@@ -187,6 +187,7 @@ impl AtomicTag {
     ///
     /// See: <https://doc.rust-lang.org/std/sync/atomic/index.html#memory-model-for-atomic-accesses>
     pub(crate) unsafe fn from_ptr<'a>(ptr: *mut AtomicTag) -> &'a Self {
+        // SAFETY: inherited from caller.
         unsafe { &*ptr }
     }
 
@@ -265,6 +266,7 @@ mod tests {
         let ptr = buffer.get(0).unwrap().as_mut_ptr().cast::<AtomicTag>();
 
         {
+            // SAFETY: We only access these atomically.
             let tag = unsafe { AtomicTag::from_ptr(ptr) };
             tag.store(Tag::FROZEN, Ordering::Relaxed);
         }
@@ -275,14 +277,17 @@ mod tests {
                 s.spawn(|| {
                     // Re-derive `p` to avoid issues with `Send`.
                     let p = buffer.get(0).unwrap().as_mut_ptr().cast::<AtomicTag>();
+
+                    // SAFETY: We only access this atomically.
                     let tag = unsafe { AtomicTag::from_ptr(p) };
                     barrier.wait();
-                    spin_decrement(&tag, count);
+                    spin_decrement(tag, count);
                 });
             }
         });
 
         {
+            // SAFETY: We only access this atomically.
             let g = unsafe { AtomicTag::from_ptr(ptr) }.load(Ordering::Relaxed);
             assert_eq!(g, Tag::new(u8::MAX.wrapping_sub((count * threads) as u8)));
         }

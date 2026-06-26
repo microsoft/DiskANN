@@ -30,22 +30,22 @@ where
     let dst = match target {
         DataType::F32 => {
             let mut dst = Matrix::new(0.0f32, data.nrows(), data.ncols());
-            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice().into())?;
+            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::F16 => {
             let mut dst = Matrix::new(f16::from_f32(0.0f32), data.nrows(), data.ncols());
-            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice().into())?;
+            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::U8 => {
             let mut dst = Matrix::new(0u8, data.nrows(), data.ncols());
-            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice().into())?;
+            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::I8 => {
             let mut dst = Matrix::new(0i8, data.nrows(), data.ncols());
-            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice().into())?;
+            SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
     };

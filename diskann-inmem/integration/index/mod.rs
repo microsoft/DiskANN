@@ -3,11 +3,11 @@
  * Licensed under the MIT license.
  */
 
-mod index;
+mod object;
 mod runner;
 mod tests;
 
-use index::{Counters, Index, KnnSearch};
+use object::{Counters, Index, KnnSearch};
 
 use diskann_benchmark_runner::{Registry, RegistryError};
 

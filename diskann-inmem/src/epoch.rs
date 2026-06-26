@@ -164,7 +164,7 @@ impl Registry {
 
             let m = &self.guards[slot];
             delay.pre_cas();
-            if let Ok(_) = m.compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed) {
+            if m.compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
                 delay.post_cas();
                 let mut reset = false;
                 loop {

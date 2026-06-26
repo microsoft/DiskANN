@@ -308,7 +308,7 @@ impl MatchBuilder {
         } else {
             Match::Nested {
                 children: self.children,
-                remark: remark,
+                remark,
             }
         }
     }

@@ -37,22 +37,27 @@ impl Slot {
     where
         F: FnOnce(),
     {
-        if let Ok(_) = self.tag.compare_exchange(
+        if self.tag.compare_exchange(
             Tag::AVAILABLE,
             Tag::OWNED,
             Ordering::Acquire,
             Ordering::Relaxed,
-        ) {
+        ).is_ok() {
+            // SAFETY: By transitioning from AVAILABLE to OWNED, we've acquired ownership
+            // of this slot and are thus free to write to the `UnsafeCell`.
             unsafe { &mut *self.payload.get() }.write(Box::new(payload));
             f();
             self.tag.store(Tag::PUBLISHED, Ordering::Release);
         }
     }
 
-    unsafe fn try_read(&self) -> Option<&Data> {
+    fn try_read(&self) -> Option<&Data> {
         if self.tag.load(Ordering::Acquire).can_read() {
+            // SAFETY: We've checked that we can read this cell.
             let payload = unsafe { &*self.payload.get() };
-            Some(&*unsafe { payload.assume_init_ref() })
+
+            // SAFETY: Items that can be read **must** be initialized.
+            Some(unsafe { payload.assume_init_ref() })
         } else {
             None
         }
@@ -65,28 +70,26 @@ impl Slot {
             return false;
         }
 
-        if let Ok(_) = self.tag.compare_exchange(
+        self.tag.compare_exchange(
             Tag::PUBLISHED,
             Tag::RETIRING,
             Ordering::Relaxed,
             Ordering::Relaxed,
-        ) {
-            true
-        } else {
-            false
-        }
+        ).is_ok()
     }
 
     unsafe fn make_available(&self) {
         assert_eq!(self.tag.load(Ordering::Relaxed), Tag::RETIRING);
+
+        // SAFETY: Items tagged as `RETIRING` must be initialized.
         unsafe { (&mut *self.payload.get()).assume_init_drop() };
 
-        if let Err(_) = self.tag.compare_exchange(
+        if self.tag.compare_exchange(
             Tag::RETIRING,
             Tag::AVAILABLE,
             Ordering::Release,
             Ordering::Relaxed,
-        ) {
+        ).is_err() {
             panic!("concurrency violation");
         }
     }
@@ -96,12 +99,15 @@ impl Drop for Slot {
     fn drop(&mut self) {
         if self.tag.load(Ordering::Relaxed) != Tag::AVAILABLE {
             let payload = self.payload.get_mut();
+
+            // SAFETY: We have exclusive access and by convention, if the tag is not
+            // available, then the corresponding payload is initialized.
             unsafe { payload.assume_init_drop() };
         }
     }
 }
 
-// We control concurrency, so can safely share this.
+// SAFETY: We control concurrency, so can safely share this.
 unsafe impl Sync for Slot {}
 
 fn make_payload(epoch: u64, index: usize) -> Data {
@@ -151,7 +157,7 @@ fn read_job(
         }
 
         for (i, slot) in slots.iter().enumerate() {
-            if let Some(read) = unsafe { slot.try_read() } {
+            if let Some(read) = slot.try_read() {
                 reads.push(read);
 
                 let sample: f64 = rng.sample(StandardUniform);
@@ -187,6 +193,7 @@ fn retire_job(registry: &Registry, slots: &[Slot], stop_at: u64, active: &Atomic
 
         if let Some(drain) = registry.try_advance() {
             for i in drain {
+                // SAFETY: retrieving from the drain gives us exclusive access.
                 unsafe { slots[i as usize].make_available() };
             }
         }

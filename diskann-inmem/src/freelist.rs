@@ -390,11 +390,8 @@ mod tests {
                     s.spawn(|| {
                         let mut out = Vec::new();
                         barrier.wait();
-                        loop {
-                            match fl.pop() {
-                                Id::Found(id) => out.push(id),
-                                Id::Scan => break,
-                            }
+                        while let Id::Found(id) = fl.pop() {
+                            out.push(id);
                         }
                         out
                     })

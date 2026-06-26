@@ -487,7 +487,7 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         for param in input.search.knn.iter() {
             let stats = super::tests::knn(
                 &*index,
-                param.clone(),
+                *param,
                 queries.as_view(),
                 &groundtruth.as_view(),
                 rt.handle(),

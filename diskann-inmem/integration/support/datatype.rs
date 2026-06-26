@@ -113,6 +113,17 @@ pub(crate) enum SliceMut<'a> {
     I8(&'a mut [i8]),
 }
 
+fn map<T, U, F>(dst: &mut [T], src: &[U], f: F)
+where
+    T: std::fmt::Display + AsDataType,
+    U: std::fmt::Display + AsDataType + Copy,
+    F: Fn(U) -> T,
+{
+    std::iter::zip(dst.iter_mut(), src.iter()).for_each(|(d, s)| {
+        *d = f(*s);
+    })
+}
+
 fn try_map<T, U, F, R>(dst: &mut [T], src: &[U], f: F) -> anyhow::Result<()>
 where
     T: std::fmt::Display + AsDataType,
@@ -181,14 +192,14 @@ impl<'a> SliceMut<'a> {
 
         match (self, rhs) {
             (SliceMut::F32(dst), Slice::F32(src)) => dst.copy_from_slice(src),
-            (SliceMut::F32(dst), Slice::F16(src)) => try_map(dst, src, |x| x.try_into())?,
-            (SliceMut::F32(dst), Slice::U8(src)) => try_map(dst, src, |x| x.try_into())?,
-            (SliceMut::F32(dst), Slice::I8(src)) => try_map(dst, src, |x| x.try_into())?,
+            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F32(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F32(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
 
             (SliceMut::F16(dst), Slice::F32(src)) => try_map(dst, src, f32_to_f16)?,
             (SliceMut::F16(dst), Slice::F16(src)) => dst.copy_from_slice(src),
-            (SliceMut::F16(dst), Slice::U8(src)) => try_map(dst, src, |x| x.try_into())?,
-            (SliceMut::F16(dst), Slice::I8(src)) => try_map(dst, src, |x| x.try_into())?,
+            (SliceMut::F16(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
+            (SliceMut::F16(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
 
             (SliceMut::U8(dst), Slice::F32(src)) => try_map(dst, src, f32_to_u8)?,
             (SliceMut::U8(dst), Slice::F16(src)) => try_map(dst, src, f16_to_u8)?,

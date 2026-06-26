@@ -99,7 +99,9 @@ pub(crate) struct Store {
     neighbors: Neighbors,
 }
 
-const SPLIT: Bytes = Bytes::size_of::<AtomicTag>();
+/// The number of bytes occupied by the in-line concurrency tag.
+pub(crate) const TAG_SIZE: Bytes = Bytes::size_of::<AtomicTag>();
+
 const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 // TODO: This is a guess and probably needs tuning.
@@ -123,7 +125,7 @@ impl Store {
         }
 
         let unpadded = bytes
-            .checked_add(SPLIT)
+            .checked_add(TAG_SIZE)
             .expect("unreachable because `init` cannot exceed `isize::MAX` bytes");
 
         // Pad to half a cache line. When data occupies just part of a cache line, this
@@ -153,7 +155,7 @@ impl Store {
             unpadded,
             unfrozen: entries.into_usize(),
             tags: repeat_n(Tag::AVAILABLE, total.into_usize())
-                .map(|v| AtomicTag::new(v))
+                .map(AtomicTag::new)
                 .collect(),
 
             // NOTE: The `Freelist` is initialized to `entries` and not `total` because
@@ -218,8 +220,17 @@ impl Store {
         let drain = self.registry.try_advance()?;
         let items = drain.len();
         for i in drain {
+            assert!(
+                i.into_usize() < self.buffer.len(),
+                "received an invalid ID ({}) while reclaiming slots - max allowed is {}",
+                i,
+                self.buffer.len(),
+            );
+
             // We release the mirror before the main tag. The other direction would
             // prematurely advertise availability.
+            //
+            // SAFETY: We've verified that `i` is in-bounds.
             let (mirror, _) = unsafe { self.data_unchecked(i.into_usize()) };
             release(mirror, "mirror");
             release(&self.tags[i.into_usize()], "tag");
@@ -302,6 +313,8 @@ impl Store {
         match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 // Set the metadata in the mirror as well.
+                //
+                // SAFETY: We've checked that `i` is in-bounds.
                 let (mirror, _) = unsafe { self.data_unchecked(i) };
                 mirror.store(retiring, Ordering::Relaxed);
                 guard.retire(i as u32);
@@ -330,6 +343,7 @@ impl Store {
                 // freelist for other threads.
                 if tag.load(Ordering::Relaxed) == Tag::AVAILABLE {
                     if acquired.is_none() {
+                        // SAFETY: We're guaranteed that `tag` belongs to `slot`.
                         acquired = unsafe { self.try_acquire(tag, slot) };
                     } else {
                         self.freelist.push(slot);
@@ -356,6 +370,7 @@ impl Store {
 
     fn slot(&self, i: u32) -> Option<Slot<'_>> {
         let tag = &self.tags.get(i.into_usize()).unwrap();
+        // SAFETY: We've guaranteed that `tag` belongs to `slot`.
         unsafe { self.try_acquire(tag, i) }
     }
 
@@ -373,6 +388,7 @@ impl Store {
             Ordering::Relaxed,
         ) {
             Ok(_) => {
+                // SAFETY: Inherited from caller - `slot` is in-bounds.
                 let (mirror, data) = unsafe { self.data_unchecked(slot.into_usize()) };
                 Some(Slot {
                     tag,
@@ -391,10 +407,13 @@ impl Store {
     ///
     /// The index `i` must be less then `self.buffer.len()`.
     unsafe fn data_unchecked(&self, i: usize) -> (&AtomicTag, RawSlice<'_>) {
+        // SAFETY: inherited from caller.
         let (data, mirror) = unsafe { self.buffer.get_unchecked(i) }
             .truncate(self.unpadded)
-            .split(self.unpadded.unchecked_sub(SPLIT));
+            .split(self.unpadded.unchecked_sub(TAG_SIZE));
         (
+            // SAFETY: We're careful in this module to ensure the inline tags are only
+            // ever accessed atomically.
             unsafe { AtomicTag::from_ptr(mirror.as_mut_ptr().cast()) },
             data,
         )
@@ -499,6 +518,7 @@ impl<'a> Reader<'a> {
     #[inline]
     pub(crate) fn read(&self, i: usize) -> Option<&[u8]> {
         if self.is_in_bounds(i) {
+            // SAFETY: `i` is in-bounds.
             unsafe { self.read_in_bounds(i) }
         } else {
             None
@@ -522,13 +542,18 @@ impl<'a> Reader<'a> {
             return None;
         }
 
+        // SAFETY: We've checked that `i` is in-bounds.
+        //
+        // Further, we guarantee that `self.unpadded >= TAG_SIZE`, so the pointer arithmetic
+        // is in-bounds.
         let tag_ptr = unsafe {
             self.buffer
                 .get_unchecked(i)
                 .as_mut_ptr()
-                .add(self.unpadded.unchecked_sub(SPLIT).value())
+                .add(self.unpadded.unchecked_sub(TAG_SIZE).value())
         };
 
+        // SAFETY: We only access tag pointers atomically.
         let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.cast()) }
             .load(Ordering::Acquire)
             .can_read();
@@ -546,14 +571,22 @@ impl<'a> Reader<'a> {
     pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
         debug_assert!(self.is_in_bounds(i));
 
+        // SAFETY:
+        //
+        // * The caller asserts `i` is in-bounds.
+        // * We maintain an internal invariant that `self.buffer.stride() <= self.unpadded`.
+        // * Further, we maintain that `self.unpadded >= TAG_SIZE`.
         let (data, tag_ptr) = unsafe {
             self.buffer
                 .get_unchecked(i)
                 .truncate_unchecked(self.unpadded)
-                .split_unchecked(self.unpadded.unchecked_sub(SPLIT))
+                .split_unchecked(self.unpadded.unchecked_sub(TAG_SIZE))
         };
 
         // NOTE: Must be `Acquire` to correctly synchronize with writes.
+        //
+        // SAFETY: We are careful in this module to ensure that inline tags are only accessed
+        // atomically.
         let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.as_mut_ptr().cast()) }
             .load(Ordering::Acquire)
             .can_read();
@@ -574,6 +607,7 @@ impl<'a> Reader<'a> {
     /// The index `i` must be satisfy [`Self::is_in_bounds`].
     #[inline]
     pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
+        // SAFETY: Inherited from caller: `i` is inbounds.
         unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
     }
 
@@ -584,7 +618,7 @@ impl<'a> Reader<'a> {
 
     /// Return [`Neighbors`].
     pub(crate) fn neighbors(&self) -> &Neighbors {
-        &self.neighbors
+        self.neighbors
     }
 }
 
@@ -600,6 +634,7 @@ pub(crate) struct Slot<'a> {
 impl<'a> Slot<'a> {
     /// View the managed data as a mutable slice.
     pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: The slot guarantees exclusive access to its corresponding data.
         unsafe { self.data.as_mut_slice() }
     }
 

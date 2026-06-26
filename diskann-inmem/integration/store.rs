@@ -343,7 +343,7 @@ fn retirer(shared: &Shared, seed: u64) {
 
         // Flow control: keep a steady readable population.
         if shared.live.load(Relaxed) > shared.low_watermark {
-            let i = rng.sample(&shared.writable);
+            let i = rng.sample(shared.writable);
             if shared.store.retire(i) {
                 shared.live.fetch_sub(1, Relaxed);
                 shared.retires_ok.fetch_add(1, Relaxed);
@@ -352,7 +352,7 @@ fn retirer(shared: &Shared, seed: u64) {
             }
         }
 
-        if iteration % RECLAIM_EVERY == 0
+        if iteration.is_multiple_of(RECLAIM_EVERY)
             && let Some(reclaimed) = shared.store.reclaim()
         {
             shared.reclaims.fetch_add(reclaimed as u64, Relaxed);
@@ -377,7 +377,7 @@ fn reader(shared: &Shared, seed: u64) {
         };
 
         observations.clear();
-        let start = rng.sample(&shared.readable);
+        let start = rng.sample(shared.readable);
         for _ in 0..READER_PASSES {
             for k in 0..window {
                 let i = (start + k) % slots;

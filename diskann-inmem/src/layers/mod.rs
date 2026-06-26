@@ -46,7 +46,7 @@ pub trait Layer: Send + Sync + 'static {
 /// Implementations may assume that `bytes.len()` is equal to [`Layer::bytes`].
 pub trait Set<T>: Layer {
     /// Write into the stored representation.
-    fn into_bytes(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
+    fn set(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
 }
 
 /// A distance computation on raw byte slices.

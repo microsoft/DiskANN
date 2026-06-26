@@ -94,8 +94,15 @@ impl Align {
         self.0.get()
     }
 
+    /// Construct a new [`Align`] with the raw `value`.
+    ///
+    /// # Safety
+    ///
+    /// `value` must be a power of two.
     pub const unsafe fn new_unchecked(value: usize) -> Self {
         debug_assert!(value.is_power_of_two());
+
+        // SAFETY: powers of two must be non-zero.
         Self(unsafe { NonZeroUsize::new_unchecked(value) })
     }
 

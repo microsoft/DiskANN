@@ -227,7 +227,4 @@ where
     fn counters(&self) -> Counters {
         self.provider().counters().into()
     }
-
-    // fn retire(&self, id: u64) -> anyhow::Result<()> {
-    // }
 }

@@ -89,7 +89,11 @@ impl Buffer {
     #[inline]
     pub(crate) unsafe fn get_unchecked(&self, i: usize) -> RawSlice<'_> {
         debug_assert!(i < self.entries);
+
+        // SAFETY: The caller asserts that `i` is in-bounds; the computed pointer stays
+        // within a single allocated object.
         let ptr = unsafe { self.ptr.add(self.stride().value() * i) };
+
         RawSlice {
             ptr,
             len: self.stride,
@@ -203,7 +207,7 @@ impl<'a> RawSlice<'a> {
     /// where `m = n.min(self.len())`.
     #[inline]
     pub(crate) fn split(&self, n: Bytes) -> (RawSlice<'a>, RawSlice<'a>) {
-        // SAFETY: The argument is <= `self.len()`.
+        // SAFETY: the argument is <= `self.len()`.
         unsafe { self.split_unchecked(self.len.min(n)) }
     }
 
@@ -215,6 +219,8 @@ impl<'a> RawSlice<'a> {
     #[inline]
     pub(crate) unsafe fn split_unchecked(&self, n: Bytes) -> (RawSlice<'a>, RawSlice<'a>) {
         debug_assert!(n <= self.len);
+
+        // SAFETY: the argument is <= `self.len()`.
         unsafe {
             (
                 Self::new(self.ptr, n),
@@ -258,6 +264,7 @@ impl<'a> RawSlice<'a> {
     /// slice does not violate Rust's borrowing rules.
     #[inline]
     pub(crate) unsafe fn as_slice(&self) -> &'a [u8] {
+        // SAFETY: Inherited from caller.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len.value()) }
     }
 
@@ -272,6 +279,7 @@ impl<'a> RawSlice<'a> {
     /// slice does not violate Rust's borrowing rules.
     #[inline]
     pub(crate) unsafe fn as_mut_slice(&mut self) -> &'a mut [u8] {
+        // SAFETY: Inherited from caller.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len.value()) }
     }
 }
@@ -344,6 +352,7 @@ mod tests {
             let mut raw_slice = buffer.get(i).unwrap();
             assert_eq!(raw_slice.len(), buffer.stride());
 
+            // SAFETY: See safety note.
             let slice = unsafe { raw_slice.as_mut_slice() };
             assert_eq!(slice.len(), buffer.stride().value());
             slice.fill(0);
@@ -373,6 +382,7 @@ mod tests {
                 ctx
             );
 
+            // SAFETY: See safety note.
             let slice = unsafe { raw_slice.as_slice() };
             assert_eq!(slice.len(), buffer.stride().value());
             assert!(slice.iter().all(|&i| i == 0), "{}", ctx);
@@ -397,12 +407,14 @@ mod tests {
 
         // truncate //
 
+        // SAFETY: see safety note.
         iota(unsafe { raw.as_mut_slice() }, base);
         for i in 0..raw.len().value() + base_usize {
             let expected = i.min(raw.len().value());
 
             let truncated = raw.truncate(Bytes::new(i));
             assert_eq!(truncated.len().value(), expected, "{}", ctx);
+            // SAFETY: see safety note.
             assert!(is_iota(unsafe { truncated.as_slice() }, base), "{}", ctx);
         }
 
@@ -417,8 +429,11 @@ mod tests {
             assert_eq!(prefix.len().value(), first, "{}", ctx);
             assert_eq!(suffix.len().value(), last, "{}", ctx);
 
+            // SAFETY: see safety note.
             assert!(is_iota(unsafe { prefix.as_slice() }, base), "{}", ctx);
+
             assert!(
+                // SAFETY: see safety note.
                 is_iota(unsafe { suffix.as_slice() }, base.wrapping_add(i as u8)),
                 "{}",
                 ctx
@@ -429,13 +444,17 @@ mod tests {
             // SAFETY: `prefix` and `suffix` are non-overlapping sub-ranges of the same
             // entry, so materializing both as mutable is sound.
             {
+                // SAFETY: see above
                 let prefix = unsafe { prefix.as_mut_slice() };
+                // SAFETY: see above
                 let suffix = unsafe { suffix.as_mut_slice() };
                 suffix.fill(0);
                 prefix.fill(0);
             }
 
+            // SAFETY: see safety note.
             assert!(unsafe { raw.as_slice() }.iter().all(|i| *i == 0), "{}", ctx);
+            // SAFETY: see safety note.
             iota(unsafe { raw.as_mut_slice() }, base);
         }
     }
@@ -467,6 +486,7 @@ mod tests {
         }
 
         for i in 0..spawns {
+            // SAFETY: at this point we have exclusive access to `buffer`.
             let slice = unsafe { buffer.get(i).unwrap().as_slice() };
             assert!(is_iota(slice, i as u8), "i = {} -- {}", i, ctx);
         }

@@ -26,7 +26,7 @@ pub(super) fn insert(
     for i in 0..dataset.nrows() {
         rt.block_on(index.insert(dataset.row(i).unwrap(), i as u64))?;
     }
-    Ok(before.delta(&index.counters())?)
+    before.delta(&index.counters())
 }
 
 pub(super) fn knn(

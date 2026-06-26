@@ -85,7 +85,7 @@ impl<T> layers::Set<&[T]> for Full<T>
 where
     T: bytemuck::Pod + Send + Sync,
 {
-    fn into_bytes(&self, v: &[T], bytes: &mut [u8]) -> ANNResult<()> {
+    fn set(&self, v: &[T], bytes: &mut [u8]) -> ANNResult<()> {
         if v.len() != self.dim() {
             Err(ANNError::from(SetError::Dim {
                 got: v.len(),
@@ -194,10 +194,13 @@ where
         if x.len() != bytes || y.len() != bytes {
             self.error(x, y)
         } else {
-            Ok(self.f.call_unaligned(
-                unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.dim) },
-                unsafe { UnalignedSlice::new(y.as_ptr().cast::<T>(), self.dim) },
-            ))
+            // SAFETY: We've checked that both `x` and `y` are valid for
+            // `size_of::<T>() * self.dim` bytes.
+            let ux = unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.dim) };
+
+            // SAFETY: Same as above
+            let uy = unsafe { UnalignedSlice::new(y.as_ptr().cast::<T>(), self.dim) };
+            Ok(self.f.call_unaligned(ux, uy))
         }
     }
 }
@@ -501,7 +504,7 @@ mod tests {
 
     /// Exercise every `Full<T>` API across dimensions `1..=max_dim`.
     ///
-    /// For each dimension we check that `bytes`/`into_bytes` agree, that `distance` and
+    /// For each dimension we check that `bytes`/`set` agree, that `distance` and
     /// `query_distance` are consistent with `DistanceProvider`, and that all of these
     /// reject byte slices that are too long or too short.
     fn test_impl<T>(max_dim: usize, ctx: &dyn Display)
@@ -521,7 +524,7 @@ mod tests {
             let a = gen_vec::<T, _>(&mut rng, dim);
             let b = gen_vec::<T, _>(&mut rng, dim);
 
-            // `bytes` and `into_bytes` agree: the encoded buffer equals the raw cast bytes.
+            // `bytes` and `set` agree: the encoded buffer equals the raw cast bytes.
             let layer = Full::<T>::new(dim, Metric::L2);
             assert_eq!(
                 layer.bytes().value(),
@@ -530,15 +533,15 @@ mod tests {
             );
 
             let mut a_bytes = vec![0u8; layer.bytes().value()];
-            layer.into_bytes(&a, &mut a_bytes).unwrap();
+            layer.set(&a, &mut a_bytes).unwrap();
             assert_eq!(
                 a_bytes.as_slice(),
                 bytemuck::cast_slice::<T, u8>(&a),
-                "{ctx}: dim {dim}: into_bytes mismatch",
+                "{ctx}: dim {dim}: set mismatch",
             );
 
             let mut b_bytes = vec![0u8; layer.bytes().value()];
-            layer.into_bytes(&b, &mut b_bytes).unwrap();
+            layer.set(&b, &mut b_bytes).unwrap();
 
             for metric in metrics {
                 let full = Full::<T>::new(dim, metric);
@@ -578,12 +581,12 @@ mod tests {
                 assert!(query.evaluate(&long).is_err());
             }
 
-            // `into_bytes` rejects mis-sized element and buffer slices.
+            // `set` rejects mis-sized element and buffer slices.
             let mut buf = vec![0u8; layer.bytes().value()];
             let too_many = gen_vec::<T, _>(&mut rng, dim + 1);
             assert!(
-                layer.into_bytes(&too_many, &mut buf).is_err(),
-                "{ctx}: dim {dim}: into_bytes accepted an over-long element slice",
+                layer.set(&too_many, &mut buf).is_err(),
+                "{ctx}: dim {dim}: set accepted an over-long element slice",
             );
 
             assert!(
@@ -593,8 +596,8 @@ mod tests {
 
             let mut short_buf = vec![0u8; layer.bytes().value().saturating_sub(1)];
             assert!(
-                layer.into_bytes(&a, &mut short_buf).is_err(),
-                "{ctx}: dim {dim}: into_bytes accepted an under-sized buffer",
+                layer.set(&a, &mut short_buf).is_err(),
+                "{ctx}: dim {dim}: set accepted an under-sized buffer",
             );
 
             let too_few = gen_vec::<T, _>(&mut rng, dim - 1);

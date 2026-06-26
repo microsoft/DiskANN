@@ -128,6 +128,7 @@ impl Neighbors {
     ) -> Result<(), OutOfBounds> {
         self.check(i)?;
 
+        // SAFETY: We've checked that `i` is in-bounds.
         let lock = unsafe { self.locks.get_unchecked(lock_index(i)) };
 
         let _guard = lock.read();
@@ -147,6 +148,9 @@ impl Neighbors {
             .into_usize();
 
         let mut resizer = neighbors.resize(len);
+
+        // SAFETY: We've validated that the two slices are valid. They cannot overlap
+        // because `neighbors` is provided externally by exclusive reference.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 rest.as_mut_ptr(),
@@ -163,10 +167,18 @@ impl Neighbors {
     /// Returns an error if `i` exceeds [`Self::entries`].
     pub(crate) fn lock(&self, i: u32) -> Result<Lock<'_>, OutOfBounds> {
         self.check(i)?;
+
+        // SAFETY: `i` is in-bounds.
         Ok(unsafe { self.lock_unchecked(i) })
     }
 
+    /// Lock adjacency-list `i` without bounds-checking.
+    ///
+    /// # SAFETY
+    ///
+    /// `i` must be in-bounds.
     unsafe fn lock_unchecked(&self, i: u32) -> Lock<'_> {
+        // SAFETY: `i` is in-bounds.
         let lock = unsafe { self.locks.get_unchecked(lock_index(i)) }.write();
 
         // SAFETY: By construction `self.buffer` has the same number of entries as
@@ -203,7 +215,10 @@ impl Neighbors {
             }));
         }
 
+        // SAFETY: We've checked `i` is in-bounds.
         let lock = unsafe { self.lock_unchecked(i) };
+
+        // SAFETY: `neighbors.len() <= self.max_length()`.
         unsafe { lock.write_unchecked(neighbors) };
         Ok(())
     }
@@ -313,6 +328,10 @@ impl Lock<'_> {
             });
         }
 
+        // SAFETY: We've verified that both regions are in-bounds.
+        //
+        // The slices have to be disjoint because `self` effectively owns its data while
+        // it is alive and this method receives by-value.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 neighbors.as_ptr(),
@@ -321,20 +340,39 @@ impl Lock<'_> {
             )
         }
 
+        // SAFETY: `self.ptr` is guaranteed to be valid for at least 4-bytes, and we own the
+        // underlying data until `drop`.
         unsafe { self.ptr.write(newlen as u32) };
+
         Ok(())
     }
 
+    /// Write the contents of `neighbors` into `self` without validating lenghts.
+    ///
+    /// # Safety
+    ///
+    /// `neighbors.len() <= self.capacity()`.
     unsafe fn write_unchecked(self, neighbors: &[u32]) {
         let len = neighbors.len();
         debug_assert!(len <= self.capacity());
+
+        // SAFETY: the caller asserts that the pointer arithmetic is sound.
+        //
+        // The slices are disjoint because `self` owns its data and this method receives
+        // by value.
         unsafe { std::ptr::copy_nonoverlapping(neighbors.as_ptr(), self.ptr.as_ptr().add(1), len) }
+
+        // SAFETY: `self.ptr` is guaranteed to be valid for at least 4-bytes, and we own the
+        // underlying data until `drop`.
         unsafe { self.ptr.write(len as u32) };
     }
 
     #[cfg(test)]
     fn as_slice(&self) -> &[u32] {
         let len = self.len();
+
+        // SAFETY: by construction - this access is in-bounds and `Lock` has exclusive
+        // access too its data, so we're free to hand out a raw slice.
         unsafe { std::slice::from_raw_parts(self.ptr.add(1).as_ptr().cast_const(), len) }
     }
 
@@ -347,6 +385,7 @@ impl Lock<'_> {
             });
         }
 
+        // SAFETY: We've checked that `neighbors.len() <= self.capacity()`.
         unsafe { self.write_unchecked(neighbors) };
         Ok(())
     }

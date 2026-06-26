@@ -57,7 +57,7 @@ where
         let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
 
         for (row, point) in std::iter::zip(data.row_iter_mut(), start_points.into_iter()) {
-            layers::Set::into_bytes(&layer, point, row).unwrap();
+            layers::Set::set(&layer, point, row).unwrap();
         }
 
         let store = Store::new(
@@ -252,7 +252,7 @@ where
 
             // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
             // insert failure.
-            <L as layers::Set<T>>::into_bytes(&self.layer, element, slot.as_mut_slice())?;
+            <L as layers::Set<T>>::set(&self.layer, element, slot.as_mut_slice())?;
             self.mapping.insert(id.clone(), slot.slot())?;
 
             // Now that insert has succeeded - publish the slot. This method cannot fail, so
@@ -421,7 +421,7 @@ impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
         T: QueryDistance + 'a,
     {
         // Make sure there's no lying.
-        assert_eq!(Bytes::new(BYTES + 1), self.bytes);
+        assert_eq!(Bytes::new(BYTES + store::TAG_SIZE.value()), self.bytes);
         Box::new(ExpandBeamImpl::<_, BYTES>(distance))
     }
 
@@ -470,16 +470,16 @@ where
     T: layers::QueryDistance,
 {
     debug_assert!(
-        BYTES + 1 <= reader.bytes().value(),
+        BYTES + store::TAG_SIZE.value() <= reader.bytes().value(),
         "we really rely on this: {}, bytes = {}",
-        BYTES + 1,
+        BYTES + store::TAG_SIZE.value(),
         reader.bytes()
     );
 
     let bytes = if BYTES == 0 {
         reader.bytes().value()
     } else {
-        BYTES + 1
+        BYTES + store::TAG_SIZE.value()
     };
 
     let len = list.len();
