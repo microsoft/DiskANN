@@ -79,10 +79,10 @@ pub(crate) trait Knn<I> {
 // Impls //
 ///////////
 
-impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::KNN<DP, T, S>>
+impl<DP, T, S, PP> Knn<DP::InternalId> for Arc<core_search::graph::KNN<DP, T, S, PP>>
 where
     DP: diskann::provider::DataProvider,
-    core_search::graph::KNN<DP, T, S>: core_search::Search<
+    core_search::graph::KNN<DP, T, S, PP>: core_search::Search<
         Id = DP::InternalId,
         Parameters = diskann::graph::search::Knn,
         Output = core_search::graph::knn::Metrics,

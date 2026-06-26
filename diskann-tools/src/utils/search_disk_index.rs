@@ -9,7 +9,8 @@ use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
     search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+        disk_provider::{DiskIndexSearcher, SearchPostProcessorKind},
+        disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{
@@ -259,6 +260,7 @@ where
                     l,
                     Some(parameters.beam_width as usize),
                     Some(vector_filter_function),
+                    SearchPostProcessorKind::None,
                     parameters.is_flat_search,
                 );
 
