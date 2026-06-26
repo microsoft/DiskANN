@@ -40,7 +40,7 @@
 //! in which method can fail, the [`anyhow::Error`] type balances generality and fidelity.
 
 mod internal;
-pub(crate) mod utils;
+pub mod utils;
 
 // Public Utility Modules
 pub mod recall;

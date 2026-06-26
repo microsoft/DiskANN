@@ -442,17 +442,11 @@ impl search::Aggregate<FlatSearchParameters, u32, FlatMetrics> for FlatAggregato
             .map(|r| recall.num_queries as f64 / r.end_to_end_latency().as_seconds())
             .collect();
 
-        let mean_cmps = {
-            let (sum, count) = results
+        let mean_cmps = benchmark_core::utils::average_all(
+            results
                 .iter()
-                .flat_map(|r| r.output().iter().map(|o| o.comparisons as f64))
-                .fold((0.0f64, 0usize), |(s, c), v| (s + v, c + 1));
-            if count == 0 {
-                0.0
-            } else {
-                sum / count as f64
-            }
-        } as f32;
+                .flat_map(|r| r.output().iter().map(|o| o.comparisons)),
+        ) as f32;
 
         Ok(FlatSearchResults {
             num_tasks: run.setup().tasks.into(),
