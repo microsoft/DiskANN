@@ -17,7 +17,7 @@ use diskann::{
 };
 
 use super::ConfigError;
-use crate::TestCallCount;
+use crate::{bftree_insert, TestCallCount};
 
 pub struct NeighborProvider<I: VectorId> {
     adjacency_list_index: BfTree,
@@ -34,6 +34,10 @@ impl<I: VectorId> HasId for NeighborProvider<I> {
 impl<I: VectorId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
+        let key_size = std::mem::size_of::<u32>();
+        let value_size = (max_degree as usize + 1) * std::mem::size_of::<u32>();
+        crate::validate_record_size("neighbor_provider", &config, key_size, value_size)?;
+
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Self::new(max_degree, adj_list_index)
@@ -142,10 +146,10 @@ impl<I: VectorId> NeighborProvider<I> {
     ///
     /// Each key is a `VectorId`, written in bytes. The value is a
     /// neighbor list of length exactly `self.dim`. Specifically,
-    /// an array of exactly `n` neighbors is written as :  
+    /// an array of exactly `n` neighbors is written as :
     /// ```text
     /// |  I0  | ... |  In  | padding |  ...  | [n; 0] |
-    ///     
+    ///
     /// -----------------------------------------------
     ///                     |
     ///                 self.dim
@@ -177,7 +181,7 @@ impl<I: VectorId> NeighborProvider<I> {
         let key = bytemuck::bytes_of(&vector_id);
         let value = cast_slice::<I, u8>(&buf[..self.dim]);
 
-        self.adjacency_list_index.insert(key, value);
+        bftree_insert(&self.adjacency_list_index, key, value)?;
 
         Ok(())
     }
@@ -189,7 +193,7 @@ impl<I: VectorId> NeighborProvider<I> {
     /// bytes of it into the bf-tree.
     ///
     /// # Errors
-    ///  
+    ///
     ///  - Neighbor length is larger than `self.max_degree()`
     ///  - Buffer length (in `I` cells) is smaller than `max_degree() + 1`
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [I]) -> ANNResult<()> {
@@ -441,15 +445,17 @@ mod tests {
         }
     }
 
-    /// Test that snapshot can be called without errors
+    /// Test that cpr_snapshot can be called without errors
     #[tokio::test]
     async fn test_snapshot() {
         // Use a temporary directory that gets cleaned up when dropped
         let temp_dir = tempfile::tempdir().unwrap();
         let snapshot_path = temp_dir.path().join("test_neighbor_snapshot.bftree");
+        let snapshot_output = temp_dir.path().join("test_neighbor_snapshot_out.bftree");
 
         let mut bf_tree_config = Config::new(&snapshot_path, 16384 * 16);
         bf_tree_config.storage_backend(bf_tree::StorageBackend::Std);
+        bf_tree_config.use_snapshot(true);
 
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
@@ -459,8 +465,10 @@ mod tests {
         scratch.write_neighbors(1, &[2, 3, 4]).unwrap();
         scratch.write_neighbors(2, &[1, 3, 5]).unwrap();
 
-        // Call snapshot - should not panic
-        neighbor_provider.adjacency_list_index.snapshot();
+        // Call cpr_snapshot - should not panic
+        neighbor_provider
+            .adjacency_list_index
+            .cpr_snapshot(&snapshot_output);
 
         // Verify data is still accessible after snapshot
         let mut result = AdjacencyList::with_capacity(10);

@@ -14,7 +14,7 @@ use diskann::{error::RankedError, utils::VectorRepr, ANNError, ANNErrorKind, ANN
 use thiserror::Error;
 
 use super::ConfigError;
-use crate::TestCallCount;
+use crate::{bftree_insert, TestCallCount};
 
 pub struct VectorProvider<T: VectorRepr> {
     dim: usize,
@@ -33,6 +33,13 @@ impl<T: VectorRepr> VectorProvider<T> {
         num_start_points: usize,
         config: Config,
     ) -> ANNResult<Self> {
+        crate::validate_record_size(
+            "vector_provider",
+            &config,
+            std::mem::size_of::<usize>(),
+            dim * std::mem::size_of::<T>(),
+        )?;
+
         let vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Ok(Self {
@@ -131,7 +138,7 @@ impl<T: VectorRepr> VectorProvider<T> {
         let key = bytemuck::bytes_of(&i);
         let value = cast_slice::<T, u8>(v);
 
-        self.vector_index.insert(key, value);
+        bftree_insert(&self.vector_index, key, value)?;
 
         Ok(())
     }
