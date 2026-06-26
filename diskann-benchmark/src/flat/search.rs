@@ -43,10 +43,10 @@ use crate::{
 const NAME: &str = "flat-index";
 
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    registry.register(NAME, FlatBenchmark::<f32>::new())?;
-    registry.register(NAME, FlatBenchmark::<f16>::new())?;
-    registry.register(NAME, FlatBenchmark::<u8>::new())?;
-    registry.register(NAME, FlatBenchmark::<i8>::new())?;
+    registry.register(NAME, Flat::<f32>::new())?;
+    registry.register(NAME, Flat::<f16>::new())?;
+    registry.register(NAME, Flat::<u8>::new())?;
+    registry.register(NAME, Flat::<i8>::new())?;
     Ok(())
 }
 
@@ -78,11 +78,11 @@ impl<T: VectorRepr> DataProvider for InMemProvider<T> {
     }
 }
 
-struct FlatBenchmark<T> {
+struct Flat<T> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> FlatBenchmark<T> {
+impl<T> Flat<T> {
     fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
@@ -90,7 +90,7 @@ impl<T> FlatBenchmark<T> {
     }
 }
 
-impl<T> Benchmark for FlatBenchmark<T>
+impl<T> Benchmark for Flat<T>
 where
     T: VectorRepr + AsDataType,
 {
@@ -187,10 +187,10 @@ where
 
         let mut results = Vec::new();
 
-        let searcher = Arc::new(FlatSearcher {
+        let searcher = Arc::new(Searcher {
             index,
             queries,
-            strategy: FlatScanStrategy::new(metric),
+            strategy: Strategy::new(metric),
         });
 
         for &threads in &input.search.num_threads {
@@ -200,11 +200,11 @@ where
                 reps,
             };
 
-            let run = search::Run::new(FlatSearchParameters { k }, setup);
+            let run = search::Run::new(SearchParameters { k }, setup);
             let aggregated = search::search_all(
                 searcher.clone(),
                 std::iter::once(run),
-                FlatAggregator::new(&groundtruth, k.get()),
+                Aggregator::new(&groundtruth, k.get()),
             )?;
 
             for item in aggregated {
@@ -224,12 +224,12 @@ where
 
 /// A [`SearchStrategy`] implementation for [`InMemProvider`] that drives
 /// a full sequential scan over all vectors.
-struct FlatScanStrategy<T: VectorRepr> {
+struct Strategy<T: VectorRepr> {
     metric: Metric,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: VectorRepr> FlatScanStrategy<T> {
+impl<T: VectorRepr> Strategy<T> {
     fn new(metric: Metric) -> Self {
         Self {
             metric,
@@ -239,15 +239,15 @@ impl<T: VectorRepr> FlatScanStrategy<T> {
 }
 
 /// The visitor that iterates over all vectors in the provider.
-struct FlatVisitor<'a, T: VectorRepr> {
+struct Visitor<'a, T: VectorRepr> {
     data: &'a FastMemoryVectorProviderAsync<T>,
 }
 
-impl<T: VectorRepr> HasId for FlatVisitor<'_, T> {
+impl<T: VectorRepr> HasId for Visitor<'_, T> {
     type Id = u32;
 }
 
-impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for FlatVisitor<'_, T> {
+impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for Visitor<'_, T> {
     type ElementRef<'a> = &'a [T];
     type Error = diskann::error::Infallible;
 
@@ -272,12 +272,12 @@ impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for FlatVisitor<'_, T> 
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for FlatScanStrategy<T> {
+impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
     type ElementRef<'a> = &'a [T];
     type QueryComputer = T::QueryDistance;
     type QueryComputerError = diskann::error::Infallible;
     type Visitor<'a>
-        = FlatVisitor<'a, T>
+        = Visitor<'a, T>
     where
         Self: 'a,
         InMemProvider<T>: 'a;
@@ -288,7 +288,7 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for FlatScanStrategy<
         provider: &'a InMemProvider<T>,
         _context: &'a DefaultContext,
     ) -> Result<Self::Visitor<'a>, Self::Error> {
-        Ok(FlatVisitor {
+        Ok(Visitor {
             data: &provider.data,
         })
     }
@@ -306,32 +306,32 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for FlatScanStrategy<
 //////////////////////////////////////////
 
 /// Wraps a [`FlatIndex`] and queries to implement the [`Search`] trait from benchmark_core.
-struct FlatSearcher<T: VectorRepr> {
+struct Searcher<T: VectorRepr> {
     index: FlatIndex<InMemProvider<T>>,
     queries: Matrix<T>,
-    strategy: FlatScanStrategy<T>,
+    strategy: Strategy<T>,
 }
 
 /// Search parameters for flat-index benchmarks.
 #[derive(Debug, Clone, Copy)]
-struct FlatSearchParameters {
+struct SearchParameters {
     k: NonZeroUsize,
 }
 
 /// Additional metrics collected during flat search.
 #[derive(Debug, Clone, Copy)]
-struct FlatMetrics {
+struct Metrics {
     /// The number of distance comparisons performed.
     pub comparisons: u32,
 }
 
-impl<T> search::Search for FlatSearcher<T>
+impl<T> search::Search for Searcher<T>
 where
     T: VectorRepr,
 {
     type Id = u32;
-    type Parameters = FlatSearchParameters;
-    type Output = FlatMetrics;
+    type Parameters = SearchParameters;
+    type Output = Metrics;
 
     fn num_queries(&self) -> usize {
         self.queries.nrows()
@@ -365,7 +365,7 @@ where
             )
             .await?;
 
-        Ok(FlatMetrics {
+        Ok(Metrics {
             comparisons: stats.cmps,
         })
     }
@@ -376,12 +376,12 @@ where
 //////////////////
 
 /// Aggregates results from multiple flat search runs, computing recall metrics.
-struct FlatAggregator<'a> {
+struct Aggregator<'a> {
     groundtruth: &'a Matrix<u32>,
     recall_k: usize,
 }
 
-impl<'a> FlatAggregator<'a> {
+impl<'a> Aggregator<'a> {
     fn new(groundtruth: &'a Matrix<u32>, recall_k: usize) -> Self {
         Self {
             groundtruth,
@@ -392,7 +392,7 @@ impl<'a> FlatAggregator<'a> {
 
 /// Results of a single flat search run.
 #[derive(Debug, Clone, Serialize)]
-struct FlatSearchResults {
+struct SearchResults {
     num_tasks: usize,
     k: usize,
     qps: Vec<f64>,
@@ -404,14 +404,14 @@ struct FlatSearchResults {
     mean_cmps: f32,
 }
 
-impl search::Aggregate<FlatSearchParameters, u32, FlatMetrics> for FlatAggregator<'_> {
-    type Output = FlatSearchResults;
+impl search::Aggregate<SearchParameters, u32, Metrics> for Aggregator<'_> {
+    type Output = SearchResults;
 
     fn aggregate(
         &mut self,
-        run: search::Run<FlatSearchParameters>,
-        mut results: Vec<search::SearchResults<u32, FlatMetrics>>,
-    ) -> anyhow::Result<FlatSearchResults> {
+        run: search::Run<SearchParameters>,
+        mut results: Vec<search::SearchResults<u32, Metrics>>,
+    ) -> anyhow::Result<SearchResults> {
         // Compute recall using the first repetition's results.
         let recall = match results.first() {
             Some(first) => benchmark_core::recall::knn(
@@ -448,7 +448,7 @@ impl search::Aggregate<FlatSearchParameters, u32, FlatMetrics> for FlatAggregato
                 .flat_map(|r| r.output().iter().map(|o| o.comparisons)),
         ) as f32;
 
-        Ok(FlatSearchResults {
+        Ok(SearchResults {
             num_tasks: run.setup().tasks.into(),
             k: run.parameters().k.get(),
             qps,
@@ -468,7 +468,7 @@ impl search::Aggregate<FlatSearchParameters, u32, FlatMetrics> for FlatAggregato
 
 #[derive(Debug, Serialize)]
 struct FlatResult {
-    results: Vec<FlatSearchResults>,
+    results: Vec<SearchResults>,
 }
 
 impl std::fmt::Display for FlatResult {
@@ -533,7 +533,7 @@ mod tests {
 
     fn make_dummy_results(num_results: usize) -> FlatResult {
         let results = (0..num_results)
-            .map(|i| FlatSearchResults {
+            .map(|i| SearchResults {
                 num_tasks: i + 1,
                 k: 10,
                 qps: vec![100.0],
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn description_with_matching_type() {
-        let benchmark = FlatBenchmark::<f32>::new();
+        let benchmark = Flat::<f32>::new();
         let input = crate::inputs::flat::FlatSearch::example();
         let text = format!("{}", DescriptionHelper(&benchmark, Some(&input)));
         // When the type matches, description writes nothing (is_match() == true)
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn description_without_input() {
-        let benchmark = FlatBenchmark::<f32>::new();
+        let benchmark = Flat::<f32>::new();
         let text = format!("{}", DescriptionHelper::<f32>(&benchmark, None));
         assert!(text.contains("Data Type: float32"));
     }
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn description_with_mismatched_type() {
         use diskann_benchmark_runner::utils::datatype::DataType;
-        let benchmark = FlatBenchmark::<f32>::new();
+        let benchmark = Flat::<f32>::new();
         let mut input = crate::inputs::flat::FlatSearch::example();
         input.data_type = DataType::UInt8;
         let text = format!("{}", DescriptionHelper(&benchmark, Some(&input)));
@@ -598,7 +598,7 @@ mod tests {
 
     /// Helper to call `description()` via `Display`.
     struct DescriptionHelper<'a, T: VectorRepr + AsDataType>(
-        &'a FlatBenchmark<T>,
+        &'a Flat<T>,
         Option<&'a crate::inputs::flat::FlatSearch>,
     );
 
