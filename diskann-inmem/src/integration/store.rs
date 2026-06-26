@@ -5,7 +5,7 @@
 
 #![expect(
     clippy::expect_used,
-    reason = "integration test tools are not production code",
+    reason = "integration test tools are not production code"
 )]
 
 use diskann_utils::views::Matrix;

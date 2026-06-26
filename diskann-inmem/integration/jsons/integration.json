@@ -1,6 +1,6 @@
 {
   "search_directories": [
-    "disk_index_search"
+    "yfcc"
   ],
   "output_directory": null,
   "jobs": [
@@ -9,16 +9,16 @@
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
-          "l_build": 50,
+          "l_build": 20,
           "max_degree": 20,
           "pruned_degree": 16
         },
         "data": {
-          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "groundtruth": "groundtruth.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin",
+          "queries": "yfcc_query_100.fbin",
           "preprocess": []
         },
         "layer": {
@@ -52,16 +52,16 @@
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
-          "l_build": 50,
+          "l_build": 20,
           "max_degree": 20,
           "pruned_degree": 16
         },
         "data": {
-          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "groundtruth": "groundtruth.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin",
+          "queries": "yfcc_query_100.fbin",
           "preprocess": []
         },
         "layer": {
@@ -95,16 +95,16 @@
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
-          "l_build": 50,
+          "l_build": 20,
           "max_degree": 20,
           "pruned_degree": 16
         },
         "data": {
-          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "groundtruth": "groundtruth.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin",
+          "queries": "yfcc_query_100.fbin",
           "preprocess": []
         },
         "layer": {
@@ -138,16 +138,16 @@
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
-          "l_build": 50,
+          "l_build": 20,
           "max_degree": 20,
           "pruned_degree": 16
         },
         "data": {
-          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "groundtruth": "groundtruth.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin",
+          "queries": "yfcc_query_100.fbin",
           "preprocess": [
             "halve",
             "floor"

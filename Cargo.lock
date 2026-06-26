@@ -822,7 +822,7 @@ dependencies = [
  "diskann-wide",
  "half",
  "parking_lot",
- "rand 0.9.4",
+ "rand",
  "serde",
  "serde_json",
  "tempfile",

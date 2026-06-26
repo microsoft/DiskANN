@@ -50,12 +50,12 @@ where
         Self { distance, metric }
     }
 
-    /// Return the logical dimension of the data handled by this [`Layer`].
+    /// Return the logical dimension of the data handled by this [`layers::Layer`].
     pub fn dim(&self) -> usize {
         self.distance.dim
     }
 
-    /// Return the number of bytes of the data handles by this [`Layer`].
+    /// Return the number of bytes of the data handles by this [`layers::Layer`].
     pub fn bytes(&self) -> Bytes {
         Bytes::new(self.dim() * std::mem::size_of::<T>())
     }

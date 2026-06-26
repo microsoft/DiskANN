@@ -394,10 +394,7 @@ pub(crate) struct Iter<'a> {
 
 impl<'a> Iter<'a> {
     fn new(view: &'a DatasetView<'a>) -> Self {
-        Self {
-            view,
-            row: 0,
-        }
+        Self { view, row: 0 }
     }
 }
 

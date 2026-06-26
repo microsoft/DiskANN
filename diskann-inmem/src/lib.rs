@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! The inmem index for DiskANN.
+
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod num;

@@ -161,7 +161,7 @@ impl Benchmark for Inmem2 {
         let exact_max_degree = (input.max_degree as f32 * 1.3) as usize;
         let layer = Full::<f32>::new(dim, metric);
         let config = diskann_inmem::provider::Config::new(num_points, exact_max_degree);
-        let provider = Provider::new(layer, config, start.row_iter());
+        let provider = Provider::new(layer, config, start.row_iter())?;
 
         let config = graph::config::Builder::new_with(
             input.max_degree,
@@ -425,7 +425,7 @@ impl Benchmark for Inmem2Stream {
         let layer = Full::<f32>::new(dim, metric);
 
         let config = diskann_inmem::provider::Config::new(max_points, exact_max_degree);
-        let provider = Provider::new(layer, config, start.row_iter());
+        let provider = Provider::new(layer, config, start.row_iter())?;
 
         let config = graph::config::Builder::new_with(
             input.max_degree,
