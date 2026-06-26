@@ -25,6 +25,7 @@ use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     files::InputFile,
     output::Output,
+    utils::datatype::DataType,
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_inmem::{layers::Full, Provider, Strategy};
@@ -33,11 +34,13 @@ use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    index::build::ProgressMeter, inputs::graph_index::DynamicRunbookParams, utils::datafiles,
+    index::build::ProgressMeter,
+    inputs::graph_index::DynamicRunbookParams,
+    utils::{datafiles, SimilarityMeasure},
 };
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    registry.register("inmem2-f32", Inmem2)?;
+    // registry.register("inmem2-f32", Inmem2)?;
     registry.register("inmem2-f32-stream", Inmem2Stream)?;
     Ok(())
 }
@@ -46,232 +49,421 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 // Input //
 ///////////
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct Inmem2Build {
-    data: InputFile,
-    queries: InputFile,
-    groundtruth: InputFile,
+mod dto {
+    use super::*;
 
-    max_degree: usize,
-    l_build: usize,
-    alpha: f32,
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct KnnSweep {
+        pub(super) search_n: usize,
+        pub(super) search_l: Vec<usize>,
+        pub(super) recall_k: usize,
+    }
 
-    search_n: usize,
-    search_l: Vec<usize>,
-    recall_k: usize,
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct KnnSearch {
+        pub(super) queries: InputFile,
+        pub(super) groundtruth: InputFile,
+        pub(super) reps: NonZeroUsize,
+        pub(super) num_threads: Vec<NonZeroUsize>,
+        pub(super) runs: Vec<KnnSweep>,
+    }
 
-    num_threads: usize,
-    reps: NonZeroUsize,
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Data {
+        pub(super) data_type: DataType,
+        pub(super) data: InputFile,
+        pub(super) distance: SimilarityMeasure,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct BuildParams {
+        pub(super) pruned_degree: usize,
+        pub(super) max_degree: usize,
+        pub(super) l_build: usize,
+        pub(super) alpha: f32,
+        pub(super) num_threads: NonZeroUsize,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct StaticBuild {
+        pub(super) data: Data,
+        pub(super) build: BuildParams,
+        pub(super) search: KnnSearch,
+    }
 }
 
-impl Input for Inmem2Build {
-    type Raw = Inmem2Build;
+#[derive(Debug)]
+struct KnnInstance {
+    knn: graph::search::Knn,
+    recall_k: usize,
+}
+
+#[derive(Debug)]
+struct KnnSearch {
+    queries: InputFile,
+    groundtruth: InputFile,
+    reps: NonZeroUsize,
+    num_threads: Vec<NonZeroUsize>,
+    runs: Vec<KnnInstance>,
+}
+
+impl KnnSearch {
+    fn from_raw(raw: dto::KnnSearch, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
+        let dto::KnnSearch {
+            mut queries,
+            mut groundtruth,
+            reps,
+            num_threads,
+            runs,
+        } = raw;
+
+        if let Some(checker) = checker {
+            queries.resolve(checker)?;
+            groundtruth.resolve(checker)?;
+        }
+
+        let runs = runs
+            .into_iter()
+            .flat_map(|sweep| {
+                sweep
+                    .search_l
+                    .into_iter()
+                    .map(move |search_l| -> anyhow::Result<_> {
+                        let knn = graph::search::Knn::new_default(sweep.search_n, search_l)?;
+                        Ok(KnnInstance {
+                            knn,
+                            recall_k: sweep.recall_k,
+                        })
+                    })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(Self {
+            queries,
+            groundtruth,
+            reps,
+            num_threads,
+            runs,
+        })
+    }
+
+    fn maximum_recall_k(&self) -> usize {
+        self.runs.iter().map(|r| r.recall_k).max().unwrap_or(0)
+    }
+}
+
+#[derive(Debug)]
+struct Data {
+    data_type: DataType,
+    data: InputFile,
+    distance: Metric,
+}
+
+impl Data {
+    fn from_raw(raw: dto::Data, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
+        let dto::Data {
+            data_type,
+            mut data,
+            distance,
+        } = raw;
+
+        if let Some(checker) = checker {
+            data.resolve(checker)?;
+        }
+
+        Ok(Self {
+            data_type,
+            data,
+            distance: distance.into(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BuildParams {
+    config: graph::Config,
+    num_threads: NonZeroUsize,
+}
+
+impl BuildParams {
+    fn from_raw(raw: dto::BuildParams, metric: Metric) -> anyhow::Result<Self> {
+        let dto::BuildParams {
+            pruned_degree,
+            max_degree,
+            l_build,
+            alpha,
+            num_threads,
+        } = raw;
+
+        let config = graph::config::Builder::new_with(
+            pruned_degree,
+            graph::config::MaxDegree::new(max_degree),
+            l_build,
+            metric.into(),
+            |b| {
+                b.alpha(alpha);
+            },
+        )
+        .build()?;
+
+        Ok(Self {
+            config,
+            num_threads,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct StaticBuild {
+    data: Data,
+    build: BuildParams,
+    search: KnnSearch,
+}
+
+impl StaticBuild {
+    fn from_raw(raw: dto::StaticBuild, mut checker: Option<&mut Checker>) -> anyhow::Result<Self> {
+        let dto::StaticBuild {
+            data,
+            build,
+            search,
+        } = raw;
+
+        let data = Data::from_raw(data, checker.as_deref_mut())?;
+        let build = BuildParams::from_raw(build, data.distance)?;
+        let search = KnnSearch::from_raw(search, checker)?;
+
+        Ok(Self {
+            data,
+            build,
+            search,
+        })
+    }
+}
+
+impl Input for StaticBuild {
+    type Raw = dto::StaticBuild;
 
     fn tag() -> &'static str {
         "inmem2"
     }
 
-    fn from_raw(mut raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self> {
-        raw.data.resolve(checker)?;
-        raw.queries.resolve(checker)?;
-        raw.groundtruth.resolve(checker)?;
-        Ok(raw)
+    fn from_raw(raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self> {
+        Self::from_raw(raw, Some(checker))
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(self)?)
+        Ok(serde_json::to_value(())?)
     }
 
-    fn example() -> Self {
-        Self {
-            data: InputFile::new("path/to/base.bin"),
-            queries: InputFile::new("path/to/query.bin"),
-            groundtruth: InputFile::new("path/to/groundtruth.bin"),
-            max_degree: 64,
-            l_build: 100,
-            alpha: 1.2,
-            search_n: 10,
-            search_l: vec![10, 20, 50, 100],
-            recall_k: 10,
-            num_threads: 4,
-            reps: NonZeroUsize::new(3).unwrap(),
+    fn example() -> Self::Raw {
+        const FOUR: NonZeroUsize = NonZeroUsize::new(4).unwrap();
+        const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
+        dto::StaticBuild {
+            data: dto::Data {
+                data_type: DataType::Float32,
+                data: InputFile::new("path/to/data"),
+                distance: SimilarityMeasure::SquaredL2,
+            },
+            build: dto::BuildParams {
+                pruned_degree: 28,
+                max_degree: 32,
+                l_build: 100,
+                alpha: 1.2,
+                num_threads: FOUR,
+            },
+            search: dto::KnnSearch {
+                queries: InputFile::new("path/to/queries"),
+                groundtruth: InputFile::new("path/to/groundtruth"),
+                reps: THREE,
+                num_threads: vec![FOUR],
+                runs: vec![dto::KnnSweep {
+                    search_n: 10,
+                    search_l: vec![10, 20, 30, 40, 50],
+                    recall_k: 10,
+                }],
+            },
         }
     }
 }
 
-impl std::fmt::Display for Inmem2Build {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "inmem2 f32 benchmark")?;
-        writeln!(f, "  max_degree: {}", self.max_degree)?;
-        writeln!(f, "  l_build: {}", self.l_build)?;
-        writeln!(f, "  alpha: {}", self.alpha)?;
-        writeln!(f, "  search_n: {}", self.search_n)?;
-        writeln!(f, "  search_l: {:?}", self.search_l)?;
-        writeln!(f, "  recall_k: {}", self.recall_k)?;
-        writeln!(f, "  num_threads: {}", self.num_threads)?;
-        writeln!(f, "  reps: {}", self.reps)
-    }
-}
+// impl std::fmt::Display for Inmem2Build {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         writeln!(f, "inmem2 f32 benchmark")?;
+//         writeln!(f, "  max_degree: {}", self.max_degree)?;
+//         writeln!(f, "  l_build: {}", self.l_build)?;
+//         writeln!(f, "  alpha: {}", self.alpha)?;
+//         writeln!(f, "  search_n: {}", self.search_n)?;
+//         writeln!(f, "  search_l: {:?}", self.search_l)?;
+//         writeln!(f, "  recall_k: {}", self.recall_k)?;
+//         writeln!(f, "  num_threads: {}", self.num_threads)?;
+//         writeln!(f, "  reps: {}", self.reps)
+//     }
+// }
 
 ///////////////
 // Benchmark //
 ///////////////
 
 #[derive(Debug)]
-struct Inmem2;
+struct Build<T>(std::marker::PhantomData<T>);
 
-impl Benchmark for Inmem2 {
-    type Input = Inmem2Build;
-    type Output = ();
-
-    fn try_match(&self, _input: &Inmem2Build) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(0))
-    }
-
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Inmem2Build>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(i) => write!(f, "{i}"),
-            None => write!(f, "inmem2 f32 benchmark"),
-        }
-    }
-
-    fn run(
-        &self,
-        input: &Inmem2Build,
-        checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> anyhow::Result<()> {
-        writeln!(output, "{input}")?;
-
-        // Load data.
-        let data: Arc<Matrix<f32>> =
-            Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.data))?);
-
-        let dim = data.ncols();
-        let num_points = data.nrows();
-        writeln!(output, "Loaded {num_points} points, dim={dim}")?;
-
-        // Compute the medoid of the dataset as the single start point.
-        let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-        let metric = Metric::L2;
-        let exact_max_degree = (input.max_degree as f32 * 1.3) as usize;
-        let layer = Full::<f32>::new(dim, metric);
-        let config = diskann_inmem::provider::Config::new(num_points, exact_max_degree);
-        let provider = Provider::new(layer, config, start.row_iter())?;
-
-        let config = graph::config::Builder::new_with(
-            input.max_degree,
-            graph::config::MaxDegree::new(exact_max_degree),
-            input.l_build,
-            metric.into(),
-            |b| {
-                b.alpha(input.alpha);
-            },
-        )
-        .build()?;
-
-        let index = Arc::new(DiskANNIndex::new(config, provider, None));
-
-        // Build via SingleInsert.
-        let rt = benchmark_core::tokio::runtime(input.num_threads)?;
-        let builder = build_core::graph::SingleInsert::new(
-            index.clone(),
-            data,
-            Strategy,
-            build_core::ids::Identity::<u32>::new(),
-        );
-
-        writeln!(
-            output,
-            "Building index with {} threads...",
-            input.num_threads
-        )?;
-        let build_results = build_core::build_tracked(
-            builder,
-            build_core::Parallelism::dynamic(
-                diskann::utils::ONE,
-                NonZeroUsize::new(input.num_threads).unwrap(),
-            ),
-            &rt,
-            Some(&ProgressMeter::new(output)),
-        )?;
-
-        let total_build_time = build_results.end_to_end_latency();
-        writeln!(
-            output,
-            "Build complete in {:.2}s",
-            total_build_time.as_seconds()
-        )?;
-        checkpoint.checkpoint(&total_build_time)?;
-
-        // Search.
-        let queries: Arc<Matrix<f32>> =
-            Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.queries))?);
-        let max_k = input.recall_k;
-        let groundtruth =
-            datafiles::load_groundtruth(datafiles::BinFile(&input.groundtruth), Some(max_k))?;
-
-        writeln!(output, "Loaded {} queries", queries.nrows())?;
-
-        let knn = benchmark_core::search::graph::KNN::new(
-            index,
-            queries,
-            benchmark_core::search::graph::Strategy::broadcast(Strategy),
-        )?;
-
-        let num_threads = NonZeroUsize::new(input.num_threads).unwrap();
-
-        for &search_l in &input.search_l {
-            let params = graph::search::Knn::new(input.search_n, search_l, None)?;
-
-            let setup = core_search::Setup {
-                threads: num_threads,
-                tasks: num_threads,
-                reps: input.reps,
-            };
-
-            let run = core_search::Run::new(params, setup);
-
-            let summaries = core_search::search_all(
-                knn.clone(),
-                std::iter::once(run),
-                benchmark_core::search::graph::knn::Aggregator::new(
-                    &groundtruth,
-                    input.recall_k,
-                    input.search_n,
-                    GroundTruthMode::Fixed,
-                ),
-            )?;
-
-            for summary in &summaries {
-                let qps: Vec<f64> = summary
-                    .end_to_end_latencies
-                    .iter()
-                    .map(|lat| summary.recall.num_queries as f64 / lat.as_seconds())
-                    .collect();
-                let max_qps = qps.iter().cloned().fold(0.0f64, f64::max);
-                let mean_qps = qps.iter().sum::<f64>() / qps.len() as f64;
-
-                writeln!(
-                    output,
-                    "  L={:<4} recall={:.4}  QPS={:.0} (max {:.0})  cmps={:.1}  hops={:.1}",
-                    search_l,
-                    summary.recall.average,
-                    mean_qps,
-                    max_qps,
-                    summary.mean_cmps,
-                    summary.mean_hops,
-                )?;
-            }
-        }
-
-        Ok(())
+impl<T> Build<T> {
+    fn new() -> Self {
+        Self(std::marker::PhantomData)
     }
 }
+
+// impl<T> Benchmark for Build<T>
+// where
+//     T: diskann_inmem::layers::FullPrecision
+//         + diskann::graph::SampleableForStart,
+// {
+//     type Input = StaticBuild;
+//     type Output = ();
+//
+//     fn try_match(&self, input: &StaticBuild) -> Result<MatchScore, FailureScore> {
+//         Ok(MatchScore(0))
+//     }
+//
+//     fn description(
+//         &self,
+//         f: &mut std::fmt::Formatter<'_>,
+//         input: Option<&StaticBuild>,
+//     ) -> std::fmt::Result {
+//         Ok(())
+//         // match input {
+//         //     Some(i) => write!(f, "{i}"),
+//         //     None => write!(f, "inmem2 f32 benchmark"),
+//         // }
+//     }
+//
+//     fn run(
+//         &self,
+//         input: &StaticBuild,
+//         checkpoint: Checkpoint<'_>,
+//         mut output: &mut dyn Output,
+//     ) -> anyhow::Result<()> {
+//         // writeln!(output, "{input}")?;
+//
+//         // Load data.
+//         let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+//             &input.data.data,
+//         ))?);
+//
+//         let dim = data.ncols();
+//         let num_points = data.nrows();
+//         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
+//
+//         // Compute the medoid of the dataset as the single start point.
+//         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
+//         let layer = Full::<T>::new(dim, input.data.distance);
+//         let config =
+//             diskann_inmem::provider::Config::new(num_points, input.build.config.max_degree().get());
+//         let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
+//
+//         let index = Arc::new(DiskANNIndex::new(
+//             input.build.config.clone(),
+//             provider,
+//             None,
+//         ));
+//
+//         // Build via SingleInsert.
+//         let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
+//         let builder = build_core::graph::SingleInsert::new(
+//             index.clone(),
+//             data,
+//             Strategy,
+//             build_core::ids::Identity::<u32>::new(),
+//         );
+//
+//         // writeln!(
+//         //     output,
+//         //     "Building index with {} threads...",
+//         //     input.num_threads
+//         // )?;
+//         let build_results = build_core::build_tracked(
+//             builder,
+//             build_core::Parallelism::dynamic(
+//                 diskann::utils::ONE,
+//                 input.build.num_threads,
+//             ),
+//             &rt,
+//             Some(&ProgressMeter::new(output)),
+//         )?;
+//
+//         let total_build_time = build_results.end_to_end_latency();
+//         writeln!(
+//             output,
+//             "Build complete in {:.2}s",
+//             total_build_time.as_seconds()
+//         )?;
+//         checkpoint.checkpoint(&total_build_time)?;
+//
+//         // Search.
+//         let queries: Arc<Matrix<T>> =
+//             Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?);
+//         let max_k = input.search.maximum_recall_k();
+//         let groundtruth =
+//             datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), Some(max_k))?;
+//
+//         writeln!(output, "Loaded {} queries", queries.nrows())?;
+//
+//         let knn = benchmark_core::search::graph::KNN::new(
+//             index,
+//             queries,
+//             benchmark_core::search::graph::Strategy::broadcast(Strategy),
+//         )?;
+//
+//         // let num_threads = NonZeroUsize::new(input.num_threads).unwrap();
+//         let mut results = Vec::new();
+//         for num_threads in input.search.num_threads.iter() {
+//             let params = graph::search::Knn::new(input.search_n, search_l, None)?;
+//
+//             let setup = core_search::Setup {
+//                 threads: num_threads,
+//                 tasks: num_threads,
+//                 reps: input.reps,
+//             };
+//
+//             let run = core_search::Run::new(params, setup);
+//
+//             let summaries = core_search::search_all(
+//                 knn.clone(),
+//                 std::iter::once(run),
+//                 benchmark_core::search::graph::knn::Aggregator::new(
+//                     &groundtruth,
+//                     input.recall_k,
+//                     input.search_n,
+//                     GroundTruthMode::Fixed,
+//                 ),
+//             )?;
+//
+//             for summary in &summaries {
+//                 let qps: Vec<f64> = summary
+//                     .end_to_end_latencies
+//                     .iter()
+//                     .map(|lat| summary.recall.num_queries as f64 / lat.as_seconds())
+//                     .collect();
+//                 let max_qps = qps.iter().cloned().fold(0.0f64, f64::max);
+//                 let mean_qps = qps.iter().sum::<f64>() / qps.len() as f64;
+//
+//                 writeln!(
+//                     output,
+//                     "  L={:<4} recall={:.4}  QPS={:.0} (max {:.0})  cmps={:.1}  hops={:.1}",
+//                     search_l,
+//                     summary.recall.average,
+//                     mean_qps,
+//                     max_qps,
+//                     summary.mean_cmps,
+//                     summary.mean_hops,
+//                 )?;
+//             }
+//         }
+//
+//         Ok(())
+//     }
+// }
 
 ///////////////
 // Streaming //

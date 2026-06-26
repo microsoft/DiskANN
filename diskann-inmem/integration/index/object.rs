@@ -188,8 +188,7 @@ impl CheckMatch for Counters {
 
 impl<T> Index for DiskANNIndex<Provider<layers::Full<T>, u64>>
 where
-    layers::Full<T>: for<'a> layers::Insert<Query<'a> = &'a [T]>,
-    T: FromSlice + AsDataType + Send + Sync + 'static,
+    T: layers::FullPrecision + FromSlice + AsDataType,
 {
     fn search<'a>(
         &'a self,

@@ -348,6 +348,7 @@ pub struct SearchAccessor<'a> {
     reader: store::Reader<'a>,
     ids: AdjacencyList<u32>,
     expand_beam: Box<dyn ExpandBeam + 'a>,
+    buffer: Vec<(u32, f32)>,
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
@@ -417,20 +418,23 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 self.ids
                     .retain(|i| pred.eval_mut(i) && self.reader.is_in_bounds(i.into_usize()));
 
-                // TODO: Move to an external buffer to avoid any dynamic dispatcn in
-                // `expand_beam_inner` - then we can do a bulk-update on the counters.
-                let mut on_neighbors = |id, distance| {
-                    self.counters.get_vector(1);
-                    self.counters.query_distance(1);
+                // This should always hold, but let's double check.
+                assert!(self.buffer.len() >= self.ids.len());
 
-                    on_neighbors(id, distance);
-                };
-
-                // SAFETY: We've verified that each entry in `self.ids` is in-bounds.
-                unsafe {
+                // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
+                // `self.buffer` is long enough to hold all the IDs.
+                let processed = unsafe {
                     self.expand_beam
-                        .expand_beam(&self.ids, 8, &self.reader, &mut on_neighbors)
+                        .expand_beam(&self.ids, 8, &self.reader, &mut self.buffer)
                 }?;
+
+                self.counters.get_vector(processed as u64);
+                self.counters.query_distance(processed as u64);
+
+                self.buffer
+                    .iter()
+                    .take(processed)
+                    .for_each(|(id, dist)| on_neighbors(*id, *dist));
             }
 
             Ok(())
@@ -448,14 +452,15 @@ trait ExpandBeam: Send + Sync + std::fmt::Debug {
     ///
     /// # Safety
     ///
-    /// All items in `list` must in-bounds with respect to `reader`.
+    /// * All items in `list` must in-bounds with respect to `reader`.
+    /// * `buffer.len() >= list.len()`.
     unsafe fn expand_beam(
         &self,
         list: &[u32],
         lookahead: usize,
         reader: &store::Reader<'_>,
-        f: &mut dyn FnMut(u32, f32),
-    ) -> ANNResult<()>;
+        buffer: &mut [(u32, f32)],
+    ) -> ANNResult<usize>;
 }
 
 #[derive(Debug)]
@@ -475,10 +480,10 @@ where
         list: &[u32],
         lookahead: usize,
         reader: &store::Reader<'_>,
-        f: &mut dyn FnMut(u32, f32),
-    ) -> ANNResult<()> {
+        buffer: &mut [(u32, f32)],
+    ) -> ANNResult<usize> {
         // SAFETY: Inherited from caller.
-        unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, f) }
+        unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, buffer) }
     }
 }
 
@@ -540,14 +545,15 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
 ///
 /// * All items in `list` must in-bounds with respect to `reader`.
 /// * The number of bytes associated with `N` cache lines must "make sense".
+/// * `buffer.len() >= list.len()`.
 #[inline]
 unsafe fn expand_beam_inner<T, const BYTES: usize>(
     distance: &T,
     list: &[u32],
     lookahead: usize,
     reader: &store::Reader<'_>,
-    f: &mut dyn FnMut(u32, f32),
-) -> ANNResult<()>
+    buffer: &mut [(u32, f32)],
+) -> ANNResult<usize>
 where
     T: layers::QueryDistance,
 {
@@ -557,6 +563,8 @@ where
         BYTES + store::TAG_SIZE.value(),
         reader.bytes()
     );
+
+    debug_assert!(buffer.len() >= list.len());
 
     let bytes = if BYTES == 0 {
         reader.bytes().value()
@@ -582,6 +590,7 @@ where
     }
 
     let mut j = lookahead;
+    let mut processed = 0;
     for &i in list.iter() {
         if j != len {
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
@@ -600,11 +609,12 @@ where
 
         // SAFETY: Caller asserts that `i` is in-bounds.
         if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
-            f(i, distance.evaluate(data)?)
+            *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
+            processed += 1;
         }
     }
 
-    Ok(())
+    Ok(processed)
 }
 
 ////////////
@@ -791,6 +801,7 @@ where
             reader,
             ids: AdjacencyList::new(),
             expand_beam,
+            buffer: vec![(0, 0.0); provider.max_degree()],
             provider,
             start_points: provider.store.frozen(),
             counters: provider.local_counters(),

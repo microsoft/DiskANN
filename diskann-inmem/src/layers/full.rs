@@ -23,6 +23,24 @@ use thiserror::Error;
 
 use crate::{layers, num::Bytes};
 
+/// A useful trait bound for types compatible with [`Full`].
+///
+/// This encompases *everything* required for `Full: layers::Insert` and can be used as
+/// a single bound.
+pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
+    #[doc(hidden)]
+    fn __new(dim: usize, metric: Metric) -> Full<Self>;
+
+    #[doc(hidden)]
+    fn __query_distance<'a, V>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
+        visitor: V,
+    ) -> ANNResult<V::Output>
+    where
+        V: layers::QueryVisitor<'a>;
+}
+
 /// Full-precision data layer.
 #[derive(Debug)]
 pub struct Full<T>
@@ -39,6 +57,13 @@ where
 {
     /// Create a new full-precision layer for data with the given `dim` and `metric`.
     pub fn new(dim: usize, metric: Metric) -> Self
+    where
+        T: FullPrecision,
+    {
+        T::__new(dim, metric)
+    }
+
+    fn from_distance_provider(dim: usize, metric: Metric) -> Self
     where
         T: DistanceProvider<T>,
     {
@@ -74,7 +99,7 @@ where
 
 impl<T> layers::Layer for Full<T>
 where
-    T: bytemuck::Pod + Send + Sync,
+    T: FullPrecision,
 {
     fn bytes(&self) -> Bytes {
         <Full<T>>::bytes(self)
@@ -83,7 +108,7 @@ where
 
 impl<T> layers::Set<&[T]> for Full<T>
 where
-    T: bytemuck::Pod + Send + Sync,
+    T: FullPrecision,
 {
     fn set(&self, v: &[T], bytes: &mut [u8]) -> ANNResult<()> {
         if v.len() != self.dim() {
@@ -123,26 +148,36 @@ crate::opaque!(SetError);
 
 impl<T> layers::AsDistance for Full<T>
 where
-    T: Debug + Send + Sync + 'static,
+    T: FullPrecision,
 {
     fn as_distance(&self) -> &dyn layers::Distance {
         &self.distance
     }
 }
 
-impl<T> layers::Insert for Full<T>
+impl<T> layers::Search for Full<T>
 where
-    T: bytemuck::Pod + Debug + Send + Sync + 'static,
-    Self: for<'a> layers::Search<Query<'a> = &'a [T]>,
+    T: FullPrecision,
 {
+    type Query<'a> = &'a [T];
+
+    fn query_distance<'a, V>(&'a self, query: &'a [T], visitor: V) -> ANNResult<V::Output>
+    where
+        V: layers::QueryVisitor<'a>,
+    {
+        T::__query_distance(self, query, visitor)
+    }
 }
+
+impl<T> layers::Insert for Full<T> where T: FullPrecision {}
 
 //////////////
 // Distance //
 //////////////
 
 #[derive(Debug)]
-struct Distance<T, U = T>
+#[doc(hidden)]
+pub struct Distance<T, U = T>
 where
     T: 'static,
     U: 'static,
@@ -329,20 +364,26 @@ macro_rules! mint {
     }};
 }
 
-impl layers::Search for Full<f32> {
-    type Query<'a> = &'a [f32];
+impl FullPrecision for f32 {
+    fn __new(dim: usize, metric: Metric) -> Full<f32> {
+        Full::from_distance_provider(dim, metric)
+    }
 
-    fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
+    fn __query_distance<'a, V>(
+        full: &'a Full<f32>,
+        query: &'a [f32],
+        visitor: V,
+    ) -> ANNResult<V::Output>
     where
         V: layers::QueryVisitor<'a>,
     {
-        self.check_dim(query.len())?;
+        full.check_dim(query.len())?;
 
         let query = Calf::Borrowed(query);
 
-        let output = match self.metric {
+        let output = match full.metric {
             Metric::L2 => {
-                if self.dim() == 100 {
+                if full.dim() == 100 {
                     mint!(query, visitor, f32 => { 100, SquaredL2 })
                 } else {
                     mint!(query, visitor, f32 => SquaredL2)
@@ -357,20 +398,26 @@ impl layers::Search for Full<f32> {
     }
 }
 
-impl layers::Search for Full<f16> {
-    type Query<'a> = &'a [f16];
+impl FullPrecision for f16 {
+    fn __new(dim: usize, metric: Metric) -> Full<f16> {
+        Full::from_distance_provider(dim, metric)
+    }
 
-    fn query_distance<'a, V>(&'a self, query: &'a [f16], visitor: V) -> ANNResult<V::Output>
+    fn __query_distance<'a, V>(
+        full: &'a Full<f16>,
+        query: &'a [f16],
+        visitor: V,
+    ) -> ANNResult<V::Output>
     where
         V: layers::QueryVisitor<'a>,
     {
-        self.check_dim(query.len())?;
+        full.check_dim(query.len())?;
 
-        let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, self.dim()).collect();
+        let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
-        let output = match self.metric {
+        let output = match full.metric {
             Metric::L2 => mint!(query, visitor, { f32, f16 } => SquaredL2),
             Metric::InnerProduct => mint!(query, visitor, { f32, f16 } => InnerProduct),
             Metric::Cosine => mint!(query, visitor, { f32, f16 } => Cosine),
@@ -381,20 +428,26 @@ impl layers::Search for Full<f16> {
     }
 }
 
-impl layers::Search for Full<u8> {
-    type Query<'a> = &'a [u8];
+impl FullPrecision for u8 {
+    fn __new(dim: usize, metric: Metric) -> Full<u8> {
+        Full::from_distance_provider(dim, metric)
+    }
 
-    fn query_distance<'a, V>(&'a self, query: &'a [u8], visitor: V) -> ANNResult<V::Output>
+    fn __query_distance<'a, V>(
+        full: &'a Full<u8>,
+        query: &'a [u8],
+        visitor: V,
+    ) -> ANNResult<V::Output>
     where
         V: layers::QueryVisitor<'a>,
     {
-        self.check_dim(query.len())?;
+        full.check_dim(query.len())?;
 
         let query = Calf::Borrowed(query);
 
-        let output = match self.metric {
+        let output = match full.metric {
             Metric::L2 => {
-                if self.dim() == 128 {
+                if full.dim() == 128 {
                     mint!(query, visitor, u8 => { 128, SquaredL2 })
                 } else {
                     mint!(query, visitor, u8 => SquaredL2)
@@ -409,18 +462,24 @@ impl layers::Search for Full<u8> {
     }
 }
 
-impl layers::Search for Full<i8> {
-    type Query<'a> = &'a [i8];
+impl FullPrecision for i8 {
+    fn __new(dim: usize, metric: Metric) -> Full<i8> {
+        Full::from_distance_provider(dim, metric)
+    }
 
-    fn query_distance<'a, V>(&'a self, query: &'a [i8], visitor: V) -> ANNResult<V::Output>
+    fn __query_distance<'a, V>(
+        full: &'a Full<i8>,
+        query: &'a [i8],
+        visitor: V,
+    ) -> ANNResult<V::Output>
     where
         V: layers::QueryVisitor<'a>,
     {
-        self.check_dim(query.len())?;
+        full.check_dim(query.len())?;
 
         let query = Calf::Borrowed(query);
 
-        let output = match self.metric {
+        let output = match full.metric {
             Metric::L2 => mint!(query, visitor, i8 => SquaredL2),
             Metric::InnerProduct => mint!(query, visitor, i8 => InnerProduct),
             Metric::Cosine => mint!(query, visitor, i8 => Cosine),
@@ -509,8 +568,7 @@ mod tests {
     /// reject byte slices that are too long or too short.
     fn test_impl<T>(max_dim: usize, ctx: &dyn Display)
     where
-        T: Sample + Debug + Send + Sync + DistanceProvider<T> + 'static,
-        Full<T>: for<'a> layers::Search<Query<'a> = &'a [T]>,
+        T: FullPrecision + Sample + DistanceProvider<T>,
     {
         let mut rng = StdRng::seed_from_u64(0x0D15_0ACE ^ max_dim as u64);
         let metrics = [

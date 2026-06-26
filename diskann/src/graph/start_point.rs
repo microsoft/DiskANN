@@ -44,6 +44,7 @@ pub trait SampleableForStart:
     diskann_utils::sampling::medoid::ComputeMedoid
     + diskann_utils::sampling::latin_hypercube::SampleLatinHyperCube
     + diskann_utils::sampling::random::RoundFromf32
+    + diskann_utils::sampling::WithApproximateNorm
 {
 }
 
@@ -51,6 +52,7 @@ impl<T> SampleableForStart for T where
     T: diskann_utils::sampling::medoid::ComputeMedoid
         + diskann_utils::sampling::latin_hypercube::SampleLatinHyperCube
         + diskann_utils::sampling::random::RoundFromf32
+        + diskann_utils::sampling::WithApproximateNorm
 {
 }
 

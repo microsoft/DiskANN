@@ -31,7 +31,7 @@ use diskann::ANNResult;
 use crate::num::Bytes;
 
 mod full;
-pub use full::Full;
+pub use full::{Full, FullPrecision};
 
 /// Base layer for data representations.
 pub trait Layer: Send + Sync + 'static {
