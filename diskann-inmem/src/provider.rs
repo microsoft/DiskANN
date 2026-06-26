@@ -3,6 +3,33 @@
  * Licensed under the MIT license.
  */
 
+//! An in-memory provider for the DiskANN graph index.
+//!
+//! This type supports the following:
+//!
+//! * Arbitrary external IDs for store data (provided they satisfy [`Id`].
+//! * Support for concurrent insertions, deletions, and searches.
+//! * Specialized implementations of [`glue::SearchAccessor::expand_beam`] enabling full
+//!   inlining of distance kernels.
+//!
+//! Known areas for future work:
+//!
+//! * Insert and delete protection: The [`DiskANNIndex`](diskann::graph::DiskANNIndex) doesn't
+//!   support ergonomic insert or delete guards to protect slots during insert or delete
+//!   operations. This leaves open a situation where an item can be inserted and during
+//!   the insertion algorithm, it is deleted, and then re-inserted.
+//!
+//!   This can cause some issue within the main indexing algorithms which assume the inserted
+//!   ID is present but requires upstream changes to properly fix.
+//!
+//! * Failed insert rollback: again, this needs some upstream changes to full support.
+//!
+//! * Quantization + reranking: Ths current version of this index targets just a single
+//!   data-store and is planned to be addressed in the near future.
+//!
+//! * Lack of save/load support: The index is currently ephemeral, but there are plans to
+//!   address this gap.
+
 use std::hash::Hash;
 
 use diskann::{
@@ -17,6 +44,7 @@ use diskann::{
     utils::IntoUsize,
 };
 use diskann_utils::views::Matrix;
+use thiserror::Error;
 
 use crate::{
     counters::{Counters, LocalCounters},
@@ -26,16 +54,26 @@ use crate::{
     store::{self, Store},
 };
 
+/// Aggregate trait for the external ID type of [`Provider`].
 pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
+
 impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
 
+/// An in-memory data-provider for DiskANN's graph indexing algorithms.
+///
+/// The first type parameter `L` is a [`layers::Layer`] for describing the kind of data
+/// stored within the provider. The second parameter `M` is the associated data for items
+/// inserted into the provider.
 #[derive(Debug)]
 pub struct Provider<L, M = u32>
 where
     M: Id,
 {
+    // The raw binary store
     store: Store,
+    // Data representation.
     layer: L,
+    // ID translation.
     mapping: Sharded<M>,
 
     // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
@@ -47,7 +85,10 @@ impl<L, M> Provider<L, M>
 where
     M: Id,
 {
-    pub fn new<I, T>(layer: L, config: Config, start_points: I) -> Self
+    /// Construct a new [`Provider`].
+    ///
+    /// The list of `start_points` must be must be compatible with `layer`.
+    pub fn new<I, T>(layer: L, config: Config, start_points: I) -> Result<Self, ProviderError>
     where
         I: IntoIterator<Item = T>,
         L: layers::Set<T>,
@@ -57,7 +98,7 @@ where
         let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
 
         for (row, point) in std::iter::zip(data.row_iter_mut(), start_points.into_iter()) {
-            layers::Set::set(&layer, point, row).unwrap();
+            layers::Set::set(&layer, point, row)?;
         }
 
         let store = Store::new(
@@ -66,16 +107,16 @@ where
             config.max_degree(),
             data.as_view(),
         )
-        .unwrap();
+        .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
 
         let mapping = Sharded::new(config.capacity());
 
-        Self {
+        Ok(Self {
             store,
             layer,
             mapping,
             counters: Counters::new(),
-        }
+        })
     }
 
     fn local_counters(&self) -> LocalCounters<'_> {
@@ -94,6 +135,15 @@ where
     }
 }
 
+#[derive(Debug, Error)]
+pub enum ProviderError {
+    #[error("error when trying to set start points")]
+    SettingStartPoints(#[from] ANNError),
+    #[error("could not create data store")]
+    CreatingStore(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+/// Configuration for [`Provider`].
 #[derive(Debug)]
 pub struct Config {
     capacity: usize,
@@ -101,6 +151,10 @@ pub struct Config {
 }
 
 impl Config {
+    /// Construct a new [`Config`].
+    ///
+    /// * `capacity`: The number of dynamic entries in the resulting provider.
+    /// * `max_degree`: The maximum degree of any adjacency list in the graph.
     pub fn new(capacity: usize, max_degree: usize) -> Self {
         Self {
             capacity,
@@ -108,10 +162,12 @@ impl Config {
         }
     }
 
+    /// Return the number of dynamic entries in the resulting provider.
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
+    /// Return the maximum degree of any adjacency list.
     pub fn max_degree(&self) -> usize {
         self.max_degree
     }
@@ -121,6 +177,7 @@ impl Config {
 // Data Provider //
 ///////////////////
 
+/// A zero-sied [`diskann::provider::ExecutionContext`] for [`Provider`].
 #[derive(Debug, Clone, Default)]
 pub struct Context;
 
@@ -161,8 +218,8 @@ where
     }
 }
 
-// TODO: The element-status checks here are profoundly expensive as they require epoch
-// registration for each check!
+// TODO: The element-status checks here are profoundly approximate because we try to avoid
+// any kind of EBR registration.
 //
 // `diskann` has plans to move deletion checks behind an accessor trait, which will help
 // with this situation.
@@ -172,7 +229,10 @@ where
     M: Id,
 {
     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
-        // TODO: These need to actually happen in lock-step.
+        // This guarantees that we have a valid mapping, but defers the actual deletion until
+        // we know it's also safe to retire the internal slot.
+        //
+        // This ensures both either succeed or are aborted.
         let entry = match self.mapping.occupied_entry(gid.clone()) {
             None => {
                 return Err(ANNError::message(
@@ -204,14 +264,16 @@ where
     ) -> ANNResult<diskann::provider::ElementStatus> {
         // Not that this check is approximate. A full check requires materialization of
         // a `reader`.
-        if self.store.can_read_approximate(id.into_usize()).unwrap() {
-            Ok(diskann::provider::ElementStatus::Valid)
-        } else {
-            Ok(diskann::provider::ElementStatus::Deleted)
+        match self.store.can_read_approximate(id.into_usize()) {
+            Some(true) => Ok(diskann::provider::ElementStatus::Valid),
+            Some(false) => Ok(diskann::provider::ElementStatus::Deleted),
+            None => Err(ANNError::message(
+                ANNErrorKind::Opaque,
+                "accessed invalid internal ID",
+            )),
         }
     }
 
-    /// Check the status via external ID.
     async fn status_by_external_id(
         &self,
         _context: &Context,
@@ -251,7 +313,7 @@ where
             })?;
 
             // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
-            // insert failure.
+            // insert failure after `set_element` returns.
             <L as layers::Set<T>>::set(&self.layer, element, slot.as_mut_slice())?;
             self.mapping.insert(id.clone(), slot.slot())?;
 
@@ -276,11 +338,16 @@ where
 // Search //
 ////////////
 
+/// A [`glue::SearchAccessor`] for [`Provider`].
+///
+/// This type intentionally avoids generic parameters and instead compiles optimized
+/// `expand_beam` kernels that get reused. The idea is to generate an efficient graph search
+/// kernel once and reuse it to balance compile times and performance.
 #[derive(Debug)]
 pub struct SearchAccessor<'a> {
     reader: store::Reader<'a>,
     ids: AdjacencyList<u32>,
-    expand_beam: Box<dyn ExpandBeam2 + 'a>,
+    expand_beam: Box<dyn ExpandBeam + 'a>,
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
@@ -343,7 +410,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || -> ANNResult<()> {
             for i in ids {
-                self.reader.neighbors().get(i, &mut self.ids).unwrap();
+                self.reader.neighbors().get(i, &mut self.ids)?;
                 self.counters.get_neighbors(1);
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
@@ -359,6 +426,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                     on_neighbors(id, distance);
                 };
 
+                // SAFETY: We've verified that each entry in `self.ids` is in-bounds.
                 unsafe {
                     self.expand_beam
                         .expand_beam(&self.ids, 8, &self.reader, &mut on_neighbors)
@@ -372,10 +440,15 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     }
 }
 
-trait ExpandBeam2: Send + Sync + std::fmt::Debug {
+trait ExpandBeam: Send + Sync + std::fmt::Debug {
     /// Evaluate a raw distance function.
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
 
+    /// Compute the distance between the query and each neighbor in `list`.
+    ///
+    /// # Safety
+    ///
+    /// All items in `list` must in-bounds with respect to `reader`.
     unsafe fn expand_beam(
         &self,
         list: &[u32],
@@ -389,7 +462,7 @@ trait ExpandBeam2: Send + Sync + std::fmt::Debug {
 #[repr(transparent)]
 struct ExpandBeamImpl<T, const BYTES: usize>(T);
 
-impl<T, const BYTES: usize> ExpandBeam2 for ExpandBeamImpl<T, BYTES>
+impl<T, const BYTES: usize> ExpandBeam for ExpandBeamImpl<T, BYTES>
 where
     T: layers::QueryDistance,
 {
@@ -404,6 +477,7 @@ where
         reader: &store::Reader<'_>,
         f: &mut dyn FnMut(u32, f32),
     ) -> ANNResult<()> {
+        // SAFETY: Inherited from caller.
         unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, f) }
     }
 }
@@ -414,13 +488,13 @@ struct ExpandBeamVisitor {
 }
 
 impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
-    type Output = Box<dyn ExpandBeam2 + 'a>;
+    type Output = Box<dyn ExpandBeam + 'a>;
 
     fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
     where
         T: QueryDistance + 'a,
     {
-        // Make sure there's no lying.
+        // This is critical to ensure we emit the correct number of prefetches.
         assert_eq!(Bytes::new(BYTES + store::TAG_SIZE.value()), self.bytes);
         Box::new(ExpandBeamImpl::<_, BYTES>(distance))
     }
@@ -433,6 +507,13 @@ impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
     }
 }
 
+/// Prefetch `len` bytes beginning at `ptr`.
+///
+/// The last cache line prefetched first, followed by the rest in ascending order.
+///
+/// # Safety
+///
+/// The memory range `[ptr, ptr.add(len))` must be valid.
 #[inline(always)]
 unsafe fn prefetch(ptr: *const u8, len: usize) {
     use std::arch::x86_64::*;
@@ -445,17 +526,18 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
         return;
     }
 
+    // SAFETY: Inherited from caller.
     unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
     for i in 0..(lines - 1) {
+        // SAFETY: Inherited from caller.
         unsafe {
             _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
         }
     }
 }
 
-/// Safety (no # yet because we need to revisit this - clippy will lint)
+/// # Safety
 ///
-/// * The concrete type of `distance` must be `T`.
 /// * All items in `list` must in-bounds with respect to `reader`.
 /// * The number of bytes associated with `N` cache lines must "make sense".
 #[inline]
@@ -486,6 +568,8 @@ where
     let lookahead = lookahead.min(len);
 
     for j in 0..lookahead {
+        // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
+        // as the validity of the prefetch bounds.
         unsafe {
             prefetch(
                 reader
@@ -500,6 +584,8 @@ where
     let mut j = lookahead;
     for &i in list.iter() {
         if j != len {
+            // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
+            // well as the validity of the prefetch bounds.
             unsafe {
                 prefetch(
                     reader
@@ -512,6 +598,7 @@ where
             j += 1;
         }
 
+        // SAFETY: Caller asserts that `i` is in-bounds.
         if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
             f(i, distance.evaluate(data)?)
         }
@@ -547,6 +634,10 @@ impl<'a> Distance<'a> {
     }
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "prune does not allow fallible distance functions yet"
+)]
 impl diskann_vector::DistanceFunction<&[u8], &[u8], f32> for Distance<'_> {
     #[inline]
     fn evaluate_similarity(&self, x: &[u8], y: &[u8]) -> f32 {
@@ -713,8 +804,8 @@ pub fn test_function<'a>(
     strategy: &'a Strategy,
     context: &'a Context,
     query: &'a [u8],
-) -> SearchAccessor<'a> {
-    glue::SearchStrategy::search_accessor(strategy, x, context, query).unwrap()
+) -> ANNResult<SearchAccessor<'a>> {
+    glue::SearchStrategy::search_accessor(strategy, x, context, query)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -746,7 +837,11 @@ where
     {
         let work = move || {
             // By construction - the downcast should succeed. Otherwise, this is a program bug.
-            let provider = accessor.provider.downcast_ref::<Provider<L, M>>().unwrap();
+            let provider = match accessor.provider.downcast_ref::<Provider<L, M>>() {
+                Some(provider) => provider,
+                None => return Err(ANNError::message(ANNErrorKind::Opaque, "bad any cast")),
+            };
+
             let mut count = 0;
             for c in candidates {
                 if let Some(ext) = provider.mapping.to_external(c.id) {
@@ -839,9 +934,19 @@ where
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
         let work = move || {
-            let reader = provider.store.reader().unwrap();
+            let reader = provider.store.reader()?;
+            let data = match reader.read(id.into_usize()) {
+                Some(data) => data,
+                None => {
+                    return Err(ANNError::message(
+                        ANNErrorKind::Opaque,
+                        "item could not be read",
+                    ));
+                }
+            };
+
             let mut buf: Box<[_]> = std::iter::repeat_n(0.0, provider.layer.dim()).collect();
-            let data = reader.read(id.into_usize()).unwrap();
+
             bytemuck::must_cast_slice_mut::<f32, u8>(&mut buf).copy_from_slice(data);
             Ok(buf)
         };
@@ -896,7 +1001,8 @@ mod tests {
 
         let config = Config::new(grid.num_points(size), degree);
 
-        let provider = Provider::<_, u64>::new(full, config, std::iter::once(start.as_slice()));
+        let provider =
+            Provider::<_, u64>::new(full, config, std::iter::once(start.as_slice())).unwrap();
         assert_eq!(provider.max_degree(), degree);
 
         let config = diskann::graph::config::Builder::new(

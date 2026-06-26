@@ -24,7 +24,7 @@ use crate::{
     index::{Counters, Index},
     support::{
         check::{CheckMatch, Match, check_all_fields},
-        datatype::{DataType, Dataset, DatasetView},
+        datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
         tolerance,
     },
@@ -71,12 +71,38 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum Preprocess {
+        Halve,
+        Floor,
+    }
+
+    impl From<Preprocess> for datatype::Preprocess {
+        fn from(op: Preprocess) -> Self {
+            match op {
+                Preprocess::Halve => datatype::Preprocess::Halve,
+                Preprocess::Floor => datatype::Preprocess::Floor,
+            }
+        }
+    }
+
+    impl From<&datatype::Preprocess> for Preprocess {
+        fn from(op: &datatype::Preprocess) -> Self {
+            match op {
+                datatype::Preprocess::Halve => Preprocess::Halve,
+                datatype::Preprocess::Floor => Preprocess::Floor,
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Data {
         pub(super) data: InputFile,
         pub(super) queries: InputFile,
         pub(super) groundtruth: InputFile,
         pub(super) metric: SerdeMetric,
         pub(super) data_type: DataType,
+        pub(super) preprocess: Vec<Preprocess>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -121,6 +147,7 @@ struct Data {
     groundtruth: InputFile,
     metric: Metric,
     data_type: DataType,
+    preprocess: Vec<datatype::Preprocess>,
 }
 
 impl Data {
@@ -131,6 +158,7 @@ impl Data {
             mut groundtruth,
             metric,
             data_type,
+            preprocess,
         } = raw;
 
         if let Some(checker) = checker {
@@ -145,6 +173,7 @@ impl Data {
             groundtruth,
             metric: metric.into(),
             data_type,
+            preprocess: preprocess.into_iter().map(From::from).collect(),
         })
     }
 
@@ -155,6 +184,7 @@ impl Data {
             groundtruth: self.groundtruth.clone(),
             metric: self.metric.try_into()?,
             data_type: self.data_type,
+            preprocess: self.preprocess.iter().map(From::from).collect(),
         })
     }
 
@@ -163,14 +193,14 @@ impl Data {
             let mut io = std::fs::File::open(&*self.data)
                 .with_context(|| format!("could not open {}", self.data.display()))?;
 
-            load_and_convert(&mut io, self.data_type, data_type)?
+            load_and_convert(&mut io, self.data_type, data_type, &self.preprocess)?
         };
 
         let queries = {
             let mut io = std::fs::File::open(&*self.queries)
                 .with_context(|| format!("could not open {}", self.queries.display()))?;
 
-            load_and_convert(&mut io, self.data_type, data_type)?
+            load_and_convert(&mut io, self.data_type, data_type, &self.preprocess)?
         };
 
         let groundtruth = {
@@ -348,19 +378,19 @@ impl Test {
 
                 let index = match start_points {
                     DatasetView::F32(v) => finish(
-                        Provider::new(layers::Full::<f32>::new(dim, metric), config, v.row_iter()),
+                        Provider::new(layers::Full::<f32>::new(dim, metric), config, v.row_iter())?,
                         index_config,
                     ),
                     DatasetView::F16(v) => finish(
-                        Provider::new(layers::Full::<f16>::new(dim, metric), config, v.row_iter()),
+                        Provider::new(layers::Full::<f16>::new(dim, metric), config, v.row_iter())?,
                         index_config,
                     ),
                     DatasetView::U8(v) => finish(
-                        Provider::new(layers::Full::<u8>::new(dim, metric), config, v.row_iter()),
+                        Provider::new(layers::Full::<u8>::new(dim, metric), config, v.row_iter())?,
                         index_config,
                     ),
                     DatasetView::I8(v) => finish(
-                        Provider::new(layers::Full::<i8>::new(dim, metric), config, v.row_iter()),
+                        Provider::new(layers::Full::<i8>::new(dim, metric), config, v.row_iter())?,
                         index_config,
                     ),
                 };
@@ -407,6 +437,7 @@ impl diskann_benchmark_runner::Input for Test {
                 groundtruth: InputFile::new("path/to/groundtruth"),
                 metric: dto::SerdeMetric::L2,
                 data_type: DataType::F32,
+                preprocess: vec![],
             },
             layer: dto::Layer::FullPrecision {
                 data_type: DataType::F32,

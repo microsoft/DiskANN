@@ -37,12 +37,16 @@ impl Slot {
     where
         F: FnOnce(),
     {
-        if self.tag.compare_exchange(
-            Tag::AVAILABLE,
-            Tag::OWNED,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .tag
+            .compare_exchange(
+                Tag::AVAILABLE,
+                Tag::OWNED,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             // SAFETY: By transitioning from AVAILABLE to OWNED, we've acquired ownership
             // of this slot and are thus free to write to the `UnsafeCell`.
             unsafe { &mut *self.payload.get() }.write(Box::new(payload));
@@ -70,12 +74,14 @@ impl Slot {
             return false;
         }
 
-        self.tag.compare_exchange(
-            Tag::PUBLISHED,
-            Tag::RETIRING,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ).is_ok()
+        self.tag
+            .compare_exchange(
+                Tag::PUBLISHED,
+                Tag::RETIRING,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
     }
 
     unsafe fn make_available(&self) {
@@ -84,12 +90,16 @@ impl Slot {
         // SAFETY: Items tagged as `RETIRING` must be initialized.
         unsafe { (&mut *self.payload.get()).assume_init_drop() };
 
-        if self.tag.compare_exchange(
-            Tag::RETIRING,
-            Tag::AVAILABLE,
-            Ordering::Release,
-            Ordering::Relaxed,
-        ).is_err() {
+        if self
+            .tag
+            .compare_exchange(
+                Tag::RETIRING,
+                Tag::AVAILABLE,
+                Ordering::Release,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
             panic!("concurrency violation");
         }
     }

@@ -13,6 +13,7 @@
           "data_type": "f32",
           "groundtruth": "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin",
           "metric": "l2",
+          "preprocess": [],
           "queries": "/disk_index_search/disk_index_sample_query_10pts.fbin"
         },
         "layer": {
@@ -133,6 +134,7 @@
           "data_type": "f32",
           "groundtruth": "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin",
           "metric": "l2",
+          "preprocess": [],
           "queries": "/disk_index_search/disk_index_sample_query_10pts.fbin"
         },
         "layer": {
@@ -253,6 +255,7 @@
           "data_type": "f32",
           "groundtruth": "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin",
           "metric": "l2",
+          "preprocess": [],
           "queries": "/disk_index_search/disk_index_sample_query_10pts.fbin"
         },
         "layer": {
@@ -351,6 +354,130 @@
           },
           "recall": {
             "average": 0.91,
+            "num_queries": 10,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 50,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "/disk_index_search/disk_index_siftsmall_learn_256pts_data.fbin",
+          "data_type": "f32",
+          "groundtruth": "/disk_index_search/disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "metric": "l2",
+          "preprocess": [
+            "halve",
+            "floor"
+          ],
+          "queries": "/disk_index_search/disk_index_sample_query_10pts.fbin"
+        },
+        "layer": {
+          "FullPrecision": {
+            "data_type": "i8"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": 1,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      },
+      "type": "integration-test"
+    },
+    "results": {
+      "build": {
+        "append_neighbors": 2449,
+        "distance": 59803,
+        "get_neighbors": 14471,
+        "get_vector": 42075,
+        "query_distance": 22829,
+        "set_neighbors": 428,
+        "set_vector": 256
+      },
+      "knn": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 517,
+            "get_vector": 1434,
+            "query_distance": 1434,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 1434,
+            "hops": 517
+          },
+          "recall": {
+            "average": 0.9,
+            "num_queries": 10,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 523,
+            "get_vector": 1462,
+            "query_distance": 1462,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 1462,
+            "hops": 523
+          },
+          "recall": {
+            "average": 0.9,
+            "num_queries": 10,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 1016,
+            "get_vector": 1625,
+            "query_distance": 1625,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 1625,
+            "hops": 1016
+          },
+          "recall": {
+            "average": 0.9,
             "num_queries": 10,
             "recall_k": 10,
             "recall_n": 10

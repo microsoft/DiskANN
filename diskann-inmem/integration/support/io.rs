@@ -6,22 +6,27 @@
 use diskann_utils::{io::read_bin, views::Matrix};
 use half::f16;
 
-use super::datatype::{DataType, Dataset, SliceMut};
+use super::datatype::{DataType, Dataset, Preprocess, SliceMut};
 
 pub(crate) fn load_and_convert<IO>(
     io: &mut IO,
     src: DataType,
     target: DataType,
+    ops: &[Preprocess],
 ) -> anyhow::Result<Dataset>
 where
     IO: std::io::Read + std::io::Seek,
 {
-    let data = match src {
+    let mut data = match src {
         DataType::F32 => Dataset::from(read_bin::<f32>(io)?),
         DataType::F16 => Dataset::from(read_bin::<f16>(io)?),
         DataType::U8 => Dataset::from(read_bin::<u8>(io)?),
         DataType::I8 => Dataset::from(read_bin::<i8>(io)?),
     };
+
+    for op in ops {
+        data.preprocess(op);
+    }
 
     if src == target {
         return Ok(data);

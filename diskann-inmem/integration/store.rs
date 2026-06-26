@@ -12,6 +12,11 @@
 //! 2. A readable value is stable for the lifetime of a single reader guard.
 //! 3. A slot never resurrects (`readable -> unreadable -> readable`) within one guard.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "this code works mainly as an integration test"
+)]
+
 use std::{
     collections::HashMap,
     io::Write,
@@ -74,6 +79,40 @@ pub struct StoreStressInput {
     seed: u64,
 }
 
+impl StoreStressInput {
+    fn check(self) -> anyhow::Result<Self> {
+        if self.readers == 0 || self.writers == 0 {
+            anyhow::bail!("`readers` and `writers` must be non-zero");
+        }
+        if self.readers >= GUARD_CAPACITY {
+            anyhow::bail!(
+                "`readers` ({}) must be below the epoch guard capacity ({GUARD_CAPACITY})",
+                self.readers,
+            );
+        }
+        if self.capacity == 0 {
+            anyhow::bail!("`capacity` must be non-zero");
+        }
+        if self.entry_bytes == 0 || !self.entry_bytes.is_multiple_of(8) {
+            anyhow::bail!(
+                "`entry_bytes` ({}) must be a non-zero multiple of 8",
+                self.entry_bytes,
+            );
+        }
+        if self.low_watermark > self.capacity {
+            anyhow::bail!(
+                "`low_watermark` ({}) must not exceed `capacity` ({})",
+                self.low_watermark,
+                self.capacity,
+            );
+        }
+        if self.duration_secs == 0 && self.max_ops == 0 {
+            anyhow::bail!("at least one of `duration_secs` or `max_ops` must be non-zero");
+        }
+        Ok(self)
+    }
+}
+
 impl Input for StoreStressInput {
     type Raw = Self;
 
@@ -82,35 +121,7 @@ impl Input for StoreStressInput {
     }
 
     fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
-        if raw.readers == 0 || raw.writers == 0 {
-            anyhow::bail!("`readers` and `writers` must be non-zero");
-        }
-        if raw.readers >= GUARD_CAPACITY {
-            anyhow::bail!(
-                "`readers` ({}) must be below the epoch guard capacity ({GUARD_CAPACITY})",
-                raw.readers,
-            );
-        }
-        if raw.capacity == 0 {
-            anyhow::bail!("`capacity` must be non-zero");
-        }
-        if raw.entry_bytes == 0 || raw.entry_bytes % 8 != 0 {
-            anyhow::bail!(
-                "`entry_bytes` ({}) must be a non-zero multiple of 8",
-                raw.entry_bytes,
-            );
-        }
-        if raw.low_watermark > raw.capacity {
-            anyhow::bail!(
-                "`low_watermark` ({}) must not exceed `capacity` ({})",
-                raw.low_watermark,
-                raw.capacity,
-            );
-        }
-        if raw.duration_secs == 0 && raw.max_ops == 0 {
-            anyhow::bail!("at least one of `duration_secs` or `max_ops` must be non-zero");
-        }
-        Ok(raw)
+        Self::check(raw)
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
@@ -496,5 +507,19 @@ impl Benchmark for StoreStress {
 
         writeln!(output, "{}", stats)?;
         Ok(stats)
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn make_sure_example_parses() {
+        let _ = StoreStressInput::check(StoreStressInput::example()).unwrap();
     }
 }

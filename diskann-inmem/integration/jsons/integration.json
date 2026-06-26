@@ -18,7 +18,8 @@
           "data_type": "f32",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin"
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "preprocess": []
         },
         "layer": {
           "FullPrecision": {
@@ -60,7 +61,8 @@
           "data_type": "f32",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin"
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "preprocess": []
         },
         "layer": {
           "FullPrecision": {
@@ -102,11 +104,58 @@
           "data_type": "f32",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
           "metric": "l2",
-          "queries": "disk_index_sample_query_10pts.fbin"
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "preprocess": []
         },
         "layer": {
           "FullPrecision": {
             "data_type": "u8"
+          }
+        },
+        "search": {
+          "knn": [
+            {
+              "beam_width": null,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 50
+            },
+            {
+              "beam_width": 3,
+              "knn": 10,
+              "search_l": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "integration-test",
+      "content": {
+        "build": {
+          "alpha": 1.2000000476837158,
+          "l_build": 50,
+          "max_degree": 20,
+          "pruned_degree": 16
+        },
+        "data": {
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "data_type": "f32",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "metric": "l2",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "preprocess": [
+            "halve",
+            "floor"
+          ]
+        },
+        "layer": {
+          "FullPrecision": {
+            "data_type": "i8"
           }
         },
         "search": {

@@ -164,7 +164,9 @@ impl Registry {
 
             let m = &self.guards[slot];
             delay.pre_cas();
-            if m.compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            if m.compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
                 delay.post_cas();
                 let mut reset = false;
                 loop {
@@ -271,6 +273,10 @@ impl Registry {
         self.try_advance_inner(NoDelay)
     }
 
+    #[expect(
+        clippy::panic,
+        reason = "the panic is exceedingly unlikely to happen and if it does, we can't continue"
+    )]
     fn try_advance_inner<T>(&self, mut delay: T) -> Option<Drain<'_>>
     where
         T: TryAdvanceDelay,

@@ -23,8 +23,8 @@ pub(super) fn insert(
     rt: &tokio::runtime::Handle,
 ) -> anyhow::Result<Counters> {
     let before = index.counters();
-    for i in 0..dataset.nrows() {
-        rt.block_on(index.insert(dataset.row(i).unwrap(), i as u64))?;
+    for (i, r) in dataset.iter().enumerate() {
+        rt.block_on(index.insert(r, i as u64))?;
     }
     before.delta(&index.counters())
 }
@@ -48,10 +48,10 @@ pub(super) fn knn(
     let before = index.counters();
     let mut misc = KnnSearch::new();
     let mut neighbors = Vec::new();
-    for (i, out) in ids.row_iter_mut().enumerate() {
+    for (out, query) in std::iter::zip(ids.row_iter_mut(), queries.iter()) {
         neighbors.clear();
 
-        let stats = rt.block_on(index.search(queries.row(i).unwrap(), knn, &mut neighbors))?;
+        let stats = rt.block_on(index.search(query, knn, &mut neighbors))?;
         misc += stats;
 
         std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = s.id);

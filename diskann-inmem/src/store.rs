@@ -62,10 +62,10 @@ use diskann_utils::views::MatrixView;
 use thiserror::Error;
 
 use crate::{
-    buffer::{Buffer, RawSlice},
+    buffer::{Buffer, BufferError, RawSlice},
     epoch::{self, Registry},
     freelist::{self, Freelist},
-    neighbors::Neighbors,
+    neighbors::{Neighbors, NeighborsError},
     num::{Align, Bytes},
     tag::{AtomicTag, Tag},
 };
@@ -124,6 +124,10 @@ impl Store {
             return Err(StoreError::need_frozen_point());
         }
 
+        #[expect(
+            clippy::expect_used,
+            reason = "we expect `init` to have at least one row, so this should never happen"
+        )]
         let unpadded = bytes
             .checked_add(TAG_SIZE)
             .expect("unreachable because `init` cannot exceed `isize::MAX` bytes");
@@ -131,6 +135,10 @@ impl Store {
         // Pad to half a cache line. When data occupies just part of a cache line, this
         // results in the same total number of cache lines being fetched while potentially
         // enabling more compact memory.
+        #[expect(
+            clippy::expect_used,
+            reason = "we expect `init` to have at least one row, so this should never happen"
+        )]
         let padded_bytes = unpadded
             .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
             .expect("unreachabel because `init` cannot exceed `isize::MAX` bytes");
@@ -150,8 +158,10 @@ impl Store {
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_neighbors))?;
 
+        const FREELIST_SIZE: NonZeroU32 = NonZeroU32::new(1024).unwrap();
+
         let me = Self {
-            buffer: Buffer::new(total.into_usize(), padded_bytes, Align::_128).unwrap(),
+            buffer: Buffer::new(total.into_usize(), padded_bytes, Align::_128)?,
             unpadded,
             unfrozen: entries.into_usize(),
             tags: repeat_n(Tag::AVAILABLE, total.into_usize())
@@ -160,15 +170,16 @@ impl Store {
 
             // NOTE: The `Freelist` is initialized to `entries` and not `total` because
             // we do not want it to release frozen IDs.
-            freelist: Freelist::new(entries, NonZeroU32::new(1024).unwrap()),
+            freelist: Freelist::new(entries, FREELIST_SIZE),
             registry: Registry::new(),
-            neighbors: Neighbors::new(total, max_neighbors).unwrap(),
+            neighbors: Neighbors::new(total, max_neighbors)?,
         };
 
         // Populate frozen points.
         for (i, data) in init.row_iter().enumerate() {
             // We have checked that the total number of entries fits in `u32`, so this
             // arithmetic cannot overflow.
+            #[expect(clippy::expect_used, reason = "this should always succeed")]
             let mut slot = me
                 .slot(entries + (i as u32))
                 .expect("store was just created - claiming the slot must succeed");
@@ -199,6 +210,7 @@ impl Store {
     ///
     /// If successful, returns the number of slots reclaimed.
     pub(crate) fn try_drain(&self) -> Option<usize> {
+        #[expect(clippy::panic, reason = "we cannot proceed if we observe this")]
         fn release(tag: &AtomicTag, kind: &'static str) {
             // Relaxed ordering is sufficient as all readers/writers are synchronized on
             // the central generation.
@@ -336,7 +348,14 @@ impl Store {
             remaining = remaining.saturating_sub(chunk.len());
 
             for slot in chunk {
-                let tag = self.tags.get(slot.into_usize()).unwrap();
+                #[expect(
+                    clippy::expect_used,
+                    reason = "this is a serious bug with the freelist"
+                )]
+                let tag = self
+                    .tags
+                    .get(slot.into_usize())
+                    .expect("freelist scan should not give out invalid IDs");
 
                 // If this slot is available and we haven't claimed a slot yet, try to
                 // claim it. Otherwise, continue with the scan to partially repopulate the
@@ -369,7 +388,8 @@ impl Store {
     }
 
     fn slot(&self, i: u32) -> Option<Slot<'_>> {
-        let tag = &self.tags.get(i.into_usize()).unwrap();
+        let tag = &self.tags.get(i.into_usize())?;
+
         // SAFETY: We've guaranteed that `tag` belongs to `slot`.
         unsafe { self.try_acquire(tag, i) }
     }
@@ -460,6 +480,18 @@ impl StoreError {
     }
 }
 
+impl From<BufferError> for StoreError {
+    fn from(err: BufferError) -> Self {
+        Self(err.into())
+    }
+}
+
+impl From<NeighborsError> for StoreError {
+    fn from(err: NeighborsError) -> Self {
+        Self(err.into())
+    }
+}
+
 #[derive(Debug, Error)]
 enum StoreErrorInner {
     #[error(
@@ -478,6 +510,10 @@ enum StoreErrorInner {
     TooManyEntries { entries: usize, frozen: usize },
     #[error("number of neighbors ({}) may not exceed `u32::MAX`", neighbors)]
     TooManyNeighbors { neighbors: usize },
+    #[error(transparent)]
+    BufferError(#[from] BufferError),
+    #[error(transparent)]
+    NeighborsError(#[from] NeighborsError),
 }
 
 /// Error conditions for [`Store::retire`].

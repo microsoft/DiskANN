@@ -20,12 +20,12 @@ use std::{
 use diskann_benchmark_runner::{benchmark::PassFail, utils::fmt::Table};
 use serde::{Serialize, Serializer};
 
-/// Perform a basline check on `self` and a `previous`ly saved result.
+/// Perform a baseline check on `self` and a `previous`ly saved result.
 pub(crate) trait CheckMatch {
     fn check_match(&self, previous: &Self) -> Match;
 }
 
-/// The result of a basline.
+/// The result of a basline check.
 #[must_use = "this is a result type"]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -190,6 +190,7 @@ impl<'a> Stack<'a> {
         Self { s, len: 0 }
     }
 
+    #[expect(clippy::unwrap_used, reason = "formatting shouldn't be failing here")]
     fn push(&mut self, key: &Key) -> Stack<'_> {
         let len = self.s.len();
         if len == 0 {
@@ -228,7 +229,7 @@ struct Record<'a> {
 ///
 /// Keys can either be strings or positional indices. The latter are used when traversing
 /// arrays.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Key {
     Str(&'static str),
     Position(usize),
@@ -280,28 +281,37 @@ impl From<String> for Key {
 // Builder //
 /////////////
 
+/// A utility for building a nested [`Match`].
 #[derive(Debug)]
 pub(crate) struct MatchBuilder {
     children: Vec<(Key, Match)>,
 }
 
 impl MatchBuilder {
+    /// Construct a new empty collection of matches.
     pub(crate) fn new() -> Self {
         Self {
             children: Vec::new(),
         }
     }
 
+    /// Push the [`Match`] into the collection only if [`Match::is_ok`] fails.
     pub(crate) fn push(&mut self, key: Key, child: Match) {
         if !child.is_ok() {
             self.children.push((key, child));
         }
     }
 
+    /// Package the collection of matches into a single [`Match`].
+    ///
+    /// If no failing matches have been aggregated, returns [`Match::Ok`].
     pub(crate) fn finish(self) -> Match {
         self.finish_with_remark(None)
     }
 
+    /// Package the collection of matches into a single [`Match`] with a remark.
+    ///
+    /// If no failing matches have been aggregated, returns [`Match::Ok`].
     pub(crate) fn finish_with_remark(self, remark: Option<Cow<'static, str>>) -> Match {
         if self.children.is_empty() {
             Match::Ok
@@ -369,9 +379,9 @@ where
     }
 }
 
-////////////
+//--------//
 // Macros //
-////////////
+//--------//
 
 macro_rules! check_all_fields {
     ($self:expr, $prev:expr, { $($field:ident),+ $(,)? } $(,)?) => {{
@@ -391,3 +401,310 @@ macro_rules! check_all_fields {
 }
 
 pub(crate) use check_all_fields;
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    //-------//
+    // Match //
+    //-------//
+
+    #[test]
+    fn match_is_ok() {
+        assert!(Match::Ok.is_ok());
+        assert!(!Match::mismatch(&1, &2).is_ok());
+    }
+
+    #[test]
+    fn mismatch_records_got_and_expected() {
+        match Match::mismatch(&1, &2) {
+            Match::Mismatch {
+                got,
+                expected,
+                remark,
+            } => {
+                assert_eq!(got, "1");
+                assert_eq!(expected, "2");
+                assert!(remark.is_none());
+            }
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mismatch_with_remark_records_remark() {
+        match Match::mismatch_with_remark(&"a", &"b", Some("note".into())) {
+            Match::Mismatch {
+                got,
+                expected,
+                remark,
+            } => {
+                assert_eq!(got, "a");
+                assert_eq!(expected, "b");
+                assert_eq!(remark.as_deref(), Some("note"));
+            }
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pass_fail_follows_is_ok() {
+        assert!(matches!(Match::Ok.pass_fail(), PassFail::Pass(Match::Ok)));
+
+        assert!(matches!(
+            Match::mismatch(&1, &2).pass_fail(),
+            PassFail::Fail(Match::Mismatch { .. })
+        ));
+
+        let mut builder = MatchBuilder::new();
+        builder.push(Key::from("test"), Match::mismatch(&1, &2));
+        builder.push(Key::from("test2"), Match::mismatch(&2, &3));
+        let mismatch = builder.finish();
+
+        assert!(matches!(mismatch, Match::Nested { .. }));
+        assert!(matches!(
+            mismatch.pass_fail(),
+            PassFail::Fail(Match::Nested { .. })
+        ));
+    }
+
+    //------------//
+    // CheckMatch //
+    //------------//
+
+    #[test]
+    fn primitive_check_match() {
+        assert!(1u32.check_match(&1u32).is_ok());
+        assert!(!2u32.check_match(&3u32).is_ok());
+        assert!("x".check_match(&"x").is_ok());
+        assert!(!"x".check_match(&"y").is_ok());
+    }
+
+    #[test]
+    fn slice_check_match_equal() {
+        let a = vec![1u32, 2, 3];
+        let b = vec![1u32, 2, 3];
+        assert!(a.check_match(&b).is_ok());
+    }
+
+    #[test]
+    fn slice_check_match_length_mismatch() {
+        let a = vec![1u32, 2, 3];
+        let b = vec![1u32, 2];
+        match a.check_match(&b) {
+            Match::Mismatch {
+                got,
+                expected,
+                remark,
+            } => {
+                assert_eq!(got, "3");
+                assert_eq!(expected, "2");
+                assert!(remark.is_some());
+            }
+            other => panic!("expected length Mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slice_check_match_element_mismatch() {
+        let a = vec![1u32, 9, 3];
+        let b = vec![1u32, 2, 3];
+        match a.check_match(&b) {
+            Match::Nested { children, .. } => {
+                assert_eq!(children.len(), 1);
+                assert!(matches!(children[0].0, Key::Position(1)));
+            }
+            other => panic!("expected Nested, got {other:?}"),
+        }
+    }
+
+    //--------------//
+    // MatchBuilder //
+    //--------------//
+
+    #[test]
+    fn builder_empty_is_ok() {
+        assert!(MatchBuilder::new().finish().is_ok());
+    }
+
+    #[test]
+    fn builder_skips_ok_matches() {
+        let mut builder = MatchBuilder::new();
+        builder.push("a".into(), Match::Ok);
+        builder.push("b".into(), Match::Ok);
+        assert!(builder.finish().is_ok());
+    }
+
+    #[test]
+    fn builder_collects_failures() {
+        let mut builder = MatchBuilder::new();
+        builder.push("a".into(), Match::Ok);
+        builder.push("b".into(), Match::mismatch(&1, &2));
+        match builder.finish() {
+            Match::Nested { children, remark } => {
+                assert_eq!(children.len(), 1);
+                assert!(remark.is_none());
+            }
+            other => panic!("expected Nested, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builder_finish_with_remark() {
+        let mut builder = MatchBuilder::new();
+        builder.push("b".into(), Match::mismatch(&1, &2));
+        match builder.finish_with_remark(Some("ctx".into())) {
+            Match::Nested { remark, .. } => assert_eq!(remark.as_deref(), Some("ctx")),
+            other => panic!("expected Nested, got {other:?}"),
+        }
+    }
+
+    //-----//
+    // Key //
+    //-----//
+
+    #[test]
+    fn key_display() {
+        assert_eq!(Key::from("field").to_string(), "field");
+        assert_eq!(Key::from(7usize).to_string(), "7");
+        assert_eq!(Key::from(String::from("owned")).to_string(), "owned");
+    }
+
+    #[test]
+    fn key_serde() {
+        let k = serde_json::to_value(Key::Str("field")).unwrap();
+        assert_eq!(k, serde_json::Value::String("field".into()));
+
+        let k = serde_json::to_value(Key::Position(10)).unwrap();
+        assert_eq!(k, serde_json::Value::Number(10.into()));
+
+        let k = serde_json::to_value(Key::String("world".into())).unwrap();
+        assert_eq!(k, serde_json::Value::String("world".into()));
+    }
+
+    //---------//
+    // Display //
+    //---------//
+
+    #[test]
+    fn display_ok() {
+        assert_eq!(Match::Ok.to_string(), "ok");
+    }
+
+    #[test]
+    fn display_nonnested() {
+        let mismatch = Match::mismatch_with_remark(&"hello", &1, Some("word".into()));
+        let rendered = mismatch.to_string();
+
+        let expected = r#"
+  got,   expected,   remark
+===========================
+hello,          1,     word
+"#;
+        let expected = expected.strip_prefix('\n').unwrap();
+
+        println!("rendered = {:?}", rendered);
+
+        let mut count = 0;
+        for (line, (got, expected)) in
+            std::iter::zip(rendered.lines(), expected.lines()).enumerate()
+        {
+            count += 1;
+            assert_eq!(got.trim(), expected.trim(), "failed on line {line}",);
+        }
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn display_nested() {
+        // Build a nested match and ensure the hierarchical path is rendered.
+        let mut inner = MatchBuilder::new();
+        inner.push(1usize.into(), Match::mismatch(&9, &2));
+        inner.push(
+            "test".into(),
+            Match::mismatch_with_remark(&9, &2, Some("hello".into())),
+        );
+        let nested = inner.finish_with_remark(Some("some remark".into()));
+
+        let mut outer = MatchBuilder::new();
+        outer.push("results".into(), nested);
+        let rendered = outer
+            .finish_with_remark(Some("final remarks".into()))
+            .to_string();
+
+        let expected = r#"
+         path,   got,   expected,          remark
+ ================================================
+             ,      ,           ,   final remarks
+      results,      ,           ,     some remark
+    results.1,     9,          2,
+ results.test,     9,          2,           hello
+ "#;
+
+        let expected = expected.strip_prefix('\n').unwrap();
+
+        println!("rendered = {:?}", rendered);
+
+        let mut count = 0;
+        for (line, (got, expected)) in
+            std::iter::zip(rendered.lines(), expected.lines()).enumerate()
+        {
+            count += 1;
+            assert_eq!(got.trim(), expected.trim(), "failed on line {line}",);
+        }
+        assert_eq!(count, 6);
+    }
+
+    //-------------------//
+    // check_all_fields! //
+    //-------------------//
+
+    #[derive(Debug)]
+    struct Sample {
+        a: u32,
+        b: String,
+    }
+
+    impl CheckMatch for Sample {
+        fn check_match(&self, previous: &Self) -> Match {
+            check_all_fields!(self, previous, { a, b }).finish()
+        }
+    }
+
+    #[test]
+    fn check_all_fields_equal() {
+        let x = Sample {
+            a: 1,
+            b: "hi".into(),
+        };
+        let y = Sample {
+            a: 1,
+            b: "hi".into(),
+        };
+        assert!(x.check_match(&y).is_ok());
+    }
+
+    #[test]
+    fn check_all_fields_reports_changed_field() {
+        let x = Sample {
+            a: 1,
+            b: "hi".into(),
+        };
+        let y = Sample {
+            a: 1,
+            b: "bye".into(),
+        };
+        match x.check_match(&y) {
+            Match::Nested { children, .. } => {
+                assert_eq!(children.len(), 1);
+                assert_eq!(children[0].0.to_string(), "b");
+            }
+            other => panic!("expected Nested, got {other:?}"),
+        }
+    }
+}
