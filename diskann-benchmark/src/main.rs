@@ -318,6 +318,12 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    fn graph_index_dynamic_yfcc_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-dynamic-yfcc.json"));
+        run_integration_test(raw);
+    }
+
     ////////////////////////////
     //     BF-Tree Index      //
     ////////////////////////////
@@ -584,6 +590,14 @@ mod tests {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_inline_filter_yfcc_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter-yfcc.json"));
         run_integration_test(raw);
     }
 
