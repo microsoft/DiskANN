@@ -17,15 +17,16 @@ use diskann_quantization::{
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::ConfigError;
-use crate::TestCallCount;
+use crate::{bftree_insert, TestCallCount};
 
 pub struct QuantQueryComputer(QueryComputer<GlobalAllocator>);
 
-impl PreprocessedDistanceFunction<&[u8], f32> for QuantQueryComputer {
-    fn evaluate_similarity(&self, x: &[u8]) -> f32 {
-        self.0
-            .evaluate_similarity(Opaque::new(x))
-            .expect("spherical query distance failed")
+impl QuantQueryComputer {
+    pub(crate) fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+        match self.0.evaluate_similarity(Opaque::new(x)) {
+            Ok(distance) => Ok(distance),
+            Err(err) => Err(ANNError::new(diskann::ANNErrorKind::IndexError, err)),
+        }
     }
 }
 
@@ -188,7 +189,7 @@ impl QuantVectorProvider {
             )
             .map_err(|e| ANNError::log_sq_error(e))?;
 
-        self.quant_vector_index.insert(key, quant_vector);
+        bftree_insert(&self.quant_vector_index, key, quant_vector)?;
 
         Ok(())
     }
@@ -209,7 +210,7 @@ impl QuantVectorProvider {
         // Update pq vector with id = i to v
         let key = bytemuck::bytes_of(&i);
 
-        self.quant_vector_index.insert(key, v);
+        bftree_insert(&self.quant_vector_index, key, v)?;
 
         Ok(())
     }
@@ -264,7 +265,7 @@ mod tests {
 
     use diskann::ANNErrorKind;
     use diskann_quantization::spherical::iface::Opaque;
-    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+    use diskann_vector::DistanceFunction;
     use tokio::task::JoinSet;
 
     use super::*;
@@ -331,7 +332,7 @@ mod tests {
 
         // Query Computer — verify it returns finite distances.
         let c = provider.query_computer(&[-0.5f32, -0.5]).unwrap();
-        let dist = c.evaluate_similarity(&provider.get_vector_sync(3).unwrap());
+        let dist = c.evaluate(&provider.get_vector_sync(3).unwrap()).unwrap();
         assert!(dist.is_finite(), "query distance should be finite");
 
         // Distance Computer — verify distances between compressed vectors are finite

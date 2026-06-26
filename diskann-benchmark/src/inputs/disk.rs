@@ -13,7 +13,7 @@ use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, ge
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{as_input, Example},
+    inputs::{as_input, post_processor::TopkPostProcessor, Example},
     utils::SimilarityMeasure,
 };
 
@@ -76,6 +76,7 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
+    pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 
 /////////
@@ -210,6 +211,12 @@ impl DiskSearchPhase {
                 anyhow::bail!("search_io_limit must be positive if specified");
             }
         }
+
+        if let Some(pp) = self.post_processor.as_mut() {
+            pp.validate(checker)
+                .context("invalid disk search post processor")?;
+        }
+
         Ok(())
     }
 }
@@ -248,6 +255,7 @@ impl Example for DiskIndexOperation {
             vector_filters_file: None,
             num_nodes_to_cache: None,
             search_io_limit: None,
+            post_processor: None,
         };
 
         Self {
@@ -372,6 +380,10 @@ impl DiskSearchPhase {
         match &self.search_io_limit {
             Some(lim) => write_field!(f, "Search IO Limit", format!("{lim}"))?,
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,
+        }
+        match &self.post_processor {
+            Some(pp) => write_field!(f, "Post Processor", pp)?,
+            None => write_field!(f, "Post Processor", "none")?,
         }
         Ok(())
     }
