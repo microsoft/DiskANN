@@ -139,8 +139,6 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     filtered_decisions_pool: ObjectPool<Vec<bool>>,
     /// Pool of pre-allocated buffers to use for quantizing vectors
     quant_buffer_pool: ObjectPool<Vec<u8>>,
-    /// Small cache for the start points' neighbors
-    neighbor_cache: DashMap<u32, Vec<u32>, foldhash::fast::RandomState>,
     /// Small cache for the start points' full precision vector data
     start_point_cache: DashMap<u32, Poly<[u8], AlignToEight>, foldhash::fast::RandomState>,
     /// Small cache for the start points' quantized vector data
@@ -177,22 +175,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
             DashMap::with_capacity_and_hasher(1, foldhash::fast::RandomState::default());
         let start_point_quant_cache =
             DashMap::with_capacity_and_hasher(1, foldhash::fast::RandomState::default());
-        let neighbor_cache =
-            DashMap::with_capacity_and_hasher(1, foldhash::fast::RandomState::default());
 
         // Try to read the start point from Garnet
         let mut v = Poly::broadcast(0u8, dim * mem::size_of::<T>(), AlignToEight)?;
         if callbacks.read_single_iid(&context.term(Term::Vector), 0, &mut v) {
-            let mut neighbors = vec![0u32; max_degree + 1];
-            if !callbacks.read_single_iid(&context.term(Term::Neighbors), 0, &mut neighbors) {
-                return Err(GarnetError::Read.into());
-            }
-
             start_point_cache.insert(0, v);
-
-            let len = neighbors[max_degree] as usize;
-            neighbors.truncate(len);
-            neighbor_cache.insert(0, neighbors);
         }
 
         let (quantizer, canonical_bytes, all_quantized) = match quant_type {
@@ -243,7 +230,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
             quant_buffer_pool,
             start_point_cache,
             start_point_quant_cache,
-            neighbor_cache,
             fsm,
             _phantom: PhantomData,
         })
@@ -287,9 +273,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
             }
 
             self.start_point_cache.insert(0, v);
-            let len = neighbors[self.max_degree] as usize;
-            neighbors.truncate(len);
-            self.neighbor_cache.insert(0, neighbors);
         } else {
             let neighbors = vec![0u32; self.max_degree + 1];
 
@@ -342,15 +325,13 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     AlignToEight,
                 )?,
             );
-            self.neighbor_cache
-                .insert(0, Vec::with_capacity(self.max_degree + 1));
         }
 
         Ok(())
     }
 
     pub(crate) fn start_points_exist(&self) -> bool {
-        self.start_point_cache.get(&0).is_some() && self.neighbor_cache.get(&0).is_some()
+        self.start_point_cache.get(&0).is_some()
     }
 
     pub(crate) fn set_attributes(
@@ -616,14 +597,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ) -> bool {
         let mut guard = neighbors.resize(self.max_degree + 1);
 
-        if iid == 0
-            && let Some(cached) = self.neighbor_cache.get(&iid)
-        {
-            guard[0..cached.len()].copy_from_slice(&cached);
-            guard.finish(cached.len());
-            return true;
-        }
-
         if !self
             .callbacks
             .read_single_iid(&context.term(Term::Neighbors), iid, &mut guard)
@@ -658,10 +631,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         guard.finish(0);
 
-        if iid == 0 {
-            self.neighbor_cache.insert(iid, neighbors.to_vec());
-        }
-
         Ok(())
     }
 
@@ -691,13 +660,6 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     data[len] = nbr;
                     len += 1;
                     data[max_degree] = len as u32;
-                }
-
-                if iid == 0
-                    && let Some(mut ns) = self.neighbor_cache.get_mut(&iid)
-                {
-                    ns.clear();
-                    ns.extend(data.iter().copied().take(len));
                 }
             },
         ) {
