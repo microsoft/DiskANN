@@ -667,7 +667,7 @@ dependencies = [
  "half",
  "indicatif",
  "itertools 0.13.0",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "opentelemetry_sdk",
  "rand",
  "rayon",
@@ -774,7 +774,7 @@ dependencies = [
  "iai-callgrind",
  "io-uring",
  "libc",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "proptest",
  "rand",
  "rayon",
@@ -875,7 +875,7 @@ dependencies = [
  "iai-callgrind",
  "itertools 0.13.0",
  "num-traits",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "proptest",
  "prost",
  "rand",
@@ -931,7 +931,7 @@ dependencies = [
  "half",
  "itertools 0.13.0",
  "num_cpus",
- "opentelemetry",
+ "opentelemetry 0.30.0",
  "ordered-float",
  "rand",
  "rand_distr",
@@ -2241,18 +2241,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentelemetry_sdk"
-version = "0.30.0"
+name = "opentelemetry"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f644aa9e5e31d11896e024305d7e3c98a88884d9f8919dbf37a9991bc47a4b"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b59f80e1ac4d5ff7a2db8fb6c80badb7f0f3f858211fba08dd9aaec750894f9"
 dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "percent-encoding",
+ "portable-atomic",
  "rand",
- "serde_json",
  "thiserror 2.0.17",
 ]
 
