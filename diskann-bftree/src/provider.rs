@@ -213,7 +213,9 @@ pub struct BfTreeProviderParameters {
     // The metric to use for distance computations
     pub metric: Metric,
 
-    // The maximum number of neighbors to store for each vector
+    // The physical maximum degree (maximum neighbor list capacity per vertex).
+    // Callers are responsible for applying any slack factor externally before
+    // passing this value.
     pub max_degree: u32,
 
     // bf-tree config for vector provider.
@@ -1981,7 +1983,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::neighbors::NeighborProvider;
     use crate::quant::create_test_quantizer;
+    use crate::vectors::VectorProvider;
     use diskann::{
         graph::DiskANNIndex,
         graph::{self, search::Knn},
@@ -1993,7 +1997,8 @@ mod tests {
     fn create_quant_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, QuantVectorProvider>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
         let dim = 5;
-        let max_degree = 8;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
 
         let provider = BfTreeProvider::new(
@@ -2002,7 +2007,7 @@ mod tests {
                 num_start_points: NonZeroUsize::new(1).unwrap(),
                 dim,
                 metric,
-                max_degree,
+                max_degree: physical_max_degree,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2014,8 +2019,8 @@ mod tests {
         .unwrap();
 
         let index_config = graph::config::Builder::new_with(
-            4,
-            graph::config::MaxDegree::new(max_degree as usize),
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
             10,
             metric.into(),
             |_| {},
@@ -2163,7 +2168,8 @@ mod tests {
 
     fn create_full_precision_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, NoStore>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
-        let max_degree = 8;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
 
         let provider = BfTreeProvider::new(
@@ -2172,7 +2178,7 @@ mod tests {
                 num_start_points: NonZeroUsize::new(1).unwrap(),
                 dim: 5,
                 metric,
-                max_degree,
+                max_degree: physical_max_degree,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2184,8 +2190,8 @@ mod tests {
         .unwrap();
 
         let index_config = graph::config::Builder::new_with(
-            4,
-            graph::config::MaxDegree::new(max_degree as usize),
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
             10,
             metric.into(),
             |_| {},
@@ -2971,5 +2977,51 @@ mod tests {
             loaded.status_by_internal_id(ctx, 0).await.unwrap(),
             ElementStatus::Valid
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_undersized_vector_config() {
+        // 1536 * 4 = 6144 bytes + 8-byte key = 6152 bytes needed
+        let result = VectorProvider::<f32>::new_with_config(
+            100,
+            1536,
+            1,
+            Config::default(), // cb_max_record_size = 1952
+        );
+        let err = result.err().expect("should fail").to_string();
+        assert!(
+            err.contains("vector_provider"),
+            "should name the failing config; got: {err}"
+        );
+        assert!(
+            err.contains("6152"),
+            "should state the required size; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_undersized_neighbor_config() {
+        // max_degree=500 → value = (500+1)*4 = 2004 bytes + 4-byte key = 2008 bytes
+        let mut neighbor_config = Config::default();
+        neighbor_config.cb_max_record_size(1952);
+
+        let result = NeighborProvider::<u32>::new_with_config(500, neighbor_config);
+        let err = result.err().expect("should fail").to_string();
+        assert!(
+            err.contains("neighbor_provider"),
+            "should name the failing config; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_config() {
+        // dim=128, f32 → key=8 + value=512 = 520 bytes, fits default 1952
+        if let Err(e) = VectorProvider::<f32>::new_with_config(100, 128, 1, Config::default()) {
+            panic!("VectorProvider should succeed: {e}");
+        }
+        // max_degree=64 → key=4 + value=(64+1)*4 = 264 bytes, fits default 1952
+        if let Err(e) = NeighborProvider::<u32>::new_with_config(64, Config::default()) {
+            panic!("NeighborProvider should succeed: {e}");
+        }
     }
 }

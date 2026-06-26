@@ -701,6 +701,16 @@ impl IndexBuild {
         (self.max_degree as f32 * 1.3) as usize
     }
 
+    #[cfg(feature = "bftree")]
+    pub(crate) fn max_degree(&self) -> u32 {
+        self.max_degree as u32
+    }
+
+    #[cfg(feature = "bftree")]
+    pub(crate) fn graph_slack_factor(&self) -> f32 {
+        1.3
+    }
+
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
         let metric: diskann_vector::distance::Metric = self.distance.into();
         let exact_max_degree = self.exact_max_degree();
