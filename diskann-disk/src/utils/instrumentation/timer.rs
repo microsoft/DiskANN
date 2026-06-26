@@ -4,11 +4,32 @@
  */
 use std::time::{Duration, Instant};
 
-use diskann_platform::*;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux::{
+    get_number_of_processors, get_peak_workingset_size, get_process_cycle_time, get_process_time,
+    get_system_time,
+};
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::{
+    get_number_of_processors, get_peak_workingset_size, get_process_cycle_time, get_process_time,
+    get_system_time,
+};
+#[cfg(target_os = "windows")]
+mod windows;
 #[cfg(feature = "perf_test")]
 use opentelemetry::{
-    KeyValue, global,
-    trace::{Tracer, get_active_span},
+    global,
+    trace::{get_active_span, Tracer},
+    KeyValue,
+};
+#[cfg(target_os = "windows")]
+use windows::{
+    get_number_of_processors, get_peak_workingset_size, get_process_cycle_time, get_process_time,
+    get_system_time,
 };
 
 #[derive(Clone)]

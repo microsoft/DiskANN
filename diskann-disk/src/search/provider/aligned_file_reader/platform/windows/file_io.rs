@@ -15,8 +15,9 @@ use windows_sys::Win32::{
     System::IO::{GetQueuedCompletionStatus, OVERLAPPED},
 };
 
+use super::file_handle::FileHandle;
+use super::io_completion_port::IOCompletionPort;
 use super::{DWORD, ULONG_PTR};
-use crate::{FileHandle, IOCompletionPort};
 
 /// Asynchronously queue a read request from a file into a buffer slice.
 ///
@@ -132,8 +133,8 @@ pub unsafe fn get_queued_completion_status(
 mod tests {
     use std::{fs::File, io::Write, path::Path};
 
+    use super::super::file_handle::{AccessMode, ShareMode};
     use super::*;
-    use crate::win::file_handle::{AccessMode, ShareMode};
 
     #[test]
     fn test_read_file_to_slice() {

@@ -12,8 +12,8 @@ use windows_sys::Win32::{
     System::IO::CreateIoCompletionPort,
 };
 
+use super::file_handle::FileHandle;
 use super::{DWORD, ULONG_PTR};
-use crate::FileHandle;
 
 /// This module provides a safe and idiomatic Rust interface over the IOCompletionPort handle and associated Windows API functions.
 /// This struct represents an I/O completion port, which is an object used in asynchronous I/O operations on Windows.
@@ -97,7 +97,7 @@ impl Drop for IOCompletionPort {
             let error_code = unsafe { GetLastError() };
             let error = io::Error::from_raw_os_error(error_code as i32);
 
-            tracing::warn!("Error when dropping IOCompletionPort: {:?}", error);
+            tracing::warn!("Error when dropping IOCompletionPort: {error:?}");
         }
     }
 }
@@ -114,8 +114,8 @@ impl Default for IOCompletionPort {
 
 #[cfg(test)]
 mod tests {
+    use super::super::file_handle::{AccessMode, ShareMode};
     use super::*;
-    use crate::win::file_handle::{AccessMode, ShareMode};
 
     #[test]
     fn create_io_completion_port() {

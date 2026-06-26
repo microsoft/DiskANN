@@ -9,9 +9,9 @@ use std::{
 };
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::utils::{
-    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, Timer,
+use diskann_providers::{
+    storage::{StorageReadProvider, StorageWriteProvider},
+    utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
@@ -23,6 +23,7 @@ use crate::{
         continuation::{process_while_resource_is_available, ChunkingConfig},
     },
     storage::quant::compressor::{CompressionStage, QuantCompressor},
+    utils::instrumentation::Timer,
 };
 
 /// [`GeneratorContext`] defines parameters for vector quantization checkpoint state

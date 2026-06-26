@@ -13,14 +13,17 @@ use diskann_providers::{
         GeneratePivotArguments,
     },
     storage::PQStorage,
-    utils::{BridgeErr, RayonThreadPoolRef, Timer},
+    utils::{BridgeErr, RayonThreadPoolRef},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
-use crate::storage::quant::compressor::{CompressionStage, QuantCompressor};
+use crate::{
+    storage::quant::compressor::{CompressionStage, QuantCompressor},
+    utils::instrumentation::Timer,
+};
 
 pub struct PQGenerationContext<'a, Storage>
 where

@@ -9,7 +9,8 @@ use diskann::ANNResult;
 use diskann_providers::storage::VirtualStorageProvider;
 use vfs::{FileSystem, MemoryFS};
 
-use super::{traits::AlignedReaderFactory, StorageProviderAlignedFileReader};
+use super::super::reader::StorageProviderAlignedFileReader;
+use super::super::traits::AlignedReaderFactory;
 
 pub struct VirtualAlignedReaderFactory<P: FileSystem = MemoryFS> {
     pub file_path: String,

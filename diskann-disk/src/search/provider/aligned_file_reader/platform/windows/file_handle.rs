@@ -29,6 +29,7 @@ pub const FILE_ATTRIBUTE_READONLY: DWORD = 0x00000001;
 /// - `Write`: The file is opened in write-only mode.
 ///
 /// - `ReadWrite`: The file is opened for both reading and writing.
+#[allow(dead_code)] // Win32 wrapper: all modes are valid; only `Read` is exercised today.
 pub enum AccessMode {
     Read,
     Write,
@@ -48,6 +49,7 @@ pub enum AccessMode {
 /// - `Write`: Allows subsequent open operations on the same file file to request write access.
 ///
 /// - `Delete`: Allows subsequent open operations on the same file file to request delete access.
+#[allow(dead_code)] // Win32 wrapper: all modes are valid; only `Read` is exercised today.
 pub enum ShareMode {
     None,
     Read,
@@ -113,7 +115,7 @@ impl FileHandle {
         let file_name_c = CString::new(file_name).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid file name. {}", file_name),
+                format!("Invalid file name. {file_name}"),
             )
         })?;
 
@@ -166,7 +168,7 @@ impl Drop for FileHandle {
         if result == 0 {
             let error_code = unsafe { GetLastError() };
             let error = io::Error::from_raw_os_error(error_code as i32);
-            tracing::warn!("Error when dropping FileHandle: {:?}", error);
+            tracing::warn!("Error when dropping FileHandle: {error:?}");
         }
     }
 }
@@ -207,7 +209,7 @@ mod tests {
         // Try to delete the file. If the handle was correctly dropped, this should succeed.
         match std::fs::remove_file(dummy_file_path) {
             Ok(()) => (), // File was deleted successfully, which means the handle was closed.
-            Err(e) => panic!("Failed to delete file: {}", e), // Failed to delete the file, likely because the handle is still open.
+            Err(e) => panic!("Failed to delete file: {e}"), // Failed to delete the file, likely because the handle is still open.
         }
     }
 

@@ -3,7 +3,8 @@
  * Licensed under the MIT license.
  */
 use clap::Parser;
-use diskann_providers::{storage::FileStorageProvider, utils::Timer};
+use diskann_disk::utils::instrumentation::Timer;
+use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{
     compute_multivec_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType,
     MultivecAggregationMethod,

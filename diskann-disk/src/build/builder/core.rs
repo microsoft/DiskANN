@@ -626,17 +626,20 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
 pub(crate) mod disk_index_builder_tests {
     use std::{io::Read, sync::Arc};
 
-    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
+    use crate::{
+        test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData},
+        utils::instrumentation::Timer,
+    };
     use diskann::{
         graph::config,
         utils::{IntoUsize, VectorRepr, ONE},
         ANNResult,
     };
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::{
-        storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
-        utils::Timer,
+    use diskann_providers::storage::{
+        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file,
     };
+
     use diskann_utils::test_data_root;
     use diskann_vector::{
         distance::Metric::{self, L2},
@@ -651,11 +654,11 @@ pub(crate) mod disk_index_builder_tests {
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
-            disk_provider::DiskIndexSearcher,
+            aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
         storage::disk_index_reader::DiskIndexReader,
-        utils::{QueryStatistics, VirtualAlignedReaderFactory},
+        utils::QueryStatistics,
     };
     const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
     pub const TEST_DATA_FILE: &str = "/sift/siftsmall_learn_256pts.fbin";

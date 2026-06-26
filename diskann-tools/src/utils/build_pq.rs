@@ -12,9 +12,9 @@ use diskann_providers::{
     },
     storage::{
         get_disk_index_compressed_pq_file, get_disk_index_pq_pivot_file, FileStorageProvider,
-        PQStorage,
+        PQStorage, StorageReadProvider,
     },
-    utils::{create_thread_pool, load_metadata_from_file, Timer},
+    utils::{create_thread_pool, load_metadata_from_file},
 };
 use diskann_vector::distance::Metric;
 use tracing::info;

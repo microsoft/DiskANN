@@ -2,123 +2,111 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use std::{
-    fs::OpenOptions,
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+use std::{ptr, thread, time::Duration};
+
+use super::super::platform::{
+    get_queued_completion_status, read_file_to_slice, AccessMode, FileHandle, IOCompletionPort,
+    IOContext, ShareMode, DWORD, OVERLAPPED, ULONG_PTR,
 };
-
 use diskann::{ANNError, ANNResult};
-use diskann_platform::ssd_io_context::IOContext;
-use io_uring::IoUring;
-use libc;
 
-use crate::utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, A512};
+use super::super::traits::AlignedFileReader;
+use crate::search::provider::aligned_file_reader::{AlignedRead, A512};
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
+pub const IO_COMPLETION_TIMEOUT: DWORD = u32::MAX; // Infinite timeout.
+pub const ASYNC_IO_COMPLETION_CHECK_INTERVAL: Duration = Duration::from_micros(5);
 
-pub struct LinuxAlignedFileReader {
-    io_context: IOContext,
-}
-
-/// AlignedFileReader for Linux.  When you modify this class run the benchmarks to make sure
+/// AlignedFileReader for Windows.  When you modify this class run the benchmarks to make sure
 /// we don't regress on runtime.
 ///
-/// # Run this before making code your change
+/// # Run this before making your code change
 /// cargo bench --bench bench_main -p diskann -- --save-baseline prior_to_change
 ///
 /// # Run this after making your code change to generate comparison metrics
 /// cargo bench --bench bench_main -p diskann -- --baseline prior_to_change
-impl LinuxAlignedFileReader {
-    pub fn new(fname: &str) -> ANNResult<Self> {
-        // Open file as read-only
-        // Apply the `O_DIRECT` flag to bypass the kernel page cache.
-        // See: https://man7.org/linux/man-pages/man2/open.2.html
-        let open_result = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(fname);
+pub struct WindowsAlignedFileReader {
+    io_context: IOContext,
+}
 
-        let file = match open_result {
-            Ok(file_handle) => file_handle,
+impl WindowsAlignedFileReader {
+    pub fn new(fname: &str) -> ANNResult<Self> {
+        let mut io_context = IOContext::new();
+        tracing::debug!("Creating file handle for {}", fname);
+        match unsafe { FileHandle::new(fname, AccessMode::Read, ShareMode::Read) } {
+            Ok(file_handle) => io_context.file_handle = file_handle,
             Err(err) => {
                 return Err(ANNError::log_io_error(err));
             }
-        };
+        }
 
-        let ring = IoUring::new(MAX_IO_CONCURRENCY as u32)?;
-        let fd = file.as_raw_fd();
-        ring.submitter().register_files(std::slice::from_ref(&fd))?;
-        let io_context = IOContext::new(file, ring);
+        // Create a io completion port for the file handle, later it will be used to get the completion status.
+        match IOCompletionPort::new(&io_context.file_handle, None, 0, 0) {
+            Ok(io_completion_port) => io_context.io_completion_port = io_completion_port,
+            Err(err) => {
+                return Err(ANNError::log_io_error(err));
+            }
+        }
 
-        Ok(LinuxAlignedFileReader { io_context })
-    }
-
-    fn submit_aligned_read(
-        aligned_read: &mut AlignedRead<u8, A512>,
-        ring: &mut IoUring,
-        identifier: u64,
-    ) -> Result<(), ANNError> {
-        let fixed_buffer = libc::iovec {
-            iov_base: aligned_read.aligned_buf_mut().as_mut_ptr() as _,
-            iov_len: aligned_read.aligned_buf_mut().len() as _,
-        };
-
-        let read = io_uring::opcode::Read::new(
-            // 0 represents the file descriptor that was registered with the ring via `register_files()` method.
-            io_uring::types::Fixed(0),
-            fixed_buffer.iov_base.cast::<u8>(),
-            fixed_buffer.iov_len as _,
-        )
-        .offset(aligned_read.offset())
-        .build()
-        .user_data(identifier);
-
-        // Submission should not fail because the batch_size should always be less
-        // than MAX_IO_CONCURRENCY and the ring was initialized with MAX_IO_CONCURRENCY
-        // spaces in the processing queue
-        unsafe {
-            ring.submission()
-                .push(&read)
-                .map_err(ANNError::log_push_error)?
-        };
-        Ok(())
+        Ok(WindowsAlignedFileReader { io_context })
     }
 }
 
-impl AlignedFileReader for LinuxAlignedFileReader {
-    /// O_DIRECT requires the buffer pointer to be aligned to the device sector
-    /// size in memory (512 bytes on typical Linux block devices).
+impl AlignedFileReader for WindowsAlignedFileReader {
+    /// Overlapped/`FILE_FLAG_NO_BUFFERING` I/O requires the buffer pointer to
+    /// be aligned to the device sector size in memory (512 bytes on typical
+    /// Windows volumes).
     type Alignment = A512;
 
     // Read the data from the file by sending concurrent io requests in batches.
     fn read(&mut self, read_requests: &mut [AlignedRead<u8, A512>]) -> ANNResult<()> {
         let n_requests = read_requests.len();
         let n_batches = n_requests.div_ceil(MAX_IO_CONCURRENCY);
-
-        let ring = &mut self.io_context.ring;
+        let ctx = &self.io_context;
+        let mut overlapped_in_out =
+            vec![unsafe { std::mem::zeroed::<OVERLAPPED>() }; MAX_IO_CONCURRENCY];
 
         for batch_idx in 0..n_batches {
-            // batch_size is the number of requests to submit, not the size of the request.
             let batch_start = MAX_IO_CONCURRENCY * batch_idx;
             let batch_size = std::cmp::min(n_requests - batch_start, MAX_IO_CONCURRENCY);
 
             for j in 0..batch_size {
-                let read_id = j + batch_start;
-                let aligned_read = &mut read_requests[read_id];
-                Self::submit_aligned_read(aligned_read, ring, read_id as u64)?;
+                let req = &mut read_requests[batch_start + j];
+                let offset = req.offset();
+                let os = &mut overlapped_in_out[j];
+
+                match unsafe {
+                    read_file_to_slice(&ctx.file_handle, req.aligned_buf_mut(), os, offset)
+                } {
+                    Ok(_) => {}
+                    Err(error) => {
+                        return Err(ANNError::log_io_error(error));
+                    }
+                }
             }
 
-            // Wait for the batch to complete.
-            ring.submit_and_wait(batch_size)?;
-
-            // N.B.: Flushing the completion queue appears to be important for proper
-            // operation.
-            // Flush the completion queue.
-            for cqe in ring.completion() {
-                if cqe.result() < 0 {
-                    return Err(ANNError::log_io_error(std::io::Error::from_raw_os_error(
-                        cqe.result(),
-                    )));
+            let mut n_read: DWORD = 0;
+            let mut n_complete: u64 = 0;
+            let mut completion_key: ULONG_PTR = 0;
+            let mut lp_os: *mut OVERLAPPED = ptr::null_mut();
+            while n_complete < batch_size as u64 {
+                match unsafe {
+                    get_queued_completion_status(
+                        &ctx.io_completion_port,
+                        &mut n_read,
+                        &mut completion_key,
+                        &mut lp_os,
+                        IO_COMPLETION_TIMEOUT,
+                    )
+                } {
+                    // An IO request completed.
+                    Ok(true) => n_complete += 1,
+                    // No IO request completed, continue to wait.
+                    Ok(false) => {
+                        thread::sleep(ASYNC_IO_COMPLETION_CHECK_INTERVAL);
+                    }
+                    // An error ocurred.
+                    Err(error) => return Err(ANNError::log_io_error(error)),
                 }
             }
         }
@@ -130,20 +118,32 @@ impl AlignedFileReader for LinuxAlignedFileReader {
 #[cfg(test)]
 mod tests {
     use std::{
-        cmp::max,
         fs::File,
         io::{BufReader, Read, Seek, SeekFrom},
     };
 
     use bincode::deserialize_from;
+    use diskann_utils::test_data_root;
     use serde::{Deserialize, Serialize};
 
     use super::*;
+    use crate::search::provider::aligned_file_reader::{AlignedRead, A512};
     use diskann_quantization::alloc::{AlignedAllocator, Poly};
-    pub const TEST_INDEX_PATH: &str =
-        "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
-    pub const TRUTH_NODE_DATA_PATH: &str =
-        "../test_data/disk_index_misc/disk_index_node_data_aligned_reader_truth.bin";
+
+    fn test_index_path() -> String {
+        test_data_root()
+            .join("disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn truth_node_data_path() -> String {
+        test_data_root()
+            .join("disk_index_misc/disk_index_node_data_aligned_reader_truth.bin")
+            .to_string_lossy()
+            .to_string()
+    }
+
     const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -164,13 +164,13 @@ mod tests {
     #[test]
     fn test_new_aligned_file_reader() {
         // Replace "test_file_path" with actual file path
-        let result = LinuxAlignedFileReader::new(TEST_INDEX_PATH);
+        let result = WindowsAlignedFileReader::new(&test_index_path());
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_read() {
-        let mut reader = LinuxAlignedFileReader::new(TEST_INDEX_PATH).unwrap();
+        let mut reader = WindowsAlignedFileReader::new(&test_index_path()).unwrap();
 
         let read_length = 512; // adjust according to your logic
         let num_read = 10;
@@ -193,7 +193,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Assert that the actual data is correct.
-        let mut file = File::open(TEST_INDEX_PATH).unwrap();
+        let mut file = File::open(test_index_path()).unwrap();
         for current_read in aligned_reads {
             let mut expected = vec![0; current_read.aligned_buf().len()];
             file.seek(SeekFrom::Start(current_read.offset())).unwrap();
@@ -207,56 +207,11 @@ mod tests {
         }
     }
 
-    /// BUG: io-uring submit_and_wait waits for a cumulative number of items to be completed, not
-    /// just the current batch.  This causes the LinuxAlignedFileReader.read method to return
-    /// before the final batches have been completely read.  The purpose of this test is to
-    /// force many batches to be queued for read and ensure that all are read when the
-    /// LinuxAlignedFileReader.read method returns.
-    #[test]
-    fn many_batches_all_should_have_data() {
-        let mut reader = LinuxAlignedFileReader::new(TEST_INDEX_PATH).unwrap();
-
-        let read_length = 512;
-        let num_read = MAX_IO_CONCURRENCY * 100; // The LinuxAlignedFileReader batches reads according to MAX_IO_CONCURRENCY.  Make sure we have many batches to handle.
-        let mut aligned_mem =
-            Poly::broadcast(0u8, read_length * num_read, AlignedAllocator::A512).unwrap();
-
-        // create and add AlignedReads to the vector
-        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
-
-        // Read the same data from disk over and over again.  We guarantee that it is not all zeros.
-        let mut aligned_reads: Vec<AlignedRead<'_, u8, A512>> = mem_slices
-            .iter_mut()
-            .map(|slice| AlignedRead::new(0, slice).unwrap())
-            .collect();
-
-        let result = reader.read(&mut aligned_reads);
-
-        // Make sure read completed successfully
-        assert!(result.is_ok());
-
-        // If we find any AlignedRead objects that are empty then the reader never read them
-        // from disk.
-        assert!(
-            !aligned_reads.iter().any(aligned_read_buffer_is_empty),
-            "Found uninitialized data that should have been read from disk"
-        );
-    }
-
-    /// Return True if the AlignedRead value is empty or False if the AlignedRead value is not empty.
-    fn aligned_read_buffer_is_empty(read: &AlignedRead<'_, u8, A512>) -> bool {
-        let max_value = read.aligned_buf().iter().fold(0, |acc, &x| max(acc, x));
-
-        // If max_value is zero then this aligned read was not completed.  Data was not
-        // read from disk because all values in memory are zero.
-        max_value == 0
-    }
-
     #[test]
     fn test_read_disk_index_by_sector() {
-        let mut reader = LinuxAlignedFileReader::new(TEST_INDEX_PATH).unwrap();
+        let mut reader = WindowsAlignedFileReader::new(&test_index_path()).unwrap();
 
-        let read_length = 512; // adjust according to your logic
+        let read_length = DEFAULT_DISK_SECTOR_LEN; // adjust according to your logic
         let num_sector = 10;
         let mut aligned_mem =
             Poly::broadcast(0u8, read_length * num_sector, AlignedAllocator::A512).unwrap();
@@ -277,7 +232,7 @@ mod tests {
         assert!(result.is_ok());
 
         aligned_reads.iter().for_each(|read| {
-            assert_eq!(read.aligned_buf().len(), 512);
+            assert_eq!(read.aligned_buf().len(), DEFAULT_DISK_SECTOR_LEN);
         });
 
         let disk_layout_meta = reconstruct_disk_meta(aligned_reads[0].aligned_buf_mut());
@@ -336,7 +291,7 @@ mod tests {
         });
 
         // Compare that each node read from the disk index are expected.
-        let node_data_truth_file = File::open(TRUTH_NODE_DATA_PATH).unwrap();
+        let node_data_truth_file = File::open(truth_node_data_path()).unwrap();
         let reader = BufReader::new(node_data_truth_file);
 
         let node_data_vec: Vec<NodeData> = deserialize_from(reader).unwrap();
@@ -350,14 +305,14 @@ mod tests {
 
     #[test]
     fn test_read_fail_invalid_file() {
-        let reader = LinuxAlignedFileReader::new("/invalid_path");
+        let reader = WindowsAlignedFileReader::new("/invalid_path");
         assert!(reader.is_err());
     }
 
     #[test]
     #[allow(clippy::read_zero_byte_vec)]
     fn test_read_no_requests() {
-        let mut reader = LinuxAlignedFileReader::new(TEST_INDEX_PATH).unwrap();
+        let mut reader = WindowsAlignedFileReader::new(&test_index_path()).unwrap();
 
         let mut read_requests = Vec::<AlignedRead<u8, A512>>::new();
         let result = reader.read(&mut read_requests);
