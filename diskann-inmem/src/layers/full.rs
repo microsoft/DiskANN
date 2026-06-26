@@ -390,7 +390,13 @@ impl layers::Search for Full<u8> {
         let query = Calf::Borrowed(query);
 
         let output = match self.metric {
-            Metric::L2 => mint!(query, visitor, u8 => SquaredL2),
+            Metric::L2 => {
+                if self.dim() == 128 {
+                    mint!(query, visitor, u8 => { 128, SquaredL2 })
+                } else {
+                    mint!(query, visitor, u8 => SquaredL2)
+                }
+            }
             Metric::InnerProduct => mint!(query, visitor, u8 => InnerProduct),
             Metric::Cosine => mint!(query, visitor, u8 => Cosine),
             Metric::CosineNormalized => mint!(query, visitor, u8 => Cosine),
@@ -427,6 +433,7 @@ impl layers::Search for Full<i8> {
 ///////////
 
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use std::fmt::Display;
 

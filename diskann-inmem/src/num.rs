@@ -23,7 +23,7 @@ impl Bytes {
     }
 
     #[inline]
-    pub const fn checked_add(self, other: Bytes) -> Option<Bytes> {
+    pub(crate) const fn checked_add(self, other: Bytes) -> Option<Bytes> {
         match self.value().checked_add(other.value()) {
             Some(v) => Some(Bytes::new(v)),
             None => None,
@@ -31,7 +31,7 @@ impl Bytes {
     }
 
     #[inline]
-    pub const fn checked_mul(self, other: usize) -> Option<Bytes> {
+    pub(crate) const fn checked_mul(self, other: usize) -> Option<Bytes> {
         match self.value().checked_mul(other) {
             Some(v) => Some(Bytes::new(v)),
             None => None,
@@ -39,21 +39,8 @@ impl Bytes {
     }
 
     #[inline]
-    pub const fn div(self, other: NonZeroUsize) -> Bytes {
+    pub(crate) const fn div(self, other: NonZeroUsize) -> Bytes {
         Bytes::new(self.value() / other.get())
-    }
-
-    #[inline]
-    pub(crate) const fn unchecked_mul(self, other: usize) -> Bytes {
-        Bytes::new(self.value() * other)
-    }
-
-    #[inline]
-    pub const fn checked_sub(self, other: Bytes) -> Option<Bytes> {
-        match self.value().checked_sub(other.value()) {
-            Some(v) => Some(Bytes::new(v)),
-            None => None,
-        }
     }
 
     #[inline]
@@ -62,7 +49,7 @@ impl Bytes {
     }
 
     #[inline]
-    pub const fn checked_next_multiple_of(self, other: Bytes) -> Option<Bytes> {
+    pub(crate) const fn checked_next_multiple_of(self, other: Bytes) -> Option<Bytes> {
         match self.value().checked_next_multiple_of(other.value()) {
             Some(v) => Some(Bytes::new(v)),
             None => None,
@@ -184,19 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn checked_sub_success() {
-        assert_eq!(
-            Bytes::new(30).checked_sub(Bytes::new(10)),
-            Some(Bytes::new(20))
-        );
-    }
-
-    #[test]
-    fn checked_sub_underflow() {
-        assert_eq!(Bytes::new(5).checked_sub(Bytes::new(10)), None);
-    }
-
-    #[test]
     fn checked_mul_success() {
         assert_eq!(Bytes::new(64).checked_mul(4), Some(Bytes::new(256)));
     }
@@ -209,11 +183,6 @@ mod tests {
     #[test]
     fn checked_mul_by_zero() {
         assert_eq!(Bytes::new(100).checked_mul(0), Some(Bytes::new(0)));
-    }
-
-    #[test]
-    fn unchecked_mul() {
-        assert_eq!(Bytes::new(64).unchecked_mul(3), Bytes::new(192));
     }
 
     #[test]

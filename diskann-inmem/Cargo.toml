@@ -32,6 +32,7 @@ tokio = { workspace = true, optional = true }
 workspace = true
 
 [dev-dependencies]
+diskann = { workspace = true, features = ["testing"] }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 tempfile = { workspace = true }

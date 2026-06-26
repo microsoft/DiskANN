@@ -153,7 +153,6 @@ where
     fn capacity(&self) -> usize {
         self.capacity
     }
-
 }
 
 struct Shard {
@@ -170,6 +169,8 @@ pub(crate) enum InsertError {
     #[error("the internal id is already mapped")]
     InternalExists,
 }
+
+crate::opaque!(InsertError);
 
 /// A handle to a valid entry in a [`Sharded`].
 ///
@@ -209,7 +210,14 @@ mod tests {
 
     #[test]
     fn new_reports_capacity() {
-        for capacity in [0, 1, SHARD_SIZE - 1, SHARD_SIZE, SHARD_SIZE + 1, 3 * SHARD_SIZE] {
+        for capacity in [
+            0,
+            1,
+            SHARD_SIZE - 1,
+            SHARD_SIZE,
+            SHARD_SIZE + 1,
+            3 * SHARD_SIZE,
+        ] {
             let map = Sharded::<u32>::new(capacity);
             assert_eq!(map.capacity(), capacity);
         }
@@ -248,10 +256,7 @@ mod tests {
         let map = Sharded::<u32>::new(16);
         map.insert(7, 5).unwrap();
 
-        assert!(matches!(
-            map.insert(7, 6),
-            Err(InsertError::ExternalExists)
-        ));
+        assert!(matches!(map.insert(7, 6), Err(InsertError::ExternalExists)));
 
         // The failed insert must not have established any partial mapping.
         assert_eq!(map.to_internal(&7), Some(5));
@@ -264,10 +269,7 @@ mod tests {
         let map = Sharded::<u32>::new(16);
         map.insert(7, 5).unwrap();
 
-        assert!(matches!(
-            map.insert(8, 5),
-            Err(InsertError::InternalExists)
-        ));
+        assert!(matches!(map.insert(8, 5), Err(InsertError::InternalExists)));
 
         // The failed insert must not have established any partial mapping.
         assert_eq!(map.to_external(5), Some(7));

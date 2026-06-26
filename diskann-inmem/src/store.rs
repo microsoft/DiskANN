@@ -188,6 +188,11 @@ impl Store {
         self.unpadded
     }
 
+    /// Return the maximum degree that can be stored in the graph.
+    pub(crate) fn max_degree(&self) -> usize {
+        self.neighbors.max_length()
+    }
+
     /// Attempt to reclaim retired slots.
     ///
     /// If successful, returns the number of slots reclaimed.
@@ -511,6 +516,7 @@ impl<'a> Reader<'a> {
     ///
     /// This guarantee only holds while `self` is alive. Construction of a new [`Reader`]
     /// requires a separate check.
+    #[cfg(test)]
     pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
         if !self.is_in_bounds(i) {
             return None;
@@ -582,7 +588,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// A writable buffer into the data managed by a [`Store`], obtained from [`Store::Acquire`].
+/// A writable buffer into the data managed by a [`Store`], obtained from [`Store::acquire`].
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
     tag: &'a AtomicTag,
@@ -607,12 +613,23 @@ impl<'a> Slot<'a> {
         me.mirror.store(Tag::FROZEN, Ordering::Release);
         me.tag.store(Tag::FROZEN, Ordering::Release);
     }
+
+    /// Consume the slot and publish the written data for all readers.
+    ///
+    /// Return the internal slot ID.
+    pub(crate) fn publish(self) -> u32 {
+        let id = self.slot();
+        let me = std::mem::ManuallyDrop::new(self);
+        me.mirror.store(Tag::PUBLISHED, Ordering::Release);
+        me.tag.store(Tag::PUBLISHED, Ordering::Release);
+        id
+    }
 }
 
 impl Drop for Slot<'_> {
     fn drop(&mut self) {
-        self.mirror.store(Tag::PUBLISHED, Ordering::Release);
-        self.tag.store(Tag::PUBLISHED, Ordering::Release);
+        self.mirror.store(Tag::AVAILABLE, Ordering::Release);
+        self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }
 
@@ -729,12 +746,36 @@ mod tests {
             // Before the slot is dropped - we should not be able to read it.
             assert!(reader.read(idx).is_none());
             assert!(!s.can_read_approximate(idx).unwrap());
-
+            slot.publish();
             idx
         };
 
         assert_eq!(reader.read(idx), Some([1, 2, 3, 4, 5, 6, 7, 8].as_slice()));
         assert!(s.can_read_approximate(idx).unwrap());
+    }
+
+    #[test]
+    fn unpublished_slots_are_immediately_available() {
+        let s = store(4, 8, 1).unwrap();
+
+        let reader = s.reader().expect("reader guard available");
+
+        let idx = {
+            let mut slot = s.acquire().expect("a fresh store has free slots");
+            let idx = slot.slot() as usize;
+            slot.as_mut_slice()
+                .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+            // Before the slot is dropped - we should not be able to read it.
+            assert!(reader.read(idx).is_none());
+            assert!(!s.can_read_approximate(idx).unwrap());
+
+            // NOTE: We do not explicitly publish the slot.
+            idx
+        };
+
+        assert!(reader.read(idx).is_none());
+        assert!(!s.can_read_approximate(idx).unwrap());
     }
 
     #[test]
@@ -787,8 +828,7 @@ mod tests {
 
         let idx = {
             let slot = s.acquire().unwrap();
-            slot.slot() as usize
-            // Publish
+            slot.publish() as usize
         };
 
         assert!(s.retire(idx).is_ok());
@@ -818,6 +858,7 @@ mod tests {
         // Claim all slots.
         let mut count = 0;
         while let Some(slot) = s.acquire() {
+            slot.publish();
             count += 1;
         }
 
@@ -831,6 +872,7 @@ mod tests {
         // Verify that we can claim all slots again.
         let mut count = 0;
         while let Some(slot) = s.acquire() {
+            slot.publish();
             count += 1;
         }
 

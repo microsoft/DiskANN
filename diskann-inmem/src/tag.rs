@@ -307,4 +307,17 @@ mod tests {
         assert!(!Tag::OWNED.can_read());
         assert!(!Tag::RETIRING.can_read());
     }
+
+    #[test]
+    fn test_display() {
+        assert_eq!(Tag::AVAILABLE.to_string(), "Tag(AVAILABLE)");
+        assert_eq!(Tag::OWNED.to_string(), "Tag(OWNED)");
+        assert_eq!(Tag::RETIRING.to_string(), "Tag(RETIRING)");
+        assert_eq!(Tag::FROZEN.to_string(), "Tag(FROZEN)");
+        assert_eq!(Tag::PUBLISHED.to_string(), "Tag(PUBLISHED)");
+
+        // Guard against future changes.
+        assert_eq!(Tag::new(Tag::RETIRING.value() + 1).to_string(), "Tag(3)");
+        assert_eq!(Tag::new(Tag::PUBLISHED.value() - 1).to_string(), "Tag(253)");
+    }
 }

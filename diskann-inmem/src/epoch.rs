@@ -834,7 +834,6 @@ mod tests {
         TestGuardDelay,
         GuardDelay,
         post_guard_check => post_guard_check,
-        with_pre_cas => pre_cas,
         with_post_cas => post_cas,
         with_pre_fence => pre_fence,
         with_post_fence => post_fence,

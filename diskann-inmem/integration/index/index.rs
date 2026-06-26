@@ -18,12 +18,10 @@ use diskann_inmem::{Context, Provider, Strategy, integration, layers};
 
 use crate::support::{
     check::{CheckMatch, Match, check_all_fields},
-    datatype::{AsDataType, DataType, FromSlice, Slice},
+    datatype::{AsDataType, FromSlice, Slice},
 };
 
 pub(crate) trait Index {
-    fn data_type(&self) -> DataType;
-
     fn search<'a>(
         &'a self,
         query: Slice<'a>,
@@ -193,10 +191,6 @@ where
     layers::Full<T>: for<'a> layers::Insert<Query<'a> = &'a [T]>,
     T: FromSlice + AsDataType + Send + Sync + 'static,
 {
-    fn data_type(&self) -> DataType {
-        T::DATA_TYPE
-    }
-
     fn search<'a>(
         &'a self,
         query: Slice<'a>,

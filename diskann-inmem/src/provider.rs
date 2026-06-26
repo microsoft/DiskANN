@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{hash::Hash, marker::PhantomData};
+use std::hash::Hash;
 
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
@@ -82,6 +82,11 @@ where
         self.counters.local()
     }
 
+    /// Return the maximum number of neighbors that can be stored in the provider's graph.
+    pub fn max_degree(&self) -> usize {
+        self.store.max_degree()
+    }
+
     /// Return a snapshot of the current event counters.
     #[cfg(feature = "integration-test")]
     pub fn counters(&self) -> crate::integration::counters::CounterSnapshot {
@@ -137,8 +142,10 @@ where
         _context: &Self::Context,
         gid: &M,
     ) -> Result<Self::InternalId, Self::Error> {
-        let id = self.mapping.to_internal(gid).unwrap();
-        Ok(id)
+        match self.mapping.to_internal(gid) {
+            Some(id) => Ok(id),
+            None => Err(ANNError::message(ANNErrorKind::Opaque, "no mapping")),
+        }
     }
 
     /// Translate an internal id to its corresponding external id.
@@ -147,8 +154,10 @@ where
         _context: &Self::Context,
         id: Self::InternalId,
     ) -> Result<Self::ExternalId, Self::Error> {
-        let gid = self.mapping.to_external(id).unwrap();
-        Ok(gid)
+        match self.mapping.to_external(id) {
+            Some(gid) => Ok(gid),
+            None => Err(ANNError::message(ANNErrorKind::Opaque, "no mapping")),
+        }
     }
 }
 
@@ -237,12 +246,18 @@ where
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
-            let mut slot = self.store.acquire().unwrap();
+            let mut slot = self.store.acquire().ok_or_else(|| {
+                ANNError::message(ANNErrorKind::Opaque, "could not allocate a new slot")
+            })?;
 
             // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
             // insert failure.
             <L as layers::Set<T>>::into_bytes(&self.layer, element, slot.as_mut_slice())?;
-            self.mapping.insert(id.clone(), slot.slot()).unwrap();
+            self.mapping.insert(id.clone(), slot.slot())?;
+
+            // Now that insert has succeeded - publish the slot. This method cannot fail, so
+            // we do not need to worry about potentially unwinding the ID mapping.
+            let id = slot.publish();
 
             // This is a rather expensive update.
             //
@@ -250,7 +265,7 @@ where
             // is not expected to be enabled for general use.
             self.local_counters().set_vector(1);
 
-            Ok(diskann::provider::NoopGuard::new(slot.slot()))
+            Ok(diskann::provider::NoopGuard::new(id))
         };
 
         ready(work)
@@ -265,7 +280,7 @@ where
 pub struct SearchAccessor<'a> {
     reader: store::Reader<'a>,
     ids: AdjacencyList<u32>,
-    expand_beam: ExpandBeam<'a>,
+    expand_beam: Box<dyn ExpandBeam2 + 'a>,
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
@@ -346,7 +361,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 
                 unsafe {
                     self.expand_beam
-                        .run(&self.ids, 8, &self.reader, &mut on_neighbors)
+                        .expand_beam(&self.ids, 8, &self.reader, &mut on_neighbors)
                 }?;
             }
 
@@ -357,18 +372,41 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     }
 }
 
-// trait ExpandBeam2: Send + Sync + Debug {
-//     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
-//
-// }
+trait ExpandBeam2: Send + Sync + std::fmt::Debug {
+    /// Evaluate a raw distance function.
+    fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
 
-type FExpandBeam = unsafe fn(
-    *const (),
-    &[u32],
-    usize,
-    &store::Reader<'_>,
-    &mut dyn FnMut(u32, f32),
-) -> ANNResult<()>;
+    unsafe fn expand_beam(
+        &self,
+        list: &[u32],
+        lookahead: usize,
+        reader: &store::Reader<'_>,
+        f: &mut dyn FnMut(u32, f32),
+    ) -> ANNResult<()>;
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+struct ExpandBeamImpl<T, const BYTES: usize>(T);
+
+impl<T, const BYTES: usize> ExpandBeam2 for ExpandBeamImpl<T, BYTES>
+where
+    T: layers::QueryDistance,
+{
+    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+        self.0.evaluate(x)
+    }
+
+    unsafe fn expand_beam(
+        &self,
+        list: &[u32],
+        lookahead: usize,
+        reader: &store::Reader<'_>,
+        f: &mut dyn FnMut(u32, f32),
+    ) -> ANNResult<()> {
+        unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, f) }
+    }
+}
 
 #[derive(Debug)]
 struct ExpandBeamVisitor {
@@ -376,7 +414,7 @@ struct ExpandBeamVisitor {
 }
 
 impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
-    type Output = ExpandBeam<'a>;
+    type Output = Box<dyn ExpandBeam2 + 'a>;
 
     fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
     where
@@ -384,93 +422,15 @@ impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
     {
         // Make sure there's no lying.
         assert_eq!(Bytes::new(BYTES + 1), self.bytes);
-
-        unsafe { ExpandBeam::new(distance, expand_beam_inner::<T, BYTES>) }
+        Box::new(ExpandBeamImpl::<_, BYTES>(distance))
     }
 
     fn visit<T>(self, distance: T) -> Self::Output
     where
         T: QueryDistance + 'a,
     {
-        unsafe { ExpandBeam::new(distance, expand_beam_inner::<T, 0>) }
+        Box::new(ExpandBeamImpl::<_, 0>(distance))
     }
-}
-
-#[derive(Debug)]
-struct ExpandBeam<'a> {
-    ptr: *const (),
-    expand_beam: FExpandBeam,
-    vtable: &'static VTable,
-    lifetime: PhantomData<&'a ()>,
-}
-
-#[derive(Debug)]
-struct VTable {
-    evaluate: unsafe fn(*const (), &[u8]) -> ANNResult<f32>,
-    drop: unsafe fn(*mut ()),
-}
-
-// SAFETY: We constrain `ptr` to be `Send`.
-unsafe impl Send for ExpandBeam<'_> {}
-
-// SAFETY: We constrain `ptr` to be `Send`.
-unsafe impl Sync for ExpandBeam<'_> {}
-
-impl<'a> ExpandBeam<'a> {
-    unsafe fn new<T>(x: T, expand_beam: FExpandBeam) -> Self
-    where
-        T: layers::QueryDistance + Send + Sync + 'a,
-    {
-        let vtable = &VTable {
-            evaluate: evaluate::<T>,
-            drop: drop::<T>,
-        };
-
-        // NOTE: It's really important that we coerce the leaked `&mut` to a `*mut` rather
-        // than going straight to `*const` as the latter converts `&mut` to `&` first
-        // and then Miri gets upset when we try to drop it, thinking it's a shared reference
-        // rather than unique one.
-        let ptr: *mut T = Box::leak(Box::new(x));
-
-        Self {
-            ptr: ptr.cast_const().cast(),
-            expand_beam,
-            vtable: &vtable,
-            lifetime: PhantomData,
-        }
-    }
-
-    unsafe fn run(
-        &self,
-        list: &[u32],
-        lookahead: usize,
-        reader: &store::Reader<'_>,
-        f: &mut dyn FnMut(u32, f32),
-    ) -> ANNResult<()> {
-        unsafe { (self.expand_beam)(self.ptr, list, lookahead, reader, f) }
-    }
-
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
-        unsafe { (self.vtable.evaluate)(self.ptr, x) }
-    }
-}
-
-impl Drop for ExpandBeam<'_> {
-    fn drop(&mut self) {
-        unsafe { (self.vtable.drop)(self.ptr.cast_mut()) }
-    }
-}
-
-unsafe fn drop<T>(ptr: *mut ()) {
-    let _ = unsafe { Box::from_raw(ptr.cast::<T>()) };
-}
-
-unsafe fn evaluate<T>(ptr: *const (), x: &[u8]) -> ANNResult<f32>
-where
-    T: layers::QueryDistance,
-{
-    let f = unsafe { &*ptr.cast::<T>() };
-    <T as layers::QueryDistance>::evaluate(f, x)
 }
 
 #[inline(always)]
@@ -493,25 +453,14 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 }
 
-const CACHE_LINE_SIZE: usize = 64;
-
-// pub unsafe fn test_function(
-//     list: &[u32],
-//     lookahead: usize,
-//     reader: &store::Reader<'_>,
-//     distance: &dyn layers::QueryDistance,
-//     f: &mut dyn FnMut(u32, f32),
-// ) -> ANNResult<()> {
-//     unsafe { expand_beam_inner::<4>(list, lookahead, reader, distance, f) }
-// }
-
 /// Safety (no # yet because we need to revisit this - clippy will lint)
 ///
 /// * The concrete type of `distance` must be `T`.
 /// * All items in `list` must in-bounds with respect to `reader`.
 /// * The number of bytes associated with `N` cache lines must "make sense".
+#[inline]
 unsafe fn expand_beam_inner<T, const BYTES: usize>(
-    distance: *const (),
+    distance: &T,
     list: &[u32],
     lookahead: usize,
     reader: &store::Reader<'_>,
@@ -520,8 +469,6 @@ unsafe fn expand_beam_inner<T, const BYTES: usize>(
 where
     T: layers::QueryDistance,
 {
-    let distance = unsafe { &*distance.cast::<T>() };
-
     debug_assert!(
         BYTES + 1 <= reader.bytes().value(),
         "we really rely on this: {}, bytes = {}",
@@ -577,6 +524,9 @@ where
 // Insert //
 ////////////
 
+/// The [`glue::PruneAccessor`] implementation for [`Provider`].
+///
+/// This type implements zero-copy access to the data within its parent provider during prunes.
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
     reader: store::Reader<'a>,
@@ -584,6 +534,7 @@ pub struct PruneAccessor<'a> {
     counters: LocalCounters<'a>,
 }
 
+/// The distance computer for [`PruneAccessor`].
 #[derive(Debug)]
 pub struct Distance<'a> {
     distance: &'a dyn layers::Distance,
@@ -906,24 +857,52 @@ where
 mod tests {
     use super::*;
 
-    use diskann::graph::DiskANNIndex;
+    use diskann::{
+        graph::{DiskANNIndex, InplaceDeleteMethod, search::Knn, test::synthetic::Grid},
+        neighbor::Neighbor,
+        provider::{DataProvider, Delete},
+    };
     use diskann_vector::distance::Metric;
 
     use crate::layers::Full;
 
+    /// The true tests live in the integration tests for this repo.
+    ///
+    /// The smoke test here uses a 2D grid of points to verify that our provider
+    /// implementations are more-or-less correct.
+    ///
+    /// Note that since `Provider` separates internal and external IDs, we multiply the
+    /// coordinates of each element in the grid by 10 and add 1 to verify that the ID
+    /// translation is behaving properly.
+    ///
+    /// For clarity, the expected structure of the grid is as follows:
+    ///
+    ///                       <unknown>
+    ///   41 91 141 191 241
+    ///   31 81 131 181 231
+    ///   21 71 121 171 221
+    ///   11 61 111 161 211
+    ///    1 51 101 151 201
+    ///
     #[tokio::test]
     async fn smoke() {
-        let full = Full::<f32>::new(1, Metric::L2);
-        let start_points: [&[f32]; _] = [&[1.0], &[2.0]];
+        let grid = Grid::Two;
+        let size = 5;
+        let data = grid.data(size);
+        let start = grid.start_point(size);
+        let degree = 6;
 
-        let config = Config::new(10, 16);
+        let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
 
-        let provider = Provider::new(full, config, start_points);
+        let config = Config::new(grid.num_points(size), degree);
+
+        let provider = Provider::<_, u64>::new(full, config, std::iter::once(start.as_slice()));
+        assert_eq!(provider.max_degree(), degree);
 
         let config = diskann::graph::config::Builder::new(
+            2 * (grid.dim() as usize),
+            diskann::graph::config::MaxDegree::new(provider.max_degree()),
             10,
-            diskann::graph::config::MaxDegree::Same,
-            100,
             (Metric::L2).into(),
         )
         .build()
@@ -931,8 +910,154 @@ mod tests {
 
         let index = DiskANNIndex::new(config, provider, None);
 
-        index.insert(&Strategy, &Context, &0, &[3.0]).await.unwrap();
-        index.insert(&Strategy, &Context, &1, &[4.0]).await.unwrap();
-        index.insert(&Strategy, &Context, &2, &[5.0]).await.unwrap();
+        for (i, data) in data.row_iter().enumerate() {
+            index
+                .insert(&Strategy, &Context, &((10 * i + 1) as u64), data)
+                .await
+                .unwrap();
+        }
+
+        // Verify that each ID round trips.
+        for i in 0..data.nrows() {
+            let i = (10 * i + 1) as u64;
+            let internal = index.provider().to_internal_id(&Context, &i).unwrap();
+            assert_ne!(internal as u64, i);
+            assert_eq!(
+                index.provider().to_external_id(&Context, internal).unwrap(),
+                i
+            );
+
+            assert!(
+                !index
+                    .provider()
+                    .status_by_external_id(&Context, &i)
+                    .await
+                    .unwrap()
+                    .is_deleted()
+            );
+            assert!(
+                !index
+                    .provider()
+                    .status_by_internal_id(&Context, internal)
+                    .await
+                    .unwrap()
+                    .is_deleted()
+            );
+        }
+
+        // Assert that out-of-bounds translations returns errors.
+        assert!(index.provider().to_internal_id(&Context, &0).is_err());
+        assert!(index.provider().to_external_id(&Context, 26).is_err());
+
+        // Searches should return something reasonable.
+        let knn = Knn::new(10, 10, None).unwrap();
+        let mut neighbors = Vec::<Neighbor<u64>>::new();
+        index
+            .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+            .await
+            .unwrap();
+
+        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+        assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
+        assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+        assert_eq!(neighbors[3].as_tuple(), (61, 2.0));
+
+        // If we run inplace delete on point 61, it longer be present.
+        index
+            .inplace_delete(
+                Strategy,
+                &Context,
+                &61,
+                3,
+                InplaceDeleteMethod::VisitedAndTopK {
+                    k_value: 10,
+                    l_value: 10,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            index
+                .provider()
+                .status_by_external_id(&Context, &61)
+                .await
+                .unwrap()
+                .is_deleted()
+        );
+
+        // We can't delete the same thing twice.
+        assert!(
+            index
+                .inplace_delete(
+                    Strategy,
+                    &Context,
+                    &61,
+                    3,
+                    InplaceDeleteMethod::VisitedAndTopK {
+                        k_value: 10,
+                        l_value: 10
+                    },
+                )
+                .await
+                .is_err()
+        );
+
+        // Rerun search - the point 61 should now be gone.
+        let mut neighbors = Vec::<Neighbor<u64>>::new();
+        index
+            .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+            .await
+            .unwrap();
+
+        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+        assert_eq!(neighbors[1].as_tuple(), (51, 1.0)); // this can be swapped with 2
+        assert_eq!(neighbors[2].as_tuple(), (11, 1.0));
+        assert_eq!(neighbors[3].as_tuple(), (101, 4.0)); // we can also accept "21"
+
+        // We can't insert an existing ID.
+        assert!(
+            index
+                .insert(&Strategy, &Context, &1, &[10.0, 10.0])
+                .await
+                .is_err()
+        );
+
+        // If we insert a new ID but the query vector is too long - make sure we leave the
+        // provider untouched.
+        assert!(
+            index
+                .insert(&Strategy, &Context, &2, &[10.0, 10.0, 10.0])
+                .await
+                .is_err()
+        );
+
+        // Check that we can reinsert the same point with a different ID and have it be
+        // returned from search.
+        index
+            .insert(&Strategy, &Context, &62, &[1.0, 1.0])
+            .await
+            .unwrap();
+
+        // We can't insert an ID - but this time it's because we don't have any more internal
+        // slots.
+        assert!(
+            index
+                .insert(&Strategy, &Context, &62, &[0.0, 0.0])
+                .await
+                .is_err()
+        );
+
+        // Rerun search - the point 62 should be present.
+        let mut neighbors = Vec::<Neighbor<u64>>::new();
+        index
+            .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+            .await
+            .unwrap();
+
+        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+        assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
+        assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+        assert_eq!(neighbors[3].as_tuple(), (62, 2.0));
     }
 }

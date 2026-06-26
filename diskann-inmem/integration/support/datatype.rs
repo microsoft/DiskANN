@@ -226,15 +226,6 @@ impl Dataset {
         self.as_view().ncols()
     }
 
-    pub(crate) fn row(&self, i: usize) -> Option<Slice<'_>> {
-        match self {
-            Self::F32(m) => m.get_row(i).map(Slice::from),
-            Self::F16(m) => m.get_row(i).map(Slice::from),
-            Self::U8(m) => m.get_row(i).map(Slice::from),
-            Self::I8(m) => m.get_row(i).map(Slice::from),
-        }
-    }
-
     pub(crate) fn as_view(&self) -> DatasetView<'_> {
         match self {
             Self::F32(m) => DatasetView::F32(m.as_view()),
