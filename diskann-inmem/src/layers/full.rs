@@ -389,7 +389,13 @@ impl FullPrecision for f32 {
                     mint!(query, visitor, f32 => SquaredL2)
                 }
             }
-            Metric::InnerProduct => mint!(query, visitor, f32 => InnerProduct),
+            Metric::InnerProduct => {
+                // if full.dim() == 768 {
+                //     mint!(query, visitor, f32 => { 768, InnerProduct })
+                // } else {
+                    mint!(query, visitor, f32 => InnerProduct)
+                // }
+            },
             Metric::Cosine => mint!(query, visitor, f32 => Cosine),
             Metric::CosineNormalized => mint!(query, visitor, f32 => CosineNormalized),
         };

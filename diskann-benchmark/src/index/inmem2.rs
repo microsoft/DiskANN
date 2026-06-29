@@ -34,13 +34,13 @@ use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    index::build::ProgressMeter,
+    index::{result::{SearchResults, AggregatedSearchResults}, build::ProgressMeter},
     inputs::graph_index::DynamicRunbookParams,
     utils::{datafiles, SimilarityMeasure},
 };
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    // registry.register("inmem2-f32", Inmem2)?;
+    registry.register("inmem2-f32", Build::<f32>::new())?;
     registry.register("inmem2-f32-stream", Inmem2Stream)?;
     Ok(())
 }
@@ -314,156 +314,139 @@ impl<T> Build<T> {
     }
 }
 
-// impl<T> Benchmark for Build<T>
-// where
-//     T: diskann_inmem::layers::FullPrecision
-//         + diskann::graph::SampleableForStart,
-// {
-//     type Input = StaticBuild;
-//     type Output = ();
-//
-//     fn try_match(&self, input: &StaticBuild) -> Result<MatchScore, FailureScore> {
-//         Ok(MatchScore(0))
-//     }
-//
-//     fn description(
-//         &self,
-//         f: &mut std::fmt::Formatter<'_>,
-//         input: Option<&StaticBuild>,
-//     ) -> std::fmt::Result {
-//         Ok(())
-//         // match input {
-//         //     Some(i) => write!(f, "{i}"),
-//         //     None => write!(f, "inmem2 f32 benchmark"),
-//         // }
-//     }
-//
-//     fn run(
-//         &self,
-//         input: &StaticBuild,
-//         checkpoint: Checkpoint<'_>,
-//         mut output: &mut dyn Output,
-//     ) -> anyhow::Result<()> {
-//         // writeln!(output, "{input}")?;
-//
-//         // Load data.
-//         let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-//             &input.data.data,
-//         ))?);
-//
-//         let dim = data.ncols();
-//         let num_points = data.nrows();
-//         writeln!(output, "Loaded {num_points} points, dim={dim}")?;
-//
-//         // Compute the medoid of the dataset as the single start point.
-//         let start = StartPointStrategy::Medoid.compute(data.as_view())?;
-//         let layer = Full::<T>::new(dim, input.data.distance);
-//         let config =
-//             diskann_inmem::provider::Config::new(num_points, input.build.config.max_degree().get());
-//         let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
-//
-//         let index = Arc::new(DiskANNIndex::new(
-//             input.build.config.clone(),
-//             provider,
-//             None,
-//         ));
-//
-//         // Build via SingleInsert.
-//         let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
-//         let builder = build_core::graph::SingleInsert::new(
-//             index.clone(),
-//             data,
-//             Strategy,
-//             build_core::ids::Identity::<u32>::new(),
-//         );
-//
-//         // writeln!(
-//         //     output,
-//         //     "Building index with {} threads...",
-//         //     input.num_threads
-//         // )?;
-//         let build_results = build_core::build_tracked(
-//             builder,
-//             build_core::Parallelism::dynamic(
-//                 diskann::utils::ONE,
-//                 input.build.num_threads,
-//             ),
-//             &rt,
-//             Some(&ProgressMeter::new(output)),
-//         )?;
-//
-//         let total_build_time = build_results.end_to_end_latency();
-//         writeln!(
-//             output,
-//             "Build complete in {:.2}s",
-//             total_build_time.as_seconds()
-//         )?;
-//         checkpoint.checkpoint(&total_build_time)?;
-//
-//         // Search.
-//         let queries: Arc<Matrix<T>> =
-//             Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?);
-//         let max_k = input.search.maximum_recall_k();
-//         let groundtruth =
-//             datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), Some(max_k))?;
-//
-//         writeln!(output, "Loaded {} queries", queries.nrows())?;
-//
-//         let knn = benchmark_core::search::graph::KNN::new(
-//             index,
-//             queries,
-//             benchmark_core::search::graph::Strategy::broadcast(Strategy),
-//         )?;
-//
-//         // let num_threads = NonZeroUsize::new(input.num_threads).unwrap();
-//         let mut results = Vec::new();
-//         for num_threads in input.search.num_threads.iter() {
-//             let params = graph::search::Knn::new(input.search_n, search_l, None)?;
-//
-//             let setup = core_search::Setup {
-//                 threads: num_threads,
-//                 tasks: num_threads,
-//                 reps: input.reps,
-//             };
-//
-//             let run = core_search::Run::new(params, setup);
-//
-//             let summaries = core_search::search_all(
-//                 knn.clone(),
-//                 std::iter::once(run),
-//                 benchmark_core::search::graph::knn::Aggregator::new(
-//                     &groundtruth,
-//                     input.recall_k,
-//                     input.search_n,
-//                     GroundTruthMode::Fixed,
-//                 ),
-//             )?;
-//
-//             for summary in &summaries {
-//                 let qps: Vec<f64> = summary
-//                     .end_to_end_latencies
-//                     .iter()
-//                     .map(|lat| summary.recall.num_queries as f64 / lat.as_seconds())
-//                     .collect();
-//                 let max_qps = qps.iter().cloned().fold(0.0f64, f64::max);
-//                 let mean_qps = qps.iter().sum::<f64>() / qps.len() as f64;
-//
-//                 writeln!(
-//                     output,
-//                     "  L={:<4} recall={:.4}  QPS={:.0} (max {:.0})  cmps={:.1}  hops={:.1}",
-//                     search_l,
-//                     summary.recall.average,
-//                     mean_qps,
-//                     max_qps,
-//                     summary.mean_cmps,
-//                     summary.mean_hops,
-//                 )?;
-//             }
-//         }
-//
-//         Ok(())
-//     }
-// }
+impl<T> Benchmark for Build<T>
+where
+    T: diskann_inmem::layers::FullPrecision
+        + diskann::graph::SampleableForStart,
+{
+    type Input = StaticBuild;
+    type Output = ();
+
+    fn try_match(&self, input: &StaticBuild) -> Result<MatchScore, FailureScore> {
+        Ok(MatchScore(0))
+    }
+
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&StaticBuild>,
+    ) -> std::fmt::Result {
+        Ok(())
+        // match input {
+        //     Some(i) => write!(f, "{i}"),
+        //     None => write!(f, "inmem2 f32 benchmark"),
+        // }
+    }
+
+    fn run(
+        &self,
+        input: &StaticBuild,
+        checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        // writeln!(output, "{input}")?;
+
+        // Load data.
+        let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            &input.data.data,
+        ))?);
+
+        let dim = data.ncols();
+        let num_points = data.nrows();
+        writeln!(output, "Loaded {num_points} points, dim={dim}")?;
+
+        // Compute the medoid of the dataset as the single start point.
+        let start = StartPointStrategy::Medoid.compute(data.as_view())?;
+        let layer = Full::<T>::new(dim, input.data.distance);
+        let config =
+            diskann_inmem::provider::Config::new(num_points, input.build.config.max_degree().get());
+        let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
+
+        let index = Arc::new(DiskANNIndex::new(
+            input.build.config.clone(),
+            provider,
+            None,
+        ));
+
+        // Build via SingleInsert.
+        let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
+        let builder = build_core::graph::SingleInsert::new(
+            index.clone(),
+            data,
+            Strategy,
+            build_core::ids::Identity::<u32>::new(),
+        );
+
+        // writeln!(
+        //     output,
+        //     "Building index with {} threads...",
+        //     input.num_threads
+        // )?;
+        let build_results = build_core::build_tracked(
+            builder,
+            build_core::Parallelism::dynamic(
+                diskann::utils::ONE,
+                input.build.num_threads,
+            ),
+            &rt,
+            Some(&ProgressMeter::new(output)),
+        )?;
+
+        let total_build_time = build_results.end_to_end_latency();
+        writeln!(
+            output,
+            "Build complete in {:.2}s",
+            total_build_time.as_seconds()
+        )?;
+        checkpoint.checkpoint(&total_build_time)?;
+
+        // Search.
+        let queries: Arc<Matrix<T>> =
+            Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?);
+        let max_k = input.search.maximum_recall_k();
+        let groundtruth =
+            datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), Some(max_k))?;
+
+        writeln!(output, "Loaded {} queries", queries.nrows())?;
+
+        let knn = benchmark_core::search::graph::KNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(Strategy),
+        )?;
+
+        let mut results = Vec::new();
+        for num_threads in input.search.num_threads.iter() {
+            for instance in input.search.runs.iter() {
+                let setup = core_search::Setup {
+                    threads: *num_threads,
+                    tasks: *num_threads,
+                    reps: input.search.reps,
+                };
+
+                let run = core_search::Run::new(instance.knn, setup);
+
+                let r = core_search::search_all(
+                    knn.clone(),
+                    std::iter::once(run),
+                    benchmark_core::search::graph::knn::Aggregator::new(
+                        &groundtruth,
+                        instance.recall_k,
+                        instance.knn.k_value().get(),
+                        GroundTruthMode::Fixed,
+                    ),
+                )?;
+                results.extend(r.into_iter().map(SearchResults::new));
+            }
+        }
+
+        let results = AggregatedSearchResults::Topk(results);
+
+        writeln!(output, "{}", results)?;
+
+        Ok(())
+    }
+}
 
 ///////////////
 // Streaming //

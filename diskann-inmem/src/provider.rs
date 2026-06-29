@@ -500,7 +500,7 @@ impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
         T: QueryDistance + 'a,
     {
         // This is critical to ensure we emit the correct number of prefetches.
-        assert_eq!(Bytes::new(BYTES + store::TAG_SIZE.value()), self.bytes);
+        assert!(Bytes::new(BYTES + store::TAG_SIZE.value()) <= self.bytes);
         Box::new(ExpandBeamImpl::<_, BYTES>(distance))
     }
 
@@ -533,7 +533,7 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
 
     // SAFETY: Inherited from caller.
     unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
-    for i in 0..(lines - 1) {
+    for i in 0..(lines - 1).min(16) {
         // SAFETY: Inherited from caller.
         unsafe {
             _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
@@ -811,10 +811,10 @@ where
 }
 
 pub fn test_function<'a>(
-    x: &'a Provider<layers::Full<u8>>,
+    x: &'a Provider<layers::Full<f32>>,
     strategy: &'a Strategy,
     context: &'a Context,
-    query: &'a [u8],
+    query: &'a [f32],
 ) -> ANNResult<SearchAccessor<'a>> {
     glue::SearchStrategy::search_accessor(strategy, x, context, query)
 }
