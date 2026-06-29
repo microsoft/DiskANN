@@ -37,8 +37,8 @@ pub mod error;
 pub use error::{Error, Result};
 
 mod context;
-pub use context::{Context, Object, Reader};
 pub(crate) use context::LoadContext;
+pub use context::{Context, Object, Reader};
 
 #[cfg(feature = "disk")]
 use std::path::Path;

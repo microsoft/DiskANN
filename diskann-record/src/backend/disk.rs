@@ -30,7 +30,7 @@ use crate::{
 /// out the same artifact name twice.
 ///
 /// # Cleanup on failure
-/// 
+///
 /// Save can fail part-way, so the [`Drop`] impl ensures cleanup of any artifacts created
 /// before the failure.
 #[derive(Debug)]
@@ -159,7 +159,7 @@ impl SaveContext for DiskSaveContext {
     /// save is in progress, or a previous run aborted between rename steps).
     ///
     /// On failure, context is dropped without committing ==> [`Drop`] impl
-    /// removes the artifacts + temp manifest. Save is marked committed once 
+    /// removes the artifacts + temp manifest. Save is marked committed once
     /// rename succeeds and artifacts are in place.
     fn finish(mut self, value: Value<'_>) -> save::Result<()> {
         let temp = self.temp_metadata();
@@ -450,7 +450,10 @@ mod tests {
             dir.path().join(&name).exists(),
             "a committed save must keep its artifacts"
         );
-        assert!(metadata.exists(), "a committed save must write the manifest");
+        assert!(
+            metadata.exists(),
+            "a committed save must write the manifest"
+        );
         assert!(
             !ctx_temp(&metadata).exists(),
             "a committed save must not leave a temp manifest"

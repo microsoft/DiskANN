@@ -488,6 +488,241 @@ mod tests {
         Ok(())
     }
 
+    //////////////////////////
+    // Legacy version path  //
+    //////////////////////////
+
+    // Sample record that requires a legacy version path (disk version older than loader version).
+    #[derive(Debug, PartialEq)]
+    struct Upgraded {
+        // Stored in the legacy (v0) record.
+        count: u32,
+        // Absent from the v0 record; reconstructed by `load_legacy` from `count`.
+        scaled: u32,
+    }
+
+    impl save::Save for Upgraded {
+        // Write using an "old" schema: only `count` is written to disk.
+        const VERSION: Version = Version::new(0, 0, 0);
+        fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
+            Ok(save_fields!(self, context, [count]))
+        }
+    }
+
+    impl load::Load<'_> for Upgraded {
+        // New schema: differs from the `0.0.0` stamped on disk, forcing `load_legacy`.
+        const VERSION: Version = Version::new(1, 0, 0);
+        fn load(_object: load::Object<'_>) -> load::Result<Self> {
+            panic!("matching-version load must not run for a legacy record");
+        }
+        fn load_legacy(object: load::Object<'_>) -> load::Result<Self> {
+            // Upgrade a v0 record: derive `scaled` from the stored `count`.
+            load_fields!(object, [count: u32]);
+            Ok(Self {
+                count,              // The original count value on disk
+                scaled: count * 10, // "default"/derived value after upgrade
+            })
+        }
+    }
+
+    #[test]
+    fn legacy_record_dispatches_to_load_legacy() -> anyhow::Result<()> {
+        // Save stamps the old `0.0.0` schema; the loader's `1.0.0` differs, so the
+        // round trip must flow through `load_legacy`, which upgrades the record.
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = dir.join("metadata.json");
+
+        save::save_to_disk(&Upgraded { count: 4, scaled: 0 }, dir, &metadata)?;
+        let restored: Upgraded = load::load_from_disk(&metadata, dir)?;
+
+        assert_eq!(
+            restored,
+            Upgraded {
+                count: 4,
+                scaled: 40
+            }
+        );
+        Ok(())
+    }
+
+    // A record whose loader has no upgrade path for the older on-disk schema:
+    // `load_legacy` refuses with `UnknownVersion`.
+    #[derive(Debug, PartialEq)]
+    struct NoUpgrade {
+        value: i32,
+    }
+
+    impl save::Save for NoUpgrade {
+        const VERSION: Version = Version::new(0, 0, 0);
+        fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
+            Ok(save_fields!(self, context, [value]))
+        }
+    }
+
+    impl load::Load<'_> for NoUpgrade {
+        const VERSION: Version = Version::new(2, 0, 0);
+        fn load(_object: load::Object<'_>) -> load::Result<Self> {
+            panic!("matching-version load must not run for a legacy record");
+        }
+        fn load_legacy(_object: load::Object<'_>) -> load::Result<Self> {
+            // Check if version.major is older than 1.0.0
+            if _object.version().major < 1 {
+                return Err(load::error::Kind::UnknownVersion.into());
+            }
+            panic!("should not reach this point");
+        }
+    }
+
+    #[test]
+    fn legacy_record_without_upgrade_path_is_rejected() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = dir.join("metadata.json");
+
+        save::save_to_disk(&NoUpgrade { value: 7 }, dir, &metadata)?;
+        let err = load::load_from_disk::<NoUpgrade>(&metadata, dir)
+            .expect_err("a legacy record with no upgrade path must fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("unknown version"),
+            "expected UnknownVersion error, got: {msg}"
+        );
+        Ok(())
+    }
+
+    ///////////////////////////////////
+    // Built-in primitive round-trip //
+    ///////////////////////////////////
+
+    // Covers the built-in `Loadable`/`Saveable` impls that the structural round-trip
+    // tests above don't reach: the wider integer widths and every `NonZero*` type.
+    #[derive(Debug, PartialEq)]
+    struct Primitives {
+        a: u16,
+        b: u32,
+        c: u64,
+        d: i16,
+        e: i32,
+        f: i64,
+        g: f64,
+        nz32: std::num::NonZeroU32,
+        nz64: std::num::NonZeroU64,
+        nzsize: std::num::NonZeroUsize,
+    }
+
+    impl save::Save for Primitives {
+        const VERSION: Version = Version::new(0, 0, 0);
+        fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
+            Ok(save_fields!(
+                self,
+                context,
+                [a, b, c, d, e, f, g, nz32, nz64, nzsize]
+            ))
+        }
+    }
+
+    impl load::Load<'_> for Primitives {
+        const VERSION: Version = Version::new(0, 0, 0);
+        fn load(object: load::Object<'_>) -> load::Result<Self> {
+            load_fields!(
+                object,
+                [
+                    a: u16,
+                    b: u32,
+                    c: u64,
+                    d: i16,
+                    e: i32,
+                    f: i64,
+                    g: f64,
+                    nz32: std::num::NonZeroU32,
+                    nz64: std::num::NonZeroU64,
+                    nzsize: std::num::NonZeroUsize,
+                ]
+            );
+            Ok(Self {
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                g,
+                nz32,
+                nz64,
+                nzsize,
+            })
+        }
+        fn load_legacy(_object: load::Object<'_>) -> load::Result<Self> {
+            panic!("nope!");
+        }
+    }
+
+    #[test]
+    fn builtin_primitives_round_trip() -> anyhow::Result<()> {
+        let value = Primitives {
+            a: 4242,
+            b: 4_000_000_000,
+            c: 1 << 40,
+            d: -12345,
+            e: -2_000_000_000,
+            f: -(1 << 40),
+            g: -2.5e-9,
+            nz32: std::num::NonZeroU32::new(7).unwrap(),
+            nz64: std::num::NonZeroU64::new(1 << 50).unwrap(),
+            nzsize: std::num::NonZeroUsize::new(99).unwrap(),
+        };
+
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = dir.join("metadata.json");
+
+        save::save_to_disk(&value, dir, &metadata)?;
+        let restored: Primitives = load::load_from_disk(&metadata, dir)?;
+
+        assert_eq!(value, restored);
+        Ok(())
+    }
+
+    #[test]
+    fn nonzero_rejects_zero_on_load() -> anyhow::Result<()> {
+        // A hand-crafted manifest storing `0` in a `NonZeroU32` field must be rejected
+        // with `NumberOutOfRange` rather than producing an invalid value.
+        #[derive(Debug)]
+        struct NzHolder {
+            _nz: std::num::NonZeroU32,
+        }
+
+        impl load::Load<'_> for NzHolder {
+            const VERSION: Version = Version::new(0, 0, 0);
+            fn load(object: load::Object<'_>) -> load::Result<Self> {
+                load_fields!(object, [nz: std::num::NonZeroU32]);
+                Ok(Self { _nz: nz })
+            }
+            fn load_legacy(_object: load::Object<'_>) -> load::Result<Self> {
+                panic!("nope!");
+            }
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = dir.join("metadata.json");
+        let manifest = serde_json::json!({
+            "files": [],
+            "value": { "$version": "0.0.0", "nz": 0 },
+        });
+        std::fs::write(&metadata, serde_json::to_vec(&manifest)?)?;
+
+        let err = load::load_from_disk::<NzHolder>(&metadata, dir)
+            .expect_err("zero stored in a NonZero field must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("number out of range"),
+            "expected NumberOutOfRange error, got: {msg}"
+        );
+        Ok(())
+    }
+
     ///////////////////////////////
     // Manifest directory escape //
     ///////////////////////////////
