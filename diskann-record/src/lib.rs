@@ -533,7 +533,14 @@ mod tests {
         let dir = temp_dir.path();
         let metadata = dir.join("metadata.json");
 
-        save::save_to_disk(&Upgraded { count: 4, scaled: 0 }, dir, &metadata)?;
+        save::save_to_disk(
+            &Upgraded {
+                count: 4,
+                scaled: 0,
+            },
+            dir,
+            &metadata,
+        )?;
         let restored: Upgraded = load::load_from_disk(&metadata, dir)?;
 
         assert_eq!(
