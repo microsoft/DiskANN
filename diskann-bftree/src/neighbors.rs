@@ -83,6 +83,11 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     /// Retrieve the neighbor list of a vector.
     ///
     /// Does not acquire any lock. Callers must ensure appropriate synchronization.
+    ///
+    /// `neighbors` is cleared first upon each invocation. A vector with no
+    /// stored neighbor list yet (bf-tree `NotFound`) yields an empty list rather
+    /// than an error, so neighbor lists are created lazily on first write.
+    /// One data copy is involved which copies the data from bf-tree to `neighbors`
     pub fn get_neighbors(&self, vector_id: I, neighbors: &mut AdjacencyList<I>) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
@@ -149,9 +154,15 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
                 ));
             }
             bf_tree::LeafReadResult::NotFound => {
-                return Err(ANNError::log_index_error(
-                    "The bf-tree entry for the vector key is marked as not found",
-                ));
+                // The vertex has no stored neighbor list yet. bf-tree natively
+                // distinguishes "absent" from "present but empty", so treat
+                // absence as an empty adjacency list rather than an error. This
+                // lets neighbor lists be created lazily on first write, avoiding
+                // an O(max_points) eager initialization at construction.
+                //
+                // `guard` is dropped at the end of this match without `finish`,
+                // which clears `neighbors` to the empty list (identical to the
+                // `Found(0)` case above).
             }
         };
 
