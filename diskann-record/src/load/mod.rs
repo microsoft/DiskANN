@@ -9,7 +9,7 @@
 //! primitive-like leaves, [`Loadable`]) and obtain an [`Object`] / [`Context`] from which
 //! they extract individual fields and side-car artifacts.
 //!
-//! The generic entry point is [`load`]; `load_from_disk` (available under the `disk`
+//! The generic entry point is `load`; `load_from_disk` (available under the `disk`
 //! feature) is the disk-backed convenience wrapper that reads a manifest and dispatches
 //! into the user type's [`Load`] impl.
 //!
@@ -37,7 +37,8 @@ pub mod error;
 pub use error::{Error, Result};
 
 mod context;
-pub use context::{Context, LoadContext, Object, Reader};
+pub use context::{Context, Object, Reader};
+pub(crate) use context::LoadContext;
 
 #[cfg(feature = "disk")]
 use std::path::Path;
@@ -54,7 +55,7 @@ use crate::{Version, save};
 /// # Errors
 ///
 /// Returns [`Error`] if the context cannot produce a root value or if `T`'s loader fails.
-pub fn load<'a, T, C>(context: &'a C) -> Result<T>
+pub(crate) fn load<'a, T, C>(context: &'a C) -> Result<T>
 where
     T: Loadable<'a>,
     C: LoadContext,

@@ -9,7 +9,7 @@
 //! (or, for primitive-like leaves, [`Saveable`]) and obtain a [`Context`] from which they
 //! request side-car artifact writers and assemble a [`Record`] of named fields.
 //!
-//! The generic entry point is [`save`]; `save_to_disk` (available under the `disk`
+//! The generic entry point is `save`; `save_to_disk` (available under the `disk`
 //! feature) is the disk-backed convenience wrapper that serializes a value into a
 //! caller-chosen directory plus a manifest path.
 //!
@@ -28,8 +28,8 @@
 pub use crate::value::{Handle, Keys, Record, Value, Versioned};
 
 mod context;
-pub use context::{Context, SaveContext, Writer};
-pub(crate) use context::{WriterInner, delegate_write_and_seek};
+pub use context::{Context, Writer};
+pub(crate) use context::{SaveContext, WriterInner, delegate_write_and_seek};
 
 mod error;
 pub use error::{Error, Result};
@@ -47,7 +47,7 @@ use crate::Version;
 ///
 /// Returns [`Error`] if a user impl returns an error or if the context fails to commit
 /// the manifest.
-pub fn save<T, C>(x: &T, context: C) -> Result<C::Output>
+pub(crate) fn save<T, C>(x: &T, context: C) -> Result<C::Output>
 where
     T: Saveable,
     C: SaveContext,

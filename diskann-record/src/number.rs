@@ -28,9 +28,40 @@ pub enum Number {
     F64(f64),
 }
 
+impl Number {
+    /// Returns the string sentinel for a non-finite `f64`, or `None` for any finite or
+    /// integer value.
+    ///
+    /// JSON cannot represent `NaN`/`\pm inf` as numeric literals, so these are encoded as
+    /// the strings `"nan"`, `"inf"`, and `"neg_inf"` instead. [`Number::from_sentinel`]
+    /// is the inverse.
+    pub(crate) fn sentinel(self) -> Option<&'static str> {
+        match self {
+            Self::F64(v) if v.is_nan() => Some("nan"),
+            Self::F64(v) if v == f64::INFINITY => Some("inf"),
+            Self::F64(v) if v == f64::NEG_INFINITY => Some("neg_inf"),
+            _ => None,
+        }
+    }
+
+    /// Decodes a non-finite `f64` sentinel produced by [`Number::sentinel`], or `None`
+    /// for any other string.
+    pub(crate) fn from_sentinel(s: &str) -> Option<Self> {
+        match s {
+            "nan" => Some(Self::F64(f64::NAN)),
+            "inf" => Some(Self::F64(f64::INFINITY)),
+            "neg_inf" => Some(Self::F64(f64::NEG_INFINITY)),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(feature = "serde")]
 impl Serialize for Number {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(sentinel) = self.sentinel() {
+            return serializer.serialize_str(sentinel);
+        }
         match *self {
             Self::U64(v) => serializer.serialize_u64(v),
             Self::I64(v) => serializer.serialize_i64(v),
@@ -61,6 +92,12 @@ impl<'de> Deserialize<'de> for Number {
 
             fn visit_f64<E: de::Error>(self, v: f64) -> Result<Number, E> {
                 Ok(Number::F64(v))
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Number, E> {
+                Number::from_sentinel(v).ok_or_else(|| {
+                    de::Error::custom(format!("expected a number or numeric sentinel, got {v:?}"))
+                })
             }
         }
 
@@ -204,5 +241,33 @@ mod tests {
         assert!(u8::try_from(Number::U64(300)).is_err());
         assert_eq!(u16::try_from(Number::U64(300)).unwrap(), 300);
         assert!(usize::try_from(Number::I64(-1)).is_err());
+    }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn non_finite_floats_round_trip_via_sentinels() {
+        for (value, sentinel) in [
+            (f64::NAN, "\"nan\""),
+            (f64::INFINITY, "\"inf\""),
+            (f64::NEG_INFINITY, "\"neg_inf\""),
+        ] {
+            let json = serde_json::to_string(&Number::F64(value)).unwrap();
+            assert_eq!(json, sentinel);
+
+            let back: Number = serde_json::from_str(&json).unwrap();
+            match back {
+                Number::F64(v) if value.is_nan() => assert!(v.is_nan()),
+                Number::F64(v) => assert_eq!(v, value),
+                other => panic!("expected F64, got {other:?}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn finite_floats_serialize_as_json_numbers() {
+        assert_eq!(serde_json::to_string(&Number::F64(1.5)).unwrap(), "1.5");
+        assert_eq!(serde_json::to_string(&Number::U64(7)).unwrap(), "7");
+        assert_eq!(serde_json::to_string(&Number::I64(-7)).unwrap(), "-7");
     }
 }

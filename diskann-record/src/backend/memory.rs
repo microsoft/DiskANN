@@ -7,9 +7,8 @@
 //!
 //! [`MemorySaveContext`] and [`MemoryContext`] mirror the disk-backed contexts but
 //! keep the manifest value and every side-car artifact in memory. Saving through an
-//! [`MemorySaveContext`] yields an [`MemoryContext`] (its
-//! [`SaveContext::Output`](crate::save::SaveContext::Output)) that can be loaded directly
-//! via [`crate::load::load`].
+//! [`MemorySaveContext`] yields an [`MemoryContext`] (its `SaveContext::Output`) that can
+//! be loaded directly via the `load` entry point.
 //!
 //! Unlike the disk path, this round trip never serializes through JSON: the manifest
 //! [`Value`] is deep-copied to `'static` via [`Value::into_owned`] and side-car artifacts
@@ -24,11 +23,11 @@ use crate::{
     save::{self, Handle, SaveContext, Writer, delegate_write_and_seek},
 };
 
-/// A save-side [`SaveContext`] that keeps every side-car artifact and the committed
+/// A save-side `SaveContext` that keeps every side-car artifact and the committed
 /// manifest value in memory.
 ///
-/// [`SaveContext::finish`] consumes the context and returns an [`MemoryContext`] ready
-/// to be loaded with [`crate::load::load`].
+/// `SaveContext::finish` consumes the context and returns an [`MemoryContext`] ready
+/// to be loaded with the `load` entry point.
 #[derive(Debug, Default)]
 pub struct MemorySaveContext {
     files: Mutex<HashMap<String, Vec<u8>>>,
@@ -126,9 +125,9 @@ impl save::WriterInner for MemoryWriter<'_> {
 
 delegate_write_and_seek!(cursor, MemoryWriter<'_>);
 
-/// A load-side [`LoadContext`] backed entirely by in-memory buffers.
+/// A load-side `LoadContext` backed entirely by in-memory buffers.
 ///
-/// Produced by [`MemorySaveContext`] via [`SaveContext::finish`]. Holds the committed
+/// Produced by [`MemorySaveContext`] via `SaveContext::finish`. Holds the committed
 /// manifest [`Value`] and every side-car artifact as an in-memory byte buffer, so loading
 /// never serializes through JSON or touches the filesystem.
 #[derive(Debug)]

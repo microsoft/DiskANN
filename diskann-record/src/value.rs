@@ -11,8 +11,8 @@
 //!
 //! Every field stored in a manifest is one of:
 //!
-//! * [`Value::Null`] / [`Value::Bool`] / [`Value::Number`] / [`Value::String`] /
-//!   [`Value::Bytes`] — primitive scalars.
+//! * [`Value::Null`] / [`Value::Bool`] / [`Value::Number`] / [`Value::String`] —
+//!   primitive scalars.
 //! * [`Value::Array`] — a homogeneous sequence (used by `Vec<T>` and `&[T]`).
 //! * [`Value::Object`] — a [`Versioned`] [`Record`] (the canonical encoding for a
 //!   `T: crate::save::Save`).
@@ -39,7 +39,7 @@ use crate::{Number, Version, save::Error};
 /// The wire-level union of every saveable kind.
 ///
 /// See the module-level docs for an overview of when each variant is produced. The
-/// borrowing parameter `'a` lets [`Value::String`], [`Value::Bytes`], and nested
+/// borrowing parameter `'a` lets [`Value::String`] and nested
 /// records reuse memory owned by the caller without copying.
 #[derive(Debug)]
 pub enum Value<'a> {
@@ -47,7 +47,6 @@ pub enum Value<'a> {
     Bool(bool),
     Number(Number),
     String(Cow<'a, str>),
-    Bytes(Cow<'a, [u8]>),
     Array(Vec<Value<'a>>),
     Object(Versioned<'a>),
     Handle(Handle),
@@ -61,7 +60,6 @@ impl Serialize for Value<'_> {
             Self::Bool(b) => ser.serialize_bool(*b),
             Self::Number(n) => n.serialize(ser),
             Self::String(s) => ser.serialize_str(s),
-            Self::Bytes(b) => ser.serialize_bytes(b),
             Self::Array(a) => a.serialize(ser),
             Self::Object(v) => v.serialize(ser),
             Self::Handle(h) => h.serialize(ser),
@@ -116,19 +114,17 @@ impl<'de> Deserialize<'de> for Value<'static> {
             }
 
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Value<'static>, E> {
+                if let Some(n) = Number::from_sentinel(v) {
+                    return Ok(Value::Number(n));
+                }
                 Ok(Value::String(Cow::Owned(v.to_owned())))
             }
 
             fn visit_string<E: de::Error>(self, v: String) -> Result<Value<'static>, E> {
+                if let Some(n) = Number::from_sentinel(&v) {
+                    return Ok(Value::Number(n));
+                }
                 Ok(Value::String(Cow::Owned(v)))
-            }
-
-            fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Value<'static>, E> {
-                Ok(Value::Bytes(Cow::Owned(v.to_owned())))
-            }
-
-            fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Value<'static>, E> {
-                Ok(Value::Bytes(Cow::Owned(v)))
             }
 
             fn visit_seq<A>(self, mut seq: A) -> Result<Value<'static>, A::Error>
@@ -210,7 +206,6 @@ impl Value<'_> {
             Self::Bool(b) => Value::Bool(b),
             Self::Number(n) => Value::Number(n),
             Self::String(s) => Value::String(Cow::Owned(s.into_owned())),
-            Self::Bytes(b) => Value::Bytes(Cow::Owned(b.into_owned())),
             Self::Array(values) => {
                 Value::Array(values.into_iter().map(Value::into_owned).collect())
             }

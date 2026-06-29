@@ -69,7 +69,7 @@ pub(crate) use delegate_write_and_seek;
 ///
 /// The generic [`save`](super::save) entry point is parameterized over this trait so
 /// that the base crate carries no hard dependency on any particular implementation.
-pub trait SaveContext {
+pub(crate) trait SaveContext {
     /// The value produced once the manifest has been committed by
     /// [`SaveContext::finish`]. For the disk-backed context this is `()`.
     type Output;
@@ -119,7 +119,7 @@ where
 /// `Context` exposes one operation — [`Context::write`] — for allocating a side-car
 /// artifact. The same context is passed to nested [`Save`](super::Save) impls (typically
 /// via the [`save_fields!`](crate::save_fields) macro), so a single save tree shares
-/// artifact-name bookkeeping. It borrows the backing [`SaveContext`] as an object-safe
+/// artifact-name bookkeeping. It borrows the backing `SaveContext` as an object-safe
 /// `GetWrite` so that the save tree is agnostic to the concrete context type.
 #[derive(Clone)]
 pub struct Context<'a> {

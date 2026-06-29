@@ -37,7 +37,7 @@ use crate::{
 /// The generic [`load`](super::load) entry point is parameterized over this trait, and
 /// [`Context`] / [`Object`] / `Array` borrow it as an object-safe `&dyn LoadContext`
 /// so the load tree is agnostic to the concrete context type.
-pub trait LoadContext {
+pub(crate) trait LoadContext {
     /// The root value of the manifest.
     ///
     /// # Errors
@@ -66,7 +66,7 @@ impl<T> ReaderInner for T where T: std::io::Read + std::io::Seek {}
 /// A borrowed reader over a side-car artifact.
 ///
 /// Produced by [`Object::read`]. Implements [`std::io::Read`] and [`std::io::Seek`] over
-/// whatever backing store the [`LoadContext`] provides, so non-file-backed providers
+/// whatever backing store the `LoadContext` provides, so non-file-backed providers
 /// (like an in-memory byte buffer) can supply an arbitrary seekable reader.
 pub struct Reader<'a> {
     io: BufReader<Box<dyn ReaderInner + 'a>>,
