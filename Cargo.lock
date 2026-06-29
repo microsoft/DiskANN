@@ -212,7 +212,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f5948e058bab1f8fb75d1fac07dbb965b7dfce1a95f7c10c6f587682526bf1"
 dependencies = [
  "cfg-if",
- "io-uring 0.6.4",
+ "io-uring",
  "libc",
  "rand",
  "serde",
@@ -771,7 +771,7 @@ dependencies = [
  "half",
  "hashbrown 0.16.1",
  "iai-callgrind",
- "io-uring 0.7.12",
+ "io-uring",
  "libc",
  "opentelemetry",
  "proptest",
@@ -1839,17 +1839,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "595a0399f411a508feb2ec1e970a4a30c249351e30208960d58298de8660b0e5"
 dependencies = [
  "bitflags 1.3.2",
- "libc",
-]
-
-[[package]]
-name = "io-uring"
-version = "0.7.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d09b98f7eace8982db770e4408e7470b028ce513ac28fecdc6bf4c30fe92b62"
-dependencies = [
- "bitflags 2.10.0",
- "cfg-if",
  "libc",
 ]
 

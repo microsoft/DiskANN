@@ -14,6 +14,6 @@ pub use linux::IOContext;
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::{
-    get_queued_completion_status, read_file_to_slice, AccessMode, FileHandle, IOCompletionPort,
-    IOContext, ShareMode, DWORD, OVERLAPPED, ULONG_PTR,
+    get_queued_completion_status, read_file_to_slice, FileHandle, IOCompletionPort, IOContext,
+    DWORD, OVERLAPPED, ULONG_PTR,
 };

@@ -4,14 +4,16 @@
  */
 use std::{ptr, thread, time::Duration};
 
-use super::super::platform::{
-    get_queued_completion_status, read_file_to_slice, AccessMode, FileHandle, IOCompletionPort,
-    IOContext, ShareMode, DWORD, OVERLAPPED, ULONG_PTR,
-};
 use diskann::{ANNError, ANNResult};
 
-use super::super::traits::AlignedFileReader;
-use crate::search::provider::aligned_file_reader::{AlignedRead, A512};
+use crate::search::provider::aligned_file_reader::{
+    platform::{
+        get_queued_completion_status, read_file_to_slice, FileHandle, IOCompletionPort, IOContext,
+        DWORD, OVERLAPPED, ULONG_PTR,
+    },
+    traits::AlignedFileReader,
+    AlignedRead, A512,
+};
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
 pub const IO_COMPLETION_TIMEOUT: DWORD = u32::MAX; // Infinite timeout.
@@ -33,7 +35,7 @@ impl WindowsAlignedFileReader {
     pub fn new(fname: &str) -> ANNResult<Self> {
         let mut io_context = IOContext::new();
         tracing::debug!("Creating file handle for {}", fname);
-        match unsafe { FileHandle::new(fname, AccessMode::Read, ShareMode::Read) } {
+        match unsafe { FileHandle::new(fname) } {
             Ok(file_handle) => io_context.file_handle = file_handle,
             Err(err) => {
                 return Err(ANNError::log_io_error(err));

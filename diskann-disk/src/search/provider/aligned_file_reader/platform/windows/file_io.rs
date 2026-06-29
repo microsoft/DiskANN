@@ -133,7 +133,6 @@ pub unsafe fn get_queued_completion_status(
 mod tests {
     use std::{fs::File, io::Write, path::Path};
 
-    use super::super::file_handle::{AccessMode, ShareMode};
     use super::*;
 
     #[test]
@@ -148,10 +147,7 @@ mod tests {
         let mut buffer: [u8; 512] = [0; 512];
         let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
         {
-            let file_handle = unsafe {
-                FileHandle::new(path.to_str().unwrap(), AccessMode::Read, ShareMode::Read)
-            }
-            .unwrap();
+            let file_handle = unsafe { FileHandle::new(path.to_str().unwrap()) }.unwrap();
 
             // Call the function under test
             let result =

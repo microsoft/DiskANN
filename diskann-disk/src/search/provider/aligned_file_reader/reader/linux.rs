@@ -7,12 +7,13 @@ use std::{
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
 };
 
-use super::super::platform::IOContext;
 use diskann::{ANNError, ANNResult};
 use io_uring::IoUring;
 use libc;
 
-use crate::search::provider::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, A512};
+use crate::search::provider::aligned_file_reader::{
+    platform::IOContext, traits::AlignedFileReader, AlignedRead, A512,
+};
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
 

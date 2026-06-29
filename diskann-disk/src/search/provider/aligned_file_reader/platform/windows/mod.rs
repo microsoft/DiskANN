@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-pub use file_handle::{AccessMode, FileHandle, ShareMode};
+pub use file_handle::FileHandle;
 pub use file_io::{get_queued_completion_status, read_file_to_slice};
 pub use io_completion_port::IOCompletionPort;
 pub use ssd_io_context::IOContext;

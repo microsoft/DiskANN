@@ -6,11 +6,11 @@
 use diskann::ANNResult;
 
 #[cfg(all(not(miri), target_os = "linux"))]
-use super::super::reader::LinuxAlignedFileReader;
+use crate::search::provider::aligned_file_reader::reader::LinuxAlignedFileReader;
 #[cfg(any(miri, target_os = "macos"))]
-use super::super::reader::StorageProviderAlignedFileReader;
+use crate::search::provider::aligned_file_reader::reader::StorageProviderAlignedFileReader;
 #[cfg(all(not(miri), target_os = "windows"))]
-use super::super::reader::WindowsAlignedFileReader;
+use crate::search::provider::aligned_file_reader::reader::WindowsAlignedFileReader;
 use crate::search::provider::aligned_file_reader::traits::AlignedReaderFactory;
 
 #[cfg(any(miri, target_os = "macos"))]

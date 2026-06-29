@@ -114,14 +114,13 @@ impl Default for IOCompletionPort {
 
 #[cfg(test)]
 mod tests {
-    use super::super::file_handle::{AccessMode, ShareMode};
     use super::*;
 
     #[test]
     fn create_io_completion_port() {
         let file_name = "../test_data/delete_set_50pts.bin";
-        let file_handle = unsafe { FileHandle::new(file_name, AccessMode::Read, ShareMode::Read) }
-            .expect("Failed to create file handle.");
+        let file_handle =
+            unsafe { FileHandle::new(file_name) }.expect("Failed to create file handle.");
 
         let io_completion_port = IOCompletionPort::new(&file_handle, None, 0, 0);
 
@@ -134,8 +133,8 @@ mod tests {
     #[test]
     fn drop_io_completion_port() {
         let file_name = "../test_data/delete_set_50pts.bin";
-        let file_handle = unsafe { FileHandle::new(file_name, AccessMode::Read, ShareMode::Read) }
-            .expect("Failed to create file handle.");
+        let file_handle =
+            unsafe { FileHandle::new(file_name) }.expect("Failed to create file handle.");
 
         let io_completion_port = IOCompletionPort::new(&file_handle, None, 0, 0)
             .expect("Failed to create IOCompletionPort.");
