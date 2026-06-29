@@ -90,7 +90,7 @@ mod imp {
     /// types.
     ///
     /// The kinds of quantized and full-precision searches are kept in-sync.
-    pub(crate) struct ProductQuantized<T>
+    pub(super) struct ProductQuantized<T>
     where
         T: VectorRepr,
     {
@@ -102,14 +102,14 @@ mod imp {
     where
         T: VectorRepr,
     {
-        pub(crate) fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self {
                 quant_search: plugins::Plugins::new(),
                 full_search: plugins::Plugins::new(),
             }
         }
 
-        pub(crate) fn search<P>(mut self, plugin: P) -> Self
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
         where
             P: plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>
                 + plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
@@ -131,17 +131,17 @@ mod imp {
 
         fn try_match(&self, input: &IndexPQOperation, context: &MatchContext) -> Score {
             let mut score = context.success(0);
-            utils::match_data_type::<T>(&mut score, *input.index_operation.source.data_type());
+            utils::match_data_type::<T>(&mut score, *input.index_operation().source().data_type());
 
             if !self
                 .quant_search
-                .is_match(&input.index_operation.search_phase)
+                .is_match(input.index_operation().search_phase())
             {
                 score.fail(
                     1,
                     &format_args!(
                         "Unsupported search phase: \"{}\" - expected one of {}",
-                        input.index_operation.search_phase.kind(),
+                        input.index_operation().search_phase().kind(),
                         self.quant_search.format_kinds(),
                     ),
                 )
@@ -163,9 +163,9 @@ mod imp {
         ) -> anyhow::Result<QuantBuildResult> {
             writeln!(output, "{}", input)?;
 
-            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune);
+            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune());
 
-            let (index, build_stats, quant_training_time) = match &input.index_operation.source {
+            let (index, build_stats, quant_training_time) = match input.index_operation().source() {
                 IndexSource::Load(load) => {
                     let index_config: &IndexConfiguration = &input.to_config()?;
 
@@ -188,8 +188,8 @@ mod imp {
 
                         diskann_async::train_pq(
                             train_data.as_view(),
-                            input.num_pq_chunks,
-                            &mut StdRng::seed_from_u64(input.seed),
+                            input.num_pq_chunks(),
+                            &mut StdRng::seed_from_u64(input.seed()),
                             diskann_providers::utils::create_thread_pool(build.num_threads())?
                                 .as_ref(),
                         )?
@@ -232,8 +232,8 @@ mod imp {
             // Save construction stats before running queries.
             checkpoint.checkpoint(&build_stats)?;
 
-            let search_phase = &input.index_operation.search_phase;
-            let search = if input.use_fp_for_search {
+            let search_phase = input.index_operation().search_phase();
+            let search = if input.use_fp_for_search() {
                 self.full_search
                     .run(index, search_phase, &Strategy::new(common::FullPrecision))?
             } else {

@@ -10,19 +10,17 @@
 //! once, search) and streaming (insert/delete/search interleaved) modes.
 //!
 //! Registered tags:
-//! - `graph-index-bftree-full-precision-f32` — static FP build + search
-//! - `graph-index-bftree-stream-full-precision-f32` — streaming FP
-//! - `graph-index-build-bftree-spherical-quantization` — static spherical (1/2/4-bit)
-//! - `graph-index-stream-bftree-spherical-quantization` — streaming spherical (1/2/4-bit)
+//! - `graph-index-bftree` — static build + search (full-precision or spherical)
+//! - `graph-index-stream-bftree` — streaming (full-precision or spherical)
 
-use crate::index::search::plugins::Topk;
+use super::search::plugins::Topk;
 use diskann_benchmark_runner::Registry;
 
 mod full_precision;
 mod full_precision_streaming;
+mod quantizer_util;
 mod spherical;
 mod spherical_streaming;
-mod streaming_utils;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register(
@@ -31,13 +29,13 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
 
     registry.register(
-        "graph-index-bftree-stream-full-precision-f32",
-        full_precision_streaming::StreamingFullPrecision::<f32>::new(),
+        "graph-index-bftree-spherical-quantization",
+        spherical::BfTreeSpherical::new().search(Topk),
     )?;
 
     registry.register(
-        "graph-index-bftree-spherical-quantization",
-        spherical::BfTreeSpherical::new().search(Topk),
+        "graph-index-stream-bftree-full-precision-f32",
+        full_precision_streaming::StreamingFullPrecision::<f32>::new(),
     )?;
 
     registry.register(

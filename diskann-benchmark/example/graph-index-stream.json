@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "graph-index-dynamic-run",
+      "type": "graph-index-stream-run",
       "content": {
         "build": {
           "data_type": "float32",
@@ -17,24 +17,13 @@
           "num_threads": 4,
           "start_point_strategy": "medoid"
         },
-        "search_phase": {
-            "search-type": "topk",
+        "search": {
             "queries": "disk_index_sample_query_10pts.fbin",
-            "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
             "reps": 1,
-            "num_threads": [
-              2
-            ],
-            "runs": [
-              {
-                "search_n": 10,
-                "search_l": [
-                  20,
-                  40
-                ],
-                "recall_k": 10
-              }
-            ]
+            "num_threads": 2,
+            "search_l": 40,
+            "search_n": 10,
+            "recall_k": 10
         },
         "runbook_params": {
             "runbook_path": "example_runbook.yaml",
