@@ -10,7 +10,7 @@
 //! communicate only through the filesystem. Both are available under the `disk` feature.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
     io::BufReader,
     path::{Path, PathBuf},
@@ -24,15 +24,21 @@ use crate::{
 
 /// The disk-backed [`SaveContext`].
 ///
-/// Holds the manifest directory, the manifest path, and the set of artifact file names
-/// registered so far. Lookup and insertion go through a [`Mutex`] so that concurrent
-/// [`Save`](crate::save::Save) impls cannot accidentally hand out the same artifact name
-/// twice.
+/// Holds the manifest directory, the manifest path, and the artifact file names registered
+/// so far paired with whether their writer has finished. Lookup and insertion go through a
+/// [`Mutex`] so that concurrent [`Save`](crate::save::Save) impls cannot accidentally hand
+/// out the same artifact name twice.
+///
+/// # Cleanup on failure
+/// 
+/// Save can fail part-way, so the [`Drop`] impl ensures cleanup of any artifacts created
+/// before the failure.
 #[derive(Debug)]
 pub(crate) struct DiskSaveContext {
     dir: PathBuf,
     metadata: PathBuf,
-    files: Mutex<HashSet<String>>,
+    files: Mutex<HashMap<String, bool>>,
+    committed: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -67,8 +73,34 @@ impl DiskSaveContext {
         Ok(Self {
             dir,
             metadata,
-            files: Mutex::new(HashSet::new()),
+            files: Mutex::new(HashMap::new()),
+            committed: false,
         })
+    }
+
+    /// Path of the temp manifest written by [`SaveContext::finish`] before the atomic
+    /// rename into [`Self::metadata`].
+    fn temp_metadata(&self) -> PathBuf {
+        let mut temp = self.metadata.clone().into_os_string();
+        temp.push(".temp");
+        PathBuf::from(temp)
+    }
+}
+
+impl Drop for DiskSaveContext {
+    /// Best-effort cleanup for an uncommitted save.
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let files = self
+            .files
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for name in files.keys() {
+            let _ = std::fs::remove_file(self.dir.join(name));
+        }
+        let _ = std::fs::remove_file(self.temp_metadata());
     }
 }
 
@@ -98,7 +130,7 @@ impl SaveContext for DiskSaveContext {
             None => format!("{:03}", files.len()),
         };
 
-        if !files.insert(name.clone()) {
+        if files.contains_key(&name) {
             return Err(save::Error::message(format!(
                 "generated artifact name {:?} collides with an existing artifact",
                 name,
@@ -114,7 +146,10 @@ impl SaveContext for DiskSaveContext {
         let file = std::fs::File::create_new(&full).map_err(|err| {
             save::Error::new(err).context(format!("while creating new file {}", full.display()))
         })?;
-        Ok(Writer::new(FileWriter { file }, name))
+        // Reserve the name as not-yet-finished; `FileWriter::finish` flips it to `true`, and
+        // `SaveContext::finish` reports any slot that was reserved but never finished.
+        files.insert(name.clone(), false);
+        Ok(Writer::new(FileWriter { file, parent: self }, name))
     }
 
     /// Finalize the manifest.
@@ -122,36 +157,47 @@ impl SaveContext for DiskSaveContext {
     /// Writes the manifest JSON atomically: serializes to a `<metadata>.temp` file first,
     /// then renames it into place. Fails if the temp file already exists (an in-flight
     /// save is in progress, or a previous run aborted between rename steps).
-    fn finish(self, value: Value<'_>) -> save::Result<()> {
-        let files = self
-            .files
-            .into_inner()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let f = Final {
-            files: files.iter().map(|k| &**k).collect(),
-            value: &value,
-        };
-
-        // Fail if the temp file already exists
-        let mut temp = self.metadata.clone().into_os_string();
-        temp.push(".temp");
-        let temp = PathBuf::from(temp);
-        let buffer = std::fs::File::create_new(&temp).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                save::Error::message(format!(
-                    "Temporary file {} already exists. Aborting!",
-                    temp.display()
-                ))
-            } else {
-                save::Error::new(err).context(format!(
-                    "while creating temp manifest file {}",
-                    temp.display()
-                ))
+    ///
+    /// On failure, context is dropped without committing ==> [`Drop`] impl
+    /// removes the artifacts + temp manifest. Save is marked committed once 
+    /// rename succeeds and artifacts are in place.
+    fn finish(mut self, value: Value<'_>) -> save::Result<()> {
+        let temp = self.temp_metadata();
+        {
+            let files = self
+                .files
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if let Some((name, _)) = files.iter().find(|(_, finished)| !**finished) {
+                return Err(save::Error::message(format!(
+                    "artifact {:?} was reserved but never finished",
+                    name,
+                )));
             }
-        })?;
+            let f = Final {
+                files: files.keys().map(|k| &**k).collect(),
+                value: &value,
+            };
 
-        serde_json::to_writer_pretty(buffer, &f)
-            .map_err(|err| save::Error::new(err).context("while serializing manifest to JSON"))?;
+            // Fail if the temp file already exists
+            let buffer = std::fs::File::create_new(&temp).map_err(|err| {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    save::Error::message(format!(
+                        "Temporary file {} already exists. Aborting!",
+                        temp.display()
+                    ))
+                } else {
+                    save::Error::new(err).context(format!(
+                        "while creating temp manifest file {}",
+                        temp.display()
+                    ))
+                }
+            })?;
+
+            serde_json::to_writer_pretty(buffer, &f).map_err(|err| {
+                save::Error::new(err).context("while serializing manifest to JSON")
+            })?;
+        }
         std::fs::rename(&temp, &self.metadata).map_err(|err| {
             save::Error::new(err).context(format!(
                 "while renaming temp manifest {} to final path {}",
@@ -159,6 +205,8 @@ impl SaveContext for DiskSaveContext {
                 self.metadata.display()
             ))
         })?;
+        // Manifest now in place, artifacts belong to a valid record
+        self.committed = true;
         Ok(())
     }
 }
@@ -166,20 +214,26 @@ impl SaveContext for DiskSaveContext {
 /// A file-backed [`WriterInner`](save::WriterInner) that streams bytes straight to disk.
 ///
 /// The bytes are persisted as they are written; [`WriterInner::finish`](save::WriterInner::finish)
-/// only needs to mint the [`Handle`] (the buffered bytes are already flushed into the file
-/// by [`Writer::finish`]).
+/// only needs to mint the [`Handle`] and mark the artifact finished in its parent context
+/// (the buffered bytes are already flushed into the file by [`Writer::finish`]).
 #[derive(Debug)]
-struct FileWriter {
+struct FileWriter<'a> {
     file: File,
+    parent: &'a DiskSaveContext,
 }
 
-impl save::WriterInner for FileWriter {
+impl save::WriterInner for FileWriter<'_> {
     fn finish(self: Box<Self>, name: String) -> save::Result<Handle> {
+        self.parent
+            .files
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(name.clone(), true);
         Ok(Handle::new(name))
     }
 }
 
-delegate_write_and_seek!(file, FileWriter);
+delegate_write_and_seek!(file, FileWriter<'_>);
 
 /// The disk-backed [`LoadContext`].
 ///
@@ -323,6 +377,90 @@ mod tests {
         let ctx = DiskSaveContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
         let handle = SaveContext::write(&ctx, None).unwrap().finish().unwrap();
         assert!(!handle.as_str().is_empty());
+    }
+
+    #[test]
+    fn drop_without_finish_cleans_up_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("meta.json");
+        let name = {
+            let ctx = DiskSaveContext::new(dir.path().into(), metadata.clone()).unwrap();
+            let name = SaveContext::write(&ctx, Some("artifact.bin"))
+                .unwrap()
+                .finish()
+                .unwrap()
+                .as_str()
+                .to_owned();
+            assert!(dir.path().join(&name).exists());
+            name
+            // `ctx` is dropped here without ever being committed via `finish`.
+        };
+        assert!(
+            !dir.path().join(&name).exists(),
+            "an uncommitted save must clean up the artifacts it created"
+        );
+    }
+
+    #[test]
+    fn failed_finish_cleans_up_artifacts_and_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("meta.json");
+        let ctx = DiskSaveContext::new(dir.path().into(), metadata.clone()).unwrap();
+        let name = SaveContext::write(&ctx, Some("artifact.bin"))
+            .unwrap()
+            .finish()
+            .unwrap()
+            .as_str()
+            .to_owned();
+
+        // Pre-create the temp manifest so `finish` aborts on the `create_new` collision.
+        let temp = ctx.temp_metadata();
+        std::fs::write(&temp, b"stale").unwrap();
+
+        let err = ctx
+            .finish(Value::Null)
+            .expect_err("finish must fail when the temp manifest already exists");
+        assert!(format!("{err}").contains("already exists"));
+
+        assert!(
+            !dir.path().join(&name).exists(),
+            "a failed finish must clean up the artifacts it created"
+        );
+        assert!(
+            !metadata.exists(),
+            "a failed finish must not leave a committed manifest"
+        );
+    }
+
+    #[test]
+    fn committed_save_preserves_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("meta.json");
+        let ctx = DiskSaveContext::new(dir.path().into(), metadata.clone()).unwrap();
+        let name = SaveContext::write(&ctx, Some("artifact.bin"))
+            .unwrap()
+            .finish()
+            .unwrap()
+            .as_str()
+            .to_owned();
+
+        ctx.finish(Value::Null).unwrap();
+
+        assert!(
+            dir.path().join(&name).exists(),
+            "a committed save must keep its artifacts"
+        );
+        assert!(metadata.exists(), "a committed save must write the manifest");
+        assert!(
+            !ctx_temp(&metadata).exists(),
+            "a committed save must not leave a temp manifest"
+        );
+    }
+
+    fn ctx_temp(metadata: &Path) -> PathBuf {
+        let mut temp = metadata.to_owned().into_os_string();
+        temp.push(".temp");
+        PathBuf::from(temp)
     }
 
     fn write_manifest(dir: &Path, files: &[&str]) -> PathBuf {

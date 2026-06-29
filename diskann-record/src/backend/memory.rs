@@ -28,9 +28,13 @@ use crate::{
 ///
 /// `SaveContext::finish` consumes the context and returns an [`MemoryContext`] ready
 /// to be loaded with the `load` entry point.
+///
+/// # Cleanup on failure
+///
+/// Failures in the same process are automatically cleaned up.
 #[derive(Debug, Default)]
 pub struct MemorySaveContext {
-    files: Mutex<HashMap<String, Vec<u8>>>,
+    files: Mutex<HashMap<String, Option<Vec<u8>>>>,
 }
 
 impl MemorySaveContext {
@@ -45,20 +49,14 @@ impl SaveContext for MemorySaveContext {
 
     fn write(&self, key: Option<&str>) -> save::Result<Writer<'_>> {
         // Mirror the disk context: a human-readable hint must be a simple relative file
-        // name so the generated artifact name is a single, well-formed key.
-        if let Some(key) = key {
+        // name. Absolute paths, parent traversal, and multi-component paths cannot produce
+        // a single, well-formed key, so they are ignored and treated as if no hint had been
+        // supplied.
+        let key = key.filter(|key| {
             let mut components = std::path::Path::new(key).components();
-            match components.next() {
-                Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
-                _ => {
-                    return Err(save::Error::message(format!(
-                        "artifact file name hint {:?} must be a relative file name with no path \
-                         separators",
-                        key,
-                    )));
-                }
-            }
-        }
+            matches!(components.next(), Some(std::path::Component::Normal(_)))
+                && components.next().is_none()
+        });
 
         let mut files = self
             .files
@@ -78,9 +76,10 @@ impl SaveContext for MemorySaveContext {
                 name,
             )));
         }
-        // Reserve the name so the count advances and concurrent writers cannot collide;
-        // the placeholder is overwritten with the real bytes by `Writer::finish`.
-        files.insert(name.clone(), Vec::new());
+        // Reserve the name with an empty slot so the count advances and concurrent writers
+        // cannot collide; the slot is filled with the real bytes by `Writer::finish`. A slot
+        // that is never filled is reported by `SaveContext::finish`.
+        files.insert(name.clone(), None);
         drop(files);
 
         Ok(Writer::new(
@@ -97,6 +96,16 @@ impl SaveContext for MemorySaveContext {
             .files
             .into_inner()
             .unwrap_or_else(|poison| poison.into_inner());
+        let files = files
+            .into_iter()
+            .map(|(name, bytes)| match bytes {
+                Some(bytes) => Ok((name, bytes)),
+                None => Err(save::Error::message(format!(
+                    "artifact {:?} was reserved but never finished",
+                    name,
+                ))),
+            })
+            .collect::<save::Result<HashMap<_, _>>>()?;
         Ok(MemoryContext {
             files,
             value: value.into_owned(),
@@ -118,7 +127,7 @@ impl save::WriterInner for MemoryWriter<'_> {
             .files
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .insert(name.clone(), self.cursor.into_inner());
+            .insert(name.clone(), Some(self.cursor.into_inner()));
         Ok(Handle::new(name))
     }
 }
