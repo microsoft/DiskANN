@@ -378,6 +378,26 @@ mod tests {
 
     use super::*;
 
+    /// Number of concurrent worker tasks for stress tests, scaled to the host's
+    /// available parallelism with a floor so contention is guaranteed even on
+    /// low-core CI runners. Falls back to the floor if parallelism is unknown.
+    fn stress_thread_count() -> u32 {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(8)
+            .max(8)
+    }
+
+    /// Build a `NeighborProvider<u32>` with a default bf-tree config.
+    fn new_provider(max_degree: u32) -> NeighborProvider<u32> {
+        NeighborProvider::<u32>::new_with_config(max_degree, Config::default()).unwrap()
+    }
+
+    /// Build a shared `NeighborProvider<u32>` with a default bf-tree config.
+    fn new_shared_provider(max_degree: u32) -> Arc<NeighborProvider<u32>> {
+        Arc::new(new_provider(max_degree))
+    }
+
     /// Length round-trips through an `I`-sized cell .
     #[test]
     fn len_cell_round_trip() {
@@ -391,9 +411,7 @@ mod tests {
     #[tokio::test]
     async fn test_neighbor_accessors() {
         let locks = Arc::new(StripedLocks::new());
-        let bf_tree_config = Config::default();
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
+        let neighbor_provider = new_provider(6);
         let mut scratch = neighbor_provider.scratch(&locks);
 
         // Set the neighbor list of a vector
@@ -443,9 +461,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_tree_traversal() {
         let locks = Arc::new(StripedLocks::new());
-        let bf_tree_config = Config::default();
-        let neighbor_provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
+        let neighbor_provider = new_shared_provider(120);
 
         let mut set = JoinSet::new();
         for i in 0..100 {
@@ -513,19 +529,14 @@ mod tests {
     /// Test that max_degree returns the correct value
     #[tokio::test]
     async fn test_max_degree() {
-        let bf_tree_config = Config::default();
-
         // Test with various max_degree values
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(6, bf_tree_config.clone()).unwrap();
+        let neighbor_provider = new_provider(6);
         assert_eq!(neighbor_provider.max_degree(), 6);
 
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(120, bf_tree_config.clone()).unwrap();
+        let neighbor_provider = new_provider(120);
         assert_eq!(neighbor_provider.max_degree(), 120);
 
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(1, bf_tree_config).unwrap();
+        let neighbor_provider = new_provider(1);
         assert_eq!(neighbor_provider.max_degree(), 1);
     }
 
@@ -550,9 +561,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_neighbor_access() {
         let locks = Arc::new(StripedLocks::new());
-        let bf_tree_config = Config::default();
-        let neighbor_provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
+        let neighbor_provider = new_shared_provider(120);
 
         let mut set = JoinSet::new();
         for _ in 0..5 {
@@ -585,64 +594,76 @@ mod tests {
     /// Without per-vertex locking, this test would non-deterministically lose edges
     /// due to the TOCTOU race in append_vector's read-modify-write cycle. With the
     /// per-vertex write lock, every appended edge must be present in the final list.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    ///
+    /// Lost-update races are probabilistic, so a single pass may not surface a
+    /// regression. The scenario is therefore repeated over many outer iterations,
+    /// and the writer count scales with the host's available parallelism (with a
+    /// floor) to keep contention meaningful on CI boxes of any core count. The
+    /// `multi_thread` runtime is left unsized so tokio scales its worker pool to
+    /// the number of CPUs.
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_append_no_lost_edges() {
-        let locks = Arc::new(StripedLocks::new());
-        let max_degree = 120u32;
-        let bf_tree_config = Config::default();
-        let provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
+        let num_threads = stress_thread_count();
+        let edges_per_thread = 20u32;
+        // Size the degree to the workload so every distinct edge can be retained.
+        let max_degree = num_threads * edges_per_thread;
 
-        // Initialize vertex 0 with an empty neighbor list.
-        let mut scratch = provider.scratch(&locks);
-        scratch.write_neighbors(0, &[]).unwrap();
+        // Repeat the whole scenario many times: each iteration is a fresh chance
+        // to interleave threads such that a broken lock would drop an edge.
+        let outer_iterations = 100;
+        for _ in 0..outer_iterations {
+            let locks = Arc::new(StripedLocks::new());
+            let provider = new_shared_provider(max_degree);
 
-        let num_threads = 8;
-        let edges_per_thread = 10;
-        // Each thread appends a unique set of neighbor IDs to vertex 0.
-        // Thread t appends IDs: [t*10+1, t*10+2, ..., t*10+10]
-        let mut set = JoinSet::new();
-        for t in 0..num_threads {
-            let provider_clone = Arc::clone(&provider);
-            let locks = locks.clone();
-            set.spawn(async move {
-                let mut scratch = provider_clone.scratch(&locks);
+            // Initialize vertex 0 with an empty neighbor list.
+            let mut scratch = provider.scratch(&locks);
+            scratch.write_neighbors(0, &[]).unwrap();
+
+            // Each thread appends a unique set of neighbor IDs to vertex 0.
+            // Thread t appends IDs: [t*edges+1, ..., t*edges+edges]
+            let mut set = JoinSet::new();
+            for t in 0..num_threads {
+                let provider_clone = Arc::clone(&provider);
+                let locks = locks.clone();
+                set.spawn(async move {
+                    let mut scratch = provider_clone.scratch(&locks);
+                    let base = t * edges_per_thread + 1;
+                    for offset in 0..edges_per_thread {
+                        let neighbor_id = base + offset;
+                        scratch.write_append(0, &[neighbor_id]).unwrap();
+                    }
+                });
+            }
+
+            while let Some(res) = set.join_next().await {
+                res.unwrap();
+            }
+
+            // Verify ALL edges from all threads are present.
+            let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
+            provider.get_neighbors(0, &mut result).unwrap();
+
+            let expected_count = (num_threads * edges_per_thread) as usize;
+            assert_eq!(
+                result.len(),
+                expected_count,
+                "Expected {} edges but found {} — edges were lost!",
+                expected_count,
+                result.len()
+            );
+
+            // Verify every expected ID is present.
+            for t in 0..num_threads {
                 let base = t * edges_per_thread + 1;
                 for offset in 0..edges_per_thread {
-                    let neighbor_id = base + offset;
-                    scratch.write_append(0, &[neighbor_id]).unwrap();
+                    let expected_id = base + offset;
+                    assert!(
+                        result.contains(expected_id),
+                        "Missing edge {} from thread {}",
+                        expected_id,
+                        t
+                    );
                 }
-            });
-        }
-
-        while let Some(res) = set.join_next().await {
-            res.unwrap();
-        }
-
-        // Verify ALL edges from all threads are present.
-        let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
-        provider.get_neighbors(0, &mut result).unwrap();
-
-        let expected_count = (num_threads * edges_per_thread) as usize;
-        assert_eq!(
-            result.len(),
-            expected_count,
-            "Expected {} edges but found {} — edges were lost!",
-            expected_count,
-            result.len()
-        );
-
-        // Verify every expected ID is present.
-        for t in 0..num_threads {
-            let base = t * edges_per_thread + 1;
-            for offset in 0..edges_per_thread {
-                let expected_id = base + offset;
-                assert!(
-                    result.contains(expected_id),
-                    "Missing edge {} from thread {}",
-                    expected_id,
-                    t
-                );
             }
         }
     }
@@ -650,17 +671,17 @@ mod tests {
     /// Stress test: concurrent appends to DIFFERENT vertices (no contention).
     ///
     /// Validates that the lock table doesn't introduce false sharing or deadlocks
-    /// when independent vertices are mutated in parallel.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    /// when independent vertices are mutated in parallel. The writer count scales
+    /// with the host's available parallelism (with a floor), and the `multi_thread`
+    /// runtime is left unsized so tokio scales its worker pool to the CPU count.
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_append_independent_vertices() {
         let locks = Arc::new(StripedLocks::new());
         let max_degree = 64u32;
-        let num_threads = 8u32;
+        let num_threads = stress_thread_count();
         let vertices_per_thread = 50u32;
-        let num_vertices = num_threads * vertices_per_thread; // 400 vertices, no overlap
-        let bf_tree_config = Config::default();
-        let provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
+        let num_vertices = num_threads * vertices_per_thread; // disjoint ranges, no overlap
+        let provider = new_shared_provider(max_degree);
 
         // Initialize all vertices with empty neighbor lists.
         {
@@ -711,88 +732,105 @@ mod tests {
     ///
     /// Writers continuously append while readers verify the neighbor list is
     /// always in a consistent state (length matches actual content, no torn reads).
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    ///
+    /// The read/write phase is repeated over many outer iterations to surface
+    /// torn-read races more reliably, the writer/reader counts scale with the
+    /// host's available parallelism (with a floor), and the `multi_thread`
+    /// runtime is left unsized so tokio scales its worker pool to the CPU count.
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_read_write_consistency() {
-        let locks = Arc::new(StripedLocks::new());
-        let max_degree = 120u32;
-        let bf_tree_config = Config::default();
-        let provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
-
-        // Initialize vertex 0.
-        let mut scratch = provider.scratch(&locks);
-        scratch.write_neighbors(0, &[]).unwrap();
-
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let writers_remaining = Arc::new(std::sync::atomic::AtomicU32::new(4));
-
-        // Spawn writer threads that append edges.
-        let num_writers = 4u32;
+        let parallelism = stress_thread_count();
+        let num_writers = parallelism;
+        let num_readers = parallelism;
         let edges_per_writer = 20u32;
-        let mut set = JoinSet::new();
+        // Size the degree to the workload so every distinct edge can be retained.
+        let max_degree = num_writers * edges_per_writer;
+        // Largest neighbor ID any writer can append (IDs run 1..=num_writers*edges).
+        let max_valid_id = num_writers * edges_per_writer;
 
-        for t in 0..num_writers {
-            let provider_clone = Arc::clone(&provider);
-            let done_clone = Arc::clone(&done);
-            let remaining_clone = Arc::clone(&writers_remaining);
-            let locks = locks.clone();
-            set.spawn(async move {
-                let mut scratch = provider_clone.scratch(&locks);
-                let base = t * edges_per_writer + 1;
-                for offset in 0..edges_per_writer {
-                    scratch.write_append(0, &[base + offset]).unwrap();
-                    tokio::task::yield_now().await;
-                }
-                // Signal done only when ALL writers have finished.
-                if remaining_clone.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-                    done_clone.store(true, std::sync::atomic::Ordering::Release);
-                }
-            });
-        }
+        let outer_iterations = 100;
+        for _ in 0..outer_iterations {
+            let locks = Arc::new(StripedLocks::new());
+            let provider = new_shared_provider(max_degree);
 
-        // Spawn reader threads that continuously read and validate consistency.
-        let num_readers = 4;
-        for _ in 0..num_readers {
-            let provider_clone = Arc::clone(&provider);
-            let done_clone = Arc::clone(&done);
-            set.spawn(async move {
-                let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
-                let mut iterations = 0u64;
-                while !done_clone.load(std::sync::atomic::Ordering::Acquire) {
-                    provider_clone.get_neighbors(0, &mut result).unwrap();
-                    // The list must never exceed max_degree
-                    assert!(
-                        result.len() <= max_degree as usize,
-                        "Neighbor list exceeded max_degree"
-                    );
-                    // All IDs in the list must be non-zero (our IDs start at 1)
-                    for &id in result.iter() {
-                        assert!(id > 0, "Found invalid zero ID in neighbor list");
+            // Initialize vertex 0.
+            let mut scratch = provider.scratch(&locks);
+            scratch.write_neighbors(0, &[]).unwrap();
+
+            let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let writers_remaining = Arc::new(std::sync::atomic::AtomicU32::new(num_writers));
+
+            // Spawn writer threads that append edges.
+            let mut set = JoinSet::new();
+
+            for t in 0..num_writers {
+                let provider_clone = Arc::clone(&provider);
+                let done_clone = Arc::clone(&done);
+                let remaining_clone = Arc::clone(&writers_remaining);
+                let locks = locks.clone();
+                set.spawn(async move {
+                    let mut scratch = provider_clone.scratch(&locks);
+                    let base = t * edges_per_writer + 1;
+                    for offset in 0..edges_per_writer {
+                        scratch.write_append(0, &[base + offset]).unwrap();
+                        tokio::task::yield_now().await;
                     }
-                    iterations += 1;
-                    tokio::task::yield_now().await;
-                }
-                assert!(
-                    iterations > 0,
-                    "Reader never got a chance to run — test is not validating anything"
-                );
-            });
-        }
+                    // Signal done only when ALL writers have finished.
+                    if remaining_clone.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+                        done_clone.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                });
+            }
 
-        while let Some(res) = set.join_next().await {
-            res.unwrap();
-        }
+            // Spawn reader threads that continuously read and validate consistency.
+            for _ in 0..num_readers {
+                let provider_clone = Arc::clone(&provider);
+                let done_clone = Arc::clone(&done);
+                set.spawn(async move {
+                    let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
+                    let mut iterations = 0u64;
+                    while !done_clone.load(std::sync::atomic::Ordering::Acquire) {
+                        provider_clone.get_neighbors(0, &mut result).unwrap();
+                        // The list must never exceed max_degree
+                        assert!(
+                            result.len() <= max_degree as usize,
+                            "Neighbor list exceeded max_degree"
+                        );
+                        // Every ID must be a real appended edge: non-zero and within
+                        // the range any writer could have produced. Anything else
+                        // signals a torn or garbage read.
+                        for &id in result.iter() {
+                            assert!(id > 0, "Found invalid zero ID in neighbor list");
+                            assert!(
+                                id <= max_valid_id,
+                                "Found out-of-bounds ID {id} (max valid is {max_valid_id})"
+                            );
+                        }
+                        iterations += 1;
+                        tokio::task::yield_now().await;
+                    }
+                    assert!(
+                        iterations > 0,
+                        "Reader never got a chance to run — test is not validating anything"
+                    );
+                });
+            }
 
-        // Final check: all edges from all writers present.
-        let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
-        provider.get_neighbors(0, &mut result).unwrap();
-        let expected = (num_writers * edges_per_writer) as usize;
-        assert_eq!(
-            result.len(),
-            expected,
-            "Expected {} edges but found {}",
-            expected,
-            result.len()
-        );
+            while let Some(res) = set.join_next().await {
+                res.unwrap();
+            }
+
+            // Final check: all edges from all writers present.
+            let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
+            provider.get_neighbors(0, &mut result).unwrap();
+            let expected = (num_writers * edges_per_writer) as usize;
+            assert_eq!(
+                result.len(),
+                expected,
+                "Expected {} edges but found {}",
+                expected,
+                result.len()
+            );
+        }
     }
 }
