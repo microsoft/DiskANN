@@ -10,6 +10,7 @@
 //! inline filter without a predicate) are unrepresentable at the API boundary.
 
 use diskann::graph::search::AdaptiveL;
+use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 
 /// Owned closure used to filter vector IDs during disk search.
 ///
@@ -27,6 +28,10 @@ pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
 /// * `InlineFilter` — label-filtered graph search; the predicate is consulted
 ///   at visit time (not just during rerank). `adaptive_l = Some(_)` grows the
 ///   beam mid-search if the observed match specificity is low.
+/// * `DiverseGraph` — greedy graph search with determinant-diversity
+///   post-processing; selects a maximally diverse top-k from the candidate
+///   pool using `DeterminantDiversityParams`. Optional hard post-filter is
+///   applied during the diversity selection step.
 pub enum SearchMode<'a> {
     FlatScan {
         filter: Option<SearchPredicate<'a>>,
@@ -39,6 +44,11 @@ pub enum SearchMode<'a> {
     InlineFilter {
         predicate: SearchPredicate<'a>,
         adaptive_l: Option<AdaptiveL>,
+    },
+
+    DiverseGraph {
+        filter: Option<SearchPredicate<'a>>,
+        params: DeterminantDiversityParams,
     },
 }
 
@@ -84,6 +94,28 @@ impl<'a> SearchMode<'a> {
         Self::InlineFilter {
             predicate: Box::new(predicate),
             adaptive_l,
+        }
+    }
+
+    /// Greedy graph search with determinant-diversity post-processing.
+    /// Selects a diverse top-k from the candidate pool found at L.
+    pub fn diverse_graph(params: DeterminantDiversityParams) -> Self {
+        Self::DiverseGraph {
+            filter: None,
+            params,
+        }
+    }
+
+    /// Greedy graph search with determinant-diversity post-processing and a
+    /// hard post-filter. The filter is honored during the diverse-selection
+    /// step (non-matching IDs are excluded from the final top-k).
+    pub fn diverse_graph_filtered<F>(predicate: F, params: DeterminantDiversityParams) -> Self
+    where
+        F: Fn(&u32) -> bool + Send + Sync + 'a,
+    {
+        Self::DiverseGraph {
+            filter: Some(Box::new(predicate)),
+            params,
         }
     }
 }

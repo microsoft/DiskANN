@@ -30,10 +30,16 @@ use diskann::{
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::compute_pq_distance,
+    model::{
+        compute_pq_distance,
+        graph::provider::{determinant_diversity, DeterminantDiversityParams},
+    },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
-use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
+use diskann_utils::{
+    object_pool::{ObjectPool, PoolOption, TryAsPooled},
+    views::Matrix,
+};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
@@ -279,8 +285,23 @@ pub struct RerankAndFilter<'a> {
     filter: Option<PostprocessFilter<'a>>,
 }
 
+#[derive(Clone, Copy)]
+pub struct DeterminantDiversityAndFilter<'a> {
+    filter: Option<PostprocessFilter<'a>>,
+    params: DeterminantDiversityParams,
+}
+
+/// Internal dispatch wrapper used by `search_internal`'s `DiverseGraph` arm
+/// to feed `DiskANNIndex::search_with`. Hidden behind `SearchMode` from the
+/// public API.
+#[derive(Clone, Copy)]
+pub enum DiskSearchPostProcessor<'a> {
+    RerankAndFilter(RerankAndFilter<'a>),
+    DeterminantDiversity(DeterminantDiversityAndFilter<'a>),
+}
+
 impl<'a> RerankAndFilter<'a> {
-    fn new(filter: Option<PostprocessFilter<'a>>) -> Self {
+    pub fn new(filter: Option<PostprocessFilter<'a>>) -> Self {
         Self { filter }
     }
 }
@@ -301,6 +322,12 @@ impl std::fmt::Debug for PredicateLabelProvider<'_> {
 impl QueryLabelProvider<u32> for PredicateLabelProvider<'_> {
     fn is_match(&self, vec_id: u32) -> bool {
         (self.predicate)(&vec_id)
+    }
+}
+
+impl<'a> DeterminantDiversityAndFilter<'a> {
+    pub fn new(filter: Option<PostprocessFilter<'a>>, params: DeterminantDiversityParams) -> Self {
+        Self { filter, params }
     }
 }
 
@@ -363,6 +390,122 @@ where
             .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
         Ok(output.extend(reranked))
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        DiskAccessor<'_, Data, VP>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DeterminantDiversityAndFilter<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+    async fn post_process<I, B>(
+        &self,
+        accessor: &mut DiskAccessor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        let provider = accessor.provider;
+        let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
+
+        let candidate_ids: Vec<u32> = candidates
+            .map(|candidate| candidate.id)
+            // `None` short-circuits to accept-all; only the `Some` arm
+            // pays the dyn-fn call per candidate.
+            .filter(|id| self.filter.is_none_or(|f| f(id)))
+            .collect();
+
+        if candidate_ids.is_empty() {
+            return Ok(0);
+        }
+
+        ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
+
+        let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
+        let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
+        let mut associated_data = Vec::with_capacity(candidate_ids.len());
+
+        for (row_idx, id) in candidate_ids.iter().enumerate() {
+            let vector = accessor.scratch.vertex_provider.get_vector(id)?;
+            let distance = provider
+                .distance_comparer
+                .evaluate_similarity(query, vector);
+            let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
+            let data = accessor.scratch.vertex_provider.get_associated_data(id)?;
+
+            candidate_vectors
+                .row_mut(row_idx)
+                .copy_from_slice(&vector_f32);
+            candidate_distances.push(distance);
+            associated_data.push(*data);
+        }
+
+        let reranked = determinant_diversity(
+            candidate_vectors.as_mut_view(),
+            &candidate_distances,
+            &query_f32,
+            usize::MAX,
+            &self.params,
+        )?;
+
+        Ok(output.extend(reranked.into_iter().map(|idx| {
+            let id = candidate_ids[idx];
+            let distance = candidate_distances[idx];
+            ((id, associated_data[idx]), distance)
+        })))
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        DiskAccessor<'_, Data, VP>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchPostProcessor<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+    async fn post_process<I, B>(
+        &self,
+        accessor: &mut DiskAccessor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        match self {
+            DiskSearchPostProcessor::RerankAndFilter(pp) => {
+                pp.post_process(accessor, query, candidates, output).await
+            }
+            DiskSearchPostProcessor::DeterminantDiversity(pp) => {
+                pp.post_process(accessor, query, candidates, output).await
+            }
+        }
     }
 }
 
@@ -987,12 +1130,15 @@ where
 
         let io_tracker = IOTracker::default();
 
-        // * `FlatScan`  — `flat_search` filters the scan iterator at
-        //   construction; non-matching IDs never enter `best`.
-        // * `Graph`     — plain greedy traversal doesn't consult any
-        //   predicate, if predicate presented `RerankAndFilter` will filter out non-matching nodes.
-        // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept`
-        //   nodes into `matched_results`, no filtering in post-processing.
+        // * `FlatScan`     — `flat_search` filters the scan iterator at
+        //                    construction; non-matching IDs never enter `best`.
+        // * `Graph`        — plain greedy traversal doesn't consult any predicate;
+        //                    if a predicate is set, `RerankAndFilter` filters out
+        //                    non-matching nodes at rerank time.
+        // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept` nodes
+        //                    into `matched_results`; no filtering in post-process.
+        // * `DiverseGraph` — `index.search_with` runs `DeterminantDiversityAndFilter`
+        //                    as the post-processor over the L candidate pool.
         let stats = match mode {
             SearchMode::FlatScan { filter } => {
                 let strategy = self.search_strategy(&io_tracker, None);
@@ -1030,6 +1176,24 @@ where
                     knn_search,
                     predicate.as_ref(),
                     adaptive_l.clone(),
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::DiverseGraph { filter, params } => {
+                // Strategy installs the filter so `RerankAndFilter` would also
+                // honor it, but the active post-processor here is the
+                // diversity selector built from `DiskSearchPostProcessor`.
+                let strategy = self.search_strategy(&io_tracker, filter.as_deref());
+                let knn_search = Knn::new(k, l, beam_width)?;
+                let processor = DiskSearchPostProcessor::DeterminantDiversity(
+                    DeterminantDiversityAndFilter::new(filter.as_deref(), *params),
+                );
+                self.runtime.block_on(self.index.search_with(
+                    knn_search,
+                    &strategy,
+                    processor,
+                    &DefaultContext,
+                    query,
                     &mut result_output_buffer,
                 ))?
             }
@@ -1471,7 +1635,13 @@ mod disk_provider_tests {
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
-                    .search(query, params.k as u32, params.l as u32, beam_width, SearchMode::graph())
+                    .search(
+                        query,
+                        params.k as u32,
+                        params.l as u32,
+                        beam_width,
+                        SearchMode::graph(),
+                    )
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1663,6 +1833,120 @@ mod disk_provider_tests {
             indices,
             vec![152, 72, 170, 118, 87, 165, 79, 141, 108, 86],
             "Expected indices to match"
+        );
+    }
+
+    #[test]
+    fn test_disk_search_determinant_diversity() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED,
+                index_path: TEST_INDEX,
+                index_path_prefix: TEST_INDEX_PREFIX,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let query_vector: [f32; 128] = [1f32; 128];
+        let return_list_size = 10u32;
+        let search_list_size = 20u32;
+
+        // Baseline: no post-processor. Det-div selects from the same L=20 candidate pool,
+        // so all det-div IDs must be a subset of the baseline candidates.
+        let baseline = search_engine
+            .search(
+                &query_vector,
+                search_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::graph(),
+            )
+            .unwrap();
+        let baseline_ids: std::collections::HashSet<u32> =
+            baseline.results.iter().map(|r| r.vertex_id).collect();
+        let baseline_top1 = baseline
+            .results
+            .first()
+            .expect("baseline returned no results");
+
+        // Run with determinant-diversity post-processor (default-ish params).
+        let params = DeterminantDiversityParams::new(2.0, 0.01).unwrap();
+        let result = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::diverse_graph(params),
+            )
+            .unwrap();
+        let det_div_ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
+
+        assert_eq!(
+            det_div_ids.len(),
+            return_list_size as usize,
+            "det-div should return k results when the candidate pool is large enough"
+        );
+        for id in &det_div_ids {
+            assert!(
+                baseline_ids.contains(id),
+                "det-div selected id {} that is not in the search candidate pool",
+                id
+            );
+        }
+
+        let mut unique = std::collections::HashSet::new();
+        for id in &det_div_ids {
+            assert!(unique.insert(*id), "det-div produced duplicate id {}", id);
+        }
+
+        // Greedy det-div with power > 0 and eta > 0 selects the highest-similarity
+        // candidate first.
+        assert_eq!(
+            result.results[0].vertex_id, baseline_top1.vertex_id,
+            "det-div top-1 should be the nearest neighbor (highest similarity)"
+        );
+
+        // Pure greedy orthogonalization (eta == 0) should also produce a valid subset.
+        let pure_params = DeterminantDiversityParams::new(2.0, 0.0).unwrap();
+        let pure_result = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::diverse_graph(pure_params),
+            )
+            .unwrap();
+        let pure_ids: Vec<u32> = pure_result.results.iter().map(|r| r.vertex_id).collect();
+        for id in &pure_ids {
+            assert!(
+                baseline_ids.contains(id),
+                "det-div(eta=0) selected id {} that is not in the search candidate pool",
+                id
+            );
+        }
+
+        // The vector_filter is honored by det-div: filter out the baseline top-1 and
+        // verify it is excluded from the det-div results.
+        let excluded = baseline_top1.vertex_id;
+        let filtered = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::diverse_graph_filtered(move |id: &u32| *id != excluded, params),
+            )
+            .unwrap();
+        let filtered_ids: Vec<u32> = filtered.results.iter().map(|r| r.vertex_id).collect();
+        assert!(
+            !filtered_ids.contains(&excluded),
+            "det-div results must respect the vector filter"
         );
     }
 

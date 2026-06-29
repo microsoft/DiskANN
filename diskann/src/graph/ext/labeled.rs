@@ -198,7 +198,7 @@ where
     ) -> ANNResult<()>
     where
         Itr: Iterator<Item = Self::Id> + Send,
-        P: glue::HybridPredicate<Accept<Self::Id>> + Send + Sync,
+        P: glue::Predicate<Self::Id> + glue::PredicateMut<Accept<Self::Id>> + Send + Sync,
         F: FnMut(Accept<Self::Id>, f32) + Send,
     {
         self.inner
@@ -271,13 +271,11 @@ where
 
 impl<P, I> glue::Predicate<I> for EvalFiltered<'_, P, I>
 where
-    P: glue::Predicate<Accept<I>>,
+    P: glue::Predicate<I>,
     I: VectorId,
 {
     fn eval(&self, item: &I) -> bool {
-        // NOTE: Swapping the order here is legal as is passing `Accept` before evaluating
-        // `is_match`. This is because `self.inner.eval` does not modify state.
-        self.inner.eval(&Accept::new(*item)) && self.labels.is_match(*item)
+        self.inner.eval(item) && self.labels.is_match(*item)
     }
 }
 
@@ -295,7 +293,7 @@ where
 
 impl<P, I> glue::HybridPredicate<I> for EvalFiltered<'_, P, I>
 where
-    P: glue::HybridPredicate<Accept<I>>,
+    P: glue::Predicate<I> + glue::PredicateMut<Accept<I>>,
     I: VectorId,
 {
 }

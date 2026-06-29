@@ -36,7 +36,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::{
+        disk::{DiskIndexLoad, DiskSearchPhase},
+        post_processor::TopkPostProcessor,
+    },
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -268,15 +271,28 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                // Construct the mode from the JSON-driven
-                // `(is_flat_search, has_filter)` pair. JSON config doesn't
-                // expose AdaptiveL yet, so `InlineFilter` is unreachable here.
+                // Construct the SearchMode from the JSON-driven
+                // (is_flat_search, has_filter, post_processor) triple.
+                // Flat scan ignores `post_processor` — determinant-diversity
+                // is a graph-traversal-only post-processing step.
                 let has_filter = search_params.vector_filters_file.is_some();
-                let mode: SearchMode<'_> = match (search_params.is_flat_search, has_filter) {
-                    (true, false) => SearchMode::flat(),
-                    (true, true) => SearchMode::flat_filtered(move |vid: &u32| vf.contains(vid)),
-                    (false, false) => SearchMode::graph(),
-                    (false, true) => SearchMode::graph_filtered(move |vid: &u32| vf.contains(vid)),
+                let post = search_params.post_processor.as_ref();
+                let mode: SearchMode<'_> = match (search_params.is_flat_search, has_filter, post) {
+                    (true, false, _) => SearchMode::flat(),
+                    (true, true, _) => SearchMode::flat_filtered(move |vid: &u32| vf.contains(vid)),
+                    (false, false, None) => SearchMode::graph(),
+                    (false, true, None) => {
+                        SearchMode::graph_filtered(move |vid: &u32| vf.contains(vid))
+                    }
+                    (false, false, Some(TopkPostProcessor::DeterminantDiversity(params))) => {
+                        SearchMode::diverse_graph(*params)
+                    }
+                    (false, true, Some(TopkPostProcessor::DeterminantDiversity(params))) => {
+                        SearchMode::diverse_graph_filtered(
+                            move |vid: &u32| vf.contains(vid),
+                            *params,
+                        )
+                    }
                 };
 
                 match searcher.search(
@@ -288,16 +304,16 @@ where
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
-                        *rc = search_result.results.len() as u32;
-                        let actual_results = search_result
-                            .results
-                            .len()
-                            .min(search_params.recall_at as usize);
-                        for (i, result_item) in search_result
-                            .results
-                            .iter()
-                            .take(actual_results)
-                            .enumerate()
+                        let base_count = (search_result.stats.result_count as usize)
+                            .min(search_params.recall_at as usize)
+                            .min(search_result.results.len());
+
+                        *rc = base_count as u32;
+                        id_chunk.fill(0);
+                        dist_chunk.fill(0.0);
+
+                        for (i, result_item) in
+                            search_result.results.iter().take(base_count).enumerate()
                         {
                             id_chunk[i] = result_item.vertex_id;
                             dist_chunk[i] = result_item.distance;
