@@ -96,11 +96,14 @@ impl<T: VectorRepr> VectorProvider<T> {
     /// Return a vector of vector Ids of the starting points
     ///
     #[inline(always)]
-    pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
+    pub fn starting_points<I: crate::BfTreeId>(&self) -> ANNResult<Vec<I>> {
         (self.max_vectors..self.total())
             .map(|i| {
-                u32::try_from(i).map_err(|_| {
-                    ANNError::message(lazy_format!(move, "start point id {i} exceeds u32::MAX"))
+                I::try_from_index(i).ok_or_else(|| {
+                    ANNError::message(lazy_format!(
+                        move,
+                        "start point id {i} exceeds the id type's maximum"
+                    ))
                 })
             })
             .collect()
