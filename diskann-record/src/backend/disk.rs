@@ -380,6 +380,76 @@ mod tests {
     }
 
     #[test]
+    fn write_rejects_preexisting_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = DiskSaveContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
+        // The first artifact is named with a `000` count prefix; pre-create that exact file
+        // on disk so the `full.exists()` guard rejects the allocation.
+        std::fs::write(dir.path().join("000-artifact.bin"), b"stale").unwrap();
+        let err = SaveContext::write(&ctx, Some("artifact.bin"))
+            .expect_err("an artifact whose file already exists on disk must be rejected");
+        assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[test]
+    fn finish_rejects_unfinished_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = DiskSaveContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
+        // Reserve an artifact slot but drop the writer without calling `finish`, leaving the
+        // slot marked as not-yet-finished.
+        let writer = SaveContext::write(&ctx, Some("artifact.bin")).unwrap();
+        drop(writer);
+        let err = ctx
+            .finish(Value::Null)
+            .expect_err("finish must fail when an artifact was reserved but never finished");
+        assert!(format!("{err}").contains("was reserved but never finished"));
+    }
+
+    #[test]
+    fn write_rejects_name_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = DiskSaveContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
+        // The count prefix normally makes a collision impossible, so seed the bookkeeping map
+        // directly with the exact name the next `write` will generate (one entry => count 1 =>
+        // `001-artifact.bin`).
+        ctx.files
+            .lock()
+            .unwrap()
+            .insert("001-artifact.bin".to_string(), true);
+        let err = SaveContext::write(&ctx, Some("artifact.bin"))
+            .expect_err("a generated name that is already registered must be rejected");
+        assert!(format!("{err}").contains("collides with an existing artifact"));
+    }
+
+    #[test]
+    fn write_reports_file_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir(&artifacts).unwrap();
+        let ctx = DiskSaveContext::new(artifacts.clone(), dir.path().join("meta.json")).unwrap();
+        // Remove the validated directory so `create_new` fails with a non-"exists" IO error
+        // (the `full.exists()` guard passes because the path is gone).
+        std::fs::remove_dir(&artifacts).unwrap();
+        let err = SaveContext::write(&ctx, Some("artifact.bin"))
+            .expect_err("creating an artifact in a missing directory must fail");
+        assert!(format!("{err}").contains("while creating new file"));
+    }
+
+    #[test]
+    fn finish_reports_rename_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        // Make the final manifest path an existing directory: the `<metadata>.temp` file is
+        // created and serialized fine, but renaming a file onto a directory fails.
+        let metadata = dir.path().join("meta.json");
+        std::fs::create_dir(&metadata).unwrap();
+        let ctx = DiskSaveContext::new(dir.path().into(), metadata.clone()).unwrap();
+        let err = ctx
+            .finish(Value::Null)
+            .expect_err("renaming the temp manifest onto a directory must fail");
+        assert!(format!("{err}").contains("while renaming temp manifest"));
+    }
+
+    #[test]
     fn drop_without_finish_cleans_up_artifacts() {
         let dir = tempfile::tempdir().unwrap();
         let metadata = dir.path().join("meta.json");
@@ -497,5 +567,37 @@ mod tests {
             panic!("a handle escaping the manifest directory must be rejected");
         };
         assert!(format!("{err}").contains("escapes the manifest directory"));
+    }
+
+    #[test]
+    fn read_reports_missing_artifact_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Register the artifact in the manifest but never create the file on disk, so the
+        // path/registration checks pass and only the file `open` fails.
+        let metadata = write_manifest(dir.path(), &["artifact.bin"]);
+        let ctx = DiskLoadContext::new(&metadata, dir.path()).unwrap();
+        let Err(err) = ctx.read("artifact.bin") else {
+            panic!("a registered artifact missing from disk must be reported");
+        };
+        assert!(format!("{err}").contains("while opening artifact file"));
+    }
+
+    #[test]
+    fn new_load_reports_missing_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("does-not-exist.json");
+        let err = DiskLoadContext::new(&metadata, dir.path())
+            .expect_err("a missing manifest file must be reported");
+        assert!(format!("{err}").contains("while trying to open"));
+    }
+
+    #[test]
+    fn new_load_rejects_malformed_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = dir.path().join("metadata.json");
+        std::fs::write(&metadata, b"this is not json").unwrap();
+        let err = DiskLoadContext::new(&metadata, dir.path())
+            .expect_err("a malformed manifest must be rejected");
+        assert!(format!("{err}").contains("could not deserialize manifest"));
     }
 }

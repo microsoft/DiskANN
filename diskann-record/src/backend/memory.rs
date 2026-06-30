@@ -226,4 +226,56 @@ mod tests {
             .expect("an unregistered artifact must be rejected");
         assert!(format!("{err}").contains("not registered in this context"));
     }
+
+    #[test]
+    fn write_rejects_name_collision() {
+        let ctx = MemorySaveContext::new();
+        // The count prefix normally makes a collision impossible, so seed the bookkeeping map
+        // directly with the exact name the next `write` will generate (one entry => count 1 =>
+        // `001-artifact.bin`).
+        ctx.files
+            .lock()
+            .unwrap()
+            .insert("001-artifact.bin".to_string(), None);
+        let err = SaveContext::write(&ctx, Some("artifact.bin"))
+            .expect_err("a generated name that is already registered must be rejected");
+        assert!(format!("{err}").contains("collides with an existing artifact"));
+    }
+
+    #[test]
+    fn finish_rejects_unfinished_artifact() {
+        let ctx = MemorySaveContext::new();
+        // Reserve an artifact slot but drop the writer without calling `finish`, leaving the
+        // slot empty.
+        let writer = SaveContext::write(&ctx, Some("artifact.bin")).unwrap();
+        drop(writer);
+        let err = ctx
+            .finish(Value::Null)
+            .expect_err("finish must fail when an artifact was reserved but never finished");
+        assert!(format!("{err}").contains("was reserved but never finished"));
+    }
+
+    #[test]
+    fn write_names_anonymous_artifact_with_count_prefix() {
+        let ctx = MemorySaveContext::new();
+        // Passing `None` as the hint exercises the count-only naming branch.
+        let handle = SaveContext::write(&ctx, None).unwrap().finish().unwrap();
+        assert_eq!(handle.as_str(), "000");
+    }
+
+    #[test]
+    fn load_dispatches_to_load_legacy_on_version_mismatch() {
+        // Build an object whose version does not match `Doc::VERSION` (1.0) so the `Loadable`
+        // blanket dispatches to `Doc::load_legacy`, which refuses with `UnknownVersion`.
+        let value = save::Record::empty()
+            .into_value(Version::new(2, 0))
+            .into_owned();
+        let context = MemoryContext {
+            files: HashMap::new(),
+            value,
+        };
+        let err = load::load::<Doc, _>(&context)
+            .expect_err("a version mismatch must dispatch to load_legacy, which refuses");
+        assert!(format!("{err}").contains("unknown version"));
+    }
 }

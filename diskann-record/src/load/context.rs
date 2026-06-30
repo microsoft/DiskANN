@@ -379,3 +379,55 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 impl ExactSizeIterator for Iter<'_> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal [`LoadContext`] used to anchor a [`Context`] in tests; the `Object`
+    /// methods under test never touch the context's `value` / `read` operations.
+    struct TestContext;
+
+    impl LoadContext for TestContext {
+        fn value(&self) -> Result<&save::Value<'_>> {
+            unimplemented!("not exercised by Object accessor tests")
+        }
+
+        fn read(&self, _key: &str) -> Result<Reader<'_>> {
+            unimplemented!("not exercised by Object accessor tests")
+        }
+    }
+
+    #[test]
+    fn object_reports_populated_keys() {
+        let mut record = save::Record::empty();
+        record.insert("alpha", save::Value::Null).unwrap();
+        record.insert("beta", save::Value::Bool(true)).unwrap();
+        let value = record.into_value(Version::new(1, 0));
+
+        let inner = TestContext;
+        let object = Context::new(&inner, &value)
+            .as_object()
+            .expect("a versioned object value must yield an Object");
+
+        assert_eq!(object.len(), 2);
+        assert!(!object.is_empty());
+        let mut keys: Vec<&str> = object.keys().collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["alpha", "beta"]);
+    }
+
+    #[test]
+    fn object_reports_empty_record() {
+        let value = save::Record::empty().into_value(Version::new(1, 0));
+
+        let inner = TestContext;
+        let object = Context::new(&inner, &value)
+            .as_object()
+            .expect("a versioned object value must yield an Object");
+
+        assert_eq!(object.len(), 0);
+        assert!(object.is_empty());
+        assert_eq!(object.keys().count(), 0);
+    }
+}
