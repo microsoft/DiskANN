@@ -68,7 +68,7 @@ impl Benchmark for StreamingSpherical {
 
         crate::index::streaming::run_streaming::<f32, BfTreeSphericalStream, _>(
             input.runbook_params(),
-            |max_points| bftree_sq_streaming_impl(input, max_points),
+            |_max_points| bftree_sq_streaming_impl(input),
             output,
         )
     }
@@ -83,45 +83,42 @@ type BfTreeSphericalStream = StreamRunner<
 
 fn bftree_sq_streaming_impl(
     input: &BfTreeStreamingRun,
-    max_points: usize,
 ) -> anyhow::Result<bigann::WithData<f32, u32, BfTreeSphericalStream>> {
     let search = input.search();
 
     let num_start_points = input.build().start_point_strategy().count();
-    let capacity = max_points + num_start_points;
 
-    crate::index::streaming::build_direct_streamer(
-        input.build().data(),
-        search,
-        capacity,
-        |data, capacity| {
-            let quantizer_poly = super::quantizer_util::build_quantizer(
-                input.quantization(),
-                data.as_view(),
-                input.build().distance(),
-            )?
-            .expect("spherical quantization config guaranteed by try_match");
+    crate::index::streaming::build_direct_streamer(input.build().data(), search, |data| {
+        // The direct (non-Managed) path uses absolute runbook tag IDs as slot IDs,
+        // so the provider must span the full dataset ID space rather than the
+        // runbook's max concurrent point count.
+        let capacity = data.nrows() + num_start_points;
+        let quantizer_poly = super::quantizer_util::build_quantizer(
+            input.quantization(),
+            data.as_view(),
+            input.build().distance(),
+        )?
+        .expect("spherical quantization config guaranteed by try_match");
 
-            let config = input.try_as_config()?.build()?;
-            let params = input.bftree_parameters(capacity, data.ncols())?;
-            let start_points = input
-                .build()
-                .start_point_strategy()
-                .compute(data.as_view())?;
-            let provider = BfTreeProvider::new(params, start_points.as_view(), quantizer_poly)?;
-            let index = Arc::new(DiskANNIndex::new(config, provider, None));
+        let config = input.try_as_config()?.build()?;
+        let params = input.bftree_parameters(capacity, data.ncols())?;
+        let start_points = input
+            .build()
+            .start_point_strategy()
+            .compute(data.as_view())?;
+        let provider = BfTreeProvider::new(params, start_points.as_view(), quantizer_poly)?;
+        let index = Arc::new(DiskANNIndex::new(config, provider, None));
 
-            let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-            Ok(StreamRunner::new(
-                index,
-                Quantized,
-                search.clone(),
-                benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-                num_threads_and_tasks,
-                input.runbook_params().ip_delete_num_to_replace,
-                input.runbook_params().ip_delete_method.into(),
-                BfTreeMaintainer,
-            ))
-        },
-    )
+        let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
+        Ok(StreamRunner::new(
+            index,
+            Quantized,
+            search.clone(),
+            benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+            num_threads_and_tasks,
+            input.runbook_params().ip_delete_num_to_replace,
+            input.runbook_params().ip_delete_method.into(),
+            BfTreeMaintainer,
+        ))
+    })
 }

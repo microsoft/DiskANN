@@ -74,7 +74,7 @@ where
 
         crate::index::streaming::run_streaming::<T, BfTreeFullPrecisionStream<T>, _>(
             input.runbook_params(),
-            |max_points| bftree_streaming::<T>(input, max_points),
+            |_max_points| bftree_streaming::<T>(input),
             output,
         )
     }
@@ -85,7 +85,6 @@ type BfTreeFullPrecisionStream<T> =
 
 fn bftree_streaming<T>(
     input: &BfTreeStreamingRun,
-    max_points: usize,
 ) -> anyhow::Result<bigann::WithData<T, u32, BfTreeFullPrecisionStream<T>>>
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
@@ -93,33 +92,31 @@ where
     let search = input.search();
 
     let num_start_points = input.build().start_point_strategy().count();
-    let capacity = max_points + num_start_points;
 
-    crate::index::streaming::build_direct_streamer(
-        input.build().data(),
-        search,
-        capacity,
-        |data, capacity| {
-            let config = input.try_as_config()?.build()?;
-            let params = input.bftree_parameters(capacity, data.ncols())?;
-            let start_points = input
-                .build()
-                .start_point_strategy()
-                .compute(data.as_view())?;
-            let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
-            let index = Arc::new(DiskANNIndex::new(config, provider, None));
+    crate::index::streaming::build_direct_streamer(input.build().data(), search, |data| {
+        // The direct (non-Managed) path uses absolute runbook tag IDs as slot IDs,
+        // so the provider must span the full dataset ID space rather than the
+        // runbook's max concurrent point count.
+        let capacity = data.nrows() + num_start_points;
+        let config = input.try_as_config()?.build()?;
+        let params = input.bftree_parameters(capacity, data.ncols())?;
+        let start_points = input
+            .build()
+            .start_point_strategy()
+            .compute(data.as_view())?;
+        let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
+        let index = Arc::new(DiskANNIndex::new(config, provider, None));
 
-            let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-            Ok(StreamRunner::new(
-                index,
-                FullPrecision,
-                search.clone(),
-                benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-                num_threads_and_tasks,
-                input.runbook_params().ip_delete_num_to_replace,
-                input.runbook_params().ip_delete_method.into(),
-                BfTreeMaintainer,
-            ))
-        },
-    )
+        let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
+        Ok(StreamRunner::new(
+            index,
+            FullPrecision,
+            search.clone(),
+            benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+            num_threads_and_tasks,
+            input.runbook_params().ip_delete_num_to_replace,
+            input.runbook_params().ip_delete_method.into(),
+            BfTreeMaintainer,
+        ))
+    })
 }
