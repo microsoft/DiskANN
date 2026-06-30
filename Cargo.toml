@@ -22,6 +22,7 @@ members = [
     "diskann-benchmark-core",
     "diskann-benchmark-simd",
     "diskann-benchmark",
+    "diskann-record",
     "diskann-tools",
     "vectorset",
     # PiPNN
@@ -70,6 +71,7 @@ diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.54.
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.54.0" }
 diskann-tools = { path = "diskann-tools", version = "0.54.0" }
 diskann-bftree = {path = "diskann-bftree", version = "0.54.0" }
+diskann-record = { path = "diskann-record", version = "0.54.0" }
 
 # External dependencies (shared versions)
 anyhow = "1.0.98"
