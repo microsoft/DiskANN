@@ -236,6 +236,29 @@ mod tests {
         assert_eq!(Number::F64(-1.0).as_u32(), None);
     }
 
+    // Regression for the NaN narrowing-accessor bug.
+    #[test]
+    fn nan_survives_float_accessors() {
+        assert_eq!(
+            Number::F64(f64::NAN).as_f64().map(f64::is_nan),
+            Some(true),
+            "as_f64 dropped a NaN"
+        );
+        assert_eq!(
+            Number::F64(f64::NAN).as_f32().map(f32::is_nan),
+            Some(true),
+            "as_f32 dropped a NaN"
+        );
+        // Sanity: infinities already work, so this is specific to NaN.
+        assert_eq!(Number::F64(f64::INFINITY).as_f64(), Some(f64::INFINITY));
+    }
+
+    #[test]
+    fn nan_round_trips_through_try_from() {
+        let back = f64::try_from(Number::F64(f64::NAN)).expect("NaN must convert back to f64");
+        assert!(back.is_nan());
+    }
+
     #[test]
     fn try_from_surfaces_out_of_range() {
         assert!(u8::try_from(Number::U64(300)).is_err());

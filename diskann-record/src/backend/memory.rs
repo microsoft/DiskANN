@@ -278,4 +278,53 @@ mod tests {
             .expect_err("a version mismatch must dispatch to load_legacy, which refuses");
         assert!(format!("{err}").contains("unknown version"));
     }
+
+    // Regression for the NaN float-field bug, demonstrated end-to-end through the in-memory
+    // backend (no serde / disk required). A struct carrying NaN-valued `f64` / `f32` fields is
+    // saved and reloaded; the reload previously FAILED with `NumberOutOfRange` because
+    // `Number::as_f64` / `as_f32` rejected NaN.
+    #[derive(Debug)]
+    struct Floats {
+        finite: f64,
+        nan64: f64,
+        nan32: f32,
+    }
+
+    impl save::Save for Floats {
+        const VERSION: Version = Version::new(1, 0);
+        fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
+            Ok(crate::save_fields!(self, context, [finite, nan64, nan32]))
+        }
+    }
+
+    impl load::Load<'_> for Floats {
+        const VERSION: Version = Version::new(1, 0);
+        fn load(object: load::Object<'_>) -> load::Result<Self> {
+            crate::load_fields!(object, [finite: f64, nan64: f64, nan32: f32]);
+            Ok(Self {
+                finite,
+                nan64,
+                nan32,
+            })
+        }
+        fn load_legacy(_: load::Object<'_>) -> load::Result<Self> {
+            Err(load::error::Kind::UnknownVersion.into())
+        }
+    }
+
+    #[test]
+    fn nan_float_fields_round_trip_in_memory() {
+        let value = Floats {
+            finite: 1.5,
+            nan64: f64::NAN,
+            nan32: f32::NAN,
+        };
+
+        let context = save::save(&value, MemorySaveContext::new()).unwrap();
+        let restored: Floats = load::load(&context).expect("NaN float fields must reload");
+
+        assert_eq!(restored.finite, 1.5);
+        assert!(restored.nan64.is_nan(), "f64 NaN field lost on reload");
+        assert!(restored.nan32.is_nan(), "f32 NaN field lost on reload");
+    }
 }

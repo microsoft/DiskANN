@@ -445,4 +445,22 @@ mod tests {
         serde_json::from_str::<Value<'static>>(json)
             .expect_err("object without $version or $handle must be rejected");
     }
+
+    // Regression for the string/float-sentinel collision. A `String` value whose contents
+    // are exactly a non-finite float sentinel (`"nan"`, `"inf"`, `"neg_inf"`) serializes to
+    // the same wire token as `Number::F64`, so the manifest deserializer (`visit_str`)
+    // resurrects it as a `Number` instead of a `String`. This corrupts any string field
+    // that happens to hold one of those three values.
+    #[cfg(feature = "disk")]
+    #[test]
+    fn string_equal_to_float_sentinel_stays_a_string() {
+        for s in ["nan", "inf", "neg_inf"] {
+            let json = serde_json::to_string(&Value::String(Cow::Borrowed(s))).unwrap();
+            let back: Value<'static> = serde_json::from_str(&json).unwrap();
+            match back {
+                Value::String(v) => assert_eq!(v, s),
+                other => panic!("string {s:?} deserialized as a non-string value: {other:?}"),
+            }
+        }
+    }
 }
