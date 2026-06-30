@@ -232,7 +232,7 @@ pub fn compute_ground_truth_from_datafiles<
 /// * `base_file` - The file containing the base vectors.
 /// * `query_file` - The file containing the query vectors.
 /// * `ground_truth_file` - The file to write the range-search ground truth results to.
-/// * `radius` - Similarity threshold for including neighbors in the result set.
+/// * `radius` - Distance threshold in DiskANN score space (smaller is better; cosine uses `1 - cos`, inner product uses `-dot`).
 /// * `filter_bitmap_file` - Optional filter bitmap file in range-groundtruth format.
 /// * `base_file_labels` - Optional labels file for base vectors.
 /// * `query_file_labels` - Optional labels file for query vectors.
