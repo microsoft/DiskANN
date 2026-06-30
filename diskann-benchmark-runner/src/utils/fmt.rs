@@ -226,16 +226,14 @@ impl std::fmt::Display for Indent<'_> {
         // newline at the end of the last print, we instead add a newline to line `N-1` when
         // writing out line `N`.
         let mut first = true;
-        self.string
-            .lines()
-            .try_for_each(|ln| {
-                if first {
-                    first = false;
-                    write!(f, "{: >spaces$}{}", "", ln)
-                } else {
-                    write!(f, "\n{: >spaces$}{}", "", ln)
-                }
-            })
+        self.string.lines().try_for_each(|ln| {
+            if first {
+                first = false;
+                write!(f, "{: >spaces$}{}", "", ln)
+            } else {
+                write!(f, "\n{: >spaces$}{}", "", ln)
+            }
+        })
     }
 }
 
