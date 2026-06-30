@@ -93,35 +93,35 @@ fn main() -> CMDResult<()> {
 #[derive(Debug, Parser)]
 struct ComputeRangeGroundTruthArgs {
     /// data type <int8/uint8/float/fp16>
-    #[arg(long = "data_type", default_value = "float")]
+    #[arg(long = "data-type", default_value = "float")]
     pub data_type: DataType,
 
     /// Distance function to use.
-    #[arg(long = "dist_fn", default_value = "l2")]
+    #[arg(long = "dist-fn", default_value = "l2")]
     pub distance_function: Metric,
 
     /// File containing the base vectors in binary format
-    #[arg(long = "base_file", short, required = true)]
+    #[arg(long = "base-file", short, required = true)]
     pub base_file: String,
 
     /// Optional labels file for base vectors
-    #[arg(long = "base_file_labels", default_value = None)]
+    #[arg(long = "base-file-labels", default_value = None)]
     pub base_file_labels: Option<String>,
 
     /// File containing the query vectors in binary format
-    #[arg(long = "query_file", short, required = true)]
+    #[arg(long = "query-file", short, required = true)]
     pub query_file: String,
 
     /// Optional labels file for query vectors
-    #[arg(long = "query_file_labels", default_value = None)]
+    #[arg(long = "query-file-labels", default_value = None)]
     pub query_file_labels: Option<String>,
 
     /// Path of the file to write range ground truth to in binary format
-    #[arg(long = "gt_file", short, required = true)]
+    #[arg(long = "gt-file", short, required = true)]
     pub ground_truth_file: String,
 
     /// Filter bitmap file in range ground truth format
-    #[arg(long = "filter_bitmap_file", short, default_value = None)]
+    #[arg(long = "filter-bitmap-file", short, default_value = None)]
     pub filter_bitmap_file: Option<String>,
 
     /// Radius threshold used to include neighbors in range-groundtruth

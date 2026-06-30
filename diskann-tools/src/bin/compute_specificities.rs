@@ -18,15 +18,15 @@ use std::process;
 )]
 struct Args {
     /// File containing the base labels
-    #[arg(long = "base_label_file", short = 'b')]
+    #[arg(long = "base-label-file", short = 'b')]
     pub base_label_file: String,
 
     /// File containing the query labels
-    #[arg(long = "query_label_file", short = 'q')]
+    #[arg(long = "query-label-file", short = 'q')]
     pub query_label_file: String,
 
     /// Output file for specificities (optional)
-    #[arg(long = "specificity_output_file", short = 'o')]
+    #[arg(long = "specificity-output-file", short = 'o')]
     pub specificity_output_file: Option<String>,
 }
 
