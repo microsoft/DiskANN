@@ -302,10 +302,7 @@ mod tests {
     fn json_numbers_select_matching_variant() {
         // Unsigned, signed, and floating-point literals each route to the visitor
         // method that preserves the writer's chosen kind.
-        assert!(matches!(
-            serde_json::from_str("7").unwrap(),
-            Number::U64(7)
-        ));
+        assert!(matches!(serde_json::from_str("7").unwrap(), Number::U64(7)));
         assert!(matches!(
             serde_json::from_str("-7").unwrap(),
             Number::I64(-7)
