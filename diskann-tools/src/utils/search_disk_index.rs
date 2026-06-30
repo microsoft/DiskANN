@@ -87,11 +87,15 @@ where
         None => vec![HashSet::<u32>::new(); query_num],
     };
 
-    assert_eq!(
-        filter_bitmaps.len(),
-        query_num,
-        "Mismatch in query and filter bitmap sizes"
-    );
+    if filter_bitmaps.len() != query_num {
+        return Err(CMDToolError {
+            details: format!(
+                "Mismatch in query and filter bitmap sizes: {} queries, {} filter bitmaps",
+                query_num,
+                filter_bitmaps.len()
+            ),
+        });
+    }
 
     let mut gt_dim: usize = 0;
     let mut gt_ids: Option<Vec<u32>> = None;
