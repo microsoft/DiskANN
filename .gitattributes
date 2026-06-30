@@ -1,7 +1,4 @@
 * text=auto eol=lf
-*.cer binary
-*.qencr binary
-*.dat binary
 test_data/**/* filter=lfs diff=lfs merge=lfs -text
 test_data/**/*.md -filter -diff -merge text
 test_data/**/*.yaml -filter -diff -merge text
