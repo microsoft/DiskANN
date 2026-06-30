@@ -1226,8 +1226,12 @@ mod disk_provider_tests {
         });
     }
 
-    #[test]
-    fn test_disk_search_k10_l20_single_or_multi_thread_128dim() {
+    #[rstest]
+    #[case(CachingStrategy::None)]
+    #[case(CachingStrategy::StaticCacheWithBfsNodes(32))]
+    fn test_disk_search_k10_l20_single_or_multi_thread_128dim(
+        #[case] caching_strategy: CachingStrategy,
+    ) {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
@@ -1237,6 +1241,7 @@ mod disk_provider_tests {
                 pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
                 index_path: TEST_INDEX_128DIM,
                 index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                caching_strategy,
                 ..Default::default()
             },
             &storage_provider,
@@ -1353,6 +1358,7 @@ mod disk_provider_tests {
         index_path: &'a str,
         index_path_prefix: &'a str,
         io_limit: usize,
+        caching_strategy: CachingStrategy,
     }
 
     impl Default for CreateDiskIndexSearcherParams<'_> {
@@ -1364,6 +1370,7 @@ mod disk_provider_tests {
                 index_path: "",
                 index_path_prefix: "",
                 io_limit: usize::MAX,
+                caching_strategy: CachingStrategy::None,
             }
         }
     }
@@ -1396,10 +1403,11 @@ mod disk_provider_tests {
             get_disk_index_file(params.index_path_prefix),
             Arc::clone(storage_provider),
         );
-        let caching_strategy = CachingStrategy::None;
-        let vertex_provider_factory =
-            DiskVertexProviderFactory::<Data, _>::new(aligned_reader_factory, caching_strategy)
-                .unwrap();
+        let vertex_provider_factory = DiskVertexProviderFactory::<Data, _>::new(
+            aligned_reader_factory,
+            params.caching_strategy,
+        )
+        .unwrap();
 
         DiskIndexSearcher::<Data, DiskVertexProviderFactory<Data, _>>::new(
             params.max_thread_num,
@@ -2251,6 +2259,7 @@ mod disk_provider_tests {
                 index_path: TEST_INDEX,
                 index_path_prefix: TEST_INDEX_PREFIX,
                 io_limit,
+                ..Default::default()
             },
             &storage_provider,
         );
