@@ -268,7 +268,8 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                let post_processor = search_params.post_processor.as_ref().map(
+                let post_processor = search_params.post_processor.as_ref().map_or(
+                    SearchPostProcessorKind::None,
                     |TopkPostProcessor::DeterminantDiversity(params)| {
                         SearchPostProcessorKind::DeterminantDiversity(*params)
                     },

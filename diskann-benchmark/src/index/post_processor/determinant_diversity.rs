@@ -64,9 +64,15 @@ where
             candidates.len(),
             &self.params,
         )
-        .into_iter()
-        .map(|idx| (ids[idx], distances[idx]));
+        .map(|indices| {
+            output.extend(
+                indices
+                    .into_iter()
+                    .map(|idx| (ids[idx], distances[idx])),
+            )
+        })
+        .map_err(ANNError::from);
 
-        std::future::ready(Ok(output.extend(reranked)))
+        std::future::ready(reranked)
     }
 }

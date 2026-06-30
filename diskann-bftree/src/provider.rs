@@ -110,6 +110,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
 ///     graph_params: None,
+///     use_snapshot: false,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -164,6 +165,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
 ///     graph_params: None,
+///     use_snapshot: false,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -197,6 +199,9 @@ where
     // Graph configuration parameters for persistence
     //
     pub(crate) graph_params: Option<GraphParams>,
+
+    // Whether CPR snapshot support is enabled for this provider's trees.
+    pub(crate) use_snapshot: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +218,9 @@ pub struct BfTreeProviderParameters {
     // The metric to use for distance computations
     pub metric: Metric,
 
-    // The maximum number of neighbors to store for each vector
+    // The physical maximum degree (maximum neighbor list capacity per vertex).
+    // Callers are responsible for applying any slack factor externally before
+    // passing this value.
     pub max_degree: u32,
 
     // bf-tree config for vector provider.
@@ -233,6 +240,9 @@ pub struct BfTreeProviderParameters {
 
     // Optional graph configuration parameters for persistence
     pub graph_params: Option<GraphParams>,
+
+    // Whether to enable CPR snapshot support on the underlying bf-trees.
+    pub use_snapshot: bool,
 }
 
 impl<T, Q> BfTreeProvider<T, Q>
@@ -252,11 +262,23 @@ where
     ///
     /// # Type Constraints
     /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
-    fn new_empty<TQ>(params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
+    fn new_empty<TQ>(mut params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
     where
         Self: StartPoint<T>,
         TQ: CreateQuantProvider<Target = Q>,
     {
+        // Force all configs to match the provider-level use_snapshot setting so the
+        // underlying bf-trees are always consistent with our snapshot guard.
+        params
+            .vector_provider_config
+            .use_snapshot(params.use_snapshot);
+        params
+            .neighbor_list_provider_config
+            .use_snapshot(params.use_snapshot);
+        params
+            .quant_vector_provider_config
+            .use_snapshot(params.use_snapshot);
+
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
             full_vectors: VectorProvider::new_with_config(
@@ -271,6 +293,7 @@ where
             )?,
             metric: params.metric,
             graph_params: params.graph_params,
+            use_snapshot: params.use_snapshot,
         })
     }
 
@@ -862,10 +885,17 @@ where
     }
 
     fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
-        self.provider
+        match self
+            .provider
             .quant_vectors
             .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| self.computer.evaluate_similarity(&self.element))
+        {
+            Ok(()) => self
+                .computer
+                .evaluate(&self.element)
+                .map_err(RankedError::Error),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -1494,23 +1524,6 @@ pub struct BfTreeParams {
     pub leaf_page_size: usize,
 }
 
-impl BfTreeParams {
-    /// Build a BfTree Config from the saved parameters and a file path.
-    /// When `is_memory` is true, the config uses an in-memory storage backend,
-    /// ensuring the circular buffer is at least as large as the bf-tree default.
-    pub fn to_config(&self, path: &std::path::Path, is_memory: bool) -> Config {
-        let mut config = Config::new(path, self.bytes);
-        config.cb_max_record_size(self.max_record_size);
-        config.leaf_page_size(self.leaf_page_size);
-        if is_memory {
-            config.storage_backend(bf_tree::StorageBackend::Memory);
-        } else {
-            config.storage_backend(bf_tree::StorageBackend::Std);
-        }
-        config
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct QuantParams {
     pub params_quant: BfTreeParams,
@@ -1530,6 +1543,9 @@ pub struct SavedParams {
     pub graph_params: Option<GraphParams>,
     /// Whether the original model was in-memory (`true`) or on-disk (`false`).
     pub is_memory: bool,
+    /// Whether CPR snapshot support was enabled.
+    #[serde(default)]
+    pub use_snapshot: bool,
 }
 
 /// The element type of the full-precision vectors stored in the index.
@@ -1621,55 +1637,33 @@ impl BfTreePaths {
     }
 }
 
-/// Copy a snapshot file to the target path if they differ.
-/// This handles the case where the index was built with a different prefix
-/// than the one being saved to.
-async fn copy_snapshot_if_needed(
-    snapshot_path: std::path::PathBuf,
+/// Save a BfTree to disk via CPR snapshot.
+///
+/// # Errors
+///
+/// Returns an error if `use_snapshot` is false, indicating the tree was not
+/// configured with snapshot support.
+fn save_bftree(
+    tree: &BfTree,
     target_path: std::path::PathBuf,
+    use_snapshot: bool,
 ) -> ANNResult<()> {
-    if snapshot_path != target_path {
-        tokio::task::spawn_blocking(move || {
-            std::fs::copy(&snapshot_path, &target_path).map_err(|e| {
-                ANNError::log_index_error(format!(
-                    "Failed to copy snapshot from {:?} to {:?}: {}",
-                    snapshot_path, target_path, e
-                ))
-            })
-        })
-        .await
-        .map_err(|e| ANNError::log_index_error(format!("Blocking copy task failed: {}", e)))??;
+    if !use_snapshot {
+        return Err(ANNError::log_index_error(
+            "cannot snapshot a BfTree that was not configured with use_snapshot(true)",
+        ));
     }
+    tree.cpr_snapshot(&target_path);
     Ok(())
 }
 
-/// Save a BfTree to disk, handling both in-memory and on-disk cases.
-/// For in-memory trees, uses `snapshot_memory_to_disk` to serialize all records.
-/// For on-disk trees, snapshots in place and copies if the target path differs.
-async fn save_bftree(tree: &BfTree, target_path: std::path::PathBuf) -> ANNResult<()> {
-    if tree.config().is_memory_backend() {
-        tree.snapshot_memory_to_disk(&target_path);
-    } else {
-        let snapshot_path = tree.snapshot();
-        copy_snapshot_if_needed(snapshot_path, target_path).await?;
-    }
-    Ok(())
-}
-
-/// Load a BfTree from a snapshot file, restoring it as in-memory or on-disk
-/// depending on `is_memory`. Builds the Config from `params` internally.
-fn load_bftree(
-    params: &BfTreeParams,
-    snapshot_path: std::path::PathBuf,
-    is_memory: bool,
-) -> Result<BfTree, ANNError> {
-    let config = params.to_config(&snapshot_path, is_memory);
-    if is_memory {
-        BfTree::new_from_snapshot_disk_to_memory(snapshot_path, config)
-            .map_err(|e| ANNError::from(super::ConfigError(e)))
-    } else {
-        BfTree::new_from_snapshot(config, None).map_err(|e| ANNError::from(super::ConfigError(e)))
-    }
+/// Load a BfTree from a CPR snapshot file.
+///
+/// The 0.5.x loader reconstructs config from the snapshot file header, so
+/// no external `BfTreeParams` are needed.
+fn load_bftree(snapshot_path: std::path::PathBuf, use_snapshot: bool) -> Result<BfTree, ANNError> {
+    BfTree::new_from_cpr_snapshot(snapshot_path, use_snapshot, None, None, None)
+        .map_err(|e| ANNError::from(super::ConfigError(e)))
 }
 
 //////////////////////
@@ -1708,6 +1702,7 @@ where
             quant_params: None,
             graph_params: self.graph_params.clone(),
             is_memory: self.full_vectors.config().is_memory_backend(),
+            use_snapshot: self.use_snapshot,
         };
 
         debug_assert_eq!(
@@ -1728,13 +1723,13 @@ where
         save_bftree(
             self.full_vectors.bftree(),
             BfTreePaths::vectors_bftree(&saved_params.prefix),
-        )
-        .await?;
+            self.use_snapshot,
+        )?;
         save_bftree(
             self.neighbor_provider.bftree(),
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
-        )
-        .await?;
+            self.use_snapshot,
+        )?;
 
         Ok(0)
     }
@@ -1764,9 +1759,8 @@ where
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
         let vector_index = load_bftree(
-            &saved_params.params_vector,
             BfTreePaths::vectors_bftree(&saved_params.prefix),
-            saved_params.is_memory,
+            saved_params.use_snapshot,
         )?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
@@ -1776,9 +1770,8 @@ where
         );
 
         let adjacency_list_index = load_bftree(
-            &saved_params.params_neighbor,
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
-            saved_params.is_memory,
+            saved_params.use_snapshot,
         )?;
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
             saved_params.max_degree,
@@ -1791,6 +1784,7 @@ where
             neighbor_provider,
             metric,
             graph_params: saved_params.graph_params,
+            use_snapshot: saved_params.use_snapshot,
         })
     }
 }
@@ -1833,6 +1827,7 @@ where
             }),
             graph_params: self.graph_params.clone(),
             is_memory: self.full_vectors.config().is_memory_backend(),
+            use_snapshot: self.use_snapshot,
         };
 
         debug_assert_eq!(
@@ -1858,18 +1853,18 @@ where
         save_bftree(
             self.full_vectors.bftree(),
             BfTreePaths::vectors_bftree(&saved_params.prefix),
-        )
-        .await?;
+            self.use_snapshot,
+        )?;
         save_bftree(
             self.neighbor_provider.bftree(),
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
-        )
-        .await?;
+            self.use_snapshot,
+        )?;
         save_bftree(
             self.quant_vectors.bftree(),
             BfTreePaths::quant_bftree(&saved_params.prefix),
-        )
-        .await?;
+            self.use_snapshot,
+        )?;
 
         let filename = BfTreePaths::quant_data_bin(&saved_params.prefix);
         let serialized = self
@@ -1904,7 +1899,7 @@ where
             })?
         };
 
-        let quant_params = saved_params.quant_params.ok_or_else(|| {
+        let _quant_params = saved_params.quant_params.ok_or_else(|| {
             ANNError::log_index_error("Missing quant_params in saved params for quantized provider")
         })?;
 
@@ -1912,9 +1907,8 @@ where
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
         let vector_index = load_bftree(
-            &saved_params.params_vector,
             BfTreePaths::vectors_bftree(&saved_params.prefix),
-            saved_params.is_memory,
+            saved_params.use_snapshot,
         )?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
@@ -1924,9 +1918,8 @@ where
         );
 
         let adjacency_list_index = load_bftree(
-            &saved_params.params_neighbor,
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
-            saved_params.is_memory,
+            saved_params.use_snapshot,
         )?;
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
             saved_params.max_degree,
@@ -1941,9 +1934,8 @@ where
             .map_err(|e| ANNError::log_index_error(format!("{e}")))?;
 
         let quant_vector_index = load_bftree(
-            &quant_params.params_quant,
             BfTreePaths::quant_bftree(&saved_params.prefix),
-            saved_params.is_memory,
+            saved_params.use_snapshot,
         )?;
         let quant_vectors = QuantVectorProvider::new_from_bftree(quantizer, quant_vector_index);
 
@@ -1953,6 +1945,7 @@ where
             neighbor_provider,
             metric,
             graph_params: saved_params.graph_params,
+            use_snapshot: saved_params.use_snapshot,
         })
     }
 }
@@ -1974,7 +1967,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::neighbors::NeighborProvider;
     use crate::quant::create_test_quantizer;
+    use crate::vectors::VectorProvider;
     use diskann::{
         graph::DiskANNIndex,
         graph::{self, search::Knn},
@@ -1986,7 +1981,8 @@ mod tests {
     fn create_quant_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, QuantVectorProvider>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
         let dim = 5;
-        let max_degree = 8;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
 
         let provider = BfTreeProvider::new(
@@ -1995,11 +1991,12 @@ mod tests {
                 num_start_points: NonZeroUsize::new(1).unwrap(),
                 dim,
                 metric,
-                max_degree,
+                max_degree: physical_max_degree,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
                 graph_params: None,
+                use_snapshot: false,
             },
             start_point.as_view(),
             create_test_quantizer(5),
@@ -2007,8 +2004,8 @@ mod tests {
         .unwrap();
 
         let index_config = graph::config::Builder::new_with(
-            4,
-            graph::config::MaxDegree::new(max_degree as usize),
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
             10,
             metric.into(),
             |_| {},
@@ -2156,7 +2153,8 @@ mod tests {
 
     fn create_full_precision_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, NoStore>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
-        let max_degree = 8;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
 
         let provider = BfTreeProvider::new(
@@ -2165,11 +2163,12 @@ mod tests {
                 num_start_points: NonZeroUsize::new(1).unwrap(),
                 dim: 5,
                 metric,
-                max_degree,
+                max_degree: physical_max_degree,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
                 graph_params: None,
+                use_snapshot: false,
             },
             start_point.as_view(),
             NoStore,
@@ -2177,8 +2176,8 @@ mod tests {
         .unwrap();
 
         let index_config = graph::config::Builder::new_with(
-            4,
-            graph::config::MaxDegree::new(max_degree as usize),
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
             10,
             metric.into(),
             |_| {},
@@ -2305,6 +2304,7 @@ mod tests {
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
                 graph_params: None,
+                use_snapshot: false,
             },
             start_points.as_view(),
             NoStore,
@@ -2391,6 +2391,7 @@ mod tests {
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
                 graph_params: None,
+                use_snapshot: false,
             },
             start_points.as_view(),
             NoStore,
@@ -2492,10 +2493,12 @@ mod tests {
         vector_config.leaf_page_size(8192);
         vector_config.cb_max_record_size(1024);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
+        vector_config.use_snapshot(true);
 
         let bytes_neighbor = 1024 * 1024;
         let mut neighbor_config = Config::new(&neighbor_path, bytes_neighbor);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
+        neighbor_config.use_snapshot(true);
 
         // Create provider parameters
         let params = BfTreeProviderParameters {
@@ -2508,6 +2511,7 @@ mod tests {
             quant_vector_provider_config: Config::default(),
             neighbor_list_provider_config: neighbor_config.clone(),
             graph_params: None,
+            use_snapshot: true,
         };
 
         let start_points = Matrix::new(Init(|| 0.0f32), num_start_points.into(), dim);
@@ -2613,14 +2617,17 @@ mod tests {
         let bytes_vector = 1024 * 1024;
         let mut vector_config = Config::new(&vector_path, bytes_vector);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
+        vector_config.use_snapshot(true);
 
         let bytes_neighbor = 1024 * 1024;
         let mut neighbor_config = Config::new(&neighbor_path, bytes_neighbor);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
+        neighbor_config.use_snapshot(true);
 
         let bytes_quant = 1024 * 1024;
         let mut quant_config = Config::new(&quant_path, bytes_quant);
         quant_config.storage_backend(bf_tree::StorageBackend::Std);
+        quant_config.use_snapshot(true);
 
         // Create spherical quantizer
         let quantizer = create_test_quantizer(dim);
@@ -2636,6 +2643,7 @@ mod tests {
             quant_vector_provider_config: quant_config.clone(),
             neighbor_list_provider_config: neighbor_config.clone(),
             graph_params: None,
+            use_snapshot: true,
         };
 
         let start_points = Matrix::new(Init(|| 0.0f32), num_start_points.into(), dim);
@@ -2752,6 +2760,11 @@ mod tests {
         let num_start_points = NonZeroUsize::new(1).unwrap();
         let ctx = &DefaultContext;
 
+        let mut vector_config = Config::default();
+        vector_config.use_snapshot(true);
+        let mut neighbor_config = Config::default();
+        neighbor_config.use_snapshot(true);
+
         let start_points = Matrix::new(Init(|| 0.0f32), num_start_points.into(), dim);
         // In-memory config (no file path needed)
         let provider = BfTreeProvider::<f32, NoStore>::new(
@@ -2761,10 +2774,11 @@ mod tests {
                 dim,
                 metric: Metric::L2,
                 max_degree,
-                vector_provider_config: Config::default(),
+                vector_provider_config: vector_config,
                 quant_vector_provider_config: Config::default(),
-                neighbor_list_provider_config: Config::default(),
+                neighbor_list_provider_config: neighbor_config,
                 graph_params: None,
+                use_snapshot: true,
             },
             start_points.as_view(),
             NoStore,
@@ -2859,6 +2873,12 @@ mod tests {
         let ctx = &DefaultContext;
 
         let quantizer = create_test_quantizer(dim);
+        let mut vector_config = Config::default();
+        vector_config.use_snapshot(true);
+        let mut neighbor_config = Config::default();
+        neighbor_config.use_snapshot(true);
+        let mut quant_config = Config::default();
+        quant_config.use_snapshot(true);
 
         let start_points = Matrix::new(Init(|| 0.0f32), num_start_points.into(), dim);
         let provider = BfTreeProvider::<f32, QuantVectorProvider>::new(
@@ -2868,10 +2888,11 @@ mod tests {
                 dim,
                 metric: Metric::L2,
                 max_degree,
-                vector_provider_config: Config::default(),
-                quant_vector_provider_config: Config::default(),
-                neighbor_list_provider_config: Config::default(),
+                vector_provider_config: vector_config,
+                quant_vector_provider_config: quant_config,
+                neighbor_list_provider_config: neighbor_config,
                 graph_params: None,
+                use_snapshot: true,
             },
             start_points.as_view(),
             quantizer,
@@ -2964,5 +2985,51 @@ mod tests {
             loaded.status_by_internal_id(ctx, 0).await.unwrap(),
             ElementStatus::Valid
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_undersized_vector_config() {
+        // 1536 * 4 = 6144 bytes + 8-byte key = 6152 bytes needed
+        let result = VectorProvider::<f32>::new_with_config(
+            100,
+            1536,
+            1,
+            Config::default(), // cb_max_record_size = 1952
+        );
+        let err = result.err().expect("should fail").to_string();
+        assert!(
+            err.contains("vector_provider"),
+            "should name the failing config; got: {err}"
+        );
+        assert!(
+            err.contains("6152"),
+            "should state the required size; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_undersized_neighbor_config() {
+        // max_degree=500 → value = (500+1)*4 = 2004 bytes + 4-byte key = 2008 bytes
+        let mut neighbor_config = Config::default();
+        neighbor_config.cb_max_record_size(1952);
+
+        let result = NeighborProvider::<u32>::new_with_config(500, neighbor_config);
+        let err = result.err().expect("should fail").to_string();
+        assert!(
+            err.contains("neighbor_provider"),
+            "should name the failing config; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_config() {
+        // dim=128, f32 → key=8 + value=512 = 520 bytes, fits default 1952
+        if let Err(e) = VectorProvider::<f32>::new_with_config(100, 128, 1, Config::default()) {
+            panic!("VectorProvider should succeed: {e}");
+        }
+        // max_degree=64 → key=4 + value=(64+1)*4 = 264 bytes, fits default 1952
+        if let Err(e) = NeighborProvider::<u32>::new_with_config(64, Config::default()) {
+            panic!("NeighborProvider should succeed: {e}");
+        }
     }
 }
