@@ -469,7 +469,7 @@ mod tests {
     fn write_manifest(dir: &Path, files: &[&str]) -> PathBuf {
         let manifest = serde_json::json!({
             "files": files,
-            "value": { "$version": "0.0.0" },
+            "value": { "$version": "0.0" },
         });
         let metadata = dir.join("metadata.json");
         std::fs::write(&metadata, serde_json::to_vec(&manifest).unwrap()).unwrap();

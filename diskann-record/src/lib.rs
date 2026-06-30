@@ -44,14 +44,14 @@
 //! struct Config { dim: usize, label: String }
 //!
 //! impl save::Save for Config {
-//!     const VERSION: Version = Version::new(0, 0, 0);
+//!     const VERSION: Version = Version::new(0, 0);
 //!     fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
 //!         Ok(diskann_record::save_fields!(self, context, [dim, label]))
 //!     }
 //! }
 //!
 //! impl load::Load<'_> for Config {
-//!     const VERSION: Version = Version::new(0, 0, 0);
+//!     const VERSION: Version = Version::new(0, 0);
 //!     fn load(object: load::Object<'_>) -> load::Result<Self> {
 //!         diskann_record::load_fields!(object, [dim: usize, label: String]);
 //!         Ok(Self { dim, label })
@@ -157,7 +157,7 @@ mod tests {
     }
 
     impl save::Save for Inner {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             Ok(save_fields!(
                 self,
@@ -168,7 +168,7 @@ mod tests {
     }
 
     impl save::Save for Test {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             // We save `x`, `y`, and `inner` directly into the manifest.
             // The raw vector data we instead store in an auxiliary file.
@@ -183,7 +183,7 @@ mod tests {
     }
 
     impl load::Load<'_> for Test {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             load_fields!(
                 object,
@@ -219,7 +219,7 @@ mod tests {
     }
 
     impl load::Load<'_> for Inner {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             load_fields!(
                 object,
@@ -293,7 +293,7 @@ mod tests {
     }
 
     impl save::Save for Metric {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             let mut record = save::Record::empty();
             match self {
@@ -313,7 +313,7 @@ mod tests {
     }
 
     impl load::Load<'_> for Metric {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             match object.single_key()? {
                 "L2" => Ok(Self::L2),
@@ -341,14 +341,14 @@ mod tests {
     }
 
     impl save::Save for MetricBag {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             Ok(save_fields!(self, context, [primary, alternatives]))
         }
     }
 
     impl load::Load<'_> for MetricBag {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             load_fields!(object, [primary: Metric, alternatives: Vec<Metric>]);
             Ok(Self {
@@ -391,14 +391,14 @@ mod tests {
     }
 
     impl save::Save for StructShape {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             Ok(save_fields!(self, context, [x]))
         }
     }
 
     impl load::Load<'_> for StructShape {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             load_fields!(object, [x: i32]);
             Ok(Self { x })
@@ -414,7 +414,7 @@ mod tests {
     }
 
     impl save::Save for EnumShape {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             let mut record = save::Record::empty();
             match self {
@@ -428,7 +428,7 @@ mod tests {
     }
 
     impl load::Load<'_> for EnumShape {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             match object.single_key()? {
                 "Only" => {
@@ -503,15 +503,15 @@ mod tests {
 
     impl save::Save for Upgraded {
         // Write using an "old" schema: only `count` is written to disk.
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             Ok(save_fields!(self, context, [count]))
         }
     }
 
     impl load::Load<'_> for Upgraded {
-        // New schema: differs from the `0.0.0` stamped on disk, forcing `load_legacy`.
-        const VERSION: Version = Version::new(1, 0, 0);
+        // New schema: differs from the `0.0` stamped on disk, forcing `load_legacy`.
+        const VERSION: Version = Version::new(1, 0);
         fn load(_object: load::Object<'_>) -> load::Result<Self> {
             panic!("matching-version load must not run for a legacy record");
         }
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn legacy_record_dispatches_to_load_legacy() -> anyhow::Result<()> {
-        // Save stamps the old `0.0.0` schema; the loader's `1.0.0` differs, so the
+        // Save stamps the old `0.0` schema; the loader's `1.0` differs, so the
         // round trip must flow through `load_legacy`, which upgrades the record.
         let temp_dir = tempfile::tempdir()?;
         let dir = temp_dir.path();
@@ -561,19 +561,19 @@ mod tests {
     }
 
     impl save::Save for NoUpgrade {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             Ok(save_fields!(self, context, [value]))
         }
     }
 
     impl load::Load<'_> for NoUpgrade {
-        const VERSION: Version = Version::new(2, 0, 0);
+        const VERSION: Version = Version::new(2, 0);
         fn load(_object: load::Object<'_>) -> load::Result<Self> {
             panic!("matching-version load must not run for a legacy record");
         }
         fn load_legacy(_object: load::Object<'_>) -> load::Result<Self> {
-            // Check if version.major is older than 1.0.0
+            // Check if version.major is older than 1.0
             if _object.version().major < 1 {
                 return Err(load::error::Kind::UnknownVersion.into());
             }
@@ -619,7 +619,7 @@ mod tests {
     }
 
     impl save::Save for Primitives {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             Ok(save_fields!(
                 self,
@@ -630,7 +630,7 @@ mod tests {
     }
 
     impl load::Load<'_> for Primitives {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             load_fields!(
                 object,
@@ -701,7 +701,7 @@ mod tests {
         }
 
         impl load::Load<'_> for NzHolder {
-            const VERSION: Version = Version::new(0, 0, 0);
+            const VERSION: Version = Version::new(0, 0);
             fn load(object: load::Object<'_>) -> load::Result<Self> {
                 load_fields!(object, [nz: std::num::NonZeroU32]);
                 Ok(Self { _nz: nz })
@@ -716,7 +716,7 @@ mod tests {
         let metadata = dir.join("metadata.json");
         let manifest = serde_json::json!({
             "files": [],
-            "value": { "$version": "0.0.0", "nz": 0 },
+            "value": { "$version": "0.0", "nz": 0 },
         });
         std::fs::write(&metadata, serde_json::to_vec(&manifest)?)?;
 
@@ -743,7 +743,7 @@ mod tests {
     }
 
     impl load::Load<'_> for HandleOnly {
-        const VERSION: Version = Version::new(0, 0, 0);
+        const VERSION: Version = Version::new(0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             load_fields!(object, [blob: save::Handle]);
             let mut io = object.read(&blob)?;
@@ -765,7 +765,7 @@ mod tests {
             // path-shape check as the thing rejecting the load.
             "files": [handle_target],
             "value": {
-                "$version": "0.0.0",
+                "$version": "0.0",
                 "blob": { "$handle": handle_target },
             },
         });

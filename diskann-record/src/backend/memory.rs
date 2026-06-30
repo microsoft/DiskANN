@@ -177,7 +177,7 @@ mod tests {
     }
 
     impl save::Save for Doc {
-        const VERSION: Version = Version::new(1, 0, 0);
+        const VERSION: Version = Version::new(1, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
             let mut io = context.write(Some("blob.bin"))?;
             io.write_all(&self.blob).map_err(save::Error::new)?;
@@ -188,7 +188,7 @@ mod tests {
     }
 
     impl load::Load<'_> for Doc {
-        const VERSION: Version = Version::new(1, 0, 0);
+        const VERSION: Version = Version::new(1, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
             crate::load_fields!(object, [name: String, blob: save::Handle]);
             let mut io = object.read(&blob)?;

@@ -433,7 +433,7 @@ mod tests {
     #[cfg(feature = "disk")]
     #[test]
     fn deserialize_rejects_handle_with_extra_fields() {
-        let json = r#"{ "$handle": "a.bin", "$version": "0.0.0" }"#;
+        let json = r#"{ "$handle": "a.bin", "$version": "0.0" }"#;
         serde_json::from_str::<Value<'static>>(json)
             .expect_err("handle object with extra fields must be rejected");
     }

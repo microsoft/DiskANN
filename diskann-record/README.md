@@ -11,4 +11,9 @@ field-by-field plumbing for plain structs. Every record carries a `Version` so l
 can detect schema changes and either upgrade or fall back through a probing chain.
 
 The goal is to allow crates like `diskann` to checkpoint their state without depending on
-a particular serialization backend. This crate has minimal dependencies by design.
+a particular serialization backend. Currently, this crate implements `Disk` and `Memory` backends
+-- `Disk` for persistent storage and `Memory` for in-memory operations. 
+`Memory` pipes the output of its `SaveContext` directly into the input of its `LoadContext`, so it is not compatible with other backends.
+A hypothetical `ObjectStore` backend could be implemented to be compatible with `Disk` backends to support caching and other advanced features.
+
+This crate has minimal dependencies by design.
