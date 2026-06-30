@@ -94,6 +94,12 @@ pub struct SearchProfile {
     /// End-to-end query wall-clock (the sum of the phases plus unattributed
     /// remainder).
     pub total: Duration,
+    /// Total bytes fetched from disk for this query (sum of the sector-aligned
+    /// read windows actually issued to the reader).
+    pub bytes_read: u64,
+    /// Number of disk read requests issued for this query (one per probed,
+    /// non-empty cluster).
+    pub io_count: u64,
 }
 
 impl SearchProfile {
@@ -113,7 +119,13 @@ impl SearchProfile {
 
 impl fmt::Display for SearchProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_layer_cake(f, "Search latency breakdown", &self.phases(), self.total)
+        write_layer_cake(f, "Search latency breakdown", &self.phases(), self.total)?;
+        writeln!(
+            f,
+            "  io: {} reads, {} KiB from disk",
+            self.io_count,
+            self.bytes_read / 1024,
+        )
     }
 }
 

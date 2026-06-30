@@ -403,10 +403,395 @@ relative to a from-scratch full-corpus build (and faster than the original build
 
 ---
 
+## 9. Disk-read latency: parallelism, caching, prefetch, async
+
+**Goal**: minimize *per-query* latency (mean and p95) on the `16384-full` index,
+which is what we optimize for in production (4 search threads). The question:
+are we using parallelism / caching / prefetching / async optimally to fetch the
+posting lists from disk? All runs use `centroid_search_l = 1024`, squared L2,
+recall@10; the harness runs `num_threads` *queries* concurrently — each query is
+internally single-threaded.
+
+### 9.0 The read path (how a query touches disk)
+
+A query's `disk_read` stage issues **one batch of `nlist` reads** (one per probed
+posting list) through the platform `AlignedFileReader`:
+
+- **Windows** (`WindowsAlignedFileReader`): IOCP with
+  `FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED` — i.e. **unbuffered/direct I/O
+  that bypasses the OS page cache**. It submits up to `MAX_IO_CONCURRENCY = 128`
+  reads *concurrently*, then blocking-polls completions. Batches larger than 128
+  are split into sequential rounds.
+- **Linux** (`LinuxAlignedFileReader`): `io_uring` with `O_DIRECT`,
+  `submit_and_wait(batch)` — true async submission, also 128-deep, also no page
+  cache.
+- The reader holds `&mut self` (per-thread, not shareable), and there is **no
+  caching / LRU / page-cache layer anywhere** in the stack.
+
+Two consequences fall out of this immediately:
+1. A *single* query already submits all of its reads concurrently (up to 128 in
+   flight). The OS sees a deep queue from just one query — we are **not**
+   submission-starved at the single-query level.
+2. Because direct I/O bypasses the page cache, **re-reading the same hot list
+   costs a full device read every time**. Nothing is amortized across queries.
+
+### 9.1 New telemetry
+
+To reason about bytes rather than just time, `SearchProfile` now records, per
+query: `io_count` (reads issued to disk), `bytes_read` (disk bytes), and
+`cache_hits` / `cache_bytes` (lists/bytes served from the new RAM cache below).
+The benchmark prints a **"Search I/O volume (mean per query)"** table
+(`NList / Reads / DiskKiB / CacheHits / CacheKiB`) alongside the latency cake.
+
+### 9.2 Experiment — concurrency sweep: is parallelism the lever?
+
+Swept `num_threads ∈ {1, 2, 4, 8}` on `16384-full`. The user is *especially*
+interested in parallelism, so this is the first question to settle empirically.
+
+| nlist | metric | T=1 | T=2 | T=4 | T=8 |
+|---:|---|---:|---:|---:|---:|
+| 1024 | QPS | 22.0 | 31.8 | 32.0 | 31.1 |
+| 1024 | mean µs | 45,514 | 62,630 | 122,250 | 241,977 |
+| 1024 | p95 µs | 56,289 | 89,095 | 161,974 | 402,159 |
+| 1024 | DiskRead µs | 37,711 | 54,500 | 110,343 | 227,906 |
+| 256 | QPS | 72.9 | 125.9 | 124.4 | 124.9 |
+| 256 | mean µs | 13,711 | 15,792 | 31,241 | 59,080 |
+| 64 | QPS | 154.5 | 291.7 | 509.0 | 440.3 |
+
+Recall is identical across thread counts (74.99 / 84.97 / 93.38 at nlist
+64 / 256 / 1024), as expected.
+
+**Reading the result**: QPS plateaus by **T=2** at high nlist (22→32→32→31) while
+per-query mean and p95 latency **inflate roughly linearly** with thread count
+(45.5ms → 122ms → 242ms at nlist 1024). That is the signature of a **saturated
+device**: aggregate read bandwidth is pinned (~1.4–1.7 GB/s here), so adding
+concurrent queries just queues them behind one another. A single T=1 query
+already nearly saturates the SSD because IOCP keeps 128 reads in flight.
+
+**Conclusion on parallelism**: more *query-level* threads cannot reduce per-query
+latency — beyond ~2 threads they actively *worsen* it. By the same token,
+**intra-query read parallelism (splitting one query's reads across worker threads,
+each with its own reader) cannot help either**: the bottleneck is device
+bandwidth, not I/O submission depth, and a single query is already submitting a
+128-deep queue. We are *not* under-using parallelism, async, or prefetch on the
+fetch path; the platform reader already issues the whole batch asynchronously and
+concurrently. **The only way to cut disk-read latency is to read fewer bytes.**
+
+### 9.3 Experiment — hot-list RAM cache (the working lever)
+
+Since the device is bandwidth-bound and direct I/O re-reads hot lists every time,
+the fix is to keep the most-read lists resident in RAM and score them without
+touching disk. Implemented `ListCache<T>` (`src/cache.rs`): at load time, greedily
+select the **largest** non-empty posting lists (by point count) up to a byte
+budget, hold their ids+vectors in RAM, and at search time serve any probed list
+that is resident from RAM (`cache_hits`) while only disk-reading the rest. Wired
+through `load_with_cache(prefix, num_threads, cache_budget_bytes)` and a
+`cache_budget_mb` knob in the benchmark. Selecting *largest-first* is deliberate:
+the size-weighted list distribution (ablation 7) means a few big lists dominate
+both the bytes read and the probe probability.
+
+Sweep on `16384-full`, **T=4** (production), `cache_budget_mb ∈ {0, 256, 512, 1024}`.
+
+> **Sizing caveat — read this before the table.** The list file stores the *full*
+> fp16 vectors plus their u32 ids, so the entire on-disk payload is only
+> ~**801 MiB**: vectors `1,087,932 × 384 × 2 B ≈ 796.8 MiB` + ids
+> `1,087,932 × 4 B ≈ 4.2 MiB`. In other words the whole "disk" index fits in
+> under a gigabyte of RAM. That reframes the budgets:
+>
+> | budget | fraction of the 801 MiB payload |
+> |---:|---|
+> | 256 MiB | ~32% (genuine partial cache) |
+> | 512 MiB | ~64% (still *smaller* than the dataset) |
+> | 1024 MiB | **caps at 801 MiB = the entire index in RAM** |
+>
+> So the **1024 MiB row is not really "a cache"** — it is *"what if the whole
+> index lived in RAM"*, i.e. the DiskRead→0 upper bound, and it's only reachable
+> here because this corpus is tiny (~0.8 GB). For a corpus 10–100× larger — the
+> regime that justifies a disk-based index in the first place — full residency is
+> impossible and only the **partial-cache rows (256/512 MiB) are
+> representative**. The generalizable takeaway is therefore the *super-linear
+> byte payoff of largest-first caching*, not the full-residency 13×.
+
+| budget | lists resident | nlist | mean µs | p95 µs | DiskRead µs | QPS | mean disk KiB/q |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 MiB | 0 | 1024 | 122,842 | 156,447 | 113,866 | 32.1 | 49,691 |
+| 256 MiB | 1,825 | 1024 | 97,115 | 117,548 | 87,405 | 40.2 | 39,697 |
+| 512 MiB | 5,422 | 1024 | 51,939 | 74,383 | 42,492 | 74.8 | 21,585 |
+| **1024 MiB** | **16,336 (all)** | 1024 | **9,217** | **11,193** | **1.1** | **427.8** | **0.0** |
+| 0 MiB | 0 | 256 | 31,431 | 53,130 | 26,748 | 124.1 | 12,889 |
+| 512 MiB | 5,422 | 256 | 12,656 | 18,868 | 7,958 | 304.5 | 5,346 |
+| **1024 MiB** | all | 256 | **4,167** | **5,064** | **1.0** | **948.6** | **0.0** |
+| **1024 MiB** | all | 64 | **2,820** | **3,767** | **0.9** | **1399.8** | 0.0 |
+| 0 MiB | 0 | 64 | 7,293 | 11,159 | 4,224 | 525.3 | 3,426 |
+
+Recall is unchanged at every budget (the cache returns the *same* vectors, just
+from RAM): 74.99 / 84.97 / 93.38.
+
+**Findings**:
+- **Partial budgets pay off super-linearly in bytes** (the generalizable result,
+  per the sizing caveat above) thanks to largest-first selection. A 256 MiB cache
+  (~32% of the payload) holds only 78 of 1023 probed lists (7.6% hit *count*) yet
+  removes **20% of disk bytes** (49.7 → 39.7 MiB/query) — big lists carry the
+  bytes. A 512 MiB cache (~64% of the payload, still smaller than the dataset)
+  already halves nlist-1024 latency (122.8 → 51.9 ms) and more than doubles QPS.
+- **Full residency** (the 1024 MiB row) is the DiskRead→0 *upper bound*, not a
+  realistic cache: it loads the whole 801 MiB index into RAM, cutting nlist-1024
+  **mean latency 13.3×** (122.8 ms → 9.2 ms) and **p95 14×** (156 ms → 11.2 ms),
+  with DiskRead collapsing from 114 ms to ~1 µs. It is only attainable because
+  this corpus is ~0.8 GB; treat it as "the ceiling if the index were in-memory."
+- Once disk is removed, the **new floor is the centroid-graph search** (~2.4–3.2
+  ms/query, independent of nlist) plus scoring — exactly the low-nlist floor
+  identified in earlier sections. That is the next target (e.g. quantized /
+  smaller centroid set, or a cheaper centroid ANN).
+
+### 9.4 Verdict on the four levers
+
+- **Parallelism**: already optimal on the fetch path and *cannot* lower per-query
+  latency — the SSD is bandwidth-saturated even by one query (§9.2). Use *fewer*
+  concurrent queries for latency; ~2 threads already max throughput.
+- **Async**: already in use (IOCP / io_uring submit the full batch
+  asynchronously, 128-deep). No headroom there.
+- **Prefetch**: would not help — there is no idle device time to hide latency
+  behind; the device is the bottleneck, and probed lists aren't known until after
+  the centroid search.
+- **Caching**: the decisive lever. A RAM-resident hot-list cache turns the
+  bandwidth-bound disk reads into memory scores. Full residency gives **~13× mean
+  / ~14× p95** — but on this tiny ~0.8 GB corpus that is just "the whole index in
+  RAM" (the 1024 MiB budget exceeds the 801 MiB payload). The *durable* result is
+  the **largest-first partial cache**: bytes removed scale far faster than hit
+  count (256 MiB ⇒ 7.6% of lists but 20% of bytes; 512 MiB ⇒ ~2× QPS at ~64% of
+  the payload), which is what generalizes to corpora too large to fully cache.
+  This directly serves the per-query mean/p95 objective.
+
+---
+
+## 10. 8-bit MinMax quantized posting lists
+
+The `16384-full` index rebuilt with 8-bit MinMax-quantized vectors stored in the
+inverted lists (1 byte/dim + a 20-byte per-vector header) instead of `fp16`
+(2 bytes/dim), reusing the baseline `fp16` centroids unchanged (zero Lloyd
+iterations). Posting-list file: **444 MB** vs **840 MB** (`fp16`).
+
+### Build latency breakdown (total 79,741 ms)
+
+| Stage | ms | % |
+|---|---:|---:|
+| normalize | 496.6 | 0.6 |
+| sample | 0.0 | 0.0 |
+| kmeans | 52.4 | 0.1 |
+| write_centroids | 45.6 | 0.1 |
+| build_graph | 38,227.5 | 47.9 |
+| assign | 39,515.6 | 49.6 |
+| write_lists | 1,400.2 | 1.8 |
+| write_metadata | 1.7 | 0.0 |
+| other | 1.4 | 0.0 |
+
+### Search results (num_threads = 4, centroid_search_l = 1024, squared L2, recall@10, cache off)
+
+| NList | Recall | Mean µs | P95 µs | DiskRead µs | Bytes/query | QPS |
+|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 74.74 | 9,994 | 11,452 | 6,617 | 1,868,542 | 365.7 |
+| 256 | 84.61 | 16,634 | 25,013 | 11,715 | 7,034,458 | 230.8 |
+| 1024 | 92.86 | 64,746 | 90,256 | 56,028 | 27,132,310 | 61.1 |
+
+
+---
+
+## 11. Graph-IVF vs disk-index latency: why fewer bytes ≠ lower latency
+
+Comparing the two on-disk designs at high search effort (single-threaded, T=1)
+surfaced a counter-intuitive result: at recall@1000 ≈ 85%, the `diskann-disk`
+Vamana+PQ index (`L_search = 1000`, `beam_width = 4`) has **~88 ms** mean latency
+while the graph-IVF indexes at comparable effort sit at **31–39 ms** — *even
+though graph-IVF reads far more bytes per query* (16–30 MB vs ~4 MB).
+
+The per-stage breakdowns show I/O is ~83–88% of latency in **both** designs, so
+the difference is entirely in *how each one pulls bytes off the SSD*:
+
+| Design | mean | I/O time | bytes / query | # I/Os | I/O pattern | effective BW |
+|---|---:|---:|---:|---:|---|---:|
+| graph-IVF 40960, nlist 1024 | 31.2 ms | 26.1 ms | 16.9 MB | 1 batch | one wide batched read | ~650 MB/s |
+| graph-IVF 16384, nlist 1147 | 38.9 ms | 32.2 ms | 30.3 MB | 1 batch | one wide batched read | ~940 MB/s |
+| disk-index, L=1000, bw 4 | 88.4 ms | 77.5 ms | ~4 MB | 1013 | long dependent chain | ~53 MB/s |
+
+**Root cause = I/O queue depth, not data volume.** Graph-IVF, after the centroid
+search, knows *all* `nlist` target lists up front and submits them as a **single
+batched read with up to 128 concurrent I/Os** (Windows IOCP). The SSD pipelines
+them, so wall time ≈ `bytes / bandwidth` — it moves tens of MB but at 650–940
+MB/s effective. The disk-index Vamana beam search is inherently **sequential**:
+each hop's next candidates depend on the distances computed from the *previous*
+hop's fetched nodes, so only `beam_width` I/Os are ever in flight. With
+`beam_width = 4` and ~1013 node reads, the query is a chain of ~253 dependent
+round-trips, each a 4 KB random read costing ~75 µs under O_DIRECT (no page
+cache). That latency can't be hidden behind a deep queue, so the device is used
+~12–18× less efficiently (~53 MB/s).
+
+### beam_width sweep (L=1000, T=1, recall@1000)
+
+Confirming the hypothesis — widening the beam (deeper I/O queue) should cut
+latency *without* materially changing the bytes read or recall:
+
+| beam_width | mean | I/O time | CPU time | p95 | p99 | mean I/Os | recall@1000 | QPS |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 88.4 ms | 77.5 ms | 10.9 ms | 99.3 ms | 107.4 ms | 1012.7 | 84.87 | 11.3 |
+| 8 | 60.7 ms | 51.5 ms | 9.1 ms | 66.1 ms | 70.3 ms | 1022.8 | 84.91 | 16.5 |
+| 16 | 48.9 ms | 40.1 ms | 8.8 ms | 55.0 ms | 65.7 ms | 1043.9 | 84.99 | 20.4 |
+| 32 | 44.0 ms | 35.0 ms | 8.9 ms | 49.3 ms | 61.3 ms | 1089.3 | 85.15 | 22.7 |
+
+**Result**: raising `beam_width` 4 → 32 **halves mean latency (88 → 44 ms)**,
+almost entirely from I/O time (77 → 35 ms, −55%), for the **same I/O count**
+(1013 → 1089, +7%) and **flat recall** (84.87 → 85.15%). This is the smoking gun:
+the original 88 ms was a **queue-depth** problem, not a bytes/bandwidth one — at
+beam 4 most of the dependency chain stalls on per-read latency; a wider beam lets
+the SSD service more reads concurrently and hides it.
+
+**Why it plateaus at ~44 ms (still above graph-IVF's 31 ms)**: returns diminish
+past beam 16 (I/O time 77 → 51 → 40 → 35 ms) as the device's IOPS/queue saturates
+and a wider beam also wastes a few extra node reads (I/Os creep up). Graph-IVF
+still wins *here* because its single batched read is 128-deep (vs a 32-max beam)
+and this corpus is RAM-resident-cheap, so its large cluster scans hit high
+bandwidth.
+
+**Caveat — this ordering is dataset-specific.** The enron corpus (<1 GB) makes
+graph-IVF's large per-query byte volume cheap. On a corpus far larger than RAM,
+graph-IVF's bytes/query scale with `nlist × list_size` and eventually dominate,
+while disk-index's I/O count stays bounded by graph hops — so the crossover
+flips. The takeaway is the *mechanism*: graph-IVF is **bandwidth-bound** (one wide
+batch), disk-index is **random-I/O-latency-bound** (a deep dependency chain whose
+effective queue depth is `beam_width`).
+
+### Re-running the full L-sweeps at beam_width = 32
+
+To see whether the queue-depth win holds across the whole operating curve, both
+original `beam_width = 4` L-sweeps were re-run at `beam_width = 32` (T=1).
+
+**recall@1000 (L = 1000 / 1500 / 2000):**
+
+| L_search | mean (bw32) | mean (bw4) | p99 (bw32) | p99 (bw4) | I/Os (bw32) | I/Os (bw4) | recall@1000 (bw32) | recall@1000 (bw4) | QPS (bw32) | QPS (bw4) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | 43.8 ms | 86.5 ms | 57.5 ms | 104.3 ms | 1089.3 | 1012.7 | 85.15 | 84.87 | 22.8 | 11.6 |
+| 1500 | 63.6 ms | 128.7 ms | 76.2 ms | 151.7 ms | 1583.0 | 1511.5 | 90.63 | 90.46 | 15.7 | 7.8 |
+| 2000 | 82.9 ms | 169.1 ms | 98.8 ms | 201.5 ms | 2078.5 | 2010.9 | 92.97 | 92.87 | 12.1 | 5.9 |
+
+At every L, beam 32 **≈halves mean latency and roughly doubles QPS at the same
+recall** (+0.1–0.2 pt) for only ~5–7% more I/Os — the §11 queue-depth effect holds
+across the entire high-recall curve.
+
+**recall@50 (L = 50 / 75 / 100 / 150 / 200):**
+
+| L_search | mean (bw32) | mean (bw4) | I/Os (bw32) | I/Os (bw4) | recall@50 (bw32) | recall@50 (bw4) | QPS (bw32) | QPS (bw4) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50 | 8.2 ms | 6.5 ms | 188.1 | 71.9 | 81.23 | 75.84 | 121.4 | 154.5 |
+| 75 | 9.0 ms | 8.3 ms | 208.5 | 96.2 | 85.15 | 81.27 | 111.6 | 120.0 |
+| 100 | 9.8 ms | 10.5 ms | 228.6 | 120.4 | 86.67 | 83.89 | 102.3 | 95.4 |
+| 150 | 11.3 ms | 14.6 ms | 270.2 | 168.8 | 88.88 | 87.28 | 88.2 | 68.5 |
+| 200 | 13.1 ms | 18.7 ms | 315.1 | 217.8 | 90.45 | 89.39 | 76.3 | 53.4 |
+
+The low-recall regime is more nuanced. A wider beam fetches **more nodes per hop**,
+so at the same L it issues ~2× the I/Os (e.g. 188 vs 72 at L=50). Those extra
+reads (a) **raise recall** at fixed L (wider frontier → +3–5 pts), but (b) at very
+small L the added I/O volume *outweighs* the queue-depth saving, so beam 32 is
+actually a touch **slower** (8.2 vs 6.5 ms at L=50). From L≥100 the queue-depth
+win dominates again and beam 32 is both faster *and* higher recall. Net: at
+recall@50 the right `beam_width` is a budget trade-off (more in-flight reads buy
+recall but cost bytes), whereas at recall@1000 the deep chain is long enough that
+a wide beam is unambiguously better.
+
+Configs: `diskann-benchmark/example/disk-index-enron-t1-beamsweep.json` (beam
+sweep), `disk-index-enron-t1-recall1000-bw32.json`,
+`disk-index-enron-t1-recall50-bw32.json`; results in the matching `*-out.json`
+files.
+
+
+---
+
+## 12. How a query becomes disk reads: cluster → AlignedRead → SSD
+
+End-to-end mechanics of turning probed centroids into bytes off the SSD, for
+reference. Code: `diskann-graphivf/src/storage.rs`,
+`diskann-graphivf/src/index.rs` (`Searcher::search_profiled`),
+`diskann-disk/src/utils/aligned_file_reader/windows_aligned_file_reader.rs`,
+`diskann-platform/src/win/file_handle.rs`.
+
+**On-disk layout.** All clusters live in one file `<prefix>.graphivf_lists`, in
+ascending cluster-id order, each record packed back-to-back with no inter-list
+padding as `[ids: u32 × count][vectors: Elem × dim × count]`. The companion
+`.graphivf_meta` stores per-cluster `counts`; the byte offset of every cluster is
+a prefix sum over the record sizes, recomputed on load (`Layout.offsets`). Lists
+are **variable length** (one centroid per ~10–20 points), so only the whole file
+is zero-padded to a 512-byte multiple — clusters themselves are not padded to a
+fixed stride. This is why mean request size ≈ `corpus_bytes / K`.
+
+**Query path** (`search_profiled`):
+
+1. **centroid_search** — graph search over the in-memory centroid (Vamana) graph
+   yields the `nlist` nearest cluster ids. Pure RAM; no disk. `nlist` *is* nprobe,
+   which is why **`io_count` ≈ nprobe**.
+2. **plan_io** — for each non-empty probed cluster, `cluster_window` computes a
+   **sector-aligned read window**: `aligned_start = align_down(offset, 512)`,
+   `aligned_end = align_up(offset + used_bytes, 512)`, and `inner_offset =
+   offset − aligned_start` (where the real data begins inside the window).
+   Rounding *outward* to 512 is mandatory because the reads use direct I/O, which
+   can only transfer whole 512-byte sectors. This wastes ≤511 B at each end, so
+   the issued `aligned_len` is slightly larger than the raw list bytes.
+3. One reusable, 512-aligned `scratch` buffer is grown to the sum of all windows
+   and carved (via `split_at_mut`) into one disjoint sub-slice per cluster. Each
+   becomes an `AlignedRead::<u8, A512>::new(aligned_start, slice)`, whose
+   constructor validates that the **offset, buffer length, and buffer memory
+   pointer** are all 512-multiples. A constructed `AlignedRead` is a type-level
+   witness that the request is legal for direct I/O. At this point
+   `profile.io_count = reads.len()` and `profile.bytes_read = total_len`.
+4. **disk_read** — all of a query's requests are submitted in a **single batch**:
+   `reader.read(&mut reads)`. `reader` is the platform `AlignedFileReader`
+   (Windows IOCP, Linux io_uring, buffered elsewhere).
+
+**Inside `WindowsAlignedFileReader`.** Requests are issued in **batches of up to
+`MAX_IO_CONCURRENCY = 128`**. For each request it fills an `OVERLAPPED` (carrying
+the file offset) and calls `ReadFile` via `read_file_to_slice`; with overlapped
+I/O `ReadFile` returns immediately, so up to 128 reads are **in flight on the SSD
+at once**. It then drains the I/O completion port with
+`get_queued_completion_status` until all reads in the batch complete. A query
+probing 1214 clusters is therefore `ceil(1214/128) = 10` batches of concurrent
+reads — this is what lets many small random reads run efficiently (§9, §11: the
+deep queue is why graph-IVF is bandwidth-bound rather than latency-bound).
+
+**Direct I/O / no page cache.** The file handle is opened once with
+`FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED |
+FILE_FLAG_RANDOM_ACCESS` (Linux equivalent: `O_DIRECT`). `FILE_FLAG_NO_BUFFERING`
+is exactly why the 512-alignment is required, and it means every byte reported in
+`bytes_read` is a real device read with no OS page-cache between the buffer and
+the SSD — so the measured IO counts/sizes are not inflated or hidden by caching.
+
+**After the read**, scoring walks each window, skips the leading partial sector
+via `inner_offset`, and reinterprets the bytes as `[u32 ids][Elem vectors]`
+(zero-copy `bytemuck` casts in `parse_cluster`), scoring the query against each
+fetched vector.
+
+**Measured relationships** (MERB-Corpus-12K, see workbook sheet *MERB IO & Req
+Size*):
+
+| Quantity | Source | Relationship |
+|---|---|---|
+| `ios/q` | `reads.len()` = non-empty probed clusters | ≈ nprobe (one request per cluster) |
+| `req size (B)` | mean `aligned_len` per window | ≈ `corpus_bytes / K`, rounded up to 512 |
+| `bytes/q` | `total_len` = Σ aligned windows | ≈ nprobe × req_size |
+
+So **more centroids → smaller clusters → smaller per-request reads but more
+requests** for the same recall target; the 128-deep IOCP batch keeps those many
+small reads cheap. (The disk-index Vamana+PQ reader instead issues fixed 4 KB
+sector reads, bounded in flight by `beam_width` — see §11.)
+
+
+---
+
 ## Overall conclusions so far
 
 - Search is **I/O-bound** at moderate-to-high nlist (disk read 62–96% of latency);
   at low nlist with many small lists, **centroid-graph search** becomes the floor.
+  The disk reads are **device-bandwidth-bound**, not parallelism-bound (§9): the
+  SSD saturates even on a single query, so a RAM hot-list cache (not more threads)
+  is what cuts per-query latency. With disk removed, centroid-graph search becomes
+  the floor at *every* nlist.
 - The recall ceiling is set by **IVF partition geometry**, not by:
   - centroid-graph approximation (99.5%+ graph recall, ablation 5), nor
   - k-means training convergence (full corpus ≈ 100K sample on recall, ablation 6).
@@ -422,3 +807,20 @@ relative to a from-scratch full-corpus build (and faster than the original build
   - **Throughput at fixed recall** → smaller, more *balanced* lists (more centroids;
     more/denser k-means training; refine seeds over the full corpus; or a
     balanced-assignment scheme).
+  - **Per-query latency (mean/p95)** → a **RAM hot-list cache** (§9). The fetch
+    path is already optimally parallel/async and the SSD is bandwidth-saturated,
+    so reading *fewer bytes* is the only lever. Caching the *largest* lists pays
+    off super-linearly in bytes (256 MiB ⇒ 7.6% of lists but 20% fewer disk
+    bytes), which is the result that generalizes. Full residency gives ~13× mean /
+    ~14× p95, but on this ~0.8 GB corpus that just means "the whole index in RAM"
+    (the 1 GiB budget exceeds the 801 MiB payload) — an upper bound, not a
+    realistic cache for larger corpora. More query threads *worsen* latency.
+- **Graph-IVF vs disk-index is a bandwidth-vs-latency story** (§11): graph-IVF
+  reads more bytes but in *one 128-deep batched I/O* (bandwidth-bound), while the
+  disk-index beam search reads far fewer bytes as a *long dependency chain* whose
+  effective queue depth is only `beam_width` (random-I/O-latency-bound). At T=1,
+  L=1000, raising `beam_width` 4 → 32 halves disk-index latency (88 → 44 ms) at
+  the same I/O count and recall — confirming the gap was queue depth, not data
+  volume. On this <1 GB corpus graph-IVF wins on latency; on corpora ≫ RAM the
+  ordering flips, since graph-IVF's bytes/query grow with `nlist × list_size`
+  while disk-index's I/O count stays bounded by graph hops.

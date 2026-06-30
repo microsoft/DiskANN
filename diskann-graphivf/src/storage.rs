@@ -205,6 +205,55 @@ pub(crate) fn write_lists<T: VectorRepr>(
     Ok((counts, offsets))
 }
 
+/// Like [`write_lists`], but the vectors are already stored in the target
+/// representation `T` and are copied verbatim instead of being encoded from
+/// `f32`.
+///
+/// Each row of `data` is one stored vector of `data.ncols()` `T` elements (for
+/// whole-vector quantized formats this is the canonical width, e.g. 404 for
+/// 8-bit MinMax at dimension 384, not the logical dimension). This is the
+/// counterpart used when the corpus is supplied pre-compressed.
+pub(crate) fn write_lists_stored<T: VectorRepr>(
+    path: &Path,
+    data: MatrixView<'_, T>,
+    assignments: &[u32],
+    num_clusters: usize,
+) -> Result<(Vec<u32>, Vec<u64>)> {
+    let dim = data.ncols();
+    let elem_size = std::mem::size_of::<T>();
+
+    let mut buckets: Vec<Vec<u32>> = vec![Vec::new(); num_clusters];
+    for (pid, &c) in assignments.iter().enumerate() {
+        buckets[c as usize].push(pid as u32);
+    }
+    let counts: Vec<u32> = buckets.iter().map(|b| b.len() as u32).collect();
+    let offsets = compute_offsets(&counts, dim, elem_size);
+
+    let mut writer = BufWriter::new(File::create(path)?);
+    let mut written: u64 = 0;
+    for bucket in &buckets {
+        writer.write_all(bytemuck::cast_slice(bucket))?;
+        for &pid in bucket {
+            writer.write_all(bytemuck::cast_slice(data.row(pid as usize)))?;
+        }
+        // Pad the record up to RECORD_ALIGN so the next cluster starts aligned.
+        let used = used_bytes(bucket.len(), dim, elem_size);
+        let rec_pad = (align_up(used, RECORD_ALIGN) - used) as usize;
+        if rec_pad > 0 {
+            writer.write_all(&[0u8; RECORD_ALIGN as usize][..rec_pad])?;
+        }
+        written += record_bytes(bucket.len(), dim, elem_size);
+    }
+
+    let pad = (align_up(written, ALIGN) - written) as usize;
+    if pad > 0 {
+        writer.write_all(&vec![0u8; pad])?;
+    }
+    writer.flush()?;
+
+    Ok((counts, offsets))
+}
+
 /// Serialize the index metadata to `path`.
 pub(crate) fn write_metadata(path: &Path, layout: &Layout) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);

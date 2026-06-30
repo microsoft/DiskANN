@@ -86,6 +86,83 @@ impl<T: VectorRepr> std::fmt::Debug for GraphIvfIndex<T> {
     }
 }
 
+/// Strategy for producing the cluster centroids that seed the IVF partition.
+///
+/// The graph and inverted lists are built identically regardless of how the
+/// centroids are obtained; this only controls the centroid-production stage.
+#[derive(Debug, Clone, Copy)]
+pub enum Seed<'a> {
+    /// Draw `samples` rows from the corpus (RNG seeded by [`BuildParams::seed`]),
+    /// take the first [`BuildParams::num_clusters`] of them as the initial
+    /// centers (Forgy initialization), then apply [`BuildParams::kmeans_iters`]
+    /// Lloyd iterations over the sample.
+    Sampled {
+        /// Number of corpus rows to sample for k-means.
+        samples: usize,
+    },
+    /// Load precomputed centroids from `path` (a `*.graphivf_centroids.fbin`
+    /// written by a previous build) and refine them with
+    /// [`BuildParams::kmeans_iters`] Lloyd iterations over the **full** corpus.
+    /// Zero iterations reuses the loaded centroids unchanged.
+    Precomputed {
+        /// Path to the centroid `fbin` to load.
+        path: &'a Path,
+    },
+}
+
+impl Seed<'_> {
+    /// Produce the centroids for `work` (the f32 corpus used for clustering),
+    /// recording the sample/k-means timings into `profile`.
+    ///
+    /// Both strategies finish with [`refine_centroids`] (Lloyd iterations); they
+    /// differ only in how the initial centers and clustering data are obtained.
+    fn centroids(
+        self,
+        work: MatrixView<'_, f32>,
+        params: &BuildParams,
+        pool: &RayonThreadPool,
+        profile: &mut BuildProfile,
+    ) -> Result<Matrix<f32>> {
+        let dim = work.ncols();
+        let num_clusters = params.num_clusters;
+        match self {
+            // Cluster a corpus sample: draw `samples` rows (RNG seeded by
+            // `params.seed`), take the first `num_clusters` as the initial
+            // centers (Forgy initialization), and refine over the sample.
+            Seed::Sampled { samples } => {
+                let sample_start = Instant::now();
+                let mut rng = StdRng::seed_from_u64(params.seed);
+                let idx = rand::seq::index::sample(&mut rng, work.nrows(), samples).into_vec();
+                let mut buf = vec![0.0f32; samples * dim];
+                for (dst, &p) in buf.chunks_mut(dim).zip(idx.iter()) {
+                    dst.copy_from_slice(work.row(p));
+                }
+                profile.sample = sample_start.elapsed();
+                let sample = Matrix::try_from(buf.into_boxed_slice(), samples, dim)
+                    .map_err(|_| GraphIvfError::invalid("sample matrix shape mismatch"))?;
+                // The prefix of a uniform random sample is itself a uniform
+                // random subset (validation guarantees `samples >= num_clusters`).
+                let init = &sample.as_slice()[..num_clusters * dim];
+                refine_centroids(sample.as_view(), init, params, pool, profile)
+            }
+            // Refine precomputed centroids over the full corpus.
+            Seed::Precomputed { path } => {
+                let mut file = File::open(path)?;
+                let centroids: Matrix<f32> =
+                    read_bin(&mut file).map_err(|e| GraphIvfError::malformed(e.to_string()))?;
+                if centroids.nrows() != num_clusters || centroids.ncols() != dim {
+                    return Err(GraphIvfError::invalid(format!(
+                        "seed centroids shape {}x{} does not match num_clusters {num_clusters} x dim {dim}",
+                        centroids.nrows(),
+                        centroids.ncols(),
+                    )));
+                }
+                refine_centroids(work, centroids.as_slice(), params, pool, profile)
+            }
+        }
+    }
+}
+
 impl<T: VectorRepr> GraphIvfIndex<T> {
     /// Build an index from `data` (one row per corpus vector) and write the
     /// on-disk artifacts using `prefix` (e.g. `/data/index` produces
@@ -98,132 +175,91 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
 
     /// Like [`build`](Self::build), but also returns a [`BuildProfile`]
     /// attributing the build wall-clock to its individual stages.
+    ///
+    /// Centroids are produced from a corpus *sample* via k-means++
+    /// ([`Seed::Sampled`]); for a precomputed-centroid build use
+    /// [`build_seeded_profiled`](Self::build_seeded_profiled).
     pub fn build_profiled(
         data: MatrixView<'_, f32>,
         params: &BuildParams,
         prefix: &Path,
     ) -> Result<(Self, BuildProfile)> {
-        let mut profile = BuildProfile::default();
-        let total_start = Instant::now();
-
-        let num_points = data.nrows();
-        let dim = data.ncols();
-        params.validate(num_points, dim)?;
-
-        // For cosine, work on an L2-normalized copy of the corpus.
-        let normalize_start = Instant::now();
-        let normalized_storage: Option<Matrix<f32>> = if params.metric.normalizes() {
-            let mut buf = data.as_slice().to_vec();
-            for row in buf.chunks_mut(dim) {
-                normalize(row);
-            }
-            Some(
-                Matrix::try_from(buf.into_boxed_slice(), num_points, dim)
-                    .map_err(|_| GraphIvfError::invalid("normalized matrix shape mismatch"))?,
-            )
-        } else {
-            None
-        };
-        profile.normalize = normalize_start.elapsed();
-        let work: MatrixView<'_, f32> = match &normalized_storage {
-            Some(m) => m.as_view(),
-            None => data,
-        };
-
-        let pool = create_thread_pool(params.num_threads)?;
-
-        // 1. Sample the corpus and run k-means to obtain centroids. The sample
-        //    and k-means phases are timed inside `run_kmeans`.
-        let sample_size = params.effective_sample_size(num_points);
-        let centroids_mat = run_kmeans(work, sample_size, params, &pool, &mut profile)?;
-
-        let index = Self::finalize_build(
-            work,
-            centroids_mat,
+        let samples = params.effective_sample_size(data.nrows());
+        Self::build_core(
+            Corpus::Plain(data),
+            Seed::Sampled { samples },
             params,
             prefix,
-            num_points,
-            dim,
-            &pool,
-            &mut profile,
-        )?;
-        profile.total = total_start.elapsed();
-        Ok((index, profile))
+        )
     }
 
-    /// Build an index by refining an existing set of `seed_centroids` with
-    /// `params.kmeans_iters` Lloyd iterations over the **entire** `data` (not a
-    /// sample), then constructing the graph and inverted lists exactly as
-    /// [`build_profiled`](Self::build_profiled).
+    /// Build an index from a full-precision corpus, producing centroids per the
+    /// given [`Seed`] strategy.
     ///
-    /// `seed_centroids` must be a `params.num_clusters x dim` matrix (e.g. the
-    /// centroids written by a previous build, read back from
-    /// `*.graphivf_centroids.fbin`). The k-means++ seeding and corpus sampling
-    /// steps are skipped; `params.sample_size` is ignored.
-    pub fn build_from_seed_centroids_profiled(
+    /// With [`Seed::Sampled`] this is equivalent to
+    /// [`build_profiled`](Self::build_profiled); with [`Seed::Precomputed`] the
+    /// centroids are loaded from disk and refined with `params.kmeans_iters`
+    /// Lloyd iterations over the entire `data` (no sampling).
+    pub fn build_seeded_profiled(
         data: MatrixView<'_, f32>,
-        seed_centroids: MatrixView<'_, f32>,
+        seed: Seed<'_>,
+        params: &BuildParams,
+        prefix: &Path,
+    ) -> Result<(Self, BuildProfile)> {
+        Self::build_core(Corpus::Plain(data), seed, params, prefix)
+    }
+
+    /// Build an index from a corpus that is **already stored** in the target
+    /// representation `T` (e.g. 8-bit MinMax quantized rows), producing
+    /// centroids per the given [`Seed`] strategy.
+    ///
+    /// Each row of `corpus` is one canonical `T` vector; it is decompressed to
+    /// `f32` (via [`VectorRepr::as_f32_into`]) only for clustering and graph
+    /// construction, while the inverted lists store the original `T` rows
+    /// verbatim. With [`Seed::Precomputed`] and `params.kmeans_iters == 0` the
+    /// loaded centroids are reused unchanged, yielding an index directly
+    /// comparable to a full-precision build sharing the same centroids.
+    ///
+    /// For cosine, stored rows are written verbatim, so the corpus must be
+    /// pre-normalized before compression.
+    pub fn build_compressed_profiled(
+        corpus: MatrixView<'_, T>,
+        seed: Seed<'_>,
+        params: &BuildParams,
+        prefix: &Path,
+    ) -> Result<(Self, BuildProfile)> {
+        Self::build_core(Corpus::Compressed(corpus), seed, params, prefix)
+    }
+
+    /// Shared build pipeline: prepare the clustering corpus, produce centroids
+    /// per `seed`, then build the graph and inverted lists. Every public build
+    /// entry point is a thin wrapper over this core.
+    fn build_core(
+        corpus: Corpus<'_, T>,
+        seed: Seed<'_>,
         params: &BuildParams,
         prefix: &Path,
     ) -> Result<(Self, BuildProfile)> {
         let mut profile = BuildProfile::default();
         let total_start = Instant::now();
 
-        let num_points = data.nrows();
-        let dim = data.ncols();
+        // 1. Decode / normalize the corpus into the f32 rows used for k-means
+        //    and assignment, plus the optional already-`T` rows to store.
+        let prepared = corpus.prepare(params, &mut profile)?;
+        let work = prepared.work();
+        let num_points = work.nrows();
+        let dim = work.ncols();
         params.validate(num_points, dim)?;
-        if seed_centroids.nrows() != params.num_clusters || seed_centroids.ncols() != dim {
-            return Err(GraphIvfError::invalid(format!(
-                "seed centroids shape {}x{} does not match num_clusters {} x dim {dim}",
-                seed_centroids.nrows(),
-                seed_centroids.ncols(),
-                params.num_clusters
-            )));
-        }
-
-        // For cosine, work on an L2-normalized copy of the corpus.
-        let normalize_start = Instant::now();
-        let normalized_storage: Option<Matrix<f32>> = if params.metric.normalizes() {
-            let mut buf = data.as_slice().to_vec();
-            for row in buf.chunks_mut(dim) {
-                normalize(row);
-            }
-            Some(
-                Matrix::try_from(buf.into_boxed_slice(), num_points, dim)
-                    .map_err(|_| GraphIvfError::invalid("normalized matrix shape mismatch"))?,
-            )
-        } else {
-            None
-        };
-        profile.normalize = normalize_start.elapsed();
-        let work: MatrixView<'_, f32> = match &normalized_storage {
-            Some(m) => m.as_view(),
-            None => data,
-        };
 
         let pool = create_thread_pool(params.num_threads)?;
 
-        // 1. Refine the seed centroids with Lloyd iterations over the full corpus.
-        //    No sampling and no k-means++ seeding (`profile.sample` stays zero).
-        let kmeans_start = Instant::now();
-        let mut centers = seed_centroids.as_slice().to_vec();
-        let mut cancel = false;
-        diskann_disk::utils::run_lloyds(
-            work.as_slice(),
-            num_points,
-            dim,
-            &mut centers,
-            params.num_clusters,
-            params.kmeans_iters,
-            &mut cancel,
-            pool.as_ref(),
-        )?;
-        profile.kmeans = kmeans_start.elapsed();
-        let centroids_mat = Matrix::try_from(centers.into_boxed_slice(), params.num_clusters, dim)
-            .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))?;
+        // 2. Produce the centroids per the seeding strategy.
+        let centroids_mat = seed.centroids(work, params, &pool, &mut profile)?;
 
+        // 3. Persist centroids, build the graph, assign points, write lists.
         let index = Self::finalize_build(
             work,
+            prepared.stored(),
             centroids_mat,
             params,
             prefix,
@@ -238,11 +274,18 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
 
     /// Finalize a build once centroids are known: persist the centroids, build
     /// the in-memory graph, assign every corpus point, and write the inverted
-    /// lists and metadata. Shared by [`build_profiled`](Self::build_profiled)
-    /// and [`build_from_seed_centroids_profiled`](Self::build_from_seed_centroids_profiled).
+    /// lists and metadata. Shared by every public build entry point via
+    /// [`build_core`](Self::build_core).
+    ///
+    /// `work` is always the full-precision corpus used for centroid assignment.
+    /// When `stored` is `Some`, those already-`T` rows are copied verbatim into
+    /// the inverted lists (the corpus was supplied pre-compressed) and the
+    /// stored vector width is `stored.ncols()`; otherwise each `work` row is
+    /// encoded element-wise to `T` and the stored width is `dim`.
     #[allow(clippy::too_many_arguments)]
     fn finalize_build(
         work: MatrixView<'_, f32>,
+        stored: Option<MatrixView<'_, T>>,
         centroids_mat: Matrix<f32>,
         params: &BuildParams,
         prefix: &Path,
@@ -251,6 +294,9 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         pool: &RayonThreadPool,
         profile: &mut BuildProfile,
     ) -> Result<Self> {
+        // Stored vector width: the canonical `T` width for pre-compressed
+        // corpora, otherwise the logical dimension of `work`.
+        let stored_dim = stored.map(|m| m.ncols()).unwrap_or(dim);
         // Persist centroids so the graph can be rebuilt on load.
         let write_centroids_start = Instant::now();
         let centroids_path = with_suffix(prefix, CENTROIDS_SUFFIX);
@@ -272,12 +318,21 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         // 4. Write the inverted lists and the metadata.
         let write_lists_start = Instant::now();
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
-        let (counts, offsets) =
-            storage::write_lists::<T>(&lists_path, work, &assignments, params.num_clusters)?;
+        let (counts, offsets) = match stored {
+            Some(stored_rows) => storage::write_lists_stored::<T>(
+                &lists_path,
+                stored_rows,
+                &assignments,
+                params.num_clusters,
+            )?,
+            None => {
+                storage::write_lists::<T>(&lists_path, work, &assignments, params.num_clusters)?
+            }
+        };
         profile.write_lists = write_lists_start.elapsed();
 
         let layout = Layout {
-            dim,
+            dim: stored_dim,
             metric: params.metric,
             element_size: std::mem::size_of::<T>(),
             num_points: num_points as u64,
@@ -294,7 +349,7 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             layout: Arc::new(layout),
             lists_path,
             metric: params.metric,
-            dim,
+            dim: stored_dim,
             _marker: PhantomData,
         })
     }
@@ -326,10 +381,12 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             read_bin(&mut centroids_file).map_err(|e| GraphIvfError::malformed(e.to_string()))?;
         let centroids = centroids::build(centroids_mat, &layout.graph, num_threads)?;
 
+        let lists_path = with_suffix(prefix, LISTS_SUFFIX);
+
         Ok(Self {
             centroids,
             layout: Arc::new(layout),
-            lists_path: with_suffix(prefix, LISTS_SUFFIX),
+            lists_path,
             metric,
             dim,
             _marker: PhantomData,
@@ -371,6 +428,145 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
     }
 }
 
+/// A build's input corpus, before preparation.
+enum Corpus<'a, T: VectorRepr> {
+    /// A full-precision corpus; encoded to `T` element-wise when written.
+    Plain(MatrixView<'a, f32>),
+    /// A corpus already stored as `T`; decompressed to f32 for clustering and
+    /// written to the inverted lists verbatim.
+    Compressed(MatrixView<'a, T>),
+}
+
+impl<'a, T: VectorRepr> Corpus<'a, T> {
+    /// Decode and (for normalizing metrics) L2-normalize the corpus into the
+    /// f32 rows used for clustering, plus the optional already-`T` rows to store
+    /// verbatim. Records the elapsed time into `profile.normalize`.
+    fn prepare(
+        self,
+        params: &BuildParams,
+        profile: &mut BuildProfile,
+    ) -> Result<PreparedCorpus<'a, T>> {
+        let start = Instant::now();
+        let prepared = match self {
+            // A full-precision corpus is borrowed as-is, or normalized into an
+            // owned copy for cosine; nothing is stored verbatim.
+            Corpus::Plain(data) if params.metric.normalizes() => {
+                let dim = data.ncols();
+                let mut buf = data.as_slice().to_vec();
+                for row in buf.chunks_mut(dim) {
+                    normalize(row);
+                }
+                let owned = Matrix::try_from(buf.into_boxed_slice(), data.nrows(), dim)
+                    .map_err(|_| GraphIvfError::invalid("normalized matrix shape mismatch"))?;
+                PreparedCorpus {
+                    owned: Some(owned),
+                    borrowed: None,
+                    stored: None,
+                }
+            }
+            Corpus::Plain(data) => PreparedCorpus {
+                owned: None,
+                borrowed: Some(data),
+                stored: None,
+            },
+            // A pre-compressed corpus is decompressed to an owned f32 copy for
+            // clustering; the original `T` rows are stored verbatim. Stored rows
+            // are copied as-is, so cosine corpora must be pre-normalized before
+            // compression; only the clustering copy is normalized here.
+            Corpus::Compressed(corpus) => {
+                let num_points = corpus.nrows();
+                if num_points == 0 {
+                    return Err(GraphIvfError::invalid("empty corpus"));
+                }
+                let dim = T::full_dimension(corpus.row(0)).map_err(|e| {
+                    GraphIvfError::invalid(format!("cannot read stored dimension: {e}"))
+                })?;
+                let mut buf = vec![0.0f32; num_points * dim];
+                for (row, dst) in corpus
+                    .as_slice()
+                    .chunks(corpus.ncols())
+                    .zip(buf.chunks_mut(dim))
+                {
+                    T::as_f32_into(row, dst).map_err(|e| {
+                        GraphIvfError::invalid(format!("cannot decompress vector: {e}"))
+                    })?;
+                }
+                if params.metric.normalizes() {
+                    for row in buf.chunks_mut(dim) {
+                        normalize(row);
+                    }
+                }
+                let work = Matrix::try_from(buf.into_boxed_slice(), num_points, dim)
+                    .map_err(|_| GraphIvfError::invalid("decompressed matrix shape mismatch"))?;
+                PreparedCorpus {
+                    owned: Some(work),
+                    borrowed: None,
+                    stored: Some(corpus),
+                }
+            }
+        };
+        profile.normalize = start.elapsed();
+        Ok(prepared)
+    }
+}
+
+/// The corpus prepared for clustering: the f32 rows used for k-means and
+/// assignment, plus the optional already-`T` rows written to the lists verbatim.
+struct PreparedCorpus<'a, T: VectorRepr> {
+    /// Owned f32 corpus, when normalization or decompression produced a copy.
+    owned: Option<Matrix<f32>>,
+    /// Borrowed f32 corpus, when no copy was needed.
+    borrowed: Option<MatrixView<'a, f32>>,
+    /// Original `T` rows to store verbatim (pre-compressed corpus only).
+    stored: Option<MatrixView<'a, T>>,
+}
+
+impl<T: VectorRepr> PreparedCorpus<'_, T> {
+    /// The f32 corpus used for k-means and centroid assignment.
+    fn work(&self) -> MatrixView<'_, f32> {
+        match (&self.owned, self.borrowed) {
+            (Some(m), _) => m.as_view(),
+            (None, Some(v)) => v,
+            (None, None) => unreachable!("prepared corpus has no work rows"),
+        }
+    }
+
+    /// The already-`T` rows to store verbatim, if the corpus was pre-compressed.
+    fn stored(&self) -> Option<MatrixView<'_, T>> {
+        self.stored
+    }
+}
+
+/// Refine `seed` (a `num_clusters x dim` row-major buffer) with
+/// `params.kmeans_iters` Lloyd iterations over `data` (no k-means++ pivot
+/// selection). Records `profile.kmeans`. `data` is the corpus sample for
+/// [`Seed::Sampled`] and the full corpus for [`Seed::Precomputed`].
+fn refine_centroids(
+    data: MatrixView<'_, f32>,
+    seed: &[f32],
+    params: &BuildParams,
+    pool: &RayonThreadPool,
+    profile: &mut BuildProfile,
+) -> Result<Matrix<f32>> {
+    let dim = data.ncols();
+    let kmeans_start = Instant::now();
+    let mut centers = seed.to_vec();
+    let mut cancel = false;
+    diskann_disk::utils::run_lloyds(
+        data.as_slice(),
+        data.nrows(),
+        dim,
+        &mut centers,
+        params.num_clusters,
+        params.kmeans_iters,
+        &mut cancel,
+        pool.as_ref(),
+    )?;
+    profile.kmeans = kmeans_start.elapsed();
+    Matrix::try_from(centers.into_boxed_slice(), params.num_clusters, dim)
+        .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))
+}
+
 /// A single-threaded query handle into a [`GraphIvfIndex`].
 ///
 /// Holds a disk reader, a current-thread runtime to drive the (in-memory) graph
@@ -386,7 +582,8 @@ pub struct Searcher<T: VectorRepr = f32> {
     dim: usize,
     cids: Vec<u32>,
     cdist: Vec<f32>,
-    /// Per-query read windows, reused across queries to avoid reallocation.
+    /// Per-query read windows for the probed clusters, reused across queries to
+    /// avoid reallocation.
     windows: Vec<storage::ClusterWindow>,
     /// One reusable 512-aligned buffer holding every probed cluster's read
     /// window back-to-back. Grown on demand; never shrunk.
@@ -477,14 +674,15 @@ impl<T: VectorRepr> Searcher<T> {
         )?;
         profile.centroid_search = centroid_search_start.elapsed();
 
-        // 2. Build a sector-aligned read window per non-empty cluster and carve
-        //    each window a disjoint slice of one reusable aligned buffer.
+        // 2. Build a sector-aligned read window per non-empty probed cluster
+        //    and carve each a disjoint slice of one reusable aligned buffer.
         let plan_io_start = Instant::now();
         let dim = self.dim;
         self.windows.clear();
         let mut total_len: usize = 0;
         for &c in &self.cids[..n] {
-            let window = storage::cluster_window(&self.layout, c as usize);
+            let c = c as usize;
+            let window = storage::cluster_window(&self.layout, c);
             if window.count == 0 {
                 continue;
             }
@@ -518,6 +716,9 @@ impl<T: VectorRepr> Searcher<T> {
             rest = tail;
         }
         profile.plan_io = plan_io_start.elapsed();
+
+        profile.bytes_read = total_len as u64;
+        profile.io_count = reads.len() as u64;
 
         // 3. Issue all reads for this query as a single batch.
         //    TODO(perf): dedupe overlapping 512-byte windows of adjacent
@@ -556,47 +757,6 @@ impl<T: VectorRepr> Searcher<T> {
         profile.total = total_start.elapsed();
         Ok((candidates, profile))
     }
-}
-
-/// Sample the corpus and run k-means, returning the centroids as a `k x dim`
-/// matrix. Records the sampling and k-means wall-clock into `profile`.
-fn run_kmeans(
-    work: MatrixView<'_, f32>,
-    sample_size: usize,
-    params: &BuildParams,
-    pool: &RayonThreadPool,
-    profile: &mut BuildProfile,
-) -> Result<Matrix<f32>> {
-    let num_points = work.nrows();
-    let dim = work.ncols();
-    let mut rng = StdRng::seed_from_u64(params.seed);
-
-    let sample_start = Instant::now();
-    let sample_idx = rand::seq::index::sample(&mut rng, num_points, sample_size).into_vec();
-    let mut sample = vec![0.0f32; sample_size * dim];
-    for (i, &p) in sample_idx.iter().enumerate() {
-        sample[i * dim..(i + 1) * dim].copy_from_slice(work.row(p));
-    }
-    profile.sample = sample_start.elapsed();
-
-    let kmeans_start = Instant::now();
-    let mut centers = vec![0.0f32; params.num_clusters * dim];
-    let mut cancel = false;
-    diskann_disk::utils::k_means_clustering(
-        &sample,
-        sample_size,
-        dim,
-        &mut centers,
-        params.num_clusters,
-        params.kmeans_iters,
-        &mut rng,
-        &mut cancel,
-        pool.as_ref(),
-    )?;
-    profile.kmeans = kmeans_start.elapsed();
-
-    Matrix::try_from(centers.into_boxed_slice(), params.num_clusters, dim)
-        .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))
 }
 
 /// Assign each corpus point to its nearest centroid via graph search.

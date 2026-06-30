@@ -29,6 +29,10 @@
 //! full-precision `f32`. Cosine similarity is implemented by L2-normalizing
 //! vectors at build and query time (spherical reduction to L2).
 
+// Retained for reference / future re-integration; not currently wired into the
+// index or search path.
+#[allow(dead_code)]
+mod cache;
 mod centroids;
 mod error;
 mod index;
@@ -39,6 +43,6 @@ mod storage;
 pub use diskann::utils::VectorRepr;
 pub use diskann_vector::Half;
 pub use error::{GraphIvfError, Result};
-pub use index::{GraphIvfIndex, Searcher};
+pub use index::{GraphIvfIndex, Searcher, Seed};
 pub use params::{BuildParams, GraphParams, Metric, SearchParams};
 pub use profile::{BuildProfile, SearchProfile};
