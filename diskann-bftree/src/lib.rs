@@ -14,6 +14,8 @@ pub mod provider;
 pub mod quant;
 pub mod vectors;
 
+mod locks;
+
 // Accessors
 pub use provider::{
     AsVectorDtype, BfTreePaths, BfTreeProvider, BfTreeProviderParameters, CreateQuantProvider,
