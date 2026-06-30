@@ -60,7 +60,7 @@ struct BuildPQArgs {
     pub dist_fn: Metric,
 
     /// Path to the data file. The file should be in the format specified by the `data_type` argument.
-    #[arg(long = "data-path", short, required = true)]
+    #[arg(long = "data-file", short, required = true)]
     pub data_path: String,
 
     /// Path to the index file. The index will be saved to this prefixed name.

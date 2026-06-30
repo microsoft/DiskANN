@@ -20,7 +20,7 @@ fn main() -> CMDResult<()> {
 
 #[derive(Debug, Parser)]
 struct GenAssociatedDataFromRangeArgs {
-    #[arg(long = "associated-data-path")]
+    #[arg(long = "associated-data-file")]
     pub associated_data_path: String,
 
     #[arg(long = "start")]
