@@ -88,11 +88,15 @@ fn build_query_bitmaps<StorageProvider: StorageReadProvider + StorageWriteProvid
             let filters =
                 search_index_utils::load_vector_filters(storage_provider, filter_bitmap_file)?;
 
-            assert_eq!(
-                filters.len(),
-                query_num,
-                "Mismatch in query and filter bitmap sizes"
-            );
+            if filters.len() != query_num {
+                return Err(CMDToolError {
+                    details: format!(
+                        "Mismatch in query and filter bitmap sizes: {} filters for {} queries",
+                        filters.len(),
+                        query_num
+                    ),
+                });
+            }
 
             Some(filters)
         }
