@@ -203,7 +203,7 @@ impl std::fmt::Display for Banner<'_> {
 /// use diskann_benchmark_runner::utils::fmt::Indent;
 ///
 /// let indented = Indent::new("hello\nworld", 4).to_string();
-/// assert_eq!(indented, "    hello\n    world\n");
+/// assert_eq!(indented, "    hello\n    world");
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Indent<'a> {
@@ -221,9 +221,21 @@ impl<'a> Indent<'a> {
 impl std::fmt::Display for Indent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let spaces = self.spaces;
+
+        // We don't know ahead of time how many lines there are. To avoid appending a
+        // newline at the end of the last print, we instead add a newline to line `N-1` when
+        // writing out line `N`.
+        let mut first = true;
         self.string
             .lines()
-            .try_for_each(|ln| writeln!(f, "{: >spaces$}{}", "", ln))
+            .try_for_each(|ln| {
+                if first {
+                    first = false;
+                    write!(f, "{: >spaces$}{}", "", ln)
+                } else {
+                    write!(f, "\n{: >spaces$}{}", "", ln)
+                }
+            })
     }
 }
 
@@ -511,19 +523,19 @@ string,        ,   string
     #[test]
     fn test_indent_single_line() {
         let s = Indent::new("hello", 4).to_string();
-        assert_eq!(s, "    hello\n");
+        assert_eq!(s, "    hello");
     }
 
     #[test]
     fn test_indent_multi_line() {
         let s = Indent::new("hello\nworld\nfoo", 2).to_string();
-        assert_eq!(s, "  hello\n  world\n  foo\n");
+        assert_eq!(s, "  hello\n  world\n  foo");
     }
 
     #[test]
     fn test_indent_zero_spaces() {
         let s = Indent::new("hello\nworld", 0).to_string();
-        assert_eq!(s, "hello\nworld\n");
+        assert_eq!(s, "hello\nworld");
     }
 
     #[test]
