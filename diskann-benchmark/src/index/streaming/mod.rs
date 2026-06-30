@@ -87,25 +87,27 @@ where
 /// For providers where external IDs match internal slots (e.g., bf-tree), the
 /// [`Managed`] layer is unnecessary. This function creates the stack without it.
 ///
-/// The closure receives `(&data, capacity)` so it can use `data.ncols()` for provider params.
+/// Because external runbook tag IDs are used directly as provider slot IDs (no
+/// remapping into a compact slot space), the provider must be sized to span the
+/// full dataset ID range rather than the runbook's max concurrent point count.
+/// The closure receives `&data` so it can size the provider from `data.nrows()`.
 #[cfg(feature = "bftree")]
 pub(crate) fn build_direct_streamer<T, S, F>(
     data_path: &diskann_benchmark_runner::files::InputFile,
     search: &StreamingSearchParams,
-    capacity: usize,
     make_stream: F,
 ) -> anyhow::Result<bigann::WithData<T, u32, S>>
 where
     T: bytemuck::Pod + VectorRepr + 'static,
     S: streaming::Stream<bigann::DataArgs<T, u32>> + 'static,
-    F: FnOnce(&Matrix<T>, usize) -> anyhow::Result<S>,
+    F: FnOnce(&Matrix<T>) -> anyhow::Result<S>,
 {
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(data_path))?;
     let queries = Arc::new(datafiles::load_dataset::<T>(datafiles::BinFile(
         &search.queries,
     ))?);
 
-    let stream = make_stream(&data, capacity)?;
+    let stream = make_stream(&data)?;
 
     let max_k = search.max_k();
     let layered = bigann::WithData::new(stream, data, queries, move |path| {
