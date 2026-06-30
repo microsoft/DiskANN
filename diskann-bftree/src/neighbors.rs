@@ -35,8 +35,11 @@ impl<I: VectorId + IntoUsize> HasId for NeighborProvider<I> {
 impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly.
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
-        let key_size = std::mem::size_of::<u32>();
-        let value_size = (max_degree as usize + 1) * std::mem::size_of::<u32>();
+        // Records are keyed by an `I`-width id and store a `dim`-cell `I`-width value
+        // (`dim == max_degree + 1`), so size the validation by the actual id width
+        // rather than assuming `u32`.
+        let key_size = std::mem::size_of::<I>();
+        let value_size = (max_degree as usize + 1) * std::mem::size_of::<I>();
         crate::validate_record_size("neighbor_provider", &config, key_size, value_size)?;
 
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
@@ -416,6 +419,42 @@ mod tests {
             assert_eq!(cell_to_len::<u32>(&len_to_cell::<u32>(len)), len);
             assert_eq!(cell_to_len::<u64>(&len_to_cell::<u64>(len)), len);
         }
+    }
+
+    /// Exercise the `u64` id path beyond the `u32` range: vertex ids and neighbor
+    /// values above `u32::MAX` must round-trip, and ids that share their low 32 bits
+    /// must not collide (proving the bf-tree key uses the full 8-byte width).
+    #[tokio::test]
+    async fn test_u64_high_bit_ids() {
+        let locks = Arc::new(StripedLocks::new());
+        let neighbor_provider =
+            NeighborProvider::<u64>::new_with_config(6, Config::default()).unwrap();
+        let mut scratch = neighbor_provider.scratch(&locks);
+
+        let high: u64 = (u32::MAX as u64) + 1;
+        let big_id: u64 = high + 7;
+        let big_neighbors: Vec<u64> = vec![high, high + 1, u64::MAX, 3];
+        scratch.write_neighbors(big_id, &big_neighbors).unwrap();
+
+        let mut result = AdjacencyList::with_capacity(10);
+        neighbor_provider
+            .get_neighbors(big_id, &mut result)
+            .unwrap();
+        assert_eq!(&*big_neighbors, &*result);
+
+        // `low` and `low | (1 << 32)` share their low 32 bits; with an 8-byte key they
+        // are distinct entries. A truncating 4-byte key would alias them.
+        let low: u64 = 1;
+        let aliased: u64 = low | (1u64 << 32);
+        scratch.write_neighbors(low, &[10, 11]).unwrap();
+        scratch.write_neighbors(aliased, &[20, 21]).unwrap();
+
+        neighbor_provider.get_neighbors(low, &mut result).unwrap();
+        assert_eq!(&[10u64, 11], &*result);
+        neighbor_provider
+            .get_neighbors(aliased, &mut result)
+            .unwrap();
+        assert_eq!(&[20u64, 21], &*result);
     }
 
     /// Test corner cases of appending to neighbor list

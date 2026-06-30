@@ -301,6 +301,8 @@ where
             .quant_vector_provider_config
             .use_snapshot(params.use_snapshot);
 
+        crate::id::validate_id_capacity::<I>(params.max_points + params.num_start_points.get())?;
+
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
             full_vectors: VectorProvider::new_with_config(
@@ -1631,6 +1633,31 @@ pub struct SavedParams {
     /// Whether CPR snapshot support was enabled.
     #[serde(default)]
     pub use_snapshot: bool,
+    /// Width in bytes of the vertex id type the index was built with
+    /// (`size_of::<I>()`). Defaults to 4 (`u32`) for indexes saved before this
+    /// field existed, all of which used `u32` ids.
+    #[serde(default = "default_id_width")]
+    pub id_width: usize,
+}
+
+/// Default [`SavedParams::id_width`] for legacy indexes (all of which were `u32`).
+fn default_id_width() -> usize {
+    std::mem::size_of::<u32>()
+}
+
+/// Validate, on load, that the persisted id metadata is compatible with the id type
+/// `I` the caller is loading as: the width must match what the index was built with,
+/// and the capacity must fit in `I`.
+fn validate_loaded_id_params<I: BfTreeId>(saved_params: &SavedParams) -> ANNResult<()> {
+    let expected = std::mem::size_of::<I>();
+    if saved_params.id_width != expected {
+        return Err(ANNError::log_index_error(format!(
+            "index was built with {}-byte vertex ids but is being loaded with a {expected}-byte \
+             id type; load it with the matching id type",
+            saved_params.id_width,
+        )));
+    }
+    crate::id::validate_id_capacity::<I>(saved_params.max_points + saved_params.frozen_points.get())
 }
 
 /// The element type of the full-precision vectors stored in the index.
@@ -1789,6 +1816,7 @@ where
             graph_params: self.graph_params.clone(),
             is_memory: self.full_vectors.config().is_memory_backend(),
             use_snapshot: self.use_snapshot,
+            id_width: std::mem::size_of::<I>(),
         };
 
         debug_assert_eq!(
@@ -1841,6 +1869,8 @@ where
                 ANNError::log_index_error(format!("Failed to deserialize params: {}", e))
             })?
         };
+
+        validate_loaded_id_params::<I>(&saved_params)?;
 
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
@@ -1915,6 +1945,7 @@ where
             graph_params: self.graph_params.clone(),
             is_memory: self.full_vectors.config().is_memory_backend(),
             use_snapshot: self.use_snapshot,
+            id_width: std::mem::size_of::<I>(),
         };
 
         debug_assert_eq!(
@@ -1986,6 +2017,8 @@ where
                 ANNError::log_index_error(format!("Failed to deserialize params: {}", e))
             })?
         };
+
+        validate_loaded_id_params::<I>(&saved_params)?;
 
         let _quant_params = saved_params.quant_params.ok_or_else(|| {
             ANNError::log_index_error("Missing quant_params in saved params for quantized provider")
@@ -3192,5 +3225,130 @@ mod tests {
         if let Err(e) = NeighborProvider::<u32>::new_with_config(64, Config::default()) {
             panic!("NeighborProvider should succeed: {e}");
         }
+    }
+
+    /// A `u64`-id provider must round-trip through save/load with the wider on-disk
+    /// neighbor format, and loading the same bytes with a mismatched id width must fail.
+    #[tokio::test]
+    async fn test_bf_tree_provider_save_load_u64_ids() {
+        let num_points = 16usize;
+        let dim = 4usize;
+        let max_degree = 16u32;
+        let num_start_points = NonZeroUsize::new(2).unwrap();
+        let ctx = &DefaultContext;
+
+        let temp_dir = tempdir().unwrap();
+        let prefix = temp_dir
+            .path()
+            .join("u64_provider")
+            .to_string_lossy()
+            .to_string();
+
+        let mut vector_config = Config::new(BfTreePaths::vectors_bftree(&prefix), 1024 * 1024);
+        vector_config.storage_backend(bf_tree::StorageBackend::Std);
+        vector_config.use_snapshot(true);
+
+        let mut neighbor_config = Config::new(BfTreePaths::neighbors_bftree(&prefix), 1024 * 1024);
+        neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
+        neighbor_config.use_snapshot(true);
+
+        let params = BfTreeProviderParameters {
+            max_points: num_points,
+            num_start_points,
+            dim,
+            metric: Metric::L2,
+            max_degree,
+            vector_provider_config: vector_config,
+            quant_vector_provider_config: Config::default(),
+            neighbor_list_provider_config: neighbor_config,
+            graph_params: None,
+            use_snapshot: true,
+        };
+
+        let start_points = Matrix::new(Init(|| 0.0f32), num_start_points.into(), dim);
+        let provider =
+            BfTreeProvider::<f32, NoStore, u64>::new(params, start_points.as_view(), NoStore)
+                .unwrap();
+
+        for i in 0..num_points {
+            let vector: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32 * 0.1).collect();
+            provider
+                .set_element(ctx, &(i as u64), &vector)
+                .await
+                .unwrap();
+        }
+
+        let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
+        for i in 0..num_points as u64 {
+            let neighbors: Vec<u64> = (0..std::cmp::min(i, max_degree as u64))
+                .map(|j| (i + j) % num_points as u64)
+                .collect();
+            scratch.write_neighbors(i, &neighbors).unwrap();
+        }
+        drop(scratch);
+
+        let storage = FileStorageProvider;
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_u64_provider")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
+
+        let loaded = BfTreeProvider::<f32, NoStore, u64>::load_with(&storage, &save_prefix)
+            .await
+            .unwrap();
+
+        for i in 0..num_points as u64 {
+            let mut original_list = AdjacencyList::new();
+            let mut loaded_list = AdjacencyList::new();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut original_list)
+                .unwrap();
+            loaded
+                .neighbor_provider
+                .get_neighbors(i, &mut loaded_list)
+                .unwrap();
+            assert_eq!(&*original_list, &*loaded_list, "neighbor mismatch at {i}");
+        }
+
+        // Loading a u64-saved index as u32 must be rejected, not silently misinterpreted.
+        let mismatch = BfTreeProvider::<f32, NoStore, u32>::load_with(&storage, &save_prefix).await;
+        assert!(
+            mismatch.is_err(),
+            "loading a u64 index with a u32 id type must fail"
+        );
+    }
+
+    /// Constructing a provider whose vertex count cannot be represented by the id type
+    /// must fail eagerly rather than silently truncate ids.
+    #[tokio::test]
+    async fn test_new_rejects_capacity_exceeding_id_type() {
+        let dim = 4usize;
+        let num_start_points = NonZeroUsize::new(1).unwrap();
+        let start_points = Matrix::new(Init(|| 0.0f32), num_start_points.into(), dim);
+
+        let params = BfTreeProviderParameters {
+            // Largest index would be u32::MAX + 1, which a u32 id cannot hold.
+            max_points: u32::MAX as usize + 2,
+            num_start_points,
+            dim,
+            metric: Metric::L2,
+            max_degree: 8,
+            vector_provider_config: Config::default(),
+            quant_vector_provider_config: Config::default(),
+            neighbor_list_provider_config: Config::default(),
+            graph_params: None,
+            use_snapshot: false,
+        };
+
+        let result =
+            BfTreeProvider::<f32, NoStore, u32>::new(params, start_points.as_view(), NoStore);
+        assert!(
+            result.is_err(),
+            "u32 provider must reject a capacity exceeding u32::MAX"
+        );
     }
 }
