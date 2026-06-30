@@ -17,11 +17,8 @@ use std::{
 use diskann::{
     graph::{
         SearchOutputBuffer,
-        config::{
-            self,
-            defaults::{FILTER_BETA, GRAPH_SLACK_FACTOR},
-        },
-        search,
+        config::{self, defaults::GRAPH_SLACK_FACTOR},
+        search::{self, AdaptiveL},
     },
     utils::VectorRepr,
 };
@@ -31,6 +28,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
+    garnet::FilterCallback,
     provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
@@ -49,11 +47,12 @@ mod ffi_recall_tests;
 mod ffi_tests;
 mod fsm;
 mod garnet;
-mod labels;
 mod provider;
 mod quantization;
 #[cfg(test)]
 mod test_utils;
+
+const ADAPTIVE_L_SAMPLES: usize = 1000;
 
 #[derive(Debug, PartialEq)]
 enum IndexState {
@@ -218,6 +217,7 @@ pub unsafe extern "C" fn create_index(
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
+    filter_callback: FilterCallback,
 ) -> *const c_void {
     let metric_type = match Metric::try_from(metric_type) {
         Ok(m) => m,
@@ -240,7 +240,13 @@ pub unsafe extern "C" fn create_index(
     };
 
     let context = Context::new(ctx);
-    let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback);
+    let callbacks = Callbacks::new(
+        read_callback,
+        write_callback,
+        delete_callback,
+        rmw_callback,
+        filter_callback,
+    );
 
     match quant_type {
         VectorQuantType::Invalid => ptr::null(),
@@ -336,6 +342,7 @@ fn interpret_vector<'a>(
 ) -> Option<PolyCow<'a>> {
     let vector_len_bytes = match quant_type {
         VectorQuantType::Invalid => return None,
+
         VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => vector_len * 4,
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
@@ -347,6 +354,7 @@ fn interpret_vector<'a>(
 
     let v = match quant_type {
         VectorQuantType::Invalid => return None,
+
         VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
             if v.as_ptr().align_offset(mem::align_of::<f32>()) == 0 {
                 // pointer is correctly aligned to interpret as f32
@@ -585,7 +593,7 @@ pub unsafe extern "C" fn search_vector(
     search_exploration_factor: u32,
     bitmap_data: *const u8,
     bitmap_len: usize,
-    _max_filtering_effort: usize,
+    max_filtering_effort: usize,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
@@ -609,7 +617,7 @@ pub unsafe extern "C" fn search_vector(
         output_distances_len,
     );
 
-    let params = match search::Knn::new(
+    let knn_params = match search::Knn::new(
         output_distances_len,
         search_exploration_factor as usize,
         None,
@@ -618,19 +626,23 @@ pub unsafe extern "C" fn search_vector(
         Err(_) => return -1,
     };
 
-    let has_filter = !bitmap_data.is_null() && bitmap_len > 0;
+    let res = if bitmap_data.is_null() || bitmap_len == 0 {
+        // normal KNN search
 
-    let labels = if has_filter {
-        Some(unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) })
+        index.inner.search_vector(&ctx, &v, knn_params, &mut output)
     } else {
-        None
+        // inline filtered search
+
+        let adaptive_l = match AdaptiveL::new(ADAPTIVE_L_SAMPLES, max_filtering_effort as f64) {
+            Ok(al) => al,
+            Err(_) => return -1,
+        };
+        let params = search::InlineFilterSearch::new(knn_params, Some(adaptive_l));
+
+        index
+            .inner
+            .filtered_search_vector(&ctx, &v, params, &mut output)
     };
-    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
-
-    let res = index
-        .inner
-        .search_vector(&ctx, &v, &params, filter, &mut output);
-
     if let Ok(stats) = res {
         if stats.result_count > i32::MAX as u32 {
             -1
@@ -655,7 +667,7 @@ pub unsafe extern "C" fn search_element(
     search_exploration_factor: u32,
     bitmap_data: *const u8,
     bitmap_len: usize,
-    _max_filtering_effort: usize,
+    max_filtering_effort: usize,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
@@ -674,26 +686,35 @@ pub unsafe extern "C" fn search_element(
         output_distances_len,
     );
 
-    let params = match search::Knn::new(
+    let knn_params = match search::Knn::new(
         output_distances_len,
         search_exploration_factor as usize,
         None,
     ) {
-        Ok(params) => params,
+        Ok(knn) => knn,
         Err(_) => return -1,
     };
 
-    let has_filter = !bitmap_data.is_null() && bitmap_len > 0;
-    let labels = if has_filter {
-        Some(unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) })
-    } else {
-        None
-    };
-    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
+    let res = if bitmap_data.is_null() || bitmap_len == 0 {
+        // normal KNN search
 
-    let res = index
-        .inner
-        .search_element(&ctx, &id, &params, filter, &mut output);
+        index
+            .inner
+            .search_element(&ctx, &id, knn_params, &mut output)
+    } else {
+        // inline filtered search
+
+        let adaptive_l = match AdaptiveL::new(ADAPTIVE_L_SAMPLES, max_filtering_effort as f64) {
+            Ok(al) => al,
+            Err(_) => return -1,
+        };
+        let params = search::InlineFilterSearch::new(knn_params, Some(adaptive_l));
+
+        index
+            .inner
+            .filtered_search_element(&ctx, &id, params, &mut output)
+    };
+
     if let Ok(stats) = res {
         if stats.result_count > i32::MAX as u32 {
             -1
@@ -879,6 +900,7 @@ mod tests {
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
             )
         };
         assert!(!index_ptr.is_null());
@@ -908,6 +930,7 @@ mod tests {
                 store.callbacks().write_callback(),
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
             )
         };
         assert!(index_ptr.is_null());

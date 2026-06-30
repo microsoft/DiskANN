@@ -16,7 +16,10 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::model::graph::provider::async_::common::FullPrecision;
+use diskann_providers::{
+    model::graph::provider::async_::common::FullPrecision,
+    storage::{FileStorageProvider, SaveWith},
+};
 use diskann_utils::{
     sampling::WithApproximateNorm,
     views::{Matrix, MatrixView},
@@ -199,18 +202,39 @@ where
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}", input)?;
 
-        super::streaming_utils::run_streaming::<T, _>(
+        let mut index_for_save: Option<BfTreeFPIndex<T>> = None;
+
+        let results = super::streaming_utils::run_streaming::<T, _>(
             input.runbook_params(),
-            |max_points| bftree_streaming::<T>(input, max_points),
+            |max_points| {
+                let (streamer, index) = bftree_streaming::<T>(input, max_points)?;
+                index_for_save = Some(index);
+                Ok(streamer)
+            },
             output,
-        )
+        )?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            let index = index_for_save.expect("index should have been set by make_streamer");
+            crate::utils::tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
+
+        Ok(results)
     }
 }
 
 fn bftree_streaming<T>(
     input: &BfTreeDynamicRun,
     max_points: usize,
-) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
+) -> anyhow::Result<(
+    bigann::WithData<T, u32, Managed<T, StreamStats>>,
+    BfTreeFPIndex<T>,
+)>
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
 {
@@ -225,13 +249,14 @@ where
     ))?);
 
     let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols());
+    let params = input.bftree_parameters(max_points, data.ncols())?;
     let start_points = input
         .build()
         .start_point_strategy()
         .compute(data.as_view())?;
     let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
     let index = Arc::new(DiskANNIndex::new(config, provider, None));
+    let index_handle = index.clone();
 
     let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
     let managed_stream = BfTreeStream {
@@ -258,5 +283,5 @@ where
         )?))
     });
 
-    Ok(layered)
+    Ok((layered, index_handle))
 }
