@@ -130,6 +130,9 @@ macro_rules! float {
             match self {
                 Self::U64(v) => try_cast!(v:u64 => $T),
                 Self::I64(v) => try_cast!(v:i64 => $T),
+                // NaN is representable in every float target but never equals itself, so the
+                // `try_cast!` round-trip guard would reject it; pass it through directly.
+                Self::F64(v) if v.is_nan() => Some(v as $T),
                 Self::F64(v) => try_cast!(v:f64 => $T),
             }
         }

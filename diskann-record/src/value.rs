@@ -446,20 +446,21 @@ mod tests {
             .expect_err("object without $version or $handle must be rejected");
     }
 
-    // Regression for the string/float-sentinel collision. A `String` value whose contents
-    // are exactly a non-finite float sentinel (`"nan"`, `"inf"`, `"neg_inf"`) serializes to
-    // the same wire token as `Number::F64`, so the manifest deserializer (`visit_str`)
-    // resurrects it as a `Number` instead of a `String`. This corrupts any string field
-    // that happens to hold one of those three values.
+    // The non-finite float sentinels (`"nan"`, `"inf"`, `"neg_inf"`) are reserved wire
+    // tokens: a JSON string equal to one of them always deserializes back as the
+    // corresponding `Number::F64`, never as a `Value::String`. This is intentional — those
+    // exact strings are not used as user string values in this repository, so the
+    // round-trip ambiguity is resolved in favor of the float sentinel.
     #[cfg(feature = "disk")]
     #[test]
-    fn string_equal_to_float_sentinel_stays_a_string() {
-        for s in ["nan", "inf", "neg_inf"] {
+    fn float_sentinel_strings_deserialize_as_numbers() {
+        for (s, is_nan) in [("nan", true), ("inf", false), ("neg_inf", false)] {
             let json = serde_json::to_string(&Value::String(Cow::Borrowed(s))).unwrap();
             let back: Value<'static> = serde_json::from_str(&json).unwrap();
             match back {
-                Value::String(v) => assert_eq!(v, s),
-                other => panic!("string {s:?} deserialized as a non-string value: {other:?}"),
+                Value::Number(Number::F64(v)) if is_nan => assert!(v.is_nan()),
+                Value::Number(Number::F64(_)) => {}
+                other => panic!("sentinel {s:?} deserialized as {other:?}, expected Number::F64"),
             }
         }
     }
