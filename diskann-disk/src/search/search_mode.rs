@@ -9,6 +9,7 @@
 //! as a sum type so that invalid combinations (flat scan with adaptive L,
 //! inline filter without a predicate) are unrepresentable at the API boundary.
 
+use diskann::graph::ext::labeled::QueryLabelProvider;
 use diskann::graph::search::AdaptiveL;
 use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 
@@ -42,7 +43,7 @@ pub enum SearchMode<'a> {
     },
 
     InlineFilter {
-        predicate: SearchPredicate<'a>,
+        predicate: Box<dyn QueryLabelProvider<u32> + 'a>,
         adaptive_l: Option<AdaptiveL>,
     },
 
@@ -87,12 +88,32 @@ impl<'a> SearchMode<'a> {
     /// Inline label-filtered graph search. `adaptive_l = Some(_)` enables
     /// mid-search beam widening; `None` runs inline tracking only (no
     /// resizing).
+    ///
+    /// The closure is wrapped in a generic adapter (`FnLabelProvider<F>`)
+    /// that implements `QueryLabelProvider<u32>`. 
     pub fn inline_filter<F>(predicate: F, adaptive_l: Option<AdaptiveL>) -> Self
     where
         F: Fn(&u32) -> bool + Send + Sync + 'a,
     {
+        struct FnLabelProvider<F>(F);
+
+        impl<F> std::fmt::Debug for FnLabelProvider<F> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("FnLabelProvider").finish_non_exhaustive()
+            }
+        }
+
+        impl<F> QueryLabelProvider<u32> for FnLabelProvider<F>
+        where
+            F: Fn(&u32) -> bool + Send + Sync,
+        {
+            fn is_match(&self, vec_id: u32) -> bool {
+                (self.0)(&vec_id)
+            }
+        }
+
         Self::InlineFilter {
-            predicate: Box::new(predicate),
+            predicate: Box::new(FnLabelProvider(predicate)),
             adaptive_l,
         }
     }
@@ -168,8 +189,8 @@ mod tests {
                 predicate,
                 adaptive_l: None,
             } => {
-                assert!(predicate(&3));
-                assert!(!predicate(&2));
+                assert!(predicate.is_match(3));
+                assert!(!predicate.is_match(2));
             }
             _ => panic!("expected InlineFilter with adaptive_l = None"),
         }

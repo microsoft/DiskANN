@@ -306,25 +306,6 @@ impl<'a> RerankAndFilter<'a> {
     }
 }
 
-/// Adapter exposing the disk-side `&dyn Fn(&u32) -> bool` predicate as a
-/// `QueryLabelProvider<u32>` for `InlineFilterSearch`.
-struct PredicateLabelProvider<'a> {
-    predicate: &'a (dyn Fn(&u32) -> bool + Send + Sync),
-}
-
-impl std::fmt::Debug for PredicateLabelProvider<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PredicateLabelProvider")
-            .finish_non_exhaustive()
-    }
-}
-
-impl QueryLabelProvider<u32> for PredicateLabelProvider<'_> {
-    fn is_match(&self, vec_id: u32) -> bool {
-        (self.predicate)(&vec_id)
-    }
-}
-
 impl<'a> DeterminantDiversityAndFilter<'a> {
     pub fn new(filter: Option<PostprocessFilter<'a>>, params: DeterminantDiversityParams) -> Self {
         Self { filter, params }
@@ -1024,10 +1005,11 @@ where
     /// is grown mid-query if the observed match specificity is low (see
     /// `diskann::graph::search::AdaptiveL`).
     ///
-    /// The disk-side `&dyn Fn(&u32) -> bool` predicate is adapted to the
-    /// `QueryLabelProvider<u32>` interface that `InlineFilterSearch` consumes
-    /// via a stack-allocated `PredicateLabelProvider` shim — no allocation,
-    /// no lifetime threading past this function body.
+    /// The label-provider trait object is built once in
+    /// `SearchMode::inline_filter` from a generic adapter, so each filter
+    /// evaluation costs exactly one indirect dispatch (through the
+    /// `&dyn QueryLabelProvider` boundary required by `labeled::Filtered`),
+    /// not two.
     ///
     /// Reuses the same `DiskAccessor` surface as the plain `Knn` graph path:
     /// `start_point_distances` and `expand_beam`, both of which call
@@ -1037,18 +1019,14 @@ where
         strategy: DiskSearchStrategy<'a, Data, ProviderFactory>,
         query: &[Data::VectorDataType],
         knn: Knn,
-        vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
+        label_provider: &(dyn QueryLabelProvider<u32> + 'a),
         adaptive_l: Option<AdaptiveL>,
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
     where
         OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
     {
-        let label_provider = PredicateLabelProvider {
-            predicate: vector_filter,
-        };
-
-        let filtered_strategy = labeled::Filtered::new(strategy, &label_provider);
+        let filtered_strategy = labeled::Filtered::new(strategy, label_provider);
         let search = InlineFilterSearch::new(knn, adaptive_l);
         self.index
             .search(search, &filtered_strategy, &DefaultContext, query, output)
