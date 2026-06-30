@@ -257,8 +257,6 @@ jobs:
     needs: basics
     name: sde-baseline-tests
     runs-on: ubuntu-latest
-    if:
-      false # Disabled until we can resolve SDE binary downloads.
     env:
       # Compile for the x86-64 baseline — no AVX, no AVX2.
       RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
@@ -320,8 +318,6 @@ jobs:
     needs: basics
     name: sde-avx512-tests
     runs-on: ubuntu-latest
-    if:
-      false # Disabled until we can resolve SDE binary downloads.
     env:
       # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
