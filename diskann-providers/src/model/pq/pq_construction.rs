@@ -717,6 +717,87 @@ mod pq_test {
     }
 
     #[test]
+    fn generate_pq_pivots_membuf_error_paths() {
+        let num_train = 5;
+        let dim = 8;
+        let num_centers = 2;
+        let num_pq_chunks = 2;
+        let train_data: Vec<f32> = vec![1.0; num_train * dim];
+        let args =
+            GeneratePivotArguments::new(num_train, dim, num_centers, num_pq_chunks, 5).unwrap();
+        let pool = create_thread_pool_for_test();
+
+        // Wrong full_pivot_data size (not num_centers * dim).
+        let mut bad_pivot = vec![0.0f32; num_centers * dim + 1];
+        let mut offsets = vec![0usize; num_pq_chunks + 1];
+        assert!(
+            generate_pq_pivots_from_membuf(
+                &args,
+                &train_data,
+                &mut offsets,
+                &mut bad_pivot,
+                &mut crate::utils::create_rnd_in_tests(),
+                &mut false,
+                pool.as_ref(),
+            )
+            .is_err()
+        );
+
+        // Wrong offsets buffer size (not num_pq_chunks + 1).
+        let mut full_pivot = vec![0.0f32; num_centers * dim];
+        let mut bad_offsets = vec![0usize; num_pq_chunks];
+        assert!(
+            generate_pq_pivots_from_membuf(
+                &args,
+                &train_data,
+                &mut bad_offsets,
+                &mut full_pivot,
+                &mut crate::utils::create_rnd_in_tests(),
+                &mut false,
+                pool.as_ref(),
+            )
+            .is_err()
+        );
+
+        // Cancellation requested by caller.
+        let mut full_pivot = vec![0.0f32; num_centers * dim];
+        let mut offsets = vec![0usize; num_pq_chunks + 1];
+        assert!(
+            generate_pq_pivots_from_membuf(
+                &args,
+                &train_data,
+                &mut offsets,
+                &mut full_pivot,
+                &mut crate::utils::create_rnd_in_tests(),
+                &mut true,
+                pool.as_ref(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn generate_pq_data_from_pivots_from_membuf_invalid_pivots_errors() {
+        let dim = 4;
+        let num_pivots = 2;
+        // pivot_data length does not equal num_pivots * dim, so MatrixView::try_from fails.
+        let pivot_data = vec![0.0f32; num_pivots * dim + 1];
+        let offsets = vec![0usize, 2, dim];
+        let vector_data = vec![1.0f32; dim];
+        let mut pq_out = vec![0u8; offsets.len() - 1];
+        assert!(
+            generate_pq_data_from_pivots_from_membuf(
+                &vector_data,
+                &pivot_data,
+                num_pivots,
+                &offsets,
+                &mut pq_out,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn read_pivot_metadata_existing_test() {
         // no real data except pivot data.
         const DATA_FILE: &str = "/test/test/fake.bin";

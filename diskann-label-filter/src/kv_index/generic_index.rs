@@ -601,4 +601,56 @@ mod tests {
         assert_eq!(LOCATION_SERIALIZE_KEY_LIST, "serialize_key_list");
         assert_eq!(DATA_TYPE_POSTING_LIST, "posting_list");
     }
+
+    fn mem_index() -> TestIndex {
+        let store = BfTreeStore::memory().expect("open store");
+        TestIndex::new(Arc::new(store))
+    }
+
+    #[test]
+    fn test_normalize_field_default_is_identity() {
+        let index = mem_index();
+        assert_eq!(index.normalize_field("color"), "color");
+        assert_eq!(index.normalize_field("a.b.c"), "a.b.c");
+    }
+
+    #[test]
+    fn test_with_field_normalizer_applies_custom_logic() {
+        let index = mem_index().with_field_normalizer(|f| format!("/{}", f.replace('.', "/")));
+        assert_eq!(index.normalize_field("a.b.c"), "/a/b/c");
+        assert_eq!(index.normalize_field("flat"), "/flat");
+    }
+
+    #[test]
+    fn test_get_or_empty_posting_list_missing_and_present() {
+        let index = mem_index();
+
+        // Missing key yields an empty posting list.
+        let empty = index.get_or_empty_posting_list(b"no-such-key").unwrap();
+        assert_eq!(empty.len(), 0);
+
+        // After storing a serialized posting list, it round-trips.
+        let mut pl = RoaringPostingList::empty();
+        pl.insert(7);
+        pl.insert(42);
+        index.store().set(b"some-key", &pl.serialize()).unwrap();
+
+        let loaded = index.get_or_empty_posting_list(b"some-key").unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains(7));
+        assert!(loaded.contains(42));
+    }
+
+    #[test]
+    fn test_get_or_empty_posting_list_corrupt_is_error() {
+        let index = mem_index();
+        index.store().set(b"bad", b"not-a-posting-list").unwrap();
+
+        let result = index.get_or_empty_posting_list(b"bad");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IndexError::Serialization { .. }
+        ));
+    }
 }

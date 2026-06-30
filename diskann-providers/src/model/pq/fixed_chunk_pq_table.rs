@@ -1106,6 +1106,86 @@ mod fixed_chunk_pq_table_test {
             pq_table.populate_chunk_distances(&query_vec, &mut aligned_pq_table_dist_scratch);
         assert!(result.is_err());
     }
+
+    /// Build a small two-chunk table with two pivots for the direct-distance tests.
+    ///
+    /// dim = 4, offsets = [0, 2, 4], pivot 0 = [1,2 | 3,4], pivot 1 = [5,6 | 7,8].
+    fn small_table() -> FixedChunkPQTable {
+        let dim = 4;
+        let offsets = vec![0, 2, 4];
+        let pq_table = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        FixedChunkPQTable::new(dim, pq_table.into(), offsets.into()).unwrap()
+    }
+
+    #[test]
+    fn test_direct_distance_methods() {
+        let table = small_table();
+        let query = [1.0f32, 1.0, 1.0, 1.0];
+        // chunk0 -> pivot0 dims[0..2] = [1,2], chunk1 -> pivot1 dims[2..4] = [7,8]
+        let base = [0u8, 1u8];
+        let reconstructed = [1.0f32, 2.0, 7.0, 8.0];
+        let max_relative = 1.0e-6;
+
+        assert_relative_eq!(
+            table.l2_distance(&query, &base),
+            SquaredL2::evaluate(&query[..], &reconstructed[..]),
+            max_relative = max_relative
+        );
+        // `InnerProduct::evaluate` returns the negated inner product, while
+        // `inner_product_raw` returns the raw (positive) inner product.
+        let ip_eval: f32 = InnerProduct::evaluate(&query[..], &reconstructed[..]);
+        assert_relative_eq!(
+            table.inner_product_raw(&query, &base),
+            -ip_eval,
+            max_relative = max_relative
+        );
+        // `inner_product` negates the raw inner product (matching the `evaluate` convention).
+        assert_relative_eq!(
+            table.inner_product(&query, &base),
+            ip_eval,
+            max_relative = max_relative
+        );
+        // `cosine_distance` follows the same `1 - similarity` convention as `Cosine::evaluate`.
+        let cos = table.cosine_distance(&query, &base);
+        assert_relative_eq!(
+            cos,
+            distance::Cosine::evaluate(&query[..], &reconstructed[..]),
+            max_relative = max_relative
+        );
+        // `cosine_normalized_distance` delegates to `cosine_distance`.
+        assert_relative_eq!(
+            table.cosine_normalized_distance(&query, &base),
+            cos,
+            max_relative = max_relative
+        );
+    }
+
+    #[test]
+    fn test_pq_dist_lookup_single() {
+        // 2 chunks, 3 centers each, row-major [chunk0 | chunk1].
+        let num_centers = 3;
+        let precomputed = [10.0f32, 11.0, 12.0, 20.0, 21.0, 22.0];
+        let coords = [1u8, 0u8];
+        // distances[0*3 + 1] + distances[1*3 + 0] = 11 + 20 = 31.
+        assert_eq!(
+            pq_dist_lookup_single(&coords, &precomputed, num_centers),
+            31.0
+        );
+    }
+
+    #[test]
+    fn test_compress_into_and_inflate_roundtrip() {
+        let table = small_table();
+        // A vector exactly equal to pivot 0 must select centroid index 0 for both chunks.
+        let full = [1.0f32, 2.0, 3.0, 4.0];
+        let mut codes = [255u8; 2];
+        table.compress_into(&full[..], &mut codes[..]).unwrap();
+        assert_eq!(codes, [0, 0]);
+
+        // Inflating those codes recovers pivot 0's values.
+        let inflated = table.inflate_vector(&codes);
+        assert_eq!(inflated, vec![1.0, 2.0, 3.0, 4.0]);
+    }
 }
 #[cfg(test)]
 mod pq_index_prune_query_test {

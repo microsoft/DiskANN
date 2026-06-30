@@ -812,4 +812,138 @@ mod tests {
             _ => panic!("Expected ParseFailure error, got: {:?}", result),
         }
     }
+
+    #[test]
+    fn test_ne_operator() {
+        let filter = json!({"a": {"$ne": 1}});
+        let ast = parse_query_filter(&filter).unwrap();
+        assert!(matches!(
+            ast,
+            ASTExpr::Compare { field, op: CompareOp::Ne(v) } if field == "a" && v == json!(1)
+        ));
+    }
+
+    #[test]
+    fn test_all_numeric_operators() {
+        for (key, build) in [
+            ("$lt", "lt"),
+            ("$lte", "lte"),
+            ("$gt", "gt"),
+            ("$gte", "gte"),
+        ] {
+            let filter = json!({ "score": { key: 5 } });
+            let ast = parse_query_filter(&filter)
+                .unwrap_or_else(|e| panic!("failed to parse {}: {:?}", key, e));
+            let matched = match (build, &ast) {
+                (
+                    "lt",
+                    ASTExpr::Compare {
+                        op: CompareOp::Lt(n),
+                        ..
+                    },
+                ) => *n == 5.0,
+                (
+                    "lte",
+                    ASTExpr::Compare {
+                        op: CompareOp::Lte(n),
+                        ..
+                    },
+                ) => *n == 5.0,
+                (
+                    "gt",
+                    ASTExpr::Compare {
+                        op: CompareOp::Gt(n),
+                        ..
+                    },
+                ) => *n == 5.0,
+                (
+                    "gte",
+                    ASTExpr::Compare {
+                        op: CompareOp::Gte(n),
+                        ..
+                    },
+                ) => *n == 5.0,
+                _ => false,
+            };
+            assert!(
+                matched,
+                "operator {} did not parse correctly: {:?}",
+                key, ast
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_value_type_for_each_numeric_operator() {
+        for key in ["$lt", "$lte", "$gt", "$gte"] {
+            let filter = json!({ "score": { key: "nan" } });
+            match parse_query_filter(&filter) {
+                Err(QueryFilterError::InvalidValueType(expected, _)) => {
+                    assert_eq!(expected, "numeric");
+                }
+                other => panic!("expected InvalidValueType for {}, got {:?}", key, other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_in_and_nin_unsupported() {
+        for key in ["$in", "$nin"] {
+            let filter = json!({ "tags": { key: [1, 2] } });
+            match parse_query_filter(&filter) {
+                Err(QueryFilterError::UnsupportedComparisonOperator(op)) => {
+                    assert_eq!(op, key);
+                }
+                other => panic!("expected unsupported operator for {}, got {:?}", key, other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_not_with_nested_error_propagates() {
+        // $not whose child has an invalid numeric value -> InvalidValueType bubbles up.
+        let filter = json!({"$not": {"a": {"$lt": "x"}}});
+        assert!(matches!(
+            parse_query_filter(&filter),
+            Err(QueryFilterError::InvalidValueType(_, _))
+        ));
+    }
+
+    #[test]
+    fn test_get_value_by_path_on_non_object() {
+        let scalar = json!(42);
+        assert_eq!(get_value_by_path(&scalar, "a"), None);
+        // Traversing through a scalar mid-path returns None.
+        let label = json!({"a": 1});
+        assert_eq!(get_value_by_path(&label, "a.b"), None);
+    }
+
+    #[test]
+    fn test_query_filter_error_display_all_variants() {
+        let cases: Vec<(QueryFilterError, &str)> = vec![
+            (
+                QueryFilterError::NestingTooDeep { max_depth: 2 },
+                "Maximum nesting depth of 2 exceeded",
+            ),
+            (
+                QueryFilterError::UnsupportedLogicalOperator("$any".to_string()),
+                "Unsupported logical operator: $any",
+            ),
+            (
+                QueryFilterError::UnsupportedComparisonOperator("$cmp".to_string()),
+                "Unsupported comparison operator: $cmp",
+            ),
+            (
+                QueryFilterError::InvalidValueType("numeric".to_string(), "\"x\"".to_string()),
+                "Invalid value type: expected numeric, got \"x\"",
+            ),
+            (
+                QueryFilterError::ParseFailure("boom".to_string()),
+                "Parse failure: boom",
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(format!("{}", err), expected);
+        }
+    }
 }

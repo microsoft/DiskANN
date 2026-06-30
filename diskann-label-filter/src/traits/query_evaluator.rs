@@ -72,3 +72,50 @@ pub trait QueryEvaluator {
         Ok(bs.len())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::posting_list_trait::{PostingList, RoaringPostingList};
+    use crate::CompareOp;
+
+    /// A minimal evaluator that always returns a fixed posting list, used to
+    /// exercise the default `is_match` and `count_matches` methods of the trait.
+    struct FixedEvaluator {
+        list: RoaringPostingList,
+    }
+
+    impl QueryEvaluator for FixedEvaluator {
+        type Error = <RoaringPostingList as PostingList>::Error;
+        type PostingList = RoaringPostingList;
+        type DocId = usize;
+
+        fn evaluate_query(
+            &self,
+            _query_expr: &ASTExpr,
+        ) -> std::result::Result<Self::PostingList, Self::Error> {
+            Ok(self.list.clone())
+        }
+    }
+
+    fn sample_expr() -> ASTExpr {
+        ASTExpr::Compare {
+            field: "field".to_owned(),
+            op: CompareOp::Eq(serde_json::json!("value")),
+        }
+    }
+
+    #[test]
+    fn default_is_match_and_count_matches() {
+        let mut list = RoaringPostingList::empty();
+        list.insert(1);
+        list.insert(2);
+        list.insert(3);
+        let evaluator = FixedEvaluator { list };
+
+        let expr = sample_expr();
+        assert!(evaluator.is_match(2, &expr).unwrap());
+        assert!(!evaluator.is_match(9, &expr).unwrap());
+        assert_eq!(evaluator.count_matches(&expr).unwrap(), 3);
+    }
+}

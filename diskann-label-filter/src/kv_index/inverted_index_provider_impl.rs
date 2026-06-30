@@ -169,3 +169,105 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attribute::AttributeValue;
+    use crate::stores::bftree_store::BfTreeStore;
+    use crate::traits::key_codec::DefaultKeyCodec;
+    use crate::traits::posting_list_trait::RoaringPostingList;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    type TestIndex = GenericIndex<BfTreeStore, RoaringPostingList, DefaultKeyCodec>;
+
+    fn index() -> TestIndex {
+        let store = BfTreeStore::memory().expect("memory store");
+        TestIndex::new(Arc::new(store))
+    }
+
+    fn attrs(pairs: &[(&str, &str)]) -> Attributes {
+        pairs
+            .iter()
+            .map(|(f, v)| (f.to_string(), AttributeValue::String(v.to_string())))
+            .collect::<HashMap<_, _>>()
+    }
+
+    /// Read the posting list for a string field/value pair.
+    fn posting(index: &TestIndex, field: &str, value: &str) -> RoaringPostingList {
+        let codec = DefaultKeyCodec::default();
+        let key = codec.encode_field_value_key(field, &AttributeValue::String(value.to_string()));
+        index.get_or_empty_posting_list(&key).unwrap()
+    }
+
+    #[test]
+    fn insert_adds_document_to_posting_list() {
+        let mut idx = index();
+        idx.insert(1, &attrs(&[("color", "red")])).unwrap();
+
+        let pl = posting(&idx, "color", "red");
+        assert!(pl.contains(1));
+    }
+
+    #[test]
+    fn delete_removes_document_and_empties_posting_list() {
+        let mut idx = index();
+        idx.insert(1, &attrs(&[("color", "red")])).unwrap();
+        idx.delete(1).unwrap();
+
+        // Posting list became empty and was removed from the store.
+        assert_eq!(posting(&idx, "color", "red").len(), 0);
+    }
+
+    #[test]
+    fn delete_missing_document_is_noop() {
+        let mut idx = index();
+        // No reverse mapping exists -> early return, still Ok.
+        idx.delete(99).unwrap();
+    }
+
+    #[test]
+    fn delete_keeps_posting_list_with_remaining_documents() {
+        let mut idx = index();
+        idx.insert(1, &attrs(&[("color", "red")])).unwrap();
+        idx.insert(2, &attrs(&[("color", "red")])).unwrap();
+
+        idx.delete(1).unwrap();
+
+        let pl = posting(&idx, "color", "red");
+        assert!(!pl.contains(1));
+        assert!(pl.contains(2));
+    }
+
+    #[test]
+    fn update_moves_document_between_values() {
+        let mut idx = index();
+        idx.insert(7, &attrs(&[("color", "red")])).unwrap();
+        idx.update(7, &attrs(&[("color", "blue")])).unwrap();
+
+        assert!(!posting(&idx, "color", "red").contains(7));
+        assert!(posting(&idx, "color", "blue").contains(7));
+    }
+
+    #[test]
+    fn batch_insert_delete_update_round_trip() {
+        let mut idx = index();
+
+        idx.batch_insert(&[
+            (10, attrs(&[("color", "red")])),
+            (11, attrs(&[("color", "red")])),
+        ])
+        .unwrap();
+        assert!(posting(&idx, "color", "red").contains(10));
+        assert!(posting(&idx, "color", "red").contains(11));
+
+        idx.batch_update(&[(10, attrs(&[("color", "green")]))])
+            .unwrap();
+        assert!(posting(&idx, "color", "green").contains(10));
+        assert!(!posting(&idx, "color", "red").contains(10));
+
+        idx.batch_delete(&[11]).unwrap();
+        assert!(!posting(&idx, "color", "red").contains(11));
+    }
+}

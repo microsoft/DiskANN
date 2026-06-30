@@ -287,4 +287,64 @@ mod tests {
         let expected_nested = "AND(\n OR(\n  age>30,\n  age<20\n ),\n NOT(name==\"Admin\")\n)";
         assert_eq!(nested_expr.to_string(), expected_nested);
     }
+
+    #[test]
+    fn test_compare_op_display_all_variants() {
+        assert_eq!(CompareOp::Eq(json!(1)).to_string(), "==");
+        assert_eq!(CompareOp::Ne(json!(1)).to_string(), "!=");
+        assert_eq!(CompareOp::Lt(1.0).to_string(), "<");
+        assert_eq!(CompareOp::Lte(1.0).to_string(), "<=");
+        assert_eq!(CompareOp::Gt(1.0).to_string(), ">");
+        assert_eq!(CompareOp::Gte(1.0).to_string(), ">=");
+    }
+
+    #[test]
+    fn test_single_and_or_collapse() {
+        // A single-element AND/OR prints just the inner expression.
+        let inner = ASTExpr::Compare {
+            field: "x".to_string(),
+            op: CompareOp::Eq(json!(1)),
+        };
+        assert_eq!(ASTExpr::And(vec![inner.clone()]).to_string(), "x==1");
+        assert_eq!(ASTExpr::Or(vec![inner]).to_string(), "x==1");
+    }
+
+    #[test]
+    fn test_empty_and_or_print() {
+        assert_eq!(ASTExpr::And(vec![]).to_string(), "true");
+        assert_eq!(ASTExpr::Or(vec![]).to_string(), "false");
+    }
+
+    #[test]
+    fn test_to_string_with_indent_custom() {
+        let expr = ASTExpr::And(vec![
+            ASTExpr::Compare {
+                field: "a".to_string(),
+                op: CompareOp::Eq(json!(1)),
+            },
+            ASTExpr::Compare {
+                field: "b".to_string(),
+                op: CompareOp::Eq(json!(2)),
+            },
+        ]);
+        // Two-space indent is applied per nesting level.
+        let printed = expr.to_string_with_indent("  ");
+        assert_eq!(printed, "AND(\n  a==1,\n  b==2\n)");
+    }
+
+    #[test]
+    fn test_value_to_string_array_and_string_escaping() {
+        // Array values and embedded quotes are rendered by the print visitor.
+        let expr = ASTExpr::Compare {
+            field: "tags".to_string(),
+            op: CompareOp::Eq(json!(["a", "b"])),
+        };
+        assert_eq!(expr.to_string(), "tags==[\"a\", \"b\"]");
+
+        let expr = ASTExpr::Compare {
+            field: "name".to_string(),
+            op: CompareOp::Eq(json!("a\"b")),
+        };
+        assert_eq!(expr.to_string(), "name==\"a\\\"b\"");
+    }
 }

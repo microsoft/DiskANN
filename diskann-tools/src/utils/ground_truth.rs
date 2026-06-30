@@ -643,3 +643,488 @@ where
 
     Ok(neighbor_queues)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diskann_disk::data_model::AdHoc;
+    use diskann_providers::storage::VirtualStorageProvider;
+    use std::io::Read;
+
+    type GraphDataF32 = AdHoc<f32>;
+
+    /// Write a `.bin` vector file: 8-byte header (npts, dim) then row-major f32 data.
+    fn write_vectors(
+        provider: &impl StorageWriteProvider,
+        path: &str,
+        dim: usize,
+        rows: &[Vec<f32>],
+    ) {
+        let mut w = provider.create_for_write(path).unwrap();
+        Metadata::new(rows.len(), dim)
+            .unwrap()
+            .write(&mut w)
+            .unwrap();
+        for row in rows {
+            w.write_all(cast_slice::<f32, u8>(row)).unwrap();
+        }
+        w.flush().unwrap();
+    }
+
+    /// Write a range-truthset (vector filters) file: header (npts, total_ids),
+    /// then `npts` i32 counts, then concatenated u32 ids.
+    fn write_filters(provider: &impl StorageWriteProvider, path: &str, rows: &[Vec<u32>]) {
+        let total: usize = rows.iter().map(|r| r.len()).sum();
+        let mut w = provider.create_for_write(path).unwrap();
+        Metadata::new(rows.len(), total)
+            .unwrap()
+            .write(&mut w)
+            .unwrap();
+        for row in rows {
+            w.write_all(&(row.len() as i32).to_le_bytes()).unwrap();
+        }
+        for row in rows {
+            w.write_all(cast_slice::<u32, u8>(row)).unwrap();
+        }
+        w.flush().unwrap();
+    }
+
+    /// Read back a standard ground-truth file: returns (npts, dim, ids, distances).
+    fn read_ground_truth(
+        provider: &impl StorageReadProvider,
+        path: &str,
+    ) -> (usize, usize, Vec<u32>, Vec<f32>) {
+        let mut f = provider.open_reader(path).unwrap();
+        let (npts, dim) = Metadata::read(&mut f).unwrap().into_dims();
+        let mut id_bytes = vec![0u8; npts * dim * size_of::<u32>()];
+        f.read_exact(&mut id_bytes).unwrap();
+        let mut dist_bytes = vec![0u8; npts * dim * size_of::<f32>()];
+        f.read_exact(&mut dist_bytes).unwrap();
+        (
+            npts,
+            dim,
+            cast_slice::<u8, u32>(&id_bytes).to_vec(),
+            cast_slice::<u8, f32>(&dist_bytes).to_vec(),
+        )
+    }
+
+    #[test]
+    fn test_compute_ground_truth_basic() {
+        let provider = VirtualStorageProvider::new_memory();
+        // 4 base points on a line; single query at origin.
+        write_vectors(
+            &provider,
+            "/base.bin",
+            2,
+            &[
+                vec![0.0, 0.0],
+                vec![1.0, 0.0],
+                vec![2.0, 0.0],
+                vec![10.0, 0.0],
+            ],
+        );
+        write_vectors(&provider, "/query.bin", 2, &[vec![0.0, 0.0]]);
+
+        compute_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            "/base.bin",
+            "/query.bin",
+            "/gt.bin",
+            None,
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (npts, dim, ids, dists) = read_ground_truth(&provider, "/gt.bin");
+        assert_eq!(npts, 1);
+        assert_eq!(dim, 2);
+        // Closest two points to origin are ids 0 and 1.
+        assert_eq!(ids, vec![0, 1]);
+        assert_eq!(dists[0], 0.0);
+        assert_eq!(dists[1], 1.0);
+    }
+
+    #[test]
+    fn test_compute_ground_truth_with_skip_base() {
+        let provider = VirtualStorageProvider::new_memory();
+        write_vectors(
+            &provider,
+            "/base.bin",
+            2,
+            &[vec![0.0, 0.0], vec![1.0, 0.0], vec![2.0, 0.0]],
+        );
+        write_vectors(&provider, "/query.bin", 2, &[vec![0.0, 0.0]]);
+
+        // Skip the first base point; nearest remaining is id 1.
+        compute_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            "/base.bin",
+            "/query.bin",
+            "/gt.bin",
+            None,
+            1,
+            None,
+            Some(1),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (_, _, ids, _) = read_ground_truth(&provider, "/gt.bin");
+        // After skipping the first base point, remaining points are re-indexed
+        // from 0, so the nearest (original [1,0]) is reported as id 0.
+        assert_eq!(ids, vec![0]);
+    }
+
+    #[test]
+    fn test_compute_ground_truth_with_insert_file() {
+        let provider = VirtualStorageProvider::new_memory();
+        write_vectors(&provider, "/base.bin", 2, &[vec![5.0, 0.0]]);
+        // The inserted vector is the true nearest neighbor; it gets id 1.
+        write_vectors(&provider, "/insert.bin", 2, &[vec![0.0, 0.0]]);
+        write_vectors(&provider, "/query.bin", 2, &[vec![0.0, 0.0]]);
+
+        compute_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            "/base.bin",
+            "/query.bin",
+            "/gt.bin",
+            None,
+            1,
+            Some("/insert.bin"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (_, _, ids, dists) = read_ground_truth(&provider, "/gt.bin");
+        assert_eq!(ids, vec![1]);
+        assert_eq!(dists[0], 0.0);
+    }
+
+    #[test]
+    fn test_compute_ground_truth_with_vector_filters() {
+        let provider = VirtualStorageProvider::new_memory();
+        write_vectors(
+            &provider,
+            "/base.bin",
+            2,
+            &[
+                vec![0.0, 0.0],
+                vec![1.0, 0.0],
+                vec![2.0, 0.0],
+                vec![3.0, 0.0],
+            ],
+        );
+        write_vectors(&provider, "/query.bin", 2, &[vec![0.0, 0.0]]);
+        // Restrict the single query to base ids {2, 3}.
+        write_filters(&provider, "/filters.bin", &[vec![2, 3]]);
+
+        compute_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            "/base.bin",
+            "/query.bin",
+            "/gt.bin",
+            Some("/filters.bin"),
+            2,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Filtered output uses the range-search format: header then per-query
+        // counts then ids. Nearest allowed point to origin is id 2.
+        let mut f = provider.open_reader("/gt.bin").unwrap();
+        let (num_queries, _) = Metadata::read(&mut f).unwrap().into_dims();
+        assert_eq!(num_queries, 1);
+        let mut count_bytes = vec![0u8; num_queries * size_of::<u32>()];
+        f.read_exact(&mut count_bytes).unwrap();
+        let counts = cast_slice::<u8, u32>(&count_bytes);
+        assert_eq!(counts, &[2]);
+        let mut id_bytes = vec![0u8; 2 * size_of::<u32>()];
+        f.read_exact(&mut id_bytes).unwrap();
+        let ids = cast_slice::<u8, u32>(&id_bytes);
+        assert_eq!(ids[0], 2);
+    }
+
+    #[test]
+    fn test_error_only_base_labels_provided() {
+        let provider = VirtualStorageProvider::new_memory();
+        write_vectors(&provider, "/base.bin", 2, &[vec![0.0, 0.0]]);
+        write_vectors(&provider, "/query.bin", 2, &[vec![0.0, 0.0]]);
+
+        let err = compute_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            "/base.bin",
+            "/query.bin",
+            "/gt.bin",
+            None,
+            1,
+            None,
+            None,
+            None,
+            Some("/base_labels.txt"),
+            None,
+        )
+        .unwrap_err();
+        assert!(err
+            .details
+            .contains("must be provided or both must be not provided"));
+    }
+
+    #[test]
+    fn test_error_base_labels_and_vector_filters() {
+        let provider = VirtualStorageProvider::new_memory();
+        write_vectors(&provider, "/base.bin", 2, &[vec![0.0, 0.0]]);
+        write_vectors(&provider, "/query.bin", 2, &[vec![0.0, 0.0]]);
+
+        let err = compute_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            "/base.bin",
+            "/query.bin",
+            "/gt.bin",
+            Some("/filters.bin"),
+            1,
+            None,
+            None,
+            None,
+            Some("/base_labels.txt"),
+            Some("/query_labels.txt"),
+        )
+        .unwrap_err();
+        assert!(err
+            .details
+            .contains("base_file_labels and vector_filters_file cannot be provided"));
+    }
+
+    /// Write a multivec `.bin` file: header (num_points, dim, total_results),
+    /// then `num_points` u32 per-point vector counts, then concatenated
+    /// row-major f32 data (each point is `count * dim` values).
+    fn write_multivec(
+        provider: &impl StorageWriteProvider,
+        path: &str,
+        dim: usize,
+        points: &[Vec<Vec<f32>>],
+    ) {
+        let total: usize = points.iter().map(|p| p.len()).sum();
+        let mut w = provider.create_for_write(path).unwrap();
+        w.write_all(&(points.len() as u32).to_le_bytes()).unwrap();
+        w.write_all(&(dim as u32).to_le_bytes()).unwrap();
+        w.write_all(&(total as u32).to_le_bytes()).unwrap();
+        for p in points {
+            w.write_all(&(p.len() as u32).to_le_bytes()).unwrap();
+        }
+        for p in points {
+            for row in p {
+                w.write_all(cast_slice::<f32, u8>(row)).unwrap();
+            }
+        }
+        w.flush().unwrap();
+    }
+
+    #[test]
+    fn test_compute_multivec_ground_truth_basic() {
+        let provider = VirtualStorageProvider::new_memory();
+        // Three base "points", each a single vector on a line.
+        write_multivec(
+            &provider,
+            "/mbase.bin",
+            2,
+            &[
+                vec![vec![0.0, 0.0]],
+                vec![vec![1.0, 0.0]],
+                vec![vec![5.0, 0.0]],
+            ],
+        );
+        // One query point with a single vector at the origin.
+        write_multivec(&provider, "/mquery.bin", 2, &[vec![vec![0.0, 0.0]]]);
+
+        compute_multivec_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            MultivecAggregationMethod::MinPairwise,
+            "/mbase.bin",
+            "/mquery.bin",
+            "/mgt.bin",
+            2,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (npts, dim, ids, _) = read_ground_truth(&provider, "/mgt.bin");
+        assert_eq!(npts, 1);
+        assert_eq!(dim, 2);
+        // Closest two base points to origin are ids 0 and 1.
+        assert_eq!(ids, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_compute_multivec_aggregation_methods() {
+        for method in [
+            MultivecAggregationMethod::AveragePairwise,
+            MultivecAggregationMethod::MinPairwise,
+            MultivecAggregationMethod::AvgofMins,
+        ] {
+            let provider = VirtualStorageProvider::new_memory();
+            // Base points are multi-vector sets.
+            write_multivec(
+                &provider,
+                "/mbase.bin",
+                2,
+                &[
+                    vec![vec![0.0, 0.0], vec![0.5, 0.0]],
+                    vec![vec![9.0, 0.0], vec![10.0, 0.0]],
+                ],
+            );
+            write_multivec(&provider, "/mquery.bin", 2, &[vec![vec![0.0, 0.0]]]);
+
+            compute_multivec_ground_truth_from_datafiles::<GraphDataF32, _>(
+                &provider,
+                Metric::L2,
+                method.clone(),
+                "/mbase.bin",
+                "/mquery.bin",
+                "/mgt.bin",
+                1,
+                None,
+                None,
+            )
+            .unwrap();
+
+            let (_, _, ids, _) = read_ground_truth(&provider, "/mgt.bin");
+            // The nearest base point to the origin is always id 0.
+            assert_eq!(ids, vec![0], "method {:?} picked wrong neighbor", method);
+        }
+    }
+
+    #[test]
+    fn test_compute_multivec_error_only_one_label_file() {
+        let provider = VirtualStorageProvider::new_memory();
+        write_multivec(&provider, "/mbase.bin", 2, &[vec![vec![0.0, 0.0]]]);
+        write_multivec(&provider, "/mquery.bin", 2, &[vec![vec![0.0, 0.0]]]);
+
+        let err = compute_multivec_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            MultivecAggregationMethod::MinPairwise,
+            "/mbase.bin",
+            "/mquery.bin",
+            "/mgt.bin",
+            1,
+            Some("/base_labels.txt"),
+            None,
+        )
+        .unwrap_err();
+        assert!(err
+            .details
+            .contains("must be provided or both must be not provided"));
+    }
+
+    #[test]
+    fn test_aggregation_method_from_str() {
+        assert!(matches!(
+            "average_pairwise".parse::<MultivecAggregationMethod>(),
+            Ok(MultivecAggregationMethod::AveragePairwise)
+        ));
+        assert!(matches!(
+            "MIN_PAIRWISE".parse::<MultivecAggregationMethod>(),
+            Ok(MultivecAggregationMethod::MinPairwise)
+        ));
+        assert!(matches!(
+            "avg_of_mins".parse::<MultivecAggregationMethod>(),
+            Ok(MultivecAggregationMethod::AvgofMins)
+        ));
+
+        let err = "nope".parse::<MultivecAggregationMethod>().unwrap_err();
+        assert_eq!(
+            format!("{}", err),
+            "Invalid format for Aggregation Method: nope"
+        );
+    }
+
+    #[test]
+    fn test_compute_multivec_ground_truth_with_labels() {
+        let provider = VirtualStorageProvider::new_memory();
+        // 3 base points, 2 query points (single vector each).
+        write_multivec(
+            &provider,
+            "/mbase.bin",
+            2,
+            &[
+                vec![vec![0.0, 0.0]],
+                vec![vec![1.0, 0.0]],
+                vec![vec![2.0, 0.0]],
+            ],
+        );
+        write_multivec(
+            &provider,
+            "/mquery.bin",
+            2,
+            &[vec![vec![0.0, 0.0]], vec![vec![2.0, 0.0]]],
+        );
+
+        // Base/query label files live on the real filesystem (read via std::fs).
+        let dir = tempfile::TempDir::new().unwrap();
+        let base_labels = dir.path().join("base.jsonl");
+        let query_labels = dir.path().join("query.jsonl");
+        {
+            let mut f = std::fs::File::create(&base_labels).unwrap();
+            writeln!(f, r#"{{"doc_id": 0, "g": "a"}}"#).unwrap();
+            writeln!(f, r#"{{"doc_id": 1, "g": "b"}}"#).unwrap();
+            writeln!(f, r#"{{"doc_id": 2, "g": "a"}}"#).unwrap();
+        }
+        {
+            let mut f = std::fs::File::create(&query_labels).unwrap();
+            writeln!(f, r#"{{"query_id": 0, "filter": {{"g": {{"$eq": "a"}}}}}}"#).unwrap();
+            writeln!(f, r#"{{"query_id": 1, "filter": {{"g": {{"$eq": "a"}}}}}}"#).unwrap();
+        }
+
+        compute_multivec_ground_truth_from_datafiles::<GraphDataF32, _>(
+            &provider,
+            Metric::L2,
+            MultivecAggregationMethod::MinPairwise,
+            "/mbase.bin",
+            "/mquery.bin",
+            "/mgt_range.bin",
+            2,
+            Some(base_labels.to_str().unwrap()),
+            Some(query_labels.to_str().unwrap()),
+        )
+        .unwrap();
+
+        // Range-search GT format: header (num_queries, total_neighbors),
+        // then num_queries u32 queue sizes, then total_neighbors u32 ids.
+        let mut f = provider.open_reader("/mgt_range.bin").unwrap();
+        let (num_queries, total_neighbors) = Metadata::read(&mut f).unwrap().into_dims();
+        assert_eq!(num_queries, 2);
+
+        let mut size_bytes = vec![0u8; num_queries * size_of::<u32>()];
+        f.read_exact(&mut size_bytes).unwrap();
+        let sizes = cast_slice::<u8, u32>(&size_bytes).to_vec();
+        assert_eq!(sizes.iter().sum::<u32>() as usize, total_neighbors);
+
+        let mut id_bytes = vec![0u8; total_neighbors * size_of::<u32>()];
+        f.read_exact(&mut id_bytes).unwrap();
+        let ids = cast_slice::<u8, u32>(&id_bytes).to_vec();
+        // Only base docs with g=="a" (ids 0 and 2) may appear in the results.
+        assert!(ids.iter().all(|&id| id == 0 || id == 2), "ids: {:?}", ids);
+    }
+}

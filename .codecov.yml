@@ -51,3 +51,4 @@ ignore:
   - "**/tests/**"
   - "**/benches/**"
   - "**/examples/**"
+  - "vectorset/src/main.rs" # binary entry point (Redis CLI), not unit-testable

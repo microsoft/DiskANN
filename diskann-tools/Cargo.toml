@@ -39,6 +39,7 @@ serde_json.workspace = true
 [dev-dependencies]
 rstest.workspace = true
 vfs = { workspace = true }
+tempfile.workspace = true
 diskann-providers = { workspace = true, default-features = false, features = [
     "virtual_storage",
 ] }

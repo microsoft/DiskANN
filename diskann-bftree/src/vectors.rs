@@ -306,4 +306,44 @@ mod tests {
         let result = provider.get_vector_sync(0).unwrap();
         assert_eq!(result, vec![1.0, 2.0, 3.0]);
     }
+
+    #[test]
+    fn get_vector_into_wrong_buffer_dim_errors() {
+        let provider = VectorProvider::<f32>::new_with_config(5, 3, 0, Config::default()).unwrap();
+        let mut buffer = [0.0f32; 2];
+        let err = provider.get_vector_into(0, &mut buffer).unwrap_err();
+        assert!(matches!(err, RankedError::Error(_)));
+    }
+
+    #[test]
+    fn get_unset_vector_reports_not_found() {
+        let provider = VectorProvider::<f32>::new_with_config(5, 3, 0, Config::default()).unwrap();
+        match provider.get_vector_sync(2).unwrap_err() {
+            RankedError::Transient(VectorUnavailable {
+                id,
+                err: VectorError::NotFound,
+            }) => assert_eq!(id, 2),
+            other => panic!("expected NotFound transient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deleted_vector_reports_deleted() {
+        let provider = VectorProvider::<f32>::new_with_config(5, 3, 0, Config::default()).unwrap();
+        provider.set_vector_sync(0, &[1.0, 2.0, 3.0]).unwrap();
+        provider.delete_vector(0);
+        match provider.get_vector_sync(0).unwrap_err() {
+            RankedError::Transient(VectorUnavailable {
+                id,
+                err: VectorError::Deleted,
+            }) => assert_eq!(id, 0),
+            other => panic!("expected Deleted transient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn starting_points_and_getters() {
+        let provider = VectorProvider::<f32>::new_with_config(5, 3, 2, Config::default()).unwrap();
+        assert_eq!(provider.starting_points().unwrap(), vec![5u32, 6u32]);
+    }
 }

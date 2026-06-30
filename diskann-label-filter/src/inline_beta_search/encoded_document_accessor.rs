@@ -149,3 +149,78 @@ where
         self.inner_accessor.is_not_start_point()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attribute::{Attribute, AttributeValue};
+    use crate::parser::ast::CompareOp;
+    use crate::set::SetProvider;
+    use serde_json::Value;
+
+    /// Minimal inner accessor that only carries an id type.
+    struct MockAccessor;
+
+    impl HasId for MockAccessor {
+        type Id = u64;
+    }
+
+    /// Builds an accessor whose filter is `category == "electronics"`, with
+    /// vector `match_id` carrying the matching attribute and vector
+    /// `other_id` carrying an unrelated attribute.
+    fn build_accessor(
+        beta: f32,
+        match_id: u64,
+        other_id: u64,
+    ) -> EncodedDocumentAccessor<MockAccessor> {
+        let mut encoder = AttributeEncoder::new();
+        let matching = Attribute::from_value(
+            "category".to_string(),
+            AttributeValue::String("electronics".to_string()),
+        );
+        let unrelated = Attribute::from_value(
+            "category".to_string(),
+            AttributeValue::String("furniture".to_string()),
+        );
+        let match_attr = encoder.insert(&matching);
+        let other_attr = encoder.insert(&unrelated);
+        let map = Arc::new(RwLock::new(encoder));
+
+        let mut provider: RoaringTreemapSetProvider<u64> = RoaringTreemapSetProvider::new();
+        provider.insert(&match_id, &match_attr).unwrap();
+        provider.insert(&other_id, &other_attr).unwrap();
+        let attribute_accessor = EncodedAttributeAccessor::new(Arc::new(RwLock::new(provider)));
+
+        let ast = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::Eq(Value::String("electronics".to_string())),
+        };
+
+        EncodedDocumentAccessor::new(MockAccessor, attribute_accessor, map, &ast, beta).unwrap()
+    }
+
+    #[test]
+    fn attributes_for_scales_distance_when_filter_matches() {
+        let mut accessor = build_accessor(0.5, 7, 8);
+        let scaled = accessor
+            .attributes_for(7, |computer, set| computer.apply(10.0, &set))
+            .unwrap();
+        assert_eq!(scaled, 5.0);
+    }
+
+    #[test]
+    fn attributes_for_keeps_distance_when_filter_does_not_match() {
+        let mut accessor = build_accessor(0.5, 7, 8);
+        let unchanged = accessor
+            .attributes_for(8, |computer, set| computer.apply(10.0, &set))
+            .unwrap();
+        assert_eq!(unchanged, 10.0);
+    }
+
+    #[test]
+    fn attributes_for_errors_when_point_has_no_labels() {
+        let mut accessor = build_accessor(0.5, 7, 8);
+        let result = accessor.attributes_for(99, |computer, set| computer.apply(10.0, &set));
+        assert!(result.is_err());
+    }
+}

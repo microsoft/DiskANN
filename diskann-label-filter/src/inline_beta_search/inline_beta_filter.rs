@@ -180,3 +180,49 @@ where
             .map_err(|e| e.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attribute::{Attribute, AttributeValue};
+    use crate::encoded_attribute_provider::attribute_encoder::AttributeEncoder;
+    use crate::parser::ast::{ASTExpr, CompareOp};
+    use serde_json::Value;
+    use std::sync::{Arc, RwLock};
+
+    /// Build an [`InlineBetaComputer`] whose filter is `category == "electronics"`,
+    /// returning the encoded attribute id that a matching point must carry.
+    fn build_computer(beta: f32) -> (InlineBetaComputer, u64) {
+        let mut encoder = AttributeEncoder::new();
+        let attr = Attribute::from_value(
+            "category".to_string(),
+            AttributeValue::String("electronics".to_string()),
+        );
+        let id = encoder.insert(&attr);
+        let map = Arc::new(RwLock::new(encoder));
+
+        let ast = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::Eq(Value::String("electronics".to_string())),
+        };
+        let filter_expr = EncodedFilterExpr::new(&ast, map).unwrap();
+        (InlineBetaComputer::new(beta, filter_expr), id)
+    }
+
+    #[test]
+    fn apply_scales_distance_when_predicate_matches() {
+        let (computer, id) = build_computer(0.5);
+        let mut attrs = RoaringTreemap::new();
+        attrs.insert(id);
+        // Predicate matches -> distance is scaled by beta.
+        assert_eq!(computer.apply(10.0, &attrs), 5.0);
+    }
+
+    #[test]
+    fn apply_returns_distance_when_predicate_does_not_match() {
+        let (computer, _id) = build_computer(0.5);
+        // Point carries no attributes -> predicate fails -> distance unchanged.
+        let attrs = RoaringTreemap::new();
+        assert_eq!(computer.apply(10.0, &attrs), 10.0);
+    }
+}

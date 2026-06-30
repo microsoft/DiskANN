@@ -131,3 +131,151 @@ impl<T: bytemuck::Pod> DatasetLoader<T> {
         Ok(Arc::new(map))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// Write a `.bin` dataset file (i32 num_vectors, i32 dim, then row-major data).
+    fn write_bin<T: bytemuck::Pod>(
+        dir: &TempDir,
+        name: &str,
+        dim: usize,
+        rows: &[Vec<T>],
+    ) -> PathBuf {
+        let path = dir.path().join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&(rows.len() as i32).to_le_bytes()).unwrap();
+        f.write_all(&(dim as i32).to_le_bytes()).unwrap();
+        for row in rows {
+            f.write_all(bytemuck::cast_slice(row)).unwrap();
+        }
+        path
+    }
+
+    /// Write raw bytes after a header (used for malformed-file tests).
+    fn write_raw(dir: &TempDir, name: &str, num_vectors: i32, dim: i32, body: &[u8]) -> PathBuf {
+        let path = dir.path().join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&num_vectors.to_le_bytes()).unwrap();
+        f.write_all(&dim.to_le_bytes()).unwrap();
+        f.write_all(body).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn new_reads_header() {
+        let dir = TempDir::new().unwrap();
+        let rows = vec![vec![1.0f32, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let path = write_bin(&dir, "base.bin", 2, &rows);
+
+        let loader = DatasetLoader::<f32>::new(&path).await.unwrap();
+        assert_eq!(loader.len(), 3);
+        assert_eq!(loader.dim(), 2);
+        assert_eq!(loader.batch_size(), BATCH_SIZE);
+    }
+
+    #[tokio::test]
+    async fn next_reads_all_vectors_in_order() {
+        let dir = TempDir::new().unwrap();
+        let rows = vec![vec![1.0f32, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let path = write_bin(&dir, "base.bin", 2, &rows);
+        let loader = DatasetLoader::<f32>::new(&path).await.unwrap();
+
+        let mut buf = Vec::new();
+        let (count, first_id) = loader.next(&mut buf).await.unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(first_id, 0);
+        assert_eq!(&buf[..count * 2], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        // Subsequent call yields nothing and clears the buffer.
+        let (count, first_id) = loader.next(&mut buf).await.unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(first_id, 3);
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn next_spans_multiple_batches() {
+        let dir = TempDir::new().unwrap();
+        let total = BATCH_SIZE + 5;
+        let rows: Vec<Vec<f32>> = (0..total).map(|i| vec![i as f32]).collect();
+        let path = write_bin(&dir, "base.bin", 1, &rows);
+        let loader = DatasetLoader::<f32>::new(&path).await.unwrap();
+
+        let mut buf = Vec::new();
+        let (count, first_id) = loader.next(&mut buf).await.unwrap();
+        assert_eq!(count, BATCH_SIZE);
+        assert_eq!(first_id, 0);
+        assert_eq!(buf[0], 0.0);
+
+        let (count, first_id) = loader.next(&mut buf).await.unwrap();
+        assert_eq!(count, 5);
+        assert_eq!(first_id, BATCH_SIZE);
+        assert_eq!(buf[0], BATCH_SIZE as f32);
+
+        let (count, _) = loader.next(&mut buf).await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn next_on_empty_dataset() {
+        let dir = TempDir::new().unwrap();
+        let path = write_bin::<f32>(&dir, "empty.bin", 4, &[]);
+        let loader = DatasetLoader::<f32>::new(&path).await.unwrap();
+
+        let mut buf = Vec::new();
+        let (count, first_id) = loader.next(&mut buf).await.unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(first_id, 0);
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn next_errors_on_truncated_vector() {
+        let dir = TempDir::new().unwrap();
+        // Header claims 2 vectors of dim 3, but only 4 f32 values follow
+        // (one full vector plus a partial second one).
+        let body: Vec<u8> = [1.0f32, 2.0, 3.0, 4.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let path = write_raw(&dir, "bad.bin", 2, 3, &body);
+        let loader = DatasetLoader::<f32>::new(&path).await.unwrap();
+
+        let mut buf = Vec::new();
+        assert!(loader.next(&mut buf).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn load_returns_all_vectors() {
+        let dir = TempDir::new().unwrap();
+        let rows = vec![vec![1.0f32, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let path = write_bin(&dir, "base.bin", 3, &rows);
+
+        let loaded = DatasetLoader::<f32>::load(&path).await.unwrap();
+        assert_eq!(*loaded, rows);
+    }
+
+    #[tokio::test]
+    async fn load_groundtruth_builds_map() {
+        let dir = TempDir::new().unwrap();
+        let num_queries = 2i32;
+        let num_neighbors = 2i32;
+        let ids: [u32; 4] = [10, 11, 20, 21];
+        let dists: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+
+        let mut body = Vec::new();
+        body.extend(bytemuck::cast_slice::<u32, u8>(&ids));
+        body.extend(bytemuck::cast_slice::<f32, u8>(&dists));
+        let path = write_raw(&dir, "gt.bin", num_queries, num_neighbors, &body);
+
+        let map = DatasetLoader::<f32>::load_groundtruth(&path).await.unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&0], vec![(10, 0.1), (11, 0.2)]);
+        assert_eq!(map[&1], vec![(20, 0.3), (21, 0.4)]);
+    }
+}

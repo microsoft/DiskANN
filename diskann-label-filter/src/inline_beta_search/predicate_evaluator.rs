@@ -91,3 +91,94 @@ where
         self.labels_of_point.contains(label_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encoded_attribute_provider::ast_id_expr::ASTIdExpr;
+    use roaring::RoaringTreemap;
+
+    fn labels(ids: &[u64]) -> RoaringTreemap {
+        let mut s = RoaringTreemap::new();
+        for &id in ids {
+            s.insert(id);
+        }
+        s
+    }
+
+    #[test]
+    fn terminal_checks_membership() {
+        let set = labels(&[1, 2, 3]);
+        let eval = PredicateEvaluator::new(&set);
+        assert!(ASTIdExpr::Terminal(2u64).accept(&eval).unwrap());
+        assert!(!ASTIdExpr::Terminal(9u64).accept(&eval).unwrap());
+    }
+
+    #[test]
+    fn and_requires_all_members() {
+        let set = labels(&[1, 2]);
+        let eval = PredicateEvaluator::new(&set);
+        let all_present =
+            ASTIdExpr::And(vec![ASTIdExpr::Terminal(1u64), ASTIdExpr::Terminal(2u64)]);
+        assert!(all_present.accept(&eval).unwrap());
+        let one_missing =
+            ASTIdExpr::And(vec![ASTIdExpr::Terminal(1u64), ASTIdExpr::Terminal(3u64)]);
+        assert!(!one_missing.accept(&eval).unwrap());
+    }
+
+    #[test]
+    fn empty_and_is_vacuously_true() {
+        let set = labels(&[]);
+        let eval = PredicateEvaluator::new(&set);
+        assert!(ASTIdExpr::<u64>::And(vec![]).accept(&eval).unwrap());
+    }
+
+    #[test]
+    fn or_requires_any_member() {
+        let set = labels(&[1]);
+        let eval = PredicateEvaluator::new(&set);
+        let any_present = ASTIdExpr::Or(vec![ASTIdExpr::Terminal(9u64), ASTIdExpr::Terminal(1u64)]);
+        assert!(any_present.accept(&eval).unwrap());
+        let none_present =
+            ASTIdExpr::Or(vec![ASTIdExpr::Terminal(8u64), ASTIdExpr::Terminal(9u64)]);
+        assert!(!none_present.accept(&eval).unwrap());
+    }
+
+    #[test]
+    fn empty_or_is_false() {
+        let set = labels(&[1]);
+        let eval = PredicateEvaluator::new(&set);
+        assert!(!ASTIdExpr::<u64>::Or(vec![]).accept(&eval).unwrap());
+    }
+
+    #[test]
+    fn not_negates_inner() {
+        let set = labels(&[1]);
+        let eval = PredicateEvaluator::new(&set);
+        assert!(ASTIdExpr::Not(Box::new(ASTIdExpr::Terminal(9u64)))
+            .accept(&eval)
+            .unwrap());
+        assert!(!ASTIdExpr::Not(Box::new(ASTIdExpr::Terminal(1u64)))
+            .accept(&eval)
+            .unwrap());
+    }
+
+    #[test]
+    fn nested_and_or_not_combination() {
+        let set = labels(&[1, 2, 3]);
+        let eval = PredicateEvaluator::new(&set);
+        // (1 AND 2) OR (NOT 5) -> both branches true, overall true
+        let expr = ASTIdExpr::Or(vec![
+            ASTIdExpr::And(vec![ASTIdExpr::Terminal(1u64), ASTIdExpr::Terminal(2u64)]),
+            ASTIdExpr::Not(Box::new(ASTIdExpr::Terminal(5u64))),
+        ]);
+        assert!(expr.accept(&eval).unwrap());
+
+        // (1 AND 9) AND (NOT 2) -> first branch false, overall false
+        let expr2 = ASTIdExpr::And(vec![
+            ASTIdExpr::And(vec![ASTIdExpr::Terminal(1u64), ASTIdExpr::Terminal(9u64)]),
+            ASTIdExpr::Not(Box::new(ASTIdExpr::Terminal(2u64))),
+        ]);
+        assert!(!expr2.accept(&eval).unwrap());
+    }
+}

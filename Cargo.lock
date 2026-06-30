@@ -940,6 +940,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "vfs",
@@ -3745,6 +3746,7 @@ dependencies = [
  "rand 0.9.4",
  "redis",
  "serde",
+ "tempfile",
  "tokio",
  "toml 0.9.10+spec-1.1.0",
 ]

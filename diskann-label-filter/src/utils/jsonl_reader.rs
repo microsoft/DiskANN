@@ -334,4 +334,91 @@ mod tests {
         assert_eq!(parsed_queries.len(), 2);
         // Additional validation of the parsed expressions would be done in the parser tests
     }
+
+    fn write_file(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.jsonl");
+        let mut file = File::create(&path).unwrap();
+        write!(file, "{}", contents).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn test_missing_file_is_io_error() {
+        let err = read_baselabels("does_not_exist_12345.jsonl").unwrap_err();
+        assert!(matches!(err, JsonlReadError::IoError(_)));
+        // Display path for IoError.
+        assert!(format!("{}", err).starts_with("IO error:"));
+    }
+
+    #[test]
+    fn test_malformed_label_line_is_parse_error() {
+        let (_dir, path) = write_file("not valid json\n");
+        let err = read_baselabels(&path).unwrap_err();
+        match err {
+            JsonlReadError::ParseError(msg) => assert!(msg.contains("line 1")),
+            other => panic!("expected ParseError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_malformed_query_line_is_parse_error() {
+        let (_dir, path) = write_file("{ broken\n");
+        assert!(matches!(
+            read_queries(&path).unwrap_err(),
+            JsonlReadError::ParseError(_)
+        ));
+    }
+
+    #[test]
+    fn test_empty_ground_truth_file() {
+        let (_dir, path) = write_file("");
+        match read_ground_truth(&path).unwrap_err() {
+            JsonlReadError::ParseError(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected ParseError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ground_truth_bad_metadata_and_bad_result() {
+        // Bad metadata line.
+        let (_d1, p1) = write_file("not-json\n");
+        match read_ground_truth(&p1).unwrap_err() {
+            JsonlReadError::ParseError(msg) => assert!(msg.contains("metadata")),
+            other => panic!("expected metadata ParseError, got {:?}", other),
+        }
+
+        // Good metadata, bad result line.
+        let (_d2, p2) =
+            write_file("{\"distance_func\": \"l2\", \"query_num\": 1}\nbroken-result\n");
+        match read_ground_truth(&p2).unwrap_err() {
+            JsonlReadError::ParseError(msg) => assert!(msg.contains("result line")),
+            other => panic!("expected result ParseError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_read_and_parse_queries_propagates_filter_error() {
+        // A valid query line whose filter uses an unsupported operator.
+        let (_dir, path) = write_file("{\"query_id\": 3, \"filter\": {\"a\": {\"$bogus\": 1}}}\n");
+        match read_and_parse_queries(&path).unwrap_err() {
+            JsonlReadError::ParseError(msg) => assert!(msg.contains("query ID 3")),
+            other => panic!("expected ParseError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_error_display_and_from_conversions() {
+        let json_err: JsonlReadError = serde_json::from_str::<serde_json::Value>("oops")
+            .unwrap_err()
+            .into();
+        assert!(matches!(json_err, JsonlReadError::JsonError(_)));
+        assert!(format!("{}", json_err).starts_with("JSON parsing error:"));
+
+        let io_err: JsonlReadError = io::Error::other("boom").into();
+        assert!(format!("{}", io_err).starts_with("IO error:"));
+
+        let parse_err = JsonlReadError::ParseError("bad".to_string());
+        assert_eq!(format!("{}", parse_err), "Parse error: bad");
+    }
 }

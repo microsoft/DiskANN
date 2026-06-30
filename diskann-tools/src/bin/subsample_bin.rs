@@ -115,3 +115,87 @@ fn main() -> Result<()> {
         DataType::Fp16 => run_for_type::<f16>(&args),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diskann_utils::io::Metadata;
+    use tempfile::TempDir;
+
+    /// Write a standard `.bin` file (8-byte header + row-major f32 data).
+    fn write_f32_bin(path: &std::path::Path, npts: usize, dim: usize) {
+        let mut f = std::fs::File::create(path).unwrap();
+        Metadata::new(npts, dim).unwrap().write(&mut f).unwrap();
+        let data: Vec<f32> = (0..npts * dim).map(|i| i as f32).collect();
+        f.write_all(bytemuck::cast_slice(&data)).unwrap();
+        f.flush().unwrap();
+    }
+
+    fn args_for(input: PathBuf, output: PathBuf, probability: f64) -> Args {
+        Args {
+            data_type: DataType::Float,
+            base_bin_file: input,
+            sampled_output_file: output,
+            sampling_probability: probability,
+            random_seed: Some(7),
+        }
+    }
+
+    #[test]
+    fn create_rng_is_deterministic_with_seed() {
+        let mut a = create_rng(Some(123));
+        let mut b = create_rng(Some(123));
+        let dist = StandardUniform;
+        let x: u64 = dist.sample(&mut a);
+        let y: u64 = dist.sample(&mut b);
+        assert_eq!(x, y);
+    }
+
+    #[test]
+    fn create_rng_without_seed_produces_values() {
+        // Smoke test the seedless branch (non-deterministic, just exercise it).
+        let mut rng = create_rng(None);
+        let _: u64 = StandardUniform.sample(&mut rng);
+    }
+
+    #[test]
+    fn run_for_type_samples_all_with_probability_one() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in.bin");
+        let output = dir.path().join("out.bin");
+        write_f32_bin(&input, 12, 4);
+
+        run_for_type::<f32>(&args_for(input, output.clone(), 1.0)).unwrap();
+
+        let mut r = std::fs::File::open(&output).unwrap();
+        let (npts, dim) = Metadata::read(&mut r).unwrap().into_dims();
+        assert_eq!(npts, 12);
+        assert_eq!(dim, 4);
+    }
+
+    #[test]
+    fn run_for_type_samples_none_with_probability_zero() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in.bin");
+        let output = dir.path().join("out.bin");
+        write_f32_bin(&input, 12, 4);
+
+        run_for_type::<f32>(&args_for(input, output.clone(), 0.0)).unwrap();
+
+        let mut r = std::fs::File::open(&output).unwrap();
+        let (npts, dim) = Metadata::read(&mut r).unwrap().into_dims();
+        assert_eq!(npts, 0);
+        assert_eq!(dim, 4);
+    }
+
+    #[test]
+    fn run_for_type_rejects_out_of_range_probability() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in.bin");
+        let output = dir.path().join("out.bin");
+        write_f32_bin(&input, 4, 2);
+
+        let err = run_for_type::<f32>(&args_for(input, output, 1.5)).unwrap_err();
+        assert!(err.to_string().contains("sampling_probability"));
+    }
+}

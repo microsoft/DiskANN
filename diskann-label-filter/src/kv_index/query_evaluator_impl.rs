@@ -867,4 +867,55 @@ mod tests {
         let result = index.evaluate_query(&expr).unwrap();
         assert!(result.is_empty());
     }
+
+    #[test]
+    fn test_evaluate_query_integer_range_corrupt_value_is_error() {
+        let store = Arc::new(DummyKvStore::default());
+        let mut index =
+            GenericIndex::<DummyKvStore, RoaringPostingList, DefaultKeyCodec>::new(store.clone());
+
+        let mut attrs = Attributes::new();
+        attrs.insert(
+            "age".to_string(),
+            AttributeValue::try_from(&json!(30)).unwrap(),
+        );
+        index.insert(1, &attrs).unwrap();
+
+        // Inject corrupt posting-list bytes at an in-range integer key so the
+        // range scan's deserialize fails.
+        let codec = DefaultKeyCodec::default();
+        let key = codec.encode_field_value_key("age", &AttributeValue::Integer(35));
+        store.set(&key, b"not-a-posting-list").unwrap();
+
+        let expr = ASTExpr::Compare {
+            field: "age".to_string(),
+            op: CompareOp::Gte(20.0),
+        };
+        assert!(index.evaluate_query(&expr).is_err());
+    }
+
+    #[test]
+    fn test_evaluate_query_float_range_corrupt_value_is_error() {
+        let store = Arc::new(DummyKvStore::default());
+        let mut index =
+            GenericIndex::<DummyKvStore, RoaringPostingList, DefaultKeyCodec>::new(store.clone());
+
+        let mut attrs = Attributes::new();
+        attrs.insert(
+            "price".to_string(),
+            AttributeValue::try_from(&json!(25.0)).unwrap(),
+        );
+        index.insert(1, &attrs).unwrap();
+
+        // Inject corrupt posting-list bytes at an in-range float key.
+        let codec = DefaultKeyCodec::default();
+        let key = codec.encode_field_value_key("price", &AttributeValue::Real(30.0));
+        store.set(&key, b"not-a-posting-list").unwrap();
+
+        let expr = ASTExpr::Compare {
+            field: "price".to_string(),
+            op: CompareOp::Gte(20.0),
+        };
+        assert!(index.evaluate_query(&expr).is_err());
+    }
 }

@@ -289,6 +289,34 @@ mod tests {
     }
 
     #[test]
+    fn test_roaring_set_provider_exists_insert_values_clear() {
+        let mut provider: RoaringSetProvider<u32> = RoaringSetProvider::new();
+
+        // exists on empty provider
+        assert!(!provider.exists(&1).unwrap());
+
+        // insert_values adds multiple values at once
+        assert!(provider.insert_values(&1, &[10, 20, 30]).unwrap());
+
+        // exists after insertion
+        assert!(provider.exists(&1).unwrap());
+
+        let set1 = provider.get(&1).unwrap().unwrap();
+        assert_eq!(set1.len(), 3);
+        assert!(set1.contains(10));
+        assert!(set1.contains(20));
+        assert!(set1.contains(30));
+
+        // re-inserting existing values reports not-all-newly-inserted
+        assert!(!provider.insert_values(&1, &[10, 20]).unwrap());
+
+        // clear removes everything
+        provider.clear().unwrap();
+        assert_eq!(provider.count().unwrap(), 0usize);
+        assert!(!provider.exists(&1).unwrap());
+    }
+
+    #[test]
     fn test_roaring_treemap_provider_delete() {
         let mut provider: RoaringTreemapSetProvider<u32> = RoaringTreemapSetProvider::new();
 
@@ -313,5 +341,55 @@ mod tests {
 
         // deleted entry returns empty set
         assert!(provider.get(&1).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_roaring_treemap_provider_exists_insert_values_clear() {
+        let mut provider: RoaringTreemapSetProvider<u32> = RoaringTreemapSetProvider::new();
+
+        assert!(!provider.exists(&1).unwrap());
+
+        let big: u64 = 1 << 50;
+        assert!(provider.insert_values(&1, &[10u64, 20u64, big]).unwrap());
+        assert!(provider.exists(&1).unwrap());
+
+        let set1 = provider.get(&1).unwrap().unwrap();
+        assert_eq!(set1.len(), 3);
+        assert!(set1.contains(big));
+
+        // re-inserting existing values reports not-all-newly-inserted
+        assert!(!provider.insert_values(&1, &[10u64]).unwrap());
+
+        // delete_from_set on a missing key returns false
+        assert!(!provider.delete_from_set(&99, &10u64).unwrap());
+
+        provider.clear().unwrap();
+        assert_eq!(provider.count().unwrap(), 0usize);
+        assert!(!provider.exists(&1).unwrap());
+    }
+
+    #[test]
+    fn test_identity_hasher_specializations() {
+        let mut h = IdentityHasher::default();
+        h.write_u8(5);
+        assert_eq!(h.finish(), 5);
+        h.write_u16(500);
+        assert_eq!(h.finish(), 500);
+        h.write_u32(70_000);
+        assert_eq!(h.finish(), 70_000);
+        h.write_u64(1u64 << 40);
+        assert_eq!(h.finish(), 1u64 << 40);
+
+        // write_u128 folds the high and low halves with XOR.
+        h.write_u128((1u128 << 64) | 7);
+        assert_eq!(h.finish(), 1u64 ^ 7u64);
+
+        // The byte fallback uses FNV-1a; verify it is deterministic.
+        let mut a = IdentityHasher::default();
+        let mut b = IdentityHasher::default();
+        a.write(&[1, 2, 3]);
+        b.write(&[1, 2, 3]);
+        assert_eq!(a.finish(), b.finish());
+        assert_ne!(a.finish(), 0);
     }
 }

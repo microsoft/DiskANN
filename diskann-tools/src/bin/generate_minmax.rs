@@ -193,3 +193,63 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diskann_utils::io::Metadata;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    /// Write a standard `.bin` file (8-byte header + row-major f32 data).
+    fn write_f32_bin(path: &str, npts: usize, dim: usize) {
+        let mut f = File::create(path).unwrap();
+        Metadata::new(npts, dim).unwrap().write(&mut f).unwrap();
+        let data: Vec<f32> = (0..npts * dim).map(|i| (i % 17) as f32).collect();
+        f.write_all(bytemuck::cast_slice(&data)).unwrap();
+        f.flush().unwrap();
+    }
+
+    #[test]
+    fn dispatch_rejects_unsupported_bit_width() {
+        let err =
+            dispatch_process_file::<f32>(3, "unused_in.bin", "unused_out.bin", 1, 1.0).unwrap_err();
+        assert!(err.to_string().contains("Unsupported bit width"));
+    }
+
+    #[test]
+    fn process_file_quantizes_and_writes_header() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in.bin");
+        let output = dir.path().join("out.bin");
+        let input_str = input.to_string_lossy().to_string();
+        let output_str = output.to_string_lossy().to_string();
+
+        let npts = 16;
+        let dim = 8;
+        write_f32_bin(&input_str, npts, dim);
+
+        process_file::<4, f32>(&input_str, &output_str, 42, 1.0).unwrap();
+
+        let mut r = File::open(&output).unwrap();
+        let meta = Metadata::read(&mut r).unwrap();
+        assert_eq!(meta.npoints(), npts);
+        // Output dim equals the per-vector byte count, which must be non-zero.
+        assert!(meta.ndims() > 0);
+    }
+
+    #[test]
+    fn dispatch_process_file_supports_valid_widths() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in.bin");
+        let input_str = input.to_string_lossy().to_string();
+        write_f32_bin(&input_str, 8, 8);
+
+        for bits in [1u8, 2, 4, 8] {
+            let output = dir.path().join(format!("out_{}.bin", bits));
+            let output_str = output.to_string_lossy().to_string();
+            dispatch_process_file::<f32>(bits, &input_str, &output_str, 1, 1.0).unwrap();
+            assert!(output.exists(), "output missing for {} bits", bits);
+        }
+    }
+}

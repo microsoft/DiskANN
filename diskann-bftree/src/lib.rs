@@ -160,3 +160,45 @@ impl Default for TestCallCount {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn vector_unavailable_display_variants() {
+        let deleted = VectorUnavailable {
+            id: 7,
+            err: VectorError::Deleted,
+        };
+        assert_eq!(deleted.to_string(), "vector 7 was deleted");
+
+        let not_found = VectorUnavailable {
+            id: 9,
+            err: VectorError::NotFound,
+        };
+        assert_eq!(not_found.to_string(), "vector 9 not found");
+    }
+
+    #[test]
+    fn vector_unavailable_acknowledge_is_noop() {
+        let transient = VectorUnavailable {
+            id: 1,
+            err: VectorError::Deleted,
+        };
+        // Acknowledging a transient deletion swallows it without producing an error.
+        transient.acknowledge("expected during traversal");
+    }
+
+    #[test]
+    fn vector_unavailable_escalate_produces_error() {
+        let transient = VectorUnavailable {
+            id: 3,
+            err: VectorError::NotFound,
+        };
+        let escalated: ANNError = transient.escalate("lookup failed");
+        let message = escalated.to_string();
+        assert!(message.contains("vector 3 not found"), "got: {message}");
+        assert!(message.contains("lookup failed"), "got: {message}");
+    }
+}

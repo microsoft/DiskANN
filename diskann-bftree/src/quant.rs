@@ -295,6 +295,29 @@ mod tests {
         assert_eq!(quant_bytes, provider.quantizer.bytes());
     }
 
+    #[tokio::test]
+    async fn get_vector_into_error_paths() {
+        let provider = create_test_provider();
+        let expected = provider.quantizer.bytes();
+
+        // Wrong buffer length → Error.
+        let mut wrong = vec![0u8; expected + 1];
+        match provider.get_vector_into(0, &mut wrong).unwrap_err() {
+            AccessError::Error(_) => {}
+            other => panic!("expected Error for wrong buffer length, got {other:?}"),
+        }
+
+        // Unset id within an empty slot → NotFound transient.
+        let mut buffer = vec![0u8; expected];
+        match provider.get_vector_into(99, &mut buffer).unwrap_err() {
+            AccessError::Transient(VectorUnavailable {
+                id,
+                err: VectorError::NotFound,
+            }) => assert_eq!(id, 99),
+            other => panic!("expected NotFound transient, got {other:?}"),
+        }
+    }
+
     fn create_test_provider() -> QuantVectorProvider {
         let dim = 2;
 

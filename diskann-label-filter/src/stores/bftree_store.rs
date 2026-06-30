@@ -276,6 +276,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn error_conversions_and_display() {
+        let from_str: BfTreeStoreError = "boom".into();
+        assert!(from_str.to_string().contains("boom"));
+
+        let from_string: BfTreeStoreError = String::from("kaboom").into();
+        assert!(from_string.to_string().contains("kaboom"));
+    }
+
+    #[test]
     fn small_key_small_value() {
         let store = BfTreeStore::memory().unwrap();
         let key = b"key";

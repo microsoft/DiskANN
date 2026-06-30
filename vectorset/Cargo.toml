@@ -27,3 +27,6 @@ tokio = { workspace = true, features = [
     "sync",
 ] }
 toml = "0.9.7"
+
+[dev-dependencies]
+tempfile.workspace = true

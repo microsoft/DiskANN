@@ -190,3 +190,66 @@ where
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attribute::AttributeValue;
+
+    fn attr(name: &str, value: &str) -> Attribute {
+        Attribute::from_value(name, AttributeValue::String(value.to_owned()))
+    }
+
+    #[test]
+    fn set_element_then_id_exists_and_delete() {
+        let store = RoaringAttributeStore::<u32>::new();
+        let attrs = vec![attr("color", "red"), attr("size", "large")];
+
+        // Insert a vector with two attributes.
+        assert!(store.set_element(&7u32, &attrs).unwrap());
+        assert!(store.id_exists(&7u32).unwrap());
+
+        // A different id does not exist.
+        assert!(!store.id_exists(&8u32).unwrap());
+
+        // The attribute map should now contain the inserted attributes.
+        {
+            let map = store.attribute_map();
+            let guard = map.read().unwrap();
+            assert!(guard.get(&attr("color", "red")).is_some());
+            assert!(guard.get(&attr("size", "large")).is_some());
+        }
+
+        // Deleting the vector removes it.
+        assert!(store.delete(&7u32).unwrap());
+        assert!(!store.id_exists(&7u32).unwrap());
+    }
+
+    #[test]
+    fn set_element_with_no_attributes_is_error() {
+        let store = RoaringAttributeStore::<u32>::new();
+        assert!(store.set_element(&1u32, &[]).is_err());
+    }
+
+    #[test]
+    fn delete_missing_id_returns_false() {
+        let store = RoaringAttributeStore::<u32>::new();
+        assert!(!store.delete(&99u32).unwrap());
+    }
+
+    #[test]
+    fn set_element_twice_updates_existing_labels() {
+        let store = RoaringAttributeStore::<u32>::new();
+
+        assert!(store.set_element(&3u32, &[attr("k", "v1")]).unwrap());
+        // Re-setting the same id exercises the "delete old labels" path.
+        assert!(store.set_element(&3u32, &[attr("k", "v2")]).unwrap());
+        assert!(store.id_exists(&3u32).unwrap());
+    }
+
+    #[test]
+    fn attribute_accessor_is_constructible() {
+        let store = RoaringAttributeStore::<u32>::new();
+        assert!(store.attribute_accessor().is_ok());
+    }
+}

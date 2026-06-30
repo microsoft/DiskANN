@@ -617,6 +617,59 @@ mod tests {
         }
     }
 
+    /// Exercise every [`MaxSimIsa`] variant through the explicit match arms in
+    /// `MaxSimElement::build` (the existing agreement tests only drive `Auto`
+    /// and `Reference`). Supported ISAs must build + compute; unsupported ones
+    /// must surface a [`NotSupported`] naming the requested ISA.
+    fn check_all_isas<T>(label: &str)
+    where
+        T: MaxSimElement + FromF32,
+        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+    {
+        let query_data = make_test_data::<T>(3 * 8, 8, 0);
+        let doc_data = make_test_data::<T>(2 * 8, 8, 1);
+        let query = make_mat(&query_data, 3, 8);
+        let doc = make_mat(&doc_data, 2, 8);
+
+        for isa in [
+            MaxSimIsa::Auto,
+            MaxSimIsa::Scalar,
+            MaxSimIsa::X86_64_V3,
+            MaxSimIsa::X86_64_V4,
+            MaxSimIsa::Neon,
+            MaxSimIsa::Reference,
+        ] {
+            let result = build_max_sim::<T, _>(isa, query, BoxErase);
+            if isa.is_available() {
+                let kernel = result
+                    .unwrap_or_else(|e| panic!("{label}{isa} available but build failed: {e}"));
+                assert_eq!(kernel.nrows(), 3, "{label}{isa} nrows");
+                let mut scores = vec![0.0f32; 3];
+                kernel
+                    .compute_max_sim(doc, &mut scores)
+                    .unwrap_or_else(|e| panic!("{label}{isa} compute failed: {e:?}"));
+            } else {
+                let err = result
+                    .err()
+                    .unwrap_or_else(|| panic!("{label}{isa} should be unsupported"));
+                assert_eq!(err.isa, isa, "{label}{isa} NotSupported.isa mismatch");
+                assert!(!err.reason.is_empty(), "{label}{isa} reason empty");
+                // Exercise the Display impl for the error path.
+                assert!(err.to_string().contains(&isa.to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn all_isas_f32() {
+        check_all_isas::<f32>("f32 ");
+    }
+
+    #[test]
+    fn all_isas_f16() {
+        check_all_isas::<half::f16>("f16 ");
+    }
+
     macro_rules! test_matches_fallback {
         ($mod_name:ident, $ty:ty, $tol:expr, $label:literal) => {
             mod $mod_name {

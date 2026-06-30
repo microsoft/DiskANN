@@ -774,4 +774,121 @@ mod test_search_index_utils {
         assert_eq!(recall.get_k(), 5);
         assert_eq!(recall.get_n(), 5);
     }
+
+    use diskann_providers::storage::{StorageWriteProvider, VirtualStorageProvider};
+    use std::io::Write as _;
+
+    /// Write a truthset bin file: 8-byte header (npts, dim), then `npts*dim`
+    /// u32 ids, optionally followed by `npts*dim` f32 distances.
+    fn write_truthset(
+        provider: &impl StorageWriteProvider,
+        path: &str,
+        npts: usize,
+        dim: usize,
+        ids: &[u32],
+        dists: Option<&[f32]>,
+    ) {
+        let mut w = provider.create_for_write(path).unwrap();
+        Metadata::new(npts, dim).unwrap().write(&mut w).unwrap();
+        w.write_all(cast_slice::<u32, u8>(ids)).unwrap();
+        if let Some(dists) = dists {
+            w.write_all(cast_slice::<f32, u8>(dists)).unwrap();
+        }
+        w.flush().unwrap();
+    }
+
+    #[test]
+    fn test_load_truthset_with_distances() {
+        let provider = VirtualStorageProvider::new_memory();
+        let path = "/truthset_with_dists.bin";
+        let ids: Vec<u32> = vec![0, 1, 2, 3, 4, 5];
+        let dists: Vec<f32> = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        write_truthset(&provider, path, 2, 3, &ids, Some(&dists));
+
+        let ts = load_truthset(&provider, path).unwrap();
+        assert_eq!(ts.index_num_points, 2);
+        assert_eq!(ts.index_dimension, 3);
+        assert_eq!(ts.index_nodes, ids);
+        assert_eq!(ts.distances, Some(dists));
+    }
+
+    #[test]
+    fn test_load_truthset_ids_only() {
+        let provider = VirtualStorageProvider::new_memory();
+        let path = "/truthset_ids_only.bin";
+        let ids: Vec<u32> = vec![10, 11, 12, 13];
+        write_truthset(&provider, path, 2, 2, &ids, None);
+
+        let ts = load_truthset(&provider, path).unwrap();
+        assert_eq!(ts.index_num_points, 2);
+        assert_eq!(ts.index_dimension, 2);
+        assert_eq!(ts.index_nodes, ids);
+        assert!(ts.distances.is_none());
+    }
+
+    #[test]
+    fn test_load_truthset_size_mismatch_errors() {
+        let provider = VirtualStorageProvider::new_memory();
+        let path = "/truthset_bad_size.bin";
+        // Header claims 2x3 but only one id follows -> neither expected size.
+        let mut w = provider.create_for_write(path).unwrap();
+        Metadata::new(2usize, 3usize)
+            .unwrap()
+            .write(&mut w)
+            .unwrap();
+        w.write_all(cast_slice::<u32, u8>(&[0u32])).unwrap();
+        w.flush().unwrap();
+        drop(w);
+
+        let err = match load_truthset(&provider, path) {
+            Ok(_) => panic!("expected size mismatch error"),
+            Err(e) => e,
+        };
+        assert!(format!("{}", err).contains("File size mismatch"));
+    }
+
+    /// Write a range-truthset bin file: 8-byte header (npts, total_ids),
+    /// then `npts` i32 per-query counts, then the concatenated u32 ids.
+    fn write_range_truthset(provider: &impl StorageWriteProvider, path: &str, rows: &[Vec<u32>]) {
+        let total_ids: usize = rows.iter().map(|r| r.len()).sum();
+        let mut w = provider.create_for_write(path).unwrap();
+        Metadata::new(rows.len(), total_ids)
+            .unwrap()
+            .write(&mut w)
+            .unwrap();
+        for row in rows {
+            w.write_all(&(row.len() as i32).to_le_bytes()).unwrap();
+        }
+        for row in rows {
+            w.write_all(cast_slice::<u32, u8>(row)).unwrap();
+        }
+        w.flush().unwrap();
+    }
+
+    #[test]
+    fn test_load_range_truthset() {
+        let provider = VirtualStorageProvider::new_memory();
+        let path = "/range_truthset.bin";
+        let rows = vec![vec![1u32, 2, 3], vec![4], vec![7, 8]];
+        write_range_truthset(&provider, path, &rows);
+
+        let ts = load_range_truthset(&provider, path).unwrap();
+        assert_eq!(ts.index_num_points, 3);
+        assert_eq!(ts.index_dimensions, vec![3, 1, 2]);
+        assert_eq!(ts.index_nodes, rows);
+        assert!(ts.distances.is_none());
+    }
+
+    #[test]
+    fn test_load_vector_filters() {
+        let provider = VirtualStorageProvider::new_memory();
+        let path = "/vector_filters.bin";
+        let rows = vec![vec![1u32, 2, 2, 3], vec![5]];
+        write_range_truthset(&provider, path, &rows);
+
+        let filters = load_vector_filters(&provider, path).unwrap();
+        assert_eq!(filters.len(), 2);
+        assert_eq!(filters[0], HashSet::from([1, 2, 3]));
+        assert_eq!(filters[1], HashSet::from([5]));
+    }
 }

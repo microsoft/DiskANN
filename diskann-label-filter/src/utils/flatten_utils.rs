@@ -394,4 +394,48 @@ mod tests {
             &AttributeValue::String("test".into())
         );
     }
+
+    #[test]
+    fn test_flatten_remaining_wrappers() {
+        let value = json!({"user": {"name": "John"}});
+
+        // underscore_notation preset
+        let map =
+            flatten_json_pointers_map_with_config(&value, &FlattenConfig::underscore_notation());
+        assert_eq!(
+            map.get("_user_name").unwrap(),
+            &AttributeValue::String("John".into())
+        );
+
+        // json_pointer preset matches the default "/" separator
+        let map = flatten_json_pointers_map_with_config(&value, &FlattenConfig::json_pointer());
+        assert_eq!(
+            map.get("/user/name").unwrap(),
+            &AttributeValue::String("John".into())
+        );
+
+        // Vec-returning custom-separator wrapper
+        let vec = flatten_json_pointers_with_separator(&value, "-");
+        assert_eq!(
+            vec,
+            vec![(
+                "-user-name".to_string(),
+                AttributeValue::String("John".into())
+            )]
+        );
+
+        // Map-returning default wrapper
+        let map = flatten_json_pointers_map(&value);
+        assert_eq!(
+            map.get("/user/name").unwrap(),
+            &AttributeValue::String("John".into())
+        );
+
+        // Map-returning custom-separator wrapper
+        let map = flatten_json_pointers_map_with_separator(&value, "_");
+        assert_eq!(
+            map.get("_user_name").unwrap(),
+            &AttributeValue::String("John".into())
+        );
+    }
 }

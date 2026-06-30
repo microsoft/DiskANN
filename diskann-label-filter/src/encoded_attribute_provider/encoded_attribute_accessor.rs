@@ -124,3 +124,87 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::set::roaring_set_provider::RoaringTreemapSetProvider;
+
+    fn provider_with_labels() -> Arc<RwLock<RoaringTreemapSetProvider<u32>>> {
+        let mut sp = RoaringTreemapSetProvider::<u32>::new();
+        // id 1 has labels {100, 200}; id 5 has label {300}.
+        sp.insert(&1u32, &100u64).unwrap();
+        sp.insert(&1u32, &200u64).unwrap();
+        sp.insert(&5u32, &300u64).unwrap();
+        Arc::new(RwLock::new(sp))
+    }
+
+    #[test]
+    fn visit_labels_of_point_present_and_absent() {
+        let mut accessor = EncodedAttributeAccessor::new(provider_with_labels());
+
+        // Present id -> Some set with both labels.
+        let count = accessor
+            .visit_labels_of_point(1u32, |id, set| {
+                assert_eq!(id, 1u32);
+                let set = set.expect("expected a set for id 1");
+                assert!(set.contains(100u64));
+                assert!(set.contains(200u64));
+                set.len()
+            })
+            .unwrap();
+        assert_eq!(count, 2u64);
+
+        // Absent id -> None.
+        let is_none = accessor
+            .visit_labels_of_point(42u32, |_id, set| set.is_none())
+            .unwrap();
+        assert!(is_none);
+    }
+
+    #[test]
+    fn visit_labels_of_points_iterates_all() {
+        let mut accessor = EncodedAttributeAccessor::new(provider_with_labels());
+
+        let mut seen: Vec<(u32, bool)> = Vec::new();
+        accessor
+            .visit_labels_of_points([1u32, 5u32, 7u32], |id, set| {
+                seen.push((id, set.is_some()));
+            })
+            .unwrap();
+
+        assert_eq!(seen, vec![(1u32, true), (5u32, true), (7u32, false)]);
+    }
+
+    #[test]
+    fn visit_recovers_from_poisoned_lock() {
+        let provider = provider_with_labels();
+
+        // Poison the lock by panicking while holding the write guard.
+        let p2 = provider.clone();
+        let _ = std::thread::spawn(move || {
+            let mut sp = p2.write().unwrap();
+            sp.insert(&9u32, &900u64).unwrap();
+            panic!("intentional panic to poison the lock");
+        })
+        .join();
+        assert!(provider.is_poisoned());
+
+        // The accessor should still be able to read despite poisoning.
+        let mut accessor = EncodedAttributeAccessor::new(provider);
+        let present = accessor
+            .visit_labels_of_point(1u32, |_id, set| set.is_some())
+            .unwrap();
+        assert!(present);
+
+        let mut count = 0usize;
+        accessor
+            .visit_labels_of_points([1u32, 5u32], |_id, set| {
+                if set.is_some() {
+                    count += 1;
+                }
+            })
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+}

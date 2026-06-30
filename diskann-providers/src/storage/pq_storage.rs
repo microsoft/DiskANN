@@ -406,6 +406,19 @@ mod pq_storage_tests {
     }
 
     #[test]
+    fn get_data_path_test() {
+        // With a data path, `get_data_path` returns it and the compressed path getter works.
+        let with_data = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
+        assert_eq!(with_data.get_data_path().unwrap(), DATA_FILE);
+        assert_eq!(with_data.get_compressed_data_path(), PQ_COMPRESSED_PATH);
+
+        // Without a data path, `get_data_path` returns a config error.
+        let without_data = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, None);
+        assert!(without_data.get_data_path().is_err());
+        assert_eq!(without_data.get_compressed_data_path(), PQ_COMPRESSED_PATH);
+    }
+
+    #[test]
     fn write_compressed_pivot_metadata_test() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let compress_pivot_path = "/write_compressed_pivot_metadata_test.bin";
@@ -467,6 +480,54 @@ mod pq_storage_tests {
         assert_eq!(pq_pivot_data.len(), 256 * 128);
         assert_eq!(centroids.len(), 128);
         assert_eq!(chunk_offsets.len(), 2);
+    }
+
+    #[test]
+    fn load_existing_pivot_data_dimension_mismatch_errors() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/mismatch_pivots.bin";
+
+        let num_centers = 3;
+        let dim = 4;
+        let pivots: Vec<f32> = (0..num_centers * dim).map(|i| i as f32).collect();
+        let chunk_offsets = vec![0, 2, dim];
+
+        let pq_storage = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None);
+        pq_storage
+            .write_pivot_data(
+                &pivots,
+                None,
+                &chunk_offsets,
+                num_centers,
+                dim,
+                &storage_provider,
+            )
+            .unwrap();
+
+        // Wrong number of centers triggers the pivots dimension-mismatch error.
+        assert!(
+            pq_storage
+                .load_existing_pivot_data(&2, &(num_centers + 1), &dim, &storage_provider)
+                .is_err()
+        );
+
+        // Wrong chunk count triggers the chunk-offsets dimension-mismatch error.
+        assert!(
+            pq_storage
+                .load_existing_pivot_data(&99, &num_centers, &dim, &storage_provider)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn load_pq_pivots_bin_missing_file_errors() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pq_storage = PQStorage::new("/missing_pivots.bin", PQ_COMPRESSED_PATH, None);
+        assert!(
+            pq_storage
+                .load_pq_pivots_bin("/missing_pivots.bin", 2, &storage_provider)
+                .is_err()
+        );
     }
 
     /// Write pivot data with `centroid = None`, read it back via

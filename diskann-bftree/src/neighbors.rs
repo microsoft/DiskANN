@@ -408,6 +408,24 @@ mod tests {
         assert!(neighbor_provider.get_neighbors(1, &mut result).is_err());
     }
 
+    #[tokio::test]
+    async fn neighbor_error_paths() {
+        let provider = NeighborProvider::<u32>::new_with_config(6, Config::default()).unwrap();
+
+        // Reading a never-set id returns the NotFound error path.
+        let mut result = AdjacencyList::with_capacity(10);
+        assert!(provider.get_neighbors(42, &mut result).is_err());
+
+        // A neighbor list longer than the max degree is rejected.
+        let too_long: Vec<u32> = (0..=provider.max_degree()).collect();
+        let mut buf = vec![0u32; provider.dim];
+        assert!(provider.set_neighbors(7, &too_long, &mut buf).is_err());
+
+        // A write buffer shorter than `dim` is rejected.
+        let mut short_buf = vec![0u32; 1];
+        assert!(provider.set_neighbors(7, &[1, 2], &mut short_buf).is_err());
+    }
+
     /// Test the interleaved and parallel traversal of the Bf-Tree
     /// by invoking the async accessors of the neighbor list provider
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]

@@ -221,4 +221,13 @@ mod timer_tests {
         let peak_memory_usage = timer.get_peak_memory_usage();
         assert!(peak_memory_usage >= 0.0);
     }
+
+    #[test]
+    fn test_elapsed_seconds_and_gcycles() {
+        let timer = Timer::new();
+        assert!(timer.elapsed_seconds() >= 0.0);
+        // elapsed_gcycles returns 0.0 when cycle counters are unavailable,
+        // and a non-negative value otherwise.
+        assert!(timer.elapsed_gcycles() >= 0.0);
+    }
 }
