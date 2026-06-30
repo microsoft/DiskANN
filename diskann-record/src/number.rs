@@ -296,4 +296,33 @@ mod tests {
         assert_eq!(serde_json::to_string(&Number::U64(7)).unwrap(), "7");
         assert_eq!(serde_json::to_string(&Number::I64(-7)).unwrap(), "-7");
     }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn json_numbers_select_matching_variant() {
+        // Unsigned, signed, and floating-point literals each route to the visitor
+        // method that preserves the writer's chosen kind.
+        assert!(matches!(
+            serde_json::from_str("7").unwrap(),
+            Number::U64(7)
+        ));
+        assert!(matches!(
+            serde_json::from_str("-7").unwrap(),
+            Number::I64(-7)
+        ));
+        match serde_json::from_str("1.5").unwrap() {
+            Number::F64(v) => assert_eq!(v, 1.5),
+            other => panic!("expected F64, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn non_sentinel_string_is_rejected() {
+        let err = serde_json::from_str::<Number>("\"bogus\"").unwrap_err();
+        assert!(
+            err.to_string().contains("numeric sentinel"),
+            "unexpected error message: {err}"
+        );
+    }
 }
