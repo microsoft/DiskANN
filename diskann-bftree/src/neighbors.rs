@@ -789,7 +789,13 @@ mod tests {
                 set.spawn(async move {
                     let mut result = AdjacencyList::with_capacity(max_degree as usize + 1);
                     let mut iterations = 0u64;
-                    while !done_clone.load(std::sync::atomic::Ordering::Acquire) {
+                    // Validate at least once before observing `done`. A reader that is
+                    // first scheduled only after every writer has already finished would
+                    // otherwise see `done == true` immediately, read nothing, and trip the
+                    // liveness assertion below — a scheduling artifact, not a real defect.
+                    // Reading the fully-written state is still a valid, consistent
+                    // observation, so the invariants hold regardless of timing.
+                    loop {
                         provider_clone.get_neighbors(0, &mut result).unwrap();
                         // The list must never exceed max_degree
                         assert!(
@@ -807,6 +813,9 @@ mod tests {
                             );
                         }
                         iterations += 1;
+                        if done_clone.load(std::sync::atomic::Ordering::Acquire) {
+                            break;
+                        }
                         tokio::task::yield_now().await;
                     }
                     assert!(
