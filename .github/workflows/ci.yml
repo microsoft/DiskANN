@@ -25,7 +25,7 @@ env:
   DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
 
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
-  SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
+  SDE_VERSION: "sde-external-10.8.0-2026-03-15-lin"
 
 defaults:
   run:
@@ -257,8 +257,6 @@ jobs:
     needs: basics
     name: sde-baseline-tests
     runs-on: ubuntu-latest
-    if:
-      false # Disabled until we can resolve SDE binary downloads.
     env:
       # Compile for the x86-64 baseline — no AVX, no AVX2.
       RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
@@ -284,7 +282,7 @@ jobs:
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
           wget -qO intel-sde.tar.xz "$SDE_URL"
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
@@ -320,8 +318,6 @@ jobs:
     needs: basics
     name: sde-avx512-tests
     runs-on: ubuntu-latest
-    if:
-      false # Disabled until we can resolve SDE binary downloads.
     env:
       # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
@@ -347,7 +343,7 @@ jobs:
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
           wget -qO intel-sde.tar.xz "$SDE_URL"
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
