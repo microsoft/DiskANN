@@ -68,8 +68,7 @@ fn build_query_bitmaps<StorageProvider: StorageReadProvider + StorageWriteProvid
 
     if base_file_labels.is_some() && filter_bitmap_file.is_some() {
         return Err(CMDToolError {
-            details: "Both base_file_labels and filter_bitmap_file cannot be provided."
-                .to_string(),
+            details: "Both base_file_labels and filter_bitmap_file cannot be provided.".to_string(),
         });
     }
 
@@ -247,17 +246,16 @@ pub fn compute_range_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let dataset_iterator =
-        VectorDataIterator::<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>::new(
-            base_file,
-            Option::None,
-            storage_provider,
-        )?;
+    let dataset_iterator = VectorDataIterator::<
+        StorageProvider,
+        Data::VectorDataType,
+        Data::AssociatedDataType,
+    >::new(base_file, Option::None, storage_provider)?;
 
     let query_data =
         read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
     let query_num = query_data.nrows();
-    
+
     let query_bitmaps = build_query_bitmaps(
         storage_provider,
         query_num,
