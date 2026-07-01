@@ -43,7 +43,7 @@ pub enum SearchMode<'a> {
     },
 
     InlineFilter {
-        predicate: Box<dyn QueryLabelProvider<u32> + 'a>,
+        filter: Box<dyn QueryLabelProvider<u32> + 'a>,
         adaptive_l: Option<AdaptiveL>,
     },
 
@@ -90,7 +90,7 @@ impl<'a> SearchMode<'a> {
     /// resizing).
     ///
     /// The closure is wrapped in a generic adapter (`FnLabelProvider<F>`)
-    /// that implements `QueryLabelProvider<u32>`. 
+    /// that implements `QueryLabelProvider<u32>`.
     pub fn inline_filter<F>(predicate: F, adaptive_l: Option<AdaptiveL>) -> Self
     where
         F: Fn(&u32) -> bool + Send + Sync + 'a,
@@ -113,7 +113,7 @@ impl<'a> SearchMode<'a> {
         }
 
         Self::InlineFilter {
-            predicate: Box::new(FnLabelProvider(predicate)),
+            filter: Box::new(FnLabelProvider(predicate)),
             adaptive_l,
         }
     }
@@ -186,11 +186,11 @@ mod tests {
         let mode = SearchMode::inline_filter(|id| *id == 3, None);
         match &mode {
             SearchMode::InlineFilter {
-                predicate,
+                filter,
                 adaptive_l: None,
             } => {
-                assert!(predicate.is_match(3));
-                assert!(!predicate.is_match(2));
+                assert!(filter.is_match(3));
+                assert!(!filter.is_match(2));
             }
             _ => panic!("expected InlineFilter with adaptive_l = None"),
         }

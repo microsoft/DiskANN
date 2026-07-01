@@ -218,6 +218,20 @@ where
 /// `clippy::type_complexity`'s default threshold.
 type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
 
+/// Encodes whether to accept all candidates at rerank time or apply a
+/// specific predicate. Used by `RerankAndFilter` and
+/// `DeterminantDiversityAndFilter` instead of `Option<PostprocessFilter>`
+/// so call sites are self-documenting without relying on comments to
+/// explain what `None` means.
+#[derive(Clone, Copy)]
+pub enum PostprocessStrategy<'a> {
+    /// Accept every candidate — no predicate is called. Used by `FlatScan`
+    /// (filtered at scan time) and `InlineFilter` (filtered at visit time).
+    AcceptAll,
+    /// Apply the given predicate; non-matching candidates are dropped.
+    Apply(PostprocessFilter<'a>),
+}
+
 pub struct DiskSearchStrategy<'a, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -225,14 +239,10 @@ where
 {
     // Borrowed from `search_internal` so the strategy can be passed by value
     io_tracker: &'a IOTracker,
-    /// Borrowed predicate consumed *only* by `default_post_processor()` →
-    /// `RerankAndFilter`. Other variants (`FlatScan`, `InlineFilter`) filter
-    /// earlier in their pipelines and install `None` here to avoid a
-    /// redundant second application. `None` means accept-all — the post-
-    /// processor short-circuits via `.map_or(true, ...)` and skips the
-    /// dyn-fn call entirely. Fn param is `u32` because `VectorIdType = u32`
-    /// is enforced by trait bounds throughout this provider.
-    postprocess_filter: Option<PostprocessFilter<'a>>,
+    /// Consumed only by `default_post_processor()` → `RerankAndFilter`.
+    /// `FlatScan` and `InlineFilter` filter earlier in their pipelines and
+    /// pass `AcceptAll` here to avoid a redundant second pass.
+    postprocess_filter: PostprocessStrategy<'a>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: &'a ProviderFactory,
@@ -280,14 +290,12 @@ impl IOTracker {
 
 #[derive(Clone, Copy)]
 pub struct RerankAndFilter<'a> {
-    /// `None` means accept-all; `post_process` short-circuits before invoking
-    /// the closure, so the unfiltered hot path pays no dyn-fn cost per node.
-    filter: Option<PostprocessFilter<'a>>,
+    filter: PostprocessStrategy<'a>,
 }
 
 #[derive(Clone, Copy)]
 pub struct DeterminantDiversityAndFilter<'a> {
-    filter: Option<PostprocessFilter<'a>>,
+    filter: PostprocessStrategy<'a>,
     params: DeterminantDiversityParams,
 }
 
@@ -301,13 +309,13 @@ pub enum DiskSearchPostProcessor<'a> {
 }
 
 impl<'a> RerankAndFilter<'a> {
-    pub fn new(filter: Option<PostprocessFilter<'a>>) -> Self {
+    pub fn new(filter: PostprocessStrategy<'a>) -> Self {
         Self { filter }
     }
 }
 
 impl<'a> DeterminantDiversityAndFilter<'a> {
-    pub fn new(filter: Option<PostprocessFilter<'a>>, params: DeterminantDiversityParams) -> Self {
+    pub fn new(filter: PostprocessStrategy<'a>, params: DeterminantDiversityParams) -> Self {
         Self { filter, params }
     }
 }
@@ -342,20 +350,27 @@ where
         let provider = accessor.provider;
 
         let mut uncached_ids = Vec::new();
-        let mut reranked = candidates
-            .map(|n| n.id)
-            // `None` short-circuits to `true` — no dyn-fn call when there's
-            // no predicate set, which is the common unfiltered hot path.
-            .filter(|id| self.filter.is_none_or(|f| f(id)))
-            .filter_map(|n| {
+        let mut reranked = {
+            let mut process = |n: u32| {
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
                     Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
                 } else {
                     uncached_ids.push(n);
                     None
                 }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            };
+            match self.filter {
+                PostprocessStrategy::AcceptAll => candidates
+                    .map(|n| n.id)
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+                PostprocessStrategy::Apply(f) => candidates
+                    .map(|n| n.id)
+                    .filter(|id| f(id))
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
+        };
         if !uncached_ids.is_empty() {
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
             for n in &uncached_ids {
@@ -404,12 +419,13 @@ where
         let provider = accessor.provider;
         let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
 
-        let candidate_ids: Vec<u32> = candidates
-            .map(|candidate| candidate.id)
-            // `None` short-circuits to accept-all; only the `Some` arm
-            // pays the dyn-fn call per candidate.
-            .filter(|id| self.filter.is_none_or(|f| f(id)))
-            .collect();
+        let candidate_ids: Vec<u32> = match self.filter {
+            PostprocessStrategy::AcceptAll => candidates.map(|candidate| candidate.id).collect(),
+            PostprocessStrategy::Apply(f) => candidates
+                .map(|candidate| candidate.id)
+                .filter(|id| f(id))
+                .collect(),
+        };
 
         if candidate_ids.is_empty() {
             return Ok(0);
@@ -905,17 +921,11 @@ where
         })
     }
 
-    /// Helper method to create a DiskSearchStrategy with common parameters.
-    ///
-    /// `postprocess_filter = None` means accept-all at rerank time. Callers pass
-    /// `None` on paths that filter earlier in their pipeline (`FlatScan` at
-    /// scan time, `InlineFilter` at visit time) to avoid re-applying the
-    /// predicate redundantly; only the plain `Graph` path installs a
-    /// predicate here
+    /// Helper method to create a `DiskSearchStrategy` with common parameters.
     fn search_strategy<'a>(
         &'a self,
         io_tracker: &'a IOTracker,
-        postprocess_filter: Option<PostprocessFilter<'a>>,
+        postprocess_filter: PostprocessStrategy<'a>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
             io_tracker,
@@ -1119,7 +1129,7 @@ where
         //                    as the post-processor over the L candidate pool.
         let stats = match mode {
             SearchMode::FlatScan { filter } => {
-                let strategy = self.search_strategy(&io_tracker, None);
+                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
                 self.runtime.block_on(self.flat_search(
                     &strategy,
                     query,
@@ -1129,7 +1139,12 @@ where
                 ))?
             }
             SearchMode::Graph { filter } => {
-                let strategy = self.search_strategy(&io_tracker, filter.as_deref());
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    filter
+                        .as_deref()
+                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                );
                 let knn_search = Knn::new(k, l, beam_width)?;
                 self.runtime.block_on(self.index.search(
                     knn_search,
@@ -1139,20 +1154,17 @@ where
                     &mut result_output_buffer,
                 ))?
             }
-            SearchMode::InlineFilter {
-                predicate,
-                adaptive_l,
-            } => {
+            SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
                 // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
                 // its counters reachable from this scope.
-                let strategy = self.search_strategy(&io_tracker, None);
+                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
                 let knn_search = Knn::new(k, l, beam_width)?;
                 self.runtime.block_on(self.filter_search(
                     strategy,
                     query,
                     knn_search,
-                    predicate.as_ref(),
+                    filter.as_ref(),
                     adaptive_l.clone(),
                     &mut result_output_buffer,
                 ))?
@@ -1161,10 +1173,13 @@ where
                 // Strategy installs the filter so `RerankAndFilter` would also
                 // honor it, but the active post-processor here is the
                 // diversity selector built from `DiskSearchPostProcessor`.
-                let strategy = self.search_strategy(&io_tracker, filter.as_deref());
+                let postprocess_config = filter
+                    .as_deref()
+                    .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
+                let strategy = self.search_strategy(&io_tracker, postprocess_config);
                 let knn_search = Knn::new(k, l, beam_width)?;
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
-                    DeterminantDiversityAndFilter::new(filter.as_deref(), *params),
+                    DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
                 self.runtime.block_on(self.index.search_with(
                     knn_search,
@@ -1763,7 +1778,7 @@ mod disk_provider_tests {
             &mut associated_data,
         );
         let io_tracker = IOTracker::default();
-        let strategy = search_engine.search_strategy(&io_tracker, None);
+        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let recorded_search =
@@ -1999,7 +2014,7 @@ mod disk_provider_tests {
             &mut associated_data,
         );
         let io_tracker = IOTracker::default();
-        let strategy = search_engine.search_strategy(&io_tracker, None);
+        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -2047,9 +2062,7 @@ mod disk_provider_tests {
             &mut associated_data2,
         );
         let io_tracker2 = IOTracker::default();
-        // Old API passed `&|_| true` (accept-all); after the Option refactor
-        // that's structurally equivalent to `None`.
-        let strategy2 = search_engine.search_strategy(&io_tracker2, None);
+        let strategy2 = search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll);
         let search_params2 =
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
@@ -2462,7 +2475,7 @@ mod disk_provider_tests {
         );
 
         let io_tracker = IOTracker::default();
-        let strategy = search_engine.search_strategy(&io_tracker, None);
+        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
 
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
