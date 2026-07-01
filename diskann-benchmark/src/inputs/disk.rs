@@ -73,7 +73,7 @@ pub(crate) struct DiskIndexBuild {
 }
 
 #[cfg(feature = "disk-index")]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct DiskSearchMode {
     pub(crate) is_flat_search: bool,
     #[serde(default)]
@@ -156,7 +156,13 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
     #[cfg(feature = "disk-index")]
+    #[serde(default)]
     pub(crate) search_mode: DiskSearchMode,
+    // Backward compatibility for older benchmark inputs that used
+    // `is_flat_search` directly at the search-phase level.
+    #[cfg(feature = "disk-index")]
+    #[serde(default, skip_serializing)]
+    pub(crate) is_flat_search: Option<bool>,
     #[cfg(not(feature = "disk-index"))]
     pub(crate) is_flat_search: bool,
     pub(crate) distance: SimilarityMeasure,
@@ -269,6 +275,11 @@ impl DiskSearchPhase {
         }
 
         #[cfg(feature = "disk-index")]
+        if let Some(is_flat_search) = self.is_flat_search {
+            self.search_mode.is_flat_search = is_flat_search;
+        }
+
+        #[cfg(feature = "disk-index")]
         self.search_mode
             .validate(checker)
             .context("invalid disk search mode")?;
@@ -347,6 +358,8 @@ impl Example for DiskIndexOperation {
                 is_flat_search: false,
                 adaptive_l: None,
             },
+            #[cfg(feature = "disk-index")]
+            is_flat_search: None,
             #[cfg(not(feature = "disk-index"))]
             is_flat_search: false,
             distance: SimilarityMeasure::SquaredL2,
