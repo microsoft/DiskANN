@@ -272,28 +272,14 @@ where
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
                 // Construct the SearchMode from the JSON-driven
-                // (is_flat_search, has_filter, post_processor) triple.
-                // Flat scan ignores `post_processor` — determinant-diversity
-                // is a graph-traversal-only post-processing step.
+                // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
+                // benchmark only supplies the per-query filter and post-processor.
                 let has_filter = search_params.vector_filters_file.is_some();
-                let post = search_params.post_processor.as_ref();
-                let mode: SearchMode<'_> = match (search_params.is_flat_search, has_filter, post) {
-                    (true, false, _) => SearchMode::flat(),
-                    (true, true, _) => SearchMode::flat_filtered(move |vid: &u32| vf.contains(vid)),
-                    (false, false, None) => SearchMode::graph(),
-                    (false, true, None) => {
-                        SearchMode::graph_filtered(move |vid: &u32| vf.contains(vid))
-                    }
-                    (false, false, Some(TopkPostProcessor::DeterminantDiversity(params))) => {
-                        SearchMode::diverse_graph(*params)
-                    }
-                    (false, true, Some(TopkPostProcessor::DeterminantDiversity(params))) => {
-                        SearchMode::diverse_graph_filtered(
-                            move |vid: &u32| vf.contains(vid),
-                            *params,
-                        )
-                    }
-                };
+                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
+                    has_filter,
+                    vf,
+                    search_params.post_processor.as_ref(),
+                );
 
                 match searcher.search(
                     q,
@@ -366,7 +352,7 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: search_params.is_flat_search,
+        is_flat_search: search_params.search_mode.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
