@@ -36,10 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::{
-        disk::{DiskIndexLoad, DiskSearchPhase},
-        post_processor::TopkPostProcessor,
-    },
+    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
     utils::{datafiles, SimilarityMeasure},
 };
 
