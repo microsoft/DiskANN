@@ -5,6 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use diskann::graph::search::{FilteredRange as FilteredRangeParameters, Range as RangeParameters};
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
 use crate::{index::result::RangeSearchResults, inputs::graph_index::GraphRangeSearch};
@@ -30,21 +31,26 @@ impl<'a> RangeSearchSteps<'a> {
     }
 }
 
-type Run = core_search::Run<diskann::graph::search::Range>;
-
 pub(crate) trait Range<I> {
+    type Parameters: Clone;
+
     fn search_all(
         &self,
-        parameters: Vec<Run>,
+        parameters: Vec<core_search::Run<Self::Parameters>>,
         groundtruth: &dyn benchmark_core::recall::Rows<I>,
     ) -> anyhow::Result<Vec<RangeSearchResults>>;
 }
 
-pub(crate) fn run<I>(
-    runner: &dyn Range<I>,
+pub(crate) fn run<I, R, F>(
+    runner: &R,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: RangeSearchSteps<'_>,
-) -> anyhow::Result<Vec<RangeSearchResults>> {
+    mut map_parameters: F,
+) -> anyhow::Result<Vec<RangeSearchResults>>
+where
+    R: Range<I>,
+    F: FnMut(RangeParameters) -> anyhow::Result<R::Parameters>,
+{
     let mut all = Vec::new();
 
     for threads in steps.num_tasks.iter() {
@@ -59,9 +65,12 @@ pub(crate) fn run<I>(
                 .construct_params()?
                 .into_iter()
                 .map(|range_search_params| {
-                    core_search::Run::new(range_search_params, setup.clone())
+                    Ok(core_search::Run::new(
+                        map_parameters(range_search_params)?,
+                        setup.clone(),
+                    ))
                 })
-                .collect();
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
             all.extend(runner.search_all(parameters, groundtruth)?);
         }
@@ -69,7 +78,6 @@ pub(crate) fn run<I>(
 
     Ok(all)
 }
-
 ///////////
 // Impls //
 ///////////
@@ -79,13 +87,15 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::Range<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::search::Range,
+        Parameters = RangeParameters,
         Output = core_search::graph::range::Metrics,
     >,
 {
+    type Parameters = RangeParameters;
+
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::search::Range>>,
+        parameters: Vec<core_search::Run<Self::Parameters>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
     ) -> anyhow::Result<Vec<RangeSearchResults>> {
         let results = core_search::search_all(
@@ -95,5 +105,35 @@ where
         )?;
 
         Ok(results.into_iter().map(RangeSearchResults::new).collect())
+    }
+}
+
+impl<DP, T, S> Range<DP::InternalId>
+    for Arc<core_search::graph::filtered_range::FilteredRange<DP, T, S>>
+where
+    DP: diskann::provider::DataProvider,
+    core_search::graph::filtered_range::FilteredRange<DP, T, S>: core_search::Search<
+        Id = DP::InternalId,
+        Parameters = FilteredRangeParameters,
+        Output = core_search::graph::filtered_range::Metrics,
+    >,
+{
+    type Parameters = FilteredRangeParameters;
+
+    fn search_all(
+        &self,
+        parameters: Vec<core_search::Run<Self::Parameters>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
+    ) -> anyhow::Result<Vec<RangeSearchResults>> {
+        let results = core_search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            core_search::graph::filtered_range::Aggregator::new(groundtruth),
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(RangeSearchResults::new_filtered)
+            .collect())
     }
 }

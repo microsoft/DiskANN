@@ -212,6 +212,7 @@ where
 
             let stats = if scratch.in_range.len()
                 >= ((self.starting_l() as f32) * self.initial_slack()) as usize
+                && scratch.in_range.len() < self.max_returned().unwrap_or(usize::MAX)
             {
                 // Move to range search
                 let range_stats = range_search_internal(
@@ -336,7 +337,7 @@ where
 
     let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
 
-    while !scratch.range_frontier.is_empty() {
+    while !scratch.range_frontier.is_empty() && scratch.in_range.len() < max_returned {
         scratch.beam_nodes.clear();
 
         // In this loop we are going to find the beam_width number of remaining nodes within the radius

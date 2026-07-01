@@ -123,6 +123,7 @@
 //!
 //! * [`graph::search::Knn`]: K-nearest neighbors search for [`diskann::graph::DiskANNIndex`].
 //! * [`graph::search::Range`]: Range search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::search::FilteredRange`]: Filtered range search for [`diskann::graph::DiskANNIndex`].
 //! * [`graph::MultiHop`]: Multi-hop filtered search for [`diskann::graph::DiskANNIndex`].
 
 pub(crate) mod ids;
