@@ -125,11 +125,8 @@ mod tests {
             checker,
         );
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            Progress::Completed => assert_eq!(processed, vec![1, 2, 3, 4, 5]),
-            _ => panic!("Expected Completed"),
-        }
+        assert!(matches!(result.unwrap(), Progress::Completed));
+        assert_eq!(processed, vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
@@ -143,11 +140,7 @@ mod tests {
             checker,
         );
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            Progress::Completed => {}
-            _ => panic!("Expected Completed"),
-        }
+        assert!(matches!(result.unwrap(), Progress::Completed));
     }
 
     /// A tracker that returns Stop after `stop_after` Continue grants.
@@ -187,14 +180,12 @@ mod tests {
             Box::new(tracker),
         );
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            Progress::Processed(idx) => {
-                assert_eq!(idx, 3); // stopped before processing item at index 3
-                assert_eq!(processed, vec![10, 20, 30]);
-            }
-            _ => panic!("Expected Processed"),
-        }
+        // `Processed(n)` reports the number of items processed before the stop grant.
+        assert!(matches!(
+            result.unwrap(),
+            Progress::Processed(processed_count) if processed_count == 3
+        ));
+        assert_eq!(processed, vec![10, 20, 30]);
     }
 
     /// A tracker that yields once (with a tiny duration), then continues.
@@ -233,12 +224,9 @@ mod tests {
             Box::new(tracker),
         );
 
-        assert!(result.is_ok());
         // After yielding, it should have continued and processed all items
-        match result.unwrap() {
-            Progress::Completed => assert_eq!(processed, vec![1, 2]),
-            _ => panic!("Expected Completed"),
-        }
+        assert!(matches!(result.unwrap(), Progress::Completed));
+        assert_eq!(processed, vec![1, 2]);
     }
 
     #[test]
@@ -283,15 +271,12 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            Progress::Processed(idx) => {
-                assert_eq!(idx, 2);
-                let processed = processed.lock().await;
-                assert_eq!(*processed, vec![1, 2]);
-            }
-            _ => panic!("Expected Processed"),
-        }
+        assert!(matches!(
+            result.unwrap(),
+            Progress::Processed(processed_count) if processed_count == 2
+        ));
+        let processed = processed.lock().await;
+        assert_eq!(*processed, vec![1, 2]);
     }
 
     #[tokio::test]
@@ -313,13 +298,8 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            Progress::Completed => {
-                let processed = processed.lock().await;
-                assert_eq!(*processed, vec![1, 2, 3]);
-            }
-            _ => panic!("Expected Completed"),
-        }
+        assert!(matches!(result.unwrap(), Progress::Completed));
+        let processed = processed.lock().await;
+        assert_eq!(*processed, vec![1, 2, 3]);
     }
 }

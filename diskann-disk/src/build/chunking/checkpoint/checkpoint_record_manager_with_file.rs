@@ -94,16 +94,6 @@ mod tests {
 
     use super::*;
 
-    // Helper function to clean up checkpoint files after tests
-    fn clean_checkpoint_file(prefix: &str, identifier: u64) {
-        let checkpoint_file = format!("{prefix}_{identifier}.checkpoint");
-        if std::path::Path::new(&checkpoint_file).exists() {
-            // There is a possible race between checking that the file exists and removing
-            // the file here, but since this is test code, that is unlikely.
-            fs::remove_file(&checkpoint_file).unwrap();
-        }
-    }
-
     #[test]
     fn test_new_checkpoint_creates_fresh_record() -> ANNResult<()> {
         let temp_dir = tempdir()?;
@@ -171,7 +161,6 @@ mod tests {
             Some(0)
         );
 
-        clean_checkpoint_file(&index_prefix, identifier);
         Ok(())
     }
 
@@ -185,9 +174,6 @@ mod tests {
             .unwrap()
             .to_string();
         let identifier = 42;
-
-        // Clean up any existing files
-        clean_checkpoint_file(&index_prefix, identifier);
 
         // Define a helper function to process a stage with interruption and resumption
         fn process_stage(
@@ -246,9 +232,6 @@ mod tests {
         // Verify workflow is complete
         let manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
         assert!(manager.has_completed()?);
-
-        // Clean up test files
-        clean_checkpoint_file(&index_prefix, identifier);
 
         Ok(())
     }
