@@ -22,6 +22,7 @@ members = [
     "diskann-benchmark-core",
     "diskann-benchmark-simd",
     "diskann-benchmark",
+    "diskann-record",
     "diskann-tools",
     "vectorset",
     "diskann-bftree",
@@ -66,6 +67,7 @@ diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.54.
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.54.0" }
 diskann-tools = { path = "diskann-tools", version = "0.54.0" }
 diskann-bftree = {path = "diskann-bftree", version = "0.54.0" }
+diskann-record = { path = "diskann-record", version = "0.54.0" }
 
 # External dependencies (shared versions)
 anyhow = "1.0.98"
@@ -87,8 +89,8 @@ iai-callgrind = "0.14.0"
 itertools = "0.13.0"
 num-traits = "0.2.15"
 num_cpus = "1.16.0"
-opentelemetry = "0.30.0"
-opentelemetry_sdk = "0.30.0"
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
 paste = "1.0.15"
 pin-project = "1.1.8"
 proptest = "1.6.0"
