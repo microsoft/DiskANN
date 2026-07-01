@@ -21,7 +21,7 @@ use diskann_wide::{
 use half::f16;
 use thiserror::Error;
 
-use crate::{layers, num::Bytes};
+use crate::{layers, num::Bytes, Hidden};
 
 /// A useful trait bound for types compatible with [`Full`].
 ///
@@ -29,10 +29,11 @@ use crate::{layers, num::Bytes};
 /// a single bound.
 pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     #[doc(hidden)]
-    fn __new(dim: usize, metric: Metric) -> Full<Self>;
+    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<Self>;
 
     #[doc(hidden)]
     fn __query_distance<'a, V>(
+        _: Hidden,
         full: &'a Full<Self>,
         query: &'a [Self],
         visitor: V,
@@ -60,7 +61,7 @@ where
     where
         T: FullPrecision,
     {
-        T::__new(dim, metric)
+        T::__new(Hidden::new(), dim, metric)
     }
 
     fn from_distance_provider(dim: usize, metric: Metric) -> Self
@@ -165,7 +166,7 @@ where
     where
         V: layers::QueryVisitor<'a>,
     {
-        T::__query_distance(self, query, visitor)
+        T::__query_distance(Hidden::new(), self, query, visitor)
     }
 }
 
@@ -349,9 +350,9 @@ crate::opaque!(QueryDistanceError);
 
 macro_rules! mint {
     ($query:ident, $visitor:ident, $T:ty => { $N:literal, $f:ident }) => {{
-        mint!($query, $visitor, { $T, $T } => { $N x $f })
+        mint!($query, $visitor, { $T, $T } => { $N, $f })
     }};
-    ($query:ident, $visitor:ident, { $T:ty, $U:ty } => { $N:literal x $f:ident }) => {{
+    ($query:ident, $visitor:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
         let inner = QueryDistance::<$T, $U, Specialize<$N, $f>>::new($query);
         $visitor.visit_sized::<{ $N * std::mem::size_of::<$U>() }, _>(inner)
     }};
@@ -365,11 +366,12 @@ macro_rules! mint {
 }
 
 impl FullPrecision for f32 {
-    fn __new(dim: usize, metric: Metric) -> Full<f32> {
+    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<f32> {
         Full::from_distance_provider(dim, metric)
     }
 
     fn __query_distance<'a, V>(
+        _: Hidden,
         full: &'a Full<f32>,
         query: &'a [f32],
         visitor: V,
@@ -390,12 +392,8 @@ impl FullPrecision for f32 {
                 }
             }
             Metric::InnerProduct => {
-                // if full.dim() == 768 {
-                //     mint!(query, visitor, f32 => { 768, InnerProduct })
-                // } else {
-                    mint!(query, visitor, f32 => InnerProduct)
-                // }
-            },
+                mint!(query, visitor, f32 => InnerProduct)
+            }
             Metric::Cosine => mint!(query, visitor, f32 => Cosine),
             Metric::CosineNormalized => mint!(query, visitor, f32 => CosineNormalized),
         };
@@ -405,11 +403,12 @@ impl FullPrecision for f32 {
 }
 
 impl FullPrecision for f16 {
-    fn __new(dim: usize, metric: Metric) -> Full<f16> {
+    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<f16> {
         Full::from_distance_provider(dim, metric)
     }
 
     fn __query_distance<'a, V>(
+        _: Hidden,
         full: &'a Full<f16>,
         query: &'a [f16],
         visitor: V,
@@ -424,7 +423,13 @@ impl FullPrecision for f16 {
         let query = Calf::Owned(as_f32);
 
         let output = match full.metric {
-            Metric::L2 => mint!(query, visitor, { f32, f16 } => SquaredL2),
+            Metric::L2 => {
+                if full.dim() == 100 {
+                    mint!(query, visitor, { f32, f16 } => { 100, SquaredL2 })
+                } else {
+                    mint!(query, visitor, { f32, f16 } => SquaredL2)
+                }
+            }
             Metric::InnerProduct => mint!(query, visitor, { f32, f16 } => InnerProduct),
             Metric::Cosine => mint!(query, visitor, { f32, f16 } => Cosine),
             Metric::CosineNormalized => mint!(query, visitor, { f32, f16 } => CosineNormalized),
@@ -435,11 +440,12 @@ impl FullPrecision for f16 {
 }
 
 impl FullPrecision for u8 {
-    fn __new(dim: usize, metric: Metric) -> Full<u8> {
+    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<u8> {
         Full::from_distance_provider(dim, metric)
     }
 
     fn __query_distance<'a, V>(
+        _: Hidden,
         full: &'a Full<u8>,
         query: &'a [u8],
         visitor: V,
@@ -469,11 +475,12 @@ impl FullPrecision for u8 {
 }
 
 impl FullPrecision for i8 {
-    fn __new(dim: usize, metric: Metric) -> Full<i8> {
+    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<i8> {
         Full::from_distance_provider(dim, metric)
     }
 
     fn __query_distance<'a, V>(
+        _: Hidden,
         full: &'a Full<i8>,
         query: &'a [i8],
         visitor: V,

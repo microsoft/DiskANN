@@ -3,45 +3,57 @@
  * Licensed under the MIT license.
  */
 
-//! Benchmark backend for the `diskann-inmem` (inmem2) provider.
-//!
-//! This wires up the inmem2 `Provider<Full<f32>>` to the standard build and search
-//! infrastructure in `diskann-benchmark-core`, giving us parallel insertion via
-//! [`SingleInsert`] and KNN search with recall/latency reporting via [`KNN`].
-
-use std::{io::Write, num::NonZeroUsize, ops::Range, sync::Arc};
-
-use diskann::{
-    graph::{self, DiskANNIndex, StartPointStrategy},
-    provider::{self as ann_provider},
+use std::{
+    fmt::{self, Display, Formatter},
+    io::Write,
+    num::NonZeroUsize,
+    ops::Range,
+    sync::Arc,
+    path::PathBuf,
 };
+
+use diskann::graph::{self, DiskANNIndex, InplaceDeleteMethod, StartPointStrategy};
 use diskann_benchmark_core::{
-    self as benchmark_core, build as build_core,
-    recall::{self, GroundTruthMode},
-    search as core_search,
+    self as benchmark_core, build as build_core, recall, search as core_search,
     streaming::{self, executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     files::InputFile,
     output::Output,
-    utils::datatype::DataType,
+    utils::{
+        datatype::{AsDataType, DataType},
+        fmt::{Delimit, KeyValue, Quote},
+    },
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
-use diskann_inmem::{layers::Full, Provider, Strategy};
+use diskann_inmem::{
+    layers::{Full, FullPrecision},
+    Provider, Strategy,
+};
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric;
+use half::f16;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    index::{result::{SearchResults, AggregatedSearchResults}, build::ProgressMeter},
+    index::{
+        build::{BuildKind, BuildStats, ProgressMeter},
+        result::{AggregatedSearchResults, SearchResults},
+        streaming::{
+            stats::{GenericStats, Summary},
+            StreamStats,
+        },
+    },
     inputs::graph_index::DynamicRunbookParams,
     utils::{datafiles, SimilarityMeasure},
 };
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", Build::<f32>::new())?;
-    registry.register("inmem2-f32-stream", Inmem2Stream)?;
+    registry.register("inmem2-f16", Build::<f16>::new())?;
+
+    registry.register("inmem2-f32-stream", StreamingBenchmark)?;
     Ok(())
 }
 
@@ -84,18 +96,82 @@ mod dto {
         pub(super) num_threads: NonZeroUsize,
     }
 
+    //-----------//
+    // Streaming //
+    //-----------//
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct StreamingKnnSearch {
+        pub(super) queries: InputFile,
+        pub(super) reps: NonZeroUsize,
+        pub(super) num_threads: NonZeroUsize,
+        pub(super) runs: Vec<KnnSweep>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct RunBook {
+        pub(super) path: InputFile,
+        pub(super) dataset: String,
+        pub(super) groundtruth_directory: String,
+        pub(super) delete_method: crate::inputs::graph_index::InplaceDeleteMethod,
+        pub(super) delete_num_to_replace: usize,
+    }
+
+    //------------------//
+    // Top Level Inputs //
+    //------------------//
+
     #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct StaticBuild {
         pub(super) data: Data,
         pub(super) build: BuildParams,
         pub(super) search: KnnSearch,
     }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct BigANNStreaming {
+        pub(super) data: Data,
+        pub(super) build: BuildParams,
+        pub(super) search: StreamingKnnSearch,
+        pub(super) runbook: RunBook,
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct KnnInstance {
     knn: graph::search::Knn,
     recall_k: usize,
+}
+
+impl KnnInstance {
+    fn flatten(runs: &[dto::KnnSweep]) -> anyhow::Result<Vec<Self>> {
+        runs.iter()
+            .flat_map(|sweep| {
+                let search_n = sweep.search_n;
+                let recall_k = sweep.recall_k;
+
+                sweep
+                    .search_l
+                    .iter()
+                    .map(move |search_l| -> anyhow::Result<_> {
+                        let knn = graph::search::Knn::new_default(search_n, *search_l)?;
+                        Ok(KnnInstance { knn, recall_k })
+                    })
+            })
+            .collect()
+    }
+}
+
+impl Display for KnnInstance {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "knn = {}, search_l = {}, beam_width = {}",
+            self.recall_k,
+            self.knn.l_value(),
+            self.knn.beam_width(),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -122,33 +198,33 @@ impl KnnSearch {
             groundtruth.resolve(checker)?;
         }
 
-        let runs = runs
-            .into_iter()
-            .flat_map(|sweep| {
-                sweep
-                    .search_l
-                    .into_iter()
-                    .map(move |search_l| -> anyhow::Result<_> {
-                        let knn = graph::search::Knn::new_default(sweep.search_n, search_l)?;
-                        Ok(KnnInstance {
-                            knn,
-                            recall_k: sweep.recall_k,
-                        })
-                    })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
         Ok(Self {
             queries,
             groundtruth,
             reps,
             num_threads,
-            runs,
+            runs: KnnInstance::flatten(&runs)?,
         })
     }
 
     fn maximum_recall_k(&self) -> usize {
         self.runs.iter().map(|r| r.recall_k).max().unwrap_or(0)
+    }
+}
+
+impl Display for KnnSearch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut kv = KeyValue::new();
+        kv.push("queries", &self.queries);
+        kv.push("groundtruth", &self.groundtruth);
+        kv.push("reps", &self.reps);
+
+        let num_threads = Delimit::new(self.num_threads.iter(), ", ");
+        kv.push("num_threads", &num_threads);
+
+        let runs = Delimit::new(self.runs.iter(), "\n").to_string();
+        kv.push("runs", &runs);
+        write!(f, "{}", kv)
     }
 }
 
@@ -176,6 +252,16 @@ impl Data {
             data,
             distance: distance.into(),
         })
+    }
+}
+
+impl Display for Data {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut kv = KeyValue::new();
+        kv.push("data_type", &self.data_type);
+        kv.push("data", &self.data);
+        kv.push("distance", &self.distance);
+        write!(f, "{}", kv)
     }
 }
 
@@ -213,6 +299,24 @@ impl BuildParams {
     }
 }
 
+impl Display for BuildParams {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut kv = KeyValue::new();
+
+        let pruned_degree = self.config.pruned_degree();
+        let max_degree = self.config.max_degree();
+        let alpha = self.config.alpha();
+        let l_build = self.config.l_build();
+
+        kv.push("pruned_degree", &pruned_degree);
+        kv.push("max_degree", &max_degree);
+        kv.push("alpha", &alpha);
+        kv.push("l_build", &l_build);
+        kv.push("num_threads", &self.num_threads);
+        write!(f, "{}", kv)
+    }
+}
+
 #[derive(Debug)]
 struct StaticBuild {
     data: Data,
@@ -237,6 +341,17 @@ impl StaticBuild {
             build,
             search,
         })
+    }
+}
+
+impl Display for StaticBuild {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut kv = KeyValue::new();
+        kv.push("data", &self.data);
+        kv.push("build", &self.build);
+        kv.push("search", &self.search);
+
+        write!(f, "{}", kv)
     }
 }
 
@@ -287,20 +402,6 @@ impl Input for StaticBuild {
     }
 }
 
-// impl std::fmt::Display for Inmem2Build {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         writeln!(f, "inmem2 f32 benchmark")?;
-//         writeln!(f, "  max_degree: {}", self.max_degree)?;
-//         writeln!(f, "  l_build: {}", self.l_build)?;
-//         writeln!(f, "  alpha: {}", self.alpha)?;
-//         writeln!(f, "  search_n: {}", self.search_n)?;
-//         writeln!(f, "  search_l: {:?}", self.search_l)?;
-//         writeln!(f, "  recall_k: {}", self.recall_k)?;
-//         writeln!(f, "  num_threads: {}", self.num_threads)?;
-//         writeln!(f, "  reps: {}", self.reps)
-//     }
-// }
-
 ///////////////
 // Benchmark //
 ///////////////
@@ -316,14 +417,17 @@ impl<T> Build<T> {
 
 impl<T> Benchmark for Build<T>
 where
-    T: diskann_inmem::layers::FullPrecision
-        + diskann::graph::SampleableForStart,
+    T: diskann_inmem::layers::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = StaticBuild;
     type Output = ();
 
     fn try_match(&self, input: &StaticBuild) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(0))
+        if T::is_match(input.data.data_type) {
+            Ok(MatchScore(0))
+        } else {
+            Err(FailureScore(1000))
+        }
     }
 
     fn description(
@@ -331,11 +435,28 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&StaticBuild>,
     ) -> std::fmt::Result {
+        match input {
+            Some(input) => {
+                let data_type = input.data.data_type;
+                if !T::is_match(data_type) {
+                    write!(
+                        f,
+                        "expected data-type {}, instead got {}",
+                        Quote(T::DATA_TYPE),
+                        Quote(data_type)
+                    )?;
+                }
+            }
+            None => {
+                write!(
+                    f,
+                    "full-precision streaming with data type {}",
+                    Quote(T::DATA_TYPE)
+                )?;
+            }
+        }
+
         Ok(())
-        // match input {
-        //     Some(i) => write!(f, "{i}"),
-        //     None => write!(f, "inmem2 f32 benchmark"),
-        // }
     }
 
     fn run(
@@ -344,7 +465,7 @@ where
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<()> {
-        // writeln!(output, "{input}")?;
+        writeln!(output, "{input}\n")?;
 
         // Load data.
         let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
@@ -377,17 +498,9 @@ where
             build_core::ids::Identity::<u32>::new(),
         );
 
-        // writeln!(
-        //     output,
-        //     "Building index with {} threads...",
-        //     input.num_threads
-        // )?;
         let build_results = build_core::build_tracked(
             builder,
-            build_core::Parallelism::dynamic(
-                diskann::utils::ONE,
-                input.build.num_threads,
-            ),
+            build_core::Parallelism::dynamic(diskann::utils::ONE, input.build.num_threads),
             &rt,
             Some(&ProgressMeter::new(output)),
         )?;
@@ -395,19 +508,22 @@ where
         let total_build_time = build_results.end_to_end_latency();
         writeln!(
             output,
-            "Build complete in {:.2}s",
+            "\nBuild complete in {:.2}s",
             total_build_time.as_seconds()
         )?;
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
-        let queries: Arc<Matrix<T>> =
-            Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?);
+        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            &input.search.queries,
+        ))?);
         let max_k = input.search.maximum_recall_k();
-        let groundtruth =
-            datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), Some(max_k))?;
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&input.search.groundtruth),
+            Some(max_k),
+        )?;
 
-        writeln!(output, "Loaded {} queries", queries.nrows())?;
+        writeln!(output, "Loaded {} queries\n", queries.nrows())?;
 
         let knn = benchmark_core::search::graph::KNN::new(
             index,
@@ -415,30 +531,13 @@ where
             benchmark_core::search::graph::Strategy::broadcast(Strategy),
         )?;
 
-        let mut results = Vec::new();
-        for num_threads in input.search.num_threads.iter() {
-            for instance in input.search.runs.iter() {
-                let setup = core_search::Setup {
-                    threads: *num_threads,
-                    tasks: *num_threads,
-                    reps: input.search.reps,
-                };
-
-                let run = core_search::Run::new(instance.knn, setup);
-
-                let r = core_search::search_all(
-                    knn.clone(),
-                    std::iter::once(run),
-                    benchmark_core::search::graph::knn::Aggregator::new(
-                        &groundtruth,
-                        instance.recall_k,
-                        instance.knn.k_value().get(),
-                        GroundTruthMode::Fixed,
-                    ),
-                )?;
-                results.extend(r.into_iter().map(SearchResults::new));
-            }
-        }
+        let mut results = _knn(
+            &knn,
+            &groundtruth,
+            input.search.reps,
+            &input.search.num_threads,
+            &input.search.runs,
+        )?;
 
         let results = AggregatedSearchResults::Topk(results);
 
@@ -448,369 +547,367 @@ where
     }
 }
 
+fn _knn(
+    runner: &dyn crate::index::search::knn::Knn<u32>,
+    groundtruth: &dyn benchmark_core::recall::Rows<u32>,
+    reps: NonZeroUsize,
+    num_threads: &[NonZeroUsize],
+    instances: &[KnnInstance],
+) -> anyhow::Result<Vec<SearchResults>> {
+    let mut results = Vec::new();
+
+    for num_threads in num_threads.iter() {
+        for instance in instances.iter() {
+            let setup = core_search::Setup {
+                threads: *num_threads,
+                tasks: *num_threads,
+                reps: reps,
+            };
+
+            let run = core_search::Run::new(instance.knn, setup);
+
+            let r = runner.search_all(
+                vec![run],
+                groundtruth,
+                instance.recall_k,
+                instance.knn.k_value().get(),
+            )?;
+
+            results.extend(r);
+        }
+    }
+
+    Ok(results)
+}
+
 ///////////////
 // Streaming //
 ///////////////
 
-/// Input for the streaming inmem2 benchmark.
-///
-/// Drives the inmem2 provider through a BigANN-style runbook. Because the inmem2
-/// provider already does external↔internal id translation, no `Managed`/
-/// `TagSlotManager` adapter is needed — the runbook talks to the provider directly.
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct Inmem2StreamInput {
-    /// Full dataset that the runbook indexes into.
-    data: InputFile,
-    /// Query set used for every search stage.
+#[derive(Debug, Clone)]
+struct StreamingKnnSearch {
     queries: InputFile,
-
-    /// Runbook parameters (path, dataset name, gt directory, ...).
-    runbook_params: DynamicRunbookParams,
-
-    max_degree: usize,
-    l_build: usize,
-    alpha: f32,
-
-    search_n: usize,
-    search_l: Vec<usize>,
-    recall_k: usize,
-
-    num_threads: usize,
     reps: NonZeroUsize,
+    num_threads: NonZeroUsize,
+    runs: Vec<KnnInstance>,
 }
 
-impl Input for Inmem2StreamInput {
-    type Raw = Inmem2StreamInput;
+impl StreamingKnnSearch {
+    fn from_raw(
+        raw: dto::StreamingKnnSearch,
+        checker: Option<&mut Checker>,
+    ) -> anyhow::Result<Self> {
+        let dto::StreamingKnnSearch {
+            mut queries,
+            reps,
+            num_threads,
+            runs,
+        } = raw;
 
-    fn tag() -> &'static str {
-        "inmem2-stream"
-    }
-
-    fn from_raw(mut raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self> {
-        raw.data.resolve(checker)?;
-        raw.queries.resolve(checker)?;
-        raw.runbook_params.validate(checker)?;
-        Ok(raw)
-    }
-
-    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(self)?)
-    }
-
-    fn example() -> Self {
-        Self {
-            data: InputFile::new("path/to/base.bin"),
-            queries: InputFile::new("path/to/query.bin"),
-            runbook_params: <DynamicRunbookParams as crate::inputs::Example>::example(),
-            max_degree: 64,
-            l_build: 100,
-            alpha: 1.2,
-            search_n: 10,
-            search_l: vec![10, 20, 50, 100],
-            recall_k: 10,
-            num_threads: 4,
-            reps: NonZeroUsize::new(3).unwrap(),
+        if let Some(checker) = checker {
+            queries.resolve(checker)?;
         }
+
+        Ok(Self {
+            queries,
+            reps,
+            num_threads,
+            runs: KnnInstance::flatten(&runs)?,
+        })
     }
 }
 
-impl std::fmt::Display for Inmem2StreamInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "inmem2 f32 streaming benchmark")?;
-        writeln!(
-            f,
-            "  runbook: {}",
-            self.runbook_params.runbook_path.display()
-        )?;
-        writeln!(f, "  dataset: {}", self.runbook_params.dataset_name)?;
-        writeln!(f, "  max_degree: {}", self.max_degree)?;
-        writeln!(f, "  l_build: {}", self.l_build)?;
-        writeln!(f, "  alpha: {}", self.alpha)?;
-        writeln!(f, "  search_n: {}", self.search_n)?;
-        writeln!(f, "  search_l: {:?}", self.search_l)?;
-        writeln!(f, "  recall_k: {}", self.recall_k)?;
-        writeln!(f, "  num_threads: {}", self.num_threads)?;
-        writeln!(f, "  reps: {}", self.reps)
+impl Display for StreamingKnnSearch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut kv = KeyValue::new();
+        kv.push("queries", &self.queries);
+        kv.push("reps", &self.reps);
+        kv.push("num_threads", &self.num_threads);
+
+        let runs = Delimit::new(self.runs.iter(), "\n");
+        kv.push("runs", &runs);
+        write!(f, "{}", runs)
     }
 }
 
 #[derive(Debug)]
-struct Inmem2Stream;
+struct RunBook {
+    runbook: bigann::RunBook,
+    delete_method: InplaceDeleteMethod,
+    delete_num_to_replace: usize,
+    // This is kept for display purposes.
+    runbook_path: InputFile,
+    dataset: String,
+}
 
-impl Benchmark for Inmem2Stream {
-    type Input = Inmem2StreamInput;
-    type Output = Vec<StreamOutput>;
+impl RunBook {
+    fn from_raw(raw: dto::RunBook, checker: &mut Checker) -> anyhow::Result<Self> {
+        let dto::RunBook {
+            mut path,
+            dataset,
+            mut groundtruth_directory,
+            delete_method,
+            delete_num_to_replace,
+        } = raw;
 
-    fn try_match(&self, _input: &Inmem2StreamInput) -> Result<MatchScore, FailureScore> {
+        path.resolve(checker)?;
+
+        let groundtruth_directory = checker.__check_dir(groundtruth_directory.as_ref())?;
+
+        let runbook = bigann::RunBook::load(
+            &path,
+            &dataset,
+            &mut bigann::ScanDirectory::new(&groundtruth_directory)?,
+        )?;
+
+        Ok(Self {
+            runbook,
+            delete_method: delete_method.into(),
+            delete_num_to_replace,
+            runbook_path: path,
+            dataset,
+        })
+    }
+}
+
+impl Display for RunBook {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut kv = KeyValue::new();
+        let path = self.runbook_path.display();
+        kv.push("runbook", &path);
+        kv.push("dataset", &self.dataset);
+
+        let max_points = self.runbook.max_points();
+        let max_tag = self.runbook.max_tag();
+        let num_stages = self.runbook.len();
+
+        kv.push("num_stages", &num_stages);
+        kv.push("max_active_points", &max_points);
+        if let Some(ref max_tag) = max_tag {
+            kv.push("max_tag", max_tag);
+        }
+
+        kv.push_eager("delete_method", format_args!("{:?}", self.delete_method));
+        kv.push("delete_num_to_replace", &self.delete_num_to_replace);
+        write!(f, "{}", kv)
+    }
+}
+
+#[derive(Debug)]
+struct BigANNStreaming {
+    data: Data,
+    build: BuildParams,
+    search: StreamingKnnSearch,
+    runbook: RunBook,
+}
+
+impl BigANNStreaming {
+    fn from_raw(raw: dto::BigANNStreaming, checker: &mut Checker) -> anyhow::Result<Self> {
+        let data = Data::from_raw(raw.data, Some(checker))?;
+        let build = BuildParams::from_raw(raw.build, data.distance)?;
+        Ok(Self {
+            data,
+            build,
+            search: StreamingKnnSearch::from_raw(raw.search, Some(checker))?,
+            runbook: RunBook::from_raw(raw.runbook, checker)?,
+        })
+    }
+}
+
+impl Display for BigANNStreaming {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut kv = KeyValue::new();
+        kv.push("data", &self.data);
+        kv.push("build", &self.build);
+        kv.push("search", &self.search);
+        kv.push("runbook", &self.runbook);
+        write!(f, "{}", kv)
+    }
+}
+
+impl Input for BigANNStreaming {
+    type Raw = dto::BigANNStreaming;
+
+    fn tag() -> &'static str {
+        "inmem2-streaming"
+    }
+
+    fn from_raw(raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self> {
+        Self::from_raw(raw, checker)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(())?)
+    }
+
+    fn example() -> Self::Raw {
+        const FOUR: NonZeroUsize = NonZeroUsize::new(4).unwrap();
+        const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
+        dto::BigANNStreaming {
+            data: dto::Data {
+                data_type: DataType::Float32,
+                data: InputFile::new("path/to/data"),
+                distance: SimilarityMeasure::SquaredL2,
+            },
+            build: dto::BuildParams {
+                pruned_degree: 28,
+                max_degree: 32,
+                l_build: 100,
+                alpha: 1.2,
+                num_threads: FOUR,
+            },
+            search: dto::StreamingKnnSearch {
+                queries: InputFile::new("path/to/queries"),
+                reps: THREE,
+                num_threads: FOUR,
+                runs: vec![dto::KnnSweep {
+                    search_n: 10,
+                    search_l: vec![10, 20, 30, 40, 50],
+                    recall_k: 10,
+                }],
+            },
+            runbook: dto::RunBook {
+                path: InputFile::new("path/to/runbook.yaml"),
+                dataset: "dataset-1M".into(),
+                groundtruth_directory: "groundtruth/dir".into(),
+                delete_method: crate::inputs::graph_index::InplaceDeleteMethod::TwoHopAndOneHop,
+                delete_num_to_replace: 3,
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StreamingBenchmark;
+
+impl Benchmark for StreamingBenchmark {
+    type Input = BigANNStreaming;
+    type Output = ();
+
+    fn try_match(&self, _input: &BigANNStreaming) -> Result<MatchScore, FailureScore> {
         Ok(MatchScore(0))
     }
 
     fn description(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Inmem2StreamInput>,
+        input: Option<&BigANNStreaming>,
     ) -> std::fmt::Result {
-        match input {
-            Some(i) => write!(f, "{i}"),
-            None => write!(f, "inmem2 f32 streaming benchmark"),
-        }
+        Ok(())
+        // match input {
+        //     Some(i) => write!(f, "{i}"),
+        //     None => write!(f, "inmem2 f32 streaming benchmark"),
+        // }
     }
 
     fn run(
         &self,
-        input: &Inmem2StreamInput,
+        input: &BigANNStreaming,
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        writeln!(output, "{input}")?;
+        writeln!(output, "{input}\n")?;
 
         // Load the runbook so we know the eventual capacity.
-        let gt_dir = input
-            .runbook_params
-            .resolved_gt_directory
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("groundtruth directory not resolved"))?;
-
-        let runbook = bigann::RunBook::load(
-            &input.runbook_params.runbook_path,
-            &input.runbook_params.dataset_name,
-            &mut bigann::ScanDirectory::new(gt_dir)?,
-        )?;
+        let runbook = input.runbook.runbook.clone();
         let max_points = runbook.max_points();
 
         // Load the dataset (consumed by `WithData`) and queries.
-        let dataset: Matrix<f32> = datafiles::load_dataset(datafiles::BinFile(&input.data))?;
-        let queries: Arc<Matrix<f32>> =
-            Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.queries))?);
+        let dataset: Matrix<f32> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
+        let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            &input.search.queries,
+        ))?);
         let dim = dataset.ncols();
-
-        writeln!(
-            output,
-            "Loaded dataset: {} points, dim={}",
-            dataset.nrows(),
-            dim
-        )?;
-        writeln!(output, "Loaded queries: {}", queries.nrows())?;
-        writeln!(output, "Runbook max_points: {max_points}")?;
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(dataset.as_view())?;
-        let metric = Metric::L2;
-        let exact_max_degree = (input.max_degree as f32 * 1.3) as usize;
-        let layer = Full::<f32>::new(dim, metric);
+        let index_config = input.build.config.clone();
+        let layer = Full::<f32>::new(dim, input.data.distance);
 
-        let config = diskann_inmem::provider::Config::new(max_points, exact_max_degree);
-        let provider = Provider::new(layer, config, start.row_iter())?;
+        let config =
+            diskann_inmem::provider::Config::new(max_points, index_config.max_degree().get());
+        let provider = Provider::<_, u32>::new(layer, config, start.row_iter())?;
 
-        let config = graph::config::Builder::new_with(
-            input.max_degree,
-            graph::config::MaxDegree::new(exact_max_degree),
-            input.l_build,
-            metric.into(),
-            |b| {
-                b.alpha(input.alpha);
-            },
-        )
-        .build()?;
+        let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
 
-        let index = Arc::new(DiskANNIndex::new(config, provider, None));
-
-        let num_threads = NonZeroUsize::new(input.num_threads.max(1)).unwrap();
+        let num_threads = input.build.num_threads;
         let runtime = benchmark_core::tokio::runtime(num_threads.get())?;
 
-        // Build the inner stream and wrap it with `WithData`.
         let stream = Stream {
-            index: index.clone(),
+            index,
             runtime,
-            ntasks: num_threads,
-            search_n: input.search_n,
-            search_l: input.search_l.clone(),
-            recall_k: input.recall_k,
-            reps: input.reps,
+            search: input.search.clone(),
+            ntasks: input.build.num_threads,
+            delete_method: input.runbook.delete_method,
+            delete_num_to_replace: input.runbook.delete_num_to_replace,
         };
 
-        let max_k = input.recall_k;
-        let queries_for_search = queries.clone();
-        let mut layered = bigann::WithData::new(stream, dataset, queries_for_search, move |path| {
+        let mut layered = bigann::WithData::new(stream, dataset, queries, move |path| {
             Ok(Box::new(datafiles::load_groundtruth(
                 datafiles::BinFile(path),
-                Some(max_k),
+                None,
             )?))
         });
 
-        // Drive the runbook.
-        let mut runbook = runbook;
+        // Here we go!
         let mut results = Vec::new();
         let stages = runbook.len();
-        let mut stage_idx = 1usize;
-
-        runbook.run_with(&mut layered, |o: StreamOutput| -> anyhow::Result<()> {
-            let banner = format!("Stage {} of {}: {}", stage_idx, stages, o.kind());
-            write!(output, "{}", crate::utils::SmallBanner(&banner))?;
-            writeln!(output, "{o}")?;
-            stage_idx += 1;
-            results.push(o);
-            Ok(())
-        })?;
+        let mut i = 1;
+        input.runbook.runbook.clone().run_with(
+            &mut layered,
+            |o: StreamStats| -> anyhow::Result<()> {
+                if o.is_maintain() {
+                    let message = format!("Ran maintenance before stage {}", i);
+                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
+                } else {
+                    let message = format!("Finished stage {} of {}: {}", i, stages, o.kind());
+                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
+                    i += 1;
+                }
+                writeln!(output, "{}", o)?;
+                results.push(o);
+                Ok(())
+            },
+        )?;
 
         write!(
             output,
             "{}",
             crate::utils::SmallBanner("End of Run Summary")
         )?;
-        let total_inserts: usize = results.iter().filter_map(|r| r.insert_count()).sum();
-        let total_deletes: usize = results.iter().filter_map(|r| r.delete_count()).sum();
-        let n_searches = results
-            .iter()
-            .filter(|r| matches!(r, StreamOutput::Search { .. }))
-            .count();
-        writeln!(
-            output,
-            "stages={stages} inserts={total_inserts} deletes={total_deletes} searches={n_searches}",
-        )?;
 
-        Ok(results)
+        writeln!(output, "{}", Summary::new(results.iter()))?;
+
+        Ok(())
     }
 }
 
-/////////////////
-// Stream impl //
-/////////////////
+////////////
+// Stream //
+////////////
 
-/// Inner streaming index over `inmem2`.
-///
-/// Implements `streaming::Stream<bigann::DataArgs<f32, u32>>` so it can be wrapped
-/// by `bigann::WithData` and driven by `bigann::RunBook`. Replace and maintain are
-/// not supported in v1; deletes are eager so no consolidation pass is needed.
-struct Stream {
-    index: Arc<DiskANNIndex<Provider<Full<f32>>>>,
+struct Stream<T>
+where
+    T: FullPrecision,
+{
+    index: Arc<DiskANNIndex<Provider<Full<T>>>>,
     runtime: tokio::runtime::Runtime,
+    search: StreamingKnnSearch,
     ntasks: NonZeroUsize,
-    search_n: usize,
-    search_l: Vec<usize>,
-    recall_k: usize,
-    reps: NonZeroUsize,
+    delete_method: InplaceDeleteMethod,
+    delete_num_to_replace: usize,
 }
 
-#[derive(Debug, Serialize)]
-pub(crate) enum StreamOutput {
-    Insert { count: usize, latency_s: f64 },
-    Delete { count: usize, latency_s: f64 },
-    Search(Vec<SearchPoint>),
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SearchPoint {
-    pub search_l: usize,
-    pub recall: f64,
-    pub mean_qps: f64,
-    pub max_qps: f64,
-}
-
-impl StreamOutput {
-    fn kind(&self) -> &'static str {
-        match self {
-            Self::Insert { .. } => "insert",
-            Self::Delete { .. } => "delete",
-            Self::Search(_) => "search",
-        }
-    }
-
-    fn insert_count(&self) -> Option<usize> {
-        match self {
-            Self::Insert { count, .. } => Some(*count),
-            _ => None,
-        }
-    }
-
-    fn delete_count(&self) -> Option<usize> {
-        match self {
-            Self::Delete { count, .. } => Some(*count),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for StreamOutput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Insert { count, latency_s } => {
-                writeln!(f, "  inserted {count} points in {latency_s:.3}s")
-            }
-            Self::Delete { count, latency_s } => {
-                writeln!(f, "  deleted {count} points in {latency_s:.3}s")
-            }
-            Self::Search(points) => {
-                for p in points {
-                    writeln!(
-                        f,
-                        "  L={:<4} recall={:.4}  QPS={:.0} (max {:.0})",
-                        p.search_l, p.recall, p.mean_qps, p.max_qps,
-                    )?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl streaming::Stream<bigann::DataArgs<f32, u32>> for Stream {
-    type Output = StreamOutput;
-
-    fn search(
+impl<T> Stream<T>
+where
+    T: FullPrecision,
+{
+    fn insert_(
         &mut self,
-        (queries, groundtruth): (Arc<Matrix<f32>>, &dyn recall::Rows<u32>),
-    ) -> anyhow::Result<Self::Output> {
-        let knn = benchmark_core::search::graph::KNN::new(
-            self.index.clone(),
-            queries,
-            benchmark_core::search::graph::Strategy::broadcast(Strategy),
-        )?;
-
-        let mut points = Vec::with_capacity(self.search_l.len());
-        for &search_l in &self.search_l {
-            let params = graph::search::Knn::new(self.search_n, search_l, None)?;
-            let setup = core_search::Setup {
-                threads: self.ntasks,
-                tasks: self.ntasks,
-                reps: self.reps,
-            };
-            let run = core_search::Run::new(params, setup);
-
-            let summaries = core_search::search_all(
-                knn.clone(),
-                std::iter::once(run),
-                benchmark_core::search::graph::knn::Aggregator::new(
-                    groundtruth,
-                    self.recall_k,
-                    self.search_n,
-                    GroundTruthMode::Fixed,
-                ),
-            )?;
-
-            for summary in &summaries {
-                let qps: Vec<f64> = summary
-                    .end_to_end_latencies
-                    .iter()
-                    .map(|lat| summary.recall.num_queries as f64 / lat.as_seconds())
-                    .collect();
-                let max_qps = qps.iter().cloned().fold(0.0f64, f64::max);
-                let mean_qps = qps.iter().sum::<f64>() / qps.len().max(1) as f64;
-                points.push(SearchPoint {
-                    search_l,
-                    recall: summary.recall.average,
-                    mean_qps,
-                    max_qps,
-                });
-            }
-        }
-        Ok(StreamOutput::Search(points))
-    }
-
-    fn insert(
-        &mut self,
-        (data, ids): (MatrixView<'_, f32>, Range<usize>),
-    ) -> anyhow::Result<Self::Output> {
+        data: MatrixView<'_, T>,
+        ids: Range<usize>,
+    ) -> anyhow::Result<BuildStats> {
         anyhow::ensure!(
             data.nrows() == ids.len(),
             "insert: data rows ({}) != ids range ({})",
@@ -818,16 +915,11 @@ impl streaming::Stream<bigann::DataArgs<f32, u32>> for Stream {
             ids.len(),
         );
 
-        let count = data.nrows();
-        let slots: Box<[u32]> = ids
-            .map(|id| u32::try_from(id))
-            .collect::<Result<Box<[u32]>, _>>()?;
-
         let runner = build_core::graph::SingleInsert::new(
             self.index.clone(),
             Arc::new(data.to_owned()),
             Strategy,
-            build_core::ids::Slice::new(slots),
+            build_core::ids::Range::<u32>::new(ids.start as u32..ids.end as u32),
         );
 
         let results = build_core::build(
@@ -836,26 +928,54 @@ impl streaming::Stream<bigann::DataArgs<f32, u32>> for Stream {
             &self.runtime,
         )?;
 
-        let latency_s = results.end_to_end_latency().as_seconds();
-        Ok(StreamOutput::Insert { count, latency_s })
+        BuildStats::new(BuildKind::SingleInsert, results)
+    }
+}
+
+impl<T> streaming::Stream<bigann::DataArgs<T, u32>> for Stream<T>
+where
+    T: FullPrecision,
+{
+    type Output = StreamStats;
+
+    fn search(
+        &mut self,
+        (queries, groundtruth): (Arc<Matrix<T>>, &dyn recall::Rows<u32>),
+    ) -> anyhow::Result<Self::Output> {
+        let knn = benchmark_core::search::graph::KNN::new(
+            self.index.clone(),
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(Strategy),
+        )?;
+
+        let r = _knn(
+            &knn,
+            groundtruth,
+            self.search.reps,
+            std::slice::from_ref(&self.search.num_threads),
+            &self.search.runs,
+        )?;
+
+        Ok(StreamStats::Search(r))
+    }
+
+    fn insert(
+        &mut self,
+        (data, ids): (MatrixView<'_, T>, Range<usize>),
+    ) -> anyhow::Result<Self::Output> {
+        self.insert_(data, ids).map(StreamStats::Insert)
     }
 
     fn delete(&mut self, ids: Range<usize>) -> anyhow::Result<Self::Output> {
-        let count = ids.len();
-        let provider = self.index.provider();
-        let ctx = diskann_inmem::Context;
-
-        let start = std::time::Instant::now();
-
         let runner = streaming::graph::InplaceDelete::new(
             self.index.clone(),
             Strategy,
-            3,
-            diskann::graph::InplaceDeleteMethod::OneHop,
-            build_core::ids::Slice::new(ids.clone().into_iter().map(|i| i as u32).collect()),
+            self.delete_num_to_replace,
+            self.delete_method,
+            build_core::ids::Range::new(ids.start as u32..ids.end as u32),
         );
 
-        let _ = build_core::build(
+        let r = build_core::build(
             runner,
             diskann_benchmark_core::build::Parallelism::fixed(
                 Some(diskann::utils::ONE),
@@ -864,22 +984,30 @@ impl streaming::Stream<bigann::DataArgs<f32, u32>> for Stream {
             &self.runtime,
         )?;
 
-        let latency_s = start.elapsed().as_secs_f64();
-
-        Ok(StreamOutput::Delete { count, latency_s })
+        Ok(StreamStats::Delete(GenericStats::new("delete".into(), r)?))
     }
 
     fn replace(
         &mut self,
-        _args: (MatrixView<'_, f32>, Range<usize>),
+        (data, ids): (MatrixView<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
-        anyhow::bail!("inmem2-f32-stream: replace is not supported in v1")
+        use diskann::provider::Delete;
+
+        // TODO: This is kind of a hack. It would be ideal to parallelize this.
+        //
+        // Also, this is *way* more expensive than it needs to be because each delete creates
+        // and then destroys an EBR guard.
+        let ctx = diskann_inmem::Context;
+        for id in ids.clone() {
+            self.runtime
+                .block_on(self.index.provider().delete(&ctx, &(id as u32)))?;
+        }
+
+        self.insert_(data, ids).map(StreamStats::Replace)
     }
 
     fn maintain(&mut self, _: ()) -> anyhow::Result<Self::Output> {
-        anyhow::bail!(
-            "inmem2-f32-stream: maintain is not supported (deletes are eager, no consolidation needed)"
-        )
+        Ok(StreamStats::Maintain(vec![]))
     }
 
     fn needs_maintenance(&mut self) -> bool {

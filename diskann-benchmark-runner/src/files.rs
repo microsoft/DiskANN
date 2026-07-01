@@ -57,6 +57,12 @@ impl std::ops::Deref for InputFile {
     }
 }
 
+impl std::fmt::Display for InputFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display())
+    }
+}
+
 ///////////
 // Tests //
 ///////////

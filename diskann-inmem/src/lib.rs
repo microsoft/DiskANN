@@ -31,6 +31,23 @@ mod test;
 #[doc(hidden)]
 pub mod integration;
 
+//----------------//
+// Internal Tools //
+//----------------//
+
+/// A "public" type that can only be constructed by this crate.
+///
+/// This helps with public traits with internal methods that we don't want users to call.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct Hidden(());
+
+impl Hidden {
+    const fn new() -> Self {
+        Self(())
+    }
+}
+
 macro_rules! opaque {
     ($T:ty) => {
         impl From<$T> for diskann::ANNError {
@@ -44,3 +61,5 @@ macro_rules! opaque {
 }
 
 pub(crate) use opaque;
+
+

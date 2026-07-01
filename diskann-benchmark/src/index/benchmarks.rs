@@ -82,14 +82,14 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::DeterminantDiversity),
     )?;
 
-    // registry.register(
-    //     "graph-index-full-precision-f16",
-    //     FullPrecision::<f16>::new().search(plugins::Topk),
-    // )?;
     registry.register(
-        "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new().search(plugins::Topk),
+        "graph-index-full-precision-f16",
+        FullPrecision::<f16>::new().search(plugins::Topk),
     )?;
+    // registry.register(
+    //     "graph-index-full-precision-u8",
+    //     FullPrecision::<u8>::new().search(plugins::Topk),
+    // )?;
     // registry.register(
     //     "graph-index-full-precision-i8",
     //     FullPrecision::<i8>::new().search(plugins::Topk),

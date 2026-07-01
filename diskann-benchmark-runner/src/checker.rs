@@ -145,6 +145,36 @@ impl Checker {
             self.search_directories(),
         )))
     }
+
+    pub fn __check_dir(&self, dir: &Path) -> Result<PathBuf, anyhow::Error> {
+        // Check if the file exists (allowing for relative paths with respect to the current
+        // directory.
+        //
+        // If the path is an absolute path and the file does not exist, then bail.
+        if dir.is_absolute() {
+            if dir.is_dir() {
+                return Ok(dir.into());
+            } else {
+                return Err(anyhow::Error::msg(format!(
+                    "input file with absolute path \"{}\" either does not exist or is not a file",
+                    dir.display()
+                )));
+            }
+        };
+
+        // At this point, start searching in the provided directories.
+        for d in self.search_directories() {
+            let absolute = d.join(dir);
+            if absolute.is_dir() {
+                return Ok(absolute);
+            }
+        }
+        Err(anyhow::Error::msg(format!(
+            "could not find input file \"{}\" in the search directories \"{:?}\"",
+            dir.display(),
+            self.search_directories(),
+        )))
+    }
 }
 
 ///////////

@@ -19,7 +19,7 @@ use super::{parsing, validate};
 ///
 /// If using this struct as a [`streaming::Executor`], consider using the
 /// [`super::WithData`] adaptor to provide dataset and query matrices.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RunBook {
     // The individual runbook stages.
     stages: Vec<Stage>,

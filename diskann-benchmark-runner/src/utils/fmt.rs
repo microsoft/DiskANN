@@ -379,7 +379,28 @@ where
 // KeyValue //
 //////////////
 
-/// Display a dynamic list of key-value pairs such that the keys are right-aligned.
+enum MaybeLazy<'a> {
+    Lazy(&'a dyn std::fmt::Display),
+    Eager(String),
+}
+
+impl std::fmt::Display for MaybeLazy<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lazy(lazy) => write!(f, "{}", lazy),
+            Self::Eager(s) => f.write_str(&s),
+        }
+    }
+}
+
+/// Display a dynamic list of key-value pairs in a YAML-like style.
+///
+/// Keys are left-aligned and single-line values are aligned into a common column
+/// just past the longest key. A value that renders to multiple lines (for example
+/// a nested [`KeyValue`] or any other multi-line block) is placed on the lines
+/// following its key, indented by two spaces. This keeps nested structures visibly
+/// subordinate to their key regardless of whether the value is itself a key-value
+/// list or an opaque block.
 ///
 /// # Examples
 ///
@@ -390,12 +411,31 @@ where
 /// kv.push("a", &1);
 /// kv.push("hello", &"world");
 ///
-/// let expected = "    a: 1\nhello: world";
+/// let expected = "a:     1\nhello: world";
+///
+/// assert_eq!(kv.to_string(), expected);
+/// ```
+///
+/// Multi-line values are indented beneath their key:
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::KeyValue;
+///
+/// let mut inner = KeyValue::new();
+/// inner.push("x", &1);
+/// inner.push("yy", &2);
+/// let inner = inner.to_string();
+///
+/// let mut kv = KeyValue::new();
+/// kv.push("name", &"example");
+/// kv.push("nested", &inner);
+///
+/// let expected = "name:   example\nnested:\n  x:  1\n  yy: 2";
 ///
 /// assert_eq!(kv.to_string(), expected);
 /// ```
 pub struct KeyValue<'a> {
-    kv: Vec<(&'a str, &'a dyn std::fmt::Display)>,
+    kv: Vec<(&'a str, MaybeLazy<'a>)>,
     max_key_length: usize,
 }
 
@@ -411,7 +451,15 @@ impl<'a> KeyValue<'a> {
     /// Push the key-value pair to `self` for formatting.
     pub fn push(&mut self, key: &'a str, value: &'a dyn std::fmt::Display) {
         self.max_key_length = self.max_key_length.max(key.len());
-        self.kv.push((key, value))
+        self.kv.push((key, MaybeLazy::Lazy(value)))
+    }
+
+    pub fn push_eager<D>(&mut self, key: &'a str, value: D)
+    where
+        D: std::fmt::Display,
+    {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv.push((key, MaybeLazy::Eager(value.to_string())))
     }
 
     pub fn render(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -426,9 +474,12 @@ impl std::fmt::Display for KeyValue<'_> {
         for (k, v) in self.kv.iter() {
             let rendered = v.to_string();
             if rendered.contains('\n') {
-                write!(f, "{}{:>width$}:\n{}", prefix, k, Indent::new(&rendered, 2))?
+                write!(f, "{}{}:\n{}", prefix, k, Indent::new(&rendered, 2))?
             } else {
-                write!(f, "{}{:>width$}: {rendered}", prefix, k)?;
+                // Left-align the key and pad so that all single-line values line up in a
+                // column one space past the longest key's colon.
+                let pad = (width + 1).saturating_sub(k.len());
+                write!(f, "{}{}:{:pad$}{rendered}", prefix, k, "")?;
             }
             prefix = "\n";
         }

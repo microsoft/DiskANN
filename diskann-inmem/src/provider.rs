@@ -424,6 +424,8 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
                 // `self.buffer` is long enough to hold all the IDs.
                 let processed = unsafe {
+                    // self.expand_beam
+                    //     .expand_beam(&self.ids, 8, &self.reader, &mut on_neighbors)
                     self.expand_beam
                         .expand_beam(&self.ids, 8, &self.reader, &mut self.buffer)
                 }?;
@@ -459,6 +461,7 @@ trait ExpandBeam: Send + Sync + std::fmt::Debug {
         list: &[u32],
         lookahead: usize,
         reader: &store::Reader<'_>,
+        // f: &mut dyn FnMut(u32, f32),
         buffer: &mut [(u32, f32)],
     ) -> ANNResult<usize>;
 }
@@ -480,9 +483,11 @@ where
         list: &[u32],
         lookahead: usize,
         reader: &store::Reader<'_>,
+        // f: &mut dyn FnMut(u32, f32),
         buffer: &mut [(u32, f32)],
     ) -> ANNResult<usize> {
         // SAFETY: Inherited from caller.
+        // unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, f) }
         unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, buffer) }
     }
 }
@@ -533,7 +538,7 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
 
     // SAFETY: Inherited from caller.
     unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
-    for i in 0..(lines - 1).min(16) {
+    for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
         unsafe {
             _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
@@ -552,6 +557,7 @@ unsafe fn expand_beam_inner<T, const BYTES: usize>(
     list: &[u32],
     lookahead: usize,
     reader: &store::Reader<'_>,
+    // f: &mut dyn FnMut(u32, f32),
     buffer: &mut [(u32, f32)],
 ) -> ANNResult<usize>
 where
@@ -610,6 +616,7 @@ where
         // SAFETY: Caller asserts that `i` is in-bounds.
         if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
             *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
+            // f(i, distance.evaluate(data)?);
             processed += 1;
         }
     }
@@ -911,13 +918,13 @@ where
     }
 }
 
-// TODO: This is such a hack.
-impl<M> glue::InplaceDeleteStrategy<Provider<layers::Full<f32>, M>> for Strategy
+impl<T, M> glue::InplaceDeleteStrategy<Provider<layers::Full<T>, M>> for Strategy
 where
     M: Id,
+    T: layers::FullPrecision,
 {
-    type DeleteElement<'a> = &'a [f32];
-    type DeleteElementGuard = Box<[f32]>;
+    type DeleteElement<'a> = &'a [T];
+    type DeleteElementGuard = Box<[T]>;
     type DeleteElementError = ANNError;
 
     type PruneStrategy = Self;
@@ -939,7 +946,7 @@ where
 
     fn get_delete_element<'a>(
         &'a self,
-        provider: &'a Provider<layers::Full<f32>, M>,
+        provider: &'a Provider<layers::Full<T>, M>,
         _context: &'a Context,
         id: u32,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
@@ -956,9 +963,10 @@ where
                 }
             };
 
-            let mut buf: Box<[_]> = std::iter::repeat_n(0.0, provider.layer.dim()).collect();
+            let mut buf: Box<[_]> =
+                std::iter::repeat_n(T::zeroed(), provider.layer.dim()).collect();
 
-            bytemuck::must_cast_slice_mut::<f32, u8>(&mut buf).copy_from_slice(data);
+            bytemuck::must_cast_slice_mut::<T, u8>(&mut buf).copy_from_slice(data);
             Ok(buf)
         };
         ready(work)

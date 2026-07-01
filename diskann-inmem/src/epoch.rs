@@ -99,7 +99,7 @@ pub(crate) struct Registry {
     // ```
     //
     // We cycle among the queues in a round-robin manner.
-    retiring: [SegQueue<u32>; 4],
+    retiring: Box<[SegQueue<u32>; 4]>,
 }
 
 // Return the queue index for the `epoch`.
@@ -125,7 +125,7 @@ impl Registry {
             guards: (0..capacity).map(|_| AtomicU64::new(0)).collect(),
             hint: AtomicUsize::new(0),
             epoch: AtomicU64::new(1),
-            retiring: core::array::from_fn(|_| SegQueue::new()),
+            retiring: Box::new(core::array::from_fn(|_| SegQueue::new())),
             drain: Mutex::new(()),
         }
     }
