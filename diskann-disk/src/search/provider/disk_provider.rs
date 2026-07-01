@@ -18,8 +18,9 @@ use diskann::{
     error::IntoANNResult,
     graph::{
         self,
+        ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
-        search::Knn,
+        search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -47,9 +48,9 @@ use tracing::debug;
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
-    filter_parameter::{default_vector_filter, VectorFilter},
     search::{
         provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
+        search_mode::SearchMode,
         traits::{VertexProvider, VertexProviderFactory},
     },
     storage::{api::AsyncDiskLoadContext, disk_index_reader::DiskIndexReader},
@@ -212,14 +213,36 @@ where
 /// from local data structures). Moving these components to the search strategy allows
 /// DiskProvider to satisfy 'static constraints while enabling flexible per-search
 /// resource management.
+/// Borrowed predicate used internally by the disk search pipeline.
+/// Spelled out here to keep the field/parameter signatures under
+/// `clippy::type_complexity`'s default threshold.
+type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
+
+/// Encodes whether to accept all candidates at rerank time or apply a
+/// specific predicate. Used by `RerankAndFilter` and
+/// `DeterminantDiversityAndFilter` instead of `Option<PostprocessFilter>`
+/// so call sites are self-documenting without relying on comments to
+/// explain what `None` means.
+#[derive(Clone, Copy)]
+pub enum PostprocessStrategy<'a> {
+    /// Accept every candidate — no predicate is called. Used by `FlatScan`
+    /// (filtered at scan time) and `InlineFilter` (filtered at visit time).
+    AcceptAll,
+    /// Apply the given predicate; non-matching candidates are dropped.
+    Apply(PostprocessFilter<'a>),
+}
+
 pub struct DiskSearchStrategy<'a, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
-    // This needs to be Arc instead of Rc because DiskSearchStrategy has "Send" trait bound, though this is not expected to be shared across threads.
-    io_tracker: IOTracker,
-    vector_filter: &'a (dyn Fn(&u32) -> bool + Send + Sync), // Fn param is u32 as we validate "VectorIdType = u32" everywhere in this provider in trait bounds.
+    // Borrowed from `search_internal` so the strategy can be passed by value
+    io_tracker: &'a IOTracker,
+    /// Consumed only by `default_post_processor()` → `RerankAndFilter`.
+    /// `FlatScan` and `InlineFilter` filter earlier in their pipelines and
+    /// pass `AcceptAll` here to avoid a redundant second pass.
+    postprocess_filter: PostprocessStrategy<'a>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: &'a ProviderFactory,
@@ -267,23 +290,18 @@ impl IOTracker {
 
 #[derive(Clone, Copy)]
 pub struct RerankAndFilter<'a> {
-    filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+    filter: PostprocessStrategy<'a>,
 }
 
 #[derive(Clone, Copy)]
 pub struct DeterminantDiversityAndFilter<'a> {
-    filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+    filter: PostprocessStrategy<'a>,
     params: DeterminantDiversityParams,
 }
 
-#[derive(Clone, Copy)]
-pub enum SearchPostProcessorKind {
-    /// No post-processing; search results are returned as-is.
-    None,
-    RerankAndFilter,
-    DeterminantDiversity(DeterminantDiversityParams),
-}
-
+/// Internal dispatch wrapper used by `search_internal`'s `DiverseGraph` arm
+/// to feed `DiskANNIndex::search_with`. Hidden behind `SearchMode` from the
+/// public API.
 #[derive(Clone, Copy)]
 pub enum DiskSearchPostProcessor<'a> {
     RerankAndFilter(RerankAndFilter<'a>),
@@ -291,16 +309,13 @@ pub enum DiskSearchPostProcessor<'a> {
 }
 
 impl<'a> RerankAndFilter<'a> {
-    pub fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync)) -> Self {
+    pub fn new(filter: PostprocessStrategy<'a>) -> Self {
         Self { filter }
     }
 }
 
 impl<'a> DeterminantDiversityAndFilter<'a> {
-    pub fn new(
-        filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
-        params: DeterminantDiversityParams,
-    ) -> Self {
+    pub fn new(filter: PostprocessStrategy<'a>, params: DeterminantDiversityParams) -> Self {
         Self { filter, params }
     }
 }
@@ -335,18 +350,27 @@ where
         let provider = accessor.provider;
 
         let mut uncached_ids = Vec::new();
-        let mut reranked = candidates
-            .map(|n| n.id)
-            .filter(|id| (self.filter)(id))
-            .filter_map(|n| {
+        let mut reranked = {
+            let mut process = |n: u32| {
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
                     Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
                 } else {
                     uncached_ids.push(n);
                     None
                 }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            };
+            match self.filter {
+                PostprocessStrategy::AcceptAll => candidates
+                    .map(|n| n.id)
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+                PostprocessStrategy::Apply(f) => candidates
+                    .map(|n| n.id)
+                    .filter(|id| f(id))
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
+        };
         if !uncached_ids.is_empty() {
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
             for n in &uncached_ids {
@@ -395,10 +419,13 @@ where
         let provider = accessor.provider;
         let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
 
-        let candidate_ids: Vec<u32> = candidates
-            .map(|candidate| candidate.id)
-            .filter(|id| (self.filter)(id))
-            .collect();
+        let candidate_ids: Vec<u32> = match self.filter {
+            PostprocessStrategy::AcceptAll => candidates.map(|candidate| candidate.id).collect(),
+            PostprocessStrategy::Apply(f) => candidates
+                .map(|candidate| candidate.id)
+                .filter(|id| f(id))
+                .collect(),
+        };
 
         if candidate_ids.is_empty() {
             return Ok(0);
@@ -497,7 +524,7 @@ where
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         DiskAccessor::new(
             provider,
-            &self.io_tracker,
+            self.io_tracker,
             query,
             self.vertex_provider_factory,
             self.scratch_pool,
@@ -522,7 +549,7 @@ where
     type Processor = RerankAndFilter<'this>;
 
     fn default_post_processor(&'this self) -> Self::Processor {
-        RerankAndFilter::new(self.vector_filter)
+        RerankAndFilter::new(self.postprocess_filter)
     }
 }
 
@@ -894,14 +921,15 @@ where
         })
     }
 
-    /// Helper method to create a DiskSearchStrategy with common parameters
+    /// Helper method to create a `DiskSearchStrategy` with common parameters.
     fn search_strategy<'a>(
         &'a self,
-        vector_filter: &'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
+        io_tracker: &'a IOTracker,
+        postprocess_filter: PostprocessStrategy<'a>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
-            io_tracker: IOTracker::default(),
-            vector_filter,
+            io_tracker,
+            postprocess_filter,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
         }
@@ -910,13 +938,16 @@ where
     /// Perform a brute-force linear scan of all points in the index, returning the
     /// nearest neighbors that pass `vector_filter`.
     ///
+    /// `vector_filter = None` scans every vector (recall baseline) and skips
+    /// the per-ID dyn-fn call entirely.
+    ///
     /// The top `neighbors_before_reranking` candidates from the quantized scan will be
     /// provided to full-precision reranking.
     async fn flat_search<OB>(
         &self,
         strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
         query: &[Data::VectorDataType],
-        vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
+        vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
         neighbors_before_reranking: usize,
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
@@ -947,7 +978,10 @@ where
         let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
         let mut cmps = 0u32;
 
-        let mut iter = (0..provider.num_points as u32).filter(vector_filter);
+        // `None` short-circuits to `true` — no dyn-fn call per node on the
+        // unfiltered (recall-baseline) path.
+        let mut iter =
+            (0..provider.num_points as u32).filter(|id| vector_filter.is_none_or(|f| f(id)));
         loop {
             id_buffer.clear();
             id_buffer.extend(iter.by_ref().take(batch_size));
@@ -974,39 +1008,56 @@ where
         })
     }
 
+    /// Run inline label-filtered graph search with optional adaptive-L sizing.
+    ///
+    /// Wraps `Knn` in an `InlineFilterSearch` that tracks matched candidates
+    /// during traversal. When `adaptive_l = Some(_)`, the beam (`l_search`)
+    /// is grown mid-query if the observed match specificity is low (see
+    /// `diskann::graph::search::AdaptiveL`).
+    ///
+    /// The label-provider trait object is built once in
+    /// `SearchMode::inline_filter` from a generic adapter, so each filter
+    /// evaluation costs exactly one indirect dispatch (through the
+    /// `&dyn QueryLabelProvider` boundary required by `labeled::Filtered`),
+    /// not two.
+    ///
+    /// Reuses the same `DiskAccessor` surface as the plain `Knn` graph path:
+    /// `start_point_distances` and `expand_beam`, both of which call
+    /// `pq_distances` internally.
+    async fn filter_search<'a, OB>(
+        &self,
+        strategy: DiskSearchStrategy<'a, Data, ProviderFactory>,
+        query: &[Data::VectorDataType],
+        knn: Knn,
+        label_provider: &(dyn QueryLabelProvider<u32> + 'a),
+        adaptive_l: Option<AdaptiveL>,
+        output: &mut OB,
+    ) -> ANNResult<graph::index::SearchStats>
+    where
+        OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
+    {
+        let filtered_strategy = labeled::Filtered::new(strategy, label_provider);
+        let search = InlineFilterSearch::new(knn, adaptive_l);
+        self.index
+            .search(search, &filtered_strategy, &DefaultContext, query, output)
+            .await
+    }
+
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
-    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        vector_filter: Option<VectorFilter<Data>>,
-        post_processor: SearchPostProcessorKind,
-        is_flat_search: bool,
+        mode: SearchMode<'_>,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
         let mut indices = vec![0u32; return_list_size as usize];
         let mut distances = vec![0f32; return_list_size as usize];
         let mut associated_data =
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
-
-        let vector_filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
-        let post_processor = match post_processor {
-            SearchPostProcessorKind::None => None,
-            SearchPostProcessorKind::RerankAndFilter => {
-                Some(DiskSearchPostProcessor::RerankAndFilter(
-                    RerankAndFilter::new(vector_filter.as_ref()),
-                ))
-            }
-            SearchPostProcessorKind::DeterminantDiversity(params) => {
-                Some(DiskSearchPostProcessor::DeterminantDiversity(
-                    DeterminantDiversityAndFilter::new(vector_filter.as_ref(), params),
-                ))
-            }
-        };
 
         let stats = self.search_internal(
             query,
@@ -1017,9 +1068,7 @@ where
             &mut indices,
             &mut distances,
             &mut associated_data,
-            post_processor,
-            vector_filter.as_ref(),
-            is_flat_search,
+            &mode,
         )?;
 
         let mut search_result = SearchResult {
@@ -1055,9 +1104,7 @@ where
         indices: &mut [u32],
         distances: &mut [f32],
         associated_data: &mut [Data::AssociatedDataType],
-        post_processor: Option<DiskSearchPostProcessor<'_>>,
-        vector_filter: &(dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
-        is_flat_search: bool,
+        mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
@@ -1065,45 +1112,94 @@ where
             &mut associated_data[..k_value],
         );
 
-        let strategy = self.search_strategy(vector_filter);
         let timer = Instant::now();
         let k = k_value;
         let l = search_list_size as usize;
-        let stats = if is_flat_search {
-            self.runtime.block_on(self.flat_search(
-                &strategy,
-                query,
-                vector_filter,
-                l,
-                &mut result_output_buffer,
-            ))?
-        } else if let Some(processor) = post_processor {
-            self.runtime.block_on(self.index.search_with(
-                Knn::new(k, l, beam_width)?,
-                &strategy,
-                processor,
-                &DefaultContext,
-                query,
-                &mut result_output_buffer,
-            ))?
-        } else {
-            self.runtime.block_on(self.index.search(
-                Knn::new(k, l, beam_width)?,
-                &strategy,
-                &DefaultContext,
-                query,
-                &mut result_output_buffer,
-            ))?
+
+        let io_tracker = IOTracker::default();
+
+        // * `FlatScan`     — `flat_search` filters the scan iterator at
+        //                    construction; non-matching IDs never enter `best`.
+        // * `Graph`        — plain greedy traversal doesn't consult any predicate;
+        //                    if a predicate is set, `RerankAndFilter` filters out
+        //                    non-matching nodes at rerank time.
+        // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept` nodes
+        //                    into `matched_results`; no filtering in post-process.
+        // * `DiverseGraph` — `index.search_with` runs `DeterminantDiversityAndFilter`
+        //                    as the post-processor over the L candidate pool.
+        let stats = match mode {
+            SearchMode::FlatScan { filter } => {
+                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                self.runtime.block_on(self.flat_search(
+                    &strategy,
+                    query,
+                    filter.as_deref(),
+                    l,
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::Graph { filter } => {
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    filter
+                        .as_deref()
+                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                );
+                let knn_search = Knn::new(k, l, beam_width)?;
+                self.runtime.block_on(self.index.search(
+                    knn_search,
+                    &strategy,
+                    &DefaultContext,
+                    query,
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::InlineFilter { filter, adaptive_l } => {
+                // Strategy is passed by value into `filter_search` so that the
+                // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
+                // its counters reachable from this scope.
+                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                let knn_search = Knn::new(k, l, beam_width)?;
+                self.runtime.block_on(self.filter_search(
+                    strategy,
+                    query,
+                    knn_search,
+                    filter.as_ref(),
+                    adaptive_l.clone(),
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::DiverseGraph { filter, params } => {
+                // Strategy installs the filter so `RerankAndFilter` would also
+                // honor it, but the active post-processor here is the
+                // diversity selector built from `DiskSearchPostProcessor`.
+                let postprocess_config = filter
+                    .as_deref()
+                    .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
+                let strategy = self.search_strategy(&io_tracker, postprocess_config);
+                let knn_search = Knn::new(k, l, beam_width)?;
+                let processor = DiskSearchPostProcessor::DeterminantDiversity(
+                    DeterminantDiversityAndFilter::new(postprocess_config, *params),
+                );
+                self.runtime.block_on(self.index.search_with(
+                    knn_search,
+                    &strategy,
+                    processor,
+                    &DefaultContext,
+                    query,
+                    &mut result_output_buffer,
+                ))?
+            }
         };
         query_stats.total_comparisons = stats.cmps;
         query_stats.search_hops = stats.hops;
 
         query_stats.total_execution_time_us = timer.elapsed().as_micros();
-        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
-        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
-        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
+        query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
         query_stats.query_pq_preprocess_time_us =
-            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
+            IOTracker::time(&io_tracker.preprocess_time_us) as u128;
         query_stats.cpu_time_us = query_stats.total_execution_time_us
             - query_stats.io_time_us
             - query_stats.query_pq_preprocess_time_us;
@@ -1485,9 +1581,7 @@ mod disk_provider_tests {
                     &mut indices,
                     &mut distances,
                     &mut associated_data,
-                    None::<DiskSearchPostProcessor<'_>>,
-                    &(|_| true),
-                    false,
+                    &SearchMode::graph(),
                 );
 
                 // Calculate the range of the truth_result for this query
@@ -1539,9 +1633,7 @@ mod disk_provider_tests {
                         params.k as u32,
                         params.l as u32,
                         beam_width,
-                        None,
-                        SearchPostProcessorKind::None,
-                        false,
+                        SearchMode::graph(),
                     )
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
@@ -1652,9 +1744,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
-            None::<DiskSearchPostProcessor<'_>>,
-            &|_| true,
-            false,
+            &SearchMode::graph(),
         );
 
         assert!(result.is_err());
@@ -1687,7 +1777,8 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(&|_| true);
+        let io_tracker = IOTracker::default();
+        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let recorded_search =
@@ -1722,9 +1813,7 @@ mod disk_provider_tests {
             return_list_size,
             search_list_size,
             Some(4),
-            None,
-            SearchPostProcessorKind::None,
-            false,
+            SearchMode::graph(),
         );
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
@@ -1767,9 +1856,7 @@ mod disk_provider_tests {
                 search_list_size,
                 search_list_size,
                 Some(4),
-                None,
-                SearchPostProcessorKind::None,
-                false,
+                SearchMode::graph(),
             )
             .unwrap();
         let baseline_ids: std::collections::HashSet<u32> =
@@ -1787,9 +1874,7 @@ mod disk_provider_tests {
                 return_list_size,
                 search_list_size,
                 Some(4),
-                None,
-                SearchPostProcessorKind::DeterminantDiversity(params),
-                false,
+                SearchMode::diverse_graph(params),
             )
             .unwrap();
         let det_div_ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
@@ -1827,9 +1912,7 @@ mod disk_provider_tests {
                 return_list_size,
                 search_list_size,
                 Some(4),
-                None,
-                SearchPostProcessorKind::DeterminantDiversity(pure_params),
-                false,
+                SearchMode::diverse_graph(pure_params),
             )
             .unwrap();
         let pure_ids: Vec<u32> = pure_result.results.iter().map(|r| r.vertex_id).collect();
@@ -1844,16 +1927,13 @@ mod disk_provider_tests {
         // The vector_filter is honored by det-div: filter out the baseline top-1 and
         // verify it is excluded from the det-div results.
         let excluded = baseline_top1.vertex_id;
-        let filter: VectorFilter<GraphDataF32VectorUnitData> = Box::new(move |id| *id != excluded);
         let filtered = search_engine
             .search(
                 &query_vector,
                 return_list_size,
                 search_list_size,
                 Some(4),
-                Some(filter),
-                SearchPostProcessorKind::DeterminantDiversity(params),
-                false,
+                SearchMode::diverse_graph_filtered(move |id: &u32| *id != excluded, params),
             )
             .unwrap();
         let filtered_ids: Vec<u32> = filtered.results.iter().map(|r| r.vertex_id).collect();
@@ -1933,7 +2013,8 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(&|_| true);
+        let io_tracker = IOTracker::default();
+        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -1980,7 +2061,8 @@ mod disk_provider_tests {
             &mut distances2,
             &mut associated_data2,
         );
-        let strategy2 = search_engine.search_strategy(&|_| true);
+        let io_tracker2 = IOTracker::default();
+        let strategy2 = search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll);
         let search_params2 =
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
@@ -2176,6 +2258,16 @@ mod disk_provider_tests {
         let mut distances = vec![0f32; 10];
         let mut associated_data = vec![(); 10];
 
+        // Build the same `SearchMode` twice. `vector_filter` is a `fn` pointer
+        // (Copy), so each call reconstructs a fresh mode with the same filter.
+        let make_mode = || -> SearchMode<'static> {
+            if is_flat_search {
+                SearchMode::flat_filtered(vector_filter)
+            } else {
+                SearchMode::graph_filtered(vector_filter)
+            }
+        };
+
         let result = search_engine.search_internal(
             &query,
             10,
@@ -2185,9 +2277,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
-            None::<DiskSearchPostProcessor<'_>>,
-            &vector_filter,
-            is_flat_search,
+            &make_mode(),
         );
 
         assert!(result.is_ok(), "Expected search to succeed");
@@ -2207,9 +2297,7 @@ mod disk_provider_tests {
             10,
             10,
             None, // beam_width
-            Some(Box::new(vector_filter)),
-            SearchPostProcessorKind::None,
-            is_flat_search,
+            make_mode(),
         );
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");
@@ -2235,6 +2323,126 @@ mod disk_provider_tests {
         assert!(
             check_distances(&actual_distances, &expected_distances),
             "Expected distances to match"
+        );
+    }
+
+    // ===========================================================================
+    // Inline filter + AdaptiveL behavioral tests
+    // ===========================================================================
+    //
+    // Two basic invariants from the design review:
+    //
+    // 1. `adaptive_l = Some(_)` with an always-true predicate visits every
+    //    candidate as a "match," computes specificity = 100%, never triggers
+    //    a resize, and produces the same top-k as plain `Knn`. This is the
+    //    "no-op equivalence" guard.
+    //
+    // 2. `adaptive_l = Some(_)` with a selective predicate must produce a
+    //    valid result set whose IDs all satisfy the predicate. Doesn't assert
+    //    recall@k (would need filter-selective ground truth) — just that the
+    //    inline path runs end-to-end and produces filter-conforming output.
+
+    #[test]
+    fn test_adaptive_l_with_no_filter_matches_plain_knn() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+
+        let plain = search_engine
+            .search(&query, 10, 10, None, SearchMode::graph())
+            .expect("plain Knn must succeed");
+
+        let inline_no_filter = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None,
+                SearchMode::inline_filter(
+                    |_| true,
+                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                ),
+            )
+            .expect("inline filter with accept-all predicate must succeed");
+
+        let plain_ids: Vec<u32> = plain.results.iter().map(|r| r.vertex_id).collect();
+        let inline_ids: Vec<u32> = inline_no_filter
+            .results
+            .iter()
+            .map(|r| r.vertex_id)
+            .collect();
+
+        assert_eq!(
+            plain.stats.result_count, inline_no_filter.stats.result_count,
+            "no-filter inline path must return same result count as plain Knn"
+        );
+        assert_eq!(
+            plain_ids, inline_ids,
+            "no-filter inline path must return the same top-k IDs as plain Knn"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_l_with_selective_predicate_returns_only_matches() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+        // Predicate from `test_search_with_vector_filter::case_4` — three IDs
+        // known to be in the unfiltered top-10 for this query+fixture.
+        let predicate = |id: &u32| *id == 72 || *id == 87 || *id == 170;
+
+        let result = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None,
+                SearchMode::inline_filter(
+                    predicate,
+                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                ),
+            )
+            .expect("inline filter search with AdaptiveL must succeed");
+
+        // `result.results` is pre-allocated to `return_list_size`; only the
+        // first `result_count` entries are populated. The trailing entries
+        // are default zeros — not search output — so slice before asserting.
+        let count = result.stats.result_count as usize;
+        let ids: Vec<u32> = result
+            .results
+            .iter()
+            .take(count)
+            .map(|r| r.vertex_id)
+            .collect();
+        for id in &ids {
+            assert!(
+                predicate(id),
+                "AdaptiveL result must only contain predicate-matching IDs; got {id} in {ids:?}"
+            );
+        }
+        assert!(
+            !ids.is_empty(),
+            "AdaptiveL on a fixture with reachable matches must return at least one match"
         );
     }
 
@@ -2266,7 +2474,8 @@ mod disk_provider_tests {
             &mut associated_data,
         );
 
-        let strategy = search_engine.search_strategy(&|_| true);
+        let io_tracker = IOTracker::default();
+        let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
 
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();

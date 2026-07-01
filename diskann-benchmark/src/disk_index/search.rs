@@ -13,9 +13,12 @@ use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
-    search::provider::{
-        disk_provider::{DiskIndexSearcher, SearchPostProcessorKind},
-        disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
+        search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
@@ -33,10 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::{
-        disk::{DiskIndexLoad, DiskSearchPhase},
-        post_processor::TopkPostProcessor,
-    },
+    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -268,27 +268,22 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                let post_processor = search_params.post_processor.as_ref().map_or(
-                    SearchPostProcessorKind::None,
-                    |TopkPostProcessor::DeterminantDiversity(params)| {
-                        SearchPostProcessorKind::DeterminantDiversity(*params)
-                    },
+                // Construct the SearchMode from the JSON-driven
+                // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
+                // benchmark only supplies the per-query filter and post-processor.
+                let has_filter = search_params.vector_filters_file.is_some();
+                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
+                    has_filter,
+                    vf,
+                    search_params.post_processor.as_ref(),
                 );
-                let vector_filter = if search_params.vector_filters_file.is_none() {
-                    None
-                } else {
-                    Some(Box::new(move |vid: &u32| vf.contains(vid))
-                        as Box<dyn Fn(&u32) -> bool + Send + Sync>)
-                };
 
                 match searcher.search(
                     q,
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
-                    vector_filter,
-                    post_processor,
-                    search_params.is_flat_search,
+                    mode,
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
@@ -354,7 +349,7 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: search_params.is_flat_search,
+        is_flat_search: search_params.search_mode.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
