@@ -116,7 +116,7 @@ struct ComputeMultivecGroundTruthArgs {
     #[arg(long = "query-file", short, required = true)]
     pub query_file: String,
 
-    #[arg(long = "query-file-labels", default_value = None)]
+    #[arg(long = "query-file-labels")]
     pub query_file_labels: Option<String>,
 
     /// Path of the file to write the ground truth to in binary format.  Please don't append .bin at the end if no filter_label or filter_label_file is provided.  It will save the file with '.bin' at the end.  Otherwise it will save the file as filename_label.bin.
