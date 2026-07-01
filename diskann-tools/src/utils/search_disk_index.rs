@@ -257,7 +257,10 @@ where
                 // Construct the mode from the CLI-driven
                 // `(is_flat_search, has_filter)` pair. CLI doesn't expose
                 // AdaptiveL yet, so `InlineFilter` is unreachable here.
-                let mode: SearchMode<'_> = match (parameters.is_flat_search, parameters.filter_bitmap_file.is_some()) {
+                let mode: SearchMode<'_> = match (
+                    parameters.is_flat_search,
+                    parameters.filter_bitmap_file.is_some(),
+                ) {
                     (true, false) => SearchMode::flat(),
                     (true, true) => {
                         SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
