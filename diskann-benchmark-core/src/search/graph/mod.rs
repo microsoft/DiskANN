@@ -3,11 +3,11 @@
  * Licensed under the MIT license.
  */
 
+pub mod filtered_range;
 pub mod inline;
 pub mod knn;
 pub mod multihop;
 pub mod range;
-pub mod filtered_range;
 
 pub mod strategy;
 
