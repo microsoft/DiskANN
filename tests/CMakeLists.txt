@@ -32,10 +32,19 @@ if (NOT Boost_FOUND)
 endif()
 
 
-set(DISKANN_UNIT_TEST_SOURCES main.cpp index_write_parameters_builder_tests.cpp)
+set(DISKANN_UNIT_TEST_SOURCES main.cpp index_write_parameters_builder_tests.cpp unified_index_tests.cpp)
 
-add_executable(${PROJECT_NAME}_unit_tests ${DISKANN_SOURCES} ${DISKANN_UNIT_TEST_SOURCES})
-target_link_libraries(${PROJECT_NAME}_unit_tests ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::unit_test_framework)
+# Link the tests against the static DiskANN core (diskann_s) rather than the
+# DLL, so internal-only symbols don't need to be exported from the DLL just to
+# satisfy the test linker. diskann_s carries DISKANN_STATIC_LIB (making
+# DISKANN_DLLEXPORT a no-op) plus MKL + synchronization.lib transitively.
+add_executable(${PROJECT_NAME}_unit_tests ${DISKANN_UNIT_TEST_SOURCES})
+target_link_libraries(${PROJECT_NAME}_unit_tests ${PROJECT_NAME}_s ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::unit_test_framework)
+
+# The static test exe still needs libiomp5md.dll / libtcmalloc_minimal.dll at
+# runtime; those are copied to the output dir by the DLL target's POST_BUILD,
+# so make sure the DLL is built first.
+add_dependencies(${PROJECT_NAME}_unit_tests ${PROJECT_NAME})
 
 add_test(NAME ${PROJECT_NAME}_unit_tests COMMAND ${PROJECT_NAME}_unit_tests)
 

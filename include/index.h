@@ -85,8 +85,16 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void load(const IndexLoadParams& load_params);
 
     DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l, LabelFormatType label_format_type = LabelFormatType::String);
-    
+
 #endif
+
+    // Unified single-file format. See docs/unified_index_format.md.
+    DISKANN_DLLEXPORT void save_unified(const char *filename);
+    // Variant of save_unified that also emits a PQ region. Pass empty
+    // buffers to skip PQ (equivalent to the no-arg overload). Used by
+    // unified_index_builder.
+    DISKANN_DLLEXPORT void save_unified(const char *filename, const std::vector<uint8_t> &pq_pivots_bytes,
+                                         const std::vector<uint8_t> &pq_codes_bytes);
 
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();

@@ -30,6 +30,14 @@ class FixedChunkPQTable
     void load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks);
 #endif
 
+    // In-memory variant of load_pq_centroid_bin. Parses the same on-disk
+    // pq_pivots blob format (outer bin -> 4 or 5 sub-bins for offsets,
+    // pivot table, centroid, [old per-chunk dim], chunk offsets), but reads
+    // straight from a caller-supplied buffer -- no temp file, no disk IO.
+    // Does NOT support OPQ rotation matrix (unified-format PQ is always
+    // standard PQ).
+    void load_pq_centroid_bin_from_memory(const uint8_t *blob, size_t blob_len, size_t num_chunks);
+
     uint32_t get_num_chunks();
 
     void preprocess_query(float *query_vec);

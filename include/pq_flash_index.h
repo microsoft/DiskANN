@@ -52,6 +52,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                                     LabelFormatType label_format_type = LabelFormatType::String);
 #endif
 
+    // (load_unified removed; use diskann::make_unified_index_ssd(reader, ctx) — see include/unified_index.h.)
+
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
     DISKANN_DLLEXPORT void cache_bfs_levels(uint64_t num_nodes_to_cache, std::vector<uint32_t> &node_list,

@@ -15,8 +15,8 @@ bitmask_filter_match<LabelT>::bitmask_filter_match(
     // _bitmask_size == 0 means no filter is set
     if (_bitmask_filters._bitmask_size > 0)
     {
-        query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
-        _bitmask_full_val._mask = query_bitmask_buf.data();
+        _query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
+        _bitmask_full_val._mask = _query_bitmask_buf.data();
 
         for (const auto& filter_label : filter_labels)
         {
@@ -25,6 +25,30 @@ bitmask_filter_match<LabelT>::bitmask_filter_match(
         }
 
         // if unv isn't set, it will be default value 0
+        auto bitmask_val = simple_bitmask::get_bitmask_val(unv_label);
+        _bitmask_full_val.merge_bitmask_val(bitmask_val);
+    }
+}
+
+template <typename LabelT>
+bitmask_filter_match<LabelT>::bitmask_filter_match(
+    simple_bitmask_buf& bitmask_filters,
+    const std::vector<LabelT>& filter_labels,
+    LabelT unv_label)
+    : _bitmask_filters(bitmask_filters),
+      _query_bitmask_buf(_owned_query_bitmask_buf)
+{
+    if (_bitmask_filters._bitmask_size > 0)
+    {
+        _query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
+        _bitmask_full_val._mask = _query_bitmask_buf.data();
+
+        for (const auto& filter_label : filter_labels)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
+            _bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
+
         auto bitmask_val = simple_bitmask::get_bitmask_val(unv_label);
         _bitmask_full_val.merge_bitmask_val(bitmask_val);
     }

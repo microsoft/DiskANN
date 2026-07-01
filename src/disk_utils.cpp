@@ -18,6 +18,10 @@
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "tsl/robin_set.h"
+#include "unified_index_io.h"
+#include "label_helper.h"
+#include "label_bitmask.h"
+#include "integer_label_vector.h"
 
 namespace diskann
 {
@@ -1447,6 +1451,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     return 0;
 }
 
+
 template DISKANN_DLLEXPORT void create_disk_layout<int8_t>(const std::string base_file,
                                                            const std::string mem_index_file,
                                                            const std::string output_file,
@@ -1455,7 +1460,8 @@ template DISKANN_DLLEXPORT void create_disk_layout<uint8_t>(const std::string ba
                                                             const std::string mem_index_file,
                                                             const std::string output_file,
                                                             const std::string reorder_data_file);
-template DISKANN_DLLEXPORT void create_disk_layout<float>(const std::string base_file, const std::string mem_index_file,
+template DISKANN_DLLEXPORT void create_disk_layout<float>(const std::string base_file,
+                                                          const std::string mem_index_file,
                                                           const std::string output_file,
                                                           const std::string reorder_data_file);
 

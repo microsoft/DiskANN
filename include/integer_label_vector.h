@@ -12,6 +12,17 @@ public:
 
     bool initialize_from_file(const std::string &label_file, size_t &numpoints);
 
+    bool initialize_from_buffers(const size_t *offsets, size_t num_points,
+                                 const uint32_t *labels, size_t total_labels);
+
+    // Zero-copy load path: caller pre-sizes both buffers, writes into the raw
+    // pointers, and the integer_label_vector is ready to use. The two-step
+    // form lets the caller skip the intermediate vector<uint8_t> + assign()
+    // copies that initialize_from_buffers incurs.
+    void resize_for_load(size_t num_points, size_t total_labels);
+    size_t *mutable_offset_data();   // size: num_points + 1 entries (size_t each)
+    uint32_t *mutable_label_data();  // size: total_labels entries (uint32_t each)
+
     bool write_to_file(const std::string &label_file) const;
 
     template <typename LabelT>

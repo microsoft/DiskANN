@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "windows_customizations.h"
+
 namespace diskann
 {
 
@@ -45,7 +47,15 @@ struct simple_bitmask_buf
 
 };
 
-class simple_bitmask
+// NOTE: simple_bitmask stays DISKANN_DLLEXPORT even though the unit tests now
+// link the static diskann_s lib (where DISKANN_DLLEXPORT is a no-op) and no
+// longer need it exported. It is kept because ColorInfoVector's inline
+// constructor (include/color_info.h, pulled in widely via neighbor.h) odr-uses
+// simple_bitmask's out-of-line methods (ctor, get_bitmask_size), so any DLL
+// consumer that instantiates it must import them. TODO: once that inline
+// dependency is removed or proven unused by every DLL consumer, drop this
+// export too -- simple_bitmask is otherwise an internal helper.
+class DISKANN_DLLEXPORT simple_bitmask
 {
 public:
     simple_bitmask(std::uint64_t* bitsets, std::uint64_t bitmask_size);

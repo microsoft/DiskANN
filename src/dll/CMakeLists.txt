@@ -11,7 +11,10 @@ add_library(${PROJECT_NAME} SHARED dllmain.cpp
     ../label_bitmask.cpp ../label_helper.cpp ../logger.cpp
     ../math_utils.cpp ../memory_mapper.cpp ../natural_number_map.cpp ../natural_number_set.cpp
     ../neighbor_list.cpp ../partition.cpp ../pq.cpp ../pq_data_store.cpp ../pq_flash_index.cpp
-    ../pq_l2_distance.cpp ../scratch.cpp ../utils.cpp ../windows_aligned_file_reader.cpp)
+    ../pq_l2_distance.cpp ../scratch.cpp ../unified_index.cpp ../unified_index_builder.cpp ../unified_index_io.cpp
+    ../unified_label_data.cpp ../unified_node_store.cpp
+    ../unified_index_base.cpp ../unified_index_memory.cpp ../unified_index_ssd.cpp
+    ../utils.cpp ../windows_aligned_file_reader.cpp)
 
 set(TARGET_DIR "$<$<CONFIG:Debug>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}>$<$<CONFIG:Release>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}>")
 
