@@ -424,8 +424,6 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
                 // `self.buffer` is long enough to hold all the IDs.
                 let processed = unsafe {
-                    // self.expand_beam
-                    //     .expand_beam(&self.ids, 8, &self.reader, &mut on_neighbors)
                     self.expand_beam
                         .expand_beam(&self.ids, 8, &self.reader, &mut self.buffer)
                 }?;
@@ -461,7 +459,6 @@ trait ExpandBeam: Send + Sync + std::fmt::Debug {
         list: &[u32],
         lookahead: usize,
         reader: &store::Reader<'_>,
-        // f: &mut dyn FnMut(u32, f32),
         buffer: &mut [(u32, f32)],
     ) -> ANNResult<usize>;
 }
@@ -483,11 +480,9 @@ where
         list: &[u32],
         lookahead: usize,
         reader: &store::Reader<'_>,
-        // f: &mut dyn FnMut(u32, f32),
         buffer: &mut [(u32, f32)],
     ) -> ANNResult<usize> {
         // SAFETY: Inherited from caller.
-        // unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, f) }
         unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, buffer) }
     }
 }
@@ -557,7 +552,6 @@ unsafe fn expand_beam_inner<T, const BYTES: usize>(
     list: &[u32],
     lookahead: usize,
     reader: &store::Reader<'_>,
-    // f: &mut dyn FnMut(u32, f32),
     buffer: &mut [(u32, f32)],
 ) -> ANNResult<usize>
 where
@@ -615,8 +609,8 @@ where
 
         // SAFETY: Caller asserts that `i` is in-bounds.
         if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
+            // SAFETY: Inherited from caller.
             *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
-            // f(i, distance.evaluate(data)?);
             processed += 1;
         }
     }

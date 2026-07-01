@@ -9,7 +9,6 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     sync::Arc,
-    path::PathBuf,
 };
 
 use diskann::graph::{self, DiskANNIndex, InplaceDeleteMethod, StartPointStrategy};
@@ -33,7 +32,6 @@ use diskann_inmem::{
 };
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric;
-use half::f16;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -45,15 +43,13 @@ use crate::{
             StreamStats,
         },
     },
-    inputs::graph_index::DynamicRunbookParams,
     utils::{datafiles, SimilarityMeasure},
 };
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", Build::<f32>::new())?;
-    registry.register("inmem2-f16", Build::<f16>::new())?;
-
-    registry.register("inmem2-f32-stream", StreamingBenchmark)?;
+    // registry.register("inmem2-f16", Build::<f16>::new())?;
+    registry.register("inmem2-f32-stream", StreamingBenchmark::<f32>::new())?;
     Ok(())
 }
 
@@ -322,10 +318,14 @@ struct StaticBuild {
     data: Data,
     build: BuildParams,
     search: KnnSearch,
+    // The serialized representation of the original input.
+    input: serde_json::Value,
 }
 
 impl StaticBuild {
     fn from_raw(raw: dto::StaticBuild, mut checker: Option<&mut Checker>) -> anyhow::Result<Self> {
+        let input = serde_json::to_value(&raw)?;
+
         let dto::StaticBuild {
             data,
             build,
@@ -340,6 +340,7 @@ impl StaticBuild {
             data,
             build,
             search,
+            input,
         })
     }
 }
@@ -367,7 +368,7 @@ impl Input for StaticBuild {
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(())?)
+        Ok(self.input.clone())
     }
 
     fn example() -> Self::Raw {
@@ -450,7 +451,7 @@ where
             None => {
                 write!(
                     f,
-                    "full-precision streaming with data type {}",
+                    "full-precision static build+search with data type {}",
                     Quote(T::DATA_TYPE)
                 )?;
             }
@@ -531,7 +532,7 @@ where
             benchmark_core::search::graph::Strategy::broadcast(Strategy),
         )?;
 
-        let mut results = _knn(
+        let results = _knn(
             &knn,
             &groundtruth,
             input.search.reps,
@@ -561,7 +562,7 @@ fn _knn(
             let setup = core_search::Setup {
                 threads: *num_threads,
                 tasks: *num_threads,
-                reps: reps,
+                reps,
             };
 
             let run = core_search::Run::new(instance.knn, setup);
@@ -645,7 +646,7 @@ impl RunBook {
         let dto::RunBook {
             mut path,
             dataset,
-            mut groundtruth_directory,
+            groundtruth_directory,
             delete_method,
             delete_num_to_replace,
         } = raw;
@@ -699,10 +700,13 @@ struct BigANNStreaming {
     build: BuildParams,
     search: StreamingKnnSearch,
     runbook: RunBook,
+    // The serialized representation of the original input.
+    input: serde_json::Value,
 }
 
 impl BigANNStreaming {
     fn from_raw(raw: dto::BigANNStreaming, checker: &mut Checker) -> anyhow::Result<Self> {
+        let input = serde_json::to_value(&raw)?;
         let data = Data::from_raw(raw.data, Some(checker))?;
         let build = BuildParams::from_raw(raw.build, data.distance)?;
         Ok(Self {
@@ -710,6 +714,7 @@ impl BigANNStreaming {
             build,
             search: StreamingKnnSearch::from_raw(raw.search, Some(checker))?,
             runbook: RunBook::from_raw(raw.runbook, checker)?,
+            input,
         })
     }
 }
@@ -737,7 +742,7 @@ impl Input for BigANNStreaming {
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(())?)
+        Ok(self.input.clone())
     }
 
     fn example() -> Self::Raw {
@@ -779,14 +784,27 @@ impl Input for BigANNStreaming {
 }
 
 #[derive(Debug)]
-struct StreamingBenchmark;
+struct StreamingBenchmark<T>(std::marker::PhantomData<T>);
 
-impl Benchmark for StreamingBenchmark {
+impl<T> StreamingBenchmark<T> {
+    fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> Benchmark for StreamingBenchmark<T>
+where
+    T: FullPrecision + AsDataType + diskann::graph::SampleableForStart,
+{
     type Input = BigANNStreaming;
     type Output = ();
 
-    fn try_match(&self, _input: &BigANNStreaming) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(0))
+    fn try_match(&self, input: &BigANNStreaming) -> Result<MatchScore, FailureScore> {
+        if T::is_match(input.data.data_type) {
+            Ok(MatchScore(0))
+        } else {
+            Err(FailureScore(1000))
+        }
     }
 
     fn description(
@@ -794,11 +812,28 @@ impl Benchmark for StreamingBenchmark {
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&BigANNStreaming>,
     ) -> std::fmt::Result {
+        match input {
+            Some(input) => {
+                let data_type = input.data.data_type;
+                if !T::is_match(data_type) {
+                    write!(
+                        f,
+                        "expected data-type {}, instead got {}",
+                        Quote(T::DATA_TYPE),
+                        Quote(data_type)
+                    )?;
+                }
+            }
+            None => {
+                write!(
+                    f,
+                    "full-precision streaming with data type {}",
+                    Quote(T::DATA_TYPE)
+                )?;
+            }
+        }
+
         Ok(())
-        // match input {
-        //     Some(i) => write!(f, "{i}"),
-        //     None => write!(f, "inmem2 f32 streaming benchmark"),
-        // }
     }
 
     fn run(
@@ -814,8 +849,8 @@ impl Benchmark for StreamingBenchmark {
         let max_points = runbook.max_points();
 
         // Load the dataset (consumed by `WithData`) and queries.
-        let dataset: Matrix<f32> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
-        let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+        let dataset: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
+        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.search.queries,
         ))?);
         let dim = dataset.ncols();
@@ -823,7 +858,7 @@ impl Benchmark for StreamingBenchmark {
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(dataset.as_view())?;
         let index_config = input.build.config.clone();
-        let layer = Full::<f32>::new(dim, input.data.distance);
+        let layer = Full::<T>::new(dim, input.data.distance);
 
         let config =
             diskann_inmem::provider::Config::new(max_points, index_config.max_degree().get());

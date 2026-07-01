@@ -21,7 +21,7 @@ use diskann_wide::{
 use half::f16;
 use thiserror::Error;
 
-use crate::{layers, num::Bytes, Hidden};
+use crate::{Hidden, layers, num::Bytes};
 
 /// A useful trait bound for types compatible with [`Full`].
 ///

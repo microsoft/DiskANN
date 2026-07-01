@@ -61,5 +61,3 @@ macro_rules! opaque {
 }
 
 pub(crate) use opaque;
-
-

@@ -388,7 +388,26 @@ impl std::fmt::Display for MaybeLazy<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lazy(lazy) => write!(f, "{}", lazy),
-            Self::Eager(s) => f.write_str(&s),
+            Self::Eager(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::fmt::Debug for MaybeLazy<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct AsDisplay<'a>(&'a dyn std::fmt::Display);
+        impl std::fmt::Debug for AsDisplay<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        match self {
+            Self::Lazy(o) => {
+                let as_display = AsDisplay(o);
+                f.debug_tuple("MaybeLazy::Lazy").field(&as_display).finish()
+            }
+            Self::Eager(s) => f.debug_tuple("MaybeLazy::Eager").field(s).finish(),
         }
     }
 }
@@ -434,6 +453,7 @@ impl std::fmt::Display for MaybeLazy<'_> {
 ///
 /// assert_eq!(kv.to_string(), expected);
 /// ```
+#[derive(Debug, Default)]
 pub struct KeyValue<'a> {
     kv: Vec<(&'a str, MaybeLazy<'a>)>,
     max_key_length: usize,
@@ -454,6 +474,7 @@ impl<'a> KeyValue<'a> {
         self.kv.push((key, MaybeLazy::Lazy(value)))
     }
 
+    /// Push the key-value pair to `self` for formatting - eagerly formatting `value`.
     pub fn push_eager<D>(&mut self, key: &'a str, value: D)
     where
         D: std::fmt::Display,

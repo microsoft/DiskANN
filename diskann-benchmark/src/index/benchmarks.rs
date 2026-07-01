@@ -86,36 +86,36 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         "graph-index-full-precision-f16",
         FullPrecision::<f16>::new().search(plugins::Topk),
     )?;
-    // registry.register(
-    //     "graph-index-full-precision-u8",
-    //     FullPrecision::<u8>::new().search(plugins::Topk),
-    // )?;
-    // registry.register(
-    //     "graph-index-full-precision-i8",
-    //     FullPrecision::<i8>::new().search(plugins::Topk),
-    // )?;
+    registry.register(
+        "graph-index-full-precision-u8",
+        FullPrecision::<u8>::new().search(plugins::Topk),
+    )?;
+    registry.register(
+        "graph-index-full-precision-i8",
+        FullPrecision::<i8>::new().search(plugins::Topk),
+    )?;
 
     // Dynamic Full Precision
     registry.register(
         "graph-index-dynamic-full-precision-f32",
         DynamicFullPrecision::<f32>::new(),
     )?;
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-f16",
-    //     DynamicFullPrecision::<f16>::new(),
-    // )?;
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-u8",
-    //     DynamicFullPrecision::<u8>::new(),
-    // )?;
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-i8",
-    //     DynamicFullPrecision::<i8>::new(),
-    // )?;
+    registry.register(
+        "graph-index-dynamic-full-precision-f16",
+        DynamicFullPrecision::<f16>::new(),
+    )?;
+    registry.register(
+        "graph-index-dynamic-full-precision-u8",
+        DynamicFullPrecision::<u8>::new(),
+    )?;
+    registry.register(
+        "graph-index-dynamic-full-precision-i8",
+        DynamicFullPrecision::<i8>::new(),
+    )?;
 
-    // product::register_benchmarks(registry)?;
-    // scalar::register_benchmarks(registry)?;
-    // spherical::register_benchmarks(registry)?;
+    product::register_benchmarks(registry)?;
+    scalar::register_benchmarks(registry)?;
+    spherical::register_benchmarks(registry)?;
     Ok(())
 }
 
