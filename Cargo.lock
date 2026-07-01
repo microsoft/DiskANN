@@ -207,15 +207,14 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bf-tree"
-version = "0.4.10"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11a6082b72699bf88f431c4ebab0e9e2ab6c31cf0576a3b115653fb8a0a0018e"
+checksum = "05f5948e058bab1f8fb75d1fac07dbb965b7dfce1a95f7c10c6f587682526bf1"
 dependencies = [
  "cfg-if",
  "io-uring",
  "libc",
- "rand 0.8.6",
- "rand 0.9.4",
+ "rand",
  "serde",
  "serde_json",
  "thread_local",
@@ -634,7 +633,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "num-traits",
  "pin-project",
- "rand 0.9.4",
+ "rand",
  "relative-path 2.0.1",
  "serde",
  "serde_json",
@@ -670,7 +669,7 @@ dependencies = [
  "itertools 0.13.0",
  "opentelemetry",
  "opentelemetry_sdk",
- "rand 0.9.4",
+ "rand",
  "rayon",
  "roaring",
  "scopeguard",
@@ -722,7 +721,7 @@ dependencies = [
  "diskann-vector",
  "diskann-wide",
  "half",
- "rand 0.9.4",
+ "rand",
  "serde",
  "serde_json",
  "tempfile",
@@ -742,7 +741,7 @@ dependencies = [
  "diskann-vector",
  "futures-util",
  "half",
- "rand 0.9.4",
+ "rand",
  "rstest",
  "serde",
  "serde_json",
@@ -777,7 +776,7 @@ dependencies = [
  "libc",
  "opentelemetry",
  "proptest",
- "rand 0.9.4",
+ "rand",
  "rayon",
  "rstest",
  "serde",
@@ -801,7 +800,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "foldhash 0.2.0",
- "rand 0.9.4",
+ "rand",
  "thiserror 2.0.17",
  "tokio",
 ]
@@ -819,7 +818,7 @@ dependencies = [
  "futures-util",
  "hashbrown 0.16.1",
  "num-traits",
- "rand 0.9.4",
+ "rand",
  "roaring",
  "scc",
  "serde",
@@ -836,7 +835,7 @@ dependencies = [
  "approx",
  "cfg-if",
  "faer",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
  "serde",
  "serde_json",
@@ -879,7 +878,7 @@ dependencies = [
  "opentelemetry",
  "proptest",
  "prost",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
  "rayon",
  "rstest",
@@ -903,13 +902,23 @@ dependencies = [
  "diskann-wide",
  "flatbuffers",
  "half",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
  "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
  "trybuild",
+]
+
+[[package]]
+name = "diskann-record"
+version = "0.54.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -934,7 +943,7 @@ dependencies = [
  "num_cpus",
  "opentelemetry",
  "ordered-float",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
  "rayon",
  "rstest",
@@ -954,7 +963,7 @@ dependencies = [
  "diskann-vector",
  "diskann-wide",
  "half",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
  "rayon",
  "rstest",
@@ -972,7 +981,7 @@ dependencies = [
  "diskann-wide",
  "half",
  "iai-callgrind",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
 ]
 
@@ -984,7 +993,7 @@ dependencies = [
  "cfg-if",
  "half",
  "paste",
- "rand 0.9.4",
+ "rand",
 ]
 
 [[package]]
@@ -1477,17 +1486,6 @@ checksum = "5881e4c3c2433fe4905bb19cfd2b5d49d4248274862b68c27c33d9ba4e13f9ec"
 
 [[package]]
 name = "getrandom"
-version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
-dependencies = [
- "cfg-if",
- "libc",
- "wasi",
-]
-
-[[package]]
-name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
@@ -1527,7 +1525,7 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "num-traits",
- "rand 0.9.4",
+ "rand",
  "rand_distr",
  "zerocopy",
 ]
@@ -2240,9 +2238,9 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry"
-version = "0.30.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf416e4cb72756655126f7dd7bb0af49c674f4c1b9903e80c009e0c37e552e6"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -2254,17 +2252,17 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry_sdk"
-version = "0.30.0"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f644aa9e5e31d11896e024305d7e3c98a88884d9f8919dbf37a9991bc47a4b"
+checksum = "9b59f80e1ac4d5ff7a2db8fb6c80badb7f0f3f858211fba08dd9aaec750894f9"
 dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
  "opentelemetry",
  "percent-encoding",
- "rand 0.9.4",
- "serde_json",
+ "portable-atomic",
+ "rand",
  "thiserror 2.0.17",
 ]
 
@@ -2486,8 +2484,8 @@ dependencies = [
  "bit-vec",
  "bitflags 2.10.0",
  "num-traits",
- "rand 0.9.4",
- "rand_chacha 0.9.0",
+ "rand",
+ "rand_chacha",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -2567,33 +2565,12 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rand"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
-dependencies = [
- "libc",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
- "rand_chacha 0.9.0",
- "rand_core 0.9.3",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.6.4",
+ "rand_chacha",
+ "rand_core",
 ]
 
 [[package]]
@@ -2603,16 +2580,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.9.3",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom 0.2.17",
+ "rand_core",
 ]
 
 [[package]]
@@ -2631,7 +2599,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
- "rand 0.9.4",
+ "rand",
 ]
 
 [[package]]
@@ -2640,7 +2608,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
- "rand_core 0.9.3",
+ "rand_core",
 ]
 
 [[package]]
@@ -3624,7 +3592,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "pin-project",
- "rand 0.9.4",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",
@@ -3742,7 +3710,7 @@ dependencies = [
  "bytemuck",
  "clap",
  "indicatif",
- "rand 0.9.4",
+ "rand",
  "redis",
  "serde",
  "tokio",

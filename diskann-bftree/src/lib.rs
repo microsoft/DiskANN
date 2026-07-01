@@ -14,6 +14,8 @@ pub mod provider;
 pub mod quant;
 pub mod vectors;
 
+mod locks;
+
 // Accessors
 pub use provider::{
     AsVectorDtype, BfTreePaths, BfTreeProvider, BfTreeProviderParameters, CreateQuantProvider,
@@ -24,7 +26,7 @@ pub use bf_tree::Config;
 
 use diskann::{
     error::{RankedError, TransientError},
-    ANNError,
+    ANNError, ANNResult,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -93,6 +95,26 @@ impl TransientError<ANNError> for VectorUnavailable {
 }
 
 pub type AccessError = RankedError<VectorUnavailable, ANNError>;
+
+/// Validate that a bf-tree config's `cb_max_record_size` is large enough for the given
+/// key + value pair. Used by provider constructors to fail early on misconfiguration.
+pub(crate) fn validate_record_size(
+    provider_name: &str,
+    config: &bf_tree::Config,
+    key_size: usize,
+    value_size: usize,
+) -> ANNResult<()> {
+    let required = key_size + value_size;
+    let configured_max = config.get_cb_max_record_size();
+    if required > configured_max {
+        return Err(ANNError::log_index_error(format!(
+            "{provider_name}: cb_max_record_size ({configured_max}) is too small; \
+             a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
+             increase cb_max_record_size to at least {required}"
+        )));
+    }
+    Ok(())
+}
 
 /// Metrics recorded by [`DefaultContext`](diskann::provider::DefaultContext).
 #[derive(Debug, Clone)]

@@ -31,7 +31,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -47,7 +47,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -63,7 +63,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -79,7 +79,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -133,9 +133,9 @@ struct ComputeGroundTruthArgs {
     #[arg(long = "gt_file", short, required = true)]
     pub ground_truth_file: String,
 
-    /// Vector filters file in the range ground truth format
-    #[arg(long = "vector_filters_file", short, default_value = None)]
-    pub vector_filters_file: Option<String>,
+    /// Filter bitmap file in the range ground truth format
+    #[arg(long = "filter_bitmap_file", short, default_value = None)]
+    pub filter_bitmap_file: Option<String>,
 
     /// Number of ground truth nearest neigbhors to compute
     #[arg(long = "recall_at", short = 'K', default_value = "10")]
