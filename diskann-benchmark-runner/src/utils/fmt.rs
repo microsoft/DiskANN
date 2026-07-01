@@ -195,7 +195,7 @@ impl std::fmt::Display for Banner<'_> {
 
 /// Indents each line of a string by a fixed number of spaces.
 ///
-/// Each line is prefixed with `spaces` spaces and terminated with a newline.
+/// Each line is prefixed with `spaces` spaces.
 ///
 /// # Examples
 ///
