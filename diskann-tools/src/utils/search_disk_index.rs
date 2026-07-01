@@ -8,9 +8,12 @@ use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
-    search::provider::{
-        disk_provider::{DiskIndexSearcher, SearchPostProcessorKind},
-        disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
+        search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{
@@ -251,21 +254,29 @@ where
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,
             )| {
-                let vector_filter_function: Box<dyn Fn(&u32) -> bool + Send + Sync> =
-                    if parameters.filter_bitmap_file.is_none() {
-                        Box::new(|_: &u32| true)
-                    } else {
-                        Box::new(move |vector_id: &u32| vector_filter.contains(vector_id))
-                    };
+                // Construct the mode from the CLI-driven
+                // `(is_flat_search, has_filter)` pair. CLI doesn't expose
+                // AdaptiveL yet, so `InlineFilter` is unreachable here.
+                let mode: SearchMode<'_> = match (
+                    parameters.is_flat_search,
+                    parameters.filter_bitmap_file.is_some(),
+                ) {
+                    (true, false) => SearchMode::flat(),
+                    (true, true) => {
+                        SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
+                    }
+                    (false, false) => SearchMode::graph(),
+                    (false, true) => {
+                        SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
+                    }
+                };
 
                 let result = searcher.search(
                     query,
                     parameters.recall_at,
                     l,
                     Some(parameters.beam_width as usize),
-                    Some(vector_filter_function),
-                    SearchPostProcessorKind::None,
-                    parameters.is_flat_search,
+                    mode,
                 );
 
                 match result {
