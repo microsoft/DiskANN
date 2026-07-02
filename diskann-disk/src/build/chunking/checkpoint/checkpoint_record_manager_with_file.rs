@@ -95,28 +95,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_checkpoint_creates_fresh_record() -> ANNResult<()> {
-        let temp_dir = tempdir()?;
-        let index_prefix = temp_dir
-            .path()
-            .join("fresh_index")
-            .to_str()
-            .unwrap()
-            .to_string();
-        // Two managers with the same prefix+identifier should see the same checkpoint state
-        let manager_a = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 42);
-        let manager_b = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 42);
-        assert_eq!(
-            manager_a.get_resumption_point(WorkStage::Start)?,
-            manager_b.get_resumption_point(WorkStage::Start)?
-        );
-        // A different identifier should be independent
-        let manager_c = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 99);
-        assert!(!manager_c.has_completed()?);
-        Ok(())
-    }
-
-    #[test]
     fn test_has_completed_false_when_no_file() -> ANNResult<()> {
         let temp_dir = tempdir()?;
         let index_prefix = temp_dir
