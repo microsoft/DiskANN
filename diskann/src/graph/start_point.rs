@@ -82,7 +82,7 @@ impl StartPointStrategy {
 
     pub fn compute<T>(&self, train_data: MatrixView<'_, T>) -> Result<Matrix<T>, StartPointError>
     where
-        T: Copy + SampleableForStart + diskann_utils::sampling::WithApproximateNorm,
+        T: Copy + SampleableForStart,
     {
         match self {
             StartPointStrategy::RandomSamples { nsamples, seed } => {

@@ -42,7 +42,7 @@ cfg_if::cfg_if! {
         const CACHE_LINE_SIZE: usize = 64;
 
         #[inline(always)]
-        pub unsafe fn prefetch_exactly<const N: usize>(ptr: *const i8) {
+        unsafe fn prefetch_exactly<const N: usize>(ptr: *const i8) {
             use std::arch::x86_64::*;
             for i in 0..N {
                 _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0);

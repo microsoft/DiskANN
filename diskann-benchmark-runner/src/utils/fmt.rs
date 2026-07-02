@@ -195,7 +195,7 @@ impl std::fmt::Display for Banner<'_> {
 
 /// Indents each line of a string by a fixed number of spaces.
 ///
-/// Each line is prefixed with `spaces` spaces and terminated with a newline.
+/// Each line is prefixed with `spaces` spaces.
 ///
 /// # Examples
 ///
@@ -221,15 +221,19 @@ impl<'a> Indent<'a> {
 impl std::fmt::Display for Indent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let spaces = self.spaces;
+
+        // We don't know ahead of time how many lines there are. To avoid appending a
+        // newline at the end of the last print, we instead add a newline to line `N-1` when
+        // writing out line `N`.
         let mut first = true;
-        for ln in self.string.lines() {
-            if !first {
-                writeln!(f)?;
+        self.string.lines().try_for_each(|ln| {
+            if first {
+                first = false;
+                write!(f, "{: >spaces$}{}", "", ln)
+            } else {
+                write!(f, "\n{: >spaces$}{}", "", ln)
             }
-            write!(f, "{: >spaces$}{}", "", ln)?;
-            first = false;
-        }
-        Ok(())
+        })
     }
 }
 

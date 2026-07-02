@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
-pub mod compute_pq_bench;
-pub mod diskann_bench;
-pub mod neighbor_bench;
+#[cfg(feature = "disk")]
+pub(crate) mod disk;
+
+pub(crate) mod memory;

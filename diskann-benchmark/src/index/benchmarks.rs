@@ -30,7 +30,6 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    sampling::WithApproximateNorm,
     views::{Matrix, MatrixView},
 };
 use half::f16;
@@ -171,10 +170,7 @@ where
 
 impl<T> Benchmark for FullPrecision<T>
 where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart
-        + AsDataType,
+    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = IndexOperation;
     type Output = BuildResult;
@@ -298,10 +294,7 @@ impl<T> DynamicFullPrecision<T> {
 
 impl<T> Benchmark for DynamicFullPrecision<T>
 where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart
-        + AsDataType,
+    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = DynamicIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
@@ -778,7 +771,7 @@ fn full_precision_streaming<T>(
     max_points: usize,
 ) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
 where
-    T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
+    T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
     let topk = input.search_phase.as_topk()?;
 

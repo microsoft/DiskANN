@@ -887,7 +887,6 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "cfg-if",
- "criterion",
  "diskann",
  "diskann-platform",
  "diskann-quantization",
@@ -897,7 +896,6 @@ dependencies = [
  "futures-util",
  "half",
  "hashbrown 0.16.1",
- "iai-callgrind",
  "itertools 0.13.0",
  "num-traits",
  "opentelemetry",
@@ -934,6 +932,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "trybuild",
+]
+
+[[package]]
+name = "diskann-record"
+version = "0.54.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2253,9 +2261,9 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry"
-version = "0.30.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf416e4cb72756655126f7dd7bb0af49c674f4c1b9903e80c009e0c37e552e6"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -2267,17 +2275,17 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry_sdk"
-version = "0.30.0"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f644aa9e5e31d11896e024305d7e3c98a88884d9f8919dbf37a9991bc47a4b"
+checksum = "9b59f80e1ac4d5ff7a2db8fb6c80badb7f0f3f858211fba08dd9aaec750894f9"
 dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
  "opentelemetry",
  "percent-encoding",
+ "portable-atomic",
  "rand",
- "serde_json",
  "thiserror 2.0.17",
 ]
 

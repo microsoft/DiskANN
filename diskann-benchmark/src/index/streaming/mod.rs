@@ -9,4 +9,3 @@ pub(crate) mod stats;
 
 pub(crate) use full_precision::FullPrecisionStream;
 pub(crate) use managed::{Managed, ManagedStream};
-pub(crate) use stats::StreamStats;
