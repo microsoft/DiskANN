@@ -116,18 +116,52 @@ impl Checker {
     ///
     /// 2. If `path` is relative, work through `self.search_directories()` in order,
     ///    returning the absolute path first existing file.
+    #[deprecated(since = "0.54.0", note = "please use `find_input_file` instead")]
     pub fn check_path(&self, path: &Path) -> Result<PathBuf, anyhow::Error> {
-        // Check if the file exists (allowing for relative paths with respect to the current
-        // directory.
+        self.find_input_file(path)
+    }
+
+    /// Try to resolve `path` as a file using the following approach:
+    ///
+    /// 1. If `path` is absolute - check that it exists and is a valid file. If
+    ///    successful, return `path` unaltered.
+    ///
+    /// 2. If `path` is relative, work through `self.search_directories()` in order,
+    ///    returning the absolute path first existing file.
+    ///
+    /// See also: [`Self::find_input_dir`].
+    pub fn find_input_file(&self, path: &Path) -> Result<PathBuf, anyhow::Error> {
+        self.check_input_path(path, Kind::File)
+    }
+
+    /// Try to resolve `path` as a directory using the following approach:
+    ///
+    /// 1. If `path` is absolute - check that it exists and is a valid directory. If
+    ///    successful, return `path` unaltered.
+    ///
+    /// 2. If `path` is relative, work through `self.search_directories()` in order,
+    ///    returning the absolute path first existing directory.
+    ///
+    /// See also: [`Self::find_input_file`].
+    pub fn find_input_dir(&self, path: &Path) -> Result<PathBuf, anyhow::Error> {
+        self.check_input_path(path, Kind::Dir)
+    }
+
+    fn check_input_path(&self, path: &Path, kind: Kind) -> Result<PathBuf, anyhow::Error> {
+        // Check if the path exists (allowing for relative paths with respect to checker's
+        // search directories).
         //
-        // If the path is an absolute path and the file does not exist, then bail.
+        // If the path is absolute - check if it exists and if it doesn't, we are done.
         if path.is_absolute() {
-            if path.is_file() {
+            if kind.check(path) {
                 return Ok(path.into());
             } else {
+                let kind = kind.as_str();
                 return Err(anyhow::Error::msg(format!(
-                    "input file with absolute path \"{}\" either does not exist or is not a file",
-                    path.display()
+                    "input {} with absolute path \"{}\" either does not exist or is not a {}",
+                    kind,
+                    path.display(),
+                    kind,
                 )));
             }
         };
@@ -135,12 +169,14 @@ impl Checker {
         // At this point, start searching in the provided directories.
         for dir in self.search_directories() {
             let absolute = dir.join(path);
-            if absolute.is_file() {
+            if kind.check(&absolute) {
                 return Ok(absolute);
             }
         }
+
         Err(anyhow::Error::msg(format!(
-            "could not find input file \"{}\" in the search directories \"{:?}\"",
+            "could not find input {} \"{}\" in the search directories \"{:?}\"",
+            kind.as_str(),
             path.display(),
             self.search_directories(),
         )))
@@ -177,6 +213,28 @@ impl Checker {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    File,
+    Dir,
+}
+
+impl Kind {
+    fn check(self, path: &Path) -> bool {
+        match self {
+            Self::File => path.is_file(),
+            Self::Dir => path.is_dir(),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Dir => "directory",
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -208,30 +266,34 @@ mod tests {
         assert!(checker.output_directory().is_none());
     }
 
+    // Create a directory that looks like this:
+    //
+    // dir/
+    //     file_a.txt
+    //     dir0/
+    //        file_b.txt
+    //        dir2/
+    //     dir1/
+    //        file_c.txt
+    //        dir0/
+    //           file_c.txt
+    fn create_test_directory(dir: &Path) {
+        File::create(dir.join("file_a.txt")).unwrap();
+
+        create_dir(dir.join("dir0")).unwrap();
+        create_dir(dir.join("dir0/dir2")).unwrap();
+        create_dir(dir.join("dir1")).unwrap();
+        create_dir(dir.join("dir1/dir0")).unwrap();
+        File::create(dir.join("dir0/file_b.txt")).unwrap();
+        File::create(dir.join("dir1/file_c.txt")).unwrap();
+        File::create(dir.join("dir1/dir0/file_c.txt")).unwrap();
+    }
+
     #[test]
-    fn test_check_path() {
-        // We create a directory that looks like this:
-        //
-        // dir/
-        //     file_a.txt
-        //     dir0/
-        //        file_b.txt
-        //     dir1/
-        //        file_c.txt
-        //        dir0/
-        //           file_c.txt
+    fn test_find_input_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
-
-        File::create(path.join("file_a.txt")).unwrap();
-        println!("{}", path.join("file_a.txt").is_file());
-
-        create_dir(path.join("dir0")).unwrap();
-        create_dir(path.join("dir1")).unwrap();
-        create_dir(path.join("dir1/dir0")).unwrap();
-        File::create(path.join("dir0/file_b.txt")).unwrap();
-        File::create(path.join("dir1/file_c.txt")).unwrap();
-        File::create(path.join("dir1/dir0/file_c.txt")).unwrap();
+        create_test_directory(path);
 
         let make_checker = |paths: &[PathBuf]| -> Checker { Checker::new(paths.to_vec(), None) };
 
@@ -240,14 +302,14 @@ mod tests {
             let checker = make_checker(&[]);
             let absolute = path.join("file_a.txt");
             assert_eq!(
-                checker.check_path(&absolute).unwrap(),
+                checker.find_input_file(&absolute).unwrap(),
                 absolute,
                 "absolute paths should be unmodified if they exist",
             );
 
             let absolute = path.join("dir0/file_b.txt");
             assert_eq!(
-                checker.check_path(&absolute).unwrap(),
+                checker.find_input_file(&absolute).unwrap(),
                 absolute,
                 "absolute paths should be unmodified if they exist",
             );
@@ -257,7 +319,7 @@ mod tests {
         {
             let checker = make_checker(&[]);
             let absolute = path.join("dir0/file_c.txt");
-            let err = checker.check_path(&absolute).unwrap_err();
+            let err = checker.find_input_file(&absolute).unwrap_err();
             let message = err.to_string();
             assert!(message.contains("input file with absolute path"));
             assert!(message.contains("either does not exist or is not a file"));
@@ -270,25 +332,97 @@ mod tests {
 
             // Directories are searched in order.
             let file = &Path::new("file_c.txt");
-            let resolved = checker.check_path(file).unwrap();
+            let resolved = checker.find_input_file(file).unwrap();
             assert_eq!(resolved, path.join("dir1/dir0/file_c.txt"));
 
             let file = &Path::new("file_b.txt");
-            let resolved = checker.check_path(file).unwrap();
+            let resolved = checker.find_input_file(file).unwrap();
             assert_eq!(resolved, path.join("dir0/file_b.txt"));
 
             // Directory search can fail.
             let file = &Path::new("file_a.txt");
-            let err = checker.check_path(file).unwrap_err();
+            let err = checker.find_input_file(file).unwrap_err();
             let message = err.to_string();
             assert!(message.contains("could not find input file"));
             assert!(message.contains("in the search directories"));
 
             // If we give an absolute path, no directory search is performed.
             let file = path.join("file_c.txt");
-            let err = checker.check_path(&file).unwrap_err();
+            let err = checker.find_input_file(&file).unwrap_err();
             let message = err.to_string();
             assert!(message.starts_with("input file with absolute path"));
+        }
+    }
+
+    #[test]
+    fn test_find_input_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        create_test_directory(path);
+
+        let make_checker = |paths: &[PathBuf]| -> Checker { Checker::new(paths.to_vec(), None) };
+
+        // Test absolute path success.
+        {
+            let checker = make_checker(&[]);
+            let absolute = path.join("dir0");
+            assert_eq!(
+                checker.find_input_dir(&absolute).unwrap(),
+                absolute,
+                "absolute paths should be unmodified if they exist",
+            );
+
+            let absolute = path.join("dir1/dir0");
+            assert_eq!(
+                checker.find_input_dir(&absolute).unwrap(),
+                absolute,
+                "absolute paths should be unmodified if they exist",
+            );
+        }
+
+        // Absolute path fail.
+        {
+            let checker = make_checker(&[]);
+            let absolute = path.join("dir1/dir1");
+            let err = checker.find_input_dir(&absolute).unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains("input directory with absolute path"));
+            assert!(message.contains("either does not exist or is not a directory"));
+
+            // Files are rejected.
+            let absolute = path.join("file_a.txt");
+            let err = checker.find_input_dir(&absolute).unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains("input directory with absolute path"));
+            assert!(message.contains("either does not exist or is not a directory"));
+        }
+
+        // Directory search
+        {
+            let checker =
+                make_checker(&[path.join("dir1/dir0"), path.join("dir1"), path.join("dir0")]);
+
+            // Directories are searched in order.
+            let dir = &Path::new("dir0");
+            let resolved = checker.find_input_dir(dir).unwrap();
+            assert_eq!(resolved, path.join("dir1/dir0"));
+
+            let dir = &Path::new("dir2");
+            let resolved = checker.find_input_dir(dir).unwrap();
+            assert_eq!(resolved, path.join("dir0/dir2"));
+
+            // Directory search can fail.
+            let dir = &Path::new("nope");
+            let err = checker.find_input_dir(dir).unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains("could not find input directory"));
+            assert!(message.contains("in the search directories"));
+
+            // If we give an absolute path, no directory search is performed.
+            let dir = path.join("dir2");
+            let err = checker.find_input_dir(&dir).unwrap_err();
+            let message = err.to_string();
+            assert!(message.starts_with("input directory with absolute path"));
         }
     }
 }
