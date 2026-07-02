@@ -581,7 +581,6 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 }
 
-
 /// Prefetch `len` bytes beginning at `ptr`.
 ///
 /// The last cache line prefetched first, followed by the rest in ascending order.
