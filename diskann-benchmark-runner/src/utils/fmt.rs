@@ -813,4 +813,15 @@ another line: 1
 
         assert_eq!(kv.to_string(), expected);
     }
+
+    #[test]
+    fn maybe_lazy_debug() {
+        let x = MaybeLazy::Lazy(&1);
+        let dbg = format!("{:?}", x);
+        assert_eq!(dbg, "MaybeLazy::Lazy(1)");
+
+        let x = MaybeLazy::Eager("hello".into());
+        let dbg = format!("{:?}", x);
+        assert_eq!(dbg, "MaybeLazy::Eager(\"hello\")");
+    }
 }
