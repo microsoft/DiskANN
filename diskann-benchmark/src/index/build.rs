@@ -112,9 +112,7 @@ pub(crate) fn set_start_points<DP, T>(
 ) -> ANNResult<()>
 where
     DP: SetStartPoints<[T]>,
-    T: diskann::graph::SampleableForStart
-        + diskann_utils::sampling::WithApproximateNorm
-        + AsyncFriendly,
+    T: diskann::graph::SampleableForStart + AsyncFriendly,
 {
     let start_points = start_strategy
         .compute(data)
