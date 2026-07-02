@@ -68,10 +68,10 @@ pub trait AsDistance: Send + Sync + std::fmt::Debug {
 /// A unary query distance on raw bytes slices.
 ///
 /// When paired with [`Layer`] via helpers like [`Search`], implementations may assume
-/// that `x` and `y` have length [`Layer::bytes`].
+/// that `x` has length [`Layer::bytes`].
 ///
-/// No alignment guarantees are made for `x` and `y`, though in practice they are likely
-/// to be aligned to 32 or 64 bytes.
+/// No alignment guarantees are made for `x`, though in practice is isk likely to be
+/// aligned to 32 or 64 bytes.
 pub trait QueryDistance: Send + Sync + std::fmt::Debug {
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
 }

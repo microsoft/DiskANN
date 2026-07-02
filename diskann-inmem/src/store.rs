@@ -336,6 +336,17 @@ impl Store {
         }
     }
 
+    /// A somewhat crude algorithm for cooperatively performing slot scanning.
+    ///
+    /// This uses [`Freelist::scan`] to acquire a disjoint chunk of the ID space for scanning,
+    /// spreading out the search across multiple threads.
+    ///
+    /// If we successfully acquire a slot, we continue for the rest of the bucket returned
+    /// by [`Freelist::scan`] and add any available slots to the freelist (allowing other
+    /// threads to find them).
+    ///
+    /// Periodically, the freelist is checked to see if another thread has found an available
+    /// slot for us.
     fn scan_acquire(&self) -> Option<Slot<'_>> {
         // This is potentially quite slow - but stop if we've scanned the entire range
         // without finding anything.

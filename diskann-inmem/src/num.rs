@@ -5,23 +5,30 @@
 
 use std::num::NonZeroUsize;
 
+/// An unsigned number of bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Bytes(usize);
 
 impl Bytes {
+    /// The approximate number of bytes in a CPU cache line.
     pub const CACHELINE: Self = Self::new(64);
+
+    /// Zero bytes.
     pub const ZERO: Self = Self::new(0);
 
+    /// Construct a new [`Bytes`].
     #[inline]
     pub const fn new(bytes: usize) -> Self {
         Self(bytes)
     }
 
+    /// Return the current value of `self`.
     #[inline]
     pub const fn value(self) -> usize {
         self.0
     }
 
+    /// Add `self` and `other`, returning `None` if the sum would overflow `usize`.
     #[inline]
     pub(crate) const fn checked_add(self, other: Bytes) -> Option<Bytes> {
         match self.value().checked_add(other.value()) {
@@ -30,6 +37,7 @@ impl Bytes {
         }
     }
 
+    /// Multiply `self` and `other`, returning `None` if the sum would overflow `usize`.
     #[inline]
     pub(crate) const fn checked_mul(self, other: usize) -> Option<Bytes> {
         match self.value().checked_mul(other) {
@@ -38,16 +46,21 @@ impl Bytes {
         }
     }
 
+    /// Perform integer division of `self` by `other`.
     #[inline]
     pub(crate) const fn div(self, other: NonZeroUsize) -> Bytes {
         Bytes::new(self.value() / other.get())
     }
 
+    /// Subtract `other` from `self` without checking for underflow.
     #[inline]
     pub(crate) const fn unchecked_sub(self, other: Bytes) -> Bytes {
         Self::new(self.value() - other.value())
     }
 
+    /// Return the smallest multiple of `other` greater-than or equal to `self`.
+    ///
+    /// Returns `None` if the next multiple exceeds `usize::MAX`.
     #[inline]
     pub(crate) const fn checked_next_multiple_of(self, other: Bytes) -> Option<Bytes> {
         match self.value().checked_next_multiple_of(other.value()) {
@@ -56,11 +69,13 @@ impl Bytes {
         }
     }
 
+    /// Return the size of `T` in [`Bytes`].
     #[inline]
     pub const fn size_of<T>() -> Self {
         Self::new(std::mem::size_of::<T>())
     }
 
+    /// Return `true` if `self` is zero.
     pub const fn is_zero(self) -> bool {
         self.0 == 0
     }
@@ -72,11 +87,16 @@ impl std::fmt::Display for Bytes {
     }
 }
 
+/// An alignment for an allocation.
+///
+/// All alignemnts are guaranteed to be powers of two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Align(NonZeroUsize);
 
 impl Align {
+    /// Construct a new [`Align`] from `value`, returning `None` if `value` is not a power
+    /// of two.
     pub const fn new(value: usize) -> Option<Self> {
         match NonZeroUsize::new(value) {
             Some(value) => {
@@ -90,6 +110,7 @@ impl Align {
         }
     }
 
+    /// Return the raw value of `self`.
     pub const fn value(self) -> usize {
         self.0.get()
     }
@@ -106,11 +127,13 @@ impl Align {
         Self(unsafe { NonZeroUsize::new_unchecked(value) })
     }
 
+    /// Return the alignment of a type `T`.
     pub const fn of<T>() -> Self {
         // SAFETY: `std::mem::align_of` is guaranteed to return a power of 2.
         unsafe { Self::new_unchecked(std::mem::align_of::<T>()) }
     }
 
+    /// Construct a new [`Align`] from a [`std::alloc::Layout`].
     pub const fn from_layout(layout: std::alloc::Layout) -> Self {
         // SAFETY: `Layout::align` is guaranteed to be a power of 2.
         unsafe { Self::new_unchecked(layout.align()) }

@@ -39,7 +39,7 @@ opentelemetry_sdk = { workspace = true, optional = true }
 scopeguard = { version = "1.2", optional = true }
 diskann-benchmark-core = { workspace = true, features = ["bigann"] }
 itertools.workspace = true
-diskann-inmem = { workspace = true }
+diskann-inmem = { workspace = true, optional = true }
 
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"
@@ -67,6 +67,9 @@ minmax-quantization = []
 
 # Enable multi-vector MaxSim distance benchmarks
 multi-vector = []
+
+# Enable inmem 2.0
+inmem2 = ["dep:diskann-inmem"]
 
 # Enable bftree backend
 bftree = ["dep:diskann-bftree"]

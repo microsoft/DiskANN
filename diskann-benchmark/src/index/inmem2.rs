@@ -797,7 +797,7 @@ where
     T: FullPrecision + AsDataType + diskann::graph::SampleableForStart,
 {
     type Input = BigANNStreaming;
-    type Output = ();
+    type Output = Vec<StreamStats>;
 
     fn try_match(&self, input: &BigANNStreaming) -> Result<MatchScore, FailureScore> {
         if T::is_match(input.data.data_type) {
@@ -914,7 +914,7 @@ where
 
         writeln!(output, "{}", Summary::new(results.iter()))?;
 
-        Ok(())
+        Ok(results)
     }
 }
 

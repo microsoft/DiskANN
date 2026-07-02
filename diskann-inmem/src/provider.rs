@@ -30,7 +30,7 @@
 //! * Lack of save/load support: The index is currently ephemeral, but there are plans to
 //!   address this gap.
 
-use std::hash::Hash;
+use std::{hash::Hash, num::NonZeroUsize};
 
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
@@ -75,6 +75,8 @@ where
     layer: L,
     // ID translation.
     mapping: Sharded<M>,
+    // Construction `Config`.
+    config: Config,
 
     // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
     // all counter related operations are no-ops.
@@ -115,10 +117,12 @@ where
             store,
             layer,
             mapping,
+            config,
             counters: Counters::new(),
         })
     }
 
+    /// A local set of counters that update the provider-wide counters in bulk.
     fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
     }
@@ -148,9 +152,12 @@ pub enum ProviderError {
 pub struct Config {
     capacity: usize,
     max_degree: usize,
+    prefetch_lookahead: Option<NonZeroUsize>,
 }
 
 impl Config {
+    const DEFAULT_PREFETCH_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+
     /// Construct a new [`Config`].
     ///
     /// * `capacity`: The number of dynamic entries in the resulting provider.
@@ -159,6 +166,7 @@ impl Config {
         Self {
             capacity,
             max_degree,
+            prefetch_lookahead: Some(Self::DEFAULT_PREFETCH_LOOKAHEAD),
         }
     }
 
@@ -170,6 +178,13 @@ impl Config {
     /// Return the maximum degree of any adjacency list.
     pub fn max_degree(&self) -> usize {
         self.max_degree
+    }
+
+    /// Configure the prefetch lookahead.
+    ///
+    /// This is used during beam expansion to prefetch data into CPU caches.
+    pub fn prefetch_lookahead(&mut self, prefetch_lookahead: Option<NonZeroUsize>) {
+        self.prefetch_lookahead = prefetch_lookahead;
     }
 }
 
@@ -425,7 +440,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 // `self.buffer` is long enough to hold all the IDs.
                 let processed = unsafe {
                     self.expand_beam
-                        .expand_beam(&self.ids, 8, &self.reader, &mut self.buffer)
+                        .expand_beam(&self.ids, &self.reader, &mut self.buffer)
                 }?;
 
                 self.counters.get_vector(processed as u64);
@@ -457,39 +472,57 @@ trait ExpandBeam: Send + Sync + std::fmt::Debug {
     unsafe fn expand_beam(
         &self,
         list: &[u32],
-        lookahead: usize,
         reader: &store::Reader<'_>,
         buffer: &mut [(u32, f32)],
     ) -> ANNResult<usize>;
 }
 
 #[derive(Debug)]
-#[repr(transparent)]
-struct ExpandBeamImpl<T, const BYTES: usize>(T);
+struct ExpandBeamImpl<T, const BYTES: usize> {
+    inner: T,
+    prefetch_lookahead: usize,
+}
+
+impl<T, const BYTES: usize> ExpandBeamImpl<T, BYTES> {
+    fn new(inner: T, prefetch_lookahead: usize) -> Self {
+        Self {
+            inner,
+            prefetch_lookahead,
+        }
+    }
+}
 
 impl<T, const BYTES: usize> ExpandBeam for ExpandBeamImpl<T, BYTES>
 where
     T: layers::QueryDistance,
 {
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
-        self.0.evaluate(x)
+        self.inner.evaluate(x)
     }
 
     unsafe fn expand_beam(
         &self,
         list: &[u32],
-        lookahead: usize,
         reader: &store::Reader<'_>,
         buffer: &mut [(u32, f32)],
     ) -> ANNResult<usize> {
         // SAFETY: Inherited from caller.
-        unsafe { expand_beam_inner::<T, BYTES>(&self.0, list, lookahead, reader, buffer) }
+        unsafe {
+            expand_beam_inner::<T, BYTES>(
+                &self.inner,
+                list,
+                self.prefetch_lookahead,
+                reader,
+                buffer,
+            )
+        }
     }
 }
 
 #[derive(Debug)]
 struct ExpandBeamVisitor {
     bytes: Bytes,
+    prefetch_lookahead: usize,
 }
 
 impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
@@ -501,14 +534,20 @@ impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
     {
         // This is critical to ensure we emit the correct number of prefetches.
         assert!(Bytes::new(BYTES + store::TAG_SIZE.value()) <= self.bytes);
-        Box::new(ExpandBeamImpl::<_, BYTES>(distance))
+        Box::new(ExpandBeamImpl::<_, BYTES>::new(
+            distance,
+            self.prefetch_lookahead,
+        ))
     }
 
     fn visit<T>(self, distance: T) -> Self::Output
     where
         T: QueryDistance + 'a,
     {
-        Box::new(ExpandBeamImpl::<_, 0>(distance))
+        Box::new(ExpandBeamImpl::<_, 0>::new(
+            distance,
+            self.prefetch_lookahead,
+        ))
     }
 }
 
@@ -589,7 +628,8 @@ where
         }
     }
 
-    let mut j = lookahead;
+    // Disable prefetching if the lookahead is 0.
+    let mut j = if lookahead == 0 { len } else { lookahead };
     let mut processed = 0;
     for &i in list.iter() {
         if j != len {
@@ -795,6 +835,7 @@ where
             query,
             ExpandBeamVisitor {
                 bytes: provider.store.bytes(),
+                prefetch_lookahead: provider.config.prefetch_lookahead.map_or(0, |x| x.get()),
             },
         )?;
 
@@ -811,6 +852,8 @@ where
     }
 }
 
+// This is a utility for helping inspect the generated code for `ExpandBeam`.
+//
 pub fn test_function<'a>(
     x: &'a Provider<layers::Full<f32>>,
     strategy: &'a Strategy,
@@ -820,6 +863,7 @@ pub fn test_function<'a>(
     glue::SearchStrategy::search_accessor(strategy, x, context, query)
 }
 
+/// Perform ID translation during post-processing.
 #[derive(Debug, Clone, Copy)]
 pub struct Translate<L, M>(std::marker::PhantomData<(L, M)>);
 
