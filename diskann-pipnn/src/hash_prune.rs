@@ -268,7 +268,9 @@ unsafe fn find_hash_avx512(
     use std::arch::x86_64::*;
     let len = len as usize;
     let t = _mm512_set1_epi16(target as i16);
-    let chunks = scan_lanes / 32;
+    // Scan only the chunks that cover valid entries (len), not the full
+    // scan_lanes capacity. At avg_deg ~60 (l_max 128) this halves the scan.
+    let chunks = len.div_ceil(32).min(scan_lanes / 32);
     let mut combined: u128 = 0;
     for chunk in 0..chunks {
         let v = _mm512_loadu_si512(hashes.add(chunk * 32) as *const __m512i);
@@ -297,7 +299,8 @@ unsafe fn find_hash_avx2(
     use std::arch::x86_64::*;
     let len = len as usize;
     let t = _mm256_set1_epi16(target as i16);
-    let chunks = scan_lanes / 16;
+    // Scan only the chunks covering valid entries (len), not full scan_lanes.
+    let chunks = len.div_ceil(16).min(scan_lanes / 16);
     for chunk in 0..chunks {
         let v = _mm256_loadu_si256(hashes.add(chunk * 16) as *const __m256i);
         let m = _mm256_cmpeq_epi16(v, t);
@@ -344,7 +347,10 @@ unsafe fn relative_hash_local(src: *const f32, dst: *const f32, m: usize) -> u16
             crate::cpu_dispatch::SimdTier::Avx512 => {
                 return relative_hash_local_avx512(src, dst, m);
             }
-            crate::cpu_dispatch::SimdTier::Avx2 | crate::cpu_dispatch::SimdTier::Scalar => {}
+            crate::cpu_dispatch::SimdTier::Avx2 => {
+                return relative_hash_local_avx2(src, dst, m);
+            }
+            crate::cpu_dispatch::SimdTier::Scalar => {}
         }
     }
     let mut h: u16 = 0;
@@ -352,6 +358,33 @@ unsafe fn relative_hash_local(src: *const f32, dst: *const f32, m: usize) -> u16
         let diff = *dst.add(j) - *src.add(j);
         let bit = ((!diff.is_sign_negative()) as u16) << j;
         h |= bit;
+    }
+    h
+}
+
+/// AVX2-vectorized `relative_hash_local`. Matches the scalar kernel's
+/// `!is_sign_negative` semantics exactly (sign bit of `dst-src`), so the
+/// produced graph is bit-identical to the scalar path it replaces on AVX2.
+///
+/// SAFETY: caller guarantees AVX2 at runtime. `m <= 16` enforced upstream.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn relative_hash_local_avx2(src: *const f32, dst: *const f32, m: usize) -> u16 {
+    use std::arch::x86_64::*;
+    let mut h: u16 = 0;
+    let mut j = 0usize;
+    while j + 8 <= m {
+        let d = _mm256_sub_ps(_mm256_loadu_ps(dst.add(j)), _mm256_loadu_ps(src.add(j)));
+        // movemask = sign bits of (dst-src); we want the NON-negative lanes
+        // (sign clear), i.e. `!is_sign_negative`, matching the scalar kernel.
+        let signs = _mm256_movemask_ps(d) as u16;
+        h |= (!signs & 0xFF) << j;
+        j += 8;
+    }
+    while j < m {
+        let diff = *dst.add(j) - *src.add(j);
+        h |= ((!diff.is_sign_negative()) as u16) << j;
+        j += 1;
     }
     h
 }
@@ -887,6 +920,36 @@ impl HashPrune {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_relative_hash_local_avx2_matches_scalar_semantics() {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if !is_x86_feature_detected!("avx2") {
+                return;
+            }
+
+            let src = [
+                1.0, -2.0, 0.0, 7.5, -0.0, 3.25, -9.0, 4.0, 8.0, -1.5, 2.0, 0.0, 6.0, -3.0, 5.5,
+                -7.25,
+            ];
+            let dst = [
+                1.0, -3.0, 0.5, 7.0, 0.0, 3.25, -8.0, -4.0, 9.0, -1.5, -2.0, -0.0, 5.0, -2.0, 5.5,
+                -8.0,
+            ];
+
+            for m in 0..=16 {
+                let mut expected = 0u16;
+                for j in 0..m {
+                    let diff: f32 = dst[j] - src[j];
+                    expected |= ((!diff.is_sign_negative()) as u16) << j;
+                }
+
+                let actual = unsafe { relative_hash_local_avx2(src.as_ptr(), dst.as_ptr(), m) };
+                assert_eq!(actual, expected, "m={m}");
+            }
+        }
+    }
 
     #[test]
     fn test_reservoir_basic() {
