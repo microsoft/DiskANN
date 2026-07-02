@@ -10,12 +10,18 @@ pub mod range;
 
 pub mod strategy;
 
+#[cfg(feature = "experimental_diversity_search")]
+pub mod diverse;
+
 pub use inline::InlineFilterSearch;
 pub use knn::KNN;
 pub use multihop::MultiHop;
 pub use range::Range;
 
 pub use strategy::Strategy;
+
+#[cfg(feature = "experimental_diversity_search")]
+pub use diverse::DiverseKNN;
 
 ////////////////
 // Test Utils //

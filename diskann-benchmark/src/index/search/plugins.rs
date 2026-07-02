@@ -178,6 +178,28 @@ impl DeterminantDiversity {
     }
 }
 
+/// A search plugin for diversity-aware top-k search.
+#[cfg(feature = "experimental_diversity_search")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DiverseSearch;
+
+#[cfg(feature = "experimental_diversity_search")]
+impl DiverseSearch {
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_diverse_search().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk-diverse-search"
+    }
+
+    pub(crate) fn get(
+        phase: &SearchPhase,
+    ) -> anyhow::Result<&crate::inputs::graph_index::TopkDiverseSearchPhase> {
+        Ok(phase.as_topk_diverse_search()?)
+    }
+}
+
 /// A search plugin for range search.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Range;

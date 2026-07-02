@@ -71,16 +71,16 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     // care.
 
     // Full Precision
-    registry.register(
-        "graph-index-full-precision-f32",
-        FullPrecision::<f32>::new()
-            .search(plugins::Topk)
-            .search(plugins::Range)
-            .search(plugins::TopkBetaFilter)
-            .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkInlineFilter)
-            .search(plugins::DeterminantDiversity),
-    )?;
+    let full_precision_f32 = FullPrecision::<f32>::new()
+        .search(plugins::Topk)
+        .search(plugins::Range)
+        .search(plugins::TopkBetaFilter)
+        .search(plugins::TopkMultihopFilter)
+        .search(plugins::TopkInlineFilter)
+        .search(plugins::DeterminantDiversity);
+    #[cfg(feature = "experimental_diversity_search")]
+    let full_precision_f32 = full_precision_f32.search(plugins::DiverseSearch);
+    registry.register("graph-index-full-precision-f32", full_precision_f32)?;
 
     registry.register(
         "graph-index-full-precision-f16",
@@ -475,6 +475,54 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             queries,
             benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
             inmem::DeterminantDiversity::new(params),
+        )?;
+
+        let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);
+        let results = search::knn::run(&knn, &groundtruth, steps)?;
+
+        Ok(AggregatedSearchResults::Topk(results))
+    }
+}
+
+#[cfg(feature = "experimental_diversity_search")]
+impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
+    for plugins::DiverseSearch
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        plugins::DiverseSearch::is_match(phase)
+    }
+
+    fn kind(&self) -> &'static str {
+        plugins::DiverseSearch::as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
+        phase: &SearchPhase,
+        _strategy: &Strategy<common::FullPrecision>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let phase = plugins::DiverseSearch::get(phase)?;
+
+        let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
+            &phase.queries,
+        ))?);
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&phase.groundtruth),
+            Some(phase.max_k()),
+        )?;
+
+        let attribute_provider = Arc::new(
+            crate::utils::attributes::FileAttributeProvider::load(&phase.attributes)?,
+        );
+
+        let knn = benchmark_core::search::graph::DiverseKNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
+            attribute_provider,
+            phase.diverse_attribute_id,
+            phase.diverse_results_k,
         )?;
 
         let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);

@@ -25,6 +25,9 @@ default = []
 # BigANN Runbook support requires parsing a YAML file.
 bigann = ["dep:serde_yaml"]
 
+# Diversity-aware search wrappers (experimental).
+experimental_diversity_search = ["diskann/experimental_diversity_search"]
+
 [lints]
 workspace = true
 

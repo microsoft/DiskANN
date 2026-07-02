@@ -67,6 +67,13 @@ minmax-quantization = []
 # Enable multi-vector MaxSim distance benchmarks
 multi-vector = []
 
+# Enable experimental diversity-aware search benchmarks
+experimental_diversity_search = [
+    "diskann/experimental_diversity_search",
+    "diskann-providers/experimental_diversity_search",
+    "diskann-benchmark-core/experimental_diversity_search",
+]
+
 # Enable bftree backend
 bftree = ["dep:diskann-bftree"]
 

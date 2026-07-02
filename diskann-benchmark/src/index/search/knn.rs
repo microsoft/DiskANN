@@ -171,3 +171,36 @@ where
         Ok(results.into_iter().map(SearchResults::new).collect())
     }
 }
+
+#[cfg(feature = "experimental_diversity_search")]
+impl<DP, T, S, P> Knn<DP::InternalId> for Arc<core_search::graph::DiverseKNN<DP, T, S, P>>
+where
+    DP: diskann::provider::DataProvider,
+    P: diskann::neighbor::AttributeValueProvider,
+    core_search::graph::DiverseKNN<DP, T, S, P>: core_search::Search<
+        Id = DP::InternalId,
+        Parameters = diskann::graph::search::Knn,
+        Output = core_search::graph::knn::Metrics,
+    >,
+{
+    fn search_all(
+        &self,
+        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>> {
+        let results = core_search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            core_search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Fixed,
+            ),
+        )?;
+
+        Ok(results.into_iter().map(SearchResults::new).collect())
+    }
+}

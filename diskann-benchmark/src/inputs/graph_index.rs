@@ -401,6 +401,64 @@ impl Example for TopkDeterminantDiversityPhase {
     }
 }
 
+#[cfg(feature = "experimental_diversity_search")]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TopkDiverseSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) groundtruth: InputFile,
+    /// Plaintext file with one integer attribute per line; line `N` is vector `N`'s attribute.
+    pub(crate) attributes: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    /// The attribute dimension used for diversity (currently only a single attribute is used).
+    #[serde(default)]
+    pub(crate) diverse_attribute_id: usize,
+    /// The maximum number of results to keep per distinct attribute value.
+    pub(crate) diverse_results_k: usize,
+}
+
+#[cfg(feature = "experimental_diversity_search")]
+impl TopkDiverseSearchPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        if self.diverse_results_k == 0 {
+            return Err(anyhow!("diverse_results_k must be greater than zero"));
+        }
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        self.attributes.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "experimental_diversity_search")]
+impl Example for TopkDiverseSearchPhase {
+    fn example() -> Self {
+        Self {
+            queries: InputFile::new("path/to/queries"),
+            groundtruth: InputFile::new("path/to/groundtruth"),
+            attributes: InputFile::new("path/to/attributes.txt"),
+            reps: NonZeroUsize::new(1).unwrap(),
+            num_threads: vec![NonZeroUsize::new(1).unwrap()],
+            runs: vec![GraphSearch {
+                search_n: 10,
+                search_l: vec![10, 20, 30, 40],
+                recall_k: 10,
+            }],
+            diverse_attribute_id: 0,
+            diverse_results_k: 1,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
@@ -410,6 +468,8 @@ pub(crate) enum SearchPhase {
     TopkMultihopFilter(MultihopFilterSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
+    #[cfg(feature = "experimental_diversity_search")]
+    TopkDiverseSearch(TopkDiverseSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -438,6 +498,8 @@ impl SearchPhase {
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
             Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
+            #[cfg(feature = "experimental_diversity_search")]
+            Self::TopkDiverseSearch(_) => SearchPhaseKind::TopkDiverseSearch,
         }
     }
 
@@ -506,6 +568,19 @@ impl SearchPhase {
             )),
         }
     }
+
+    #[cfg(feature = "experimental_diversity_search")]
+    pub(crate) fn as_topk_diverse_search(
+        &self,
+    ) -> Result<&TopkDiverseSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkDiverseSearch(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkDiverseSearch,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -517,6 +592,8 @@ impl SearchPhase {
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
             SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
+            #[cfg(feature = "experimental_diversity_search")]
+            SearchPhase::TopkDiverseSearch(phase) => phase.validate(checker),
         }
     }
 }
@@ -529,6 +606,8 @@ pub(crate) enum SearchPhaseKind {
     TopkMultihopFilter,
     TopkInlineFilter,
     TopkDeterminantDiversity,
+    #[cfg(feature = "experimental_diversity_search")]
+    TopkDiverseSearch,
 }
 
 impl SearchPhaseKind {
@@ -540,6 +619,8 @@ impl SearchPhaseKind {
             Self::TopkMultihopFilter => "topk-multihop-filter",
             Self::TopkInlineFilter => "topk-inline-filter",
             Self::TopkDeterminantDiversity => "topk-determinant-diversity",
+            #[cfg(feature = "experimental_diversity_search")]
+            Self::TopkDiverseSearch => "topk-diverse-search",
         }
     }
 }
