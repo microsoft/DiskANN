@@ -20,10 +20,7 @@ use diskann_providers::{
     model::graph::provider::async_::common::FullPrecision,
     storage::{FileStorageProvider, SaveWith},
 };
-use diskann_utils::{
-    sampling::WithApproximateNorm,
-    views::{Matrix, MatrixView},
-};
+use diskann_utils::views::{Matrix, MatrixView};
 
 use crate::{
     index::{
@@ -161,7 +158,7 @@ impl<T> StreamingFullPrecision<T> {
 
 impl<T> Benchmark for StreamingFullPrecision<T>
 where
-    T: VectorRepr + WithApproximateNorm + SampleableForStart + AsDataType + bytemuck::Pod,
+    T: VectorRepr + SampleableForStart + AsDataType + bytemuck::Pod,
 {
     type Input = BfTreeDynamicRun;
     type Output = Vec<managed::Stats<StreamStats>>;
@@ -236,7 +233,7 @@ fn bftree_streaming<T>(
     BfTreeFPIndex<T>,
 )>
 where
-    T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
+    T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
     let topk = match &input.search_phase() {
         SearchPhase::Topk(topk) => topk,

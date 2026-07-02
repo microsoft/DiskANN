@@ -124,10 +124,7 @@ mod imp {
 
     impl<T> Benchmark for ProductQuantized<T>
     where
-        T: VectorRepr
-            + diskann_utils::sampling::WithApproximateNorm
-            + diskann::graph::SampleableForStart
-            + AsDataType,
+        T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
     {
         type Input = IndexPQOperation;
         type Output = QuantBuildResult;
