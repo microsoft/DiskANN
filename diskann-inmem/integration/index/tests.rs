@@ -127,7 +127,7 @@ impl std::fmt::Display for KnnStats {
         kv.push("counters", &self.counters);
         kv.push("recall", &self.recall);
         kv.push("misc", &self.misc);
-        kv.render(f)
+        write!(f, "{}", kv)
     }
 }
 

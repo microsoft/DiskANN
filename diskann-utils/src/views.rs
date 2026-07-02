@@ -344,19 +344,6 @@ where
         unsafe { self.get_row_unchecked_mut(row) }
     }
 
-    /// Return row `row` as a mutable slice.
-    pub fn get_row_mut(&mut self, row: usize) -> Option<&mut [T::Elem]>
-    where
-        T: MutDenseData,
-    {
-        if row < self.nrows() {
-            // SAFETY: `row` is in-bounds.
-            Some(unsafe { self.get_row_unchecked_mut(row) })
-        } else {
-            None
-        }
-    }
-
     /// Returns the requested row without boundschecking.
     ///
     /// # Safety

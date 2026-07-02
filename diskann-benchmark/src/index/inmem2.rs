@@ -38,10 +38,7 @@ use crate::{
     index::{
         build::{BuildKind, BuildStats, ProgressMeter},
         result::{AggregatedSearchResults, SearchResults},
-        streaming::{
-            stats::{GenericStats, Summary},
-            StreamStats,
-        },
+        streaming::stats::{GenericStats, StreamStats, Summary},
     },
     utils::{datafiles, SimilarityMeasure},
 };

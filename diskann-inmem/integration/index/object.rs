@@ -142,7 +142,7 @@ impl std::fmt::Display for Counters {
         kv.push("get_neighbors", &self.get_neighbors);
         kv.push("set_neighbors", &self.set_neighbors);
         kv.push("append_neighbors", &self.append_neighbors);
-        kv.render(f)
+        write!(f, "{}", kv)
     }
 }
 

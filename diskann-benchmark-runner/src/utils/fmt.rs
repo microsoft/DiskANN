@@ -486,10 +486,6 @@ impl<'a> KeyValue<'a> {
         self.max_key_length = self.max_key_length.max(key.len());
         self.kv.push((key, MaybeLazy::Eager(value.to_string())))
     }
-
-    pub fn render(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
-    }
 }
 
 impl std::fmt::Display for KeyValue<'_> {
