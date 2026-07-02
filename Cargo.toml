@@ -17,6 +17,7 @@ members = [
     "diskann-disk",
     "diskann-label-filter",
     "diskann-garnet",
+    "diskann-inmem",
     # Infrastructure
     "diskann-benchmark-runner",
     "diskann-benchmark-core",
@@ -25,7 +26,7 @@ members = [
     "diskann-record",
     "diskann-tools",
     "vectorset",
-    "diskann-bftree", "diskann-inmem",
+    "diskann-bftree",
 ]
 
 default-members = [
