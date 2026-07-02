@@ -330,8 +330,8 @@ fn writer(shared: &Shared) {
             Some(mut writer) => {
                 let stamp = shared.stamp.fetch_add(1, Relaxed);
                 write_stamp(writer.as_mut_slice(), stamp);
-                // Dropping the writer publishes the slot.
-                drop(writer);
+                writer.publish();
+
                 let live = shared.live.fetch_add(1, Relaxed) + 1;
                 shared.peak_live.fetch_max(live, Relaxed);
                 shared.acquires_ok.fetch_add(1, Relaxed);

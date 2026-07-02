@@ -90,6 +90,10 @@ impl<'a> Writer<'a> {
         Self { slot }
     }
 
+    pub fn publish(self) {
+        self.slot.publish();
+    }
+
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.slot.as_mut_slice()
     }
