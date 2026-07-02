@@ -50,11 +50,10 @@ macro_rules! architecture_hook {
 /// A utility for specializing distance computations for fixed-length slices.
 ///
 /// When `F` implements [`diskann_wide::arch::Target2`] for [`UnalignedSlice`],
-/// `Specialize<N, F>` will implement [`FTarget2`] for slices of exactly length `N`. This
-/// can lead to must better generated code, especially when `N` is small.
+/// `Specialize<N, F>` will implement [`diskann_wide::arch::FTarget2`] for slices of exactly
+/// length `N`. This can lead to must better generated code, especially when `N` is small.
 ///
 /// Passing slices of length not equal to `N` will panic.
-///
 /// ```
 /// use diskann_vector::{AsUnaligned, distance::{Specialize, SquaredL2}};
 /// use diskann_wide::{ARCH, arch::FTarget2};
