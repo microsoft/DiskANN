@@ -735,4 +735,82 @@ string,        ,   string
             .with_pair(" and ");
         assert_eq!(d.to_string(), "\"topk\" and \"range\"");
     }
+
+    //----------//
+    // KeyValue //
+    //----------//
+
+    // Strip a preceeding newline if it exists.
+    fn process(x: &str) -> &str {
+        let x = x.strip_prefix('\n').unwrap_or(x);
+        x.strip_suffix('\n').unwrap_or(x)
+    }
+
+    #[test]
+    fn test_key_value_empty() {
+        let kv = KeyValue::new();
+        assert_eq!(kv.to_string(), "");
+    }
+
+    #[test]
+    fn test_key_value_single_pair() {
+        let mut kv = KeyValue::new();
+        kv.push("a", &1);
+        assert_eq!(kv.to_string(), "a: 1");
+    }
+
+    #[test]
+    fn test_key_value_aligns_values() {
+        let mut kv = KeyValue::new();
+        kv.push("a", &1);
+        kv.push("hello", &"world");
+        let expected = process(
+            r#"
+a:     1
+hello: world
+"#,
+        );
+        assert_eq!(kv.to_string(), expected);
+    }
+
+    #[test]
+    fn test_key_value_push_eager() {
+        let mut kv = KeyValue::new();
+        kv.push_eager("a", 1);
+        kv.push_eager("hello", "world");
+
+        let expected = process(
+            r#"
+a:     1
+hello: world
+"#,
+        );
+
+        assert_eq!(kv.to_string(), expected);
+    }
+
+    #[test]
+    fn test_key_value_multiline_value_is_indented() {
+        let mut inner = KeyValue::new();
+        inner.push("x", &1);
+        inner.push("yy", &2);
+        let inner = inner.to_string();
+
+        let mut kv = KeyValue::new();
+        kv.push("name", &"example");
+        kv.push("nested", &inner);
+        kv.push("another line", &1);
+
+        let expected = process(
+            r#"
+name:         example
+nested:
+  x:  1
+  yy: 2
+another line: 1
+"#,
+        );
+
+        assert_eq!(kv.to_string(), expected);
+    }
 }
