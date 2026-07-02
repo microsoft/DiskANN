@@ -610,7 +610,7 @@ impl IndexLoad {
         // This isn't a fully complete check since the index may be composed of multiple files,
         // but without encoding the type into the loader, it seems complicated to do better than this
         let path = std::path::Path::new(&self.load_path);
-        let p = checker.check_path(path);
+        let p = checker.find_input_file(path);
         match p {
             Ok(p) => {
                 self.load_path = p.to_string_lossy().to_string();
@@ -1291,38 +1291,7 @@ impl DynamicRunbookParams {
             }
         }
 
-        // Resolve gt_directory using search directories, similar to InputFile
-        let mut resolved_gt_directory = None;
-        let gt_path = std::path::Path::new(&self.gt_directory);
-
-        // Check if the path is absolute or exists relative to current directory
-        if gt_path.is_dir() {
-            resolved_gt_directory = Some(gt_path.to_path_buf());
-        } else if gt_path.is_absolute() {
-            return Err(anyhow::anyhow!(
-                "Ground truth directory with absolute path \"{}\" either does not exist or is not a directory",
-                self.gt_directory
-            ));
-        } else {
-            // Search in the provided directories
-            for dir in checker.search_directories() {
-                let absolute = dir.join(gt_path);
-                if absolute.is_dir() {
-                    resolved_gt_directory = Some(absolute);
-                    break;
-                }
-            }
-        }
-
-        let final_gt_directory = resolved_gt_directory.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Could not find ground truth directory \"{}\" in the search directories: {:?}",
-                self.gt_directory,
-                checker.search_directories()
-            )
-        })?;
-
-        // Store the resolved path for later use
+        let final_gt_directory = checker.find_input_dir(self.gt_directory.as_ref())?;
         self.resolved_gt_directory = Some(final_gt_directory.clone());
 
         // Run pre-flight checks for the runbook.
