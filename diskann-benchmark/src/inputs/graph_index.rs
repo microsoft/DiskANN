@@ -604,8 +604,8 @@ impl IndexLoad {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check if the file exists (allowing for relative paths with respect to the current
-        // directory.
+        // Check if the file exists (allowing for relative paths with respect to the search
+        // directories.
         //
         // This isn't a fully complete check since the index may be composed of multiple files,
         // but without encoding the type into the loader, it seems complicated to do better than this
