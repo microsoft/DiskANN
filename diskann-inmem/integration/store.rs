@@ -278,6 +278,48 @@ fn observe(
 // Shared //
 ////////////
 
+struct Local<'a> {
+    counter: u64,
+    parent: &'a AtomicU64,
+}
+
+impl<'a> Local<'a> {
+    fn new(parent: &'a AtomicU64) -> Self {
+        Self { counter: 0, parent }
+    }
+
+    fn add(&mut self, by: u64) {
+        self.counter += by;
+    }
+}
+
+impl Drop for Local<'_> {
+    fn drop(&mut self) {
+        self.parent.fetch_add(self.counter, Relaxed);
+    }
+}
+
+struct LocalMax<'a> {
+    max: usize,
+    parent: &'a AtomicUsize,
+}
+
+impl<'a> LocalMax<'a> {
+    fn new(parent: &'a AtomicUsize) -> Self {
+        Self { max: 0, parent }
+    }
+
+    fn max(&mut self, m: usize) {
+        self.max = self.max.max(m);
+    }
+}
+
+impl Drop for LocalMax<'_> {
+    fn drop(&mut self) {
+        self.parent.fetch_max(self.max, Relaxed);
+    }
+}
+
 /// State shared by all worker threads for the duration of a run.
 struct Shared {
     store: Store,
@@ -324,8 +366,14 @@ fn should_stop(shared: &Shared) -> bool {
 /////////////
 
 fn writer(shared: &Shared) {
+    let mut ops = Local::new(&shared.ops);
+    let mut acquires_ok = Local::new(&shared.acquires_ok);
+    let mut acquires_fail = Local::new(&shared.acquires_fail);
+
+    let mut peak_live = LocalMax::new(&shared.peak_live);
+
     while !should_stop(shared) {
-        shared.ops.fetch_add(1, Relaxed);
+        ops.add(1);
         match shared.store.acquire() {
             Some(mut writer) => {
                 let stamp = shared.stamp.fetch_add(1, Relaxed);
@@ -333,11 +381,11 @@ fn writer(shared: &Shared) {
                 writer.publish();
 
                 let live = shared.live.fetch_add(1, Relaxed) + 1;
-                shared.peak_live.fetch_max(live, Relaxed);
-                shared.acquires_ok.fetch_add(1, Relaxed);
+                peak_live.max(live);
+                acquires_ok.add(1);
             }
             None => {
-                shared.acquires_fail.fetch_add(1, Relaxed);
+                acquires_fail.add(1);
                 std::thread::yield_now();
             }
         }
@@ -348,6 +396,10 @@ fn retirer(shared: &Shared, seed: u64) {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut iteration: u64 = 0;
 
+    let mut retires_ok = Local::new(&shared.retires_ok);
+    let mut retires_fail = Local::new(&shared.retires_fail);
+    let mut reclaims = Local::new(&shared.reclaims);
+
     while !should_stop(shared) {
         shared.ops.fetch_add(1, Relaxed);
         iteration += 1;
@@ -357,16 +409,16 @@ fn retirer(shared: &Shared, seed: u64) {
             let i = rng.sample(shared.writable);
             if shared.store.retire(i) {
                 shared.live.fetch_sub(1, Relaxed);
-                shared.retires_ok.fetch_add(1, Relaxed);
+                retires_ok.add(1);
             } else {
-                shared.retires_fail.fetch_add(1, Relaxed);
+                retires_fail.add(1);
             }
         }
 
         if iteration.is_multiple_of(RECLAIM_EVERY)
             && let Some(reclaimed) = shared.store.reclaim()
         {
-            shared.reclaims.fetch_add(reclaimed as u64, Relaxed);
+            reclaims.add(reclaimed as u64);
         }
 
         std::thread::yield_now();
@@ -379,8 +431,11 @@ fn reader(shared: &Shared, seed: u64) {
     let window = READER_WINDOW.min(slots);
     let mut observations = HashMap::with_capacity(window);
 
+    let mut ops = Local::new(&shared.ops);
+    let mut reads = Local::new(&shared.reads);
+
     while !should_stop(shared) {
-        shared.ops.fetch_add(1, Relaxed);
+        ops.add(1);
         let Some(guard) = shared.store.reader() else {
             // All guard slots are occupied; back off and retry.
             std::thread::yield_now();
@@ -393,7 +448,7 @@ fn reader(shared: &Shared, seed: u64) {
             for k in 0..window {
                 let i = (start + k) % slots;
                 observe(shared, &mut observations, i, guard.read(i));
-                shared.reads.fetch_add(1, Relaxed);
+                reads.add(1);
             }
         }
     }

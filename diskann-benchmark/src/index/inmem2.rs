@@ -650,7 +650,7 @@ impl RunBook {
 
         path.resolve(checker)?;
 
-        let groundtruth_directory = checker.__check_dir(groundtruth_directory.as_ref())?;
+        let groundtruth_directory = checker.find_input_dir(groundtruth_directory.as_ref())?;
 
         let runbook = bigann::RunBook::load(
             &path,
