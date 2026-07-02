@@ -1922,7 +1922,7 @@ mod tests {
             vec![],
         ];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 4, Metric::L2, 1.2, false);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 4, Metric::L2, 1.2);
 
         assert_eq!(result[0], vec![1, 2, 3]);
     }
