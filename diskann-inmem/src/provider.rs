@@ -558,6 +558,7 @@ impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 unsafe fn prefetch(ptr: *const u8, len: usize) {
     use std::arch::x86_64::*;
@@ -579,6 +580,16 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
         }
     }
 }
+
+/// Prefetch `len` bytes beginning at `ptr`.
+///
+/// The last cache line prefetched first, followed by the rest in ascending order.
+///
+/// # Safety
+///
+/// The memory range `[ptr, ptr.add(len))` must be valid.
+#[cfg(not(any(target_arch = "x86_64", target_feature = "avx2")))]
+unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
 
 /// # Safety
 ///
