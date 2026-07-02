@@ -12,15 +12,15 @@ use bytemuck::{cast_slice, cast_slice_mut};
 use diskann::{
     graph::AdjacencyList,
     provider::{self, HasId},
-    utils::{IntoUsize, VectorId},
     ANNError, ANNResult,
 };
 
 use super::ConfigError;
+use crate::id::BfTreeId;
 use crate::locks::StripedLocks;
 use crate::{bftree_insert, TestCallCount};
 
-pub struct NeighborProvider<I: VectorId + IntoUsize> {
+pub struct NeighborProvider<I: BfTreeId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
     #[allow(dead_code)]
@@ -28,11 +28,11 @@ pub struct NeighborProvider<I: VectorId + IntoUsize> {
     _phantom: PhantomData<I>,
 }
 
-impl<I: VectorId + IntoUsize> HasId for NeighborProvider<I> {
+impl<I: BfTreeId> HasId for NeighborProvider<I> {
     type Id = I;
 }
 
-impl<I: VectorId + IntoUsize> NeighborProvider<I> {
+impl<I: BfTreeId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly.
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
         // Records are keyed by an `I`-width id and store a `dim`-cell `I`-width value
@@ -48,7 +48,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     }
 
     fn new(max_degree: u32, adjacency_list_index: BfTree) -> ANNResult<Self> {
-        let dim = 1 + max_degree.into_usize();
+        let dim = 1 + max_degree as usize;
 
         Ok(Self {
             adjacency_list_index,
@@ -291,7 +291,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
 
 pub struct NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     provider: &'a NeighborProvider<I>,
     locks: &'a StripedLocks,
@@ -300,28 +300,28 @@ where
 
 impl<'a, I> NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     pub fn write_neighbors(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         self.provider.set_neighbors(id, neighbors, &mut self.buf)
     }
     pub fn write_append(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         self.provider.append_vector(id, neighbors, &mut self.buf)
     }
 }
 
 impl<'a, I> HasId for NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     type Id = I;
 }
 
 impl<'a, I> provider::NeighborAccessor for NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     fn get_neighbors(
         &mut self,
@@ -334,14 +334,14 @@ where
 
 impl<'a, I> provider::NeighborAccessorMut for NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     fn set_neighbors(
         &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         std::future::ready(self.provider.set_neighbors(id, neighbors, &mut self.buf))
     }
     fn append_vector(
@@ -349,7 +349,7 @@ where
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         std::future::ready(self.provider.append_vector(id, neighbors, &mut self.buf))
     }
 }

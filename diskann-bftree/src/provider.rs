@@ -301,7 +301,15 @@ where
             .quant_vector_provider_config
             .use_snapshot(params.use_snapshot);
 
-        crate::id::validate_id_capacity::<I>(params.max_points + params.num_start_points.get())?;
+        let id_capacity = params
+            .max_points
+            .checked_add(params.num_start_points.get())
+            .ok_or_else(|| {
+                ANNError::log_index_error(
+                    "max_points + num_start_points overflows usize".to_string(),
+                )
+            })?;
+        crate::id::validate_id_capacity::<I>(id_capacity)?;
 
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
@@ -371,7 +379,7 @@ where
     // ///
     // pub(crate) fn is_not_start_point(&self) -> impl Fn(&Neighbor<u32>) -> bool {
     //     let range = self.full_vectors.start_point_range();
-    //     move |neighbor| !range.contains(&neighbor.id.into_usize())
+    //     move |neighbor| !range.contains(&neighbor.id.as_index())
     // }
 
     /// Return a vector of starting points.
@@ -380,8 +388,8 @@ where
     }
 
     /// An iterator over all ids including start points (even if they are deleted).
-    pub fn iter(&self) -> std::iter::Map<std::ops::Range<usize>, fn(usize) -> I> {
-        (0..self.full_vectors.total()).map(I::from_index as fn(usize) -> I)
+    pub fn iter(&self) -> crate::id::IdRange<I> {
+        I::id_range(self.full_vectors.total())
     }
 
     pub fn num_start_points(&self) -> usize {
@@ -486,12 +494,12 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         // Only delete vector data here. Neighbor adjacency cleanup (zeroing the
         // deleted vertex's edge list and patching neighbors-of-neighbors) is
         // handled by `DiskANNIndex::inplace_delete` → `drop_adj_list`.
-        self.full_vectors.delete_vector(id.into_usize());
-        self.quant_vectors.delete_vector(id.into_usize());
+        self.full_vectors.delete_vector(id.as_index());
+        self.quant_vectors.delete_vector(id.as_index());
 
         std::future::ready(Ok(()))
     }
@@ -511,7 +519,7 @@ where
         id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<diskann::provider::ElementStatus, Self::Error>> + Send
     {
-        let status = match self.full_vectors.get_vector_sync(id.into_usize()) {
+        let status = match self.full_vectors.get_vector_sync(id.as_index()) {
             Ok(_) => Ok(ElementStatus::Valid),
             Err(RankedError::Transient(_)) => Ok(ElementStatus::Deleted),
             Err(RankedError::Error(e)) => Err(e),
@@ -528,7 +536,7 @@ where
     I: BfTreeId,
 {
     type Item = I;
-    type IntoIter = std::iter::Map<std::ops::Range<usize>, fn(usize) -> I>;
+    type IntoIter = crate::id::IdRange<I>;
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
@@ -659,15 +667,15 @@ where
         id: &I,
         element: &[T],
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
 
         // First, write to the authoritative full-precision store.
-        if let Err(err) = self.full_vectors.set_vector_sync(id.into_usize(), element) {
+        if let Err(err) = self.full_vectors.set_vector_sync(id.as_index(), element) {
             return std::future::ready(Err(err));
         }
 
         // Then, write the compressed representation to the quant store.
-        if let Err(err) = self.quant_vectors.set_vector_sync(id.into_usize(), element) {
+        if let Err(err) = self.quant_vectors.set_vector_sync(id.as_index(), element) {
             debug_assert!(
                 false,
                 "quant write failed after full-precision success: {err}"
@@ -696,9 +704,9 @@ where
         id: &I,
         element: &[T],
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
 
-        if let Err(err) = self.full_vectors.set_vector_sync(id.into_usize(), element) {
+        if let Err(err) = self.full_vectors.set_vector_sync(id.as_index(), element) {
             return std::future::ready(Err(err));
         }
 
@@ -756,8 +764,8 @@ where
         let mut scratch = self.neighbor_provider.scratch(&self.locks);
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
-            self.full_vectors.set_vector_sync(id.into_usize(), v)?;
-            self.quant_vectors.set_vector_sync(id.into_usize(), v)?;
+            self.full_vectors.set_vector_sync(id.as_index(), v)?;
+            self.quant_vectors.set_vector_sync(id.as_index(), v)?;
             // Initialize empty neighbor list
             scratch.write_neighbors(id, &[])?;
         }
@@ -788,7 +796,7 @@ where
         let mut scratch = self.neighbor_provider.scratch(&self.locks);
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
-            self.full_vectors.set_vector_sync(id.into_usize(), v)?;
+            self.full_vectors.set_vector_sync(id.as_index(), v)?;
             // Initialize empty neighbor list
             scratch.write_neighbors(id, &[])?;
         }
@@ -841,7 +849,7 @@ where
     fn get_distance(&mut self, id: I) -> Result<f32, AccessError> {
         self.provider
             .full_vectors
-            .get_vector_into(id.into_usize(), &mut self.element)
+            .get_vector_into(id.as_index(), &mut self.element)
             .map(|_: ()| self.computer.evaluate_similarity(&self.element))
     }
 }
@@ -951,7 +959,7 @@ where
         match self
             .provider
             .quant_vectors
-            .get_vector_into(id.into_usize(), &mut self.element)
+            .get_vector_into(id.as_index(), &mut self.element)
         {
             Ok(()) => self
                 .computer
@@ -1106,7 +1114,7 @@ where
             match self
                 .provider
                 .full_vectors
-                .get_vector_into(i.into_usize(), &mut b)
+                .get_vector_into(i.as_index(), &mut b)
                 .allow_transient("transient errors allowed during fill")?
             {
                 Some(()) => Ok(Some(b)),
@@ -1214,7 +1222,7 @@ where
             match self
                 .provider
                 .quant_vectors
-                .get_vector_into(i.into_usize(), &mut b)
+                .get_vector_into(i.as_index(), &mut b)
                 .allow_transient("transient errors allowed during fill")?
             {
                 Some(()) => Ok(Some(Owned(b))),
@@ -1403,7 +1411,7 @@ where
         use diskann::error::ErrorExt;
         let elt = provider
             .full_vectors
-            .get_vector_sync(id.into_usize())
+            .get_vector_sync(id.as_index())
             .escalate("get_delete_element: failed to read vector for inplace delete")?
             .into();
         Ok(elt)
@@ -1530,7 +1538,7 @@ where
         use diskann::error::ErrorExt;
         provider
             .full_vectors
-            .get_vector_sync(id.into_usize())
+            .get_vector_sync(id.as_index())
             .escalate("get_delete_element: failed to read vector for inplace delete")
             .map(Into::into)
     }
@@ -1585,7 +1593,7 @@ where
         for n in candidates {
             match provider
                 .full_vectors
-                .get_vector_sync(n.id.into_usize())
+                .get_vector_sync(n.id.as_index())
                 .allow_transient("stale candidate during rerank")
             {
                 Ok(Some(vec)) => {
@@ -1657,7 +1665,13 @@ fn validate_loaded_id_params<I: BfTreeId>(saved_params: &SavedParams) -> ANNResu
             saved_params.id_width,
         )));
     }
-    crate::id::validate_id_capacity::<I>(saved_params.max_points + saved_params.frozen_points.get())
+    let id_capacity = saved_params
+        .max_points
+        .checked_add(saved_params.frozen_points.get())
+        .ok_or_else(|| {
+            ANNError::log_index_error("max_points + frozen_points overflows usize".to_string())
+        })?;
+    crate::id::validate_id_capacity::<I>(id_capacity)
 }
 
 /// The element type of the full-precision vectors stored in the index.
