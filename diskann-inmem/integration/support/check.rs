@@ -20,12 +20,12 @@ use std::{
 use diskann_benchmark_runner::{benchmark::PassFail, utils::fmt::Table};
 use serde::{Serialize, Serializer};
 
-/// Perform a baseline check on `self` and a `previous`ly saved result.
+/// Perform a baseline check on `self` and a previously saved result.
 pub(crate) trait CheckMatch {
     fn check_match(&self, previous: &Self) -> Match;
 }
 
-/// The result of a basline check.
+/// The result of a baseline check.
 #[must_use = "this is a result type"]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]

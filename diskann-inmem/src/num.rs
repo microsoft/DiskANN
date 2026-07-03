@@ -89,7 +89,7 @@ impl std::fmt::Display for Bytes {
 
 /// An alignment for an allocation.
 ///
-/// All alignemnts are guaranteed to be powers of two.
+/// All alignments are guaranteed to be powers of two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Align(NonZeroUsize);

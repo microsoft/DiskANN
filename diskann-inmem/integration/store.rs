@@ -347,7 +347,7 @@ struct Shared {
     transitions: AtomicU64,
 }
 
-/// Record the first observed invariant violation and signal all workers to stop.
+/// Record an observed invariant violation and signal all workers to stop.
 fn record_violation(shared: &Shared, message: String) {
     let mut slot = shared.violation.lock().unwrap();
     slot.push(message);

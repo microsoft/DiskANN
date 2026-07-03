@@ -740,7 +740,7 @@ string,        ,   string
     // KeyValue //
     //----------//
 
-    // Strip a preceeding newline if it exists.
+    // Strip a preceding newline if it exists.
     fn process(x: &str) -> &str {
         let x = x.strip_prefix('\n').unwrap_or(x);
         x.strip_suffix('\n').unwrap_or(x)

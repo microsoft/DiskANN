@@ -15,8 +15,8 @@
 //! The design of this module allows aggressive optimization of graph search kernels via
 //! the [`Search`] and [`QueryVisitor`] pairs of traits.
 //!
-//! Implementations of [`Search`] can pass an [`QueryDistance`] kernels specialized to
-//! to a specific geometry (dimensionality or metric type) which upstream [`QueryVisitor`]
+//! Implementations of [`Search`] can pass a [`QueryDistance`] kernel specialized to
+//! a specific geometry (dimensionality or metric type) which upstream [`QueryVisitor`]
 //! will fuse into larger kernels. While this allows for high performance graph kernels,
 //! some considerations should be taken into account:
 //!
@@ -41,7 +41,7 @@ pub trait Layer: Send + Sync + 'static {
     fn bytes(&self) -> Bytes;
 }
 
-/// Store a element of type `T` into a raw byte buffer.
+/// Store an element of type `T` into a raw byte buffer.
 ///
 /// Implementations may assume that `bytes.len()` is equal to [`Layer::bytes`].
 pub trait Set<T>: Layer {
@@ -65,12 +65,12 @@ pub trait AsDistance: Send + Sync + std::fmt::Debug {
     fn as_distance(&self) -> &dyn Distance;
 }
 
-/// A unary query distance on raw bytes slices.
+/// A unary query distance on raw byte slices.
 ///
 /// When paired with [`Layer`] via helpers like [`Search`], implementations may assume
 /// that `x` has length [`Layer::bytes`].
 ///
-/// No alignment guarantees are made for `x`, though in practice is isk likely to be
+/// No alignment guarantees are made for `x`, though in practice it is likely to be
 /// aligned to 32 or 64 bytes.
 pub trait QueryDistance: Send + Sync + std::fmt::Debug {
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;

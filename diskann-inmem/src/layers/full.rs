@@ -243,7 +243,7 @@ where
 
 #[derive(Debug, Error)]
 #[error(
-    "expected slices of lenght {} - instead got {} and {}",
+    "expected slices of length {} - instead got {} and {}",
     self.expected,
     self.xlen,
     self.ylen
@@ -337,7 +337,7 @@ where
 
 #[derive(Debug, Error)]
 #[error(
-    "expected slice of lenght {} - instead got {}",
+    "expected slice of length {} - instead got {}",
     self.expected,
     self.xlen,
 )]
