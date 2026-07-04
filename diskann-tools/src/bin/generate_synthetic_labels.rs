@@ -11,7 +11,7 @@ use tracing::{error, info};
 #[derive(Debug, Parser)]
 struct GenerateSyntheticLabelsArgs {
     /// Filename for saving the label file
-    #[arg(long = "output_file", required = true)]
+    #[arg(long = "output-file", required = true)]
     pub output_file: String,
 
     /// Number of vectors

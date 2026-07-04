@@ -52,30 +52,30 @@ fn main() -> Result<(), CMDToolError> {
 #[derive(Debug, Parser)]
 struct BuildPQArgs {
     /// data type <int8/uint8/float / fp16> (required)
-    #[arg(long = "data_type", default_value = "float")]
+    #[arg(long = "data-type", default_value = "float")]
     pub data_type: DataType,
 
     /// Distance function to use.
-    #[arg(long = "dist_fn", default_value = "l2")]
+    #[arg(long = "dist-fn", default_value = "l2")]
     pub dist_fn: Metric,
 
     /// Path to the data file. The file should be in the format specified by the `data_type` argument.
-    #[arg(long = "data_path", short, required = true)]
+    #[arg(long = "data-file", short, required = true)]
     pub data_path: String,
 
     /// Path to the index file. The index will be saved to this prefixed name.
-    #[arg(long = "index_path_prefix", short, required = true)]
+    #[arg(long = "index-path-prefix", short, required = true)]
     pub index_path_prefix: String,
 
     /// Number of threads to use.
-    #[arg(long = "num_threads", short = 'T')]
+    #[arg(long = "num-threads", short = 'T')]
     pub num_threads: Option<usize>,
 
     /// Ratio of PQ training set size to data size
-    #[arg(long = "p_val", short = 'p', default_value = "0.1")]
+    #[arg(long = "p-val", short = 'p', default_value = "0.1")]
     pub p_val: f64,
 
     /// Number of PQ bytee
-    #[arg(long = "pq_bytes", short, default_value = "10")]
+    #[arg(long = "pq-bytes", short, default_value = "10")]
     pub pq_bytes: usize,
 }
