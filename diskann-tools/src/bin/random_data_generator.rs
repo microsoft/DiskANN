@@ -10,11 +10,11 @@ use diskann_tools::utils::{write_random_data, CMDResult, CMDToolError, DataType}
 #[derive(Debug, Parser)]
 struct RandomDataGeneratorArgs {
     /// data type <int8/uint8/float/fp16> (required)
-    #[arg(long = "data_type", required = true)]
+    #[arg(long = "data-type", required = true)]
     pub data_type: DataType,
 
     /// File name for saving the random vectors
-    #[arg(long = "output_file", required = true)]
+    #[arg(long = "output-file", required = true)]
     pub output_file: String,
 
     /// Dimensionality of the vector
