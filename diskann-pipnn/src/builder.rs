@@ -533,8 +533,11 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     // Extract graph and optionally apply diversity-aware final prune.
     let t3 = Instant::now();
     let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
-        // Extract full reservoir (l_max candidates with distances) for diversity prune.
-        let candidates = hash_prune.extract_graph_for_prune();
+        // Extract each node's candidate ids (up to l_max) for the diversity
+        // prune. final_prune recomputes distances from the base data, so ids
+        // alone suffice — dropping the reservoir's distance/hash slabs before
+        // this copy (see extract_graph_ids).
+        let candidates = hash_prune.extract_graph_ids();
         let extract_secs = t3.elapsed().as_secs_f64();
         tracing::info!(
             elapsed_secs = extract_secs,
@@ -756,7 +759,7 @@ impl FinalPruneKernel {
 pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
-    candidates_per_node: &[Vec<(u32, f32)>],
+    candidates_per_node: &[Vec<u32>],
     max_degree: usize,
     metric: Metric,
     alpha: f32,
@@ -804,7 +807,7 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             // candidate list directly; otherwise under-degree nodes lose useful
             // edges and still pay the full prune cost.
             if nc <= max_degree {
-                return candidates.iter().map(|&(id, _)| id).collect();
+                return candidates.clone();
             }
 
             // Per-thread tier-specialised inline kernel; generic fallback owns
@@ -827,7 +830,7 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                                     cf.resize(nc * ndims, 0.0);
                                 }
                                 let cand_f32 = &mut cf[..nc * ndims];
-                                for (ci, &(id, _)) in candidates.iter().enumerate() {
+                                for (ci, &id) in candidates.iter().enumerate() {
                                     let src =
                                         &data[id as usize * ndims..(id as usize + 1) * ndims];
                                     T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
@@ -869,7 +872,16 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                                     let z = &cand_f32[i * ndims..(i + 1) * ndims];
                                     order.push((kernel.call(x_f32, z), i as u32));
                                 }
-                                order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+                                // Break exact-distance ties by candidate point
+                                // id so the admitted set is independent of the
+                                // input candidate order (extract emits ids
+                                // unsorted). Tie-breaking by the array index
+                                // would NOT be order-invariant — the index→id
+                                // map differs between layouts; the id is stable.
+                                order.sort_unstable_by(|a, b| {
+                                    a.0.total_cmp(&b.0)
+                                        .then_with(|| candidates[a.1 as usize].cmp(&candidates[b.1 as usize]))
+                                });
 
                                 // Lazy RobustPrune (paper "Optimizing RobustPrune"):
                                 // walk candidates in ascending fresh-distance-to-x
@@ -917,7 +929,7 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
                                     if !occluded {
                                         sel_local.push(i as u8);
-                                        sel.push(candidates[i].0);
+                                        sel.push(candidates[i]);
                                     }
                                 }
 
@@ -1868,13 +1880,9 @@ mod tests {
     fn test_final_prune_from_candidates_diversity() {
         // 4 points: 0=(0,0), 1=(1,0), 2=(0,1), 3=(0.1,0) -- point 3 is occluded by 1.
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.1, 0.0];
-        let candidates = vec![
-            // Node 0's candidates sorted by distance: 3 (close, same direction as 1), 1 (far along x), 2 (far along y)
-            vec![(3, 0.01f32), (1, 1.0f32), (2, 1.0f32)],
-            vec![],
-            vec![],
-            vec![],
-        ];
+        // Candidate ids only; final_prune recomputes distances from `data`
+        // and re-sorts, so input order is irrelevant.
+        let candidates = vec![vec![3u32, 1, 2], vec![], vec![], vec![]];
 
         let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
         let node0 = &result[0];
@@ -1893,7 +1901,7 @@ mod tests {
     #[test]
     fn test_final_prune_from_candidates_empty() {
         let data: Vec<f32> = vec![0.0; 8];
-        let candidates: Vec<Vec<(u32, f32)>> = vec![vec![], vec![], vec![], vec![]];
+        let candidates: Vec<Vec<u32>> = vec![vec![], vec![], vec![], vec![]];
         let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert!(result.iter().all(|adj| adj.is_empty()));
     }
@@ -1901,7 +1909,7 @@ mod tests {
     #[test]
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
-        let candidates = vec![vec![(1, 1.0f32)], vec![(0, 1.0f32)]];
+        let candidates = vec![vec![1u32], vec![0u32]];
         let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
@@ -1915,12 +1923,7 @@ mod tests {
             1.0, 0.0, // candidate 2
             0.0, 1.0, // candidate 3
         ];
-        let candidates = vec![
-            vec![(1, 0.01f32), (2, 1.0f32), (3, 1.0f32)],
-            vec![],
-            vec![],
-            vec![],
-        ];
+        let candidates = vec![vec![1u32, 2, 3], vec![], vec![], vec![]];
 
         let result = final_prune_from_candidates(&data, 2, &candidates, 4, Metric::L2, 1.2);
 

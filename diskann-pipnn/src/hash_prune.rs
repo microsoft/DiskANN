@@ -8,13 +8,13 @@
 //! Storage is AoSoA hot/cold split:
 //! - `hot: Vec<HotSlot>` — one 16-byte slot per point (mutex + len + farthest).
 //!   Hot path early-reject and lock-acquire only touch this slab (~160 MB at 10M points).
-//! - `cold: Vec<ColdSlot>` — one 512-byte slot per point. Inside each ColdSlot,
-//!   hashes / distances / neighbors are split into three contiguous arrays, so
-//!   `find_hash` only walks 2 cache lines (128 B of u16) instead of 8 cache lines
-//!   of mixed AoS.
+//! - Three cold slabs (`cold_hashes`, `cold_distances`, `cold_neighbors`), each a
+//!   single `MmapSlab` of `npoints * scan_lanes` elements. Splitting hashes /
+//!   distances / neighbors into three contiguous arrays lets `find_hash` walk
+//!   pure u16 hashes (32 per cache line) instead of 8-byte mixed-AoS entries.
 //!
-//! Both slabs are one Vec each (contiguous in VA), so `madvise(HUGEPAGE)` is
-//! effective when the kernel actually backs THP.
+//! Each slab is one contiguous allocation, so `madvise(HUGEPAGE)` is effective
+//! when the kernel actually backs THP.
 //!
 //! `l_max` is dynamic user input; the cold slab stride (`scan_lanes`) and the
 //! `find_hash_simd` scan width both scale with it at runtime. The only fixed
@@ -541,6 +541,24 @@ unsafe fn collect_sorted_neighbors(
     })
 }
 
+/// Collect the reservoir's neighbor ids, truncated to `cap`, WITHOUT sorting.
+/// The final-prune path recomputes fresh full-precision distances and re-sorts
+/// by them, so the reservoir's stored order (and its bf16 distances) are
+/// irrelevant here — reading only `neighbors` lets the caller drop the hashes
+/// and distances slabs before extraction.
+///
+/// SAFETY: caller holds the slot lock (or owns the reservoir); `neighbors` is
+/// valid for `hot.len` elements.
+#[inline]
+unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize) -> Vec<u32> {
+    let out_len = (hot.len as usize).min(cap);
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        out.push(*neighbors.add(i));
+    }
+    out
+}
+
 // ─── Test-only thin wrapper preserving the old HashPruneReservoir API ─────────
 
 #[cfg(test)]
@@ -911,9 +929,36 @@ impl HashPrune {
         self.extract_into(cap, |(id, _)| id)
     }
 
-    pub fn extract_graph_for_prune(self) -> Vec<Vec<(u32, f32)>> {
+    /// Extract each point's reservoir as ids only (`Vec<Vec<u32>>`), for the
+    /// final-prune path. Drops the hashes and distances slabs (2/3 of the
+    /// reservoir) BEFORE materializing the copy, so only the neighbors slab
+    /// overlaps it — and emits bare `u32` ids since final-prune recomputes
+    /// distances and ignores both the stored distance and the reservoir order.
+    pub fn extract_graph_ids(self) -> Vec<Vec<u32>> {
         let cap = self.l_max;
-        self.extract_into(cap, |pair| pair)
+        let scan_lanes = self.scan_lanes;
+        drop(self.sketches);
+        let HashPrune {
+            hot,
+            cold_hashes,
+            cold_distances,
+            cold_neighbors,
+            ..
+        } = self;
+        // Neither the hashes (LSH dedup index) nor the distances (bf16
+        // keep-closer key) are read again — free them before the copy so the
+        // reservoir+copy overlap is just the neighbors slab.
+        drop(cold_hashes);
+        drop(cold_distances);
+        (0..hot.len())
+            .into_par_iter()
+            .map(|i| {
+                let neighbors = (cold_neighbors.as_ptr() as *const u32).wrapping_add(i * scan_lanes);
+                // SAFETY: i < hot.len() == npoints; the row spans scan_lanes
+                // slots, hot[i].len <= l_max <= scan_lanes are valid u32.
+                unsafe { collect_neighbor_ids(&hot[i], neighbors, cap) }
+            })
+            .collect_installed()
     }
 }
 
@@ -1138,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_graph_for_prune_returns_full_reservoir() {
+    fn test_extract_graph_ids_returns_full_reservoir() {
         let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
         hp.add_edge(0, 1, 1.0);
@@ -1148,14 +1193,25 @@ mod tests {
         hp.add_edge(2, 0, 1.0);
         hp.add_edge(3, 0, 1.414);
 
-        let full = hp.extract_graph_for_prune();
+        let full = hp.extract_graph_ids();
         assert_eq!(full.len(), 4);
         assert!(!full[0].is_empty(), "node 0 should have neighbors");
-        for neighbors in &full {
-            for w in neighbors.windows(2) {
-                assert!(w[0].1 <= w[1].1, "should be sorted by distance");
-            }
-        }
+        // ids-only, unsorted: every id is one of node 0's inserted neighbors
+        // {1,2,3} with no duplicates (the LSH bucket may keep-closer-collapse a
+        // colliding pair on this tiny 4-plane sketch, so we don't assert all 3).
+        let mut n0 = full[0].clone();
+        n0.sort_unstable();
+        let deduped = {
+            let mut d = n0.clone();
+            d.dedup();
+            d
+        };
+        assert_eq!(n0, deduped, "no duplicate ids in a reservoir row");
+        assert!(
+            n0.iter().all(|&id| (1..=3).contains(&id)),
+            "node 0 ids must be a subset of its inserted neighbors {{1,2,3}}, got {:?}",
+            n0
+        );
     }
 
     #[test]
@@ -1171,25 +1227,6 @@ mod tests {
             graph[0].len() <= 2,
             "extract_graph should truncate to max_degree"
         );
-    }
-
-    #[test]
-    fn test_extract_for_prune_preserves_distances() {
-        let data = vec![0.0f32; 4 * 2];
-        let hp = HashPrune::new(&data, 4, 2, 4, 10, 5, 42);
-        hp.add_edge(0, 1, 1.5);
-        hp.add_edge(0, 2, 2.5);
-
-        let full = hp.extract_graph_for_prune();
-        let node0 = &full[0];
-        for &(id, dist) in node0 {
-            if id == 1 {
-                assert!((dist - 1.5).abs() < 0.05, "dist for id=1: {}", dist);
-            }
-            if id == 2 {
-                assert!((dist - 2.5).abs() < 0.05, "dist for id=2: {}", dist);
-            }
-        }
     }
 
     #[test]
