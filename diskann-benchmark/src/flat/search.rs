@@ -43,8 +43,6 @@ const NAME: &str = "flat-index";
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register(NAME, Flat::<f32>::new())?;
     registry.register(NAME, Flat::<f16>::new())?;
-    registry.register(NAME, Flat::<u8>::new())?;
-    registry.register(NAME, Flat::<i8>::new())?;
     Ok(())
 }
 
