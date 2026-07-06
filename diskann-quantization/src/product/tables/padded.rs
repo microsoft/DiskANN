@@ -108,9 +108,11 @@ impl PaddedTable {
     }
 
     pub fn distance(&self, metric: Metric) -> Distance<'_> {
+        let (distance, self_distance) = dispatch_no_features(metric);
         Distance {
             table: self,
-            distance: dispatch_no_features(metric),
+            distance,
+            self_distance,
         }
     }
 }
@@ -143,17 +145,52 @@ impl From<VectorMetric> for Metric {
     }
 }
 
-type Dispatched = Dispatched3<f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>;
+impl<A> Target<A, (FDistance, SelfDistance)> for Metric
+where
+    A: Preferred,
+    SquaredL2: Op<A::f32s>,
+    InnerProduct: Op<A::f32s>,
+    Cosine: Op<A::f32s>,
+{
+    #[inline(always)]
+    fn run(self, arch: A) -> (FDistance, SelfDistance) {
+        match self {
+            Self::SquaredL2 => (
+                arch.dispatch3::<SquaredL2, f32, Ref<PaddedTable>, Ref<[f32]>, Ref<[u8]>>(),
+                arch.dispatch3::<SquaredL2, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>(),
+            ),
+            Self::InnerProduct => (
+                arch.dispatch3::<InnerProduct, f32, Ref<PaddedTable>, Ref<[f32]>, Ref<[u8]>>(),
+                arch.dispatch3::<InnerProduct, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>(),
+            ),
+            Self::Cosine => (
+                arch.dispatch3::<Cosine, f32, Ref<PaddedTable>, Ref<[f32]>, Ref<[u8]>>(),
+                arch.dispatch3::<Cosine, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>(),
+            ),
+        }
+    }
+}
+
+type FDistance = Dispatched3<f32, Ref<PaddedTable>, Ref<[f32]>, Ref<[u8]>>;
+type SelfDistance = Dispatched3<f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>;
 
 #[derive(Debug, Clone)]
 pub struct Distance<'a> {
     table: &'a PaddedTable,
-    distance: Dispatched,
+    distance: FDistance,
+    self_distance: SelfDistance,
 }
+
+impl DistanceFunction<&[f32], &[u8], f32> for Distance<'_> {
+    fn evaluate_similarity(&self, a: &[f32], b: &[u8]) -> f32 {
+        self.distance.call(self.table, a, b)
+    }
+}
+
 
 impl DistanceFunction<&[u8], &[u8], f32> for Distance<'_> {
     fn evaluate_similarity(&self, a: &[u8], b: &[u8]) -> f32 {
-        self.distance.call(self.table, a, b)
+        self.self_distance.call(self.table, a, b)
     }
 }
 
@@ -205,10 +242,9 @@ where
     type Accum;
 
     fn init(arch: V::Arch) -> Self::Accum;
-
     fn accum(acc: Self::Accum, x: V, y: V) -> Self::Accum;
-
-    fn reduce(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32;
+    fn reduce_pair(a: Self::Accum, b: Self::Accum) -> f32;
+    fn reduce_quad(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32;
 }
 
 #[derive(Debug)]
@@ -229,8 +265,12 @@ where
         d.mul_add_simd(d, acc)
     }
 
-    fn reduce(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
-        ((a + b) + (c + d)).sum_tree()
+    fn reduce_pair(a: Self::Accum, b: Self::Accum) -> f32 {
+        (a + b).sum_tree()
+    }
+
+    fn reduce_quad(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
+        Self::reduce_pair(a + b, c + d)
     }
 }
 
@@ -251,8 +291,12 @@ where
         x.mul_add_simd(y, acc)
     }
 
-    fn reduce(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
-        -((a + b) + (c + d)).sum_tree()
+    fn reduce_pair(a: Self::Accum, b: Self::Accum) -> f32 {
+        -(a + b).sum_tree()
+    }
+
+    fn reduce_quad(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
+        Self::reduce_pair(a + b, c + d)
     }
 }
 
@@ -264,6 +308,15 @@ struct CosineAccumulator<V> {
     xy: V,
     xnorm: V,
     ynorm: V,
+}
+
+fn finish_cosine(xy: f32, xnorm: f32, ynorm: f32) -> f32 {
+    if xnorm < f32::MIN_POSITIVE || ynorm < f32::MIN_POSITIVE {
+        0.0
+    } else {
+        let v = xy / (xnorm.sqrt() * ynorm.sqrt());
+        1.0 - (-1.0f32).max(1.0f32.min(v))
+    }
 }
 
 impl<V> Op<V> for Cosine
@@ -288,43 +341,34 @@ where
         }
     }
 
-    fn reduce(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
+    fn reduce_pair(a: Self::Accum, b: Self::Accum) -> f32 {
+        let xy = (a.xy + b.xy).sum_tree();
+        let xnorm = (a.xnorm + b.xnorm).sum_tree();
+        let ynorm = (a.ynorm + b.ynorm).sum_tree();
+        finish_cosine(xy, xnorm, ynorm)
+    }
+
+    fn reduce_quad(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
         let xy = ((a.xy + b.xy) + (c.xy + d.xy)).sum_tree();
         let xnorm = ((a.xnorm + b.xnorm) + (c.xnorm + d.xnorm)).sum_tree();
         let ynorm = ((a.ynorm + b.ynorm) + (c.ynorm + d.ynorm)).sum_tree();
-
-        if xnorm < f32::MIN_POSITIVE || ynorm < f32::MIN_POSITIVE {
-            0.0
-        } else {
-            let v = xy / (xnorm.sqrt() * ynorm.sqrt());
-            1.0 - (-1.0f32).max(1.0f32.min(v))
-        }
-    }
-}
-
-impl<A> Target<A, Dispatched> for Metric
-where
-    A: Preferred,
-    SquaredL2: Op<A::f32s>,
-    InnerProduct: Op<A::f32s>,
-    Cosine: Op<A::f32s>,
-{
-    #[inline(always)]
-    fn run(self, arch: A) -> Dispatched {
-        match self {
-            Self::SquaredL2 => {
-                arch.dispatch3::<SquaredL2, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>()
-            }
-            Self::InnerProduct => {
-                arch.dispatch3::<InnerProduct, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>()
-            }
-            Self::Cosine => arch.dispatch3::<Cosine, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>(),
-        }
+        finish_cosine(xy, xnorm, ynorm)
     }
 }
 
 macro_rules! target {
     ($op:ident) => {
+        impl<A> FTarget3<A, f32, &PaddedTable, &[f32], &[u8]> for $op
+        where
+            A: Preferred,
+            Self: Op<A::f32s>,
+        {
+            #[inline(always)]
+            fn run(arch: A, table: &PaddedTable, a: &[f32], b: &[u8]) -> f32 {
+                distance::<A::f32s, Self>(arch, table, a, b)
+            }
+        }
+
         impl<A> FTarget3<A, f32, &PaddedTable, &[u8], &[u8]> for $op
         where
             A: Preferred,
@@ -332,7 +376,7 @@ macro_rules! target {
         {
             #[inline(always)]
             fn run(arch: A, table: &PaddedTable, a: &[u8], b: &[u8]) -> f32 {
-                invoke::<A::f32s, Self>(arch, table, a, b)
+                self_distance::<A::f32s, Self>(arch, table, a, b)
             }
         }
     };
@@ -342,18 +386,126 @@ target!(SquaredL2);
 target!(InnerProduct);
 target!(Cosine);
 
+//--------------------------------//
+// Full Precision-Quant Distances //
+//--------------------------------//
+
 #[inline(always)]
-fn invoke<V, O>(arch: V::Arch, table: &PaddedTable, a: &[u8], b: &[u8]) -> f32
+fn distance<V, O>(arch: V::Arch, table: &PaddedTable, a: &[f32], b: &[u8]) -> f32
 where
     V: SIMDVector<Scalar = f32>,
     O: Op<V>,
 {
     // TODO: Safety Checks
-    unsafe { kernel::<V, O>(arch, table.pivots.as_view(), table.pivots_per_chunk, a, b) }
+    unsafe { distance_inner::<V, O>(arch, table, a, b) }
 }
 
 #[inline(always)]
-unsafe fn kernel<V, O>(
+unsafe fn distance_inner<V, O>(arch: V::Arch, table: &PaddedTable, a: &[f32], b: &[u8]) -> f32
+where
+    V: SIMDVector<Scalar = f32>,
+    O: Op<V>,
+{
+    debug_assert_eq!(a.len(), table.offsets.dim());
+    debug_assert_eq!(b.len(), table.offsets.len());
+
+    let pivots = &table.pivots;
+
+    // The number of SIMD steps to process for each pivot.
+    let steps = pivots.ncols() / V::LANES;
+
+    let pivot_stride = pivots.ncols();
+    let chunk_stride = table.pivots_per_chunk * pivot_stride;
+
+    let len = b.len();
+    let mut d0 = O::init(arch);
+    let mut d1 = O::init(arch);
+
+    let mut i = 0;
+    let mut p = pivots.as_ptr();
+
+    let load_full =
+        |ptr: *const f32, remaining: usize| unsafe { V::load_simd_first(arch, ptr, remaining) };
+
+    let load_pivot = |ptr: *const f32, indices: &[u8], chunk: usize, lane: usize| -> V {
+        let ptr = unsafe {
+            ptr.add(pivot_stride * (*indices.get_unchecked(chunk) as usize) + V::LANES * lane)
+        };
+        unsafe { V::load_simd(arch, ptr) }
+    };
+
+    let offsets = table.offsets.as_slice();
+    let aptr = a.as_ptr();
+
+    while i + 2 <= len {
+        // Pointers to the start of each chunk.
+        let c0 = p;
+        let c1 = p.add(chunk_stride);
+
+        let mut a0 = aptr.add(offsets[i]);
+        let mut a1 = aptr.add(offsets[i + 1]);
+
+        let mut r0 = offsets[i + 1] - offsets[i];
+        let mut r1 = offsets[i + 2] - offsets[i + 1];
+
+        for j in 0..steps {
+            // Unroll 0
+            let va = load_full(a0, r0);
+            let vb = load_pivot(c0, b, i, j);
+            d0 = O::accum(d0, va, vb);
+            a0 = a0.wrapping_add(V::LANES);
+            r0 = r0.saturating_sub(V::LANES);
+
+            // Unroll 1
+            let va = load_full(a1, r1);
+            let vb = load_pivot(c1, b, i + 1, j);
+            d1 = O::accum(d1, va, vb);
+            a1 = a1.wrapping_add(V::LANES);
+            r1 = r1.saturating_sub(V::LANES);
+        }
+
+        i += 2;
+        p = unsafe { p.add(2 * chunk_stride) };
+    }
+
+    while i < len {
+        let mut a0 = aptr.add(offsets[i]);
+        let mut r0 = offsets[i + 1] - offsets[i];
+
+        for j in 0..steps {
+            let va = load_full(a0, r0);
+            let vb = load_pivot(p, b, i, j);
+            d0 = O::accum(d0, va, vb);
+            a0 = a0.wrapping_add(V::LANES);
+            r0 = r0.saturating_sub(V::LANES);
+        }
+
+        i += 1;
+        p = unsafe { p.add(chunk_stride) };
+    }
+
+    O::reduce_pair(d0, d1)
+}
+
+//-----------------------//
+// Quant-Quant Distances //
+//-----------------------//
+
+#[inline(always)]
+fn self_distance<V, O>(arch: V::Arch, table: &PaddedTable, a: &[u8], b: &[u8]) -> f32
+where
+    V: SIMDVector<Scalar = f32>,
+    O: Op<V>,
+{
+    // TODO: Safety Checks
+    unsafe {
+        self_distance_inner::<V, O>(arch, table.pivots.as_view(), table.pivots_per_chunk, a, b)
+    }
+}
+
+// TODO: safety docs
+#[inline(always)]
+unsafe fn self_distance_inner<V, O>(
     arch: V::Arch,
     pivots: MatrixView<'_, f32>,
     pivots_per_chunk: usize,
@@ -432,5 +584,5 @@ where
         p = unsafe { p.add(chunk_stride) };
     }
 
-    O::reduce(a0, a1, a2, a3)
+    O::reduce_quad(a0, a1, a2, a3)
 }

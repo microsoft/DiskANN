@@ -149,16 +149,12 @@ impl FixedChunkPQTable {
         let chunk_offsets = ChunkOffsetsBase::new(chunk_offsets).bridge_err()?;
 
         // TODO: Do the right thing with the centroids.
-        let padded = product::tables::PaddedTable::from_parts(
-            pivots.as_view(),
-            chunk_offsets.clone(),
-        ).unwrap();
+        let padded =
+            product::tables::PaddedTable::from_parts(pivots.as_view(), chunk_offsets.clone())
+                .unwrap();
 
-        let table = BasicTable::new(
-            pivots,
-            chunk_offsets,
-        )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        let table = BasicTable::new(pivots, chunk_offsets)
+            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
 
         if centroids.len() != dim {
             return Err(ANNError::log_pq_error(format_args!(
@@ -168,7 +164,11 @@ impl FixedChunkPQTable {
             )));
         }
 
-        Ok(Self { table, centroids, padded })
+        Ok(Self {
+            table,
+            centroids,
+            padded,
+        })
     }
 
     /// Get chunk number.
@@ -902,7 +902,9 @@ mod fixed_chunk_pq_table_test {
                 .unwrap();
 
         let clone = base.clone();
-        let FixedChunkPQTable { table, centroids, .. } = clone;
+        let FixedChunkPQTable {
+            table, centroids, ..
+        } = clone;
 
         assert_eq!(table.view_pivots(), base.table.view_pivots());
         assert_eq!(table.view_offsets(), base.table.view_offsets());

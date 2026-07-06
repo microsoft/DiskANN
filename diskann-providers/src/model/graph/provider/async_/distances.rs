@@ -218,10 +218,7 @@ pub mod pq {
     where
         T: VectorRepr,
     {
-        pub fn new(
-            quant: pq::distance::DistanceComputer<'a>,
-            full: T::Distance,
-        ) -> Self {
+        pub fn new(quant: pq::distance::DistanceComputer<'a>, full: T::Distance) -> Self {
             Self { quant, full }
         }
     }

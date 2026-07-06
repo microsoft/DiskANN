@@ -6,9 +6,9 @@
 use std::{ops::Deref, sync::Arc};
 
 use diskann::ANNResult;
+use diskann_quantization::product;
 use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
-use diskann_quantization::product;
 
 // Concrete implementations
 use super::{cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
@@ -121,42 +121,42 @@ where
     }
 }
 
-/// Pre-dispatched distance functions for the `FixedChunkPQTable`.
-#[derive(Debug)]
-pub struct VTable {
-    pub distance_fn: fn(&FixedChunkPQTable, &[f32], &[u8]) -> f32,
-    // pub distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32,
-}
-
-impl Clone for VTable {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl Copy for VTable {}
-
-impl VTable {
-    pub fn new(distance: Metric) -> Self {
-        let distance_fn: fn(&FixedChunkPQTable, &[f32], &[u8]) -> f32 = match distance {
-            Metric::L2 => FixedChunkPQTable::l2_distance,
-            Metric::Cosine => FixedChunkPQTable::cosine_distance,
-            Metric::InnerProduct => FixedChunkPQTable::inner_product,
-            Metric::CosineNormalized => FixedChunkPQTable::cosine_normalized_distance,
-        };
-
-        // let distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32 = match distance {
-        //     Metric::L2 => FixedChunkPQTable::qq_l2_distance,
-        //     Metric::Cosine => FixedChunkPQTable::qq_cosine_distance,
-        //     Metric::InnerProduct => FixedChunkPQTable::qq_ip_distance,
-        //     Metric::CosineNormalized => FixedChunkPQTable::qq_cosine_distance,
-        // };
-
-        Self {
-            distance_fn,
-            // distance_fn_qq,
-        }
-    }
-}
+// /// Pre-dispatched distance functions for the `FixedChunkPQTable`.
+// #[derive(Debug)]
+// pub struct VTable {
+//     pub distance_fn: fn(&FixedChunkPQTable, &[f32], &[u8]) -> f32,
+//     // pub distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32,
+// }
+//
+// impl Clone for VTable {
+//     fn clone(&self) -> Self {
+//         *self
+//     }
+// }
+// impl Copy for VTable {}
+//
+// impl VTable {
+//     pub fn new(distance: Metric) -> Self {
+//         let distance_fn: fn(&FixedChunkPQTable, &[f32], &[u8]) -> f32 = match distance {
+//             Metric::L2 => FixedChunkPQTable::l2_distance,
+//             Metric::Cosine => FixedChunkPQTable::cosine_distance,
+//             Metric::InnerProduct => FixedChunkPQTable::inner_product,
+//             Metric::CosineNormalized => FixedChunkPQTable::cosine_normalized_distance,
+//         };
+//
+//         // let distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32 = match distance {
+//         //     Metric::L2 => FixedChunkPQTable::qq_l2_distance,
+//         //     Metric::Cosine => FixedChunkPQTable::qq_cosine_distance,
+//         //     Metric::InnerProduct => FixedChunkPQTable::qq_ip_distance,
+//         //     Metric::CosineNormalized => FixedChunkPQTable::qq_cosine_distance,
+//         // };
+//
+//         Self {
+//             distance_fn,
+//             // distance_fn_qq,
+//         }
+//     }
+// }
 
 /// A distance computer for computing random access distances.
 /// That is, distances where preprocessing is too expensive to be worth it.
@@ -168,15 +168,12 @@ impl VTable {
 ///
 /// Internally, a mini v-table is kept to invoke the correct distance function.
 #[derive(Debug)]
-pub struct DistanceComputer<'a>
-{
+pub struct DistanceComputer<'a> {
     table: &'a FixedChunkPQTable,
-    vtable: VTable,
-    quantquant: product::tables::padded::Distance<'a>,
+    distance: product::tables::padded::Distance<'a>,
 }
 
-impl<'a> DistanceComputer<'a>
-{
+impl<'a> DistanceComputer<'a> {
     /// Create a new distance computer implementing the `DistanceFunction` API for
     /// full-precision/quant and quant/quant combinations.
     ///
@@ -193,8 +190,7 @@ impl<'a> DistanceComputer<'a>
     pub fn new(table: &'a FixedChunkPQTable, distance: Metric) -> Self {
         Self {
             table,
-            vtable: VTable::new(distance),
-            quantquant: table.distance(distance),
+            distance: table.distance(distance),
         }
     }
 }
@@ -202,8 +198,7 @@ impl<'a> DistanceComputer<'a>
 const INVALID_PQ_DIMENSION: &str = "invalid PQ dimension";
 
 /// Perform a comparison between a full-precision vector and quantized vector.
-impl DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<'_>
-{
+impl DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &[u8]) -> f32 {
         assert_eq!(
@@ -212,26 +207,20 @@ impl DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<'_>
             "{}",
             INVALID_PQ_DIMENSION
         );
-        (self.vtable.distance_fn)(&self.table, fp, q)
+        self.distance.evaluate_similarity(fp, q)
     }
 }
 
 /// Perform a comparison between two quantized vectors.
-impl DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<'_>
-{
+impl DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &[u8], q1: &[u8]) -> f32 {
-        self.quantquant.evaluate_similarity(q0, q1)
-        // let num_pq_chunks = self.table.get_num_chunks();
-        // assert_eq!(q0.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
-        // assert_eq!(q1.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
-        // (self.vtable.distance_fn_qq)(&self.table, q0, q1)
+        self.distance.evaluate_similarity(q0, q1)
     }
 }
 
 /// Perform a comparison between a full-precision vector and quantized vector.
-impl DistanceFunction<&[f32], &&[u8], f32> for DistanceComputer<'_>
-{
+impl DistanceFunction<&[f32], &&[u8], f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &&[u8]) -> f32 {
         let q: &[u8] = q;
@@ -239,8 +228,7 @@ impl DistanceFunction<&[f32], &&[u8], f32> for DistanceComputer<'_>
     }
 }
 
-impl DistanceFunction<&[f32], &Vec<u8>, f32> for DistanceComputer<'_>
-{
+impl DistanceFunction<&[f32], &Vec<u8>, f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &Vec<u8>) -> f32 {
         self.evaluate_similarity(fp, q.as_slice())
@@ -248,8 +236,7 @@ impl DistanceFunction<&[f32], &Vec<u8>, f32> for DistanceComputer<'_>
 }
 
 /// Perform a comparison between two quantized vectors.
-impl DistanceFunction<&&[u8], &&[u8], f32> for DistanceComputer<'_>
-{
+impl DistanceFunction<&&[u8], &&[u8], f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &&[u8], q1: &&[u8]) -> f32 {
         let q0: &[u8] = q0;
@@ -259,8 +246,7 @@ impl DistanceFunction<&&[u8], &&[u8], f32> for DistanceComputer<'_>
 }
 
 /// Perform a comparison between two quantized vectors.
-impl DistanceFunction<&Vec<u8>, &Vec<u8>, f32> for DistanceComputer<'_>
-{
+impl DistanceFunction<&Vec<u8>, &Vec<u8>, f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &Vec<u8>, q1: &Vec<u8>) -> f32 {
         self.evaluate_similarity(q0.as_slice(), q1.as_slice())
@@ -289,14 +275,12 @@ mod tests {
     // `PreprocessedDistanceFunction`.
     //
     // This lets us reuse the testing infrastructure for the `QueryComputer`.
-    struct PreprocessedWrapper<'a>
-    {
+    struct PreprocessedWrapper<'a> {
         table: DistanceComputer<'a>,
         query: Vec<f32>,
     }
 
-    impl PreprocessedDistanceFunction<&[u8], f32> for PreprocessedWrapper<'_>
-    {
+    impl PreprocessedDistanceFunction<&[u8], f32> for PreprocessedWrapper<'_> {
         fn evaluate_similarity(&self, x: &[u8]) -> f32 {
             self.table.evaluate_similarity(&*self.query, x)
         }
