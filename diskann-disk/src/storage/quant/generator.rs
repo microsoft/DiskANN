@@ -6,6 +6,7 @@
 use std::{
     io::{Seek, SeekFrom, Write},
     marker::PhantomData,
+    time::Instant,
 };
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
@@ -23,7 +24,6 @@ use crate::{
         continuation::{process_while_resource_is_available, ChunkingConfig},
     },
     storage::quant::compressor::{CompressionStage, QuantCompressor},
-    utils::instrumentation::Timer,
 };
 
 /// [`GeneratorContext`] defines parameters for vector quantization checkpoint state
@@ -108,7 +108,7 @@ where
     where
         Storage: StorageReadProvider + StorageWriteProvider,
     {
-        let timer = Timer::new();
+        let timer = Instant::now();
 
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
         let (num_points, dim) = metadata.into_dims();

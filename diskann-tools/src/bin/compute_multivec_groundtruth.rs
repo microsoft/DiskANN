@@ -2,8 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+use std::time::Instant;
+
 use clap::Parser;
-use diskann_disk::utils::instrumentation::Timer;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{
     compute_multivec_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType,
@@ -14,7 +15,7 @@ use diskann_vector::Half;
 
 fn main() -> CMDResult<()> {
     init_subscriber();
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     let args = ComputeMultivecGroundTruthArgs::parse();
 

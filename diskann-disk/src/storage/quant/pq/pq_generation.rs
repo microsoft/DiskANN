@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Instant};
 
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -20,10 +20,7 @@ use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
-use crate::{
-    storage::quant::compressor::{CompressionStage, QuantCompressor},
-    utils::instrumentation::Timer,
-};
+use crate::storage::quant::compressor::{CompressionStage, QuantCompressor};
 
 pub struct PQGenerationContext<'a, Storage>
 where
@@ -84,7 +81,7 @@ where
                 ));
             }
 
-            let timer = Timer::new();
+            let timer = Instant::now();
 
             let rng =
                 diskann_providers::utils::create_rnd_provider_from_optional_seed(context.seed);

@@ -624,12 +624,9 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
 
 #[cfg(test)]
 pub(crate) mod disk_index_builder_tests {
-    use std::{io::Read, sync::Arc};
+    use std::{io::Read, sync::Arc, time::Instant};
 
-    use crate::{
-        test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData},
-        utils::instrumentation::Timer,
-    };
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::config,
         utils::{IntoUsize, VectorRepr, ONE},
@@ -829,7 +826,7 @@ pub(crate) mod disk_index_builder_tests {
                 ),
             }?;
 
-            let timer = Timer::new();
+            let timer = Instant::now();
             disk_index.build()?;
             println!("Indexing time: {} seconds", timer.elapsed().as_secs_f64());
 
