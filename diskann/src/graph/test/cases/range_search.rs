@@ -59,7 +59,10 @@ fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/range_search")
 }
 
-pub(super) fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provider::Provider>> {
+pub(super) fn setup_grid_index(
+    grid_size: usize,
+    dims: Grid,
+) -> Arc<DiskANNIndex<test_provider::Provider>> {
     let provider = test_provider::Provider::grid(dims, grid_size).unwrap();
 
     let index_config = graph::config::Builder::new(
@@ -303,8 +306,7 @@ fn max_results_respected_means_no_second_round() {
     let max_results = 4; // max_returned limited to starting_l, so no second round should be triggered
 
     let range_search =
-        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
-            .unwrap();
+        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
     let mut results: Vec<Neighbor<u32>> = Vec::new();
 
     let stats = rt
@@ -362,8 +364,7 @@ fn max_results_respected_and_second_round_triggered() {
     let max_results = 5; // max_returned greater than starting_l, so second round should be triggered
 
     let range_search =
-        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
-            .unwrap();
+        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
     let mut results: Vec<Neighbor<u32>> = Vec::new();
 
     let stats = rt
@@ -403,7 +404,7 @@ fn max_results_respected_and_second_round_triggered() {
         stats.range_search_second_round,
         "If max_results is respected, a second round should be triggered"
     );
-    
+
     assert_range_invariants(&results, radius, None);
     assert_no_duplicates(&results);
 }

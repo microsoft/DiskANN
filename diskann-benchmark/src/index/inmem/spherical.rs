@@ -474,7 +474,7 @@ mod imp {
 
         fn run(
             &self,
-            index: Arc<DiskANNIndex<SQProvider>>, 
+            index: Arc<DiskANNIndex<SQProvider>>,
             phase: &SearchPhase,
             query_layout: &exhaustive::SphericalQuery,
         ) -> anyhow::Result<AggregatedSearchResults> {
@@ -503,28 +503,28 @@ mod imp {
                 .map(utils::filters::as_query_label_provider)
                 .collect();
 
-            let filtered_range =
-                benchmark_core::search::graph::filtered_range::FilteredRange::new(
-                    index.clone(),
-                    queries.clone(),
-                    benchmark_core::search::graph::Strategy::broadcast(
-                        inmem::spherical::Quantized::search((*query_layout).into()),
-                    ),
-                    labels,
-                )?;
+            let filtered_range = benchmark_core::search::graph::filtered_range::FilteredRange::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+                labels,
+            )?;
 
-            let result = search::range::run(&filtered_range, &groundtruth, steps, |range_search| {
-                diskann::graph::search::FilteredRange::with_options(
-                    range_search.max_returned(),
-                    range_search.starting_l(),
-                    range_search.beam_width(),
-                    range_search.radius(),
-                    range_search.inner_radius(),
-                    range_search.initial_slack(),
-                    range_search.range_slack(),
-                )
-                .map_err(Into::into)
-            })?;
+            let result =
+                search::range::run(&filtered_range, &groundtruth, steps, |range_search| {
+                    diskann::graph::search::FilteredRange::with_options(
+                        range_search.max_returned(),
+                        range_search.starting_l(),
+                        range_search.beam_width(),
+                        range_search.radius(),
+                        range_search.inner_radius(),
+                        range_search.initial_slack(),
+                        range_search.range_slack(),
+                    )
+                    .map_err(Into::into)
+                })?;
 
             Ok(AggregatedSearchResults::Range(result))
         }
