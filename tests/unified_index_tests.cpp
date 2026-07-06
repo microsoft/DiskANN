@@ -1476,6 +1476,116 @@ BOOST_AUTO_TEST_CASE(memory_parity_legacy_vs_unified)
     BOOST_CHECK_EQUAL(exact, static_cast<size_t>(nq));
 }
 
+BOOST_AUTO_TEST_CASE(parity_unaligned_dim_66)
+{
+    // Regression for the coord-width mismatch: UnifiedIndexWriter::write_node
+    // stores coords as dim*sizeof(T) while the node store decodes them as
+    // aligned_dim*sizeof(T). When dim is a multiple of 8 (e.g. 32) the two
+    // agree and the bug is hidden; dim=66 -> aligned_dim=72 exposes it. Both
+    // the memory and SSD unified paths must still match the legacy results.
+    const uint32_t npts = 3000;
+    const uint32_t dim = 66; // aligned_dim = 72
+    const uint32_t nq = 50;
+    const uint32_t R = 32, L = 100, K = 10, search_L = 100, beam = 4, pq_chunks = 22;
+
+    ScopedFile data_sf(tmp_path("parity_u66_data"));
+    write_float_bin_parity(data_sf.path, npts, dim, /*seed=*/1234);
+
+    auto write_params = std::make_shared<IndexWriteParameters>(
+        IndexWriteParametersBuilder(L, R).with_alpha(1.2f).with_num_threads(1).build());
+    Index<float, uint32_t, uint32_t> idx(diskann::Metric::L2, dim, npts, write_params, nullptr,
+                                         /*num_frozen_pts=*/0, /*dynamic=*/false, /*enable_tags=*/false,
+                                         /*concurrent_consolidate=*/false, /*pq_dist_build=*/false,
+                                         /*num_pq_chunks=*/0, /*use_opq=*/false, /*filtered_index=*/false);
+    idx.build(data_sf.path.c_str(), npts, std::vector<uint32_t>());
+
+    // ---- Memory parity ----
+    ScopedLegacyMemFiles legacy_mem(tmp_path("parity_u66_legacy_mem"));
+    ScopedFile unified_mem_sf(tmp_path("parity_u66_unified_mem"));
+    idx.save(legacy_mem.prefix.c_str());
+    idx.save_unified(unified_mem_sf.path.c_str());
+
+    Index<float, uint32_t, uint32_t> legacy_mem_idx(diskann::Metric::L2, dim, npts, write_params, nullptr, 0, false,
+                                                    false, false, false, 0, false, false);
+    legacy_mem_idx.load(legacy_mem.prefix.c_str(), /*num_threads=*/1, /*search_l=*/search_L);
+
+    UnifiedLoadContext mctx;
+    mctx.path = unified_mem_sf.path;
+    mctx.num_threads = 1;
+    mctx.search_l = search_L;
+    auto umem = make_unified_index_memory(mctx);
+    BOOST_REQUIRE(umem != nullptr);
+    BOOST_CHECK_EQUAL(umem->dim(), static_cast<uint64_t>(dim));
+    BOOST_CHECK_EQUAL(umem->aligned_dim(), 72u);
+
+    // ---- SSD parity (shared PQ) ----
+    ScopedLegacySsdFiles legacy_ssd(tmp_path("parity_u66_legacy_ssd"));
+    std::vector<uint8_t> pq_pivots_bytes, pq_codes_bytes;
+    make_legacy_ssd_from_index(idx, data_sf.path, legacy_ssd.prefix, pq_chunks, diskann::Metric::L2, pq_pivots_bytes,
+                               pq_codes_bytes);
+    ScopedFile unified_ssd_sf(tmp_path("parity_u66_unified_ssd"));
+    idx.save_unified(unified_ssd_sf.path.c_str(), pq_pivots_bytes, pq_codes_bytes);
+
+    auto legacy_reader = make_reader();
+    PQFlashIndex<float, uint32_t> pfi(legacy_reader, diskann::Metric::L2);
+    BOOST_REQUIRE_EQUAL(pfi.load(/*num_threads=*/1, legacy_ssd.prefix.c_str()), 0);
+
+    UnifiedLoadContext sctx_load;
+    sctx_load.path = unified_ssd_sf.path;
+    sctx_load.num_threads = 1;
+    sctx_load.search_l = search_L;
+    auto ureader = make_reader();
+    auto ussd = make_unified_index_ssd(ureader, sctx_load);
+    BOOST_REQUIRE(ussd != nullptr);
+
+    size_t mem_exact = 0, ssd_exact = 0;
+    for (uint32_t q = 0; q < nq; ++q)
+    {
+        std::vector<float> query(dim);
+        for (uint32_t j = 0; j < dim; ++j)
+            query[j] = det_float(/*seed=*/4321, q, j);
+
+        std::vector<uint32_t> mem_legacy_ids(K, 0);
+        std::vector<float> mem_legacy_dists(K, 0.0f);
+        legacy_mem_idx.search<uint32_t>(query.data(), K, search_L, mem_legacy_ids.data(), mem_legacy_dists.data());
+        std::vector<uint64_t> mem_uni_ids(K, 0);
+        std::vector<float> mem_uni_dists(K, 0.0f);
+        UnifiedSearchContext mq;
+        mq.query = query.data();
+        mq.K = K;
+        mq.L = search_L;
+        mq.indices = mem_uni_ids.data();
+        mq.distances = mem_uni_dists.data();
+        umem->search(mq);
+        if (topk_overlap(mem_legacy_ids, mem_uni_ids) >= 1.0)
+            ++mem_exact;
+
+        std::vector<uint64_t> ssd_legacy_ids(K, 0);
+        std::vector<float> ssd_legacy_dists(K, 0.0f);
+        pfi.cached_beam_search(query.data(), K, search_L, ssd_legacy_ids.data(), ssd_legacy_dists.data(),
+                               static_cast<uint64_t>(beam));
+        std::vector<uint64_t> ssd_uni_ids(K, 0);
+        std::vector<float> ssd_uni_dists(K, 0.0f);
+        UnifiedSearchContext sq;
+        sq.query = query.data();
+        sq.K = K;
+        sq.L = search_L;
+        sq.indices = ssd_uni_ids.data();
+        sq.distances = ssd_uni_dists.data();
+        sq.beam_width = beam;
+        ussd->search(sq);
+        if (topk_overlap(ssd_legacy_ids, ssd_uni_ids) >= 1.0)
+            ++ssd_exact;
+    }
+    BOOST_TEST_MESSAGE("unaligned dim=66 parity: memory exact = " << mem_exact << "/" << nq
+                                                                  << ", ssd exact = " << ssd_exact << "/" << nq);
+    BOOST_CHECK_EQUAL(mem_exact, static_cast<size_t>(nq));
+    BOOST_CHECK_EQUAL(ssd_exact, static_cast<size_t>(nq));
+
+    ussd.reset();
+    ureader->close();
+}
+
 BOOST_AUTO_TEST_CASE(ssd_parity_legacy_vs_unified)
 {
     const uint32_t npts = 10000;

@@ -104,7 +104,7 @@ void UnifiedIndexWriter::write_node(const void *coords, const uint32_t *neighbor
     if (_written_nodes >= _header.npts)
         throw std::logic_error("UnifiedIndexWriter: too many nodes written");
 
-    const uint64_t coords_bytes = _header.dim * [&]() -> uint64_t {
+    const uint64_t elem_size = [&]() -> uint64_t {
         switch (_header.data_type)
         {
         case DataTypeTag::Float:
@@ -117,9 +117,23 @@ void UnifiedIndexWriter::write_node(const void *coords, const uint32_t *neighbor
         throw std::logic_error("UnifiedIndexWriter: unknown data type");
     }();
 
+    // `coords` holds `dim` elements, but the node store decodes coords as
+    // aligned_dim*sizeof(T) (unified_node_store_base::init_geometry) and the
+    // distance functions read the full aligned width. Zero-pad the coords out
+    // to aligned_dim so writer and reader agree on the per-node layout;
+    // otherwise dims that are not a multiple of 8 (e.g. 66 -> 72) desync the
+    // offset math and corrupt neighbor/coord decoding.
+    const uint64_t coords_bytes = _header.dim * elem_size;
+    const uint64_t aligned_coords_bytes = _header.aligned_dim * elem_size;
+
     const uint64_t id = _written_nodes;
     _node_offsets[id] = cur_offset() - _graph_region_start;
     write_raw(coords, coords_bytes);
+    if (aligned_coords_bytes > coords_bytes)
+    {
+        const std::vector<char> zeros(static_cast<size_t>(aligned_coords_bytes - coords_bytes), 0);
+        write_raw(zeros.data(), zeros.size());
+    }
     write_raw(neighbors, static_cast<uint64_t>(degree) * sizeof(uint32_t));
     _node_offsets[id + 1] = cur_offset() - _graph_region_start;
     ++_written_nodes;

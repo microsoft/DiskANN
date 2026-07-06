@@ -35,7 +35,7 @@ with PQ data simply ignored on the in-memory path.
 1. **One file, self-describing.** All sidecar files merge into one container with a fixed-layout header that declares which optional sections are present.
 2. **Disk and memory share one graph encoding.** The graph + embeddings region is byte-for-byte identical regardless of which loader consumes it.
 3. **Region-level 4 KiB alignment, intra-region packing.** Major regions begin at 4 KiB-aligned file offsets to preserve the `AlignedFileReader` invariants (`include/aligned_file_reader.h:73-90`, `src/windows_aligned_file_reader.cpp:125-127`). Inside a region, payload is packed without per-record padding.
-4. **No redundant per-node metadata.** Embedding size is constant (`dim * sizeof(T)`, from header) and neighbor IDs are fixed-width `uint32_t`. Per-node degree is *derived* from the offset table, not stored.
+4. **No redundant per-node metadata.** Embedding size is constant (`aligned_dim * sizeof(T)`, coords zero-padded from `dim` to `aligned_dim`) and neighbor IDs are fixed-width `uint32_t`. Per-node degree is *derived* from the offset table, not stored.
 
 ### 1.3 Supporting facts from existing code
 
@@ -60,7 +60,7 @@ All multi-byte integers are little-endian. All offsets and lengths are in bytes 
 | (padded to next 4 KiB boundary)                  |
 +--------------------------------------------------+
 | Graph + Embeddings Region                        |  offset = header.graph_region_off
-|   Per node N: [coords:T*dim][nbrs:u32*degree]    |
+|   Per node N: [coords:T*aligned_dim][nbrs:u32*degree] |
 |   No per-node degree field.                      |
 |   Variable-width packing, no sector padding.     |
 |   (region padded to next 4 KiB boundary)         |
@@ -164,13 +164,16 @@ The trailing sentinel `offset_table[npts]` equals `header.graph_region_len` (the
 
 Each node record contains, in order:
 
-1. `coords`: exactly `dim * sizeof(T)` bytes of vector data, where `T` corresponds to `header.data_type`.
+1. `coords`: exactly `aligned_dim * sizeof(T)` bytes of vector data, where `T` corresponds to `header.data_type`.
+   The `dim` real values are followed by `(aligned_dim - dim)` zero-padding elements. Coords are padded to
+   `aligned_dim` (= `ROUND_UP(dim, 8)`) so the reader can decode a fixed coord stride and the SIMD distance
+   functions can read the full aligned width without a per-node copy.
 2. `neighbors`: zero or more `uint32_t` neighbor node IDs.
 
 There is no per-node degree field. The degree is derived:
 
 ```
-degree = (record_size - dim * sizeof(T)) / sizeof(uint32_t)
+degree = (record_size - aligned_dim * sizeof(T)) / sizeof(uint32_t)
 ```
 
 The graph region is otherwise unstructured. Implementations MUST pad with zero bytes from `header.graph_region_off + header.graph_region_len` to the next 4 KiB-aligned file offset, so that subsequent regions begin sector-aligned. Padding bytes are not part of `graph_region_len`.
@@ -232,9 +235,9 @@ Present iff `HAS_MAX_BASE_NORM` (MIPS preprocessing only). Payload: byte-identic
 3. Read the graph region into a buffer (or stream it in chunks).
 4. For each node N in `[0, npts)`:
    - `record = region_buf[offset_table[N] : offset_table[N+1]]`
-   - `coords = record[0 : dim * sizeof(T)]` → copy into `_data_store`
-   - `degree = (len(record) - dim * sizeof(T)) / sizeof(uint32_t)`
-   - `neighbors = record[dim * sizeof(T) :]` interpreted as `uint32_t[degree]` → copy into `InMemGraphStore::_graph[N]`
+   - `coords = record[0 : aligned_dim * sizeof(T)]` (first `dim` values are real, rest zero-padding) → copy into `_data_store`
+   - `degree = (len(record) - aligned_dim * sizeof(T)) / sizeof(uint32_t)`
+   - `neighbors = record[aligned_dim * sizeof(T) :]` interpreted as `uint32_t[degree]` → copy into `InMemGraphStore::_graph[N]`
 5. If `flags & HAS_LABELS`:
    - Read the dictionary; reconstruct in-memory `label_map` and `labels_to_medoids`.
    - Read `per_point_labels`; dispatch on `header.label_encoding`:
@@ -259,7 +262,7 @@ Present iff `HAS_MAX_BASE_NORM` (MIPS preprocessing only). Payload: byte-identic
    aligned_start = start_byte & ~(SECTOR_LEN - 1)
    aligned_end   = (end_byte + SECTOR_LEN - 1) & ~(SECTOR_LEN - 1)
    ```
-   Issue the aligned read; advance the in-buffer pointer by `(start_byte - aligned_start)` to land on the node record. Degree is `(end_byte - start_byte - dim * sizeof(T)) / 4`.
+   Issue the aligned read; advance the in-buffer pointer by `(start_byte - aligned_start)` to land on the node record. Degree is `(end_byte - start_byte - aligned_dim * sizeof(T)) / 4`.
 
 This change is encapsulated in a single helper (`node_read_window(N)`) so the bulk of `cached_beam_search` is unchanged.
 
