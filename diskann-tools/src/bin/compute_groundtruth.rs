@@ -142,10 +142,6 @@ struct ComputeGroundTruthArgs {
     pub recall_at: u32,
 
     /// File containing the associated data in binary format
-<<<<<<< HEAD
-    #[arg(long = "associated-data-file", required = false, default_value = None)]
-=======
     #[arg(long = "associated-data-file")]
->>>>>>> 9123eb55d587028adb22429faf731df8d7626903
     pub associated_data_file: Option<String>,
 }
