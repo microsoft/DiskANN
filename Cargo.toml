@@ -121,9 +121,3 @@ opt-level = 1
 debug = true
 debug-assertions = true
 overflow-checks = true
-
-# DIAGNOSTIC: patched faer that respects FAER_FORCE_AVX256 env var.
-# Set FAER_FORCE_AVX256=1 to make faer's matmul use AVX-256 instead of AVX-512
-# even on AVX-512-capable hardware. Used for AVX2-vs-AVX-512 A/B benchmarks.
-[patch.crates-io]
-faer = { path = "patches/faer-no-avx512" }
