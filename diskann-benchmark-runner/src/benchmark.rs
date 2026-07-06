@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Checkpoint, Input, Output};
 
+///////////////
+// Benchmark //
+///////////////
+
 /// A registered benchmark.
 ///
 /// Benchmarks consist of an [`Input`] and a corresponding serialized `Output`. Inputs will
@@ -21,26 +25,19 @@ pub trait Benchmark: 'static {
 
     /// Return whether or not this benchmark is compatible with `input`.
     ///
-    /// On success, returns `Ok(MatchScore)`. [`MatchScore`]s of all benchmarks will be
-    /// collected and the benchmark with the lowest final score will be selected.
+    /// Use [`MatchContext::success`] to create an initial [`Score`], then progressively
+    /// refine it with [`Score::penalize`] and [`Score::fail`].
     ///
-    /// In the case of ties, the winner is chosen using an unspecified tie-breaking procedure.
+    /// Among successful matches, the benchmark with the lowest score wins. Ties are broken
+    /// by an unspecified procedure.
     ///
-    /// On failure, returns `Err(FailureScore)`. In the [`crate::Registry`]
-    /// registry, [`FailureScore`]s will be used to rank the "nearest misses". Implementations
-    /// are encouraged to generate ranked [`FailureScore`]s to assist in user level debugging.
-    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore>;
+    /// When no successful match exists, failure scores rank the "nearest misses".
+    /// Implementations should use [`Score::fail`] with descriptive reasons to aid
+    /// diagnostics.
+    fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score;
 
     /// Return descriptive information about the benchmark.
-    ///
-    /// If `input` is `None`, then high level information about the benchmark should be relayed.
-    /// If `input` is `Some`, and is an unsuccessful match, diagnostic information about what
-    /// was expected should be generated to help users.
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
-    ) -> std::fmt::Result;
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
 
     /// Run the benchmark with `input`.
     ///
@@ -48,38 +45,14 @@ pub trait Benchmark: 'static {
     /// long-running benchmarks can periodically save output to prevent data loss due to
     /// an early error.
     ///
-    /// Implementors may assume that [`Self::try_match`] returned `Ok` on `input`.
+    /// Implementors may assume that [`Self::try_match`] returned a successful [`Score`]
+    /// for `input`.
     fn run(
         &self,
         input: &Self::Input,
         checkpoint: Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output>;
-}
-
-/// Successful matches from [`Benchmark::try_match`] will return `MatchScores`.
-///
-/// A lower numerical value indicates a better match for purposes of overload resolution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MatchScore(pub u32);
-
-impl std::fmt::Display for MatchScore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "success ({})", self.0)
-    }
-}
-
-/// Successful matches from [`Benchmark::try_match`] will return `FailureScores`.
-///
-/// A lower numerical value indicates a better match, which can help when compiling a
-/// list of considered and rejected candidates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FailureScore(pub u32);
-
-impl std::fmt::Display for FailureScore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "fail ({})", self.0)
-    }
 }
 
 /// A refinement of [`Benchmark`], that supports before/after comparison of generated results.
@@ -128,6 +101,236 @@ pub enum PassFail<P, F> {
 }
 
 //////////////
+// Matching //
+//////////////
+
+/// Context for [`Benchmark::try_match`].
+///
+/// This is used to create matching [`Score`]s via [`Self::success`] and [`Self::fail`].
+/// Users can test their [`Benchmark::try_match`] implementations using [`Self::test`].
+///
+/// Internally, the [`MatchContext`] decides whether or not failure reasons are evaluated,
+/// eliding formatting in situations where the results will not be used.
+#[derive(Debug)]
+pub struct MatchContext {
+    record_failure_reasons: bool,
+}
+
+impl MatchContext {
+    /// Create a new [`Score`] configured for "success" with the given `score`.
+    ///
+    /// Lower scores indicate better successful matches.
+    pub fn success(&self, score: u32) -> Score {
+        Score {
+            inner: ScoreInner::Success(SuccessScore(score)),
+            context: self.hidden_clone(),
+        }
+    }
+
+    /// Create a new [`Score`] configured for "failure" with the given `score`.
+    ///
+    /// Lower scores indicate better "near misses".
+    pub fn fail(&self, score: u32, reason: &dyn std::fmt::Display) -> Score {
+        let mut s = self.success(u32::MAX);
+        s.fail(score, reason);
+        s
+    }
+
+    /// Test a [`Benchmark::try_match`] implementation, returning a [`TestScore`] with
+    /// full failure reasons (if applicable).
+    pub fn test<T>(benchmark: &T, input: &T::Input) -> TestScore
+    where
+        T: Benchmark,
+    {
+        benchmark
+            .try_match(input, &Self::with_reasons())
+            .into_test()
+    }
+
+    fn hidden_clone(&self) -> Self {
+        Self {
+            record_failure_reasons: self.record_failure_reasons,
+        }
+    }
+
+    /// Create a new [`MatchContext`] that does not evaluate failure reasons.
+    pub(crate) fn new() -> Self {
+        Self {
+            record_failure_reasons: false,
+        }
+    }
+
+    /// Create a new [`MatchContext`] that evaluates failure reasons.
+    pub(crate) fn with_reasons() -> Self {
+        Self {
+            record_failure_reasons: true,
+        }
+    }
+}
+
+/// The result of [`MatchContext::test`], providing low-level access to the final match
+/// scoring and failure reasons.
+#[derive(Debug)]
+pub enum TestScore {
+    Success(u32),
+    Failure {
+        score: u32,
+        reasons: Option<Vec<String>>,
+    },
+}
+
+/// A score for [`Benchmark::try_match`].
+///
+/// A [`Score`] is in one of two states: success or failure. Lower scores indicate better
+/// matches in both states. In the failure case, scores rank "near misses" for diagnostics.
+///
+/// - [`Score::penalize`] increases the score of a successful match.
+/// - [`Score::fail`] transitions to (or worsens) the failure state.
+///
+/// The current state can be queried with [`Score::is_success`].
+#[derive(Debug)]
+pub struct Score {
+    inner: ScoreInner,
+    context: MatchContext,
+}
+
+impl Score {
+    /// If the score is in the "success" state, penalize it by `by`.
+    ///
+    /// Has no effect if the score is already in the "failure" state.
+    pub fn penalize(&mut self, by: u32) {
+        match self.inner {
+            ScoreInner::Success(ref mut v) => v.0 = v.0.saturating_add(by),
+            ScoreInner::Failure(..) => {}
+        }
+    }
+
+    /// Transition the score to the "failure" state with penalty `by` and a `reason`.
+    ///
+    /// If the score is already in the "failure" state, `by` is added to the existing
+    /// failure score and `reason` is appended to the list of failure reasons.
+    pub fn fail(&mut self, by: u32, reason: &dyn std::fmt::Display) {
+        match &mut self.inner {
+            ScoreInner::Success(_) => {
+                self.inner = ScoreInner::Failure(
+                    FailureScore(by),
+                    self.context
+                        .record_failure_reasons
+                        .then(|| vec![reason.to_string()]),
+                );
+            }
+            ScoreInner::Failure(score, reasons) => {
+                score.0 = (score.0).saturating_add(by);
+                if self.context.record_failure_reasons {
+                    reasons
+                        .get_or_insert_with(|| Vec::with_capacity(1))
+                        .push(reason.to_string())
+                }
+            }
+        }
+    }
+
+    /// Return `true` if `self` is in the "success" state. Returning `false` implies the
+    /// "failure" state.
+    #[must_use = "this function has no side-effects"]
+    pub fn is_success(&self) -> bool {
+        matches!(self.inner, ScoreInner::Success(_))
+    }
+
+    fn into_test(self) -> TestScore {
+        match self.inner {
+            ScoreInner::Success(score) => TestScore::Success(score.0),
+            ScoreInner::Failure(score, reasons) => TestScore::Failure {
+                score: score.0,
+                reasons,
+            },
+        }
+    }
+
+    pub(crate) fn match_score(&self) -> Option<SuccessScore> {
+        match self.inner {
+            ScoreInner::Success(score) => Some(score),
+            ScoreInner::Failure(..) => None,
+        }
+    }
+
+    pub(crate) fn as_raw(&self) -> RawScore {
+        match self.inner {
+            ScoreInner::Success(s) => RawScore::Success(s),
+            ScoreInner::Failure(s, _) => RawScore::Failure(s),
+        }
+    }
+
+    pub(crate) fn reason(&self) -> Reason<'_> {
+        match &self.inner {
+            ScoreInner::Success(_) => Reason::none(),
+            ScoreInner::Failure(_, reasons) => Reason::new(reasons.as_deref()),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ScoreInner {
+    Success(SuccessScore),
+    Failure(FailureScore, Option<Vec<String>>),
+}
+
+pub(crate) struct Reason<'a>(Option<&'a [String]>);
+
+impl<'a> Reason<'a> {
+    fn new(reasons: Option<&'a [String]>) -> Self {
+        Self(reasons)
+    }
+
+    fn none() -> Self {
+        Self(None)
+    }
+}
+
+impl std::fmt::Display for Reason<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("<missing>"),
+            Some(reasons) => {
+                let mut first = true;
+                for reason in reasons.iter() {
+                    if !first {
+                        writeln!(f)?;
+                    }
+                    write!(f, "- {}", reason)?;
+                    first = false;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum RawScore {
+    Success(SuccessScore),
+    Failure(FailureScore),
+}
+
+impl RawScore {
+    #[cfg(test)]
+    fn success(score: u32) -> Self {
+        Self::Success(SuccessScore(score))
+    }
+
+    #[cfg(test)]
+    fn failure(score: u32) -> Self {
+        Self::Failure(FailureScore(score))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SuccessScore(pub(crate) u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct FailureScore(pub(crate) u32);
+
+//////////////
 // Internal //
 //////////////
 
@@ -141,13 +344,9 @@ pub(crate) mod internal {
 
     /// Object-safe trait for type-erased benchmarks stored in the registry.
     pub(crate) trait Benchmark {
-        fn try_match(&self, input: &Any) -> Result<MatchScore, FailureScore>;
+        fn try_match(&self, input: &Any, context: &MatchContext) -> Score;
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&Any>,
-        ) -> std::fmt::Result;
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
 
         fn run(
             &self,
@@ -285,42 +484,43 @@ pub(crate) mod internal {
         }
     }
 
-    /// The score given to unsuccessful downcasts in [`Benchmark::try_match`].
-    const MATCH_FAIL: FailureScore = FailureScore(10_000);
+    const MATCH_FAIL: u32 = 10_000;
 
     impl<T, R> Benchmark for Wrapper<T, R>
     where
         T: super::Benchmark,
         R: AsRegression<T>,
     {
-        fn try_match(&self, input: &Any) -> Result<MatchScore, FailureScore> {
+        fn try_match(&self, input: &Any, context: &MatchContext) -> Score {
             if let Some(cast) = input.downcast_ref::<T::Input>() {
-                self.benchmark.try_match(cast)
+                self.benchmark.try_match(cast, context)
             } else {
-                Err(MATCH_FAIL)
+                struct TagMismatch<T>(&'static str, std::marker::PhantomData<T>);
+
+                impl<T> std::fmt::Display for TagMismatch<T>
+                where
+                    T: super::Benchmark,
+                {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(
+                            f,
+                            "expected tag \"{}\" - instead got \"{}\"",
+                            T::Input::tag(),
+                            self.0,
+                        )
+                    }
+                }
+
+                context.fail(
+                    MATCH_FAIL,
+                    &TagMismatch::<T>(input.tag(), std::marker::PhantomData),
+                )
             }
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&Any>,
-        ) -> std::fmt::Result {
-            match input {
-                Some(input) => match input.downcast_ref::<T::Input>() {
-                    Some(cast) => self.benchmark.description(f, Some(cast)),
-                    None => write!(
-                        f,
-                        "expected tag \"{}\" - instead got \"{}\"",
-                        T::Input::tag(),
-                        input.tag(),
-                    ),
-                },
-                None => {
-                    writeln!(f, "tag \"{}\"", <T::Input as Input>::tag())?;
-                    self.benchmark.description(f, None)
-                }
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "tag \"{}\"", <T::Input as Input>::tag())?;
+            self.benchmark.description(f)
         }
 
         fn run(
@@ -396,5 +596,93 @@ pub(crate) mod internal {
 
             write!(f, "{}", as_str)
         }
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_score_no_reasons() {
+        let context = MatchContext::new();
+        let mut score = context.success(0);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(0));
+
+        score.penalize(10);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(10));
+
+        score.penalize(10);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(20));
+
+        // Ensure that we saturate properly.
+        score.penalize(u32::MAX);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(u32::MAX));
+
+        // Switch to failure
+        score.fail(5, &"some reason that is not evaluated");
+        assert!(!score.is_success());
+        assert_eq!(score.as_raw(), RawScore::failure(5));
+
+        score.fail(10, &"another reason that is not evaluated");
+        assert!(!score.is_success());
+        assert_eq!(score.as_raw(), RawScore::failure(15));
+
+        // Calling `penalize` should have no effect.
+        score.penalize(5);
+        assert!(!score.is_success());
+        assert_eq!(score.as_raw(), RawScore::failure(15));
+
+        // Since we aren't recording reasons - nothing should be returned.
+        assert_eq!(score.reason().to_string(), "<missing>");
+    }
+
+    #[test]
+    fn test_score_with_reasons() {
+        let context = MatchContext::with_reasons();
+        let mut score = context.success(0);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(0));
+
+        score.penalize(10);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(10));
+
+        score.penalize(10);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(20));
+        assert_eq!(score.reason().to_string(), "<missing>");
+
+        // Ensure that we saturate properly.
+        score.penalize(u32::MAX);
+        assert!(score.is_success());
+        assert_eq!(score.as_raw(), RawScore::success(u32::MAX));
+
+        // Switch to failure
+        score.fail(5, &"some reason that is evaluated");
+        assert!(!score.is_success());
+        assert_eq!(score.as_raw(), RawScore::failure(5));
+
+        score.fail(10, &"another reason that is evaluated");
+        assert!(!score.is_success());
+        assert_eq!(score.as_raw(), RawScore::failure(15));
+
+        // Calling `penalize` should have no effect.
+        score.penalize(5);
+        assert!(!score.is_success());
+        assert_eq!(score.as_raw(), RawScore::failure(15));
+
+        // Reasons are recorded, so both failure reasons should be returned.
+        let expected = "- some reason that is evaluated\n\
+                        - another reason that is evaluated";
+        assert_eq!(score.reason().to_string(), expected);
     }
 }

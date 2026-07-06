@@ -8,7 +8,7 @@ use std::collections::{hash_map::Entry, HashMap};
 use thiserror::Error;
 
 use crate::{
-    benchmark::{self, Benchmark, FailureScore, MatchScore, Regression},
+    benchmark::{self, Benchmark, FailureScore, MatchContext, Regression, Score},
     input, Checkpoint, Input, Output,
 };
 
@@ -20,7 +20,7 @@ pub(crate) struct RegisteredBenchmark {
 
 impl std::fmt::Debug for RegisteredBenchmark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let benchmark = Capture(&*self.benchmark, None);
+        let benchmark = Capture(&*self.benchmark);
         f.debug_struct("RegisteredBenchmark")
             .field("name", &self.name)
             .field("benchmark", &benchmark)
@@ -96,12 +96,9 @@ impl Registry {
 
     /// Return an iterator over registered benchmark names and their descriptions.
     pub(crate) fn names(&self) -> impl ExactSizeIterator<Item = (&str, String)> {
-        self.benchmarks.iter().map(|entry| {
-            (
-                entry.name.as_str(),
-                Capture(&*entry.benchmark, None).to_string(),
-            )
-        })
+        self.benchmarks
+            .iter()
+            .map(|entry| (entry.name.as_str(), Capture(&*entry.benchmark).to_string()))
     }
 
     /// Return `true` if `job` matches with any registered benchmark. Otherwise, return `false`.
@@ -141,28 +138,31 @@ impl Registry {
             return Ok(());
         }
 
-        // Collect all failures with their scores, sorted by score (best near-misses first).
-        let mut failures: Vec<(&RegisteredBenchmark, FailureScore)> = self
+        // Collect all failures with their scores and reasons in a single pass.
+        let mut failures: Vec<(&RegisteredBenchmark, FailureScore, Score)> = self
             .benchmarks
             .iter()
-            .filter_map(|entry| match entry.benchmark.try_match(job) {
-                Ok(_) => None,
-                Err(score) => Some((entry, score)),
+            .filter_map(|entry| {
+                let score = entry
+                    .benchmark
+                    .try_match(job, &MatchContext::with_reasons());
+                match score.as_raw() {
+                    crate::benchmark::RawScore::Success(_) => None,
+                    crate::benchmark::RawScore::Failure(fail_score) => {
+                        Some((entry, fail_score, score))
+                    }
+                }
             })
             .collect();
 
-        failures.sort_by_key(|(_, score)| *score);
+        failures.sort_by_key(|(_, score, _)| *score);
         failures.truncate(max_methods);
 
         let mismatches = failures
             .into_iter()
-            .map(|(entry, _)| {
-                let reason = Capture(&*entry.benchmark, Some(job)).to_string();
-
-                Mismatch {
-                    method: entry.name.clone(),
-                    reason,
-                }
+            .map(|(entry, _, score)| Mismatch {
+                method: entry.name.clone(),
+                reason: score.reason().to_string(),
             })
             .collect();
 
@@ -176,8 +176,8 @@ impl Registry {
             .filter_map(|entry| {
                 entry
                     .benchmark
-                    .try_match(job)
-                    .ok()
+                    .try_match(job, &MatchContext::new())
+                    .match_score()
                     .map(|score| (entry, score))
             })
             .min_by_key(|(_, score)| *score)
@@ -338,11 +338,8 @@ impl RegressionBenchmark<'_> {
         self.regression.input_tag()
     }
 
-    pub(crate) fn try_match(
-        &self,
-        input: &input::internal::Any,
-    ) -> Result<MatchScore, FailureScore> {
-        self.benchmark.benchmark().try_match(input)
+    pub(crate) fn try_match(&self, input: &input::internal::Any, context: &MatchContext) -> Score {
+        self.benchmark.benchmark().try_match(input, context)
     }
 
     pub(crate) fn check(
@@ -367,20 +364,17 @@ pub(crate) struct RegisteredTolerance<'a> {
 }
 
 /// Helper to capture a `Benchmark::description` call into a `String` via `Display`.
-struct Capture<'a>(
-    &'a dyn benchmark::internal::Benchmark,
-    Option<&'a input::internal::Any>,
-);
+struct Capture<'a>(&'a dyn benchmark::internal::Benchmark);
 
 impl std::fmt::Display for Capture<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.description(f, self.1)
+        self.0.description(f)
     }
 }
 
 impl std::fmt::Debug for Capture<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.description(f, self.1)
+        self.0.description(f)
     }
 }
 
