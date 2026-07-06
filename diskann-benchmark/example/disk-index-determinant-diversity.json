@@ -1,0 +1,42 @@
+{
+  "search_directories": [
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Build",
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "dim": 128,
+          "max_degree": 32,
+          "l_build": 50,
+          "num_threads": 1,
+          "build_ram_limit_gb": 2.0,
+          "num_pq_chunks": 128,
+          "quantization_type": "FP",
+          "save_path": "siftsmall_index_full_det_div"
+        },
+        "search_phase": {
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "search_list": [10, 20, 40],
+          "beam_width": 4,
+          "recall_at": 10,
+          "num_threads": 1,
+          "is_flat_search": false,
+          "distance": "squared_l2",
+          "vector_filters_file": null,
+          "post_processor": {
+            "type": "determinant-diversity",
+            "power": 2.0,
+            "eta": 1.0
+          }
+        }
+      }
+    }
+  ]
+}

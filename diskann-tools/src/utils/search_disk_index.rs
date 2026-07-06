@@ -8,8 +8,12 @@ use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
-    search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
+        search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{
@@ -45,7 +49,7 @@ pub struct SearchDiskIndexParameters<'a> {
     pub result_output_prefix: &'a str,
     pub query_file: &'a str,
     pub truthset_file: &'a str,
-    pub vector_filters_file: Option<&'a str>,
+    pub filter_bitmap_file: Option<&'a str>,
     pub num_threads: usize,
     pub recall_at: u32,
     pub beam_width: u32,
@@ -78,19 +82,23 @@ where
         &mut storage_provider.open_reader(parameters.query_file)?,
     )?;
     let query_num = queries.nrows();
-    // Load the vector filters
-    let vector_filters = match parameters.vector_filters_file {
-        Some(vector_filters_file) => {
-            search_index_utils::load_vector_filters(storage_provider, vector_filters_file)?
+    // Load the filter bitmaps
+    let filter_bitmaps = match parameters.filter_bitmap_file {
+        Some(filter_bitmap_file) => {
+            search_index_utils::load_vector_filters(storage_provider, filter_bitmap_file)?
         }
         None => vec![HashSet::<u32>::new(); query_num],
     };
 
-    assert_eq!(
-        vector_filters.len(),
-        query_num,
-        "Mismatch in query and vector filter sizes"
-    );
+    if filter_bitmaps.len() != query_num {
+        return Err(CMDToolError {
+            details: format!(
+                "Mismatch in query and filter bitmap sizes: {} queries, {} filter bitmaps",
+                query_num,
+                filter_bitmaps.len()
+            ),
+        });
+    }
 
     let mut gt_dim: usize = 0;
     let mut gt_ids: Option<Vec<u32>> = None;
@@ -101,7 +109,7 @@ where
     // Check for ground truth
     let mut calc_recall_flag = false;
     if !parameters.truthset_file.is_empty() && storage_provider.exists(parameters.truthset_file) {
-        if parameters.vector_filters_file.is_none() {
+        if parameters.filter_bitmap_file.is_none() {
             let ret =
                 search_index_utils::load_truthset(storage_provider, parameters.truthset_file)?;
             gt_ids = Some(ret.index_nodes);
@@ -224,7 +232,7 @@ where
         let zipped = cmp_stats
             .par_iter_mut()
             .zip(queries.par_row_iter())
-            .zip(vector_filters.par_iter())
+            .zip(filter_bitmaps.par_iter())
             .zip(query_result_ids[test_id].par_chunks_mut(parameters.recall_at as usize))
             .zip(query_result_dists[test_id].par_chunks_mut(parameters.recall_at as usize))
             .zip(statistics.par_iter_mut())
@@ -246,20 +254,29 @@ where
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,
             )| {
-                let vector_filter_function: Box<dyn Fn(&u32) -> bool + Send + Sync> =
-                    if parameters.vector_filters_file.is_none() {
-                        Box::new(|_: &u32| true)
-                    } else {
-                        Box::new(move |vector_id: &u32| vector_filter.contains(vector_id))
-                    };
+                // Construct the mode from the CLI-driven
+                // `(is_flat_search, has_filter)` pair. CLI doesn't expose
+                // AdaptiveL yet, so `InlineFilter` is unreachable here.
+                let mode: SearchMode<'_> = match (
+                    parameters.is_flat_search,
+                    parameters.filter_bitmap_file.is_some(),
+                ) {
+                    (true, false) => SearchMode::flat(),
+                    (true, true) => {
+                        SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
+                    }
+                    (false, false) => SearchMode::graph(),
+                    (false, true) => {
+                        SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
+                    }
+                };
 
                 let result = searcher.search(
                     query,
                     parameters.recall_at,
                     l,
                     Some(parameters.beam_width as usize),
-                    Some(vector_filter_function),
-                    parameters.is_flat_search,
+                    mode,
                 );
 
                 match result {

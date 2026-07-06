@@ -373,4 +373,48 @@ mod disk_sector_graph_test {
         let data = &graph;
         assert_eq!(data.len(), 512);
     }
+
+    #[test]
+    fn test_reconfigure_grows_buffer() {
+        let reader = AlignedFileReaderFactory::new(test_index_path())
+            .build()
+            .unwrap();
+        let mut graph = test_initialize_disk_sector_graph(2, 1, reader);
+        assert_eq!(graph.max_n_batch_sector_read, 4);
+
+        // Reconfigure to larger batch — buffer must grow beyond initial 512 bytes
+        graph.reconfigure(16).unwrap();
+        assert_eq!(graph.max_n_batch_sector_read, 16);
+        assert_eq!(graph.sectors_data.len(), 16 * 64);
+    }
+
+    #[test]
+    fn test_reconfigure_noop_for_smaller_size() {
+        let reader = AlignedFileReaderFactory::new(test_index_path())
+            .build()
+            .unwrap();
+        let mut graph = test_initialize_disk_sector_graph(2, 1, reader);
+        let original_len = graph.sectors_data.len();
+
+        // Reconfigure with same or smaller size should be a no-op
+        graph.reconfigure(4).unwrap();
+        assert_eq!(graph.max_n_batch_sector_read, 4);
+        assert_eq!(graph.sectors_data.len(), original_len);
+
+        graph.reconfigure(2).unwrap();
+        assert_eq!(graph.max_n_batch_sector_read, 4);
+        assert_eq!(graph.sectors_data.len(), original_len);
+    }
+
+    #[test]
+    fn test_new_disk_sector_graph_zero_block_size_defaults() {
+        let metadata = GraphMetadata::new(1000, 32, 500, 32, 2, 20, 50, 1024, 256);
+        // block_size = 0 should fall back to DEFAULT_DISK_SECTOR_LEN regardless of version
+        let header = GraphHeader::new(metadata, 0, GraphLayoutVersion::new(1, 0));
+        let reader = AlignedFileReaderFactory::new(test_index_path())
+            .build()
+            .unwrap();
+        let graph = DiskSectorGraph::new(reader, &header, 2).unwrap();
+        assert_eq!(graph.block_size, DEFAULT_DISK_SECTOR_LEN);
+    }
 }

@@ -27,11 +27,11 @@ use rand::{rngs::StdRng, SeedableRng};
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Input binary file path containing vector data
-    #[arg(short, long)]
+    #[arg(short, long = "input-file")]
     input: String,
 
     /// Output binary file path for quantized vectors
-    #[arg(short, long)]
+    #[arg(short, long = "output-file")]
     output: String,
 
     /// Number of bits for quantization (1, 2, 4, or 8)
