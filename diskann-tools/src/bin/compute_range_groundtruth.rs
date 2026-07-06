@@ -105,7 +105,7 @@ struct ComputeRangeGroundTruthArgs {
     pub base_file: String,
 
     /// Optional labels file for base vectors
-    #[arg(long = "base-file-labels", default_value = None)]
+    #[arg(long = "base-file-labels")]
     pub base_file_labels: Option<String>,
 
     /// File containing the query vectors in binary format

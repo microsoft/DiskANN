@@ -682,6 +682,7 @@ pub(crate) mod disk_index_builder_tests {
         pub checkpoint_params: Option<CheckpointParams>,
         pub num_threads: usize,
         pub metric: Metric,
+        pub block_size: usize,
     }
 
     impl Default for TestParams {
@@ -700,6 +701,7 @@ pub(crate) mod disk_index_builder_tests {
                 checkpoint_params: None,
                 num_threads: 1,
                 metric: L2,
+                block_size: DEFAULT_DISK_SECTOR_LEN,
             }
         }
     }
@@ -799,7 +801,7 @@ pub(crate) mod disk_index_builder_tests {
                 self.params.data_path.clone(),
                 self.params.index_path_prefix.clone(),
                 self.params.associated_data_path.clone(),
-                DEFAULT_DISK_SECTOR_LEN,
+                self.params.block_size,
             )?;
 
             let mut disk_index = match self.params.checkpoint_params {
@@ -921,6 +923,31 @@ pub(crate) mod disk_index_builder_tests {
         let index_path_prefix = format!("{}_metric_{:?}", INDEX_PATH_PREFIX, metric);
 
         run_one_shot_test(index_path_prefix, |params| TestParams { metric, ..params });
+    }
+
+    /// Forces the multi-sector-per-node layout: with a 512-byte block, a 128-d f32 vector
+    /// (512 B) plus its neighbor list exceeds one sector, so each node spans multiple
+    /// sectors (`node_len > block_size`). The default 4096-byte sector packs these small
+    /// nodes many-per-sector, leaving the crossing path otherwise untested; 512 is one of
+    /// the two block sizes the disk format supports.
+    #[test]
+    fn test_build_multi_sector_per_node() {
+        let params = TestParams {
+            block_size: 512,
+            max_degree: 16,
+            l_build: 64,
+            index_path_prefix: format!("{}_multi_sector", INDEX_PATH_PREFIX),
+            ..TestParams::default()
+        };
+        let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+        verify_search_result_with_ground_truth::<GraphDataF32VectorUnitData>(
+            &fixture.params,
+            10,
+            32,
+            &fixture.storage_provider,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1089,9 +1116,7 @@ pub(crate) mod disk_index_builder_tests {
                 &mut indices,
                 &mut distances,
                 &mut associated_data,
-                None,
-                &|_| true,
-                false,
+                &crate::search::search_mode::SearchMode::graph(),
             );
 
             diskann_providers::test_utils::assert_top_k_exactly_match(
