@@ -82,12 +82,12 @@ fn assert_divisible_by_four(results: &[Neighbor<u32>]) {
     }
 }
 
-//////////////////////////////////////////////////////////
-//// Tests with an always-true filter that validate   ////
-//// that filtered range search gives correct answers ////
-//// and respects parameters such as inner_radius and ////
-//// max_results.                                     ////
-//////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////
+// Tests with an always-true filter that validate   //
+// that filtered range search gives correct answers //
+// and respects parameters such as inner_radius and //
+// max_results.                                     //
+//////////////////////////////////////////////////////
 
 #[test]
 fn basic_range_search() {
@@ -358,13 +358,13 @@ fn max_results_respected_and_second_round_triggered() {
     assert_no_duplicates(&filtered_results);
 }
 
-//////////////////////////////////////////////////////////////////
-//// Next, some tests with a somewhat more complex filter.    ////
-//// We check that second round behavior is as expected, and  ////
-//// that the filter is applied correctly. We also check that ////
-//// putting a cap on the returned results correctly uses the ////
-//// filter-satisfying results, not all results.              ////
-//////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////
+// Next, some tests with a somewhat more complex filter.    //
+// We check that second round behavior is as expected, and  //
+// that the filter is applied correctly. We also check that //
+// putting a cap on the returned results correctly uses the //
+// filter-satisfying results, not all results.              //
+//////////////////////////////////////////////////////////////
 
 #[test]
 fn divisible_by_four_filter_second_round_triggered() {
