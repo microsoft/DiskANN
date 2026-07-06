@@ -19,7 +19,6 @@ use diskann_providers::{
     model::graph::provider::async_::common::FullPrecision,
     storage::{FileStorageProvider, SaveWith},
 };
-use diskann_utils::sampling::WithApproximateNorm;
 
 use crate::{
     index::{
@@ -69,7 +68,7 @@ where
 
 impl<T> Benchmark for BfTreeFullPrecision<T>
 where
-    T: VectorRepr + AsDataType + SampleableForStart + WithApproximateNorm + 'static,
+    T: VectorRepr + AsDataType + SampleableForStart + 'static,
 {
     type Input = BfTreeFullPrecisionBuild;
     type Output = BuildResult;

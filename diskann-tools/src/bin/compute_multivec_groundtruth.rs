@@ -94,11 +94,11 @@ fn main() -> CMDResult<()> {
 #[derive(Debug, Parser)]
 struct ComputeMultivecGroundTruthArgs {
     /// data type <int8/uint8/float / fp16> (required)
-    #[arg(long = "data_type", default_value = "float")]
+    #[arg(long = "data-type", default_value = "float")]
     pub data_type: DataType,
 
     /// Distance function to use.
-    #[arg(long = "dist_fn", default_value = "l2")]
+    #[arg(long = "dist-fn", default_value = "l2")]
     pub distance_function: Metric,
 
     /// Whether to use average or min aggregation
@@ -106,24 +106,24 @@ struct ComputeMultivecGroundTruthArgs {
     pub aggregation: MultivecAggregationMethod,
 
     /// File containing the base vectors in binary format
-    #[arg(long = "base_file", short, required = true)]
+    #[arg(long = "base-file", short, required = true)]
     pub base_file: String,
 
-    #[arg(long = "base_file_labels", default_value = None)]
+    #[arg(long = "base-file-labels", default_value = None)]
     pub base_file_labels: Option<String>,
 
     /// File containing the query vectors in binary format
-    #[arg(long = "query_file", short, required = true)]
+    #[arg(long = "query-file", short, required = true)]
     pub query_file: String,
 
-    #[arg(long = "query_file_labels", default_value = None)]
+    #[arg(long = "query-file-labels")]
     pub query_file_labels: Option<String>,
 
     /// Path of the file to write the ground truth to in binary format.  Please don't append .bin at the end if no filter_label or filter_label_file is provided.  It will save the file with '.bin' at the end.  Otherwise it will save the file as filename_label.bin.
-    #[arg(long = "gt_file", short, required = true)]
+    #[arg(long = "gt-file", short, required = true)]
     pub ground_truth_file: String,
 
     /// Number of ground truth nearest neighbors to compute
-    #[arg(long = "recall_at", short = 'K', default_value = "10")]
+    #[arg(long = "recall-at", short = 'K', default_value = "10")]
     pub recall_at: u32,
 }
