@@ -67,7 +67,7 @@ struct DivisibleByFourFilter;
 
 impl labeled::QueryLabelProvider<u32> for DivisibleByFourFilter {
     fn is_match(&self, id: u32) -> bool {
-        id % 4 == 0
+        id.is_multiple_of(4)
     }
 }
 
