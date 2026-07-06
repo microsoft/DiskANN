@@ -1,0 +1,69 @@
+{
+  "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
+  "test": "graph/test/cases/filtered_range_search/divisible_by_four_filter_no_second_round_from_max_results",
+  "payload": {
+    "comparisons": 31,
+    "grid_size": 5,
+    "hops": 17,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 50.0,
+    "range_search_second_round": false,
+    "result_count": 12,
+    "results": [
+      [
+        124,
+        3.0
+      ],
+      [
+        68,
+        17.0
+      ],
+      [
+        88,
+        17.0
+      ],
+      [
+        92,
+        17.0
+      ],
+      [
+        72,
+        19.0
+      ],
+      [
+        112,
+        19.0
+      ],
+      [
+        64,
+        19.0
+      ],
+      [
+        96,
+        21.0
+      ],
+      [
+        48,
+        21.0
+      ],
+      [
+        116,
+        21.0
+      ],
+      [
+        108,
+        21.0
+      ],
+      [
+        84,
+        21.0
+      ]
+    ],
+    "starting_l": 16
+  }
+}

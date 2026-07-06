@@ -1,0 +1,61 @@
+{
+  "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
+  "test": "graph/test/cases/filtered_range_search/max_results_respected_means_no_second_round",
+  "payload": {
+    "comparisons": 10,
+    "grid_size": 5,
+    "hops": 5,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 50.0,
+    "range_search_second_round": false,
+    "result_count": 10,
+    "results": [
+      [
+        124,
+        3.0
+      ],
+      [
+        99,
+        6.0
+      ],
+      [
+        119,
+        6.0
+      ],
+      [
+        123,
+        6.0
+      ],
+      [
+        98,
+        9.0
+      ],
+      [
+        118,
+        9.0
+      ],
+      [
+        94,
+        9.0
+      ],
+      [
+        122,
+        11.0
+      ],
+      [
+        114,
+        11.0
+      ],
+      [
+        74,
+        11.0
+      ]
+    ],
+    "starting_l": 4
+  }
+}

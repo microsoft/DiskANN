@@ -26,6 +26,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<1>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -36,6 +37,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<2>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -46,6 +48,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -441,7 +444,87 @@ mod imp {
                 ),
             )?;
 
-            let result = search::range::run(&range, &groundtruth, steps)?;
+            let result = search::range::run(&range, &groundtruth, steps, |range_search| {
+                diskann::graph::search::Range::with_options(
+                    range_search.max_returned(),
+                    range_search.starting_l(),
+                    range_search.beam_width(),
+                    range_search.radius(),
+                    range_search.inner_radius(),
+                    range_search.initial_slack(),
+                    range_search.range_slack(),
+                )
+                .map_err(Into::into)
+            })?;
+
+            Ok(AggregatedSearchResults::Range(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+        for search::plugins::FilteredRange
+    {
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            search::plugins::FilteredRange::is_match(phase)
+        }
+
+        fn kind(&self) -> &'static str {
+            SearchPhaseKind::FilteredRange.as_str()
+        }
+
+        fn run(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>, 
+            phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let filtered_range = phase.as_filtered_range()?;
+
+            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &filtered_range.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
+
+            let steps = search::range::RangeSearchSteps::new(
+                filtered_range.reps,
+                &filtered_range.num_threads,
+                &filtered_range.runs,
+            );
+
+            let bit_maps = generate_bitmaps(
+                &filtered_range.query_predicates,
+                &filtered_range.data_labels,
+            )?;
+
+            let labels: Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect();
+
+            let filtered_range =
+                benchmark_core::search::graph::filtered_range::FilteredRange::new(
+                    index.clone(),
+                    queries.clone(),
+                    benchmark_core::search::graph::Strategy::broadcast(
+                        inmem::spherical::Quantized::search((*query_layout).into()),
+                    ),
+                    labels,
+                )?;
+
+            let result = search::range::run(&filtered_range, &groundtruth, steps, |range_search| {
+                diskann::graph::search::FilteredRange::with_options(
+                    range_search.max_returned(),
+                    range_search.starting_l(),
+                    range_search.beam_width(),
+                    range_search.radius(),
+                    range_search.inner_radius(),
+                    range_search.initial_slack(),
+                    range_search.range_slack(),
+                )
+                .map_err(Into::into)
+            })?;
 
             Ok(AggregatedSearchResults::Range(result))
         }

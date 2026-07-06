@@ -28,46 +28,18 @@ use crate::{
     },
 };
 
-fn root() -> TestRoot {
-    TestRoot::new("graph/test/cases/range_search")
-}
-
-fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provider::Provider>> {
-    let provider = test_provider::Provider::grid(dims, grid_size).unwrap();
-
-    let index_config = graph::config::Builder::new(
-        provider.max_degree(),
-        graph::config::MaxDegree::same(),
-        100,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
-}
-
-fn setup_grid_index_and_default_query(
-    grid_size: usize,
-    dims: Grid,
-) -> (Arc<DiskANNIndex<test_provider::Provider>>, Vec<f32>) {
-    let index = setup_grid_index(grid_size, dims);
-    let query = vec![grid_size as f32; dims.dim().into()];
-    (index, query)
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RangeSearchBaseline {
-    grid_size: usize,
-    query: Vec<f32>,
-    radius: f32,
-    inner_radius: Option<f32>,
-    starting_l: usize,
-    results: Vec<(u32, f32)>,
-    comparisons: usize,
-    hops: usize,
-    result_count: usize,
-    range_search_second_round: bool,
+pub(super) struct RangeSearchBaseline {
+    pub(super) grid_size: usize,
+    pub(super) query: Vec<f32>,
+    pub(super) radius: f32,
+    pub(super) inner_radius: Option<f32>,
+    pub(super) starting_l: usize,
+    pub(super) results: Vec<(u32, f32)>,
+    pub(super) comparisons: usize,
+    pub(super) hops: usize,
+    pub(super) result_count: usize,
+    pub(super) range_search_second_round: bool,
 }
 
 verbose_eq!(RangeSearchBaseline {
@@ -83,14 +55,46 @@ verbose_eq!(RangeSearchBaseline {
     range_search_second_round,
 });
 
-fn assert_no_duplicates(results: &[Neighbor<u32>]) {
+fn root() -> TestRoot {
+    TestRoot::new("graph/test/cases/range_search")
+}
+
+pub(super) fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provider::Provider>> {
+    let provider = test_provider::Provider::grid(dims, grid_size).unwrap();
+
+    let index_config = graph::config::Builder::new(
+        provider.max_degree(),
+        graph::config::MaxDegree::same(),
+        100,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
+    Arc::new(DiskANNIndex::new(index_config, provider, None))
+}
+
+pub(super) fn setup_grid_index_and_default_query(
+    grid_size: usize,
+    dims: Grid,
+) -> (Arc<DiskANNIndex<test_provider::Provider>>, Vec<f32>) {
+    let index = setup_grid_index(grid_size, dims);
+    let query = vec![grid_size as f32; dims.dim().into()];
+    (index, query)
+}
+
+pub(super) fn assert_no_duplicates(results: &[Neighbor<u32>]) {
     let mut seen = std::collections::HashSet::new();
     for n in results {
         assert!(seen.insert(n.id), "duplicate result id {}", n.id);
     }
 }
 
-fn assert_range_invariants(results: &[Neighbor<u32>], radius: f32, inner_radius: Option<f32>) {
+pub(super) fn assert_range_invariants(
+    results: &[Neighbor<u32>],
+    radius: f32,
+    inner_radius: Option<f32>,
+) {
     for n in results {
         assert!(
             n.distance <= radius,
@@ -283,4 +287,123 @@ fn empty_results() {
         !stats.range_search_second_round,
         "empty results shouldn't trigger a second round"
     );
+}
+
+#[test]
+fn max_results_respected_means_no_second_round() {
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("max_results_respected_means_no_second_round");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 50.0; // every point will be in range with this radius
+    let starting_l = 4; // small set to trigger multiple rounds
+    let max_results = 4; // max_returned limited to starting_l, so no second round should be triggered
+
+    let range_search =
+        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
+            .unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        results.len() <= max_results,
+        "result count {} exceeds max_results {}",
+        results.len(),
+        max_results
+    );
+
+    assert!(
+        !stats.range_search_second_round,
+        "If max_results is respected, a second round should not be triggered"
+    );
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn max_results_respected_and_second_round_triggered() {
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("max_results_respected_and_second_round_triggered");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 50.0; // every point will be in range with this radius
+    let starting_l = 4; // small set to trigger multiple rounds
+    let max_results = 5; // max_returned greater than starting_l, so second round should be triggered
+
+    let range_search =
+        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
+            .unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        results.len() <= max_results,
+        "result count {} exceeds max_results {}",
+        results.len(),
+        max_results
+    );
+
+    assert!(
+        stats.range_search_second_round,
+        "If max_results is respected, a second round should be triggered"
+    );
+    
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
 }

@@ -174,7 +174,11 @@ where
             }
 
             let mut in_range: Vec<_> = merged.into_values().collect();
-            in_range.sort_unstable_by(|left, right| left.distance.total_cmp(&right.distance));
+            in_range.sort_unstable_by(|left, right| {
+                left.distance
+                    .total_cmp(&right.distance)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
 
             let mut matched_from_first_round = Vec::with_capacity(matched_results.len());
             for neighbor in matched_results.iter().copied() {
@@ -209,7 +213,7 @@ where
 
                 (
                     InternalSearchStats {
-                        cmps: cmps,
+                        cmps,
                         hops: hops + range_stats.hops,
                         range_search_second_round: true,
                     },
@@ -218,8 +222,8 @@ where
             } else {
                 (
                     InternalSearchStats {
-                        cmps: cmps,
-                        hops: hops,
+                        cmps,
+                        hops,
                         range_search_second_round: false,
                     },
                     matched_from_first_round,
