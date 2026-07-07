@@ -37,8 +37,6 @@ mod tests {
         quant_type: VectorQuantType,
         metric_type: i32,
     ) -> (*const c_void, Context) {
-        store.clear();
-
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
 
@@ -885,6 +883,55 @@ mod tests {
         let qv = [0.5f32, 0.5];
         let (ids, _dists) = do_search(&ctx, index_ptr, &qv, 10, None);
         assert!(!ids.is_empty(), "no results found");
+
+        unsafe {
+            drop_index(ctx.get(), index_ptr);
+        }
+    }
+
+    #[test]
+    fn recreate_basic() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+
+        // add vectors
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
+            InsertResult::Success
+        );
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
+            InsertResult::Success
+        );
+        assert_eq!(
+            insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
+            InsertResult::Success
+        );
+
+        // do a search; save results
+        let qv = [0.0f32, 0.0];
+        let (orig_ids, orig_dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+        assert!(!orig_ids.is_empty());
+        assert!(!orig_dists.is_empty());
+
+        let orig_num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
+
+        // drop index
+        unsafe {
+            drop_index(ctx.get(), index_ptr);
+        }
+
+        // create_index with the same store
+        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+
+        // check num vectors is the same
+        let num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
+        assert_eq!(num_vectors, orig_num_vectors);
+
+        // do a search; check results match above
+        let (ids, dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+        assert_eq!(ids, orig_ids);
+        assert_eq!(dists, orig_dists);
 
         unsafe {
             drop_index(ctx.get(), index_ptr);

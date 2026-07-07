@@ -53,6 +53,10 @@ impl Store {
             }
         })
     }
+
+    pub fn count(&self) -> usize {
+        STORE.with(|s| s.len())
+    }
 }
 
 unsafe extern "C" fn test_read(

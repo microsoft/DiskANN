@@ -208,7 +208,15 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let quantizer = Box::new(quantization::MinMax8Bit::new(dim, metric_type)?)
                     as Box<dyn GarnetQuantizer>;
                 let canonical_bytes = quantizer.bytes();
-                // NOTE: Q8 needs no training, so it always starts with backfill complete.
+                // NOTE: Q8 needs no training, so it always starts with backfill
+                // complete. However, we still need to load the start point if
+                // it exists.
+
+                let mut qsv = Poly::broadcast(0u8, canonical_bytes, AlignToEight)?;
+                if callbacks.read_single_iid(&context.term(Term::Quantized), 0, &mut qsv) {
+                    start_point_quant_cache.insert(0, qsv);
+                }
+
                 (Some(quantizer), canonical_bytes, true)
             }
             VectorQuantType::Bin | VectorQuantType::XBinU8 | VectorQuantType::XBinI8 => {
