@@ -19,7 +19,7 @@ bytemuck.workspace = true
 num_cpus.workspace = true
 rayon.workspace = true
 half.workspace = true
-ordered-float = "4.2.0"
+ordered-float = "5.3.0"
 rand_distr.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
