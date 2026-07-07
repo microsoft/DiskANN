@@ -14,7 +14,6 @@ byteorder.workspace = true
 clap = { workspace = true, features = ["derive"] }
 diskann-providers = { workspace = true, default-features = false } # see `linalg/Cargo.toml`
 diskann-vector = { workspace = true }
-diskann-disk = { workspace = true, features = ["pipnn"] }
 diskann-utils = { workspace = true }
 bytemuck.workspace = true
 num_cpus.workspace = true
@@ -47,7 +46,7 @@ diskann-utils = { workspace = true, features = ["testing"] }
 [features]
 default = []
 # When a feature is enabled in tools, enable it in dependencies
-perf_test = ["diskann-providers/perf_test", "diskann-disk/perf_test"]
+perf_test = ["diskann-providers/perf_test"]
 
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"

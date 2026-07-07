@@ -139,7 +139,7 @@ mod tests {
 
     use diskann_benchmark_runner::{app::Commands, output::Memory};
     use diskann_providers::storage::FileStorageProvider;
-    use diskann_tools::utils::{compute_ground_truth_from_datafiles, GraphDataF32Vector};
+    use diskann_tools::utils::compute_ground_truth_from_datafiles;
     use diskann_vector::distance::Metric;
 
     // Add these structs to deserialize the benchmark results
@@ -736,7 +736,7 @@ mod tests {
 
         let disk_index_search_path = root_directory().join("test_data/disk_index_search");
 
-        let result = compute_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
+        let result = compute_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
             &storage_provider,
             Metric::L2, // distance function
             disk_index_search_path

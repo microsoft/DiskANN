@@ -7,9 +7,9 @@ use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{
     build_pq, get_num_threads, init_subscriber, BuildPQParameters, CMDToolError, DataType,
-    GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
 };
 use diskann_vector::distance::Metric;
+use diskann_vector::Half;
 use tracing::{error, info};
 
 fn main() -> Result<(), CMDToolError> {
@@ -31,10 +31,10 @@ fn main() -> Result<(), CMDToolError> {
     };
 
     let err = match args.data_type {
-        DataType::Int8 => build_pq::<GraphDataInt8Vector>(&storage_provider, parameters),
-        DataType::Uint8 => build_pq::<GraphDataU8Vector>(&storage_provider, parameters),
-        DataType::Float => build_pq::<GraphDataF32Vector>(&storage_provider, parameters),
-        DataType::Fp16 => build_pq::<GraphDataHalfVector>(&storage_provider, parameters),
+        DataType::Int8 => build_pq::<i8>(&storage_provider, parameters),
+        DataType::Uint8 => build_pq::<u8>(&storage_provider, parameters),
+        DataType::Float => build_pq::<f32>(&storage_provider, parameters),
+        DataType::Fp16 => build_pq::<Half>(&storage_provider, parameters),
     };
 
     match err {

@@ -6,10 +6,10 @@ use clap::Parser;
 use diskann_providers::{storage::FileStorageProvider, utils::Timer};
 use diskann_tools::utils::{
     compute_multivec_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType,
-    GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
     MultivecAggregationMethod,
 };
 use diskann_vector::distance::Metric;
+use diskann_vector::Half;
 
 fn main() -> CMDResult<()> {
     init_subscriber();
@@ -23,7 +23,7 @@ fn main() -> CMDResult<()> {
 
     let err = match args.data_type {
         DataType::Float => {
-            compute_multivec_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
+            compute_multivec_ground_truth_from_datafiles::<f32, FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 args.aggregation,
@@ -36,7 +36,7 @@ fn main() -> CMDResult<()> {
             )
         }
         DataType::Fp16 => {
-            compute_multivec_ground_truth_from_datafiles::<GraphDataHalfVector, FileStorageProvider>(
+            compute_multivec_ground_truth_from_datafiles::<Half, FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 args.aggregation,
@@ -48,32 +48,28 @@ fn main() -> CMDResult<()> {
                 args.query_file_labels.as_deref(),
             )
         }
-        DataType::Uint8 => {
-            compute_multivec_ground_truth_from_datafiles::<GraphDataU8Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                args.aggregation,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.recall_at,
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
-        DataType::Int8 => {
-            compute_multivec_ground_truth_from_datafiles::<GraphDataInt8Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                args.aggregation,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.recall_at,
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
+        DataType::Uint8 => compute_multivec_ground_truth_from_datafiles::<u8, FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            args.aggregation,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.recall_at,
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
+        DataType::Int8 => compute_multivec_ground_truth_from_datafiles::<i8, FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            args.aggregation,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.recall_at,
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
     };
 
     match err {
