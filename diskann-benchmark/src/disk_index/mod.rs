@@ -17,14 +17,14 @@ cfg_if::cfg_if! {
             benchmarks::register_benchmarks(registry)
         }
     } else {
-        crate::utils::stub_impl!(
-            "disk-index",
-            inputs::disk::DiskIndexOperation
-        );
-
-        /// Register a stub that guides users to enable the `disk-index` feature.
         pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-            imp::register("disk-index", registry)
+            registry.register_partially_gated::<crate::inputs::disk::DiskIndexOperation>(
+                "disk-index",
+                "disk-index",
+                "Disk Index build and search benchmarks"
+            )?;
+
+            Ok(())
         }
     }
 }

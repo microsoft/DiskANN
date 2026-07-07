@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::Checker;
+use crate::{internal::visibility::Visibility, Checker};
 
 /// Inputs to [`Benchmarks`](crate::Benchmark).
 ///
@@ -67,6 +67,14 @@ impl Registered<'_> {
     pub fn example(&self) -> anyhow::Result<serde_json::Value> {
         self.0.example()
     }
+
+    pub(crate) fn visibility(&self) -> Visibility<'_> {
+        self.0.visibility()
+    }
+
+    pub(crate) fn display(&self) -> Display<'_> {
+        Display(self.0)
+    }
 }
 
 impl std::fmt::Debug for Registered<'_> {
@@ -77,8 +85,42 @@ impl std::fmt::Debug for Registered<'_> {
     }
 }
 
+pub(crate) struct Display<'a>(&'a dyn internal::DynInput);
+
+impl std::fmt::Debug for Display<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("input::Display")
+            .field("tag", &self.0.tag())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for Display<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.tag())?;
+        match self.0.visibility() {
+            Visibility::Available => {}
+            Visibility::Gated { features } => {
+                write!(f, " (requires the {})", features)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn order_inputs(a: &Registered<'_>, b: &Registered<'_>) -> std::cmp::Ordering {
+    // First order by visibility (visible first).
+    //
+    // Then order by tag.
+    a.visibility()
+        .cmp(&b.visibility())
+        .then_with(|| a.tag().cmp(b.tag()))
+}
+
 pub(crate) mod internal {
     use super::*;
+
+    use crate::Features;
 
     /// Runtime representation of a deserialized [`Input`].
     #[derive(Debug)]
@@ -107,6 +149,14 @@ pub(crate) mod internal {
             T: std::any::Any,
         {
             self.any.as_any().downcast_ref::<T>()
+        }
+
+        #[must_use = "this function has no side effects"]
+        pub(crate) fn is<T>(&self) -> bool
+        where
+            T: std::any::Any,
+        {
+            self.any.as_any().is::<T>()
         }
 
         #[must_use = "this function has no side effects"]
@@ -168,6 +218,9 @@ pub(crate) mod internal {
         ) -> anyhow::Result<Any>;
         fn example(&self) -> anyhow::Result<serde_json::Value>;
 
+        // visibility
+        fn visibility(&self) -> Visibility<'_>;
+
         // reflection
         fn as_any(&self) -> &dyn std::any::Any;
         fn type_name(&self) -> &'static str;
@@ -191,6 +244,9 @@ pub(crate) mod internal {
         fn example(&self) -> anyhow::Result<serde_json::Value> {
             Ok(serde_json::to_value(T::example())?)
         }
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Available
+        }
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
@@ -204,15 +260,20 @@ pub(crate) mod internal {
     #[derive(Debug)]
     pub(crate) struct Gated {
         tag: &'static str,
-        feature: &'static str,
+        features: Features,
     }
 
     impl Gated {
-        pub(crate) fn new(
-            tag: &'static str,
-            feature: &'static str,
-        ) -> Self {
-            Self { tag, feature }
+        pub(crate) fn new(tag: &'static str, features: Features) -> Self {
+            Self { tag, features }
+        }
+
+        pub(crate) fn tag(&self) -> &'static str {
+            self.tag
+        }
+
+        pub(crate) fn features(&self) -> &Features {
+            &self.features
         }
     }
 
@@ -226,17 +287,22 @@ pub(crate) mod internal {
             _checker: &mut Checker,
         ) -> anyhow::Result<Any> {
             anyhow::bail!(
-                "use of the \"{}\" input is gated behind the feature \"{}\"",
+                "use of the \"{}\" input is gated behind the feature(s) \"{}\"",
                 self.tag,
-                self.feature
+                self.features
             );
         }
         fn example(&self) -> anyhow::Result<serde_json::Value> {
             anyhow::bail!(
-                "use of the \"{}\" input is gated behind the feature \"{}\"",
+                "use of the \"{}\" input is gated behind the feature(s) \"{}\"",
                 self.tag,
-                self.feature,
+                self.features,
             );
+        }
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Gated {
+                features: &self.features,
+            }
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self

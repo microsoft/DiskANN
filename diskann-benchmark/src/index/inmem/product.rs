@@ -3,251 +3,229 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::Registry;
+use std::{io::Write, sync::Arc};
 
-// Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!(
-    "product-quantization",
-    inputs::graph_index::IndexPQOperation
-);
+use diskann::utils::VectorRepr;
+use diskann_benchmark_runner::{
+    benchmark::{MatchContext, Score},
+    utils::{datatype::AsDataType, MicroSeconds},
+    Benchmark, Checkpoint, Output, Registry,
+};
+use diskann_providers::{
+    index::diskann_async::{self},
+    model::{
+        graph::provider::async_::{common, inmem},
+        IndexConfiguration,
+    },
+};
+use diskann_utils::views::{Matrix, MatrixView};
+use half::f16;
+use rand::{rngs::StdRng, SeedableRng};
+
+use crate::{
+    index::{
+        benchmarks::{run_build, QueryType, Strategy},
+        build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
+        result::{BuildResult, QuantBuildResult},
+        search::plugins,
+    },
+    inputs::graph_index::{IndexPQOperation, IndexSource, SearchPhase},
+    utils::{self, datafiles},
+};
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    #[cfg(feature = "product-quantization")]
-    {
-        use crate::index::search::plugins;
-        use half::f16;
+    // NOTE: Try to balance search plugins with the needed functionality.
+    //
+    // Feel free to add search plugins, but be mindful of the monomorphization cost.
 
-        // NOTE: Try to balance search plugins with the needed functionality.
-        //
-        // Feel free to add search plugins, but be mindful of the monomorphization cost.
-
-        registry.register(
-            "graph-index-pq-f32",
-            imp::ProductQuantized::<f32>::new()
-                .search(plugins::Topk)
-                .search(plugins::Range),
-        )?;
-        registry.register(
-            "graph-index-pq-f16",
-            imp::ProductQuantized::<f16>::new().search(plugins::Topk),
-        )?;
-    }
-
-    // Stub implementation
-    #[cfg(not(feature = "product-quantization"))]
-    imp::register("graph-index-pq", registry)?;
+    registry.register(
+        "graph-index-pq-f32",
+        ProductQuantized::<f32>::new()
+            .search(plugins::Topk)
+            .search(plugins::Range),
+    )?;
+    registry.register(
+        "graph-index-pq-f16",
+        ProductQuantized::<f16>::new().search(plugins::Topk),
+    )?;
 
     Ok(())
 }
 
-#[cfg(feature = "product-quantization")]
-mod imp {
-    use std::{io::Write, sync::Arc};
+type PQProvider<T> = inmem::DefaultProvider<
+    inmem::FullPrecisionStore<T>,
+    inmem::DefaultQuant,
+    common::NoDeletes,
+    diskann::provider::DefaultContext,
+>;
 
-    use diskann::utils::VectorRepr;
-    use diskann_providers::{
-        index::diskann_async::{self},
-        model::{
-            graph::provider::async_::{common, inmem},
-            IndexConfiguration,
-        },
-    };
-    use diskann_utils::views::{Matrix, MatrixView};
+impl<T> QueryType for PQProvider<T>
+where
+    T: VectorRepr,
+{
+    type Element = T;
+}
 
-    use diskann_benchmark_runner::{
-        benchmark::{MatchContext, Score},
-        utils::{datatype::AsDataType, MicroSeconds},
-        Benchmark, Checkpoint, Output,
-    };
-    use rand::{rngs::StdRng, SeedableRng};
+/// A [`Benchmark`] for product-quantized searches containing a dynamic list of search
+/// types.
+///
+/// The kinds of quantized and full-precision searches are kept in-sync.
+pub(crate) struct ProductQuantized<T>
+where
+    T: VectorRepr,
+{
+    quant_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>,
+    full_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>,
+}
 
-    use crate::{
-        index::{
-            benchmarks::{run_build, QueryType, Strategy},
-            build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-            result::{BuildResult, QuantBuildResult},
-            search::plugins,
-        },
-        inputs::graph_index::{IndexPQOperation, IndexSource, SearchPhase},
-        utils::{self, datafiles},
-    };
-
-    type PQProvider<T> = inmem::DefaultProvider<
-        inmem::FullPrecisionStore<T>,
-        inmem::DefaultQuant,
-        common::NoDeletes,
-        diskann::provider::DefaultContext,
-    >;
-
-    impl<T> QueryType for PQProvider<T>
-    where
-        T: VectorRepr,
-    {
-        type Element = T;
-    }
-
-    /// A [`Benchmark`] for product-quantized searches containing a dynamic list of search
-    /// types.
-    ///
-    /// The kinds of quantized and full-precision searches are kept in-sync.
-    pub(crate) struct ProductQuantized<T>
-    where
-        T: VectorRepr,
-    {
-        quant_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>,
-        full_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>,
-    }
-
-    impl<T> ProductQuantized<T>
-    where
-        T: VectorRepr,
-    {
-        pub(crate) fn new() -> Self {
-            Self {
-                quant_search: plugins::Plugins::new(),
-                full_search: plugins::Plugins::new(),
-            }
+impl<T> ProductQuantized<T>
+where
+    T: VectorRepr,
+{
+    pub(crate) fn new() -> Self {
+        Self {
+            quant_search: plugins::Plugins::new(),
+            full_search: plugins::Plugins::new(),
         }
+    }
 
-        pub(crate) fn search<P>(mut self, plugin: P) -> Self
-        where
-            P: plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>
-                + plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
-                + Clone
-                + 'static,
+    pub(crate) fn search<P>(mut self, plugin: P) -> Self
+    where
+        P: plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>
+            + plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
+            + Clone
+            + 'static,
+    {
+        self.quant_search.register(plugin.clone());
+        self.full_search.register(plugin);
+        self
+    }
+}
+
+impl<T> Benchmark for ProductQuantized<T>
+where
+    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
+{
+    type Input = IndexPQOperation;
+    type Output = QuantBuildResult;
+
+    fn try_match(&self, input: &IndexPQOperation, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        utils::match_data_type::<T>(&mut score, *input.index_operation.source.data_type());
+
+        if !self
+            .quant_search
+            .is_match(&input.index_operation.search_phase)
         {
-            self.quant_search.register(plugin.clone());
-            self.full_search.register(plugin);
-            self
+            score.fail(
+                1,
+                &format_args!(
+                    "Unsupported search phase: \"{}\" - expected one of {}",
+                    input.index_operation.search_phase.kind(),
+                    self.quant_search.format_kinds(),
+                ),
+            )
         }
+
+        score
     }
 
-    impl<T> Benchmark for ProductQuantized<T>
-    where
-        T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
-    {
-        type Input = IndexPQOperation;
-        type Output = QuantBuildResult;
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data/Query Type: {}", T::DATA_TYPE,)?;
+        writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
+    }
 
-        fn try_match(&self, input: &IndexPQOperation, context: &MatchContext) -> Score {
-            let mut score = context.success(0);
-            utils::match_data_type::<T>(&mut score, *input.index_operation.source.data_type());
+    fn run(
+        &self,
+        input: &IndexPQOperation,
+        checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<QuantBuildResult> {
+        writeln!(output, "{}", input)?;
 
-            if !self
-                .quant_search
-                .is_match(&input.index_operation.search_phase)
-            {
-                score.fail(
-                    1,
-                    &format_args!(
-                        "Unsupported search phase: \"{}\" - expected one of {}",
-                        input.index_operation.search_phase.kind(),
-                        self.quant_search.format_kinds(),
-                    ),
-                )
+        let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune);
+
+        let (index, build_stats, quant_training_time) = match &input.index_operation.source {
+            IndexSource::Load(load) => {
+                let index_config: &IndexConfiguration = &input.to_config()?;
+
+                let index =
+                    { utils::tokio::block_on(load_index::<_>(&load.load_path, index_config))? };
+
+                (Arc::new(index), None::<BuildStats>, MicroSeconds::new(0))
             }
+            IndexSource::Build(build) => {
+                let data: Arc<Matrix<T>> =
+                    Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
-            score
-        }
-
-        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            writeln!(f, "Data/Query Type: {}", T::DATA_TYPE,)?;
-            writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
-        }
-
-        fn run(
-            &self,
-            input: &IndexPQOperation,
-            checkpoint: Checkpoint<'_>,
-            mut output: &mut dyn Output,
-        ) -> anyhow::Result<QuantBuildResult> {
-            writeln!(output, "{}", input)?;
-
-            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune);
-
-            let (index, build_stats, quant_training_time) = match &input.index_operation.source {
-                IndexSource::Load(load) => {
-                    let index_config: &IndexConfiguration = &input.to_config()?;
-
-                    let index =
-                        { utils::tokio::block_on(load_index::<_>(&load.load_path, index_config))? };
-
-                    (Arc::new(index), None::<BuildStats>, MicroSeconds::new(0))
-                }
-                IndexSource::Build(build) => {
-                    let data: Arc<Matrix<T>> =
-                        Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
-
-                    let start = std::time::Instant::now();
-                    let table = {
-                        let train_data = Matrix::try_from(
-                            (&*T::as_f32(data.as_slice())?).into(),
-                            data.nrows(),
-                            data.ncols(),
-                        )?;
-
-                        diskann_async::train_pq(
-                            train_data.as_view(),
-                            input.num_pq_chunks,
-                            &mut StdRng::seed_from_u64(input.seed),
-                            diskann_providers::utils::create_thread_pool(build.num_threads())?
-                                .as_ref(),
-                        )?
-                    };
-
-                    let create_index = |data_view: MatrixView<T>| {
-                        let index = diskann_async::new_quant_index::<T, _, _>(
-                            input.try_as_config()?.build()?,
-                            input.inmem_parameters(data_view.nrows(), data_view.ncols())?,
-                            table,
-                            common::NoDeletes,
-                        )?;
-                        build::set_start_points(
-                            index.provider(),
-                            data_view,
-                            *build.start_point_strategy(),
-                        )?;
-                        Ok(index)
-                    };
-                    let quant_training_time: MicroSeconds = start.elapsed().into();
-
-                    let (index, build_stats) = run_build(
-                        build,
-                        hybrid,
-                        None,
-                        output,
-                        create_index,
-                        single_or_multi_insert,
+                let start = std::time::Instant::now();
+                let table = {
+                    let train_data = Matrix::try_from(
+                        (&*T::as_f32(data.as_slice())?).into(),
+                        data.nrows(),
+                        data.ncols(),
                     )?;
 
-                    // Save the index if requested
-                    if let Some(save_path) = build.save_path() {
-                        utils::tokio::block_on(save_index(index.clone(), save_path))?;
-                    }
+                    diskann_async::train_pq(
+                        train_data.as_view(),
+                        input.num_pq_chunks,
+                        &mut StdRng::seed_from_u64(input.seed),
+                        diskann_providers::utils::create_thread_pool(build.num_threads())?.as_ref(),
+                    )?
+                };
 
-                    (index, Some(build_stats), quant_training_time)
+                let create_index = |data_view: MatrixView<T>| {
+                    let index = diskann_async::new_quant_index::<T, _, _>(
+                        input.try_as_config()?.build()?,
+                        input.inmem_parameters(data_view.nrows(), data_view.ncols())?,
+                        table,
+                        common::NoDeletes,
+                    )?;
+                    build::set_start_points(
+                        index.provider(),
+                        data_view,
+                        *build.start_point_strategy(),
+                    )?;
+                    Ok(index)
+                };
+                let quant_training_time: MicroSeconds = start.elapsed().into();
+
+                let (index, build_stats) = run_build(
+                    build,
+                    hybrid,
+                    None,
+                    output,
+                    create_index,
+                    single_or_multi_insert,
+                )?;
+
+                // Save the index if requested
+                if let Some(save_path) = build.save_path() {
+                    utils::tokio::block_on(save_index(index.clone(), save_path))?;
                 }
-            };
 
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&build_stats)?;
+                (index, Some(build_stats), quant_training_time)
+            }
+        };
 
-            let search_phase = &input.index_operation.search_phase;
-            let search = if input.use_fp_for_search {
-                self.full_search
-                    .run(index, search_phase, &Strategy::new(common::FullPrecision))?
-            } else {
-                self.quant_search
-                    .run(index, search_phase, &Strategy::new(hybrid))?
-            };
+        // Save construction stats before running queries.
+        checkpoint.checkpoint(&build_stats)?;
 
-            let result = QuantBuildResult {
-                quant_training_time,
-                build: BuildResult::new(build_stats, search),
-            };
+        let search_phase = &input.index_operation.search_phase;
+        let search = if input.use_fp_for_search {
+            self.full_search
+                .run(index, search_phase, &Strategy::new(common::FullPrecision))?
+        } else {
+            self.quant_search
+                .run(index, search_phase, &Strategy::new(hybrid))?
+        };
 
-            writeln!(output, "\n\n{}", result)?;
-            Ok(result)
-        }
+        let result = QuantBuildResult {
+            quant_training_time,
+            build: BuildResult::new(build_stats, search),
+        };
+
+        writeln!(output, "\n\n{}", result)?;
+        Ok(result)
     }
 }

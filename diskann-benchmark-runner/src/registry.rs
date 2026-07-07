@@ -9,34 +9,10 @@ use thiserror::Error;
 
 use crate::{
     benchmark::{self, Benchmark, FailureScore, MatchContext, Regression, Score},
-    input, Checkpoint, Input, Output,
+    input,
+    internal::visibility::{Visibility},
+    Checkpoint, Features, Input, Output,
 };
-
-/// A registered benchmark entry: a name paired with a type-erased benchmark.
-pub(crate) struct RegisteredBenchmark {
-    name: String,
-    benchmark: Box<dyn benchmark::internal::Benchmark>,
-}
-
-impl std::fmt::Debug for RegisteredBenchmark {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let benchmark = Capture(&*self.benchmark);
-        f.debug_struct("RegisteredBenchmark")
-            .field("name", &self.name)
-            .field("benchmark", &benchmark)
-            .finish()
-    }
-}
-
-impl RegisteredBenchmark {
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub(crate) fn benchmark(&self) -> &dyn benchmark::internal::Benchmark {
-        &*self.benchmark
-    }
-}
 
 /// A collection of registered inputs and benchmarks.
 pub struct Registry {
@@ -64,10 +40,13 @@ impl Registry {
         self._input(tag).map(input::Registered)
     }
 
-    /// Return an iterator over all registered input tags in an unspecified order.
-    pub fn input_tags(&self) -> impl ExactSizeIterator<Item = &'static str> + use<'_> {
-        self.inputs.keys().copied()
+    pub(crate) fn inputs(&self) -> impl ExactSizeIterator<Item = input::Registered<'_>> {
+        self.inputs.values().map(|v| input::Registered(&**v))
     }
+
+    //--------------//
+    // Registration //
+    //--------------//
 
     /// Register a new `benchmark` with the given `name`.
     ///
@@ -94,11 +73,50 @@ impl Registry {
         Ok(())
     }
 
+    pub fn register_gated(
+        &mut self,
+        tag: &'static str,
+        name: impl Into<String>,
+        features: Features,
+        description: impl Into<String>,
+    ) -> Result<(), RegistryError> {
+        self.register_gated_input(crate::input::internal::Gated::new(tag, features.clone()))?;
+
+        self.benchmarks.push(RegisteredBenchmark {
+            name: name.into(),
+            benchmark: Box::new(benchmark::internal::FullyGated::new(
+                tag,
+                features,
+                description.into(),
+            )),
+        });
+        Ok(())
+    }
+
+    pub fn register_partially_gated<I>(
+        &mut self,
+        name: impl Into<String>,
+        features: Features,
+        description: impl Into<String>,
+    ) -> Result<(), RegistryError>
+    where
+        I: Input,
+    {
+        self.register_input::<I>()?;
+
+        self.benchmarks.push(RegisteredBenchmark {
+            name: name.into(),
+            benchmark: Box::new(benchmark::internal::PartiallyGated::<I>::new(
+                features,
+                description.into(),
+            )),
+        });
+        Ok(())
+    }
+
     /// Return an iterator over registered benchmark names and their descriptions.
-    pub(crate) fn names(&self) -> impl ExactSizeIterator<Item = (&str, String)> {
-        self.benchmarks
-            .iter()
-            .map(|entry| (entry.name.as_str(), Capture(&*entry.benchmark).to_string()))
+    pub(crate) fn benchmarks(&self) -> &[RegisteredBenchmark] {
+        &self.benchmarks
     }
 
     /// Return `true` if `job` matches with any registered benchmark. Otherwise, return `false`.
@@ -204,11 +222,57 @@ impl Registry {
 
                 if o.get().as_any().is::<crate::input::internal::Wrapper<T>>() {
                     Ok(())
+                } else if let Some(existing) = o
+                    .get()
+                    .as_any()
+                    .downcast_ref::<crate::input::internal::Gated>()
+                {
+                    Err(RegistryError {
+                        tag,
+                        existing: Kind::Gated(existing.features().to_string()),
+                        new: Kind::Available(wrapper.type_name()),
+                    })
                 } else {
                     Err(RegistryError {
                         tag,
-                        existing: o.get().type_name(),
-                        new: wrapper.type_name(),
+                        existing: Kind::Available(o.get().type_name()),
+                        new: Kind::Available(wrapper.type_name()),
+                    })
+                }
+            }
+        }
+    }
+
+    fn register_gated_input(
+        &mut self,
+        input: crate::input::internal::Gated,
+    ) -> Result<(), RegistryError> {
+        match self.inputs.entry(input.tag()) {
+            Entry::Vacant(v) => {
+                v.insert(Box::new(input));
+                Ok(())
+            }
+            Entry::Occupied(o) => {
+                if let Some(existing) = o
+                    .get()
+                    .as_any()
+                    .downcast_ref::<crate::input::internal::Gated>()
+                {
+                    if existing.features() != input.features() {
+                        Err(RegistryError {
+                            tag: input.tag(),
+                            existing: Kind::Gated(existing.features().to_string()),
+                            new: Kind::Gated(input.features().to_string()),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    let type_name = o.get().type_name();
+                    Err(RegistryError {
+                        tag: input.tag(),
+                        existing: Kind::Available(type_name),
+                        new: Kind::Gated(input.features().to_string()),
                     })
                 }
             }
@@ -287,18 +351,97 @@ impl Default for Registry {
     }
 }
 
+/// A registered benchmark entry: a name paired with a type-erased benchmark.
+pub(crate) struct RegisteredBenchmark {
+    name: String,
+    benchmark: Box<dyn benchmark::internal::Benchmark>,
+}
+
+impl std::fmt::Debug for RegisteredBenchmark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let benchmark = Capture(&*self.benchmark);
+        f.debug_struct("RegisteredBenchmark")
+            .field("name", &self.name)
+            .field("benchmark", &benchmark)
+            .finish()
+    }
+}
+
+impl RegisteredBenchmark {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn benchmark(&self) -> &dyn benchmark::internal::Benchmark {
+        &*self.benchmark
+    }
+
+    pub(crate) fn visibility(&self) -> Visibility<'_> {
+        self.benchmark.visibility()
+    }
+
+    pub(crate) fn display(&self) -> Display<'_> {
+        Display(self)
+    }
+
+    pub(crate) fn description(&self) -> String {
+        Capture(&*self.benchmark).to_string()
+    }
+
+    pub(crate) fn order(this: &&Self, other: &&Self) -> std::cmp::Ordering {
+        this.visibility()
+            .cmp(&other.visibility())
+            .then_with(|| this.name().cmp(other.name()))
+    }
+}
+
+pub(crate) struct Display<'a>(&'a RegisteredBenchmark);
+
+impl std::fmt::Display for Display<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self.0.name();
+        match self.0.visibility() {
+            Visibility::Available => writeln!(f, "{name}:")?,
+            Visibility::Gated { features } => {
+                writeln!(f, "{name} (requires the {}):", features)?
+            }
+        };
+
+        write!(
+            f,
+            "{}",
+            crate::utils::fmt::Indent::new(&self.0.description(), 4)
+        )
+    }
+}
+
 /// Error for [`Registry::register`] or [`Registry::register_regression`].
 #[derive(Debug, Error)]
 #[error(
-    "A different input with tag \"{}\" was already registered. Existing type: \"{}\". New type: \"{}\"",
+    "A different input with tag \"{}\" was already registered. Existing {}. New {}",
     self.tag,
     self.existing,
     self.new,
 )]
 pub struct RegistryError {
     tag: &'static str,
-    existing: &'static str,
-    new: &'static str,
+    existing: Kind,
+    new: Kind,
+}
+
+#[derive(Debug)]
+enum Kind {
+    Available(&'static str),
+    Gated(String),
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Available(type_name) => write!(f, "type \"{}\"", type_name),
+            Self::Gated(features) => write!(f, "gated input for {}", features),
+        }
+    }
 }
 
 /// Document the reason for a method matching failure.
@@ -422,7 +565,7 @@ mod tests {
         registry.register_input::<A>().unwrap();
         registry.register_input::<B>().unwrap();
 
-        let mut tags: Vec<_> = registry.input_tags().collect();
+        let mut tags: Vec<_> = registry.inputs().map(|i| i.tag()).collect();
         tags.sort();
         assert_eq!(tags.as_slice(), ["type-a", "type-b"]);
 

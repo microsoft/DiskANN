@@ -3,17 +3,16 @@
  * Licensed under the MIT license.
  */
 
-use crate::registry;
+use crate::{Features, registry};
 
-// submodules
 mod dim;
 mod typed;
 
 pub(crate) use typed::TypeInput;
 
-/////////
-// API //
-/////////
+//////////////////
+// Registration //
+//////////////////
 
 pub fn register_benchmarks(
     registry: &mut registry::Registry,
@@ -27,5 +26,26 @@ pub fn register_benchmarks(
 
     registry.register("simple-bench", dim::SimpleBench)?;
     registry.register_regression("dim-bench", dim::DimBench)?;
+
+    // Gated
+    registry.register_partially_gated::<TypeInput>(
+        "gated-bench",
+        Features::new("gated-feature"),
+        "A gated benchmark",
+    )?;
+
+    registry.register_partially_gated::<dim::DimInput>(
+        "another-gated-bench",
+        Features::all(["gated-feature", "super-special-gated-feature"]),
+        "Another gated benchmark",
+    )?;
+
+    registry.register_gated(
+        "phantom-input",
+        "fully-gated-bench",
+        Features::any(["fully-gated-feature", "something-else"]),
+        "A fully gated benchmark",
+    )?;
+
     Ok(())
 }

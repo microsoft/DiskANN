@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Checkpoint, Input, Output};
+use crate::{internal::visibility::Visibility, Checkpoint, Input, Output};
 
 ///////////////
 // Benchmark //
@@ -337,7 +337,7 @@ pub(crate) struct FailureScore(pub(crate) u32);
 pub(crate) mod internal {
     use super::*;
 
-    use crate::input::internal::Any;
+    use crate::{input::internal::Any, Features};
 
     use anyhow::Context;
     use thiserror::Error;
@@ -354,6 +354,9 @@ pub(crate) mod internal {
             checkpoint: Checkpoint<'_>,
             output: &mut dyn Output,
         ) -> anyhow::Result<serde_json::Value>;
+
+        // visibility
+        fn visibility(&self) -> Visibility<'_>;
 
         /// If supported, return an object capable of running regression checks on this benchmark.
         fn as_regression(&self) -> Option<&dyn Regression>;
@@ -495,25 +498,9 @@ pub(crate) mod internal {
             if let Some(cast) = input.downcast_ref::<T::Input>() {
                 self.benchmark.try_match(cast, context)
             } else {
-                struct TagMismatch<T>(&'static str, std::marker::PhantomData<T>);
-
-                impl<T> std::fmt::Display for TagMismatch<T>
-                where
-                    T: super::Benchmark,
-                {
-                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(
-                            f,
-                            "expected tag \"{}\" - instead got \"{}\"",
-                            T::Input::tag(),
-                            self.0,
-                        )
-                    }
-                }
-
                 context.fail(
                     MATCH_FAIL,
-                    &TagMismatch::<T>(input.tag(), std::marker::PhantomData),
+                    &TagMismatch::<T::Input>(input.tag(), std::marker::PhantomData),
                 )
             }
         }
@@ -538,9 +525,30 @@ pub(crate) mod internal {
             }
         }
 
+        // Visibility
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Available
+        }
+
         // Extensions
         fn as_regression(&self) -> Option<&dyn Regression> {
             R::as_regression(&self.benchmark)
+        }
+    }
+
+    struct TagMismatch<T>(&'static str, std::marker::PhantomData<T>);
+
+    impl<T> std::fmt::Display for TagMismatch<T>
+    where
+        T: Input,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "expected tag \"{}\" - instead got \"{}\"",
+                T::tag(),
+                self.0,
+            )
         }
     }
 
@@ -602,22 +610,127 @@ pub(crate) mod internal {
     //
     // We support two flavors:
     //
-    // 1. Benchmarks that have inputs that are valid and registered.
-    // 2. Benchmarks that have inputs that are *also* feature gated.
+    // 1. Benchmarks that have inputs that are *also* feature gated.
+    // 2. Benchmarks that have inputs that are valid and registered.
 
-    // pub(crate) struct FullyGated {
-    //     fn try_match(&self, _input: &Any) -> Result<MatchScore, FailureScore> {
-    //         // There is nothing here we can try to match against.
-    //         Err(FailureScore(u32::MAX))
-    //     }
+    pub(crate) struct FullyGated {
+        tag: &'static str,
+        features: Features,
+        description: String,
+    }
 
-    //     fn description(
-    //         &self,
-    //         f: &mut std::fmt::Formatter<'_>,
-    //         input: Option<&Any>,
-    //     ) -> std::fmt::Result {
-    //     }
-    // }
+    impl FullyGated {
+        pub(crate) fn new(tag: &'static str, features: Features, description: String) -> Self {
+            Self {
+                tag,
+                features,
+                description,
+            }
+        }
+    }
+
+    impl Benchmark for FullyGated {
+        fn try_match(&self, _input: &Any, context: &MatchContext) -> Score {
+            context.fail(
+                u32::MAX,
+                &format_args!("gated benchmark requires feature(s) {}", self.features),
+            )
+        }
+
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(
+                f,
+                "[gated by features {}] tag \"{}\"",
+                self.features, self.tag
+            )?;
+            f.write_str(&self.description)
+        }
+
+        fn run(
+            &self,
+            _input: &Any,
+            _checkpoint: Checkpoint<'_>,
+            _output: &mut dyn Output,
+        ) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!("tried to run a gated benchmark - this should be unreachable")
+        }
+
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Gated {
+                features: &self.features,
+            }
+        }
+
+        fn as_regression(&self) -> Option<&dyn Regression> {
+            None
+        }
+    }
+
+    pub(crate) struct PartiallyGated<I> {
+        features: Features,
+        description: String,
+        _input: std::marker::PhantomData<I>,
+    }
+
+    impl<I> PartiallyGated<I> {
+        pub(crate) fn new(features: Features, description: String) -> Self {
+            Self {
+                features,
+                description,
+                _input: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<I> Benchmark for PartiallyGated<I>
+    where
+        I: Input,
+    {
+        fn try_match(&self, input: &Any, context: &MatchContext) -> Score {
+            if input.is::<I>() {
+                context.fail(
+                    MATCH_FAIL - 1,
+                    &format_args!(
+                        "gated benchmark requires the feature(s) \"{}\"",
+                        self.features
+                    ),
+                )
+            } else {
+                context.fail(
+                    MATCH_FAIL,
+                    &TagMismatch::<I>(input.tag(), std::marker::PhantomData),
+                )
+            }
+        }
+
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(
+                f,
+                "tag \"{}\"",
+                I::tag()
+            )?;
+            f.write_str(&self.description)
+        }
+
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Gated {
+                features: &self.features,
+            }
+        }
+
+        fn run(
+            &self,
+            _input: &Any,
+            _checkpoint: Checkpoint<'_>,
+            _output: &mut dyn Output,
+        ) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!("tried to run a gated benchmark - this should be unreachable")
+        }
+
+        fn as_regression(&self) -> Option<&dyn Regression> {
+            None
+        }
+    }
 }
 
 ///////////

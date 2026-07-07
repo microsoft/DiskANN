@@ -36,7 +36,6 @@ use half::f16;
 
 use super::{
     build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-    inmem::{product, scalar, spherical},
     search,
 };
 use crate::{
@@ -112,9 +111,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         DynamicFullPrecision::<i8>::new(),
     )?;
 
-    product::register_benchmarks(registry)?;
-    scalar::register_benchmarks(registry)?;
-    spherical::register_benchmarks(registry)?;
+    super::inmem::register_benchmarks(registry)?;
     Ok(())
 }
 
