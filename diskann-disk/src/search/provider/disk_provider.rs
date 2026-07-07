@@ -1190,6 +1190,31 @@ where
                     &mut result_output_buffer,
                 ))?
             }
+            SearchMode::DiverseAttribute {
+                provider,
+                diverse_attribute_id,
+                diverse_results_k,
+            } => {
+                // Attribute-bucket diversity: keep at most `diverse_results_k`
+                // results per distinct attribute value. The provider is type
+                // erased (see `ErasedAttributeProvider`) so it fits the
+                // non-generic `SearchMode`.
+                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                let knn_search = Knn::new(k, l, beam_width)?;
+                let diverse_params = graph::DiverseSearchParams::new(
+                    *diverse_attribute_id,
+                    *diverse_results_k,
+                    Arc::new(provider.clone()),
+                );
+                let diverse = graph::search::Diverse::new(knn_search, diverse_params);
+                self.runtime.block_on(self.index.search(
+                    diverse,
+                    &strategy,
+                    &DefaultContext,
+                    query,
+                    &mut result_output_buffer,
+                ))?
+            }
         };
         query_stats.total_comparisons = stats.cmps;
         query_stats.search_hops = stats.hops;

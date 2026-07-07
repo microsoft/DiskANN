@@ -11,13 +11,42 @@
 
 use diskann::graph::ext::labeled::QueryLabelProvider;
 use diskann::graph::search::AdaptiveL;
+use diskann::neighbor::AttributeValueProvider;
+use diskann::provider::HasId;
 use diskann_providers::model::graph::provider::DeterminantDiversityParams;
+use std::sync::Arc;
 
 /// Owned closure used to filter vector IDs during disk search.
 ///
 /// The `&u32` argument is the disk-side internal/external ID (they coincide
 /// on the disk path by construction).
 pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
+
+/// Type-erased attribute provider used by the [`SearchMode::DiverseAttribute`]
+/// variant.
+///
+/// `SearchMode` is a non-generic enum, so the generic
+/// `P: AttributeValueProvider<Id = u32>` required by attribute-bucket diverse
+/// search is erased behind this trait object. The `Value` type is pinned to
+/// `u32`, matching every current provider.
+pub type DynAttributeProvider = dyn AttributeValueProvider<Id = u32, Value = u32>;
+
+/// `Sized` wrapper around [`DynAttributeProvider`] so it can be handed to
+/// `DiverseSearchParams<P>`, which requires `P: Sized`.
+#[derive(Debug, Clone)]
+pub struct ErasedAttributeProvider(pub Arc<DynAttributeProvider>);
+
+impl HasId for ErasedAttributeProvider {
+    type Id = u32;
+}
+
+impl AttributeValueProvider for ErasedAttributeProvider {
+    type Value = u32;
+
+    fn get(&self, id: Self::Id) -> Option<Self::Value> {
+        self.0.get(id)
+    }
+}
 
 /// Top-level disk search mode.
 ///
@@ -50,6 +79,12 @@ pub enum SearchMode<'a> {
     DiverseGraph {
         filter: Option<SearchPredicate<'a>>,
         params: DeterminantDiversityParams,
+    },
+
+    DiverseAttribute {
+        provider: ErasedAttributeProvider,
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
     },
 }
 
@@ -137,6 +172,21 @@ impl<'a> SearchMode<'a> {
         Self::DiverseGraph {
             filter: Some(Box::new(predicate)),
             params,
+        }
+    }
+
+    /// Attribute-bucket diverse search. Diversifies the top-k so that results
+    /// are spread across distinct attribute buckets (as opposed to
+    /// [`Self::diverse_graph`], which is determinant-based post-processing).
+    pub fn diverse_attribute(
+        provider: Arc<DynAttributeProvider>,
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
+    ) -> Self {
+        Self::DiverseAttribute {
+            provider: ErasedAttributeProvider(provider),
+            diverse_attribute_id,
+            diverse_results_k,
         }
     }
 }

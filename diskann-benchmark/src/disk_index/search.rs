@@ -4,7 +4,12 @@
  */
 
 use rayon::prelude::*;
-use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
+use std::{
+    collections::HashSet,
+    fmt,
+    sync::{atomic::AtomicBool, Arc},
+    time::Instant,
+};
 
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -37,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
     inputs::disk::{DiskIndexLoad, DiskSearchPhase},
-    utils::{datafiles, SimilarityMeasure},
+    utils::{attributes::FileAttributeProvider, datafiles, SimilarityMeasure},
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -236,6 +241,14 @@ where
 
     logger.log_checkpoint("index_loaded");
 
+    // Load the attribute provider for diversity-aware search, if configured.
+    let diverse_attribute_provider = match &search_params.attributes {
+        Some(attributes_file) => Some(Arc::new(FileAttributeProvider::load(attributes_file)?)),
+        None => None,
+    };
+    let diverse_results_k = search_params.diverse_results_k;
+    let diverse_attribute_id = search_params.diverse_attribute_id;
+
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
@@ -271,20 +284,31 @@ where
                 // Construct the SearchMode from the JSON-driven
                 // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
                 // benchmark only supplies the per-query filter and post-processor.
-                let has_filter = search_params.vector_filters_file.is_some();
-                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
-                    has_filter,
-                    vf,
-                    search_params.post_processor.as_ref(),
-                );
+                let mode: SearchMode<'_> = match diverse_attribute_provider.as_ref() {
+                    Some(provider) => SearchMode::diverse_attribute(
+                        provider.clone(),
+                        diverse_attribute_id,
+                        diverse_results_k.unwrap_or(search_params.recall_at as usize),
+                    ),
+                    None => {
+                        let has_filter = search_params.vector_filters_file.is_some();
+                        search_params.search_mode.search_mode(
+                            has_filter,
+                            vf,
+                            search_params.post_processor.as_ref(),
+                        )
+                    }
+                };
 
-                match searcher.search(
+                let search_outcome = searcher.search(
                     q,
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
                     mode,
-                ) {
+                );
+
+                match search_outcome {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
                         let base_count = (search_result.stats.result_count as usize)
