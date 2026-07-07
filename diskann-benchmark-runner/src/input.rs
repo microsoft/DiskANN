@@ -138,6 +138,8 @@ pub(crate) mod internal {
         }
     }
 
+    // Wrapper for user-supplied inputs.
+
     #[derive(Debug)]
     pub(crate) struct Wrapper<T>(std::marker::PhantomData<T>);
 
@@ -194,6 +196,53 @@ pub(crate) mod internal {
         }
         fn type_name(&self) -> &'static str {
             std::any::type_name::<T>()
+        }
+    }
+
+    // Gated Inputs
+
+    #[derive(Debug)]
+    pub(crate) struct Gated {
+        tag: &'static str,
+        feature: &'static str,
+    }
+
+    impl Gated {
+        pub(crate) fn new(
+            tag: &'static str,
+            feature: &'static str,
+        ) -> Self {
+            Self { tag, feature }
+        }
+    }
+
+    impl DynInput for Gated {
+        fn tag(&self) -> &'static str {
+            self.tag
+        }
+        fn try_deserialize(
+            &self,
+            _serialized: &serde_json::Value,
+            _checker: &mut Checker,
+        ) -> anyhow::Result<Any> {
+            anyhow::bail!(
+                "use of the \"{}\" input is gated behind the feature \"{}\"",
+                self.tag,
+                self.feature
+            );
+        }
+        fn example(&self) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!(
+                "use of the \"{}\" input is gated behind the feature \"{}\"",
+                self.tag,
+                self.feature,
+            );
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn type_name(&self) -> &'static str {
+            std::any::type_name::<Self>()
         }
     }
 }

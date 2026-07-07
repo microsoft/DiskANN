@@ -397,4 +397,25 @@ pub(crate) mod internal {
             write!(f, "{}", as_str)
         }
     }
+
+    // Gated Benchmarks
+    //
+    // We support two flavors:
+    //
+    // 1. Benchmarks that have inputs that are valid and registered.
+    // 2. Benchmarks that have inputs that are *also* feature gated.
+
+    // pub(crate) struct FullyGated {
+    //     fn try_match(&self, _input: &Any) -> Result<MatchScore, FailureScore> {
+    //         // There is nothing here we can try to match against.
+    //         Err(FailureScore(u32::MAX))
+    //     }
+
+    //     fn description(
+    //         &self,
+    //         f: &mut std::fmt::Formatter<'_>,
+    //         input: Option<&Any>,
+    //     ) -> std::fmt::Result {
+    //     }
+    // }
 }
