@@ -19,7 +19,7 @@ bytemuck.workspace = true
 num_cpus.workspace = true
 rayon.workspace = true
 half.workspace = true
-ordered-float = "5.3.0"
+ordered-float = "4.2.0"
 rand_distr.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -45,8 +45,6 @@ diskann-utils = { workspace = true, features = ["testing"] }
 
 [features]
 default = []
-# When a feature is enabled in tools, enable it in dependencies
-perf_test = ["diskann-disk/perf_test"]
 
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"

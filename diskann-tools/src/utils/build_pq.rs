@@ -3,10 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use diskann::utils::VectorRepr;
-use diskann::utils::VectorRepr;
-use diskann::ANNResult;
-use diskann_disk::{utils::instrumentation::Timer};
+use std::time::Instant;
+
+use diskann::{utils::VectorRepr, ANNResult};
 use diskann_providers::{
     model::{
         GeneratePivotArguments, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
@@ -55,7 +54,7 @@ pub fn build_pq<T: VectorRepr>(
 
     let p_val = MAX_PQ_TRAINING_SET_SIZE / (metadata.npoints() as f64);
 
-    let timer = Timer::new();
+    let timer = Instant::now();
     let storage_provider = FileStorageProvider;
     let random_provider = diskann_providers::utils::create_rnd_provider_from_seed(42);
 
@@ -94,14 +93,11 @@ pub fn build_pq<T: VectorRepr>(
     )?;
 
     info!(
-         "PQ build completed in {:.3} seconds, {:.3}B cycles, {:.3}% CPU time, peak memory {:.3} GBs for {} chunks, using {} threads",
-         timer.elapsed_seconds(),
-         timer.elapsed_gcycles(),
-         timer.get_average_cpu_time_in_percents(),
-         timer.get_peak_memory_usage(),
-         num_pq_chunks,
-         parameters.num_threads
-     );
+        "PQ build completed in {:.3} seconds for {} chunks, using {} threads",
+        timer.elapsed().as_secs_f64(),
+        num_pq_chunks,
+        parameters.num_threads
+    );
 
     Ok(())
 }
