@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use diskann::utils::VectorRepr;
 use diskann::ANNResult;
-use diskann_disk::data_model::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
@@ -28,7 +28,7 @@ pub struct BuildPQParameters<'a> {
     pub pq_bytes: f64,
 }
 
-pub fn build_pq<Data: GraphDataType>(
+pub fn build_pq<T: VectorRepr>(
     storage_provider: &impl StorageReadProvider,
     parameters: BuildPQParameters,
 ) -> ANNResult<()> {
@@ -59,7 +59,7 @@ pub fn build_pq<Data: GraphDataType>(
     let random_provider = diskann_providers::utils::create_rnd_provider_from_seed(42);
 
     let (mut train_data_vector, num_train, train_dim) = pq_storage
-        .get_random_train_data_slice::<Data::VectorDataType, _>(
+        .get_random_train_data_slice::<T, _>(
             p_val,
             &storage_provider,
             &mut random_provider.create_rnd(),
