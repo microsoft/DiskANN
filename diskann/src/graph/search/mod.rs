@@ -117,9 +117,5 @@ pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_filter_search::MultihopFilterSearch;
 pub use range_search::{Range, RangeSearchError};
 
-// Feature-gated diverse search.
-#[cfg(feature = "experimental_diversity_search")]
 mod diverse_search;
-
-#[cfg(feature = "experimental_diversity_search")]
 pub use diverse_search::Diverse;
