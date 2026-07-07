@@ -15,7 +15,6 @@ pub(crate) mod recall;
 pub(crate) mod streaming;
 pub(crate) mod tokio;
 
-#[cfg(feature = "experimental_diversity_search")]
 pub(crate) mod attributes;
 
 const DATA_TYPE_MISMATCH: FailureScore = FailureScore(1000);

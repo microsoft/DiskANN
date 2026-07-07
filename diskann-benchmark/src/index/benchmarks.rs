@@ -78,7 +78,6 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         .search(plugins::TopkMultihopFilter)
         .search(plugins::TopkInlineFilter)
         .search(plugins::DeterminantDiversity);
-    #[cfg(feature = "experimental_diversity_search")]
     let full_precision_f32 = full_precision_f32.search(plugins::DiverseSearch);
     registry.register("graph-index-full-precision-f32", full_precision_f32)?;
 
@@ -484,7 +483,6 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
     }
 }
 
-#[cfg(feature = "experimental_diversity_search")]
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
     for plugins::DiverseSearch
 {

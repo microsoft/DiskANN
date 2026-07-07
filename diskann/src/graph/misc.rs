@@ -32,7 +32,6 @@ pub enum InplaceDeleteMethod {
 }
 
 // Parameters for diverse search
-#[cfg(feature = "experimental_diversity_search")]
 #[derive(Clone, Debug)]
 pub struct DiverseSearchParams<P>
 where
@@ -43,7 +42,6 @@ where
     pub attribute_provider: std::sync::Arc<P>,
 }
 
-#[cfg(feature = "experimental_diversity_search")]
 impl<P> DiverseSearchParams<P>
 where
     P: crate::neighbor::AttributeValueProvider,

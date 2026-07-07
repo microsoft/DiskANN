@@ -179,11 +179,9 @@ impl DeterminantDiversity {
 }
 
 /// A search plugin for diversity-aware top-k search.
-#[cfg(feature = "experimental_diversity_search")]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DiverseSearch;
 
-#[cfg(feature = "experimental_diversity_search")]
 impl DiverseSearch {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_diverse_search().is_ok()

@@ -1951,7 +1951,6 @@ mod disk_provider_tests {
         );
     }
 
-    #[cfg(feature = "experimental_diversity_search")]
     #[test]
     fn test_disk_search_diversity_search() {
         use diskann::graph::DiverseSearchParams;

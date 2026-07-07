@@ -61,6 +61,3 @@ tracing = ["dep:tracing"]
 
 # Enable testing providers.
 testing = ["dep:dashmap"]
-
-# Enable experimental diversity search
-experimental_diversity_search = []

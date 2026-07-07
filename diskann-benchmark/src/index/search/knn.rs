@@ -172,7 +172,6 @@ where
     }
 }
 
-#[cfg(feature = "experimental_diversity_search")]
 impl<DP, T, S, P> Knn<DP::InternalId> for Arc<core_search::graph::DiverseKNN<DP, T, S, P>>
 where
     DP: diskann::provider::DataProvider,
