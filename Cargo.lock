@@ -763,7 +763,6 @@ dependencies = [
  "criterion",
  "diskann",
  "diskann-linalg",
- "diskann-platform",
  "diskann-providers",
  "diskann-quantization",
  "diskann-utils",
@@ -785,6 +784,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vfs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -843,16 +843,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diskann-platform"
-version = "0.54.0"
-dependencies = [
- "io-uring",
- "libc",
- "tracing",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "diskann-providers"
 version = "0.54.0"
 dependencies = [
@@ -863,7 +853,6 @@ dependencies = [
  "byteorder",
  "cfg-if",
  "diskann",
- "diskann-platform",
  "diskann-quantization",
  "diskann-utils",
  "diskann-vector",
@@ -873,7 +862,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.13.0",
  "num-traits",
- "opentelemetry",
  "proptest",
  "prost",
  "rand",

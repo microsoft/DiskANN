@@ -44,7 +44,6 @@ The repository uses a Cargo workspace with crates organized into functional tier
 **Tier 1: Foundation**
 - `diskann-wide/` - Low-level SIMD, bit manipulation, type width abstractions
 - `diskann-vector/` - Vector primitives and operations
-- `diskann-platform/` - Platform-specific utilities
 
 **Tier 2: Core Libraries**
 - `diskann-linalg/` - Linear algebra operations

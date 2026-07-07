@@ -14,9 +14,6 @@ pub use rayon_util::{
     create_thread_pool_for_bench, create_thread_pool_for_test,
 };
 
-mod timer;
-pub use timer::Timer;
-
 /// Read/write block size (64 MB) for cached I/O operations such as CachedReader and CachedWriter
 pub const READ_WRITE_BLOCK_SIZE: u64 = 64 * 1024 * 1024;
 
