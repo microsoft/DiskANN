@@ -49,12 +49,14 @@ use tracing::debug;
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
     search::{
-        provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
+        provider::{
+            aligned_file_reader::AlignedFileReaderFactory,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
         search_mode::SearchMode,
         traits::{VertexProvider, VertexProviderFactory},
     },
     storage::{api::AsyncDiskLoadContext, disk_index_reader::DiskIndexReader},
-    utils::AlignedFileReaderFactory,
     utils::QueryStatistics,
 };
 
@@ -139,20 +141,17 @@ where
         );
 
         let graph_header = {
-            let aligned_reader_factory = AlignedFileReaderFactory::new(get_disk_index_file(
-                ctx.quant_load_context.metadata.prefix(),
-            ));
-
             let caching_strategy = if ctx.num_nodes_to_cache > 0 {
                 CachingStrategy::StaticCacheWithBfsNodes(ctx.num_nodes_to_cache)
             } else {
                 CachingStrategy::None
             };
 
-            let vertex_provider_factory = DiskVertexProviderFactory::<Data, _>::new(
-                aligned_reader_factory,
-                caching_strategy,
-            )?;
+            let vertex_provider_factory =
+                DiskVertexProviderFactory::<Data, AlignedFileReaderFactory>::from_disk_index_path(
+                    get_disk_index_file(ctx.quant_load_context.metadata.prefix()),
+                    caching_strategy,
+                )?;
             VertexProviderFactory::get_header(&vertex_provider_factory)?
         };
 
@@ -1251,7 +1250,8 @@ mod disk_provider_tests {
     use super::*;
     use crate::{
         build::builder::core::disk_index_builder_tests::{IndexBuildFixture, TestParams},
-        utils::{QueryStatistics, VirtualAlignedReaderFactory},
+        search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
+        utils::QueryStatistics,
     };
 
     const TEST_INDEX_PREFIX_128DIM: &str =

@@ -15,16 +15,16 @@ use tracing::info;
 
 use crate::{
     data_model::{Cache, CachingStrategy, GraphHeader},
+    search::provider::aligned_file_reader::{
+        traits::{AlignedFileReader, AlignedReaderFactory},
+        AlignedFileReaderFactory, AlignedRead,
+    },
     search::{
         provider::{
             cached_disk_vertex_provider::CachedDiskVertexProvider,
             disk_vertex_provider::DiskVertexProvider,
         },
         traits::{VertexProvider, VertexProviderFactory},
-    },
-    utils::aligned_file_reader::{
-        traits::{AlignedFileReader, AlignedReaderFactory},
-        AlignedRead,
     },
 };
 
@@ -95,6 +95,22 @@ where
                 Arc::new(Cache::new(0, 0)?),
             ),
         }
+    }
+}
+
+impl<Data: GraphDataType<VectorIdType = u32>>
+    DiskVertexProviderFactory<Data, AlignedFileReaderFactory>
+{
+    /// Creates a production `DiskVertexProviderFactory` that reads the on-disk index at
+    /// `disk_index_path` using the platform's native aligned file reader.
+    pub fn from_disk_index_path(
+        disk_index_path: String,
+        caching_strategy: CachingStrategy,
+    ) -> ANNResult<Self> {
+        Self::new(
+            AlignedFileReaderFactory::new(disk_index_path),
+            caching_strategy,
+        )
     }
 }
 
@@ -239,8 +255,10 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test_utils::GraphDataF32VectorUnitData;
-    use crate::utils::VirtualAlignedReaderFactory;
+    use crate::{
+        search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
+        test_utils::GraphDataF32VectorUnitData,
+    };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
