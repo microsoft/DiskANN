@@ -73,8 +73,6 @@ bftree = ["dep:diskann-bftree"]
 # Enable Disk Index benchmarks
 disk-index = [
     "diskann-disk/perf_test",
-    "diskann-providers/perf_test",
-    "diskann-tools/perf_test",
     "dep:diskann-disk",
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",

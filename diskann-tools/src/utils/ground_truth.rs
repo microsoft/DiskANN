@@ -14,7 +14,6 @@ use diskann::{
     neighbor::{Neighbor, NeighborPriorityQueue},
     utils::VectorRepr,
 };
-use diskann_disk::data_model::GraphDataType;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::utils::{
     create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator,
@@ -26,6 +25,7 @@ use diskann_utils::{
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::utils::{search_index_utils, CMDResult, CMDToolError};
 
@@ -132,7 +132,8 @@ fn build_query_bitmaps<StorageProvider: StorageReadProvider + StorageWriteProvid
 /// * `insert_file` - Optional file containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
 pub fn compute_ground_truth_from_datafiles<
-    Data: GraphDataType,
+    V: VectorRepr,
+    A: Serialize + for<'de> Deserialize<'de> + Default + Copy,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 >(
     storage_provider: &StorageProvider,
@@ -148,27 +149,26 @@ pub fn compute_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let dataset_iterator = VectorDataIterator::<
-        StorageProvider,
-        Data::VectorDataType,
-        Data::AssociatedDataType,
-    >::new(base_file, associated_data_file.clone(), storage_provider)?;
+    let dataset_iterator = VectorDataIterator::<StorageProvider, V, A>::new(
+        base_file,
+        associated_data_file.clone(),
+        storage_provider,
+    )?;
 
     let insert_iterator = match insert_file {
         Some(insert_file) => {
-            let i = VectorDataIterator::<
-                StorageProvider,
-                Data::VectorDataType,
-                Data::AssociatedDataType,
-            >::new(insert_file, Option::None, storage_provider)?;
+            let i = VectorDataIterator::<StorageProvider, V, A>::new(
+                insert_file,
+                Option::None,
+                storage_provider,
+            )?;
             Some(i)
         }
         None => None,
     };
 
     // Load the query file
-    let query_data =
-        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let query_data = read_bin::<V>(&mut storage_provider.open_reader(query_file)?)?;
     let query_num = query_data.nrows();
     let has_filter_bitmap_file = filter_bitmap_file.is_some();
     let has_query_bitmaps = base_file_labels.is_some() && query_file_labels.is_some();
@@ -180,7 +180,7 @@ pub fn compute_ground_truth_from_datafiles<
         query_file_labels,
     )?;
 
-    let ground_truth_result = compute_ground_truth_from_data::<Data, StorageProvider>(
+    let ground_truth_result = compute_ground_truth_from_data::<V, A, StorageProvider>(
         distance_function,
         dataset_iterator,
         &query_data,
@@ -211,7 +211,7 @@ pub fn compute_ground_truth_from_datafiles<
     } else {
         // Write results and return
         let id_to_associated_data = associated_data_file.map(|_| id_to_associated_data);
-        write_ground_truth::<Data>(
+        write_ground_truth::<A>(
             storage_provider,
             ground_truth_file,
             query_num,
@@ -237,7 +237,8 @@ pub fn compute_ground_truth_from_datafiles<
 /// * `base_file_labels` - Optional labels file for base vectors.
 /// * `query_file_labels` - Optional labels file for query vectors.
 pub fn compute_range_ground_truth_from_datafiles<
-    Data: GraphDataType,
+    V: VectorRepr,
+    A: for<'de> Deserialize<'de> + Default,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 >(
     storage_provider: &StorageProvider,
@@ -250,14 +251,13 @@ pub fn compute_range_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let dataset_iterator = VectorDataIterator::<
-        StorageProvider,
-        Data::VectorDataType,
-        Data::AssociatedDataType,
-    >::new(base_file, Option::None, storage_provider)?;
+    let dataset_iterator = VectorDataIterator::<StorageProvider, V, A>::new(
+        base_file,
+        Option::None,
+        storage_provider,
+    )?;
 
-    let query_data =
-        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let query_data = read_bin::<V>(&mut storage_provider.open_reader(query_file)?)?;
     let query_num = query_data.nrows();
 
     let query_bitmaps = build_query_bitmaps(
@@ -268,7 +268,7 @@ pub fn compute_range_ground_truth_from_datafiles<
         query_file_labels,
     )?;
 
-    let ground_truth = compute_range_ground_truth_from_data::<Data, StorageProvider>(
+    let ground_truth = compute_range_ground_truth_from_data::<V, A, StorageProvider>(
         distance_function,
         dataset_iterator,
         &query_data,
@@ -282,15 +282,16 @@ pub fn compute_range_ground_truth_from_datafiles<
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn compute_range_ground_truth_from_data<Data, VectorReader>(
+pub fn compute_range_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
-    dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
-    queries: &Matrix<Data::VectorDataType>,
+    dataset_iter: VectorDataIterator<VectorReader, V, A>,
+    queries: &Matrix<V>,
     radius: f32,
     query_bitmaps: Option<Vec<BitSet>>,
 ) -> CMDResult<Vec<Vec<Neighbor<u32>>>>
 where
-    Data: GraphDataType,
+    V: VectorRepr,
+    A: for<'de> Deserialize<'de> + Default,
     VectorReader: StorageReadProvider,
 {
     let query_num = queries.nrows();
@@ -299,10 +300,10 @@ where
     let mut ground_truth: Vec<Vec<Neighbor<u32>>> = vec![Vec::new(); query_num];
     let mut queries_and_result: Vec<_> = queries.row_iter().zip(ground_truth.iter_mut()).collect();
 
-    let distance_comparer = Data::VectorDataType::distance(distance_function, Some(query_dim));
+    let distance_comparer = V::distance(distance_function, Some(query_dim));
 
     let batch_size = 10_000;
-    let mut data_batch: Vec<Box<[Data::VectorDataType]>> = Vec::with_capacity(batch_size);
+    let mut data_batch: Vec<Box<[V]>> = Vec::with_capacity(batch_size);
 
     let pool = create_thread_pool(0)?;
 
@@ -401,7 +402,7 @@ impl FromStr for MultivecAggregationMethod {
 /// * `base_file_labels` - Optional labels file for the base vectors to filter which base vectors to consider per query.
 /// * `query_file_labels` - Optional labels file for the query vectors to filter which base vectors to consider per query.
 pub fn compute_multivec_ground_truth_from_datafiles<
-    Data: GraphDataType,
+    V: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 >(
     storage_provider: &StorageProvider,
@@ -414,15 +415,11 @@ pub fn compute_multivec_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let (base_vectors, _, _, _) = file_util::load_multivec_bin::<
-        Data::VectorDataType,
-        StorageProvider,
-    >(storage_provider, base_file)?;
+    let (base_vectors, _, _, _) =
+        file_util::load_multivec_bin::<V, StorageProvider>(storage_provider, base_file)?;
 
-    let (query_vectors, query_num, query_dim, _) = file_util::load_multivec_bin::<
-        Data::VectorDataType,
-        StorageProvider,
-    >(storage_provider, query_file)?;
+    let (query_vectors, query_num, query_dim, _) =
+        file_util::load_multivec_bin::<V, StorageProvider>(storage_provider, query_file)?;
 
     // both base_file_labels and query_file_labels are provided or both are not provided
     if !((base_file_labels.is_some() && query_file_labels.is_some())
@@ -444,7 +441,7 @@ pub fn compute_multivec_ground_truth_from_datafiles<
 
     let has_query_bitmaps = query_bitmaps.is_some();
 
-    let ground_truth = compute_multivec_ground_truth_from_data::<Data::VectorDataType>(
+    let ground_truth = compute_multivec_ground_truth_from_data::<V>(
         distance_function,
         aggregation_method,
         base_vectors,
@@ -467,7 +464,7 @@ pub fn compute_multivec_ground_truth_from_datafiles<
         )
     } else {
         // Write results and return
-        write_ground_truth::<Data>(
+        write_ground_truth::<()>(
             storage_provider,
             ground_truth_file,
             query_num,
@@ -523,13 +520,13 @@ fn write_range_search_ground_truth<StorageProvider: StorageReadProvider + Storag
 /// Writes out a ground truth file.  ground_truth is a vector of NeighborPriorityQueue objects
 /// where the order of queue objects corresponds to the order of queries used to compute this
 /// ground truth.
-fn write_ground_truth<Data: GraphDataType>(
+fn write_ground_truth<A: Serialize + Copy>(
     storage_provider: &impl StorageWriteProvider,
     ground_truth_file: &str,
     number_of_queries: usize,
     number_of_neighbors: usize,
     ground_truth: Vec<NeighborPriorityQueue<u32>>,
-    id_to_associated_data: Option<Vec<Data::AssociatedDataType>>,
+    id_to_associated_data: Option<Vec<A>>,
 ) -> CMDResult<()> {
     let mut file = storage_provider.create_for_write(ground_truth_file)?;
 
@@ -589,19 +586,18 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
 /// * `query_bitmaps` - Optional per-query bitmaps restricting which base point ids contribute to that query's neighbors.
 #[allow(clippy::too_many_arguments)]
-pub fn compute_ground_truth_from_data<Data, VectorReader>(
+pub fn compute_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
-    dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
-    queries: &Matrix<Data::VectorDataType>,
+    dataset_iter: VectorDataIterator<VectorReader, V, A>,
+    queries: &Matrix<V>,
     recall_at: u32,
-    insert_iter: Option<
-        VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
-    >,
+    insert_iter: Option<VectorDataIterator<VectorReader, V, A>>,
     skip_base: Option<usize>,
     query_bitmaps: Option<Vec<BitSet>>,
-) -> CMDResult<(Npq, Vec<Data::AssociatedDataType>)>
+) -> CMDResult<(Npq, Vec<A>)>
 where
-    Data: GraphDataType,
+    V: VectorRepr,
+    A: for<'de> Deserialize<'de> + Default,
     VectorReader: StorageReadProvider,
 {
     let query_num = queries.nrows();
@@ -613,15 +609,15 @@ where
     let mut queries_and_neighbor_queue: Vec<_> =
         queries.row_iter().zip(neighbor_queues.iter_mut()).collect();
 
-    let distance_comparer = Data::VectorDataType::distance(distance_function, Some(query_dim));
+    let distance_comparer = V::distance(distance_function, Some(query_dim));
 
     let batch_size = 10_000;
-    let mut data_batch: Vec<Box<[Data::VectorDataType]>> = Vec::with_capacity(batch_size);
+    let mut data_batch: Vec<Box<[V]>> = Vec::with_capacity(batch_size);
 
     let pool = create_thread_pool(0)?;
 
     let mut num_base_points: usize = 0;
-    let mut id_to_associated_data = Vec::<Data::AssociatedDataType>::new();
+    let mut id_to_associated_data = Vec::<A>::new();
     let skip_base = skip_base.unwrap_or(0);
     // Loop over all the raw data
     for chunk in dataset_iter.skip(skip_base).chunks(batch_size).into_iter() {

@@ -6,12 +6,13 @@
 use std::{
     io::{Seek, SeekFrom, Write},
     marker::PhantomData,
+    time::Instant,
 };
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::utils::{
-    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, Timer,
+use diskann_providers::{
+    storage::{StorageReadProvider, StorageWriteProvider},
+    utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
@@ -107,7 +108,7 @@ where
     where
         Storage: StorageReadProvider + StorageWriteProvider,
     {
-        let timer = Timer::new();
+        let timer = Instant::now();
 
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
         let (num_points, dim) = metadata.into_dims();
@@ -596,6 +597,42 @@ mod generator_tests {
             assert!(error_msg.contains(&msg), "{}", &error_msg);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_params_missing_compressed_file() -> ANNResult<()> {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/test_data")
+            .expect("Could not create test directory");
+
+        let data_path = "/test_data/data.bin";
+        let compressed_path = "/test_data/compressed.bin";
+        let num_points = 100;
+        let dim = 8;
+        let output_dim = 4u32;
+
+        // Create source data
+        let data = create_test_data(num_points, dim);
+        let view = MatrixView::try_from(data.as_slice(), num_points, dim).unwrap();
+        write_bin(view, &mut storage_provider.create_for_write(data_path)?)?;
+
+        // Don't create compressed file but set offset > 0
+        let context = GeneratorContext::new(10, compressed_path.to_string());
+        let generator = QuantDataGenerator::<f32, DummyCompressor>::new(
+            data_path.to_string(),
+            context,
+            &output_dim,
+        )
+        .unwrap();
+
+        let err = generator
+            .validate_params(num_points, &storage_provider)
+            .unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::FileNotFoundError);
+        assert!(err.to_string().contains("expected compressed file"));
         Ok(())
     }
 }

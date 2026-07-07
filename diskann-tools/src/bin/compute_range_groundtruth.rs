@@ -2,17 +2,19 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+use std::time::Instant;
+
 use clap::Parser;
-use diskann_providers::{storage::FileStorageProvider, utils::Timer};
+use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{
     compute_range_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType,
-    GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
 };
 use diskann_vector::distance::Metric;
+use diskann_vector::Half;
 
 fn main() -> CMDResult<()> {
     init_subscriber();
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     let args = ComputeRangeGroundTruthArgs::parse();
 
@@ -22,7 +24,7 @@ fn main() -> CMDResult<()> {
 
     let err = match args.data_type {
         DataType::Float => {
-            compute_range_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
+            compute_range_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 &args.base_file,
@@ -35,7 +37,7 @@ fn main() -> CMDResult<()> {
             )
         }
         DataType::Fp16 => {
-            compute_range_ground_truth_from_datafiles::<GraphDataHalfVector, FileStorageProvider>(
+            compute_range_ground_truth_from_datafiles::<Half, (), FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 &args.base_file,
@@ -48,7 +50,7 @@ fn main() -> CMDResult<()> {
             )
         }
         DataType::Uint8 => {
-            compute_range_ground_truth_from_datafiles::<GraphDataU8Vector, FileStorageProvider>(
+            compute_range_ground_truth_from_datafiles::<u8, (), FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 &args.base_file,
@@ -60,19 +62,17 @@ fn main() -> CMDResult<()> {
                 args.query_file_labels.as_deref(),
             )
         }
-        DataType::Int8 => {
-            compute_range_ground_truth_from_datafiles::<GraphDataInt8Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.radius,
-                args.filter_bitmap_file.as_deref(),
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
+        DataType::Int8 => compute_range_ground_truth_from_datafiles::<i8, (), FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.radius,
+            args.filter_bitmap_file.as_deref(),
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
     };
 
     match err {

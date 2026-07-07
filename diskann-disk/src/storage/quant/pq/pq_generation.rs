@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Instant};
 
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -13,7 +13,7 @@ use diskann_providers::{
         GeneratePivotArguments,
     },
     storage::PQStorage,
-    utils::{BridgeErr, RayonThreadPoolRef, Timer},
+    utils::{BridgeErr, RayonThreadPoolRef},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
@@ -81,7 +81,7 @@ where
                 ));
             }
 
-            let timer = Timer::new();
+            let timer = Instant::now();
 
             let rng =
                 diskann_providers::utils::create_rnd_provider_from_optional_seed(context.seed);

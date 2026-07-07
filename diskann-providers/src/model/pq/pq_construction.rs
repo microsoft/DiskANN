@@ -8,6 +8,7 @@ use std::{
     mem::size_of,
     num::NonZeroUsize,
     sync::atomic::AtomicBool,
+    time::Instant,
     vec,
 };
 
@@ -34,7 +35,7 @@ use crate::{
     model::GeneratePivotArguments,
     storage::PQStorage,
     utils::{
-        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef, Timer,
+        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef,
         create_rnd_provider_from_seed,
     },
 };
@@ -324,7 +325,7 @@ where
     T: Copy + VectorRepr,
     Storage: StorageWriteProvider + StorageReadProvider,
 {
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     info!("Generating PQ data starting from offset {}", offset);
 
