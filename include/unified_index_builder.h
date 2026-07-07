@@ -59,7 +59,11 @@ struct UnifiedBuildContext
 // Class shape (instead of free function) leaves room for future stateful build
 // modes (incremental build, multi-pass, etc.). For now `build()` is the only
 // method.
-class unified_index_builder
+//
+// DISKANN_DLLEXPORT so the single public build entry point can be called across
+// the DLL boundary (e.g. from the AdsSnr PublicDiskANNBuilderWrapper). The other
+// unified_* classes remain unexported (internal to the DLL / static lib).
+class DISKANN_DLLEXPORT unified_index_builder
 {
   public:
     unified_index_builder();
