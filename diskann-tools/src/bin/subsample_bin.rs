@@ -24,19 +24,23 @@ use diskann_utils::io::Metadata;
 #[command(name = "subsample_bin", about = "Subsample vectors from a binary file")]
 struct Args {
     /// Data type of the vectors, one of: float, int8, uint8, fp16
-    #[arg(value_enum)]
+    #[arg(long = "data-type", value_enum)]
     data_type: DataType,
 
     /// Input base binary file
+    #[arg(long = "base-bin-file")]
     base_bin_file: PathBuf,
 
     /// Output file for sampled vectors
+    #[arg(long = "sampled-output-file")]
     sampled_output_file: PathBuf,
 
     /// Sampling probability between 0 and 1, for example 0.1
+    #[arg(long = "sampling-probability")]
     sampling_probability: f64,
 
     /// Optional random seed for reproducible sampling
+    #[arg(long = "random-seed")]
     random_seed: Option<u64>,
 }
 

@@ -19,7 +19,7 @@ use super::{parsing, validate};
 ///
 /// If using this struct as a [`streaming::Executor`], consider using the
 /// [`super::WithData`] adaptor to provide dataset and query matrices.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RunBook {
     // The individual runbook stages.
     stages: Vec<Stage>,
@@ -470,6 +470,8 @@ mod tests {
     // Runbook //
     //---------//
 
+    fn _assert_is_clone<T: Clone>(_x: &T) {}
+
     struct MockStream {
         stages: Vec<Stage>,
         current_stage: usize,
@@ -661,6 +663,7 @@ test_dataset:
         // Load the runbook
         let mut groundtruth_finder = ScanDirectory::new(temp_dir.path()).unwrap();
         let runbook = RunBook::load(&yaml_path, "test_dataset", &mut groundtruth_finder).unwrap();
+        _assert_is_clone(&runbook);
 
         // Verify the runbook was loaded correctly
         assert_eq!(runbook.len(), 8);

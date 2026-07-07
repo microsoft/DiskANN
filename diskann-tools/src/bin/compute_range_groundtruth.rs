@@ -6,9 +6,9 @@ use clap::Parser;
 use diskann_providers::{storage::FileStorageProvider, utils::Timer};
 use diskann_tools::utils::{
     compute_range_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType,
-    GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
 };
 use diskann_vector::distance::Metric;
+use diskann_vector::Half;
 
 fn main() -> CMDResult<()> {
     init_subscriber();
@@ -22,7 +22,7 @@ fn main() -> CMDResult<()> {
 
     let err = match args.data_type {
         DataType::Float => {
-            compute_range_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
+            compute_range_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 &args.base_file,
@@ -35,7 +35,7 @@ fn main() -> CMDResult<()> {
             )
         }
         DataType::Fp16 => {
-            compute_range_ground_truth_from_datafiles::<GraphDataHalfVector, FileStorageProvider>(
+            compute_range_ground_truth_from_datafiles::<Half, (), FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 &args.base_file,
@@ -48,7 +48,7 @@ fn main() -> CMDResult<()> {
             )
         }
         DataType::Uint8 => {
-            compute_range_ground_truth_from_datafiles::<GraphDataU8Vector, FileStorageProvider>(
+            compute_range_ground_truth_from_datafiles::<u8, (), FileStorageProvider>(
                 &storage_provider,
                 args.distance_function,
                 &args.base_file,
@@ -60,19 +60,17 @@ fn main() -> CMDResult<()> {
                 args.query_file_labels.as_deref(),
             )
         }
-        DataType::Int8 => {
-            compute_range_ground_truth_from_datafiles::<GraphDataInt8Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.radius,
-                args.filter_bitmap_file.as_deref(),
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
+        DataType::Int8 => compute_range_ground_truth_from_datafiles::<i8, (), FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.radius,
+            args.filter_bitmap_file.as_deref(),
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
     };
 
     match err {
@@ -93,35 +91,35 @@ fn main() -> CMDResult<()> {
 #[derive(Debug, Parser)]
 struct ComputeRangeGroundTruthArgs {
     /// data type <int8/uint8/float/fp16>
-    #[arg(long = "data_type", default_value = "float")]
+    #[arg(long = "data-type", default_value = "float")]
     pub data_type: DataType,
 
     /// Distance function to use.
-    #[arg(long = "dist_fn", default_value = "l2")]
+    #[arg(long = "dist-fn", default_value = "l2")]
     pub distance_function: Metric,
 
     /// File containing the base vectors in binary format
-    #[arg(long = "base_file", short, required = true)]
+    #[arg(long = "base-file", short, required = true)]
     pub base_file: String,
 
     /// Optional labels file for base vectors
-    #[arg(long = "base_file_labels", default_value = None)]
+    #[arg(long = "base-file-labels")]
     pub base_file_labels: Option<String>,
 
     /// File containing the query vectors in binary format
-    #[arg(long = "query_file", short, required = true)]
+    #[arg(long = "query-file", short, required = true)]
     pub query_file: String,
 
     /// Optional labels file for query vectors
-    #[arg(long = "query_file_labels", default_value = None)]
+    #[arg(long = "query-file-labels", default_value = None)]
     pub query_file_labels: Option<String>,
 
     /// Path of the file to write range ground truth to in binary format
-    #[arg(long = "gt_file", short, required = true)]
+    #[arg(long = "gt-file", short, required = true)]
     pub ground_truth_file: String,
 
     /// Filter bitmap file in range ground truth format
-    #[arg(long = "filter_bitmap_file", short, default_value = None)]
+    #[arg(long = "filter-bitmap-file", short, default_value = None)]
     pub filter_bitmap_file: Option<String>,
 
     /// Radius threshold used to include neighbors in range-groundtruth
