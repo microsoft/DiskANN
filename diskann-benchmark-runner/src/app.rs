@@ -460,7 +460,7 @@ impl App {
 /// The benchmark output will naturally change over time. Running the unit tests with the
 /// environment variable
 /// ```text
-/// POCKETBENCH_TEST=overwrite
+/// DISKANN_TEST=overwrite
 /// ```
 /// will replace the `stdout.txt` (and `output.json` if one was generated) for each test
 /// scenario. Developers should then consult `git diff` to ensure that major regressions
@@ -476,7 +476,7 @@ mod tests {
 
     use crate::{registry, ux};
 
-    const ENV: &str = "POCKETBENCH_TEST";
+    const ENV: &str = "DISKANN_TEST";
 
     // Expected I/O files.
     const STDIN: &str = "stdin.txt";
@@ -504,10 +504,10 @@ mod tests {
         }
     }
 
-    // Check if `POCKETBENCH_TEST=overwrite` is configured. Return `true` if so - otherwise
+    // Check if `DISKANN_TEST=overwrite` is configured. Return `true` if so - otherwise
     // return `false`.
     //
-    // If `POCKETBENCH_TEST` is set but its value is not `overwrite` - panic.
+    // If `DISKANN_TEST` is set but its value is not `overwrite` - panic.
     fn overwrite() -> bool {
         match std::env::var(ENV) {
             Ok(v) => {
