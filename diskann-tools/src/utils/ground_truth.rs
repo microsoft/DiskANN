@@ -50,6 +50,74 @@ pub fn read_labels_and_compute_bitmap(
     }
 }
 
+fn build_query_bitmaps<StorageProvider: StorageReadProvider + StorageWriteProvider>(
+    storage_provider: &StorageProvider,
+    query_num: usize,
+    filter_bitmap_file: Option<&str>,
+    base_file_labels: Option<&str>,
+    query_file_labels: Option<&str>,
+) -> CMDResult<Option<Vec<BitSet>>> {
+    // both base_file_labels and query_file_labels are provided or both are not provided
+    if !((base_file_labels.is_some() && query_file_labels.is_some())
+        || (base_file_labels.is_none() && query_file_labels.is_none()))
+    {
+        return Err(CMDToolError {
+            details: "Both base_file_labels and query_file_labels must be provided or both must be not provided.".to_string(),
+        });
+    }
+
+    if base_file_labels.is_some() && filter_bitmap_file.is_some() {
+        return Err(CMDToolError {
+            details: "Both base_file_labels and filter_bitmap_file cannot be provided.".to_string(),
+        });
+    }
+
+    let mut query_bitmaps: Option<Vec<BitSet>> = None;
+
+    if let (Some(base_file_labels), Some(query_file_labels)) = (base_file_labels, query_file_labels)
+    {
+        query_bitmaps = Some(read_labels_and_compute_bitmap(
+            base_file_labels,
+            query_file_labels,
+        )?);
+    }
+
+    // Load the filter bitmaps
+    let filter_bitmaps = match filter_bitmap_file {
+        Some(filter_bitmap_file) => {
+            let filters =
+                search_index_utils::load_vector_filters(storage_provider, filter_bitmap_file)?;
+
+            if filters.len() != query_num {
+                return Err(CMDToolError {
+                    details: format!(
+                        "Mismatch in query and filter bitmap sizes: {} filters for {} queries",
+                        filters.len(),
+                        query_num
+                    ),
+                });
+            }
+
+            Some(filters)
+        }
+        None => None,
+    };
+
+    if let Some(filters) = filter_bitmaps {
+        let mut bitmaps = vec![BitSet::new(); query_num];
+        for (idx_query, filter) in filters.iter().enumerate() {
+            for item in filter.iter() {
+                if let Ok(idx) = (*item).try_into() {
+                    bitmaps[idx_query].insert(idx);
+                }
+            }
+        }
+        query_bitmaps = Some(bitmaps)
+    }
+
+    Ok(query_bitmaps)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::panic)]
 /// Computes the true nearest neighbors for a set of queries and writes them to a file.
@@ -72,7 +140,7 @@ pub fn compute_ground_truth_from_datafiles<
     base_file: &str,
     query_file: &str,
     ground_truth_file: &str,
-    vector_filters_file: Option<&str>,
+    filter_bitmap_file: Option<&str>,
     recall_at: u32,
     insert_file: Option<&str>,
     skip_base: Option<usize>,
@@ -85,22 +153,6 @@ pub fn compute_ground_truth_from_datafiles<
         Data::VectorDataType,
         Data::AssociatedDataType,
     >::new(base_file, associated_data_file.clone(), storage_provider)?;
-
-    // both base_file_labels and query_file_labels are provided or both are not provided
-    if !((base_file_labels.is_some() && query_file_labels.is_some())
-        || (base_file_labels.is_none() && query_file_labels.is_none()))
-    {
-        return Err(CMDToolError {
-            details: "Both base_file_labels and query_file_labels must be provided or both must be not provided.".to_string(),
-        });
-    }
-
-    if base_file_labels.is_some() && vector_filters_file.is_some() {
-        return Err(CMDToolError {
-            details: "Both base_file_labels and vector_filters_file cannot be provided."
-                .to_string(),
-        });
-    }
 
     let insert_iterator = match insert_file {
         Some(insert_file) => {
@@ -118,50 +170,15 @@ pub fn compute_ground_truth_from_datafiles<
     let query_data =
         read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
     let query_num = query_data.nrows();
-
-    let mut query_bitmaps: Option<Vec<BitSet>> = None;
-    if let (Some(base_file_labels), Some(query_file_labels)) = (base_file_labels, query_file_labels)
-    {
-        query_bitmaps = Some(read_labels_and_compute_bitmap(
-            base_file_labels,
-            query_file_labels,
-        )?);
-    }
-
-    // Load the vector filters
-    let vector_filters = match vector_filters_file {
-        Some(vector_filters_file) => {
-            let filters =
-                search_index_utils::load_vector_filters(storage_provider, vector_filters_file)?;
-
-            assert_eq!(
-                filters.len(),
-                query_num,
-                "Mismatch in query and vector filter sizes"
-            );
-
-            Some(filters)
-        }
-        None => None,
-    };
-
-    let has_vector_filters = vector_filters.is_some();
-    let has_query_bitmaps = query_bitmaps.is_some();
-
-    if has_vector_filters {
-        // copy vector_filters to query_bitmaps one item at a time
-        if let Some(filters) = vector_filters {
-            let mut bitmaps = vec![BitSet::new(); query_num];
-            for (idx_query, filter) in filters.iter().enumerate() {
-                for item in filter.iter() {
-                    if let Ok(idx) = (*item).try_into() {
-                        bitmaps[idx_query].insert(idx);
-                    }
-                }
-            }
-            query_bitmaps = Some(bitmaps)
-        }
-    }
+    let has_filter_bitmap_file = filter_bitmap_file.is_some();
+    let has_query_bitmaps = base_file_labels.is_some() && query_file_labels.is_some();
+    let query_bitmaps = build_query_bitmaps(
+        storage_provider,
+        query_num,
+        filter_bitmap_file,
+        base_file_labels,
+        query_file_labels,
+    )?;
 
     let ground_truth_result = compute_ground_truth_from_data::<Data, StorageProvider>(
         distance_function,
@@ -180,7 +197,7 @@ pub fn compute_ground_truth_from_datafiles<
 
     assert_ne!(ground_truth.len(), 0, "No ground-truth results computed");
 
-    if has_vector_filters || has_query_bitmaps {
+    if has_filter_bitmap_file || has_query_bitmaps {
         let ground_truth_collection = ground_truth
             .into_iter()
             .map(|npq| npq.into_iter().collect())
@@ -203,6 +220,135 @@ pub fn compute_ground_truth_from_datafiles<
             id_to_associated_data,
         )
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::panic)]
+/// Computes range-search ground truth for a set of queries and writes it to a file.
+///
+/// # Arguments
+///
+/// * `distance_function` - e.g. L2
+/// * `base_file` - The file containing the base vectors.
+/// * `query_file` - The file containing the query vectors.
+/// * `ground_truth_file` - The file to write the range-search ground truth results to.
+/// * `radius` - Distance threshold in DiskANN score space (smaller is better; cosine uses `1 - cos`, inner product uses `-dot`).
+/// * `filter_bitmap_file` - Optional filter bitmap file in range-groundtruth format.
+/// * `base_file_labels` - Optional labels file for base vectors.
+/// * `query_file_labels` - Optional labels file for query vectors.
+pub fn compute_range_ground_truth_from_datafiles<
+    Data: GraphDataType,
+    StorageProvider: StorageReadProvider + StorageWriteProvider,
+>(
+    storage_provider: &StorageProvider,
+    distance_function: Metric,
+    base_file: &str,
+    query_file: &str,
+    ground_truth_file: &str,
+    radius: f32,
+    filter_bitmap_file: Option<&str>,
+    base_file_labels: Option<&str>,
+    query_file_labels: Option<&str>,
+) -> CMDResult<()> {
+    let dataset_iterator = VectorDataIterator::<
+        StorageProvider,
+        Data::VectorDataType,
+        Data::AssociatedDataType,
+    >::new(base_file, Option::None, storage_provider)?;
+
+    let query_data =
+        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let query_num = query_data.nrows();
+
+    let query_bitmaps = build_query_bitmaps(
+        storage_provider,
+        query_num,
+        filter_bitmap_file,
+        base_file_labels,
+        query_file_labels,
+    )?;
+
+    let ground_truth = compute_range_ground_truth_from_data::<Data, StorageProvider>(
+        distance_function,
+        dataset_iterator,
+        &query_data,
+        radius,
+        query_bitmaps,
+    )?;
+
+    assert_ne!(ground_truth.len(), 0, "No ground-truth results computed");
+
+    write_range_search_ground_truth(storage_provider, ground_truth_file, query_num, ground_truth)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compute_range_ground_truth_from_data<Data, VectorReader>(
+    distance_function: Metric,
+    dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
+    queries: &Matrix<Data::VectorDataType>,
+    radius: f32,
+    query_bitmaps: Option<Vec<BitSet>>,
+) -> CMDResult<Vec<Vec<Neighbor<u32>>>>
+where
+    Data: GraphDataType,
+    VectorReader: StorageReadProvider,
+{
+    let query_num = queries.nrows();
+    let query_dim = queries.ncols();
+
+    let mut ground_truth: Vec<Vec<Neighbor<u32>>> = vec![Vec::new(); query_num];
+    let mut queries_and_result: Vec<_> = queries.row_iter().zip(ground_truth.iter_mut()).collect();
+
+    let distance_comparer = Data::VectorDataType::distance(distance_function, Some(query_dim));
+
+    let batch_size = 10_000;
+    let mut data_batch: Vec<Box<[Data::VectorDataType]>> = Vec::with_capacity(batch_size);
+
+    let pool = create_thread_pool(0)?;
+
+    let mut num_base_points: usize = 0;
+
+    for chunk in dataset_iter.chunks(batch_size).into_iter() {
+        data_batch.clear();
+        for (data_vector, _associated_data) in chunk {
+            data_batch.push(data_vector);
+        }
+        let points = data_batch.len();
+
+        if points == 0 {
+            continue;
+        }
+
+        queries_and_result
+            .par_iter_mut()
+            .enumerate()
+            .for_each_in_pool(pool.as_ref(), |(idx_query, (query, query_results))| {
+                for (idx_in_batch, data) in data_batch.iter().enumerate() {
+                    let idx = (num_base_points + idx_in_batch) as u32;
+
+                    let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
+                        if let Ok(idx_usize) = idx.try_into() {
+                            bitmaps[idx_query].contains(idx_usize)
+                        } else {
+                            false
+                        }
+                    } else {
+                        true
+                    };
+
+                    if allowed_by_bitmap {
+                        let distance = distance_comparer.evaluate_similarity(data, query);
+                        if distance <= radius {
+                            query_results.push(Neighbor { id: idx, distance });
+                        }
+                    }
+                }
+            });
+
+        num_base_points += points;
+    }
+
+    Ok(ground_truth)
 }
 
 #[derive(Debug, Clone)]

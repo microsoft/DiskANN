@@ -15,8 +15,10 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::model::graph::provider::async_::common::FullPrecision;
-use diskann_utils::sampling::WithApproximateNorm;
+use diskann_providers::{
+    model::graph::provider::async_::common::FullPrecision,
+    storage::{FileStorageProvider, SaveWith},
+};
 
 use crate::{
     index::{
@@ -26,7 +28,7 @@ use crate::{
         search::plugins::{Plugin, Plugins},
     },
     inputs::{bftree::BfTreeFullPrecisionBuild, graph_index::SearchPhase},
-    utils::{self},
+    utils::{self, tokio},
 };
 
 type BfTreeFPProvider<T> = BfTreeProvider<T, NoStore>;
@@ -66,7 +68,7 @@ where
 
 impl<T> Benchmark for BfTreeFullPrecision<T>
 where
-    T: VectorRepr + AsDataType + SampleableForStart + WithApproximateNorm + 'static,
+    T: VectorRepr + AsDataType + SampleableForStart + 'static,
 {
     type Input = BfTreeFullPrecisionBuild;
     type Output = BuildResult;
@@ -126,7 +128,7 @@ where
             output,
             |data| {
                 let config = input.try_as_config()?.build()?;
-                let params = input.bftree_parameters(data.nrows(), data.ncols());
+                let params = input.bftree_parameters(data.nrows(), data.ncols())?;
                 let start_points = input.build().start_point_strategy().compute(data)?;
                 let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
                 Ok(Arc::new(DiskANNIndex::new(config, provider, None)))
@@ -135,6 +137,15 @@ where
         )?;
 
         checkpoint.checkpoint(&build_stats)?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
 
         let search_results =
             self.plugins

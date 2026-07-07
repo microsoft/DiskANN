@@ -10,8 +10,9 @@ use diskann::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchAccessor, SearchPostProcess, SearchPostProcessStep, SearchStrategy,
+            self, Accept, Decision, DefaultPostProcessor, FilteredAccessor, InplaceDeleteStrategy,
+            InsertStrategy, PruneStrategy, SearchAccessor, SearchPostProcess,
+            SearchPostProcessStep, SearchStrategy,
         },
         workingset::{self, map::Entry},
     },
@@ -115,7 +116,9 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Metric to use for comparing distances
     metric_type: Metric,
     /// Maximum degree of the graph.
-    /// Note: Unlike DiskANN, this is the true maximum. Neighbors can never exceed this degree.
+    ///
+    /// Note: Unlike DiskANN, this is the true maximum. Neighbors can never
+    /// exceed this degree.
     max_degree: usize,
     /// Garnet storage engine callbacks
     callbacks: Callbacks,
@@ -129,8 +132,11 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     training_lock: Mutex<()>,
     /// Pool of pre-allocated buffers to use for neighbor lists
     id_buffer_pool: ObjectPool<AdjList>,
-    /// Pool of pre-allocated buffers to use for filtering IDs
+    /// Pool of pre-allocated buffers to use for IDs
     filtered_ids_pool: ObjectPool<Vec<u32>>,
+    /// Pool of pre-allocated buffers to use for filter decisions during
+    /// filtered search beam expansion
+    filtered_decisions_pool: ObjectPool<Vec<bool>>,
     /// Pool of pre-allocated buffers to use for quantizing vectors
     quant_buffer_pool: ObjectPool<Vec<u8>>,
     /// Small cache for the start points' neighbors
@@ -158,6 +164,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
             ObjectPool::new(Undef::new(max_degree + 1), parallelism, Some(parallelism));
         let filtered_ids_pool = ObjectPool::new(
             Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2),
+            parallelism,
+            Some(parallelism),
+        );
+        let filtered_decisions_pool = ObjectPool::new(
+            Undef::new(MAX_OCCLUSION_SIZE.get() as usize),
             parallelism,
             Some(parallelism),
         );
@@ -228,6 +239,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             training_lock: Mutex::new(()),
             id_buffer_pool,
             filtered_ids_pool,
+            filtered_decisions_pool,
             quant_buffer_pool,
             start_point_cache,
             start_point_quant_cache,
@@ -889,6 +901,7 @@ pub(crate) struct DynamicAccessor<'a, T: VectorRepr> {
     computer: GarnetQueryComputer,
     id_buffer: PooledRef<'a, AdjList>,
     filtered_ids: PooledRef<'a, Vec<u32>>,
+    filtered_decisions: PooledRef<'a, Vec<bool>>,
 }
 
 impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
@@ -906,6 +919,9 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
         let filtered_ids = provider
             .filtered_ids_pool
             .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2)); // x2 to allow for the length prefixes for garnet
+        let filtered_decisions = provider
+            .filtered_decisions_pool
+            .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize));
 
         let computer = if quantized && let Some(quantizer) = provider.quantizer() {
             let from_f32 = T::as_f32(query).map_err(|e| {
@@ -929,6 +945,7 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
             computer,
             id_buffer,
             filtered_ids,
+            filtered_decisions,
         })
     }
 
@@ -1005,7 +1022,7 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
     {
         // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
         // borrow. We put it back at the end to save the allocation.
-        let mut id_buffer = std::mem::take(&mut **self.id_buffer);
+        let mut id_buffer = mem::take(&mut **self.id_buffer);
 
         for nl_id in ids {
             self.provider
@@ -1213,6 +1230,150 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         )
         .await
         .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)))
+    }
+}
+
+impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
+    fn start_point_distances<F>(&mut self, mut f: F) -> impl Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(glue::Decision<Self::Id>, f32) + Send,
+    {
+        if !self.provider.start_points_exist() {
+            return future::ready(Ok(()));
+        }
+
+        let result = match self.start_point_distance() {
+            Ok(dist) => {
+                f(glue::Decision::reject(Self::START_ID), dist);
+                Ok(())
+            }
+            Err(err) => Err(ANNError::from(err)),
+        };
+
+        future::ready(result)
+    }
+
+    fn expand_beam_filtered<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(glue::Decision<Self::Id>, f32) + Send,
+    {
+        // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
+        // borrow. We put it back at the end to save the allocation.
+        let mut id_buffer = mem::take(&mut **self.id_buffer);
+
+        for nl_id in ids {
+            self.provider
+                .get_neighbors(self.context, nl_id, &mut id_buffer);
+
+            self.filtered_ids.clear();
+            self.filtered_decisions.clear();
+
+            for id in id_buffer.iter().copied().filter(|id| pred.eval_mut(id)) {
+                if id == Self::START_ID {
+                    let dist = match self.start_point_distance() {
+                        Ok(dist) => dist,
+                        Err(err) => return future::ready(Err(ANNError::from(err))),
+                    };
+                    on_neighbors(Decision::reject(id), dist);
+                } else {
+                    let matches = self.provider.callbacks.matches_filter(self.context, id);
+
+                    self.filtered_ids.push(4);
+                    self.filtered_ids.push(id);
+
+                    self.filtered_decisions.push(matches);
+                }
+            }
+
+            let ctx = if self.quantized {
+                self.context.term(Term::Quantized)
+            } else {
+                self.context.term(Term::Vector)
+            };
+
+            if !self.filtered_ids.is_empty() {
+                self.provider
+                    .callbacks
+                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                        let dist = self.computer.evaluate_similarity(v);
+                        let decision = if self.filtered_decisions[i as usize] {
+                            Decision::accept(self.filtered_ids[i as usize * 2 + 1])
+                        } else {
+                            Decision::reject(self.filtered_ids[i as usize * 2 + 1])
+                        };
+                        on_neighbors(decision, dist);
+                    });
+            }
+        }
+
+        **self.id_buffer = id_buffer;
+        future::ready(Ok(()))
+    }
+
+    fn expand_beam_accept_only<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::Predicate<Self::Id> + glue::PredicateMut<Accept<Self::Id>> + Send + Sync,
+        F: FnMut(glue::Accept<Self::Id>, f32) + Send,
+    {
+        // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
+        // borrow. We put it back at the end to save the allocation.
+        let mut id_buffer = mem::take(&mut **self.id_buffer);
+
+        for nl_id in ids {
+            self.provider
+                .get_neighbors(self.context, nl_id, &mut id_buffer);
+            self.filtered_ids.clear();
+
+            for id in id_buffer.iter().copied() {
+                if id != Self::START_ID && pred.eval(&id) {
+                    let matches = self.provider.callbacks.matches_filter(self.context, id);
+
+                    if matches && pred.eval_mut(&Accept::new(id)) {
+                        self.filtered_ids.push(4);
+                        self.filtered_ids.push(id);
+                    }
+                }
+            }
+
+            let ctx = if self.quantized {
+                self.context.term(Term::Quantized)
+            } else {
+                self.context.term(Term::Vector)
+            };
+
+            if !self.filtered_ids.is_empty() {
+                self.provider
+                    .callbacks
+                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                        let dist = self.computer.evaluate_similarity(v);
+                        on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
+                    });
+            }
+        }
+
+        **self.id_buffer = id_buffer;
+        future::ready(Ok(()))
+    }
+
+    fn num_starting_points(&self) -> impl future::Future<Output = ANNResult<usize>> + Send {
+        if self.provider.start_points_exist() {
+            future::ready(Ok(1))
+        } else {
+            future::ready(Ok(0))
+        }
     }
 }
 

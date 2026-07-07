@@ -13,8 +13,12 @@ use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
-    search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
+        search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
@@ -264,33 +268,35 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                let vector_filter = if search_params.vector_filters_file.is_none() {
-                    None
-                } else {
-                    Some(Box::new(move |vid: &u32| vf.contains(vid))
-                        as Box<dyn Fn(&u32) -> bool + Send + Sync>)
-                };
+                // Construct the SearchMode from the JSON-driven
+                // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
+                // benchmark only supplies the per-query filter and post-processor.
+                let has_filter = search_params.vector_filters_file.is_some();
+                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
+                    has_filter,
+                    vf,
+                    search_params.post_processor.as_ref(),
+                );
 
                 match searcher.search(
                     q,
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
-                    vector_filter,
-                    search_params.is_flat_search,
+                    mode,
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
-                        *rc = search_result.results.len() as u32;
-                        let actual_results = search_result
-                            .results
-                            .len()
-                            .min(search_params.recall_at as usize);
-                        for (i, result_item) in search_result
-                            .results
-                            .iter()
-                            .take(actual_results)
-                            .enumerate()
+                        let base_count = (search_result.stats.result_count as usize)
+                            .min(search_params.recall_at as usize)
+                            .min(search_result.results.len());
+
+                        *rc = base_count as u32;
+                        id_chunk.fill(0);
+                        dist_chunk.fill(0.0);
+
+                        for (i, result_item) in
+                            search_result.results.iter().take(base_count).enumerate()
                         {
                             id_chunk[i] = result_item.vertex_id;
                             dist_chunk[i] = result_item.distance;
@@ -343,7 +349,7 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: search_params.is_flat_search,
+        is_flat_search: search_params.search_mode.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,

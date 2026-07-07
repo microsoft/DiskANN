@@ -31,7 +31,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -47,7 +47,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -63,7 +63,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -79,7 +79,7 @@ fn main() -> CMDResult<()> {
                 &args.base_file,
                 &args.query_file,
                 &args.ground_truth_file,
-                args.vector_filters_file.as_deref(),
+                args.filter_bitmap_file.as_deref(),
                 args.recall_at,
                 insert_file,
                 skip_base,
@@ -108,40 +108,40 @@ fn main() -> CMDResult<()> {
 #[derive(Debug, Parser)]
 struct ComputeGroundTruthArgs {
     /// data type <int8/uint8/float / fp16> (required)
-    #[arg(long = "data_type", default_value = "float")]
+    #[arg(long = "data-type", default_value = "float")]
     pub data_type: DataType,
 
     /// Distance function to use.
-    #[arg(long = "dist_fn", default_value = "l2")]
+    #[arg(long = "dist-fn", default_value = "l2")]
     pub distance_function: Metric,
 
     /// File containing the base vectors in binary format
-    #[arg(long = "base_file", short, required = true)]
+    #[arg(long = "base-file", short, required = true)]
     pub base_file: String,
 
-    #[arg(long = "base_file_labels", default_value = None)]
+    #[arg(long = "base-file-labels", default_value = None)]
     pub base_file_labels: Option<String>,
 
     /// File containing the query vectors in binary format
-    #[arg(long = "query_file", short, required = true)]
+    #[arg(long = "query-file", short, required = true)]
     pub query_file: String,
 
-    #[arg(long = "query_file_labels", default_value = None)]
+    #[arg(long = "query-file-labels", default_value = None)]
     pub query_file_labels: Option<String>,
 
     /// Path of the file to write the ground truth to in binary format.  Please don't append .bin at the end if no filter_label or filter_label_file is provided.  It will save the file with '.bin' at the end.  Otherwise it will save the file as filename_label.bin.
-    #[arg(long = "gt_file", short, required = true)]
+    #[arg(long = "gt-file", short, required = true)]
     pub ground_truth_file: String,
 
-    /// Vector filters file in the range ground truth format
-    #[arg(long = "vector_filters_file", short, default_value = None)]
-    pub vector_filters_file: Option<String>,
+    /// Filter bitmap file in the range ground truth format
+    #[arg(long = "filter-bitmap-file", short, default_value = None)]
+    pub filter_bitmap_file: Option<String>,
 
     /// Number of ground truth nearest neigbhors to compute
-    #[arg(long = "recall_at", short = 'K', default_value = "10")]
+    #[arg(long = "recall-at", short = 'K', default_value = "10")]
     pub recall_at: u32,
 
     /// File containing the associated data in binary format
-    #[arg(long = "associated_data_file", required = false, default_value = None)]
+    #[arg(long = "associated-data-file")]
     pub associated_data_file: Option<String>,
 }

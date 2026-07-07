@@ -53,7 +53,8 @@
                     "scan_promotion_rate": null,
                     "cb_copy_on_access_ratio": null,
                     "read_record_cache": null,
-                    "cache_only": null
+                    "cache_only": null,
+                    "use_snapshot": false
                 },
                 "neighbor_store_config": {
                     "cb_size_byte": 67108864,
@@ -64,7 +65,8 @@
                     "scan_promotion_rate": null,
                     "cb_copy_on_access_ratio": null,
                     "read_record_cache": null,
-                    "cache_only": null
+                    "cache_only": null,
+                    "use_snapshot": false
                 },
                 "quant_store_config": {
                     "cb_size_byte": 67108864,
@@ -75,7 +77,8 @@
                     "scan_promotion_rate": null,
                     "cb_copy_on_access_ratio": null,
                     "read_record_cache": null,
-                    "cache_only": null
+                    "cache_only": null,
+                    "use_snapshot": false
                 }
             }
         }
