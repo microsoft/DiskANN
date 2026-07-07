@@ -5,9 +5,6 @@
 pub mod search_index_utils;
 pub use search_index_utils::*;
 
-pub mod graph_data_types;
-pub use graph_data_types::*;
-
 pub mod data_type;
 pub use data_type::*;
 
