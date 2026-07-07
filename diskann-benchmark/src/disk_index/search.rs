@@ -9,6 +9,7 @@ use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
+use diskann::graph;
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
@@ -36,7 +37,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::disk::{DiskIndexLoad, DiskSearchMode, DiskSearchPhase},
+    inputs::post_processor::TopkPostProcessor,
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -158,6 +160,52 @@ impl DiskSearchResult {
     }
 }
 
+/// Construct the disk [`SearchMode`] from the JSON-driven [`DiskSearchMode`]
+/// config plus the per-query filter and post-processor supplied at search time.
+fn build_search_mode<'a>(
+    mode: &'a DiskSearchMode,
+    has_vector_filters: bool,
+    vector_filter: &'a HashSet<u32>,
+    post_processor: Option<&TopkPostProcessor>,
+) -> SearchMode<'a> {
+    let adaptive_l = mode.adaptive_l.as_ref().map(|adaptive_l| {
+        graph::search::AdaptiveL::new(adaptive_l.sample_count.into(), adaptive_l.scale_factor)
+            .expect("validated adaptive L must construct")
+    });
+
+    match (
+        mode.is_flat_search,
+        has_vector_filters,
+        post_processor,
+        adaptive_l,
+    ) {
+        (true, false, _, _) => SearchMode::flat(),
+        (true, true, _, _) => {
+            SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
+        }
+        (false, false, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
+            SearchMode::diverse_graph(*params)
+        }
+        (false, true, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
+            SearchMode::diverse_graph_filtered(
+                move |vid: &u32| vector_filter.contains(vid),
+                *params,
+            )
+        }
+        (false, false, None, Some(adaptive_l)) => {
+            SearchMode::inline_filter(|_| true, Some(adaptive_l))
+        }
+        (false, true, None, Some(adaptive_l)) => SearchMode::inline_filter(
+            move |vid: &u32| vector_filter.contains(vid),
+            Some(adaptive_l),
+        ),
+        (false, false, None, None) => SearchMode::graph(),
+        (false, true, None, None) => {
+            SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
+        }
+    }
+}
+
 pub(super) fn search_disk_index<T, StorageType>(
     index_load: &DiskIndexLoad,
     search_params: &DiskSearchPhase,
@@ -185,7 +233,7 @@ where
     let num_queries = queries.nrows();
 
     // Load the vector filters
-    let vector_filters = match &search_params.vector_filters_file {
+    let vector_filters = match &search_params.search_mode.vector_filters_file {
         Some(vector_filters_file) => {
             let vector_filters_file = vector_filters_file.to_string_lossy().to_string();
             search_index_utils::load_vector_filters(storage_provider, &vector_filters_file)?
@@ -199,7 +247,7 @@ where
 
     // Prepare ground truth context
     let gt_context = prepare_ground_truth_context(
-        search_params.vector_filters_file.is_some(),
+        search_params.search_mode.vector_filters_file.is_some(),
         &search_params.groundtruth,
         search_params.recall_at,
         storage_provider,
@@ -271,11 +319,12 @@ where
                 // Construct the SearchMode from the JSON-driven
                 // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
                 // benchmark only supplies the per-query filter and post-processor.
-                let has_filter = search_params.vector_filters_file.is_some();
-                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
+                let has_filter = search_params.search_mode.vector_filters_file.is_some();
+                let mode: SearchMode<'_> = build_search_mode(
+                    &search_params.search_mode,
                     has_filter,
                     vf,
-                    search_params.post_processor.as_ref(),
+                    search_params.search_mode.post_processor.as_ref(),
                 );
 
                 match searcher.search(
@@ -351,7 +400,7 @@ where
         recall_at: search_params.recall_at,
         is_flat_search: search_params.search_mode.is_flat_search,
         distance: search_params.distance,
-        uses_vector_filters: search_params.vector_filters_file.is_some(),
+        uses_vector_filters: search_params.search_mode.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
         span_metrics,

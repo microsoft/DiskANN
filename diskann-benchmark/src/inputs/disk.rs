@@ -6,26 +6,17 @@
 use std::{fmt, num::NonZeroUsize, path::Path};
 
 use anyhow::Context;
-#[cfg(feature = "disk-index")]
-use std::collections::HashSet;
 
-#[cfg(feature = "disk-index")]
-use diskann::graph;
 use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
-#[cfg(feature = "disk-index")]
-use diskann_disk::search::search_mode::SearchMode;
 #[cfg(feature = "disk-index")]
 use diskann_disk::QuantizationType;
 use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{as_input, post_processor::TopkPostProcessor, Example},
+    inputs::{as_input, graph_index::AdaptiveL, post_processor::TopkPostProcessor, Example},
     utils::SimilarityMeasure,
 };
-
-#[cfg(feature = "disk-index")]
-use crate::inputs::graph_index::AdaptiveL;
 
 //////////////
 // Registry //
@@ -72,69 +63,33 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) save_path: String,
 }
 
-#[cfg(feature = "disk-index")]
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct DiskSearchMode {
     pub(crate) is_flat_search: bool,
     #[serde(default)]
     pub(crate) adaptive_l: Option<AdaptiveL>,
+    #[serde(default)]
+    pub(crate) vector_filters_file: Option<InputFile>,
+    #[serde(default)]
+    pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 
-#[cfg(feature = "disk-index")]
 impl DiskSearchMode {
-    pub(crate) fn search_mode<'a>(
-        &'a self,
-        has_vector_filters: bool,
-        vector_filter: &'a HashSet<u32>,
-        post_processor: Option<&TopkPostProcessor>,
-    ) -> SearchMode<'a> {
-        let adaptive_l = self.adaptive_l.as_ref().map(|adaptive_l| {
-            graph::search::AdaptiveL::new(adaptive_l.sample_count.into(), adaptive_l.scale_factor)
-                .expect("validated adaptive L must construct")
-        });
-
-        match (
-            self.is_flat_search,
-            has_vector_filters,
-            post_processor,
-            adaptive_l,
-        ) {
-            (true, false, _, _) => SearchMode::flat(),
-            (true, true, _, _) => {
-                SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
-            }
-            (false, false, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
-                SearchMode::diverse_graph(*params)
-            }
-            (false, true, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
-                SearchMode::diverse_graph_filtered(
-                    move |vid: &u32| vector_filter.contains(vid),
-                    *params,
-                )
-            }
-            (false, false, None, Some(adaptive_l)) => {
-                SearchMode::inline_filter(|_| true, Some(adaptive_l))
-            }
-            (false, true, None, Some(adaptive_l)) => SearchMode::inline_filter(
-                move |vid: &u32| vector_filter.contains(vid),
-                Some(adaptive_l),
-            ),
-            (false, false, None, None) => SearchMode::graph(),
-            (false, true, None, None) => {
-                SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
-            }
-        }
-    }
-
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         if let Some(adaptive_l) = self.adaptive_l.as_mut() {
             adaptive_l.validate(checker)?;
+        }
+        if let Some(vf) = self.vector_filters_file.as_mut() {
+            vf.resolve(checker).context("invalid vector_filters_file")?;
+        }
+        if let Some(pp) = self.post_processor.as_mut() {
+            pp.validate(checker)
+                .context("invalid disk search post processor")?;
         }
         Ok(())
     }
 }
 
-#[cfg(feature = "disk-index")]
 impl fmt::Display for DiskSearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let base = if self.is_flat_search { "flat" } else { "graph" };
@@ -155,21 +110,11 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) beam_width: usize,
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
-    #[cfg(feature = "disk-index")]
     #[serde(default)]
     pub(crate) search_mode: DiskSearchMode,
-    // Backward compatibility for older benchmark inputs that used
-    // `is_flat_search` directly at the search-phase level.
-    #[cfg(feature = "disk-index")]
-    #[serde(default, skip_serializing)]
-    pub(crate) is_flat_search: Option<bool>,
-    #[cfg(not(feature = "disk-index"))]
-    pub(crate) is_flat_search: bool,
     pub(crate) distance: SimilarityMeasure,
-    pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
-    pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 
 /////////
@@ -270,16 +215,7 @@ impl DiskSearchPhase {
         self.groundtruth
             .resolve(checker)
             .context("invalid groundtruth file")?;
-        if let Some(vf) = self.vector_filters_file.as_mut() {
-            vf.resolve(checker).context("invalid vector_filters_file")?;
-        }
 
-        #[cfg(feature = "disk-index")]
-        if let Some(is_flat_search) = self.is_flat_search {
-            self.search_mode.is_flat_search = is_flat_search;
-        }
-
-        #[cfg(feature = "disk-index")]
         self.search_mode
             .validate(checker)
             .context("invalid disk search mode")?;
@@ -315,11 +251,6 @@ impl DiskSearchPhase {
             }
         }
 
-        if let Some(pp) = self.post_processor.as_mut() {
-            pp.validate(checker)
-                .context("invalid disk search post processor")?;
-        }
-
         Ok(())
     }
 }
@@ -353,20 +284,15 @@ impl Example for DiskIndexOperation {
             beam_width: 16,
             recall_at: 10,
             num_threads: 8,
-            #[cfg(feature = "disk-index")]
             search_mode: DiskSearchMode {
                 is_flat_search: false,
                 adaptive_l: None,
+                vector_filters_file: None,
+                post_processor: None,
             },
-            #[cfg(feature = "disk-index")]
-            is_flat_search: None,
-            #[cfg(not(feature = "disk-index"))]
-            is_flat_search: false,
             distance: SimilarityMeasure::SquaredL2,
-            vector_filters_file: None,
             num_nodes_to_cache: None,
             search_io_limit: None,
-            post_processor: None,
         };
 
         Self {
@@ -478,12 +404,9 @@ impl DiskSearchPhase {
         write_field!(f, "Beam Width", self.beam_width)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
-        #[cfg(feature = "disk-index")]
         write_field!(f, "Search Mode", self.search_mode)?;
-        #[cfg(not(feature = "disk-index"))]
-        write_field!(f, "Flat Search", self.is_flat_search)?;
         write_field!(f, "Distance", self.distance)?;
-        match &self.vector_filters_file {
+        match &self.search_mode.vector_filters_file {
             Some(vf) => write_field!(f, "Vector Filters File", vf.display())?,
             None => write_field!(f, "Vector Filters File", "none")?,
         }
@@ -495,7 +418,7 @@ impl DiskSearchPhase {
             Some(lim) => write_field!(f, "Search IO Limit", format!("{lim}"))?,
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,
         }
-        match &self.post_processor {
+        match &self.search_mode.post_processor {
             Some(pp) => write_field!(f, "Post Processor", pp)?,
             None => write_field!(f, "Post Processor", "none")?,
         }
