@@ -15,8 +15,9 @@ use windows_sys::Win32::{
     System::IO::{GetQueuedCompletionStatus, OVERLAPPED},
 };
 
+use super::file_handle::FileHandle;
+use super::io_completion_port::IOCompletionPort;
 use super::{DWORD, ULONG_PTR};
-use crate::{FileHandle, IOCompletionPort};
 
 /// Asynchronously queue a read request from a file into a buffer slice.
 ///
@@ -133,7 +134,6 @@ mod tests {
     use std::{fs::File, io::Write, path::Path};
 
     use super::*;
-    use crate::win::file_handle::{AccessMode, ShareMode};
 
     #[test]
     fn test_read_file_to_slice() {
@@ -147,10 +147,7 @@ mod tests {
         let mut buffer: [u8; 512] = [0; 512];
         let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
         {
-            let file_handle = unsafe {
-                FileHandle::new(path.to_str().unwrap(), AccessMode::Read, ShareMode::Read)
-            }
-            .unwrap();
+            let file_handle = unsafe { FileHandle::new(path.to_str().unwrap()) }.unwrap();
 
             // Call the function under test
             let result =

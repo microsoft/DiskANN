@@ -9,7 +9,6 @@ members = [
     "diskann-linalg",
     "diskann-utils",
     "diskann-quantization",
-    "diskann-platform",
     # Algorithm
     "diskann",
     # Providers
@@ -57,7 +56,6 @@ diskann-vector = { path = "diskann-vector", version = "0.54.0" }
 diskann-linalg = { path = "diskann-linalg", version = "0.54.0" }
 diskann-utils = { path = "diskann-utils", default-features = false, version = "0.54.0" }
 diskann-quantization = { path = "diskann-quantization", default-features = false, version = "0.54.0" }
-diskann-platform = { path = "diskann-platform", version = "0.54.0" }
 # Algorithm
 diskann = { path = "diskann", version = "0.54.0" }
 # Providers

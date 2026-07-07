@@ -4,11 +4,26 @@
  */
 use std::time::{Duration, Instant};
 
-use diskann_platform::*;
-#[cfg(feature = "perf_test")]
-use opentelemetry::{
-    KeyValue, global,
-    trace::{Tracer, get_active_span},
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux::{
+    get_number_of_processors, get_peak_workingset_size, get_process_cycle_time, get_process_time,
+    get_system_time,
+};
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::{
+    get_number_of_processors, get_peak_workingset_size, get_process_cycle_time, get_process_time,
+    get_system_time,
+};
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows::{
+    get_number_of_processors, get_peak_workingset_size, get_process_cycle_time, get_process_time,
+    get_system_time,
 };
 
 #[derive(Clone)]
@@ -47,10 +62,6 @@ impl Timer {
 
     pub fn elapsed(&self) -> Duration {
         Instant::now().duration_since(self.check_point)
-    }
-
-    pub fn elapsed_seconds(&self) -> f64 {
-        self.elapsed().as_secs_f64()
     }
 
     pub fn elapsed_gcycles(&self) -> f32 {
@@ -102,38 +113,6 @@ impl Timer {
         }
 
         0.0
-    }
-
-    pub fn elapsed_seconds_for_step(&self, step: &str) -> String {
-        #[cfg(feature = "perf_test")]
-        {
-            let tracer = global::tracer("");
-            tracer.in_span(format!("InMemIndexBuild-{:?}", step), |_context| {
-                get_active_span(|span| {
-                    span.set_attribute(KeyValue::new("duration_seconds", self.elapsed_seconds()));
-                    span.set_attribute(KeyValue::new(
-                        "elapsed_cycles",
-                        self.elapsed_gcycles() as f64,
-                    ));
-                    span.set_attribute(KeyValue::new(
-                        "cpu_time",
-                        self.get_average_cpu_time_in_percents(),
-                    ));
-                    span.set_attribute(KeyValue::new(
-                        "peak_memory_usage",
-                        self.get_peak_memory_usage() as f64,
-                    ));
-                });
-            });
-        }
-        format!(
-            "Time for {}: {:.3} seconds, {:.3}B cycles, {:.3}% CPU time, peak memory {:.3} GBs",
-            step,
-            self.elapsed_seconds(),
-            self.elapsed_gcycles(),
-            self.get_average_cpu_time_in_percents(),
-            self.get_peak_memory_usage()
-        )
     }
 }
 
@@ -199,13 +178,6 @@ mod timer_tests {
             timer.elapsed() > t0,
             "Timer::elapsed() did not increase over time"
         );
-    }
-
-    #[test]
-    fn test_elapsed_seconds_for_step() {
-        let timer = Timer::new();
-        let log = timer.elapsed_seconds_for_step("Test step");
-        assert!(log.contains("Time for Test step:"));
     }
 
     #[test]

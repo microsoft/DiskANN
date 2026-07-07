@@ -45,8 +45,6 @@ diskann-utils = { workspace = true, features = ["testing"] }
 
 [features]
 default = []
-# When a feature is enabled in tools, enable it in dependencies
-perf_test = ["diskann-providers/perf_test"]
 
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"
