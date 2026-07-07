@@ -19,7 +19,7 @@ use diskann::{
 };
 use diskann_benchmark_core::{self as benchmark_core, recall::GroundTruthMode, search};
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::{datatype::AsDataType, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Registry,
@@ -95,25 +95,18 @@ where
     type Input = FlatSearch;
     type Output = FlatResult;
 
-    fn try_match(&self, input: &FlatSearch) -> Result<MatchScore, FailureScore> {
-        utils::match_data_type::<T>(input.data_type)
+    fn try_match(&self, input: &FlatSearch, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        let desc = T::describe(input.data_type);
+        if !desc.is_match() {
+            score.fail(1, &format_args!("Data Type: {}", desc));
+        }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&FlatSearch>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(i) => {
-                let desc = T::describe(i.data_type);
-                if !desc.is_match() {
-                    writeln!(f, "Data Type: {}", desc)?;
-                }
-                Ok(())
-            }
-            None => writeln!(f, "Data Type: {}", T::DATA_TYPE),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data Type: {}", T::DATA_TYPE)
     }
 
     fn run(
@@ -559,40 +552,35 @@ mod tests {
     }
 
     #[test]
-    fn description_with_matching_type() {
-        let benchmark = Flat::<f32>::new();
-        let input = crate::inputs::flat::FlatSearch::example();
-        let text = format!("{}", DescriptionHelper(&benchmark, Some(&input)));
-        // When the type matches, description writes nothing (is_match() == true)
-        assert!(!text.contains("Data Type:"));
-    }
-
-    #[test]
     fn description_without_input() {
         let benchmark = Flat::<f32>::new();
-        let text = format!("{}", DescriptionHelper::<f32>(&benchmark, None));
+        let text = format!("{}", DescriptionHelper::<f32>(&benchmark));
         assert!(text.contains("Data Type: float32"));
     }
 
     #[test]
     fn description_with_mismatched_type() {
-        use diskann_benchmark_runner::utils::datatype::DataType;
+        use diskann_benchmark_runner::{benchmark::TestScore, utils::datatype::DataType};
         let benchmark = Flat::<f32>::new();
         let mut input = crate::inputs::flat::FlatSearch::example();
         input.data_type = DataType::UInt8;
-        let text = format!("{}", DescriptionHelper(&benchmark, Some(&input)));
-        assert!(text.contains("Data Type: expected \"float32\" but found \"uint8\""));
+
+        let score = MatchContext::test(&benchmark, &input);
+        match score {
+            TestScore::Failure { reasons, .. } => {
+                let reasons = reasons.unwrap();
+                assert!(reasons[0].contains("Data Type: expected \"float32\" but found \"uint8\""));
+            }
+            _ => panic!("matching should fail"),
+        }
     }
 
     /// Helper to call `description()` via `Display`.
-    struct DescriptionHelper<'a, T: VectorRepr + AsDataType>(
-        &'a Flat<T>,
-        Option<&'a crate::inputs::flat::FlatSearch>,
-    );
+    struct DescriptionHelper<'a, T: VectorRepr + AsDataType>(&'a Flat<T>);
 
     impl<T: VectorRepr + AsDataType> std::fmt::Display for DescriptionHelper<'_, T> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            self.0.description(f, self.1)
+            self.0.description(f)
         }
     }
 }
