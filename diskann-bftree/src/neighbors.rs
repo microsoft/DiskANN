@@ -87,7 +87,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     /// `neighbors` is cleared first upon each invocation. A vector with no
     /// stored neighbor list yet (bf-tree `NotFound`) yields an empty list rather
     /// than an error, so neighbor lists are created lazily on first write.
-    /// One data copy is involved which copies the data from bf-tree to `neighbors`
+    /// Involves one data copy, from the bf-tree into `neighbors`.
     pub fn get_neighbors(&self, vector_id: I, neighbors: &mut AdjacencyList<I>) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
