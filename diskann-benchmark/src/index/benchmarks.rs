@@ -634,7 +634,8 @@ where
             beta_filter.reps,
             &beta_filter.num_threads,
             &beta_filter.runs,
-        );
+        )
+        .with_groundtruth_mode(benchmark_core::recall::GroundTruthMode::Flexible);
 
         let result = search::knn::run(&knn, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
@@ -680,7 +681,8 @@ where
             datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
         let steps =
-            search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+            search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs)
+                .with_groundtruth_mode(benchmark_core::recall::GroundTruthMode::Flexible);
 
         let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -737,7 +739,8 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-        let steps = search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+        let steps = search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs)
+            .with_groundtruth_mode(benchmark_core::recall::GroundTruthMode::Flexible);
 
         let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 
