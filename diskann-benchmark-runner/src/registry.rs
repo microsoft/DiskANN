@@ -20,7 +20,7 @@ pub(crate) struct RegisteredBenchmark {
 
 impl std::fmt::Debug for RegisteredBenchmark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let benchmark = Capture(&*self.benchmark);
+        let benchmark = self.benchmark.as_string();
         f.debug_struct("RegisteredBenchmark")
             .field("name", &self.name)
             .field("benchmark", &benchmark)
@@ -98,7 +98,7 @@ impl Registry {
     pub(crate) fn names(&self) -> impl ExactSizeIterator<Item = (&str, String)> {
         self.benchmarks
             .iter()
-            .map(|entry| (entry.name.as_str(), Capture(&*entry.benchmark).to_string()))
+            .map(|entry| (entry.name.as_str(), entry.benchmark.as_string()))
     }
 
     /// Return `true` if `job` matches with any registered benchmark. Otherwise, return `false`.
@@ -361,21 +361,6 @@ pub(crate) struct RegisteredTolerance<'a> {
     /// A single tolerance input can apply to multiple benchmarks. This field records all
     /// such benchmarks that are available in the registry that use this tolerance.
     pub(crate) regressions: Vec<RegressionBenchmark<'a>>,
-}
-
-/// Helper to capture a `Benchmark::description` call into a `String` via `Display`.
-struct Capture<'a>(&'a dyn benchmark::internal::Benchmark);
-
-impl std::fmt::Display for Capture<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.description(f)
-    }
-}
-
-impl std::fmt::Debug for Capture<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.description(f)
-    }
 }
 
 ///////////
