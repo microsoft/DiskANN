@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::{percentiles, MicroSeconds},
     Benchmark, Checkpoint, Registry,
@@ -39,15 +39,11 @@ impl Benchmark for MetadataIndexJob {
     type Input = MetadataIndexBuild;
     type Output = MetadataIndexBuildStats;
 
-    fn try_match(&self, _input: &MetadataIndexBuild) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(1))
+    fn try_match(&self, _input: &MetadataIndexBuild, context: &MatchContext) -> Score {
+        context.success(1)
     }
 
-    fn description(
-        &self,
-        _f: &mut std::fmt::Formatter<'_>,
-        _input: Option<&MetadataIndexBuild>,
-    ) -> std::fmt::Result {
+    fn description(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Ok(())
     }
 
