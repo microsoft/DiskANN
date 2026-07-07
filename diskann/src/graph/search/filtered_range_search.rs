@@ -242,14 +242,15 @@ where
                 dist <= radius
             });
 
-            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
-                    all_matched.iter().copied(),
+                    all_matched
+                        .iter()
+                        .copied()
+                        .take(self.max_returned().unwrap_or(usize::MAX)),
                     &mut filtered,
                 )
-                .await
                 .into_ann_result()?;
 
             Ok(SearchStats {
