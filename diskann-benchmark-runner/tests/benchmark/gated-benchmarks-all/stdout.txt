@@ -25,7 +25,7 @@ Registered Benchmarks:
         A gated benchmark
     something-else (requires the feature "gated-feature-3"):
         tag "sample-input"
-        A gated input that always registers its input
+        A gated benchmark that always registers its input
     something-else-v3 (requires the feature "gated-feature-3"):
         tag "sample-input"
-        A gated input that always registers its input - a redundant registration.
+        A gated benchmark that always registers its input - a redundant registration.

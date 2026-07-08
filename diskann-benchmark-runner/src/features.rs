@@ -30,7 +30,7 @@ use crate::utils::fmt;
 /// let features = Features::any(["a", "b"]);
 /// assert_eq!(features.to_string(), "features \"a\" or \"b\"");
 /// ```
-/// A custom layout"
+/// A custom layout:
 /// ```
 /// use diskann_benchmark_runner::Features;
 ///
@@ -141,7 +141,7 @@ impl std::fmt::Display for Features {
                 }
             }
             FeaturesInner::Custom { custom, plural } => {
-                write!(f, "{} \"{}\"", feature(*plural), custom)
+                write!(f, "{} {}", feature(*plural), custom)
             }
         }
     }
@@ -179,11 +179,11 @@ mod tests {
             // Custom
             (
                 Features::custom("custom/stuff", false),
-                "feature \"custom/stuff\"",
+                "feature custom/stuff",
             ),
             (
                 Features::custom("custom/stuff", true),
-                "features \"custom/stuff\"",
+                "features custom/stuff",
             ),
         ];
 

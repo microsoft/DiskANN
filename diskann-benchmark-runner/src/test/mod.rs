@@ -117,19 +117,19 @@ pub fn register_benchmarks(
     // A benchmark that always registers its input, but is the only one to use it.
     let features = Features::new("gated-feature-3");
     if config.enabled(&features) {
-        // Register it twice to test pluralization in the print-out.
         registry.register("something-else", gated::GatedWithIndependentInput)?;
     } else {
+        // Register it twice to test pluralization in the print-out.
         registry.register_partially_gated::<gated::SampleInput>(
             "something-else",
             features.clone(),
-            "A gated input that always registers its input",
+            "A gated benchmark that always registers its input",
         )?;
 
         registry.register_partially_gated::<gated::SampleInput>(
             "something-else-v3",
             features,
-            "A gated input that always registers its input - a redundant registration.",
+            "A gated benchmark that always registers its input - a redundant registration.",
         )?;
     }
 

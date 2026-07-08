@@ -108,11 +108,11 @@ impl Registry {
     ///
     /// The resulting benchmark will not be callable, but it will be discoverable. When used
     /// with [`crate::App`], this will provide much better diagnostics when an input with
-    /// `tag` is parsed by the front and and dispatched to the back-end.
+    /// `tag` is parsed by the front-end and dispatched to the back-end.
     ///
     /// # Errors
     ///
-    /// Errors if an in input with tag but different type has already been registered.
+    /// Errors if an input with tag but different type has already been registered.
     pub fn register_partially_gated<I>(
         &mut self,
         name: impl Into<String>,

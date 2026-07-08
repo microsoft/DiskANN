@@ -617,7 +617,7 @@ pub(crate) mod internal {
     // 2. Benchmarks that have inputs that are *also* feature gated.
 
     /// A benchmark that is gated behind `features`, but whose input *is* compiled into the
-    /// application. These benchamrks allow their inputs to be inspected and parsed, but
+    /// application. These benchmarks allow their inputs to be inspected and parsed, but
     /// fail matching.
     ///
     /// This custom type allows us to return more precise error messages when benchmark
