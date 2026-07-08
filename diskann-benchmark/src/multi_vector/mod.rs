@@ -30,14 +30,10 @@ cfg_if::cfg_if! {
             kernels::register(registry)
         }
     } else {
-        pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-            registry.register_partially_gated::<crate::inputs::multi_vector::MultiVectorOp>(
-                "multi-vector-op",
-                "multi-vector",
-                "Multi-vector benchmarks"
-            )?;
+        crate::utils::stub_impl!("multi-vector", inputs::multi_vector::MultiVectorOp);
 
-            Ok(())
+        pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+            imp::register("multi-vector-op", registry)
         }
     }
 }
