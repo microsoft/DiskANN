@@ -99,7 +99,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    benchmark::{internal::CheckedPassFail, PassFail},
+    benchmark::{internal::CheckedPassFail, MatchContext, PassFail},
     input::internal::Any,
     internal::load_from_disk,
     jobs, registry, result, Checker,
@@ -243,7 +243,11 @@ impl<'a> Checks<'a> {
                     .entry
                     .regressions
                     .iter()
-                    .filter_map(|r| r.try_match(&input).ok().map(|score| (*r, score)))
+                    .filter_map(|r| {
+                        r.try_match(&input, &MatchContext::new())
+                            .match_score()
+                            .map(|score| (*r, score))
+                    })
                     .min_by_key(|(_, score)| *score)
                     .map(|(r, _)| r)
                     .ok_or_else(|| {

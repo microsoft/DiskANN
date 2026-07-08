@@ -35,7 +35,7 @@ mod imp {
     use std::{io::Write, num::NonZeroUsize};
 
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -205,46 +205,30 @@ mod imp {
         type Input = inputs::exhaustive::MinMax;
         type Output = Results;
 
-        fn try_match(
-            &self,
-            input: &inputs::exhaustive::MinMax,
-        ) -> Result<MatchScore, FailureScore> {
+        fn try_match(&self, input: &inputs::exhaustive::MinMax, context: &MatchContext) -> Score {
             let num_bits = input.num_bits.get();
             if num_bits == NBITS {
-                Ok(MatchScore(0))
+                context.success(0)
             } else {
-                Err(FailureScore(
+                context.fail(
                     NBITS.abs_diff(num_bits).try_into().unwrap_or(u32::MAX),
-                ))
+                    &format_args!(
+                        "Expected \"num_bits = {}\", instead got {}",
+                        NBITS,
+                        input.num_bits.get()
+                    ),
+                )
             }
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&inputs::exhaustive::MinMax>,
-        ) -> std::fmt::Result {
-            match input {
-                None => {
-                    writeln!(
-                        f,
-                        "- Exhaustive search for {}-bit minmax quantization",
-                        NBITS
-                    )?;
-                    writeln!(f, "- Requires `float32` data")?;
-                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
-                }
-                Some(from) => {
-                    if from.num_bits.get() != NBITS {
-                        writeln!(
-                            f,
-                            "- Expected \"num_bits = {}\", instead got {}",
-                            NBITS,
-                            from.num_bits.get(),
-                        )?;
-                    }
-                }
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(
+                f,
+                "- Exhaustive search for {}-bit minmax quantization",
+                NBITS
+            )?;
+            writeln!(f, "- Requires `float32` data")?;
+            writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
             Ok(())
         }
 
