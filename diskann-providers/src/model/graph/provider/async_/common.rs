@@ -139,6 +139,35 @@ impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
         self.max_vectors
     }
 
+    /// Return the first `first_n` stored vectors as one contiguous
+    /// `&[first_n * dim]` slice, for callers (e.g. PiPNN, which reads all points
+    /// at once rather than serially inserting) that want to build directly from
+    /// the store and avoid holding a second copy of the dataset.
+    ///
+    /// Only valid when vectors are densely packed — `padded_vector_dim == dim`,
+    /// which holds whenever `dim * size_of::<T>()` is a multiple of 64 (true for
+    /// the common ANN dims 128/384/768/960/1536). When packed, vector `i` sits at
+    /// `start_index + i*dim` with no gaps, so the prefix is exactly what a flat
+    /// `npoints × dim` consumer expects — identical bytes to the source matrix,
+    /// no effect on the build. Panics on a padded stride, where a flat slice would
+    /// silently misalign vectors.
+    ///
+    /// # Safety
+    /// Same torn-read caveat as `get_slice`: no concurrent writes to the region.
+    /// `first_n` must be `<= max_vectors`.
+    pub unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
+        assert_eq!(
+            self.padded_vector_dim, self.dim,
+            "flat_prefix requires dense packing (padded_vector_dim == dim); \
+             dim*size_of::<T>() must be a multiple of 64"
+        );
+        assert!(first_n <= self.max_vectors, "first_n exceeds max_vectors");
+        // SAFETY: dense-packed → vectors start at `start_index`, stride `dim`;
+        // the first `first_n * dim` elements after start_index are initialized.
+        let buf = unsafe { (*self.store.get()).as_ptr() };
+        unsafe { slice::from_raw_parts(buf.add(self.start_index), first_n * self.dim) }
+    }
+
     pub fn dim(&self) -> usize {
         self.dim
     }
@@ -214,6 +243,20 @@ pub enum PrefetchCacheLineLevel {
 pub trait SetElementHelper<T> {
     /// Set an element in the index.
     fn set_element(&self, index: &u32, element: &[T]) -> ANNResult<()>;
+}
+
+/// A helper trait exposing the store's densely-packed vectors as one contiguous
+/// slice, for batch builders (PiPNN) that read every point at once and want to
+/// build directly from the store instead of holding a second dataset copy.
+pub trait FlatVectorAccess<T> {
+    /// Return the first `first_n` stored vectors as one contiguous
+    /// `&[first_n * dim]` slice. Only valid for densely-packed dims; panics on a
+    /// padded stride (see [`AlignedMemoryVectorStore::flat_prefix`]).
+    ///
+    /// # Safety
+    /// Torn-read caveat: no concurrent writes to the read region; `first_n` must
+    /// be `<= max_vectors`.
+    unsafe fn flat_prefix(&self, first_n: usize) -> &[T];
 }
 
 /// A helper trait to select the quant vector store.

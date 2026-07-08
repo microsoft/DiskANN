@@ -29,7 +29,7 @@ use crate::model::graph::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
             CreateVectorStore, FullPrecision, Internal, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
+            PrefetchCacheLineLevel, SetElementHelper, FlatVectorAccess,
         },
         inmem::DefaultProvider,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -98,6 +98,16 @@ where
     /// Set the element at the given index.
     fn set_element(&self, id: &u32, element: &[T]) -> Result<(), ANNError> {
         unsafe { self.set_vector_sync(id.into_usize(), element) }
+    }
+}
+
+impl<T> FlatVectorAccess<T> for FullPrecisionStore<T>
+where
+    T: VectorRepr,
+{
+    // AdHoc<T>::VectorDataType == T, so the inherent flat_prefix returns &[T].
+    unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
+        unsafe { FastMemoryVectorProviderAsync::<AdHoc<T>>::flat_prefix(self, first_n) }
     }
 }
 

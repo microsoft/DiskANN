@@ -95,6 +95,18 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
         self.dim
     }
 
+    /// Return the first `first_n` stored vectors as one contiguous
+    /// `&[first_n * dim]` slice — lets a batch builder (PiPNN) read every point
+    /// straight from the store, so the build needs no second copy of the dataset.
+    /// Only valid for densely-packed dims; see
+    /// [`AlignedMemoryVectorStore::flat_prefix`].
+    ///
+    /// # Safety
+    /// Torn-read caveat: no concurrent writes to the read region.
+    pub unsafe fn flat_prefix(&self, first_n: usize) -> &[Data::VectorDataType] {
+        unsafe { self.vectors.flat_prefix(first_n) }
+    }
+
     /// Return a [`diskann_vector::DistanceFunction`] capable of computing distances on elements
     /// yielded by this provider.
     pub(crate) fn distance(&self) -> &<Data::VectorDataType as VectorRepr>::Distance {

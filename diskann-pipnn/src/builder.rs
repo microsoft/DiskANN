@@ -406,122 +406,120 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     let sketch_secs = t0.elapsed().as_secs_f64();
     tracing::info!(elapsed_secs = sketch_secs, "HashPrune init complete");
 
-    // Run multiple replicas of partitioning + leaf building.
     let mut partition_secs = 0.0f64;
     let mut leaf_build_secs = 0.0f64;
-    let mut total_leaves = 0usize;
-    let mut total_edges_count = 0usize;
 
+    // Replicas are a PARTITION concept (cf. gp-ann's dense ball carving,
+    // `BuildApproximateNearestNeighborGraph`): each replica re-partitions the
+    // full dataset with a different seed and its leaves are ACCUMULATED into one
+    // shared pool. The leaf build (GEMM k-NN) and HashPrune merge then run ONCE
+    // over the combined pool — not per replica — so a point's neighbors from
+    // overlapping leaves across all replicas merge together before top-k. The
+    // partition config is identical across replicas (only the seed varies), so
+    // build it once here.
+    let partition_config = PartitionConfig::new(
+        config.c_max,
+        config.c_min,
+        config.p_samp,
+        config.fanout.clone(),
+        metric,
+        crate::partition::LEADER_CAP,
+    )?;
+
+    let mut leaves: Vec<crate::partition::Leaf> = Vec::new();
     for replica in 0..config.replicas {
         let seed = 1000 + replica as u64 * 7919;
 
         let t1 = Instant::now();
-        let mut partition_config = PartitionConfig::new(
-            config.c_max,
-            config.c_min,
-            config.p_samp,
-            config.fanout.clone(),
-            metric,
-            crate::partition::LEADER_CAP,
-        )?;
-
-        let leaves = crate::partition::partition(data, ndims, npoints, &partition_config, seed);
+        let replica_leaves =
+            crate::partition::partition(data, ndims, npoints, &partition_config, seed);
         partition_secs += t1.elapsed().as_secs_f64();
 
-        // Free partition's per-thread stripe buffers (~20 MB/thread × 48 threads
-        // ≈ 1 GB) so peak RSS during leaf+HP is max-of-phases instead of
-        // sum-of-phases. Mirrors `release_thread_buffers` for leaf_build.
-        (0..rayon::current_num_threads())
-            .into_par_iter()
-            .for_each_installed(|_| {
-                crate::partition::release_thread_buffers();
-            });
-
-        let total_pts: usize = leaves.iter().map(|l| l.indices.len()).sum();
-        let leaf_sizes: Vec<usize> = leaves.iter().map(|l| l.indices.len()).collect();
-        total_leaves += leaves.len();
-        let small_leaves = leaf_sizes.iter().filter(|&&s| s < 64).count();
-        let med_leaves = leaf_sizes
-            .iter()
-            .filter(|&&s| (64..512).contains(&s))
-            .count();
-        let big_leaves = leaf_sizes.iter().filter(|&&s| s >= 512).count();
+        let total_pts: usize = replica_leaves.iter().map(|l| l.indices.len()).sum();
         tracing::info!(
             replica = replica,
             partition_secs = t1.elapsed().as_secs_f64(),
-            num_leaves = leaves.len(),
-            avg_leaf_size = total_pts as f64 / leaves.len().max(1) as f64,
-            max_leaf_size = leaf_sizes.iter().max().unwrap_or(&0),
+            num_leaves = replica_leaves.len(),
+            avg_leaf_size = total_pts as f64 / replica_leaves.len().max(1) as f64,
             total_pts = total_pts,
+            overlap = total_pts as f64 / npoints as f64,
             "Partition complete"
         );
-        // Hint to return freed partition GEMM buffers to the OS.
-        tracing::debug!(
-            small_leaves = small_leaves,
-            med_leaves = med_leaves,
-            big_leaves = big_leaves,
-            overlap = total_pts as f64 / npoints as f64,
-            "Leaf size distribution"
-        );
+        leaves.extend(replica_leaves);
+    }
+    let total_leaves = leaves.len();
 
-        // Build leaves in parallel, streaming edges to HashPrune per-leaf.
-        let t2 = Instant::now();
-
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let total_edges = AtomicUsize::new(0);
-
-        // Leaves processed in parallel via par_chunks. Each chunk shares one
-        // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
-        // overhead across multiple leaves. Chunk size scales with leaf count
-        // and rayon pool size so every thread gets ~4 work-stealing units.
-        let nthreads = rayon::current_num_threads().max(1);
-        let leaf_batch = (leaves.len() / (nthreads * 4)).clamp(1, 256);
-        let num_planes = hash_prune.num_planes();
-        leaves.par_chunks(leaf_batch).for_each_installed(|chunk| {
-            leaf_build::LEAF_BUFFERS.with(|cell| {
-                let mut bufs = cell.borrow_mut();
-                for leaf in chunk {
-                    let _edge_count = leaf_build::build_leaf_into(
-                        data,
-                        ndims,
-                        &leaf.indices,
-                        config.k,
-                        metric,
-                        &mut bufs,
-                    );
-                    let n = leaf.indices.len();
-                    let group_edges = bufs.group_starts[n] as usize;
-                    total_edges.fetch_add(group_edges, Ordering::Relaxed);
-
-                    // Gather a small (n × num_planes) per-leaf sketches cache.
-                    // L1-resident: 130 × 12 × 4 = ~6 KB.
-                    let need = n * num_planes;
-                    if bufs.local_sketches.len() < need {
-                        bufs.local_sketches.resize(need, 0.0);
-                    }
-                    hash_prune.gather_sketches_into(&leaf.indices, &mut bufs.local_sketches[..need]);
-
-                    hash_prune.add_edges_grouped_local_sketches(
-                        &bufs.group_starts,
-                        &bufs.group_data[..group_edges],
-                        &leaf.indices,
-                        &bufs.local_sketches[..need],
-                    );
-                }
-            });
+    // Free partition's per-thread stripe buffers (~20 MB/thread × 48 threads
+    // ≈ 1 GB) so peak RSS during leaf+HP is max-of-phases instead of
+    // sum-of-phases. Mirrors `release_thread_buffers` for leaf_build.
+    (0..rayon::current_num_threads())
+        .into_par_iter()
+        .for_each_installed(|_| {
+            crate::partition::release_thread_buffers();
         });
 
-        let replica_edges = total_edges.load(Ordering::Relaxed);
-        total_edges_count += replica_edges;
-        leaf_build_secs += t2.elapsed().as_secs_f64();
+    // Build all leaves (from every replica) in parallel, streaming edges to the
+    // single HashPrune. This is the one leaf-build + merge pass.
+    let t2 = Instant::now();
 
-        tracing::info!(
-            replica = replica,
-            elapsed_secs = t2.elapsed().as_secs_f64(),
-            total_edges = replica_edges,
-            "Leaf build and merge complete"
-        );
-    }
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let total_edges = AtomicUsize::new(0);
+
+    // Leaves processed in parallel via par_chunks. Each chunk shares one
+    // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
+    // overhead across multiple leaves. Chunk size scales with leaf count
+    // and rayon pool size so every thread gets ~4 work-stealing units.
+    let nthreads = rayon::current_num_threads().max(1);
+    let leaf_batch = (leaves.len() / (nthreads * 4)).clamp(1, 256);
+    let num_planes = hash_prune.num_planes();
+    leaves.par_chunks(leaf_batch).for_each_installed(|chunk| {
+        leaf_build::LEAF_BUFFERS.with(|cell| {
+            let mut bufs = cell.borrow_mut();
+            for leaf in chunk {
+                let _edge_count = leaf_build::build_leaf_into(
+                    data,
+                    ndims,
+                    &leaf.indices,
+                    config.k,
+                    metric,
+                    &mut bufs,
+                );
+                let n = leaf.indices.len();
+                let group_edges = bufs.group_starts[n] as usize;
+                total_edges.fetch_add(group_edges, Ordering::Relaxed);
+
+                // Gather a small (n × num_planes) per-leaf sketches cache.
+                // L1-resident: 130 × 12 × 4 = ~6 KB.
+                let need = n * num_planes;
+                if bufs.local_sketches.len() < need {
+                    bufs.local_sketches.resize(need, 0.0);
+                }
+                hash_prune.gather_sketches_into(&leaf.indices, &mut bufs.local_sketches[..need]);
+
+                hash_prune.add_edges_grouped_local_sketches(
+                    &bufs.group_starts,
+                    &bufs.group_data[..group_edges],
+                    &leaf.indices,
+                    &bufs.local_sketches[..need],
+                );
+            }
+        });
+    });
+    // `leaves` is dropped right after the build to free the accumulated index
+    // Vecs (~n·overlap u32) before extraction. (It is fully live *during* the
+    // build — every leaf is an input — so incremental freeing can't lower the
+    // leaf-build peak; the reduction target there is the reservoir slab, below.)
+    drop(leaves);
+
+    let total_edges_count = total_edges.load(Ordering::Relaxed);
+    leaf_build_secs += t2.elapsed().as_secs_f64();
+
+    tracing::info!(
+        elapsed_secs = t2.elapsed().as_secs_f64(),
+        total_leaves = total_leaves,
+        total_edges = total_edges_count,
+        "Leaf build and merge complete"
+    );
 
     // Release thread-local leaf buffers so their arena pages can be reclaimed.
     (0..rayon::current_num_threads())
@@ -546,49 +544,14 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 
         let t4 = Instant::now();
         tracing::info!(
-            "Applying final prune (selecting {} from {} candidates)",
+            nodes = candidates.len(),
+            "Applying final prune (selecting {} from up to {} candidates)",
             max_degree,
             config.l_max
         );
-        // Log candidate stats before pruning.
-        let total_candidates: usize = candidates.iter().map(|c| c.len()).sum();
-        let nodes_over_degree = candidates.iter().filter(|c| c.len() > max_degree).count();
-        let max_cand = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
-        let avg_cand = if candidates.is_empty() {
-            0.0
-        } else {
-            total_candidates as f64 / candidates.len() as f64
-        };
-        tracing::info!(
-            nodes = candidates.len(),
-            avg_candidates = avg_cand,
-            max_candidates = max_cand,
-            nodes_over_max_degree = nodes_over_degree,
-            max_degree = max_degree,
-            "Final prune input"
-        );
 
         let adj = final_prune_from_candidates(
-            data, ndims, &candidates, max_degree, metric, config.alpha,
-        );
-
-        // Log output stats after pruning.
-        let total_edges: usize = adj.iter().map(|a| a.len()).sum();
-        let avg_degree = if adj.is_empty() {
-            0.0
-        } else {
-            total_edges as f64 / adj.len() as f64
-        };
-        let pruned_count = candidates
-            .iter()
-            .zip(adj.iter())
-            .filter(|(c, a)| a.len() < c.len())
-            .count();
-        tracing::info!(
-            avg_degree,
-            pruned_count,
-            pruned_pct = 100.0 * pruned_count as f64 / candidates.len().max(1) as f64,
-            "Final prune output"
+            data, ndims, candidates, max_degree, metric, config.alpha,
         );
 
         let final_prune_secs = t4.elapsed().as_secs_f64();
@@ -759,7 +722,7 @@ impl FinalPruneKernel {
 pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
-    candidates_per_node: &[Vec<u32>],
+    candidates_per_node: Vec<Vec<u32>>,
     max_degree: usize,
     metric: Metric,
     alpha: f32,
@@ -794,7 +757,7 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     let generic_dist = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
     candidates_per_node
-        .par_iter()
+        .into_par_iter()
         .enumerate()
         .map(|(node_idx, candidates)| {
             if candidates.is_empty() {
@@ -805,9 +768,12 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             // RobustPrune is only needed to reduce overfull candidate pools.
             // If a node already fits the published degree bound, preserve the
             // candidate list directly; otherwise under-degree nodes lose useful
-            // edges and still pay the full prune cost.
+            // edges and still pay the full prune cost. Move (not clone) the input
+            // Vec straight into the output — the common case, and consuming by
+            // value here means each input list is freed as its output is produced
+            // instead of the whole input set co-existing with the whole output.
             if nc <= max_degree {
-                return candidates.clone();
+                return candidates;
             }
 
             // Per-thread tier-specialised inline kernel; generic fallback owns
@@ -1884,7 +1850,7 @@ mod tests {
         // and re-sorts, so input order is irrelevant.
         let candidates = vec![vec![3u32, 1, 2], vec![], vec![], vec![]];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, candidates, 2, Metric::L2, 1.2);
         let node0 = &result[0];
         // With alpha=1.2, point 3 should be selected first (closest).
         // Point 1 might be pruned because dist(3,1) * 1.2 < dist(0,1).
@@ -1902,7 +1868,7 @@ mod tests {
     fn test_final_prune_from_candidates_empty() {
         let data: Vec<f32> = vec![0.0; 8];
         let candidates: Vec<Vec<u32>> = vec![vec![], vec![], vec![], vec![]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, candidates, 10, Metric::L2, 1.2);
         assert!(result.iter().all(|adj| adj.is_empty()));
     }
 
@@ -1910,7 +1876,7 @@ mod tests {
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
         let candidates = vec![vec![1u32], vec![0u32]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, candidates, 10, Metric::L2, 1.2);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
     }
@@ -1925,7 +1891,7 @@ mod tests {
         ];
         let candidates = vec![vec![1u32, 2, 3], vec![], vec![], vec![]];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 4, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, candidates, 4, Metric::L2, 1.2);
 
         assert_eq!(result[0], vec![1, 2, 3]);
     }

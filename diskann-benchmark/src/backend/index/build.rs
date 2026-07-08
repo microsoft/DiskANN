@@ -128,7 +128,8 @@ pub(super) fn pipnn_insert<U, V, D, T, S>(
 where
     T: diskann::utils::VectorRepr + Send + Sync + bytemuck::Pod,
     U: AsyncFriendly
-        + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
+        + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>
+        + diskann_providers::model::graph::provider::async_::common::FlatVectorAccess<T>,
     V: AsyncFriendly
         + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
     D: AsyncFriendly,
@@ -157,7 +158,17 @@ where
 
     writeln!(output, "PiPNN build: {} points x {} dims", npoints, ndims)?;
 
-    // Step 1: Store all data vectors into the provider so search can read them.
+    // PiPNN reads ALL points at once (partition + leaf build), unlike Vamana's
+    // serial "read source row i → greedy-search the store → insert row i", which
+    // needs the source `Matrix` and the accumulating store to coexist. PiPNN has
+    // no such dependency, so it only needs ONE copy of the dataset. We therefore:
+    //   1. copy the vectors into the provider store (which search reads anyway),
+    //   2. DROP the source `Matrix` — freeing the second copy before the
+    //      memory-heavy leaf-build/reservoir phase,
+    //   3. build directly FROM the store's contiguous buffer.
+    // Result: peak RSS holds one dataset copy instead of two.
+
+    // Step 1: populate the search store from the source Matrix.
     let t_store = Instant::now();
     {
         let provider = &index.data_provider;
@@ -167,7 +178,6 @@ where
                 let id = i as u32;
                 let row: &[T] = data.row(i);
                 provider.base_vectors.set_element(&id, row)?;
-                provider.aux_vectors.set_element(&id, row)?;
             }
             Ok::<(), anyhow::Error>(())
         })?;
@@ -175,13 +185,18 @@ where
     let store_secs = t_store.elapsed().as_secs_f64();
     writeln!(output, "  Vector store:  {:.3}s", store_secs)?;
 
-    // Step 2: Run PiPNN build on the raw flat data.
-    let flat_data = data.as_slice();
+    // Step 2: drop the source Matrix — the store now holds the only copy.
+    drop(data);
+
+    // Step 3: build directly from the store's contiguous buffer. SAFETY: the
+    // store was fully populated in Step 1 and is not written again until after
+    // the build; `flat_prefix` asserts dense packing (holds for these dims).
+    let flat: &[T] = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(input.num_threads)
         .build()?;
     let graph =
-        pool.install(|| diskann_pipnn::builder::build_typed::<T>(flat_data, npoints, ndims, &ctx))?;
+        pool.install(|| diskann_pipnn::builder::build_typed::<T>(flat, npoints, ndims, &ctx))?;
 
     writeln!(output, "{}", graph.build_stats)?;
     writeln!(
@@ -192,7 +207,7 @@ where
         graph.num_isolated(),
     )?;
 
-    // Step 3: Transfer adjacency lists into the index.
+    // Step 4: Transfer adjacency lists into the index.
     let t_transfer = Instant::now();
     {
         let provider = index.provider();
