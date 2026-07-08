@@ -11,10 +11,6 @@ use crate::{internal::visibility::Visibility, Checkpoint, Input, Output};
 // Benchmark //
 ///////////////
 
-///////////////
-// Benchmark //
-///////////////
-
 /// A registered benchmark.
 ///
 /// Benchmarks consist of an [`Input`] and a corresponding serialized `Output`. Inputs will
@@ -617,55 +613,15 @@ pub(crate) mod internal {
     //
     // We support two flavors:
     //
-    // 1. Benchmarks that have inputs that are *also* feature gated.
-    // 2. Benchmarks that have inputs that are valid and registered.
+    // 1. Benchmarks that have inputs that are valid and registered.
+    // 2. Benchmarks that have inputs that are *also* feature gated.
 
-    pub(crate) struct FullyGated {
-        tag: &'static str,
-        features: Features,
-        description: String,
-    }
-
-    impl FullyGated {
-        pub(crate) fn new(tag: &'static str, features: Features, description: String) -> Self {
-            Self {
-                tag,
-                features,
-                description,
-            }
-        }
-    }
-
-    impl Benchmark for FullyGated {
-        fn try_match(&self, _input: &Any, _context: &MatchContext) -> AnnotatedMatch<'_> {
-            AnnotatedMatch::WrongTag
-        }
-
-        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            writeln!(f, "tag \"{}\"", self.tag)?;
-            f.write_str(&self.description)
-        }
-
-        fn run(
-            &self,
-            _input: &Any,
-            _checkpoint: Checkpoint<'_>,
-            _output: &mut dyn Output,
-        ) -> anyhow::Result<serde_json::Value> {
-            anyhow::bail!("tried to run a gated benchmark - this should be unreachable")
-        }
-
-        fn visibility(&self) -> Visibility<'_> {
-            Visibility::Gated {
-                features: &self.features,
-            }
-        }
-
-        fn as_regression(&self) -> Option<&dyn Regression> {
-            None
-        }
-    }
-
+    /// A benchmark that is gated behind `features`, but whose input *is* compiled into the
+    /// application. These benchamrks allow their inputs to be inspected and parsed, but
+    /// fail matching.
+    ///
+    /// This custom type allows us to return more precise error messages when benchmark
+    /// matching fails.
     pub(crate) struct PartiallyGated<I> {
         features: Features,
         description: String,
@@ -696,6 +652,59 @@ pub(crate) mod internal {
 
         fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             writeln!(f, "tag \"{}\"", I::tag())?;
+            f.write_str(&self.description)
+        }
+
+        fn run(
+            &self,
+            _input: &Any,
+            _checkpoint: Checkpoint<'_>,
+            _output: &mut dyn Output,
+        ) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!("tried to run a gated benchmark - this should be unreachable")
+        }
+
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Gated {
+                features: &self.features,
+            }
+        }
+
+        fn as_regression(&self) -> Option<&dyn Regression> {
+            None
+        }
+    }
+
+    /// A benchmark that is gated behind `features` along with its input.
+    ///
+    /// These benchmarks are completely unreachable as the front-end has no way to parse
+    /// inputs associated with `tag`.
+    ///
+    /// However, they are included to provide a bread-crumb for users that additional
+    /// benchmarks *do* exist behind the associated features.
+    pub(crate) struct FullyGated {
+        tag: &'static str,
+        features: Features,
+        description: String,
+    }
+
+    impl FullyGated {
+        pub(crate) fn new(tag: &'static str, features: Features, description: String) -> Self {
+            Self {
+                tag,
+                features,
+                description,
+            }
+        }
+    }
+
+    impl Benchmark for FullyGated {
+        fn try_match(&self, _input: &Any, _context: &MatchContext) -> AnnotatedMatch<'_> {
+            AnnotatedMatch::WrongTag
+        }
+
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "tag \"{}\"", self.tag)?;
             f.write_str(&self.description)
         }
 

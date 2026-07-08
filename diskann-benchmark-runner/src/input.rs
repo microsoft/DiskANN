@@ -68,10 +68,13 @@ impl Registered<'_> {
         self.0.example()
     }
 
+    /// Return the visibility of the attach input.
     pub(crate) fn visibility(&self) -> Visibility<'_> {
         self.0.visibility()
     }
 
+    /// Return a `std::fmt::Display` implementation that pretty-prints the input tag as well
+    /// as any visibility modifiers.
     pub(crate) fn display(&self) -> Display<'_> {
         Display(self.0)
     }
@@ -85,6 +88,7 @@ impl std::fmt::Debug for Registered<'_> {
     }
 }
 
+/// Return item from [`Registered::display`].
 pub(crate) struct Display<'a>(&'a dyn internal::DynInput);
 
 impl std::fmt::Debug for Display<'_> {
@@ -108,10 +112,11 @@ impl std::fmt::Display for Display<'_> {
     }
 }
 
+/// Orders [`Registered`] inputs in the following order:
+///
+/// 1. Available items in alphabetical order.
+/// 2. Unavailable (gated) items in alphabetical order.
 pub(crate) fn order_inputs(a: &Registered<'_>, b: &Registered<'_>) -> std::cmp::Ordering {
-    // First order by visibility (visible first).
-    //
-    // Then order by tag.
     a.visibility()
         .cmp(&b.visibility())
         .then_with(|| a.tag().cmp(b.tag()))
@@ -255,8 +260,9 @@ pub(crate) mod internal {
         }
     }
 
-    // Gated Inputs
-
+    /// An input that isn't compiled into a version of a binary, but exists behind a feature
+    /// flag. Including it internally allows us to provide better error messages if we
+    /// discover this `tag` in the wild so we can point users towards its associated `features`.
     #[derive(Debug)]
     pub(crate) struct Gated {
         tag: &'static str,

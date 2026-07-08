@@ -8,7 +8,9 @@ use crate::Features;
 // Visibility of an item.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Visibility<'a> {
+    /// Item is available.
     Available,
+    /// Item is unavailable and gated behind `features`.
     Gated { features: &'a Features },
 }
 
@@ -19,9 +21,12 @@ impl Visibility<'_> {
     }
 }
 
+/// A [`Visibility`] filter.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Filter {
+    /// Match all possible visibilities.
     All,
+    /// Only match [`Visibility::Available`].
     OnlyAvailable,
 }
 

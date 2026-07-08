@@ -7,6 +7,37 @@ use crate::utils::fmt;
 
 /// A simple list of features for annotating gated benchmarks/inputs.
 ///
+/// Features supports one of the following four patterns:
+///
+/// A singular feature:
+/// ```
+/// use diskann_benchmark_runner::Features;
+///
+/// let features = Features::new("a");
+/// assert_eq!(features.to_string(), "feature \"a\"");
+/// ```
+/// A conjunction:
+/// ```
+/// use diskann_benchmark_runner::Features;
+///
+/// let features = Features::all(["a", "b"]);
+/// assert_eq!(features.to_string(), "features \"a\" and \"b\"");
+/// ```
+/// A disjunction:
+/// ```
+/// use diskann_benchmark_runner::Features;
+///
+/// let features = Features::any(["a", "b"]);
+/// assert_eq!(features.to_string(), "features \"a\" or \"b\"");
+/// ```
+/// A custom layout"
+/// ```
+/// use diskann_benchmark_runner::Features;
+///
+/// let features = Features::custom("(\"a\" and \"b\") or \"c\"", true);
+/// assert_eq!(features.to_string(), "features (\"a\" and \"b\") or \"c\"");
+/// ```
+///
 /// See: [`crate::Registry::register_gated`] and [`crate::Registry::register_partially_gated`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Features(FeaturesInner);
@@ -20,10 +51,12 @@ pub(crate) enum FeaturesInner {
 }
 
 impl Features {
+    /// Construct a singular [`Features`].
     pub fn new(feature: &'static str) -> Self {
         Self(FeaturesInner::Only(feature))
     }
 
+    /// Construct a [`Features`] as a disjunction of features.
     pub fn any<I>(itr: I) -> Self
     where
         I: IntoIterator<Item = &'static str>,
@@ -31,6 +64,7 @@ impl Features {
         Self(FeaturesInner::Any(itr.into_iter().collect()))
     }
 
+    /// Construct a [`Features`] as a conjunction of features.
     pub fn all<I>(itr: I) -> Self
     where
         I: IntoIterator<Item = &'static str>,
@@ -38,6 +72,8 @@ impl Features {
         Self(FeaturesInner::All(itr.into_iter().collect()))
     }
 
+    /// Construct a [`Features`] with a custom formatted string where `plural` can be used
+    /// to control whether the returned struct uses "feature" or "features" in its formatting.
     pub fn custom(custom: &'static str, plural: bool) -> Self {
         Self(FeaturesInner::Custom { custom, plural })
     }
