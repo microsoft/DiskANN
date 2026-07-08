@@ -73,6 +73,17 @@ impl Registry {
         Ok(())
     }
 
+    /// Register a non-existent benchmark that is gated by `features` with an input `tag` that
+    /// is also gated.
+    ///
+    /// The resulting benchmark will not be callable, but it and its input will be made
+    /// discoverable. When used with [`crate::App`], this will provide much better diagnostics
+    /// when an input with `tag` is discovered (pointing the user towards `features`).
+    ///
+    /// # Errors
+    ///
+    /// Errors if a concrete input with `tag` is already registered, or another gated input
+    /// has registered `tag` with a **different** feature set.
     pub fn register_gated(
         &mut self,
         tag: &'static str,
@@ -93,6 +104,15 @@ impl Registry {
         Ok(())
     }
 
+    /// Register a non-existent benchmark that is gated by `features` with a compiled [`Input`].
+    ///
+    /// The resulting benchmark will not be callable, but it will be discoverable. When used
+    /// with [`crate::App`], this will provide much better diagnostics when an input with
+    /// `tag` is parsed by the front and and dispatched to the back-end.
+    ///
+    /// # Errors
+    ///
+    /// Errors if an in input with tag but different type has already been registered.
     pub fn register_partially_gated<I>(
         &mut self,
         name: impl Into<String>,
