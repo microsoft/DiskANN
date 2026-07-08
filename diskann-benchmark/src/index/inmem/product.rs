@@ -55,7 +55,7 @@ mod imp {
     use diskann_utils::views::{Matrix, MatrixView};
 
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
@@ -129,52 +129,30 @@ mod imp {
         type Input = IndexPQOperation;
         type Output = QuantBuildResult;
 
-        fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            let score = utils::match_data_type::<T>(*input.index_operation.source.data_type());
-            if self
+        fn try_match(&self, input: &IndexPQOperation, context: &MatchContext) -> Score {
+            let mut score = context.success(0);
+            utils::match_data_type::<T>(&mut score, *input.index_operation.source.data_type());
+
+            if !self
                 .quant_search
                 .is_match(&input.index_operation.search_phase)
             {
-                score
-            } else {
-                match score {
-                    Ok(_) => Err(FailureScore(0)),
-                    Err(score) => Err(score),
-                }
+                score.fail(
+                    1,
+                    &format_args!(
+                        "Unsupported search phase: \"{}\" - expected one of {}",
+                        input.index_operation.search_phase.kind(),
+                        self.quant_search.format_kinds(),
+                    ),
+                )
             }
+
+            score
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&IndexPQOperation>,
-        ) -> std::fmt::Result {
-            match input {
-                Some(arg) => {
-                    let desc = T::describe(*arg.index_operation.source.data_type());
-                    if !desc.is_match() {
-                        writeln!(f, "Data/Query Type: {}", desc,)?;
-                    }
-
-                    if !self
-                        .quant_search
-                        .is_match(&arg.index_operation.search_phase)
-                    {
-                        writeln!(
-                            f,
-                            "Unsupported search phase: \"{}\" - expected one of {}",
-                            arg.index_operation.search_phase.kind(),
-                            self.quant_search.format_kinds(),
-                        )?;
-                    }
-                    Ok(())
-                }
-                None => {
-                    writeln!(f, "Data/Query Type: {}", T::DATA_TYPE,)?;
-
-                    writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
-                }
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "Data/Query Type: {}", T::DATA_TYPE,)?;
+            writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
         }
 
         fn run(

@@ -4,7 +4,7 @@
  */
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::Score,
     utils::datatype::{AsDataType, DataType},
 };
 use serde::{Deserialize, Serialize};
@@ -15,16 +15,14 @@ pub(crate) mod recall;
 pub(crate) mod streaming;
 pub(crate) mod tokio;
 
-const DATA_TYPE_MISMATCH: FailureScore = FailureScore(1000);
+const DATA_TYPE_MISMATCH: u32 = 1000;
 
-pub(crate) fn match_data_type<T>(data_type: DataType) -> Result<MatchScore, FailureScore>
+pub(crate) fn match_data_type<T>(score: &mut Score, data_type: DataType)
 where
     T: AsDataType,
 {
-    if T::is_match(data_type) {
-        Ok(MatchScore(0))
-    } else {
-        Err(DATA_TYPE_MISMATCH)
+    if !T::is_match(data_type) {
+        score.fail(DATA_TYPE_MISMATCH, &T::describe(data_type))
     }
 }
 
@@ -117,11 +115,7 @@ macro_rules! stub_impl {
     ($feature:literal, $input:path $(,)?) => {
         #[cfg(not(feature = $feature))]
         mod imp {
-            use diskann_benchmark_runner::{
-                benchmark::{FailureScore, MatchScore},
-                output::Output,
-                Benchmark, Checkpoint, Registry,
-            };
+            use diskann_benchmark_runner::{output::Output, Benchmark, Checkpoint, Registry};
 
             use crate::inputs;
 
@@ -136,15 +130,15 @@ macro_rules! stub_impl {
                 type Input = $input;
                 type Output = serde_json::Value;
 
-                fn try_match(&self, _input: &$input) -> Result<MatchScore, FailureScore> {
-                    Err(FailureScore(0))
+                fn try_match(
+                    &self,
+                    _input: &$input,
+                    context: &diskann_benchmark_runner::benchmark::MatchContext,
+                ) -> diskann_benchmark_runner::benchmark::Score {
+                    context.fail(0, &concat!("Requires the \"", $feature, "\" feature"))
                 }
 
-                fn description(
-                    &self,
-                    f: &mut std::fmt::Formatter<'_>,
-                    _input: Option<&$input>,
-                ) -> std::fmt::Result {
+                fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     writeln!(f, "{}", concat!("Requires the \"", $feature, "\" feature"))
                 }
 

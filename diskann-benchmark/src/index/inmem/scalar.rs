@@ -58,7 +58,7 @@ mod imp {
     use anyhow::Context;
     use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
@@ -140,95 +140,72 @@ mod imp {
                 type Input = IndexSQOperation;
                 type Output = QuantBuildResult;
 
-                fn try_match(&self, input: &IndexSQOperation) -> Result<MatchScore, FailureScore> {
-                    let mut failure_score: Option<u32> = None;
+                fn try_match(&self, input: &IndexSQOperation, context: &MatchContext) -> Score {
+                    let mut score = context.success(0);
+
                     match input.index_operation.source {
                         IndexSource::Load(_) => {}
                         IndexSource::Build(ref build) => {
                             if build.multi_insert().is_some() {
-                                failure_score = Some(1);
+                                score.fail(1, &"Scalar Quantization does not support multi-insert");
                             }
                         }
                     }
 
-                    if !<$T>::is_match(*input.index_operation.source.data_type()) {
-                        *failure_score.get_or_insert(0) += 1;
+                    let data_type = *input.index_operation.source.data_type();
+                    if !<$T>::is_match(data_type) {
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Only `{}` data type is supported. Instead, got {}",
+                                <$T>::DATA_TYPE,
+                                data_type
+                            ),
+                        )
                     }
 
                     if !self.quant_search.is_match(&input.index_operation.search_phase) {
-                        *failure_score.get_or_insert(0) += 1;
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Unsupported search phase: \"{}\" - expected one of {}",
+                                input.index_operation.search_phase.kind(),
+                                self.quant_search.format_kinds(),
+                            )
+                        )
                     }
 
                     if input.num_bits != $N {
-                        *failure_score.get_or_insert(0) += 10 + ($N as usize).abs_diff(input.num_bits) as u32;
+                        score.fail(
+                            10 + ($N as usize).abs_diff(input.num_bits) as u32,
+                            &format_args!(
+                                "Expected {} bits, instead got {}",
+                                $N,
+                                input.num_bits,
+                            )
+                        )
                     }
 
-                    match failure_score {
-                        None => Ok(MatchScore(0)),
-                        Some(score) => Err(FailureScore(score)),
-                    }
+                    score
                 }
 
                 fn description(
                     &self,
                     f: &mut std::fmt::Formatter<'_>,
-                    input: Option<&IndexSQOperation>,
                 ) -> std::fmt::Result {
-                    match input {
-                        None => {
-                            writeln!(
-                                f,
-                                "- Index Build and Search using {} scalar quantized bits",
-                                $N
-                            )?;
-                            writeln!(
-                                f,
-                                "- Requires `{}` data",
-                                <$T>::DATA_TYPE,
-                            )?;
-                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                            writeln!(f, "- Does not support multi-insert")?;
-                            writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
-                        }
-                        Some(input) => {
-                            if input.num_bits != $N {
-                                writeln!(
-                                    f,
-                                    "- Expected {} bits, instead got {}",
-                                    $N,
-                                    input.num_bits
-                                )?;
-                            }
-
-                            let data_type = *input.index_operation.source.data_type();
-                            if !<$T>::is_match(data_type) {
-                                writeln!(
-                                    f,
-                                    "- Only `{}` data type is supported. Instead, got {}",
-                                    <$T>::DATA_TYPE,
-                                    data_type
-                                )?;
-                            }
-
-                            if let IndexSource::Build(ref build) = input.index_operation.source {
-                                if build.multi_insert().is_some() {
-                                    writeln!(
-                                        f,
-                                        "- Scalar Quantization does not support multi-insert"
-                                    )?;
-                                }
-                            }
-
-                            if !self.quant_search.is_match(&input.index_operation.search_phase) {
-                                writeln!(
-                                    f,
-                                    "- Unsupported search phase: \"{}\" - expected one of {}",
-                                    input.index_operation.search_phase.kind(),
-                                    self.quant_search.format_kinds(),
-                                )?;
-                            }
-                        }
-                    }
+                    writeln!(
+                        f,
+                        "- Index Build and Search using {} scalar quantized bits",
+                        $N
+                    )?;
+                    writeln!(
+                        f,
+                        "- Requires `{}` data",
+                        <$T>::DATA_TYPE,
+                    )?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
+                    writeln!(f, "- Does not support multi-insert")?;
+                    writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
                     Ok(())
                 }
 

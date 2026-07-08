@@ -9,7 +9,7 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::datatype::AsDataType,
     Benchmark, Checkpoint,
@@ -73,44 +73,26 @@ where
     type Input = BfTreeFullPrecisionBuild;
     type Output = BuildResult;
 
-    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
-        let score = utils::match_data_type::<T>(input.data_type());
-        if self.plugins.is_match(input.search_phase()) {
-            score
-        } else {
-            match score {
-                Ok(_) => Err(FailureScore(0)),
-                Err(s) => Err(s),
-            }
+    fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        utils::match_data_type::<T>(&mut score, input.data_type());
+        if !self.plugins.is_match(input.search_phase()) {
+            score.fail(
+                1,
+                &format_args!(
+                    "Unsupported search phase: \"{}\" - expected one of {}",
+                    input.search_phase().kind(),
+                    self.plugins.format_kinds(),
+                ),
+            );
         }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(arg) => {
-                let desc = T::describe(arg.build().data_type());
-                if !desc.is_match() {
-                    writeln!(f, "Data/Query Type: {}", desc)?;
-                }
-                if !self.plugins.is_match(arg.search_phase()) {
-                    writeln!(
-                        f,
-                        "Unsupported search phase: \"{}\" - expected one of {}",
-                        arg.search_phase().kind(),
-                        self.plugins.format_kinds(),
-                    )?;
-                }
-                Ok(())
-            }
-            None => {
-                writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
-                writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
+        writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
     }
 
     fn run(
