@@ -6,7 +6,7 @@ Could not find a match for the following input:
   "error_when_checked": false
 }
 
-Closest matches:
+Closest matches for tag "test-input-types":
 
     1. "type-bench-f32":
         - expected "float32" but found "float16"
@@ -17,5 +17,9 @@ Closest matches:
     3. "exact-type-bench-f32-1000":
         - expected "float32" but found "float16"
 
+
+Found 1 gated benchmark matching this input:
+
+    * "gated-bench" (requires the feature "gated-feature-0")
 
 could not find a benchmark for all inputs

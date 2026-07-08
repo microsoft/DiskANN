@@ -99,7 +99,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    benchmark::{internal::CheckedPassFail, MatchContext, PassFail},
+    benchmark::{internal::CheckedPassFail, PassFail},
     input::internal::Any,
     internal::load_from_disk,
     jobs, registry, result, Checker,
@@ -239,17 +239,7 @@ impl<'a> Checks<'a> {
                 // regression benchmark for this concrete input. This benchmark should exist,
                 // but it's possible that code changes between when the results were generated
                 // and now has led to the input no longer being matchable with anything.
-                let regression = inner
-                    .entry
-                    .regressions
-                    .iter()
-                    .filter_map(|r| {
-                        r.try_match(&input, &MatchContext::new())
-                            .match_score()
-                            .map(|score| (*r, score))
-                    })
-                    .min_by_key(|(_, score)| *score)
-                    .map(|(r, _)| r)
+                let regression = registry::find_best_match(&input, &inner.entry.regressions)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Could not match input tag \"{}\" and tolerance tag \"{}\" to \
@@ -262,7 +252,7 @@ impl<'a> Checks<'a> {
                     })?;
 
                 Ok(Check {
-                    regression,
+                    regression: *regression,
                     tolerance: inner.tolerance.clone(),
                     input,
                 })

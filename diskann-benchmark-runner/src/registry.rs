@@ -8,9 +8,9 @@ use std::collections::{hash_map::Entry, HashMap};
 use thiserror::Error;
 
 use crate::{
-    benchmark::{self, Benchmark, FailureScore, MatchContext, Regression, Score},
+    benchmark::{self, internal::AnnotatedMatch, Benchmark, MatchContext, Regression, Score},
     input,
-    internal::visibility::{Visibility},
+    internal::visibility::Visibility,
     Checkpoint, Features, Input, Output,
 };
 
@@ -151,55 +151,50 @@ impl Registry {
         &self,
         job: &input::internal::Any,
         max_methods: usize,
-    ) -> Result<(), Vec<Mismatch>> {
+    ) -> Result<(), Mismatches<'_>> {
+        // Simple `has_match` will minimally allocate if an actual match is found, saving
+        // the work done below to put together a comprehensive summary of the closest matches.
         if self.has_match(job) {
             return Ok(());
         }
 
-        // Collect all failures with their scores and reasons in a single pass.
-        let mut failures: Vec<(&RegisteredBenchmark, FailureScore, Score)> = self
-            .benchmarks
-            .iter()
-            .filter_map(|entry| {
-                let score = entry
-                    .benchmark
-                    .try_match(job, &MatchContext::with_reasons());
-                match score.as_raw() {
-                    crate::benchmark::RawScore::Success(_) => None,
-                    crate::benchmark::RawScore::Failure(fail_score) => {
-                        Some((entry, fail_score, score))
+        let mut gated = Vec::<(&RegisteredBenchmark, &Features)>::new();
+        let mut failures = Vec::<(&RegisteredBenchmark, Score)>::new();
+
+        for entry in self.benchmarks() {
+            match entry
+                .benchmark
+                .try_match(job, &MatchContext::with_reasons())
+            {
+                AnnotatedMatch::User(score) => {
+                    if score.is_success() {
+                        // This should be unreachable from the earlier `has_match` check.
+                        return Ok(());
+                    } else {
+                        failures.push((entry, score));
                     }
                 }
-            })
-            .collect();
+                // Don't report anything for a wrong tag. It's not very useful.
+                AnnotatedMatch::WrongTag => {}
+                AnnotatedMatch::Gated(features) => gated.push((entry, features)),
+            }
+        }
 
-        failures.sort_by_key(|(_, score, _)| *score);
+        failures.sort_by(|(_, left), (_, right)| Score::order(left, right));
         failures.truncate(max_methods);
 
-        let mismatches = failures
-            .into_iter()
-            .map(|(entry, _, score)| Mismatch {
-                method: entry.name.clone(),
-                reason: score.reason().to_string(),
-            })
-            .collect();
+        let mismatches = Mismatches {
+            tag: job.tag(),
+            user: failures,
+            gated,
+        };
 
         Err(mismatches)
     }
 
     /// Find the best matching benchmark for `job` by score.
     fn find_best_match(&self, job: &input::internal::Any) -> Option<&RegisteredBenchmark> {
-        self.benchmarks
-            .iter()
-            .filter_map(|entry| {
-                entry
-                    .benchmark
-                    .try_match(job, &MatchContext::new())
-                    .match_score()
-                    .map(|score| (entry, score))
-            })
-            .min_by_key(|(_, score)| *score)
-            .map(|(entry, _)| entry)
+        find_best_match(job, self.benchmarks())
     }
 
     fn _input(&self, tag: &str) -> Option<&dyn input::internal::DynInput> {
@@ -351,6 +346,32 @@ impl Default for Registry {
     }
 }
 
+pub(crate) trait CommonTryMatch {
+    fn common_try_match(&self, input: &input::internal::Any) -> AnnotatedMatch<'_>;
+}
+
+/// Return the entry in `benchmarks` that has the best successful match to `job`.
+///
+/// Returns `None` if no entries in `benchmarks` matches `job`.
+pub(crate) fn find_best_match<'a, T>(
+    job: &input::internal::Any,
+    benchmarks: &'a [T],
+) -> Option<&'a T>
+where
+    T: CommonTryMatch,
+{
+    benchmarks
+        .iter()
+        .filter_map(|entry| {
+            let score: benchmark::Score = entry.common_try_match(job).try_into_score()?;
+            score
+                .match_score()
+                .map(|s: benchmark::SuccessScore| (entry, s))
+        })
+        .min_by_key(|(_, score)| *score)
+        .map(|(entry, _)| entry)
+}
+
 /// A registered benchmark entry: a name paired with a type-erased benchmark.
 pub(crate) struct RegisteredBenchmark {
     name: String,
@@ -388,10 +409,33 @@ impl RegisteredBenchmark {
         Capture(&*self.benchmark).to_string()
     }
 
+    /// Order available benchmarks first (alphabetically) followed by gated benchmarks
+    /// (also alphabetically).
     pub(crate) fn order(this: &&Self, other: &&Self) -> std::cmp::Ordering {
-        this.visibility()
-            .cmp(&other.visibility())
-            .then_with(|| this.name().cmp(other.name()))
+        use Visibility::{Available, Gated};
+
+        match (this.visibility(), other.visibility()) {
+            (Available, Available) => this.name().cmp(other.name()),
+            (Available, Gated { .. }) => std::cmp::Ordering::Less,
+            (Gated { .. }, Available) => std::cmp::Ordering::Greater,
+            (
+                Gated {
+                    features: this_features,
+                },
+                Gated {
+                    features: other_features,
+                },
+            ) => this
+                .name()
+                .cmp(other.name())
+                .then_with(|| this_features.cmp(other_features)),
+        }
+    }
+}
+
+impl CommonTryMatch for RegisteredBenchmark {
+    fn common_try_match(&self, input: &input::internal::Any) -> AnnotatedMatch<'_> {
+        self.benchmark().try_match(input, &MatchContext::new())
     }
 }
 
@@ -402,9 +446,7 @@ impl std::fmt::Display for Display<'_> {
         let name = self.0.name();
         match self.0.visibility() {
             Visibility::Available => writeln!(f, "{name}:")?,
-            Visibility::Gated { features } => {
-                writeln!(f, "{name} (requires the {}):", features)?
-            }
+            Visibility::Gated { features } => writeln!(f, "{name} (requires the {}):", features)?,
         };
 
         write!(
@@ -444,21 +486,52 @@ impl std::fmt::Display for Kind {
     }
 }
 
-/// Document the reason for a method matching failure.
-pub struct Mismatch {
-    method: String,
-    reason: String,
+#[derive(Debug)]
+pub(crate) struct Mismatches<'a> {
+    tag: &'static str,
+    user: Vec<(&'a RegisteredBenchmark, Score)>,
+    gated: Vec<(&'a RegisteredBenchmark, &'a Features)>,
 }
 
-impl Mismatch {
-    /// Return the name of the benchmark that we failed to match.
-    pub fn method(&self) -> &str {
-        &self.method
-    }
+impl std::fmt::Display for Mismatches<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Print out user mismatches
+        if self.user.is_empty() {
+            writeln!(
+                f,
+                "No active benchmarks are registered for tag \"{}\"",
+                self.tag
+            )?;
+        } else {
+            writeln!(f, "Closest matches for tag \"{}\":\n", self.tag)?;
+            for (i, (entry, score)) in self.user.iter().enumerate() {
+                writeln!(f, "    {}. \"{}\":", i + 1, entry.name())?;
+                writeln!(
+                    f,
+                    "{}\n",
+                    crate::utils::fmt::Indent::new(&score.reason().to_string(), 8)
+                )?;
+            }
+        }
 
-    /// Return the reason why this method was not a match.
-    pub fn reason(&self) -> &str {
-        &self.reason
+        // Print out gated benchmarks (if any).
+        if !self.gated.is_empty() {
+            writeln!(
+                f,
+                "\nFound {} gated {} matching this input:\n",
+                self.gated.len(),
+                if self.gated.len() == 1 {
+                    "benchmark"
+                } else {
+                    "benchmarks"
+                },
+            )?;
+            for (entry, features) in self.gated.iter() {
+                writeln!(f, "    * \"{}\" (requires the {})", entry.name(), features)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -481,10 +554,6 @@ impl RegressionBenchmark<'_> {
         self.regression.input_tag()
     }
 
-    pub(crate) fn try_match(&self, input: &input::internal::Any, context: &MatchContext) -> Score {
-        self.benchmark.benchmark().try_match(input, context)
-    }
-
     pub(crate) fn check(
         &self,
         tolerance: &input::internal::Any,
@@ -493,6 +562,12 @@ impl RegressionBenchmark<'_> {
         after: &serde_json::Value,
     ) -> anyhow::Result<benchmark::internal::CheckedPassFail> {
         self.regression.check(tolerance, input, before, after)
+    }
+}
+
+impl CommonTryMatch for RegressionBenchmark<'_> {
+    fn common_try_match(&self, input: &input::internal::Any) -> AnnotatedMatch<'_> {
+        self.benchmark.common_try_match(input)
     }
 }
 
@@ -586,6 +661,93 @@ mod tests {
         }
 
         let err = registry.register_input::<A2>().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("A different input with tag \"type-a\" was already registered"),
+            "FAILED: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_gated_to_real_conflict() {
+        let mut registry = Registry::new();
+        registry
+            .register_gated_input(crate::input::internal::Gated::new(
+                "type-a",
+                Features::new("feature"),
+            ))
+            .unwrap();
+
+        registry.register_input::<B>().unwrap();
+
+        let mut tags: Vec<_> = registry.inputs().map(|i| i.tag()).collect();
+        tags.sort();
+        assert_eq!(tags.as_slice(), ["type-a", "type-b"]);
+
+        {
+            let a = registry._input(A::tag()).unwrap();
+            assert!(a.as_any().is::<crate::input::internal::Gated>());
+        }
+
+        let err = registry.register_input::<A>().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("A different input with tag \"type-a\" was already registered"),
+            "FAILED: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_real_to_gated_conflict() {
+        let mut registry = Registry::new();
+
+        registry.register_input::<A>().unwrap();
+        registry.register_input::<B>().unwrap();
+
+        let err = registry
+            .register_gated_input(crate::input::internal::Gated::new(
+                "type-a",
+                Features::new("feature"),
+            ))
+            .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("A different input with tag \"type-a\" was already registered"),
+            "FAILED: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_gated_to_gated() {
+        let mut registry = Registry::new();
+
+        registry
+            .register_gated_input(crate::input::internal::Gated::new(
+                "type-a",
+                Features::new("feature"),
+            ))
+            .unwrap();
+
+        // If we register with the same feature set, there is no error.
+        registry
+            .register_gated_input(crate::input::internal::Gated::new(
+                "type-a",
+                Features::new("feature"),
+            ))
+            .unwrap();
+
+        // If we register with a different feature-set, that is an error.
+        let err = registry
+            .register_gated_input(crate::input::internal::Gated::new(
+                "type-a",
+                Features::any(["feature", "another"]),
+            ))
+            .unwrap_err();
+
         let msg = err.to_string();
         assert!(
             msg.contains("A different input with tag \"type-a\" was already registered"),

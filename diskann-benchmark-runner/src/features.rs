@@ -5,6 +5,9 @@
 
 use crate::utils::fmt;
 
+/// A simple list of features for annotating gated benchmarks/inputs.
+///
+/// See: [`crate::Registry::register_gated`] and [`crate::Registry::register_partially_gated`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Features(FeaturesInner);
 
@@ -38,6 +41,21 @@ impl Features {
     pub fn custom(custom: &'static str, plural: bool) -> Self {
         Self(FeaturesInner::Custom { custom, plural })
     }
+
+    /// Return `true` if this feature requirement is satisfied by the set of `enabled` feature
+    /// names.
+    ///
+    /// [`FeaturesInner::Custom`] requirements are opaque to the registry and are therefore
+    /// never considered satisfied.
+    #[cfg(any(test, feature = "test-app"))]
+    pub(crate) fn satisfied_by(&self, enabled: &std::collections::HashSet<String>) -> bool {
+        match &self.0 {
+            FeaturesInner::Only(feature) => enabled.contains(*feature),
+            FeaturesInner::Any(any) => any.iter().any(|f| enabled.contains(*f)),
+            FeaturesInner::All(all) => all.iter().all(|f| enabled.contains(*f)),
+            FeaturesInner::Custom { .. } => false,
+        }
+    }
 }
 
 impl From<&'static str> for Features {
@@ -48,42 +66,93 @@ impl From<&'static str> for Features {
 
 impl std::fmt::Display for Features {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn feature(plural: bool) -> &'static str {
+            if plural {
+                "features"
+            } else {
+                "feature"
+            }
+        }
+
         match &self.0 {
             FeaturesInner::Only(feature) => write!(f, "feature \"{}\"", feature),
             FeaturesInner::Any(any) => {
-                let prefix = if any.len() == 1 {
-                    "feature"
+                if any.is_empty() {
+                    f.write_str("feature <missing>")
                 } else {
-                    "features"
-                };
-                write!(
-                    f,
-                    "{} {}",
-                    prefix,
-                    fmt::Delimit::new(any.iter().map(fmt::Quote), ", ")
-                        .with_last(", or ")
-                        .with_pair(" or ")
-                )
+                    write!(
+                        f,
+                        "{} {}",
+                        feature(any.len() != 1),
+                        fmt::Delimit::new(any.iter().map(fmt::Quote), ", ")
+                            .with_last(", or ")
+                            .with_pair(" or ")
+                    )
+                }
             }
             FeaturesInner::All(all) => {
-                let prefix = if all.len() == 1 {
-                    "feature"
+                if all.is_empty() {
+                    f.write_str("feature <missing>")
                 } else {
-                    "features"
-                };
-                write!(
-                    f,
-                    "{} {}",
-                    prefix,
-                    fmt::Delimit::new(all.iter().map(fmt::Quote), ", ")
-                        .with_last(", and ")
-                        .with_pair(" and ")
-                )
+                    write!(
+                        f,
+                        "{} {}",
+                        feature(all.len() != 1),
+                        fmt::Delimit::new(all.iter().map(fmt::Quote), ", ")
+                            .with_last(", and ")
+                            .with_pair(" and ")
+                    )
+                }
             }
             FeaturesInner::Custom { custom, plural } => {
-                let prefix = if *plural { "features" } else { "features" };
-                write!(f, "{} \"{}\"", prefix, custom)
+                write!(f, "{} \"{}\"", feature(*plural), custom)
             }
+        }
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rendering() {
+        let list = [
+            (Features::new("a"), "feature \"a\""),
+            (Features::from("b"), "feature \"b\""),
+            // Any
+            (Features::any([]), "feature <missing>"),
+            (Features::any(["a"]), "feature \"a\""),
+            (Features::any(["a", "b"]), "features \"a\" or \"b\""),
+            (
+                Features::any(["a", "b", "c"]),
+                "features \"a\", \"b\", or \"c\"",
+            ),
+            // All
+            (Features::all([]), "feature <missing>"),
+            (Features::all(["a"]), "feature \"a\""),
+            (Features::all(["a", "b"]), "features \"a\" and \"b\""),
+            (
+                Features::all(["a", "b", "c"]),
+                "features \"a\", \"b\", and \"c\"",
+            ),
+            // Custom
+            (
+                Features::custom("custom/stuff", false),
+                "feature \"custom/stuff\"",
+            ),
+            (
+                Features::custom("custom/stuff", true),
+                "features \"custom/stuff\"",
+            ),
+        ];
+
+        for (feature, expected) in list.iter() {
+            assert_eq!(feature.to_string(), *expected, "Failed for {:?}", feature);
         }
     }
 }

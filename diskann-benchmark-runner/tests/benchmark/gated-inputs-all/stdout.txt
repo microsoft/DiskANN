@@ -2,5 +2,4 @@ Available input kinds are listed below:
     sample-input
     test-input-dim
     test-input-types
-
-One or more inputs are hidden, use "inputs --all" to list all inputs
+    phantom-input (requires the features "gated-feature-2" or "gated-feature-3")

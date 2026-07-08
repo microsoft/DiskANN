@@ -62,10 +62,7 @@ use std::{io::Write, path::PathBuf};
 use clap::{Parser, Subcommand};
 
 use crate::{
-    internal::{
-        self,
-        visibility::{Filter as VisibilityFilter},
-    },
+    internal::{self, visibility::Filter as VisibilityFilter},
     jobs::{self, Jobs},
     output::Output,
     registry,
@@ -241,17 +238,13 @@ impl App {
 
                 let mut inputs: Vec<_> = registry
                     .inputs()
-                    .filter_map(|i| {
+                    .filter(|i| {
                         let vis = i.visibility();
                         if !vis.is_available() {
                             has_hidden = true;
                         }
 
-                        if filter.matches(&vis) {
-                            Some(i)
-                        } else {
-                            None
-                        }
+                        filter.matches(&vis)
                     })
                     .collect();
 
@@ -284,17 +277,13 @@ impl App {
                 let mut benchmarks: Vec<_> = registry
                     .benchmarks()
                     .iter()
-                    .filter_map(|b| {
+                    .filter(|b| {
                         let vis = b.visibility();
                         if !vis.is_available() {
                             has_hidden = true;
                         }
 
-                        if filter.matches(&vis) {
-                            Some(b)
-                        } else {
-                            None
-                        }
+                        filter.matches(&vis)
                     })
                     .collect();
 
@@ -337,12 +326,7 @@ impl App {
                             "Could not find a match for the following input:\n\n{}\n",
                             repr
                         )?;
-                        writeln!(output, "Closest matches:\n")?;
-                        for (i, mismatch) in mismatches.into_iter().enumerate() {
-                            writeln!(output, "    {}. \"{}\":", i + 1, mismatch.method(),)?;
-                            writeln!(output, "{}\n", Indent::new(mismatch.reason(), 8),)?;
-                        }
-                        writeln!(output)?;
+                        writeln!(output, "{}", mismatches)?;
 
                         return Err(anyhow::Error::msg(
                             "could not find a benchmark for all inputs",
@@ -555,7 +539,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use crate::{registry, ux};
+    use crate::{registry, test::TestConfig, ux};
 
     const ENV: &str = "POCKETBENCH_TEST";
 
@@ -564,6 +548,10 @@ mod tests {
     const STDOUT: &str = "stdout.txt";
     const INPUT_FILE: &str = "input.json";
     const OUTPUT_FILE: &str = "output.json";
+
+    // Optional list of enabled features, one feature name per line. When absent, no
+    // features are enabled.
+    const FEATURES_FILE: &str = "features.txt";
 
     // Regression Extension
     const TOLERANCES_FILE: &str = "tolerances.json";
@@ -671,12 +659,29 @@ mod tests {
             }
         }
 
+        // Build the registration config from the fixture's `features.txt`, if present. Each
+        // non-empty line names one enabled feature.
+        fn config(&self) -> TestConfig {
+            let path = self.dir.join(FEATURES_FILE);
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => TestConfig::with_features(
+                    contents
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(str::to_owned),
+                ),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => TestConfig::new(),
+                Err(err) => panic!("failed to read {:?}: {}", path, err),
+            }
+        }
+
         fn run(&self, tempdir: &Path) {
             let apps = self.parse_stdin(tempdir);
 
             // Register outputs
             let mut registry = registry::Registry::new();
-            crate::test::register_benchmarks(&mut registry).unwrap();
+            crate::test::register_benchmarks(&mut registry, &self.config()).unwrap();
 
             // Run each app invocation - collecting the last output into a buffer.
             //

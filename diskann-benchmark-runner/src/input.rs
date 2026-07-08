@@ -287,14 +287,14 @@ pub(crate) mod internal {
             _checker: &mut Checker,
         ) -> anyhow::Result<Any> {
             anyhow::bail!(
-                "use of the \"{}\" input is gated behind the feature(s) \"{}\"",
+                "use of the \"{}\" input is gated behind the {}",
                 self.tag,
                 self.features
             );
         }
         fn example(&self) -> anyhow::Result<serde_json::Value> {
             anyhow::bail!(
-                "use of the \"{}\" input is gated behind the feature(s) \"{}\"",
+                "use of the \"{}\" input is gated behind the {}",
                 self.tag,
                 self.features,
             );
