@@ -67,6 +67,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod imp {
     use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
+    use diskann_benchmark_core::recall::GroundTruthMode;
     use diskann_benchmark_runner::{
         benchmark::{FailureScore, MatchScore},
         utils::{datatype::AsDataType, MicroSeconds},
@@ -394,7 +395,7 @@ mod imp {
                 topk.reps,
                 &topk.num_threads,
                 &topk.runs,
-                benchmark_core::recall::GroundTruthMode::Fixed,
+                GroundTruthMode::Fixed,
             );
 
             let knn = benchmark_core::search::graph::KNN::new(
@@ -482,7 +483,7 @@ mod imp {
                 betafilter.reps,
                 &betafilter.num_threads,
                 &betafilter.runs,
-                benchmark_core::recall::GroundTruthMode::Flexible,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
@@ -537,7 +538,7 @@ mod imp {
                 multihop.reps,
                 &multihop.num_threads,
                 &multihop.runs,
-                benchmark_core::recall::GroundTruthMode::Flexible,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
@@ -591,7 +592,7 @@ mod imp {
                 inline.reps,
                 &inline.num_threads,
                 &inline.runs,
-                benchmark_core::recall::GroundTruthMode::Flexible,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;

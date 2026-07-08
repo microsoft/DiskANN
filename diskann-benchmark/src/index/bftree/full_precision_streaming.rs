@@ -8,7 +8,11 @@ use diskann::{
     graph::{DiskANNIndex, InplaceDeleteMethod, SampleableForStart},
     utils::{VectorRepr, ONE},
 };
-use diskann_benchmark_core::{self as benchmark_core, recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::{
+    self as benchmark_core,
+    recall::{GroundTruthMode, Rows},
+    streaming::executors::bigann,
+};
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     output::Output,
@@ -103,7 +107,7 @@ where
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
-            benchmark_core::recall::GroundTruthMode::Fixed,
+            GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))

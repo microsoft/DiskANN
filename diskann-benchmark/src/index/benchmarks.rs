@@ -13,6 +13,7 @@ use diskann::{
 };
 use diskann_benchmark_core::{
     self as benchmark_core,
+    recall::GroundTruthMode,
     streaming::{executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
@@ -474,7 +475,7 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             phase.reps,
             &phase.num_threads,
             &phase.runs,
-            benchmark_core::recall::GroundTruthMode::Fixed,
+            GroundTruthMode::Fixed,
         );
         let results = search::knn::run(&knn, &groundtruth, steps)?;
 
@@ -528,7 +529,7 @@ where
             topk.reps,
             &topk.num_threads,
             &topk.runs,
-            benchmark_core::recall::GroundTruthMode::Fixed,
+            GroundTruthMode::Fixed,
         );
 
         let results = search::knn::run(&knn, &groundtruth, steps)?;
@@ -644,7 +645,7 @@ where
             beta_filter.reps,
             &beta_filter.num_threads,
             &beta_filter.runs,
-            benchmark_core::recall::GroundTruthMode::Flexible,
+            GroundTruthMode::Flexible,
         );
 
         let result = search::knn::run(&knn, &groundtruth, steps)?;
@@ -694,7 +695,7 @@ where
             multihop.reps,
             &multihop.num_threads,
             &multihop.runs,
-            benchmark_core::recall::GroundTruthMode::Flexible,
+            GroundTruthMode::Flexible,
         );
 
         let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
@@ -756,7 +757,7 @@ where
             inline.reps,
             &inline.num_threads,
             &inline.runs,
-            benchmark_core::recall::GroundTruthMode::Flexible,
+            GroundTruthMode::Flexible,
         );
 
         let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
