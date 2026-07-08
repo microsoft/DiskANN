@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashSet, hash::Hash};
+use std::{
+    collections::{BTreeMap, HashSet},
+    hash::Hash,
+};
 
 use diskann_utils::{
     strided::StridedView,
@@ -196,8 +199,22 @@ where
         }
     }
 
-    // The actual recall computation for groundtruth
-    let mut recall_values: Vec<f64> = Vec::new();
+    // The actual recall computation for groundtruth.
+    //
+    // To avoid floating-point accumulation error we do not sum per-query `f64`
+    // ratios. Each ratio `r / this_recall_k` is generally not exactly
+    // representable (e.g. `99.0 / 100.0`), and summing thousands of them
+    // compounds the rounding, producing values like `0.9999899999999999` where
+    // the exact answer is `0.99999`. Instead we accumulate integer hit counts,
+    // grouped by their (per-row) denominator `this_recall_k`, and divide once
+    // per distinct denominator at the end. This is algebraically identical to
+    // the mean of per-query recalls, but exact whenever all scored rows share a
+    // denominator (the common fixed-size-groundtruth case).
+    //
+    // A `BTreeMap` (rather than `HashMap`) keeps the final summation order
+    // deterministic across runs, so the reported recall is bit-reproducible.
+    let mut hits_by_k: BTreeMap<usize, u64> = BTreeMap::new();
+    let mut num_scored_queries: usize = 0;
     let mut this_groundtruth = HashSet::new();
     let mut this_results = HashSet::new();
 
@@ -244,17 +261,26 @@ where
             .count()
             .min(this_recall_k);
 
-        let recall = (r as f64) / (this_recall_k as f64);
-
-        recall_values.push(recall);
+        *hits_by_k.entry(this_recall_k).or_insert(0) += r as u64;
+        num_scored_queries += 1;
     }
 
-    // Compute the average recall
-    let total: f64 = recall_values.iter().sum();
-    let average = if recall_values.is_empty() {
+    // Compute the average recall as the mean of the per-query recalls. Grouping
+    // by denominator lets each group be reduced with an exact integer numerator,
+    // limiting rounding to at most one division per distinct `this_recall_k`.
+    //
+    // `num_scored_queries` is the *global* count of scored queries, not a
+    // per-denominator count: the mean of per-query recalls divides the grand
+    // total by the number of queries, so each query contributes `1 / N`
+    // regardless of its `this_recall_k`. Concretely,
+    // `(1/N) * sum_i (r_i / k_i) == sum_d (hits_by_k[d] / (d * N))`.
+    let average = if num_scored_queries == 0 {
         0.0
     } else {
-        total / (recall_values.len() as f64)
+        hits_by_k
+            .into_iter()
+            .map(|(k, hits)| (hits as f64) / ((k * num_scored_queries) as f64))
+            .sum()
     };
 
     Ok(RecallMetrics {
@@ -675,6 +701,44 @@ mod tests {
         assert_eq!(recall.average, 0.0);
         assert!(!recall.average.is_nan());
         assert!(!recall.average.is_infinite());
+    }
+
+    // Regression test for the reported "0.9999899999999999" recall (issue #1171).
+    //
+    // With a fixed denominator, the average of the per-query recalls must be
+    // computed without floating-point accumulation error: a perfect run reports
+    // exactly `1.0`, and a run missing exactly 5 of 500_000 neighbours reports
+    // exactly `0.99999` rather than `0.9999899999999999`.
+    #[test]
+    fn test_fixed_denominator_no_precision_loss() {
+        let k = 100usize;
+        let num_queries = 5000usize;
+
+        // Groundtruth: every row is `0..k`.
+        let gt_row: Vec<u32> = (0..k as u32).collect();
+        let groundtruth: Vec<_> = (0..num_queries).map(|_| gt_row.clone()).collect();
+
+        // Perfect results: every query recovers all `k` neighbours.
+        let perfect: Vec<_> = (0..num_queries).map(|_| gt_row.clone()).collect();
+        let recall = knn(&groundtruth, None, &perfect, k, k, GroundTruthMode::Fixed).unwrap();
+        assert_eq!(recall.average, 1.0);
+
+        // Miss exactly one neighbour on 5 queries (5 misses out of 500_000).
+        let mut near_perfect = perfect.clone();
+        for row in near_perfect.iter_mut().take(5) {
+            // Replace the last groundtruth id with a non-matching one.
+            *row.last_mut().unwrap() = u32::MAX;
+        }
+        let recall = knn(
+            &groundtruth,
+            None,
+            &near_perfect,
+            k,
+            k,
+            GroundTruthMode::Fixed,
+        )
+        .unwrap();
+        assert_eq!(recall.average, 0.99999);
     }
 
     #[test]
