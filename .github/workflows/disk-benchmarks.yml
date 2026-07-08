@@ -28,7 +28,6 @@ on:
       - 'diskann-vector/**'
       - 'diskann-wide/**'
       - 'diskann-utils/**'
-      - 'diskann-platform/**'
       - 'diskann-label-filter/**'
       - 'diskann-benchmark/**'
       - 'diskann-benchmark-runner/**'

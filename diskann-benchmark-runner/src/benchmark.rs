@@ -11,6 +11,10 @@ use crate::{internal::visibility::Visibility, Checkpoint, Input, Output};
 // Benchmark //
 ///////////////
 
+///////////////
+// Benchmark //
+///////////////
+
 /// A registered benchmark.
 ///
 /// Benchmarks consist of an [`Input`] and a corresponding serialized `Output`. Inputs will
@@ -370,6 +374,21 @@ pub(crate) mod internal {
 
         /// If supported, return an object capable of running regression checks on this benchmark.
         fn as_regression(&self) -> Option<&dyn Regression>;
+
+        fn as_string(&self) -> String {
+            Description(self).to_string()
+        }
+    }
+
+    struct Description<'a, T: ?Sized>(&'a T);
+
+    impl<T> std::fmt::Display for Description<'_, T>
+    where
+        T: Benchmark + ?Sized,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.description(f)
+        }
     }
 
     pub(crate) struct Checked {

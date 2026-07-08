@@ -12,7 +12,7 @@ use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{
     data_model::GraphHeader,
-    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
+    search::provider::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
 };
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
@@ -198,13 +198,15 @@ impl<AlignedReaderType: AlignedFileReader> Deref for DiskSectorGraph<AlignedRead
 
 #[cfg(test)]
 mod disk_sector_graph_test {
-    use crate::utils::aligned_file_reader::{
-        traits::AlignedReaderFactory, AlignedFileReaderFactory,
-    };
     use diskann_utils::test_data_root;
 
     use super::*;
-    use crate::data_model::{GraphLayoutVersion, GraphMetadata};
+    use crate::{
+        data_model::{GraphLayoutVersion, GraphMetadata},
+        search::provider::aligned_file_reader::{
+            traits::AlignedReaderFactory, AlignedFileReaderFactory,
+        },
+    };
 
     fn test_index_path() -> String {
         test_data_root()

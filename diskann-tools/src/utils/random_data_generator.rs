@@ -197,7 +197,28 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::utils::size_constants::{TEST_DATASET_SIZE_SMALL, TEST_NUM_DIMENSIONS_RECOMMENDED};
+
+    /// The small dataset size for testing the library.
+    /// A prime number is used to avoid any accidental patterns in the data.
+    #[cfg(not(miri))]
+    const TEST_DATASET_SIZE_SMALL: u64 = 101;
+
+    /// The recommended number of dimensions for testing the library.
+    /// A prime number is used to avoid any accidental patterns in the data.
+    /// When "memory aligned" the dimensions become 64 (8*8). Setting to non-aligned value to ensure aligning works.
+    #[cfg(not(miri))]
+    const TEST_NUM_DIMENSIONS_RECOMMENDED: usize = 59;
+
+    /// The small dataset size for testing the library.
+    /// A prime number is used to avoid any accidental patterns in the data.
+    #[cfg(miri)]
+    const TEST_DATASET_SIZE_SMALL: u64 = 3;
+
+    /// The recommended number of dimensions for testing the library.
+    /// A prime number is used to avoid any accidental patterns in the data.
+    /// When "memory aligned" the dimensions become 16 (8*2). Setting to non-aligned value to ensure aligning works.
+    #[cfg(miri)]
+    const TEST_NUM_DIMENSIONS_RECOMMENDED: usize = 13;
 
     #[rstest]
     fn random_data_write_success(

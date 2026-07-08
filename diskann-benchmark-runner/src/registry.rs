@@ -380,7 +380,7 @@ pub(crate) struct RegisteredBenchmark {
 
 impl std::fmt::Debug for RegisteredBenchmark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let benchmark = Capture(&*self.benchmark);
+        let benchmark = self.benchmark.as_string();
         f.debug_struct("RegisteredBenchmark")
             .field("name", &self.name)
             .field("benchmark", &benchmark)
@@ -406,7 +406,7 @@ impl RegisteredBenchmark {
     }
 
     pub(crate) fn description(&self) -> String {
-        Capture(&*self.benchmark).to_string()
+        self.benchmark.as_string()
     }
 
     /// Order available benchmarks first (alphabetically) followed by gated benchmarks
@@ -579,21 +579,6 @@ pub(crate) struct RegisteredTolerance<'a> {
     /// A single tolerance input can apply to multiple benchmarks. This field records all
     /// such benchmarks that are available in the registry that use this tolerance.
     pub(crate) regressions: Vec<RegressionBenchmark<'a>>,
-}
-
-/// Helper to capture a `Benchmark::description` call into a `String` via `Display`.
-struct Capture<'a>(&'a dyn benchmark::internal::Benchmark);
-
-impl std::fmt::Display for Capture<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.description(f)
-    }
-}
-
-impl std::fmt::Debug for Capture<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.description(f)
-    }
 }
 
 ///////////
