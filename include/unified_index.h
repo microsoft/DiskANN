@@ -86,11 +86,11 @@ class unified_index
 // Factory: open a unified file fully in memory. Peeks the 4 KiB header,
 // dispatches on `data_type`, instantiates the right templated implementation,
 // calls load(ctx), returns the owning pointer as the non-templated interface.
-std::unique_ptr<unified_index> make_unified_index_memory(const UnifiedLoadContext &ctx);
+DISKANN_DLLEXPORT std::unique_ptr<unified_index> make_unified_index_memory(const UnifiedLoadContext &ctx);
 
 // Factory: open a unified file in disk-resident (SSD) mode. The supplied
 // AlignedFileReader is handed to the constructed unified_index_ssd<T>.
-std::unique_ptr<unified_index> make_unified_index_ssd(
+DISKANN_DLLEXPORT std::unique_ptr<unified_index> make_unified_index_ssd(
     std::shared_ptr<AlignedFileReader> reader, const UnifiedLoadContext &ctx);
 
 } // namespace diskann
