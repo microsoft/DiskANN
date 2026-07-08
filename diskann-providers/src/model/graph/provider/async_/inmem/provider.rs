@@ -6,8 +6,6 @@
 use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-#[cfg(test)]
-use diskann::neighbor::Neighbor;
 use diskann::{
     ANNError, ANNResult,
     graph::AdjacencyList,
@@ -234,7 +232,7 @@ pub struct DefaultProvider<U, V = NoStore, D = NoDeletes, Ctx = DefaultContext> 
     pub aux_vectors: V,
 
     // Provider that holds the graph structure as neighbors of vectors.
-    pub(crate) neighbor_provider: SimpleNeighborProviderAsync<u32>,
+    pub(crate) neighbor_provider: SimpleNeighborProviderAsync,
 
     /// The delete provider. If `D == NoDeletes`, then delete related operations are disabled.
     ///
@@ -323,14 +321,6 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
         })
     }
 
-    /// Return a predicate that can be applied to `Iter::filter` to remove start points
-    /// from an iterator of neighbors.
-    #[cfg(test)]
-    pub(crate) fn is_not_start_point(&self) -> impl Fn(&Neighbor<u32>) -> bool {
-        let range = self.start_points.range();
-        move |neighbor| !range.contains(&neighbor.id)
-    }
-
     /// Return a vector of starting points.
     pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
         Ok(self.start_points.range().collect())
@@ -342,7 +332,7 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
     }
 
     /// Return a reference to the neighbor provider.
-    pub fn neighbors(&self) -> &SimpleNeighborProviderAsync<u32> {
+    pub fn neighbors(&self) -> &SimpleNeighborProviderAsync {
         &self.neighbor_provider
     }
 
@@ -653,26 +643,26 @@ where
     }
 }
 
-impl NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
+impl NeighborAccessor for &SimpleNeighborProviderAsync {
     async fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> ANNResult<Self> {
+    ) -> ANNResult<()> {
         self.get_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
+        Ok(())
     }
 }
 
-impl NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
-    async fn set_neighbors(self, id: u32, neighbors: &[u32]) -> ANNResult<Self> {
+impl NeighborAccessorMut for &SimpleNeighborProviderAsync {
+    async fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) -> ANNResult<()> {
         self.set_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
+        Ok(())
     }
 
-    async fn append_vector(self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<Self> {
+    async fn append_vector(&mut self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         self.append_vector_sync(id.into_usize(), new_neighbor_ids)?;
-        Ok(self)
+        Ok(())
     }
 }
 
@@ -683,7 +673,7 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type Accessor<'a> = &'a SimpleNeighborProviderAsync<u32>;
+    type Accessor<'a> = &'a SimpleNeighborProviderAsync;
     fn default_accessor(&self) -> Self::Accessor<'_> {
         self.neighbors()
     }
@@ -789,7 +779,7 @@ mod tests {
         for i in iter.clone() {
             // set adjacency list to non-empty before release
             provider
-                .neighbor_provider
+                .neighbors()
                 .set_neighbors(i, &[1, 2])
                 .await
                 .unwrap();
@@ -805,7 +795,7 @@ mod tests {
             // check that adjacency list was reset after release
             let mut neighbors = AdjacencyList::new();
             provider
-                .neighbor_provider
+                .neighbors()
                 .get_neighbors(i, &mut neighbors)
                 .await
                 .unwrap();

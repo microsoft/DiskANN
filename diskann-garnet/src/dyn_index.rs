@@ -6,7 +6,6 @@
 use crate::{
     SearchResults,
     garnet::{Context, GarnetId},
-    labels::GarnetQueryLabelProvider,
     provider::{DynamicQuantization, GarnetProvider},
 };
 use diskann::{
@@ -15,10 +14,7 @@ use diskann::{
     provider::DataProvider,
     utils::VectorRepr,
 };
-use diskann_providers::{
-    index::wrapped_async::DiskANNIndex, model::graph::provider::layers::BetaFilter,
-};
-use std::sync::Arc;
+use diskann_providers::index::wrapped_async::DiskANNIndex;
 
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.
@@ -31,8 +27,7 @@ pub(crate) trait DynIndex: Send + Sync {
         &self,
         context: &Context,
         data: &[u8],
-        params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        params: search::Knn,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -40,8 +35,23 @@ pub(crate) trait DynIndex: Send + Sync {
         &self,
         context: &Context,
         id: &GarnetId,
-        params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        params: search::Knn,
+        output: &mut SearchResults<'_>,
+    ) -> ANNResult<SearchStats>;
+
+    fn filtered_search_vector(
+        &self,
+        context: &Context,
+        data: &[u8],
+        params: search::InlineFilterSearch,
+        output: &mut SearchResults<'_>,
+    ) -> ANNResult<SearchStats>;
+
+    fn filtered_search_element(
+        &self,
+        context: &Context,
+        id: &GarnetId,
+        params: search::InlineFilterSearch,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -66,7 +76,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     /// The data slice here must be aligned to `T` or this will panic.
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
         self.insert(
-            DynamicQuantization,
+            &DynamicQuantization,
             context,
             id,
             bytemuck::cast_slice::<u8, T>(data),
@@ -84,32 +94,50 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         &self,
         context: &Context,
         data: &[u8],
-        params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        params: search::Knn,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let query = bytemuck::cast_slice::<u8, T>(data);
-        if let Some((labels, beta)) = filter {
-            let beta_filter = BetaFilter::new(DynamicQuantization, Arc::new(labels.clone()), beta);
-            self.search(*params, &beta_filter, context, query, output)
-        } else {
-            self.search(*params, &DynamicQuantization, context, query, output)
-        }
+        self.search(params, &DynamicQuantization, context, query, output)
     }
 
     fn search_element(
         &self,
         context: &Context,
         id: &GarnetId,
-        params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        params: search::Knn,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = self.inner.provider().get_full_vector(context, iid)?;
         let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
-        self.search_vector(context, data_bytes, params, filter, output)
+        self.search_vector(context, data_bytes, params, output)
+    }
+
+    fn filtered_search_vector(
+        &self,
+        context: &Context,
+        data: &[u8],
+        params: search::InlineFilterSearch,
+        output: &mut SearchResults<'_>,
+    ) -> ANNResult<SearchStats> {
+        let query = bytemuck::cast_slice::<u8, T>(data);
+        self.search(params, &DynamicQuantization, context, query, output)
+    }
+
+    fn filtered_search_element(
+        &self,
+        context: &Context,
+        id: &GarnetId,
+        params: search::InlineFilterSearch,
+        output: &mut SearchResults<'_>,
+    ) -> ANNResult<SearchStats> {
+        // Look up internal ID
+        let iid = self.inner.provider().to_internal_id(context, id)?;
+        let data = self.inner.provider().get_full_vector(context, iid)?;
+        let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
+        self.filtered_search_vector(context, data_bytes, params, output)
     }
 
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {

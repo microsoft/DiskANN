@@ -546,6 +546,58 @@ mod partition_test {
     }
 
     #[test]
+    fn test_estimate_initial_partition_count_minimum_clamp() {
+        // When total RAM fits well within budget, should clamp to minimum of 3
+        let count = estimate_initial_partition_count(
+            100,                       // total_points
+            10,                        // dimension
+            1,                         // k_base
+            1_000_000.0,               // ram_budget_in_bytes
+            &|n, _d| n as f64 * 100.0, // total_ram = 100 * 100 = 10_000 << 1_000_000 => clamp to 3
+        );
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_odd_rounding() {
+        // Even partition count should be bumped to odd
+        let count = estimate_initial_partition_count(
+            1000,
+            128,
+            1,
+            1000.0,                  // budget
+            &|n, _d| n as f64 * 4.0, // total_ram = 4000, ratio = 4 => ceil = 4 (even) => 5
+        );
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_large_ratio() {
+        // Odd result that is >= 3 should be returned as-is
+        let count = estimate_initial_partition_count(
+            1000,
+            128,
+            1,
+            1000.0,                  // budget
+            &|n, _d| n as f64 * 7.0, // total_ram = 7000, ratio = 7 => odd, >= 3
+        );
+        assert_eq!(count, 7);
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_k_base_multiplier() {
+        // k_base multiplies total_points in the estimator call
+        let count = estimate_initial_partition_count(
+            100,
+            10,
+            3,                       // k_base
+            100.0,                   // budget
+            &|n, _d| n as f64 * 1.0, // n = total_points * k_base = 300, total_ram = 300, ratio = 3
+        );
+        assert_eq!(count, 3);
+    }
+
+    #[test]
     fn test_partition_with_ram_budget() -> ANNResult<()> {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let dataset_file = "/sift/siftsmall_learn.bin";

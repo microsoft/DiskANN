@@ -44,7 +44,6 @@ The repository uses a Cargo workspace with crates organized into functional tier
 **Tier 1: Foundation**
 - `diskann-wide/` - Low-level SIMD, bit manipulation, type width abstractions
 - `diskann-vector/` - Vector primitives and operations
-- `diskann-platform/` - Platform-specific utilities
 
 **Tier 2: Core Libraries**
 - `diskann-linalg/` - Linear algebra operations
@@ -211,6 +210,19 @@ CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 **DON'T**:
 - Add tests for derived traits (Clone, Debug, PartialEq)
 - Add tests for enums unless they have explicit functionality
+
+### Documentation
+
+Less is more. Documentation goes out of date; rustdoc-generated output doesn't. Don't duplicate what rustdoc already provides for free (type listings, signatures, re-exports, intra-doc links).
+
+**DO**:
+- Document non-obvious behavior, errors, safety, and design intent
+- Use `# Errors`, `# Safety`, `# Panics`, `# Example` sections
+- Keep documentation for internal `pub(crate)` / `pub(super)` items concise and additive; critical items should still receive full documentation
+
+**DON'T**:
+- Maintain explicit lists of types/functions in module-level docs
+- Restate what the signature already shows (e.g. "owns an `Arc<T>`" on a struct whose only field is `Arc<T>`)
 
 ---
 

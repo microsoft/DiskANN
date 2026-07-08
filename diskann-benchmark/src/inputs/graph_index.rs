@@ -15,7 +15,7 @@ use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Chec
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::inmem::DefaultProviderParameters,
+        graph::provider::{async_::inmem::DefaultProviderParameters, DeterminantDiversityParams},
     },
     utils::load_metadata_from_file,
 };
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    inputs::{self, as_input, save_and_load, Example},
+    inputs::{self, as_input, save_and_load, write_field, Example, PRINT_WIDTH},
     utils::SimilarityMeasure,
 };
 
@@ -218,7 +218,7 @@ impl BetaSearchPhase {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct MultiHopSearchPhase {
+pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -229,7 +229,7 @@ pub(crate) struct MultiHopSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl MultiHopSearchPhase {
+impl MultihopFilterSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
         self.query_predicates.resolve(checker)?;
@@ -241,6 +241,63 @@ impl MultiHopSearchPhase {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct AdaptiveL {
+    pub(crate) sample_count: NonZeroUsize,
+    pub(crate) scale_factor: f64,
+}
+
+impl AdaptiveL {
+    pub(crate) fn validate(&self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        let _ = graph::search::AdaptiveL::new(self.sample_count.into(), self.scale_factor)
+            .map_err(|e| anyhow::anyhow!("failed to create adaptive L: {}", e))?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct InlineFilterSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) data_labels: InputFile,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub(crate) adaptive_l: Option<AdaptiveL>,
+}
+
+impl InlineFilterSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        if let Some(ref adaptive_l) = self.adaptive_l {
+            adaptive_l.validate(checker)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn adaptive_l(&self) -> Result<Option<graph::search::AdaptiveL>, anyhow::Error> {
+        if let Some(ref adaptive_l) = self.adaptive_l {
+            let adaptive_l = graph::search::AdaptiveL::new(
+                adaptive_l.sample_count.into(),
+                adaptive_l.scale_factor,
+            )?; // Safe to unwrap since we've already validated the input
+            Ok(Some(adaptive_l))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -297,13 +354,50 @@ impl Example for MultiInsert {
     }
 }
 
-// This constant is used to ensure that summaries of graph-index related jobs properly have
-// their field descriptions aligned.
-const PRINT_WIDTH: usize = 18;
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TopkDeterminantDiversityPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    pub(crate) power: f32,
+    pub(crate) eta: f32,
+}
 
-macro_rules! write_field {
-    ($f:ident, $field:tt, $($expr:tt)*) => {
-        writeln!($f, "{:>PRINT_WIDTH$}: {}", $field, $($expr)*)
+impl TopkDeterminantDiversityPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        DeterminantDiversityParams::new(self.power, self.eta)
+            .map_err(|e| anyhow::anyhow!("invalid determinant-diversity params: {e}"))?;
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        Ok(())
+    }
+}
+
+impl Example for TopkDeterminantDiversityPhase {
+    fn example() -> Self {
+        Self {
+            queries: InputFile::new("path/to/queries"),
+            groundtruth: InputFile::new("path/to/groundtruth"),
+            reps: NonZeroUsize::new(1).unwrap(),
+            num_threads: vec![NonZeroUsize::new(1).unwrap()],
+            runs: vec![GraphSearch {
+                search_n: 10,
+                search_l: vec![10, 20, 30, 40],
+                recall_k: 10,
+            }],
+            power: 1.0,
+            eta: 0.5,
+        }
     }
 }
 
@@ -313,7 +407,9 @@ pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
-    TopkMultihopFilter(MultiHopSearchPhase),
+    TopkMultihopFilter(MultihopFilterSearchPhase),
+    TopkInlineFilter(InlineFilterSearchPhase),
+    TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
 
 #[derive(Debug, Error)]
@@ -340,6 +436,8 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
+            Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
     }
 
@@ -375,11 +473,35 @@ impl SearchPhase {
 
     pub(crate) fn as_topk_multihop_filter(
         &self,
-    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
         match self {
             Self::TopkMultihopFilter(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(
                 SearchPhaseKind::TopkMultihopFilter,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_inline_filter(
+        &self,
+    ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkInlineFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkInlineFilter,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_determinant_diversity(
+        &self,
+    ) -> Result<&TopkDeterminantDiversityPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkDeterminantDiversity(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkDeterminantDiversity,
                 self.kind(),
             )),
         }
@@ -393,6 +515,8 @@ impl SearchPhase {
             SearchPhase::Range(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
     }
 }
@@ -403,6 +527,8 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkInlineFilter,
+    TopkDeterminantDiversity,
 }
 
 impl SearchPhaseKind {
@@ -412,6 +538,8 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkInlineFilter => "topk-inline-filter",
+            Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }
     }
 }
@@ -476,13 +604,13 @@ impl IndexLoad {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check if the file exists (allowing for relative paths with respect to the current
-        // directory.
+        // Check if the file exists (allowing for relative paths with respect to the search
+        // directories.
         //
         // This isn't a fully complete check since the index may be composed of multiple files,
         // but without encoding the type into the loader, it seems complicated to do better than this
         let path = std::path::Path::new(&self.load_path);
-        let p = checker.check_path(path);
+        let p = checker.find_input_file(path);
         match p {
             Ok(p) => {
                 self.load_path = p.to_string_lossy().to_string();
@@ -539,19 +667,19 @@ pub enum StartPointStrategyRef {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexBuild {
-    pub(crate) data_type: DataType,
-    pub(crate) data: InputFile,
-    pub(crate) distance: SimilarityMeasure,
-    pub(crate) max_degree: usize,
-    pub(crate) l_build: usize,
-    pub(crate) insert_retry: Option<InsertRetry>,
+    data_type: DataType,
+    data: InputFile,
+    distance: SimilarityMeasure,
+    max_degree: usize,
+    l_build: usize,
+    insert_retry: Option<InsertRetry>,
     #[serde(with = "StartPointStrategyRef")]
-    pub(crate) start_point_strategy: StartPointStrategy,
-    pub(crate) alpha: f32,
-    pub(crate) backedge_ratio: f32,
-    pub(crate) num_threads: usize,
-    pub(crate) multi_insert: Option<MultiInsert>,
-    pub(crate) save_path: Option<String>,
+    start_point_strategy: StartPointStrategy,
+    alpha: f32,
+    backedge_ratio: f32,
+    num_threads: usize,
+    multi_insert: Option<MultiInsert>,
+    save_path: Option<String>,
 }
 
 impl IndexBuild {
@@ -559,8 +687,18 @@ impl IndexBuild {
         "graph-index-builder"
     }
 
-    fn exact_max_degree(&self) -> usize {
+    pub(crate) fn exact_max_degree(&self) -> usize {
         (self.max_degree as f32 * 1.3) as usize
+    }
+
+    #[cfg(feature = "bftree")]
+    pub(crate) fn max_degree(&self) -> u32 {
+        self.max_degree as u32
+    }
+
+    #[cfg(feature = "bftree")]
+    pub(crate) fn graph_slack_factor(&self) -> f32 {
+        1.3
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
@@ -618,7 +756,7 @@ impl IndexBuild {
         }
     }
 
-    fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub(crate) fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_field!(f, "file", self.data.display())?;
         write_field!(f, "data_type", self.data_type)?;
         write_field!(f, "max degree", self.max_degree)?;
@@ -661,6 +799,39 @@ impl IndexBuild {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn data_type(&self) -> DataType {
+        self.data_type
+    }
+
+    pub(crate) fn l_build(&self) -> usize {
+        self.l_build
+    }
+
+    pub(crate) fn num_threads(&self) -> usize {
+        self.num_threads
+    }
+
+    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    pub(crate) fn distance(&self) -> SimilarityMeasure {
+        self.distance
+    }
+
+    pub(crate) fn data(&self) -> &InputFile {
+        &self.data
+    }
+
+    pub(crate) fn start_point_strategy(&self) -> &StartPointStrategy {
+        &self.start_point_strategy
+    }
+
+    pub(crate) fn multi_insert(&self) -> Option<&MultiInsert> {
+        self.multi_insert.as_ref()
+    }
+
+    pub(crate) fn save_path(&self) -> Option<&str> {
+        self.save_path.as_deref()
     }
 }
 
@@ -814,7 +985,9 @@ impl IndexPQOperation {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.index_operation.validate(checker)
+        self.index_operation.validate(checker)?;
+
+        Ok(())
     }
 }
 
@@ -898,7 +1071,9 @@ impl IndexSQOperation {
             ));
         }
 
-        self.index_operation.validate(checker)
+        self.index_operation.validate(checker)?;
+
+        Ok(())
     }
 }
 
@@ -1090,7 +1265,10 @@ pub(crate) struct DynamicRunbookParams {
     pub(crate) gt_directory: String,
     pub(crate) ip_delete_method: InplaceDeleteMethod,
     pub(crate) ip_delete_num_to_replace: usize,
-    pub(crate) consolidate_threshold: f32,
+    /// Threshold for deferred consolidation. Required for soft-delete providers (inmem).
+    /// Hard-delete providers (bf-tree) ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) consolidate_threshold: Option<f32>,
     #[serde(skip)]
     pub(crate) resolved_gt_directory: Option<std::path::PathBuf>,
 }
@@ -1103,46 +1281,17 @@ impl DynamicRunbookParams {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.runbook_path.resolve(checker)?;
 
-        // Validate consolidate_threshold is greater than 0
-        if self.consolidate_threshold <= 0.0 {
-            return Err(anyhow::anyhow!(
-                "consolidate_threshold must be greater than 0, but got {}",
-                self.consolidate_threshold
-            ));
-        }
-
-        // Resolve gt_directory using search directories, similar to InputFile
-        let mut resolved_gt_directory = None;
-        let gt_path = std::path::Path::new(&self.gt_directory);
-
-        // Check if the path is absolute or exists relative to current directory
-        if gt_path.is_dir() {
-            resolved_gt_directory = Some(gt_path.to_path_buf());
-        } else if gt_path.is_absolute() {
-            return Err(anyhow::anyhow!(
-                "Ground truth directory with absolute path \"{}\" either does not exist or is not a directory",
-                self.gt_directory
-            ));
-        } else {
-            // Search in the provided directories
-            for dir in checker.search_directories() {
-                let absolute = dir.join(gt_path);
-                if absolute.is_dir() {
-                    resolved_gt_directory = Some(absolute);
-                    break;
-                }
+        // Validate consolidate_threshold if provided
+        if let Some(threshold) = self.consolidate_threshold {
+            if threshold <= 0.0 {
+                return Err(anyhow::anyhow!(
+                    "consolidate_threshold must be greater than 0, but got {}",
+                    threshold
+                ));
             }
         }
 
-        let final_gt_directory = resolved_gt_directory.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Could not find ground truth directory \"{}\" in the search directories: {:?}",
-                self.gt_directory,
-                checker.search_directories()
-            )
-        })?;
-
-        // Store the resolved path for later use
+        let final_gt_directory = checker.find_input_dir(self.gt_directory.as_ref())?;
         self.resolved_gt_directory = Some(final_gt_directory.clone());
 
         // Run pre-flight checks for the runbook.
@@ -1175,8 +1324,19 @@ impl Example for DynamicRunbookParams {
                 l_value: 64,
             },
             ip_delete_num_to_replace: 3,
-            consolidate_threshold: 0.2,
+            consolidate_threshold: Some(0.2),
             resolved_gt_directory: None,
+        }
+    }
+}
+
+impl DynamicRunbookParams {
+    /// Example for hard-delete providers that don't use consolidation.
+    #[cfg(feature = "bftree")]
+    pub(crate) fn example_immediate() -> Self {
+        Self {
+            consolidate_threshold: None,
+            ..Self::example()
         }
     }
 }
@@ -1208,7 +1368,9 @@ impl std::fmt::Display for DynamicRunbookParams {
             }
         }
         write_field!(f, "IP Delete Num to Replace", self.ip_delete_num_to_replace)?;
-        write_field!(f, "Consolidate Threshold", self.consolidate_threshold)?;
+        if let Some(threshold) = self.consolidate_threshold {
+            write_field!(f, "Consolidate Threshold", threshold)?;
+        }
 
         Ok(())
     }
@@ -1234,6 +1396,7 @@ impl DynamicIndexRun {
         self.build.validate(checker)?;
         self.runbook_params.validate(checker)?;
         self.search_phase.validate(checker)?;
+
         Ok(())
     }
 

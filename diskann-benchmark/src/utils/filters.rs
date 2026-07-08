@@ -6,7 +6,10 @@
 use bit_set::BitSet;
 use std::fmt::Debug;
 
-use diskann::{graph::index::QueryLabelProvider, utils::VectorId};
+use diskann::{
+    graph::ext::labeled::QueryLabelProvider,
+    utils::{IntoUsize, VectorId},
+};
 use diskann_benchmark_runner::files::InputFile;
 use diskann_label_filter::{
     kv_index::GenericIndex,
@@ -62,7 +65,7 @@ impl Debug for QueryBitmapEvaluator {
 
 impl<T> QueryLabelProvider<T> for QueryBitmapEvaluator
 where
-    T: VectorId,
+    T: VectorId + IntoUsize,
 {
     fn is_match(&self, vec_id: T) -> bool {
         self.get_bitmap().contains(vec_id.into_usize())
@@ -74,7 +77,7 @@ pub struct BitmapFilter(pub BitSet);
 
 impl<T> QueryLabelProvider<T> for BitmapFilter
 where
-    T: VectorId,
+    T: VectorId + IntoUsize,
 {
     fn is_match(&self, vec_id: T) -> bool {
         self.0.contains(vec_id.into_usize())

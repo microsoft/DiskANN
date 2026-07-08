@@ -232,6 +232,26 @@ impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
     pub(crate) fn prefetch_lookahead(&self) -> usize {
         self.prefetch_lookahead
     }
+
+    #[cfg(test)]
+    pub(crate) fn compare_data(&self, other: &Self)
+    where
+        T: PartialEq,
+    {
+        assert_eq!(self.dim, other.dim);
+        assert_eq!(self.max_vectors, other.max_vectors);
+
+        for i in 0..self.max_vectors {
+            // SAFETY: The usual statement that this is not actually sound.
+            unsafe {
+                assert_eq!(
+                    self.get_vector_sync(i),
+                    other.get_vector_sync(i),
+                    "mismatch at entry {i}",
+                );
+            }
+        }
+    }
 }
 
 impl<T> VectorStore for FastMemoryVectorProviderAsync<T>
@@ -328,7 +348,6 @@ mod tests {
     use std::{num::NonZeroUsize, sync::Arc};
 
     use crate::storage::VirtualStorageProvider;
-    use diskann::utils::vecid_from_usize;
     use diskann_vector::distance::Metric;
 
     use super::*;
@@ -349,10 +368,7 @@ mod tests {
             let vector_provider_clone = Arc::clone(&vector_provider);
             handles.push(tokio::spawn(async move {
                 // SAFETY: We're ensuring accesses are disjoint
-                unsafe {
-                    vector_provider_clone.set_vector_sync(vecid_from_usize(i).unwrap(), &vector)
-                }
-                .unwrap()
+                unsafe { vector_provider_clone.set_vector_sync(i, &vector) }.unwrap()
             }));
         }
         for handle in handles {
@@ -360,7 +376,7 @@ mod tests {
         }
         for i in 0..num_points {
             // SAFETY: We're only accessing one at a time.
-            let vector = unsafe { vector_provider.get_vector_sync(vecid_from_usize(i).unwrap()) };
+            let vector = unsafe { vector_provider.get_vector_sync(i) };
             assert_eq!(vector, &vec![(i as f32), (i + 1) as f32, (i + 2) as f32]);
         }
         assert_eq!(vector_provider.num_get_calls.get(), num_points);

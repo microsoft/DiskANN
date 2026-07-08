@@ -94,14 +94,52 @@ mod tests {
 
     use super::*;
 
-    // Helper function to clean up checkpoint files after tests
-    fn clean_checkpoint_file(prefix: &str, identifier: u64) {
-        let checkpoint_file = format!("{prefix}_{identifier}.checkpoint");
-        if std::path::Path::new(&checkpoint_file).exists() {
-            // There is a possible race between checking that the file exists and removing
-            // the file here, but since this is test code, that is unlikely.
-            fs::remove_file(&checkpoint_file).unwrap();
-        }
+    #[test]
+    fn test_has_completed_false_when_no_file() -> ANNResult<()> {
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("nonexistent_index")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 999);
+        assert!(!manager.has_completed()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_mark_as_invalid() -> ANNResult<()> {
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("test_invalid")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let identifier = 77;
+
+        let mut manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        // Advance to a later stage with some progress
+        manager.update(Progress::Completed, WorkStage::QuantizeFPV)?;
+        manager.update(Progress::Processed(42), WorkStage::InMemIndexBuild)?;
+
+        // Verify we can resume from progress=42
+        let manager2 = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        assert_eq!(
+            manager2.get_resumption_point(WorkStage::QuantizeFPV)?,
+            Some(42)
+        );
+
+        // Mark as invalid - progress resets to 0 (is_valid=false => progress read as 0)
+        let mut manager3 = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        manager3.mark_as_invalid()?;
+        assert_eq!(
+            manager3.get_resumption_point(WorkStage::QuantizeFPV)?,
+            Some(0)
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -114,9 +152,6 @@ mod tests {
             .unwrap()
             .to_string();
         let identifier = 42;
-
-        // Clean up any existing files
-        clean_checkpoint_file(&index_prefix, identifier);
 
         // Define a helper function to process a stage with interruption and resumption
         fn process_stage(
@@ -175,9 +210,6 @@ mod tests {
         // Verify workflow is complete
         let manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
         assert!(manager.has_completed()?);
-
-        // Clean up test files
-        clean_checkpoint_file(&index_prefix, identifier);
 
         Ok(())
     }

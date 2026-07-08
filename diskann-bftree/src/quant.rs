@@ -5,7 +5,7 @@
 
 //! Bf-Tree quant vector provider.
 
-use crate::{AccessError, AsKey, VectorError, VectorUnavailable};
+use crate::{AccessError, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_quantization::{
@@ -17,21 +17,16 @@ use diskann_quantization::{
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::ConfigError;
-use crate::TestCallCount;
+use crate::{bftree_insert, TestCallCount};
 
 pub struct QuantQueryComputer(QueryComputer<GlobalAllocator>);
 
 impl QuantQueryComputer {
-    pub(crate) fn into_inner(self) -> QueryComputer<GlobalAllocator> {
-        self.0
-    }
-}
-
-impl PreprocessedDistanceFunction<&[u8], f32> for QuantQueryComputer {
-    fn evaluate_similarity(&self, x: &[u8]) -> f32 {
-        self.0
-            .evaluate_similarity(Opaque::new(x))
-            .expect("spherical query distance failed")
+    pub(crate) fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+        match self.0.evaluate_similarity(Opaque::new(x)) {
+            Ok(distance) => Ok(distance),
+            Err(err) => Err(ANNError::new(diskann::ANNErrorKind::IndexError, err)),
+        }
     }
 }
 
@@ -43,6 +38,13 @@ pub struct QuantVectorProvider {
 
 impl QuantVectorProvider {
     pub fn new_with_config(quantizer: Poly<dyn Quantizer>, config: Config) -> ANNResult<Self> {
+        crate::validate_record_size(
+            "quant_vector_provider",
+            &config,
+            std::mem::size_of::<usize>(),
+            quantizer.bytes(),
+        )?;
+
         let quant_vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Ok(Self {
@@ -73,6 +75,11 @@ impl QuantVectorProvider {
             quantizer,
             num_get_calls: TestCallCount::default(),
         }
+    }
+
+    pub(crate) fn delete_vector(&self, i: usize) {
+        let key = bytemuck::bytes_of(&i);
+        self.quant_vector_index.delete(key);
     }
 
     /// Return the dimension of the full-precision data associated with this provider
@@ -123,7 +130,7 @@ impl QuantVectorProvider {
         }
 
         self.num_get_calls.increment();
-        match self.quant_vector_index.read(i.as_key(), buffer) {
+        match self.quant_vector_index.read(bytemuck::bytes_of(&i), buffer) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 if read_size as usize != expected {
                     return Err(AccessError::Error(ANNError::log_index_error(format!(
@@ -155,7 +162,7 @@ impl QuantVectorProvider {
         Ok(())
     }
 
-    /// Return the quant vector at index `i`.
+    /// Return the quant vector at index `i`
     #[cfg(test)]
     pub(crate) fn get_vector_sync(&self, i: usize) -> Result<Vec<u8>, AccessError> {
         let mut value = vec![0u8; self.quantizer.bytes()];
@@ -182,7 +189,7 @@ impl QuantVectorProvider {
         }
 
         // Serialize the key into a byte string, &[u8]
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
 
         let dim = self.quantizer.bytes();
         let quant_vector = &mut vec![0u8; dim];
@@ -194,7 +201,7 @@ impl QuantVectorProvider {
             )
             .map_err(|e| ANNError::log_sq_error(e))?;
 
-        self.quant_vector_index.insert(key, quant_vector);
+        bftree_insert(&self.quant_vector_index, key, quant_vector)?;
 
         Ok(())
     }
@@ -213,16 +220,11 @@ impl QuantVectorProvider {
         }
 
         // Update pq vector with id = i to v
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
 
-        self.quant_vector_index.insert(key, v);
+        bftree_insert(&self.quant_vector_index, key, v)?;
 
         Ok(())
-    }
-
-    pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
-        self.quant_vector_index.delete(key);
     }
 }
 
@@ -275,7 +277,7 @@ mod tests {
 
     use diskann::ANNErrorKind;
     use diskann_quantization::spherical::iface::Opaque;
-    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+    use diskann_vector::DistanceFunction;
     use tokio::task::JoinSet;
 
     use super::*;
@@ -342,7 +344,7 @@ mod tests {
 
         // Query Computer — verify it returns finite distances.
         let c = provider.query_computer(&[-0.5f32, -0.5]).unwrap();
-        let dist = c.evaluate_similarity(&provider.get_vector_sync(3).unwrap());
+        let dist = c.evaluate(&provider.get_vector_sync(3).unwrap()).unwrap();
         assert!(dist.is_finite(), "query distance should be finite");
 
         // Distance Computer — verify distances between compressed vectors are finite

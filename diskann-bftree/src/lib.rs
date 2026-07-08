@@ -14,6 +14,8 @@ pub mod provider;
 pub mod quant;
 pub mod vectors;
 
+mod locks;
+
 // Accessors
 pub use provider::{
     AsVectorDtype, BfTreePaths, BfTreeProvider, BfTreeProviderParameters, CreateQuantProvider,
@@ -24,7 +26,7 @@ pub use bf_tree::Config;
 
 use diskann::{
     error::{RankedError, TransientError},
-    ANNError,
+    ANNError, ANNResult,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -47,16 +49,6 @@ impl From<ConfigError> for ANNError {
     #[inline(never)]
     fn from(error: ConfigError) -> ANNError {
         ANNError::new(diskann::ANNErrorKind::IndexError, error)
-    }
-}
-
-trait AsKey {
-    fn as_key(&self) -> &[u8];
-}
-
-impl AsKey for usize {
-    fn as_key(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
     }
 }
 
@@ -103,6 +95,26 @@ impl TransientError<ANNError> for VectorUnavailable {
 }
 
 pub type AccessError = RankedError<VectorUnavailable, ANNError>;
+
+/// Validate that a bf-tree config's `cb_max_record_size` is large enough for the given
+/// key + value pair. Used by provider constructors to fail early on misconfiguration.
+pub(crate) fn validate_record_size(
+    provider_name: &str,
+    config: &bf_tree::Config,
+    key_size: usize,
+    value_size: usize,
+) -> ANNResult<()> {
+    let required = key_size + value_size;
+    let configured_max = config.get_cb_max_record_size();
+    if required > configured_max {
+        return Err(ANNError::log_index_error(format!(
+            "{provider_name}: cb_max_record_size ({configured_max}) is too small; \
+             a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
+             increase cb_max_record_size to at least {required}"
+        )));
+    }
+    Ok(())
+}
 
 /// Metrics recorded by [`DefaultContext`](diskann::provider::DefaultContext).
 #[derive(Debug, Clone)]
@@ -168,5 +180,40 @@ impl TestCallCount {
 impl Default for TestCallCount {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// `bf_tree::BfTree::insert` can fail, but uses a `LeafInsertResult` that is not `#[must_use]`.
+///
+/// This makes it too easy to drop errors.
+///
+/// We use a `clippy` lint to explicitly disallow `bf_tree::BfTree::insert` and instead
+/// funnel calls through this method to get a proper error.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this is the allowed way to call this method"
+)]
+fn bftree_insert(tree: &bf_tree::BfTree, key: &[u8], value: &[u8]) -> Result<(), InsertError> {
+    match tree.insert(key, value) {
+        bf_tree::LeafInsertResult::Success => Ok(()),
+        bf_tree::LeafInsertResult::InvalidKV(s) => Err(InsertError(s)),
+    }
+}
+
+#[derive(Debug)]
+pub struct InsertError(String);
+
+impl std::fmt::Display for InsertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "insert into a `bftree` failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for InsertError {}
+
+impl From<InsertError> for ANNError {
+    #[track_caller]
+    fn from(error: InsertError) -> Self {
+        ANNError::new(diskann::ANNErrorKind::IndexError, error)
     }
 }

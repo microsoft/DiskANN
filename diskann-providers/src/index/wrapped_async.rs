@@ -11,13 +11,13 @@ use diskann::{
         self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
             Batch, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-            MultiInsertStrategy, PruneStrategy, SearchStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchAccessor, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors},
         search_output_buffer,
     },
     neighbor::Neighbor,
-    provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
+    provider::{DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement},
     utils::ONE,
 };
 use diskann_utils::Reborrow;
@@ -192,15 +192,15 @@ where
         })
     }
 
-    pub fn insert<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    pub fn insert<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         id: &DP::ExternalId,
         vector: T,
     ) -> ANNResult<()>
     where
-        S: InsertStrategy<DP, T>,
+        S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
         T: Copy + Send,
     {
@@ -233,7 +233,7 @@ where
     ) -> ANNResult<bool>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -243,7 +243,7 @@ where
 
     pub fn drop_adj_list<NA>(&self, accessor: &mut NA, vector_id: DP::InternalId) -> ANNResult<()>
     where
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
@@ -258,7 +258,7 @@ where
     ) -> ANNResult<PartitionedNeighbors<DP::InternalId>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -296,7 +296,7 @@ where
     ) -> ANNResult<ConsolidateKind>
     where
         DP: Delete,
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle.block_on(self.inner.drop_deleted_neighbors(
             context,
@@ -320,17 +320,17 @@ where
             .block_on(self.inner.consolidate_vector(strategy, context, vector_id))
     }
 
-    pub fn search<S, T, O, OB, P>(
-        &self,
+    pub fn search<'a, S, T, O, OB, P>(
+        &'a self,
         search_params: P,
-        strategy: &S,
-        context: &DP::Context,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> ANNResult<P::Output>
     where
-        P: graph::search::Search<DP, S, T>,
-        S: DefaultSearchStrategy<DP, T, O>,
+        P: graph::search::Search<'a, DP, S, T>,
+        S: DefaultSearchStrategy<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
     {
@@ -346,13 +346,13 @@ where
     /// [`PagedSearch::next_page`] for retrieving results.
     pub fn paged_search<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<DP, T> + 'static,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor> + 'static,
         T: Copy + Send + 'a,
     {
         let inner = self
@@ -367,14 +367,14 @@ where
     /// Begin a paged search with explicit initial seed IDs (synchronous wrapper).
     pub fn paged_search_with_init_ids<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
         init_ids: Option<&'a [DP::InternalId]>,
-    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<DP, T> + 'static,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor> + 'static,
         T: Copy + Send + 'a,
     {
         let inner = self.handle.block_on(
@@ -404,9 +404,84 @@ where
     ) -> ANNResult<noawait::PagedSearch<DP::InternalId>>
     where
         T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
-        S: for<'a> SearchStrategy<DP, <T as Reborrow<'a>>::Target> + 'static,
+        S: for<'a> SearchStrategy<
+                'a,
+                DP,
+                <T as Reborrow<'a>>::Target,
+                SearchAccessor: SearchAccessor,
+            > + 'static,
     {
-        noawait::PagedSearch::new(self.inner.clone(), strategy, context, query, l_value)
+        // It would be nice if we could simply forward this to a `noawait::PagedSearch::new`
+        // method. However, the trait bound on `SearchStrategy` is *just* complicated enough
+        // that Rust cannot project the necessary bounds.
+        //
+        // Instead, we inline the implementation here.
+        //
+        // Under the assumption that the implementation of [`graph::search::PagedSearch`]'s
+        // implementations are fully synchronous, we can directly poll this task instead
+        // of going through a runtime since we (theoretically) control the only suspension
+        // point.
+        //
+        // Doing so allows stepping the task state machine to be done with a single function
+        // call to `Future::poll`.
+        //
+        // Obviously, if the "noawait" assumption is broken, then the inner async job may
+        // yield before our control point, but we can detect this situation since no output
+        // will be generated on the output channel.
+        //
+        // We rely on `Drop` to clean up the paged search resources.
+
+        let (input, output) = noawait::channel::<DP::InternalId>();
+        let input_clone = input.clone();
+        let output_clone = output.clone();
+
+        let index = self.inner.clone();
+
+        // Create the search task.
+        let mut searcher: std::pin::Pin<Box<dyn Future<Output = ANNError>>> =
+            Box::pin(async move {
+                // The assumption of `noawait` is that this call will always resolve to
+                // `Poll::Ready`.
+                let mut state = match index
+                    .paged_search(&strategy, &context, query.reborrow(), l_value)
+                    .await
+                {
+                    Ok(state) => state,
+                    Err(err) => return err,
+                };
+
+                loop {
+                    // This is the await point that pauses the future.
+                    //
+                    // Under the "noawait" assumption, this should be the only point where
+                    // this future ever yields `Pending` and is where we expect the future
+                    // to stop every time we poll it.
+                    futures_util::pending!();
+
+                    // We control the invocation of poll and should always ensure that
+                    // input is available.
+                    let k_value = match input_clone.take() {
+                        Some(value) => value,
+                        None => return noawait::InternalInvariantViolated::MissingInput.into(),
+                    };
+
+                    // Step paged search and propagate any errors.
+                    let page = match state.next_page(k_value).await {
+                        Ok(page) => page,
+                        Err(err) => return err,
+                    };
+
+                    // Send output to the caller.
+                    output_clone.replace(Some(page));
+                }
+            });
+
+        // Drive the inner future one step to initialize paged search.
+        if let Some(err) = noawait::step(searcher.as_mut()) {
+            return Err(err);
+        }
+
+        Ok(noawait::PagedSearch::from_raw(input, output, searcher))
     }
 
     pub fn count_reachable_nodes<NA>(
@@ -415,7 +490,7 @@ where
         accessor: &mut NA,
     ) -> ANNResult<usize>
     where
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.count_reachable_nodes(start_points, accessor))
@@ -424,7 +499,7 @@ where
     pub fn get_degree_stats<NA, Itr>(&self, accessor: &mut NA, itr: Itr) -> ANNResult<DegreeStats>
     where
         Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.get_degree_stats(accessor, itr))
@@ -435,15 +510,19 @@ where
 ///
 /// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
 /// blocks the current thread to drive the underlying async search forward.
-pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
-    handle: tokio::runtime::Handle,
-    inner: graph::search::PagedSearch<'a, DP, S, T>,
-}
-
-impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+pub struct PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
+    handle: tokio::runtime::Handle,
+    inner: graph::search::PagedSearch<'a, DP, A>,
+}
+
+impl<'a, DP, A> PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
@@ -473,13 +552,12 @@ pub mod noawait {
     };
 
     use diskann::{ANNErrorKind, utils::VectorId};
-    use diskann_utils::Reborrow;
     use thiserror::Error;
 
     type Input = Rc<RefCell<Option<usize>>>;
     type Output<I> = Rc<RefCell<Option<Vec<Neighbor<I>>>>>;
 
-    fn channel<I>() -> (Input, Output<I>)
+    pub(super) fn channel<I>() -> (Input, Output<I>)
     where
         I: VectorId,
     {
@@ -488,7 +566,7 @@ pub mod noawait {
         (input, output)
     }
 
-    fn step<I>(fut: Pin<&mut dyn Future<Output = I>>) -> Option<I> {
+    pub(super) fn step<I>(fut: Pin<&mut dyn Future<Output = I>>) -> Option<I> {
         let mut cx = Context::from_waker(Waker::noop());
         match fut.poll(&mut cx) {
             Poll::Ready(v) => Some(v),
@@ -518,91 +596,19 @@ pub mod noawait {
     where
         I: VectorId,
     {
-        /// Construct a new [`PagedSearch`].
+        /// Construct a `PagedSearch` from components.
         ///
-        /// This works by creating a small async task using [`graph::search::PagedSearch`]
-        /// internally. The requested k-nearest neighors are sent using a `Rc<RefCell<_>>`
-        /// channel and the actual neighbors are retrieved from a similar data structure.
-        ///
-        /// Under the assumption that the implementation of [`graph::search::PagedSearch`]'s
-        /// implementations are fully synchronous, we can directly poll this task instead
-        /// of going through a runtime since we (theoretically) control the only suspension
-        /// point.
-        ///
-        /// Doing so allows stepping the task state machine to be done with a single function
-        /// call to `Future::poll`.
-        ///
-        /// Obviously, if the "noawait" assumption is broken, then the inner async job may
-        /// yield before our control point, but we can detect this situation since no output
-        /// will be generated on the output channel.
-        ///
-        /// We rely on `Drop` to clean up the paged search resources.
-        pub(super) fn new<DP, S, T>(
-            index: Arc<diskann::graph::DiskANNIndex<DP>>,
-            strategy: S,
-            context: DP::Context,
-            query: T,
-            l_value: usize,
-        ) -> ANNResult<Self>
-        where
-            DP: DataProvider<InternalId = I>,
-            T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
-            S: for<'a> SearchStrategy<DP, <T as Reborrow<'a>>::Target> + 'static,
-        {
-            // Prepare the input and output channels used to communicate with the search task.
-            let (input, output) = channel::<I>();
-            let input_clone = input.clone();
-            let output_clone = output.clone();
-
-            // Create the search task.
-            let mut searcher: Pin<Box<dyn Future<Output = ANNError>>> = Box::pin(async move {
-                // The assumption of `noawait` is that this call will always resolve to
-                // `Poll::Ready`.
-                let mut state = match index
-                    .paged_search(strategy, &context, query.reborrow(), l_value)
-                    .await
-                {
-                    Ok(state) => state,
-                    Err(err) => return err,
-                };
-
-                loop {
-                    // This is the await point that pauses the future.
-                    //
-                    // Under the "noawait" assumption, this should be the only point where
-                    // this future ever yields `Pending` and is where we expect the future
-                    // to stop every time we poll it.
-                    futures_util::pending!();
-
-                    // We control the invocation of poll and should always ensure that
-                    // input is available.
-                    let k_value = match input_clone.take() {
-                        Some(value) => value,
-                        None => return InternalInvariantViolated::MissingInput.into(),
-                    };
-
-                    // Step paged search and propagate any errors.
-                    let page = match state.next_page(k_value).await {
-                        Ok(page) => page,
-                        Err(err) => return err,
-                    };
-
-                    // Send output to the caller.
-                    output_clone.replace(Some(page));
-                }
-            });
-
-            // Drive the inner future one step to initialize paged search.
-            if let Some(err) = step(searcher.as_mut()) {
-                return Err(err);
-            }
-
-            let this = Self {
+        /// Expects `Input` and `Output` to be properly wired into `searcher`.
+        pub(super) fn from_raw(
+            input: Input,
+            output: Output<I>,
+            searcher: Pin<Box<dyn Future<Output = ANNError>>>,
+        ) -> Self {
+            Self {
                 input: Some(input),
                 output,
                 searcher,
-            };
-            Ok(this)
+            }
         }
 
         /// Retrieve the next results from paged search, returning any errors.
@@ -641,7 +647,7 @@ pub mod noawait {
     }
 
     #[derive(Debug, Clone, Copy, Error)]
-    enum InternalInvariantViolated {
+    pub(super) enum InternalInvariantViolated {
         #[error("INTERNAL: input channel was not configured")]
         MissingInput,
         #[error("noawait contract violated: future suspended before expected yield point")]
@@ -726,7 +732,7 @@ mod tests {
         let storage = VirtualStorageProvider::new_memory();
         let ctx = DefaultContext;
         for (i, v) in train_data.row_iter().enumerate() {
-            index.insert(FullPrecision, &ctx, &(i as u32), v).unwrap();
+            index.insert(&FullPrecision, &ctx, &(i as u32), v).unwrap();
         }
 
         let save_metadata = AsyncIndexMetadata::new(save_path.to_string());

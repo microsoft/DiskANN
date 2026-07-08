@@ -16,7 +16,7 @@ use diskann_utils::{
     Reborrow,
     future::{AssertSend, SendFuture, boxit},
 };
-use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 use hashbrown::HashSet;
 use thiserror::Error;
@@ -25,8 +25,8 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
-        self, Batch, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
-        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
+        self, Batch, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, PruneAccessor,
+        PruneStrategy, SearchAccessor, SearchPostProcess, SearchStrategy,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -35,7 +35,7 @@ use super::{
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
-    workingset::{AsWorkingSet, Fill, View},
+    workingset::View,
 };
 
 use crate::{
@@ -44,13 +44,12 @@ use crate::{
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
     provider::{
-        Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
         DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
         NeighborAccessorMut, SetElement,
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
-        IntoUsize, TryIntoVectorId, VectorId,
+        IntoUsize,
         async_tools::{self, DynamicBalancer},
     },
 };
@@ -64,35 +63,6 @@ pub struct DiskANNIndex<DP: DataProvider> {
     /// The data provider.
     pub data_provider: DP,
     scratch_pool: ObjectPool<SearchScratch<DP::InternalId>>,
-}
-
-/// Decision returned by [`QueryLabelProvider::on_visit`] to control search traversal.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum QueryVisitDecision<I: VectorId> {
-    /// Accept this node into the frontier for further traversal.
-    Accept(Neighbor<I>),
-    /// Reject this node; do not add it to the frontier.
-    Reject,
-    /// Stop the search immediately without accepting this node.
-    Terminate,
-}
-
-pub trait QueryLabelProvider<V: VectorId>: std::fmt::Debug + Send + Sync {
-    /// This is a query scoped provider
-    /// Check if the vec_id's label match the query label
-    fn is_match(&self, vec_id: V) -> bool;
-
-    /// Inspect a candidate before it is inserted into the frontier.
-    /// Implementations can tweak the distance, reject the candidate, or
-    /// request early termination. The default implementation accepts if
-    /// `is_match` returns true, rejects otherwise.
-    fn on_visit(&self, neighbor: Neighbor<V>) -> QueryVisitDecision<V> {
-        if self.is_match(neighbor.id) {
-            QueryVisitDecision::Accept(neighbor)
-        } else {
-            QueryVisitDecision::Reject
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,15 +223,15 @@ where
     }
 
     /// Insert a vector into the index with the given `id` and `vector`.
-    pub fn insert<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    pub fn insert<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         id: &DP::ExternalId,
         vector: T,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        S: InsertStrategy<DP, T>,
+        S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
         T: Copy + Send,
     {
@@ -274,23 +244,21 @@ where
 
             let internal_id = guard.id();
 
-            // NOTE: Use the API `insert_search_accessor` to allow `Accessor` customization.
+            // NOTE: Use the API `insert_search_accessor` to allow customization.
             let mut accessor = strategy
-                .insert_search_accessor(&self.data_provider, context)
+                .insert_search_accessor(&self.data_provider, context, vector)
                 .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(vector).into_ann_result()?;
 
             // NOTE: We don't filter the start points out of `visited_nodes`, as those are
             // needed to generate out edges from the start points.
-            let start_ids = accessor.starting_points().await?;
+            let num_start_ids = accessor.num_starting_points().await?;
 
             let prune_strategy = strategy.prune_strategy();
             let mut prune_accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
-            let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
+            let mut scratch = self.search_scratch(self.l_build(), num_start_ids);
             let mut search_l = scratch.best.search_l();
 
             // If the experimental config is present, use it to obtain the maximum number
@@ -298,7 +266,6 @@ where
             let insert_retry = self.config.experimental_insert_retry();
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
-            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
@@ -308,9 +275,7 @@ where
 
                 self.search_internal(
                     None, // beam_width
-                    &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut search_record,
                 )
@@ -321,23 +286,16 @@ where
                         &mut search_record.visited,
                         self.max_occlusion_size(),
                     ),
-                    occlude_factor: &mut prune_scratch.occlude_factor,
+                    states: &mut prune_scratch.states,
                     neighbors: &mut new_neighbors,
-                    last_checked: &mut prune_scratch.last_checked,
                 };
 
                 let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
                 };
 
-                self.robust_prune(
-                    &mut prune_accessor,
-                    internal_id,
-                    context,
-                    &mut working_set,
-                    options,
-                )
-                .await?;
+                self.robust_prune(&mut prune_accessor, internal_id, context, options)
+                    .await?;
 
                 let should_retry =
                     insert_retry.is_some_and(|v| v.should_retry(attempt, new_neighbors.len()));
@@ -358,6 +316,7 @@ where
 
             // insert out edges
             prune_accessor
+                .neighbors()
                 .set_neighbors(internal_id, &new_neighbors)
                 .await?;
 
@@ -367,12 +326,10 @@ where
             // add edges from `new_neighbors` to `internal_id` and prune if necessary
             for source in new_neighbors.iter().take(num_back_edges) {
                 self.add_edge_and_prune(
-                    &prune_strategy,
-                    context,
+                    &mut prune_accessor,
                     std::slice::from_ref(&internal_id),
                     *source,
                     &mut prune_scratch,
-                    &mut working_set,
                     None,
                 )
                 .await?;
@@ -389,40 +346,33 @@ where
         clippy::too_many_arguments,
         reason = "internal method with tightly coupled params"
     )]
-    fn search_and_prune<S, B, Set>(
+    fn search_and_prune<S, B, A>(
         &self,
         strategy: &S,
         context: &DP::Context,
         batch: &B,
         ids: &[DP::InternalId],
         position: usize,
-        working_set: &mut Set,
+        prune_accessor: &mut A,
         prune_scratch: &mut prune::Scratch<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
     where
-        S: for<'a> InsertStrategy<
-                DP,
-                B::Element<'a>,
-                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
-            >,
+        S: for<'a> InsertStrategy<'a, DP, B::Element<'a>>,
         B: Batch,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
-            // Copy vectors to the vector provider, quantize them and set quant vec provider if necessary
             let internal_id = ids[position];
+            let vector = batch.get(position);
 
             // NOTE: Use the `insert_search_accessor` API to allow insert-specific customization.
             let mut accessor = strategy
-                .insert_search_accessor(&self.data_provider, context)
+                .insert_search_accessor(&self.data_provider, context, vector)
                 .into_ann_result()?;
 
-            let computer = accessor
-                .build_query_computer(batch.get(position))
-                .into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
+            let num_start_ids = accessor.num_starting_points().await?;
 
-            let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
+            let mut scratch = self.search_scratch(self.l_build(), num_start_ids);
             let mut search_l = scratch.best.search_l();
 
             // If the experimental config is present, use it to obtain the maximum number
@@ -437,20 +387,14 @@ where
 
                 self.search_internal(
                     None, // beam_width
-                    &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut search_record,
                 )
                 .await?;
 
                 // Add other vector id pairs in the mini batch to the candidate pool
-                let prune_strategy = strategy.prune_strategy();
-                let mut prune_accessor = prune_strategy
-                    .prune_accessor(&self.data_provider, context)
-                    .into_ann_result()?;
-
+                //
                 // N.B.: If `candidates == 0`, then `async_tools::around` naturally returns
                 // an empty iterator and `robust_prune_with` will skip the additional
                 // distance computations.
@@ -461,12 +405,11 @@ where
                 };
 
                 self.robust_prune_with(
-                    &mut prune_accessor,
+                    prune_accessor,
                     internal_id,
                     async_tools::around(ids, position, candidates).copied(),
                     &mut search_record,
                     prune_scratch,
-                    working_set,
                     options,
                 )
                 .await
@@ -602,35 +545,40 @@ where
     ///
     /// Returns a pair `(edges, result)`. Whether or not `result` is an error, `edges` will
     /// contain all edges successfully processed by this task.
-    fn search_and_prune_batch<S, B, Set>(
+    fn search_and_prune_batch<S, B>(
         &self,
         strategy: &S,
         context: &DP::Context,
         batch: &B,
         work: &DynamicBalancer<DP::InternalId>,
-        working_set: &mut Set,
+        seed: &S::Seed,
     ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
     where
+        S: MultiInsertStrategy<DP, B>,
         B: Batch,
-        S: for<'a> InsertStrategy<
-                DP,
-                B::Element<'a>,
-                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
-            >,
-        Set: Send + Sync,
     {
         async move {
             let mut output = Vec::new();
+            let mut accessor = match strategy.seeded_prune_accessor(
+                self.provider(),
+                context,
+                seed,
+                self.max_occlusion_size(),
+            ) {
+                Ok(accessor) => accessor,
+                Err(err) => return Err((output, err)),
+            };
+
             let mut prune_scratch = prune::Scratch::new();
             while let Some((_, position)) = work.next() {
                 match self
                     .search_and_prune(
-                        strategy,
+                        &strategy.insert_strategy(),
                         context,
                         batch,
                         work.all(),
                         position,
-                        working_set,
+                        &mut accessor,
                         &mut prune_scratch,
                     )
                     .await
@@ -676,11 +624,10 @@ where
                 ));
 
             let mut accessor = strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             let mut prune_scratch = prune::Scratch::new();
-            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             // During bootstrap, we want the graph to be as dense as possible to aid
             // in early navigation.
@@ -695,7 +642,6 @@ where
                 current.source,
                 &candidates,
                 &mut prune_scratch,
-                &mut working_set,
                 options,
             )
             .await
@@ -916,23 +862,26 @@ where
                 .await
                 .into_ann_result()?;
 
+            let seed = Arc::new(seed);
+            let strategy = Arc::new(strategy);
+
             let handles: Vec<_> = (0..num_tasks.get() - 1)
                 .map(|_| {
                     let self_clone = self.clone();
-                    let insert_strategy = strategy.insert_strategy();
+                    let seed_clone = seed.clone();
+                    let strategy_clone = strategy.clone();
                     let context_clone = context.clone();
                     let vectors_clone = vectors.clone();
                     let work_clone = work.clone();
-                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
 
                     let future = async move {
                         self_clone
                             .search_and_prune_batch(
-                                &insert_strategy,
+                                &*strategy_clone,
                                 &context_clone,
                                 &vectors_clone,
                                 &work_clone,
-                                &mut working_set,
+                                &seed_clone,
                             )
                             .await
                     };
@@ -942,13 +891,7 @@ where
 
             // Defer dealing with the `result` until after we have joined the other tasks.
             let mut edges = match self
-                .search_and_prune_batch(
-                    &strategy.insert_strategy(),
-                    context,
-                    &vectors,
-                    &work,
-                    &mut seed.as_working_set(self.max_occlusion_size()),
-                )
+                .search_and_prune_batch(&*strategy, context, &vectors, &work, &seed)
                 .await
             {
                 Ok(v) => v,
@@ -1010,9 +953,11 @@ where
             {
                 let prune_strategy = strategy.insert_strategy().prune_strategy();
                 let accessor = &mut prune_strategy
-                    .prune_accessor(&self.data_provider, context)
+                    .prune_accessor(&self.data_provider, context, 0)
                     .into_ann_result()?;
+
                 accessor
+                    .neighbors()
                     .set_neighbors_bulk(
                         edges
                             .into_iter()
@@ -1026,11 +971,18 @@ where
                 .map(|i| {
                     let self_clone = self.clone();
                     let context_clone = context.clone();
-                    let strategy_clone = strategy.insert_strategy().prune_strategy();
+                    let strategy_clone = strategy.clone();
                     let backedges_clone = backedges.clone();
-                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
+                    let seed_clone = seed.clone();
 
                     tokio::spawn(context.wrap_spawn(async move {
+                        let mut accessor = strategy_clone.seeded_prune_accessor(
+                            self_clone.provider(),
+                            &context_clone,
+                            &seed_clone,
+                            self_clone.max_occlusion_size(),
+                        )?;
+
                         // Get the range of items to process in this task.
                         let range = async_tools::partition(backedges_clone.len(), num_tasks, i)?;
                         let itr = backedges_clone.iter().skip(range.start).take(range.len());
@@ -1047,12 +999,10 @@ where
 
                             self_clone
                                 .add_edge_and_prune(
-                                    &strategy_clone,
-                                    &context_clone,
+                                    &mut accessor,
                                     &sorted_buf,
                                     *source,
                                     &mut prune_scratch,
-                                    &mut working_set,
                                     None,
                                 )
                                 .await?;
@@ -1092,7 +1042,7 @@ where
     ) -> impl SendFuture<ANNResult<bool>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut neighbors = AdjacencyList::new();
@@ -1114,7 +1064,7 @@ where
 
     pub fn drop_adj_list(
         &self,
-        accessor: &mut impl AsNeighborMut<Id = DP::InternalId>,
+        accessor: &mut impl NeighborAccessorMut<Id = DP::InternalId>,
         vector_id: DP::InternalId,
     ) -> impl SendFuture<ANNResult<()>> {
         accessor
@@ -1136,7 +1086,7 @@ where
         DP: Delete,
         F: FnMut(DP::InternalId) + Send,
         G: FnMut(DP::InternalId) + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut neighbors = AdjacencyList::new();
@@ -1171,7 +1121,7 @@ where
     ) -> impl SendFuture<ANNResult<PartitionedNeighbors<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut undeleted = Vec::new();
@@ -1199,7 +1149,7 @@ where
     ) -> impl SendFuture<ANNResult<Vec<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut return_candidates = Vec::new();
@@ -1227,35 +1177,24 @@ where
         id: DP::InternalId,
         l_value: usize,
         k_value: usize,
+        v: S::DeleteElementGuard,
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         S: InplaceDeleteStrategy<DP> + Sync,
         DP: Delete,
     {
         async move {
-            let v = strategy
-                .get_delete_element(&self.data_provider, context, id)
-                .await
-                .into_ann_result()?;
-
             let search_strategy = strategy.search_strategy();
             let mut search_accessor = search_strategy
-                .search_accessor(&self.data_provider, context)
+                .search_accessor(&self.data_provider, context, v.reborrow())
                 .into_ann_result()?;
 
-            let computer = search_accessor
-                .build_query_computer(v.reborrow())
-                .into_ann_result()?;
-
-            let start_ids = search_accessor.starting_points().await?;
-
-            let mut scratch = self.search_scratch(l_value, start_ids.len());
+            let num_start_ids = search_accessor.num_starting_points().await?;
+            let mut scratch = self.search_scratch(l_value, num_start_ids);
 
             self.search_internal(
                 None, // beam_width
-                &start_ids,
                 &mut search_accessor,
-                &computer,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
             )
@@ -1270,7 +1209,6 @@ where
                 .post_process(
                     &mut search_accessor,
                     v.reborrow(),
-                    &computer,
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
@@ -1284,8 +1222,13 @@ where
                 .collect();
 
             // Collect IDs whose adjacency lists need to be updated.
+            let prune_strategy = strategy.prune_strategy();
+            let mut prune_accessor = prune_strategy
+                .prune_accessor(self.provider(), context, 0)
+                .into_ann_result()?;
+
             let ids_to_modify = self
-                .return_refs_to_deleted_vertex(&mut search_accessor, id, &undeleted_ids)
+                .return_refs_to_deleted_vertex(&mut prune_accessor.neighbors(), id, &undeleted_ids)
                 .await?;
 
             undeleted_ids.truncate(k_value);
@@ -1308,7 +1251,7 @@ where
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut two_hop_nbhs = HashSet::new();
@@ -1371,7 +1314,7 @@ where
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut undeleted_one_hop_nbhs = Vec::new();
@@ -1408,7 +1351,7 @@ where
     where
         Self: 'static + Send + Sync,
         S: InplaceDeleteStrategy<DP>
-            + for<'a> SearchStrategy<DP, S::DeleteElement<'a>>
+            + for<'a> SearchStrategy<'a, DP, S::DeleteElement<'a>>
             + Send
             + Sync
             + Clone,
@@ -1521,8 +1464,13 @@ where
                             };
 
                             let mut prune_scratch = prune::Scratch::new();
-                            let mut working_set =
-                                strategy_clone.create_working_set(self_clone.max_occlusion_size());
+                            let mut accessor = strategy_clone
+                                .prune_accessor(
+                                    self_clone.provider(),
+                                    &context_clone,
+                                    self_clone.max_occlusion_size(),
+                                )
+                                .into_ann_result()?;
 
                             match result {
                                 Some(source) => {
@@ -1536,12 +1484,10 @@ where
 
                                     self_clone
                                         .add_edge_and_prune(
-                                            &strategy_clone,
-                                            &context_clone,
+                                            &mut accessor,
                                             &adj_list,
                                             source,
                                             &mut prune_scratch,
-                                            &mut working_set,
                                             Some(&ids_to_delete_clone), // delete any edges to a deleted point as part of add_edge_and_prune
                                         )
                                         .await?;
@@ -1565,11 +1511,12 @@ where
                 // finally, drop each deleted neighbor's edges, this can run sequentially
                 let prune_strategy = strategy.prune_strategy();
                 let mut accessor = prune_strategy
-                    .prune_accessor(&self.data_provider, context)
+                    .prune_accessor(&self.data_provider, context, 0)
                     .into_ann_result()?;
 
                 for vector_id in ids_to_delete.iter() {
-                    self.drop_adj_list(&mut accessor, *vector_id).await?;
+                    self.drop_adj_list(&mut accessor.neighbors(), *vector_id)
+                        .await?;
                 }
             }
 
@@ -1614,27 +1561,25 @@ where
             delete_set.insert(vector_id);
             let prune_strategy = strategy.prune_strategy();
 
-            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
+            let mut accessor = prune_strategy
+                .prune_accessor(self.provider(), context, self.max_occlusion_size())
+                .into_ann_result()?;
+
             let mut prune_scratch = prune::Scratch::new();
 
             for (neighbor, edges) in edges_to_add.iter() {
                 self.add_edge_and_prune(
-                    &prune_strategy,
-                    context,
+                    &mut accessor,
                     edges,
                     *neighbor,
                     &mut prune_scratch,
-                    &mut working_set,
                     Some(&delete_set), // delete the edge to the deleted point as part of add_edge_and_prune
                 )
                 .await?
             }
 
-            let mut accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
-            self.drop_adj_list(&mut accessor, vector_id).await?;
+            self.drop_adj_list(&mut accessor.neighbors(), vector_id)
+                .await?;
 
             Ok(())
         }
@@ -1659,14 +1604,28 @@ where
                 .data_provider
                 .to_internal_id(context, id)
                 .escalate("id translation for `inplace_delete` must succeed")?;
+
+            // For VisitedAndTopK, we must capture the delete element *before* erasing
+            // the vector data, since it uses the deleted vector as a search query.
+            // This is necessary in hard-delete providers.
+            let delete_element = match inplace_delete_method {
+                InplaceDeleteMethod::VisitedAndTopK { .. } => Some(
+                    strategy
+                        .get_delete_element(&self.data_provider, context, vector_id)
+                        .await
+                        .into_ann_result()?,
+                ),
+                _ => None,
+            };
+
             self.data_provider
                 .delete(context, id)
                 .await
                 .escalate("`inplace_delete` requires a successful delete")?;
 
-            let search_strategy = strategy.search_strategy();
-            let accessor = &mut search_strategy
-                .search_accessor(&self.data_provider, context)
+            let prune_strategy = strategy.prune_strategy();
+            let mut accessor = prune_strategy
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             let InplaceDeleteWorkList {
@@ -1677,24 +1636,28 @@ where
                     k_value: k,
                     l_value: l,
                 } => {
-                    self.get_candidates_using_visited_and_topk(strategy, context, vector_id, *l, *k)
-                        .await?
+                    // delete_element is always Some for VisitedAndTopK (set above).
+                    let Some(v) = delete_element else {
+                        unreachable!("delete_element is set for VisitedAndTopK");
+                    };
+                    self.get_candidates_using_visited_and_topk(
+                        strategy, context, vector_id, *l, *k, v,
+                    )
+                    .await?
                 }
                 InplaceDeleteMethod::TwoHopAndOneHop => {
-                    self.get_candidates_using_twohop_and_onehop(context, accessor, vector_id)
-                        .await?
+                    self.get_candidates_using_twohop_and_onehop(
+                        context,
+                        &mut accessor.neighbors(),
+                        vector_id,
+                    )
+                    .await?
                 }
                 InplaceDeleteMethod::OneHop => {
-                    self.get_candidates_using_onehop(context, accessor, vector_id)
+                    self.get_candidates_using_onehop(context, &mut accessor.neighbors(), vector_id)
                         .await?
                 }
             };
-
-            let prune_strategy = strategy.prune_strategy();
-            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
-            let mut accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
-                .into_ann_result()?;
 
             let mut edges_to_add = HashMap::<DP::InternalId, Vec<DP::InternalId>>::new();
 
@@ -1703,25 +1666,20 @@ where
                 undeleted: adjacency_list,
                 ..
             } = self
-                .get_undeleted_neighbors(context, &mut accessor, vector_id)
+                .get_undeleted_neighbors(context, &mut accessor.neighbors(), vector_id)
                 .await?;
-
-            let computer = accessor.build_distance_computer().into_ann_result()?;
 
             // This is the total union of elements that we consider for neighbors.
             // It's possible there is some repitition, but implementations of `Fill` should
             // already properly handle that.
-            let view = accessor
-                .fill(
-                    &mut working_set,
+            let (view, computer) = accessor
+                .fill(internal::chain(
                     internal::chain(
-                        internal::chain(
-                            replace_candidates.iter().copied(),
-                            in_neighbors.iter().copied(),
-                        ),
-                        adjacency_list.iter().copied(),
+                        replace_candidates.iter().copied(),
+                        in_neighbors.iter().copied(),
                     ),
-                )
+                    adjacency_list.iter().copied(),
+                ))
                 .await
                 .into_ann_result()?;
 
@@ -1809,7 +1767,7 @@ where
     ) -> impl SendFuture<ANNResult<ConsolidateKind>>
     where
         DP: Delete,
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         async move {
             let status = self
@@ -1889,12 +1847,12 @@ where
             let mut pool = HashSet::new();
             let mut deleted_neighbors = Vec::new();
             let accessor = &mut strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             self.on_neighbors(
                 context,
-                accessor,
+                &mut accessor.neighbors(),
                 vector_id,
                 |i| {
                     pool.insert(i);
@@ -1916,7 +1874,7 @@ where
             for id in deleted_neighbors.iter() {
                 self.on_neighbors(
                     context,
-                    accessor,
+                    &mut accessor.neighbors(),
                     *id,
                     |i| {
                         pool.insert(i);
@@ -1936,7 +1894,6 @@ where
                     neighbors
                 } else {
                     let mut prune_scratch = prune::Scratch::new();
-                    let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
                     // Force saturation is mainly used for the retry insert logic.
                     //
@@ -1951,7 +1908,6 @@ where
                             vector_id,
                             &neighbors,
                             &mut prune_scratch,
-                            &mut working_set,
                             options,
                         )
                         .await
@@ -1971,23 +1927,23 @@ where
                 adj_list
             );
 
-            accessor.set_neighbors(vector_id, &adj_list).await?;
+            accessor
+                .neighbors()
+                .set_neighbors(vector_id, &adj_list)
+                .await?;
             Ok(ConsolidateKind::Complete)
         }
     }
 
-    // A is the accessor type, T is the query type used for BuildQueryComputer
-    pub(crate) fn search_internal<A, T, SR, Q>(
+    pub(crate) fn search_internal<A, SR, Q>(
         &self,
         beam_width: Option<usize>,
-        start_ids: &[DP::InternalId],
         accessor: &mut A,
-        computer: &A::QueryComputer,
         scratch: &mut SearchScratch<DP::InternalId, Q>,
         search_record: &mut SR,
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
-        A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
+        A: SearchAccessor<Id = DP::InternalId>,
         SR: SearchRecord<DP::InternalId> + ?Sized,
         Q: NeighborQueue<DP::InternalId>,
     {
@@ -1997,16 +1953,13 @@ where
             // paged search can call search_internal multiple times, we only need to initialize
             // state if not already initialized.
             if scratch.visited.is_empty() {
-                for id in start_ids {
-                    scratch.visited.insert(*id);
-                    let element = accessor
-                        .get_element(*id)
-                        .await
-                        .escalate("start point retrieval must succeed")?;
-                    let dist = computer.evaluate_similarity(element.reborrow());
-                    scratch.best.insert(Neighbor::new(*id, dist));
-                    scratch.cmps += 1;
-                }
+                accessor
+                    .start_point_distances(|id, distance| {
+                        scratch.visited.insert(id);
+                        scratch.best.insert(Neighbor::new(id, distance));
+                        scratch.cmps += 1;
+                    })
+                    .await?;
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
@@ -2026,9 +1979,8 @@ where
                 accessor
                     .expand_beam(
                         scratch.beam_nodes.iter().copied(),
-                        computer,
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |id, distance| neighbors.push(Neighbor::new(id, distance)),
                     )
                     .await?;
 
@@ -2061,7 +2013,8 @@ where
     /// # Supported Search Types
     ///
     /// - [`search::Knn`]: Standard k-NN graph-based search
-    /// - [`search::MultihopSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
     /// - [`search::Range`]: Range-based search within a distance radius
     /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
     ///
@@ -2078,17 +2031,17 @@ where
     /// let params = Range::new(100, 0.5)?;
     /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     /// ```
-    pub fn search<S, T, O, OB, P>(
-        &self,
+    pub fn search<'a, S, T, O, OB, P>(
+        &'a self,
         search_params: P,
-        strategy: &S,
-        context: &DP::Context,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: Search<DP, S, T>,
-        S: glue::DefaultPostProcessor<DP, T, O>,
+        P: Search<'a, DP, S, T>,
+        S: glue::DefaultPostProcessor<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
     {
@@ -2097,19 +2050,19 @@ where
     }
 
     /// Execute a search with an explicit post-processor parameter.
-    pub fn search_with<S, T, O, OB, P, PP>(
-        &self,
+    pub fn search_with<'a, S, T, O, OB, P, PP>(
+        &'a self,
         search_params: P,
-        strategy: &S,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: Search<DP, S, T>,
-        S: glue::SearchStrategy<DP, T>,
-        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        P: Search<'a, DP, S, T>,
+        S: glue::SearchStrategy<'a, DP, T>,
+        PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
     {
@@ -2126,13 +2079,13 @@ where
     /// yields successive pages of nearest-neighbor results.
     pub fn paged_search<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2147,23 +2100,21 @@ where
     /// provide custom starting points for the graph traversal.
     pub fn paged_search_with_init_ids<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
         init_ids: Option<&'a [DP::InternalId]>,
-    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
-            let (computer, scratch) = {
+            let (accessor, scratch) = {
                 let mut accessor = strategy
-                    .search_accessor(&self.data_provider, context)
+                    .search_accessor(&self.data_provider, context, query)
                     .into_ann_result()?;
-
-                let computer = accessor.build_query_computer(query).into_ann_result()?;
 
                 let start_ids = accessor.starting_points().await?;
                 let num_start_points = start_ids.len();
@@ -2184,9 +2135,8 @@ where
                 accessor
                     .expand_beam(
                         init_ids.iter().copied(),
-                        &computer,
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |id, distance| neighbors.push(Neighbor::new(id, distance)),
                     )
                     .await?;
 
@@ -2195,19 +2145,16 @@ where
                     .iter()
                     .for_each(|neighbor| scratch.best.insert(*neighbor));
 
-                (computer, scratch)
+                (accessor, scratch)
             };
 
             ANNResult::Ok(PagedSearch {
                 index: self,
-                context,
                 scratch,
                 computed_result: vec![Neighbor::default(); l_value],
                 next_result_index: l_value,
                 search_param_l: l_value,
-                strategy,
-                computer,
-                _query: std::marker::PhantomData,
+                accessor,
             })
         }
     }
@@ -2222,7 +2169,7 @@ where
         accessor: &mut NA,
     ) -> impl SendFuture<ANNResult<usize>>
     where
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut expanded_nodes = HashSet::<DP::InternalId>::new();
@@ -2253,7 +2200,7 @@ where
     ) -> impl SendFuture<ANNResult<DegreeStats>>
     where
         Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut max_degree_usize: usize = 0;
@@ -2319,26 +2266,23 @@ where
     /// We're going through a temporary phase of moving the `Context` into the `Strategy`.
     /// For now - we unfortunately need both.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn add_edge_and_prune<'a, S>(
+    pub(crate) fn add_edge_and_prune<'a, A>(
         &'a self,
-        strategy: &'a S,
-        context: &'a DP::Context,
+        accessor: &'a mut A,
         targets: &[DP::InternalId],
         source: DP::InternalId,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut S::WorkingSet,
         to_remove: Option<&HashSet<DP::InternalId>>,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        S: PruneStrategy<DP>,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
-            let mut accessor = strategy
-                .prune_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
             let mut adj_list = AdjacencyList::with_capacity(self.max_degree_with_slack());
-            accessor.get_neighbors(source, &mut adj_list).await?;
+            accessor
+                .neighbors()
+                .get_neighbors(source, &mut adj_list)
+                .await?;
 
             let mut did_remove = false;
             if let Some(set) = to_remove {
@@ -2363,9 +2307,12 @@ where
                 // No pruning is needed; we can just append.
                 tracked_trace!("Appending back-edge from {} to {:?}.", source, targets,);
                 if did_remove {
-                    accessor.set_neighbors(source, &adj_list).await?;
+                    accessor
+                        .neighbors()
+                        .set_neighbors(source, &adj_list)
+                        .await?;
                 } else if let Some(edges) = adj_list.last(num_new_edges) {
-                    accessor.append_vector(source, edges).await?;
+                    accessor.neighbors().append_vector(source, edges).await?;
                 }
             } else {
                 // During back-edge insertion, we are working with a limited number
@@ -2376,16 +2323,11 @@ where
                     force_saturate: false,
                 };
 
-                self.robust_prune_list(
-                    &mut accessor,
-                    source,
-                    &adj_list,
-                    scratch,
-                    working_set,
-                    options,
-                )
-                .await
-                .escalate("retrieving inserted vector must succeed")?;
+                self.robust_prune_list(accessor, source, &adj_list, scratch, options)
+                    .await
+                    .allow_transient(
+                        "vector may already be unavailable in hard-delete providers",
+                    )?;
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",
@@ -2393,7 +2335,10 @@ where
                     scratch.neighbors
                 );
 
-                accessor.set_neighbors(source, &scratch.neighbors).await?;
+                accessor
+                    .neighbors()
+                    .set_neighbors(source, &scratch.neighbors)
+                    .await?;
             }
 
             Ok(())
@@ -2405,21 +2350,16 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
-    /// this API are suppressed and any IDs that failed will be skipped during prune.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune<A, Set>(
+    /// Forwards errors from [`PruneAccessor::fill`].
+    fn robust_prune<A>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         mut context: prune::Context<'_, DP::InternalId>,
-        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
             // Early exit.
@@ -2427,13 +2367,10 @@ where
                 return Ok(());
             }
 
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-
-            let view = accessor
-                .fill(working_set, context.pool.iter().map(|n| n.id))
+            let (view, computer) = accessor
+                .fill(context.pool.iter().map(|n| n.id))
                 .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             self.occlude_list::<A::View<'_>, _, _>(
                 &computer,
@@ -2454,30 +2391,24 @@ where
     ///
     /// All other fields of `scratch` are clobbered.
     ///
-    /// This works by first retrieving `location` and all ids in `list` into `working_set`
-    /// via [`Fill`] and then computing distances to populate the candidate pool.
+    /// This works by first retrieving `location` and all ids in `list` via
+    /// [`PruneAccessor::fill`] and then computing distances to populate the candidate pool.
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
-    /// this API are suppressed and any IDs that failed will be skipped during prune unless
-    /// the vector that was not retrieved was `location`. If this is the case,
-    /// [`prune::ListError::FailedVectorRetrieval`] is returned to delegate escalation to
-    /// the caller.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune_list<A, Set>(
+    /// Forwards errors from [`PruneAccessor::fill`]. If `location` was not made available
+    /// during [`PruneAccessor::fill`], [`prune::ListError::FailedVectorRetrieval`] is
+    /// returned to delegate escalation to the caller.
+    fn robust_prune_list<A>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         list: &AdjacencyList<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
             // Early exit.
@@ -2485,17 +2416,14 @@ where
                 return Ok(());
             }
 
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-
             // Fetch into the working set, including the source location.
-            let view = accessor
-                .fill(
-                    working_set,
-                    internal::chain(std::iter::once(location), list.iter().copied()),
-                )
+            let (view, computer) = accessor
+                .fill(internal::chain(
+                    std::iter::once(location),
+                    list.iter().copied(),
+                ))
                 .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             scratch.pool.clear();
             scratch.pool.reserve(list.len());
@@ -2548,42 +2476,31 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. If `internal_id` cannot be retrieved
-    /// from the working set, [`prune::ListError::FailedVectorRetrieval`] is returned.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "internal method with tightly coupled params"
-    )]
-    fn robust_prune_with<A, Set, Itr>(
+    /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved,
+    /// [`prune::ListError::FailedVectorRetrieval`] is returned.
+    fn robust_prune_with<A, Itr>(
         &self,
         accessor: &mut A,
         internal_id: DP::InternalId,
         extras: Itr,
         record: &mut VisitedSearchRecord<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-            let view = accessor
+            let (view, computer) = accessor
                 .fill(
-                    working_set,
                     internal::chain(
                         std::iter::once(internal_id),
                         internal::chain(extras.clone(), record.ids()),
                     )
                     .take(self.max_occlusion_size()),
                 )
-                .await
-                .into_ann_result()?;
+                .await?;
 
             if extras.len() != 0 {
                 let this_vector = view
@@ -2603,8 +2520,7 @@ where
 
             let mut context = prune::Context {
                 pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
-                occlude_factor: &mut scratch.occlude_factor,
-                last_checked: &mut scratch.last_checked,
+                states: &mut scratch.states,
                 neighbors: &mut scratch.neighbors,
             };
 
@@ -2663,28 +2579,27 @@ where
         C: for<'a, 'b> DistanceFunction<M::ElementRef<'a>, M::ElementRef<'b>, f32>,
         F: Fn(DP::InternalId) -> bool,
     {
-        if context.pool.is_empty() {
-            return;
-        }
+        assert!(
+            context.pool.len() <= u16::MAX.into_usize(),
+            "this has an upper bound set by `diskann::graph::Config` and should not exceed `u16::MAX`"
+        );
 
         let prune::Context {
             pool,
-            occlude_factor,
-            neighbors: dst,
-            last_checked,
+            states,
+            neighbors,
         } = context;
 
-        dst.clear();
-        occlude_factor.clear();
+        if pool.is_empty() {
+            neighbors.clear();
+            return;
+        }
 
         let alpha = self.config.alpha();
         let degree = self.config.pruned_degree().get();
 
-        occlude_factor.clear();
-        occlude_factor.resize(pool.len(), 0.0);
-
-        last_checked.clear();
-        last_checked.resize(pool.len(), 0u16);
+        states.clear();
+        states.resize(pool.len(), prune::State::default());
 
         let mut current_alpha = 1.0f32;
         let increment_factor = alpha.min(1.2);
@@ -2707,17 +2622,57 @@ where
             })
             .collect();
 
-        // Loop will also terminate after cur_alpha reaches alpha
-        while dst.len() < degree {
+        // For an alpha value `A`, a candidate `i` is promoted to a neighbor if for all
+        // ```
+        // max{j < i | j is a neighbor}(occlude_factor(i, j))
+        // ```
+        // This process happens with multiple values of `A`.
+        //
+        // We can compute this efficiently using the following rules:
+        //
+        // 1. For a candidate `i`, start scanning `j < i`, computing occlude factors.
+        // 2. If we find an occlude factor greater than `A`, record that `i` has visited
+        //    `j`, stop computing occlude factors, and move on to `i + 1`.
+        // 3. If we reach `j == i - 1` with the maximum occlude factor less than `A`, then
+        //    `i` gets promoted to a neighbor.
+        //
+        // On the implementation side, we use `states` in the following way:
+        //
+        // * `states[n].neighbor` is the **index** in `pool` of the `n`th **neighbor**.
+        //   Note that a "neighbor" is a candidate that passes pruning.
+        //
+        //   Very important: to get the index `j` in the above description, we need to
+        //   check `pool[states[n].neighbor]`.
+        //
+        //   This indexing naturally skips candidates `j` that have not been promoted to
+        //   neighbors.
+        //
+        // * `states[i].occlude_factor` is the maximum occlude factor found for a candidate
+        //   `i`. This gets set to `f32::MAX` when `i` is promoted to a neighbor which
+        //   excludes it from future consideration.
+        //
+        // * `states[i].last_checked` is the highest value of `n` against which the
+        //   occlude factor for `j = pool[states[n].neighbor]` has been checked.
+        //
+        //   The maximum value this should reach is `i`.
+        //
+        // Note that we use `states` for both "candidate" and "neighbor" tracking.
+        let mut found = 0;
+        while found < degree {
             for (i, (neighbor_distance, neighbor)) in cache.iter().enumerate() {
-                if dst.len() >= degree {
+                if found >= degree {
                     break;
                 }
 
-                let factor = &mut occlude_factor[i];
+                // The tracking states for candidate `i`.
+                let prune::State {
+                    mut occlude_factor,
+                    mut last_checked,
+                    ..
+                } = states[i];
 
                 // If the occlusion factor for this neighbor is too high, skip it.
-                if *factor > current_alpha {
+                if occlude_factor > current_alpha {
                     continue;
                 }
 
@@ -2727,39 +2682,28 @@ where
                 let neighbor = match neighbor {
                     Some(n) => n,
                     None => {
-                        *factor = f32::MAX;
+                        debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
+                        // SAFETY: We've already checked `states[i]`.
+                        unsafe { states.get_unchecked_mut(i) }.occlude_factor = f32::MAX;
                         continue;
                     }
                 };
-
-                // This neighbor has not been exluded.
-                //
-                // To determine whether or not to add it, we must compute its occlusion
-                // factor against all elements in `result` that appear before it in `pool`.
-                //
-                // This computation may be resumed from previous `alpha` values, so we need
-                // to access our scratch data structures.
-                let position = &mut last_checked[i];
-
-                // During computation, we've found an occlusion factor greater than alpha
-                // and wish to abort this neighbor from consideration.
-                let mut skip: bool = false;
 
                 // Increment `position` until we've compared with all current entries in
                 // `result`.
                 //
                 // When the list is empty, the loop is skipped allowing the first undeleted
                 // element to be added.
-                while *position as usize != dst.len() {
-                    let result_to_check = *position;
-                    // Increment the position pointer.
-                    *position += 1;
-
-                    let result_position = dst[result_to_check as usize].into_usize();
+                while last_checked as usize != found {
+                    let result_position = states[last_checked as usize].neighbor.into_usize();
+                    last_checked += 1;
 
                     // If the position of this result in `pool` is greater than or equal
                     // the current working position, then skip this candidate.
                     if result_position >= i {
+                        debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
+                        // SAFETY: We've already checked `states[i]`.
+                        unsafe { states.get_unchecked_mut(i) }.last_checked = last_checked;
                         continue;
                     }
 
@@ -2773,43 +2717,36 @@ where
                     };
 
                     // Update occlude factor
-                    *factor = self.config.prune_kind().update_occlude_factor(
+                    occlude_factor = self.config.prune_kind().update_occlude_factor(
                         *neighbor_distance,
                         distance,
-                        *factor,
+                        occlude_factor,
                         current_alpha,
                     );
 
                     // Check if the most recent update to the occlusion factor removes this
                     // neighbor from consideration.
-                    if *factor > current_alpha {
-                        // Don't add this neighbor.
-                        skip = true;
+                    if occlude_factor > current_alpha {
                         break;
                     }
                 }
 
-                // N.B.: We can get here straight from the self-neighbor check when the
-                // neighbor and the data at `location` have the same encoding.
-                //
-                // SO, we use short-circuiting logic to avoid checking the occlusion factor
-                // twice, though that might not really save much.
-                if skip || *factor > current_alpha {
+                debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
+                // SAFETY: We've already checked `states[i]`.
+                let state = unsafe { states.get_unchecked_mut(i) };
+
+                state.last_checked = last_checked;
+                if occlude_factor > current_alpha {
+                    state.occlude_factor = occlude_factor;
                     continue;
                 }
 
                 // This neighbor has passed all the requirements of being a candidate.
-                *factor = f32::MAX;
+                state.occlude_factor = f32::MAX;
 
                 // This conversion should always succeed.
-                #[expect(
-                    clippy::expect_used,
-                    reason = "`i` cannot exceed `u16::MAX` so conversion should succeed"
-                )]
-                dst.push(
-                    i.try_into_vector_id()
-                        .expect("argument should not exceed u16::MAX"),
-                );
+                states[found].neighbor = i as u16;
+                found += 1;
             }
 
             // Exit if we completed the final iteration.
@@ -2820,54 +2757,58 @@ where
             current_alpha = (current_alpha * increment_factor).min(alpha);
         }
 
-        // Cleanup `result` by undoing the local indirection.
-        dst.remap_trusted(|r| *r = pool[r.into_usize()].id);
-        debug_assert!(dst.len() <= degree, "max degree bound violated");
+        let mut guard = neighbors.resize(found);
+        std::iter::zip(guard.iter_mut(), states.iter()).for_each(|(d, s)| {
+            *d = pool[s.neighbor.into_usize()].id;
+        });
+        guard.finish(found);
+
+        debug_assert!(neighbors.len() <= degree, "max degree bound violated");
 
         // Post processing saturation if enabled.
         if options.force_saturate || (self.config.saturate_after_prune() && alpha > 1.0f32) {
             for neighbor in context.pool.iter() {
-                if dst.len() >= degree {
+                if neighbors.len() >= degree {
                     break;
                 }
 
                 if !exclude(neighbor.id) {
                     // `AdjacencyList` filters out duplicates. No need to explicitly
                     // check.
-                    dst.push(neighbor.id);
+                    neighbors.push(neighbor.id);
                 }
             }
         }
     }
 
-    /// Prune all nodes in the graph.
+    /// Prune all nodes in `ids`.
     ///
-    /// This is used as the final step of graph construction.
-    pub fn prune_range<S>(
+    /// This is used as the final step of graph construction. `ids` yields the
+    /// [`DataProvider::InternalId`] of every point to prune.
+    pub fn prune_range<S, I>(
         &self,
         strategy: &S,
         context: &DP::Context,
-        range: Range<DP::InternalId>,
+        ids: I,
     ) -> impl SendFuture<ANNResult<()>>
     where
         S: PruneStrategy<DP>,
+        I: IntoIterator<Item = DP::InternalId> + Send,
+        I::IntoIter: Send,
     {
         async move {
-            let start: u64 = range.start.into();
-            let end: u64 = range.end.into();
-
             let mut accessor = strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
-
-            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();
 
-            for id in start..end {
-                let id = id.try_into_vector_id()?;
-                accessor.get_neighbors(id, &mut neighbors).await?;
+            for id in ids {
+                accessor
+                    .neighbors()
+                    .get_neighbors(id, &mut neighbors)
+                    .await?;
                 if neighbors.len() <= self.pruned_degree() {
                     continue;
                 }
@@ -2877,18 +2818,14 @@ where
                     force_saturate: false,
                 };
 
-                self.robust_prune_list(
-                    &mut accessor,
-                    id,
-                    &neighbors,
-                    &mut prune_scratch,
-                    &mut working_set,
-                    options,
-                )
-                .await
-                .escalate("prune-range does not support transient errors")?;
+                self.robust_prune_list(&mut accessor, id, &neighbors, &mut prune_scratch, options)
+                    .await
+                    .escalate("prune-range does not support transient errors")?;
 
-                accessor.set_neighbors(id, &prune_scratch.neighbors).await?;
+                accessor
+                    .neighbors()
+                    .set_neighbors(id, &prune_scratch.neighbors)
+                    .await?;
             }
 
             Ok(())
@@ -2933,31 +2870,4 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn query_label_provider_on_visit_default() {
-        #[derive(Debug)]
-        struct BasicValidation;
-
-        impl QueryLabelProvider<u32> for BasicValidation {
-            fn is_match(&self, id: u32) -> bool {
-                id.is_multiple_of(2)
-            }
-        }
-
-        let filter = BasicValidation;
-        assert!(matches!(
-            filter.on_visit(Neighbor::new(0, 1.0)),
-            QueryVisitDecision::Accept(_)
-        ));
-        assert!(matches!(
-            filter.on_visit(Neighbor::new(1, 1.0)),
-            QueryVisitDecision::Reject
-        ));
-    }
 }

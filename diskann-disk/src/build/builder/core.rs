@@ -624,7 +624,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
 
 #[cfg(test)]
 pub(crate) mod disk_index_builder_tests {
-    use std::{io::Read, sync::Arc};
+    use std::{io::Read, sync::Arc, time::Instant};
 
     use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
@@ -633,10 +633,10 @@ pub(crate) mod disk_index_builder_tests {
         ANNResult,
     };
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::{
-        storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
-        utils::Timer,
+    use diskann_providers::storage::{
+        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file,
     };
+
     use diskann_utils::test_data_root;
     use diskann_vector::{
         distance::Metric::{self, L2},
@@ -651,11 +651,11 @@ pub(crate) mod disk_index_builder_tests {
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
-            disk_provider::DiskIndexSearcher,
+            aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
         storage::disk_index_reader::DiskIndexReader,
-        utils::{QueryStatistics, VirtualAlignedReaderFactory},
+        utils::QueryStatistics,
     };
     const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
     pub const TEST_DATA_FILE: &str = "/sift/siftsmall_learn_256pts.fbin";
@@ -682,6 +682,7 @@ pub(crate) mod disk_index_builder_tests {
         pub checkpoint_params: Option<CheckpointParams>,
         pub num_threads: usize,
         pub metric: Metric,
+        pub block_size: usize,
     }
 
     impl Default for TestParams {
@@ -700,6 +701,7 @@ pub(crate) mod disk_index_builder_tests {
                 checkpoint_params: None,
                 num_threads: 1,
                 metric: L2,
+                block_size: DEFAULT_DISK_SECTOR_LEN,
             }
         }
     }
@@ -799,7 +801,7 @@ pub(crate) mod disk_index_builder_tests {
                 self.params.data_path.clone(),
                 self.params.index_path_prefix.clone(),
                 self.params.associated_data_path.clone(),
-                DEFAULT_DISK_SECTOR_LEN,
+                self.params.block_size,
             )?;
 
             let mut disk_index = match self.params.checkpoint_params {
@@ -824,7 +826,7 @@ pub(crate) mod disk_index_builder_tests {
                 ),
             }?;
 
-            let timer = Timer::new();
+            let timer = Instant::now();
             disk_index.build()?;
             println!("Indexing time: {} seconds", timer.elapsed().as_secs_f64());
 
@@ -921,6 +923,31 @@ pub(crate) mod disk_index_builder_tests {
         let index_path_prefix = format!("{}_metric_{:?}", INDEX_PATH_PREFIX, metric);
 
         run_one_shot_test(index_path_prefix, |params| TestParams { metric, ..params });
+    }
+
+    /// Forces the multi-sector-per-node layout: with a 512-byte block, a 128-d f32 vector
+    /// (512 B) plus its neighbor list exceeds one sector, so each node spans multiple
+    /// sectors (`node_len > block_size`). The default 4096-byte sector packs these small
+    /// nodes many-per-sector, leaving the crossing path otherwise untested; 512 is one of
+    /// the two block sizes the disk format supports.
+    #[test]
+    fn test_build_multi_sector_per_node() {
+        let params = TestParams {
+            block_size: 512,
+            max_degree: 16,
+            l_build: 64,
+            index_path_prefix: format!("{}_multi_sector", INDEX_PATH_PREFIX),
+            ..TestParams::default()
+        };
+        let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+        verify_search_result_with_ground_truth::<GraphDataF32VectorUnitData>(
+            &fixture.params,
+            10,
+            32,
+            &fixture.storage_provider,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1040,11 +1067,8 @@ pub(crate) mod disk_index_builder_tests {
         let pq_compressed_path = get_compressed_pq_file(&params.index_path_prefix);
         let index_file_path = get_disk_index_file(&params.index_path_prefix);
 
-        let index_reader = DiskIndexReader::<G::VectorDataType>::new(
-            pq_pivot_path,
-            pq_compressed_path,
-            storage_provider.as_ref(),
-        )?;
+        let index_reader =
+            DiskIndexReader::new(pq_pivot_path, pq_compressed_path, storage_provider.as_ref())?;
 
         let vertex_provider_factory = DiskVertexProviderFactory::new(
             VirtualAlignedReaderFactory::new(index_file_path, Arc::clone(storage_provider)),
@@ -1092,8 +1116,7 @@ pub(crate) mod disk_index_builder_tests {
                 &mut indices,
                 &mut distances,
                 &mut associated_data,
-                &|_| true,
-                false,
+                &crate::search::search_mode::SearchMode::graph(),
             );
 
             diskann_providers::test_utils::assert_top_k_exactly_match(
