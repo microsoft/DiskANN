@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn create_fresh() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         // A fresh FSM should result in full block of all zeroes.
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn basic_next_id() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn basic_delete() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn basic_id_reuse() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn basic_recovery() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn dynamic_expansion() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();

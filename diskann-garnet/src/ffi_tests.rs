@@ -39,6 +39,7 @@ mod tests {
     ) -> (*const c_void, Context) {
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
+        let mut quant_needed = false;
 
         let dim: u32 = 2;
         let reduce_dim = 0;
@@ -59,6 +60,7 @@ mod tests {
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
+                &mut quant_needed,
             )
         };
 
@@ -67,7 +69,7 @@ mod tests {
 
     #[test]
     fn basic_create_index() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
         assert!(!index_ptr.is_null());
 
@@ -78,7 +80,7 @@ mod tests {
 
     #[test]
     fn create_index_with_invalid_metric_returns_null() {
-        let store = Store;
+        let store = Store::new();
 
         // Test with invalid metric type values — passed as raw i32
         let invalid_metrics = [-1, -2, 99, i32::MAX, i32::MIN];
@@ -96,7 +98,7 @@ mod tests {
 
     #[test]
     fn create_index_with_valid_metrics() {
-        let store = Store;
+        let store = Store::new();
 
         // Test all valid metric types
         let valid_metrics = [
@@ -122,7 +124,7 @@ mod tests {
 
     #[test]
     fn add_check_and_remove_vector() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         // Vector id with 4 bytes size
@@ -174,7 +176,7 @@ mod tests {
 
     #[test]
     fn update_vector_attributes() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         // Vector id with 4 bytes size
@@ -259,7 +261,7 @@ mod tests {
 
     #[test]
     fn external_id_exists_lifecycle() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         // EID 1
@@ -348,7 +350,7 @@ mod tests {
 
     #[test]
     fn internal_id_exists_lifecycle() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         let bad_iid_bytes = [0u8; 5];
@@ -418,7 +420,7 @@ mod tests {
     /// Using u64 external IDs, insert some vectors and ensure search results are same.
     #[test]
     fn search_with_large_external_ids() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         let id1 = 1234u64;
@@ -526,7 +528,7 @@ mod tests {
 
     #[test]
     fn search_element() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         let id1 = 1234u64;
@@ -630,7 +632,7 @@ mod tests {
 
     #[test]
     fn continue_search() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
@@ -732,7 +734,7 @@ mod tests {
 
     #[test]
     fn search_without_filter() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         unsafe {
@@ -760,7 +762,7 @@ mod tests {
 
     #[test]
     fn search_with_null_bitmap_same_as_unfiltered() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
 
         unsafe {
@@ -788,7 +790,7 @@ mod tests {
 
     #[test]
     fn basic_quant_bootstrap_lifecycle_bin() {
-        let store = Store;
+        let store = Store::new();
         let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Bin);
         let index = unsafe { &*index_ptr.cast::<Index>() };
 
@@ -890,51 +892,75 @@ mod tests {
     }
 
     #[test]
-    fn recreate_basic() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+    fn recreate_basic_with_float_vectors() {
+        for quant_type in [
+            VectorQuantType::NoQuant,
+            VectorQuantType::Bin,
+            VectorQuantType::Q8,
+        ] {
+            let store = Store::new();
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
 
-        // add vectors
-        assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
-            InsertResult::Success
-        );
-        assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
-            InsertResult::Success
-        );
-        assert_eq!(
-            insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
-            InsertResult::Success
-        );
+            // add vectors
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
+                InsertResult::Success,
+                "failed to insert id=10 with quant_type={quant_type:?}",
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
+                InsertResult::Success,
+                "failed to insert id=20 with quant_type={quant_type:?}",
+            );
+            assert_eq!(
+                insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
+                InsertResult::Success,
+                "failed to insert id=30 with quant_type={quant_type:?}",
+            );
 
-        // do a search; save results
-        let qv = [0.0f32, 0.0];
-        let (orig_ids, orig_dists) = do_search(&ctx, index_ptr, &qv, 10, None);
-        assert!(!orig_ids.is_empty());
-        assert!(!orig_dists.is_empty());
+            // do a search; save results
+            let qv = [0.0f32, 0.0];
+            let (orig_ids, orig_dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+            assert!(
+                !orig_ids.is_empty(),
+                "got empty id list for quant_type={quant_type:?}"
+            );
+            assert!(
+                !orig_dists.is_empty(),
+                "got empty dist list for quant_type={quant_type:?}"
+            );
 
-        let orig_num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
+            let orig_num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
 
-        // drop index
-        unsafe {
-            drop_index(ctx.get(), index_ptr);
-        }
+            // drop index
+            unsafe {
+                drop_index(ctx.get(), index_ptr);
+            }
 
-        // create_index with the same store
-        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::Q8);
+            // create_index with the same store
+            let (index_ptr, ctx) = create_test_index(&store, quant_type);
 
-        // check num vectors is the same
-        let num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
-        assert_eq!(num_vectors, orig_num_vectors);
+            // check num vectors is the same
+            let num_vectors = unsafe { card(ctx.get(), index_ptr) } as usize;
+            assert_eq!(
+                num_vectors, orig_num_vectors,
+                "term count mismatch for quant_type={quant_type:?}"
+            );
 
-        // do a search; check results match above
-        let (ids, dists) = do_search(&ctx, index_ptr, &qv, 10, None);
-        assert_eq!(ids, orig_ids);
-        assert_eq!(dists, orig_dists);
+            // do a search; check results match above
+            let (ids, dists) = do_search(&ctx, index_ptr, &qv, 10, None);
+            assert_eq!(
+                ids, orig_ids,
+                "recreated search didn't match ids for quant_type={quant_type:?}"
+            );
+            assert_eq!(
+                dists, orig_dists,
+                "recreated search didn't match dists for quant_type={quant_type:?}"
+            );
 
-        unsafe {
-            drop_index(ctx.get(), index_ptr);
+            unsafe {
+                drop_index(ctx.get(), index_ptr);
+            }
         }
     }
 }
