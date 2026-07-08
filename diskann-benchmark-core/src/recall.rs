@@ -205,11 +205,13 @@ where
     // ratios. Each ratio `r / this_recall_k` is generally not exactly
     // representable (e.g. `99.0 / 100.0`), and summing thousands of them
     // compounds the rounding, producing values like `0.9999899999999999` where
-    // the exact answer is `0.99999`. Instead we accumulate integer hit counts,
-    // grouped by their (per-row) denominator `this_recall_k`, and divide once
-    // per distinct denominator at the end. This is algebraically identical to
-    // the mean of per-query recalls, but exact whenever all scored rows share a
-    // denominator (the common fixed-size-groundtruth case).
+    // the closest `f64` to the true answer is `0.99999`. Instead we accumulate
+    // integer hit counts, grouped by their (per-row) denominator
+    // `this_recall_k`, and divide once per distinct denominator at the end. This
+    // is algebraically identical to the mean of per-query recalls; the result is
+    // still rounded to `f64`, but whenever all scored rows share a denominator
+    // (the common fixed-size-groundtruth case) the rounding is limited to that
+    // single division rather than accumulating across every query.
     //
     // A `BTreeMap` (rather than `HashMap`) keeps the final summation order
     // deterministic across runs, so the reported recall is bit-reproducible.
@@ -266,7 +268,7 @@ where
     }
 
     // Compute the average recall as the mean of the per-query recalls. Grouping
-    // by denominator lets each group be reduced with an exact integer numerator,
+    // by denominator lets each group be reduced with an integer numerator,
     // limiting rounding to at most one division per distinct `this_recall_k`.
     //
     // `num_scored_queries` is the *global* count of scored queries, not a
@@ -274,12 +276,19 @@ where
     // total by the number of queries, so each query contributes `1 / N`
     // regardless of its `this_recall_k`. Concretely,
     // `(1/N) * sum_i (r_i / k_i) == sum_d (hits_by_k[d] / (d * N))`.
+    //
+    // The denominator is formed as a `u128` product so `k * num_scored_queries`
+    // cannot overflow on very large benchmarks; the single division to `f64` is
+    // the only rounding step.
     let average = if num_scored_queries == 0 {
         0.0
     } else {
         hits_by_k
             .into_iter()
-            .map(|(k, hits)| (hits as f64) / ((k * num_scored_queries) as f64))
+            .map(|(k, hits)| {
+                let denom = (k as u128) * (num_scored_queries as u128);
+                (hits as f64) / (denom as f64)
+            })
             .sum()
     };
 
