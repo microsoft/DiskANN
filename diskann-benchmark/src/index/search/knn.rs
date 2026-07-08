@@ -12,10 +12,10 @@ use crate::{index::result::SearchResults, inputs::graph_index::GraphSearch};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SearchSteps<'a> {
-    pub groundtruth_mode: GroundTruthMode,
     pub reps: NonZeroUsize,
     pub num_tasks: &'a [NonZeroUsize],
     pub runs: &'a [GraphSearch],
+    pub groundtruth_mode: GroundTruthMode,
 }
 
 impl<'a> SearchSteps<'a> {
@@ -23,18 +23,14 @@ impl<'a> SearchSteps<'a> {
         reps: NonZeroUsize,
         num_tasks: &'a [NonZeroUsize],
         runs: &'a [GraphSearch],
+        groundtruth_mode: GroundTruthMode,
     ) -> Self {
         Self {
-            groundtruth_mode: GroundTruthMode::Fixed,
             reps,
             num_tasks,
             runs,
+            groundtruth_mode,
         }
-    }
-
-    pub(crate) fn with_groundtruth_mode(mut self, groundtruth_mode: GroundTruthMode) -> Self {
-        self.groundtruth_mode = groundtruth_mode;
-        self
     }
 }
 

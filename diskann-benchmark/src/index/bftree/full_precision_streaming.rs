@@ -103,6 +103,7 @@ where
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
+            benchmark_core::recall::GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))

@@ -470,7 +470,12 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             inmem::DeterminantDiversity::new(params),
         )?;
 
-        let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);
+        let steps = search::knn::SearchSteps::new(
+            phase.reps,
+            &phase.num_threads,
+            &phase.runs,
+            benchmark_core::recall::GroundTruthMode::Fixed,
+        );
         let results = search::knn::run(&knn, &groundtruth, steps)?;
 
         Ok(AggregatedSearchResults::Topk(results))
@@ -519,7 +524,12 @@ where
             benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
         )?;
 
-        let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+        let steps = search::knn::SearchSteps::new(
+            topk.reps,
+            &topk.num_threads,
+            &topk.runs,
+            benchmark_core::recall::GroundTruthMode::Fixed,
+        );
 
         let results = search::knn::run(&knn, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(results))
@@ -634,8 +644,8 @@ where
             beta_filter.reps,
             &beta_filter.num_threads,
             &beta_filter.runs,
-        )
-        .with_groundtruth_mode(benchmark_core::recall::GroundTruthMode::Flexible);
+            benchmark_core::recall::GroundTruthMode::Flexible,
+        );
 
         let result = search::knn::run(&knn, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
@@ -680,9 +690,12 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
-        let steps =
-            search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs)
-                .with_groundtruth_mode(benchmark_core::recall::GroundTruthMode::Flexible);
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            benchmark_core::recall::GroundTruthMode::Flexible,
+        );
 
         let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -739,8 +752,12 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-        let steps = search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs)
-            .with_groundtruth_mode(benchmark_core::recall::GroundTruthMode::Flexible);
+        let steps = search::knn::SearchSteps::new(
+            inline.reps,
+            &inline.num_threads,
+            &inline.runs,
+            benchmark_core::recall::GroundTruthMode::Flexible,
+        );
 
         let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 
