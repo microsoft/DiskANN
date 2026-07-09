@@ -1175,6 +1175,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         }
     }
 
+    #[cfg(feature = "flatbuffers")]
     fn try_deserialize_from(
         proto: fb::spherical::SphericalQuantizer<'_>,
         alloc: A,
