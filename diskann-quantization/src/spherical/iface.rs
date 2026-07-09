@@ -1171,7 +1171,6 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         if nbits as usize == NBITS {
             Self::try_deserialize_from(proto, alloc)
         } else {
-            println!("here with {}", nbits);
             Err(DeserializationError::UnsupportedBitWidth(nbits))
         }
     }
