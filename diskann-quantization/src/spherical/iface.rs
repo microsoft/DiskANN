@@ -1149,6 +1149,46 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         .map_err(|e| e.into())
     }
 
+    /// Attempt to deserialize an `spherical::Quantizer` flatbuffer into [`Impl`].
+    #[cfg(feature = "flatbuffers")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "flatbuffers")))]
+    pub fn try_deserialize(
+        data: &[u8],
+        alloc: A,
+    ) -> Result<Self, DeserializationError>
+    where
+        Self: Constructible<A>,
+    {
+        // Check that this is one of the known identifiers.
+        if !fb::spherical::quantizer_buffer_has_identifier(data) {
+            return Err(DeserializationError::InvalidIdentifier);
+        }
+
+        // Match as much as we can without allocating.
+        //
+        // Then, we branch on the number of bits.
+        let root = fb::spherical::root_as_quantizer(data)?;
+        let nbits = root.nbits();
+        let proto = root.quantizer();
+
+        if nbits as usize == NBITS {
+            Self::try_deserialize_from(proto, alloc)
+        } else {
+            Err(DeserializationError::UnsupportedBitWidth(nbits))
+        }
+    }
+
+    fn try_deserialize_from(
+        proto: fb::spherical::SphericalQuantizer<'_>,
+        alloc: A
+    ) -> Result<Self, DeserializationError>
+    where
+        Self: Constructible<A>,
+    {
+        let quantizer = SphericalQuantizer::try_unpack(alloc, proto)?;
+        Ok(Self::new(quantizer)?)
+    }
+
     #[cfg(feature = "flatbuffers")]
     fn serialize<B>(&self, allocator: B) -> Result<Poly<[u8], B>, AllocatorError>
     where
@@ -2007,11 +2047,7 @@ where
         Impl<NBITS, A>: Quantizer<O> + Constructible<A>,
     {
         let imp = match Poly::new_with(
-            #[inline(never)]
-            |alloc| -> Result<_, super::quantizer::DeserializationError> {
-                let quantizer = SphericalQuantizer::try_unpack(alloc, proto)?;
-                Ok(Impl::new(quantizer)?)
-            },
+            |alloc| Impl::<NBITS, A>::try_deserialize_from(proto, alloc),
             alloc,
         ) {
             Ok(imp) => imp,
