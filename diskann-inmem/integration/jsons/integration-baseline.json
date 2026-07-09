@@ -456,7 +456,7 @@
             "hops": 5771
           },
           "recall": {
-            "average": 0.9590000000000002,
+            "average": 0.959,
             "num_queries": 100,
             "recall_k": 10,
             "recall_n": 10
@@ -477,7 +477,7 @@
             "hops": 10638
           },
           "recall": {
-            "average": 0.9680000000000004,
+            "average": 0.968,
             "num_queries": 100,
             "recall_k": 10,
             "recall_n": 10

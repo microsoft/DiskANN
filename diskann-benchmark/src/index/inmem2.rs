@@ -17,7 +17,7 @@ use diskann_benchmark_core::{
     streaming::{self, executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     files::InputFile,
     output::Output,
     utils::{
@@ -420,39 +420,30 @@ where
     type Input = StaticBuild;
     type Output = ();
 
-    fn try_match(&self, input: &StaticBuild) -> Result<MatchScore, FailureScore> {
-        if T::is_match(input.data.data_type) {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1000))
+    fn try_match(&self, input: &StaticBuild, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        let data_type = input.data.data_type;
+        if !T::is_match(data_type) {
+            score.fail(
+                1000,
+                &format_args!(
+                    "expected data-type {}, instead got {}",
+                    Quote(T::DATA_TYPE),
+                    Quote(data_type)
+                ),
+            )
         }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&StaticBuild>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(input) => {
-                let data_type = input.data.data_type;
-                if !T::is_match(data_type) {
-                    write!(
-                        f,
-                        "expected data-type {}, instead got {}",
-                        Quote(T::DATA_TYPE),
-                        Quote(data_type)
-                    )?;
-                }
-            }
-            None => {
-                write!(
-                    f,
-                    "full-precision static build+search with data type {}",
-                    Quote(T::DATA_TYPE)
-                )?;
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "full-precision static build+search with data type {}",
+            Quote(T::DATA_TYPE)
+        )?;
 
         Ok(())
     }
@@ -796,39 +787,29 @@ where
     type Input = BigANNStreaming;
     type Output = Vec<StreamStats>;
 
-    fn try_match(&self, input: &BigANNStreaming) -> Result<MatchScore, FailureScore> {
-        if T::is_match(input.data.data_type) {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1000))
+    fn try_match(&self, input: &BigANNStreaming, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        let data_type = input.data.data_type;
+        if !T::is_match(data_type) {
+            score.fail(
+                1000,
+                &format_args!(
+                    "expected data-type {}, instead got {}",
+                    Quote(T::DATA_TYPE),
+                    Quote(data_type)
+                ),
+            );
         }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&BigANNStreaming>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(input) => {
-                let data_type = input.data.data_type;
-                if !T::is_match(data_type) {
-                    write!(
-                        f,
-                        "expected data-type {}, instead got {}",
-                        Quote(T::DATA_TYPE),
-                        Quote(data_type)
-                    )?;
-                }
-            }
-            None => {
-                write!(
-                    f,
-                    "full-precision streaming with data type {}",
-                    Quote(T::DATA_TYPE)
-                )?;
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "full-precision streaming with data type {}",
+            Quote(T::DATA_TYPE)
+        )?;
 
         Ok(())
     }

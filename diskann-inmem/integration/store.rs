@@ -29,7 +29,7 @@ use std::{
 
 use diskann_benchmark_runner::{
     Benchmark, Checker, Checkpoint, Input, Output,
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     utils::fmt::KeyValue,
 };
 use rand::{Rng, SeedableRng, distr::Uniform, rngs::StdRng};
@@ -466,15 +466,11 @@ impl Benchmark for StoreStress {
     type Input = StoreStressInput;
     type Output = StoreStressStats;
 
-    fn try_match(&self, _input: &StoreStressInput) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(0))
+    fn try_match(&self, _input: &StoreStressInput, context: &MatchContext) -> Score {
+        context.success(0)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        _input: Option<&StoreStressInput>,
-    ) -> std::fmt::Result {
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "concurrency stress test for the in-memory store (readers/writers/retirers)"

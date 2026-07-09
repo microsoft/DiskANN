@@ -9,7 +9,7 @@ use anyhow::Context;
 use diskann::graph::{DiskANNIndex, search::Knn};
 use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     files::InputFile,
     utils::fmt::Indent,
 };
@@ -482,16 +482,13 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     type Input = Test;
     type Output = BuildAndSearch;
 
-    fn try_match(&self, input: &Test) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &Test, context: &MatchContext) -> Score {
+        // Future-proof against additional enums in `input.layer`.
         let Layer::FullPrecision { .. } = input.layer;
-        Ok(MatchScore(0))
+        context.success(0)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        _input: Option<&Test>,
-    ) -> std::fmt::Result {
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "nop")
     }
 
@@ -501,6 +498,7 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
+        // Future-proof against additional enums in `input.layer`.
         let Layer::FullPrecision { data_type } = input.layer;
 
         // Load the data and perform any necessary data conversions.
@@ -547,7 +545,7 @@ impl Regression for FullPrecision {
         before: &Self::Output,
         after: &Self::Output,
     ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
-        Ok(before.check_match(after).pass_fail())
+        Ok(after.check_match(before).pass_fail())
     }
 }
 
