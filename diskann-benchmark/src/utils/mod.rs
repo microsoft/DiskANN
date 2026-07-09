@@ -102,61 +102,6 @@ where
     }
 }
 
-/// Backend implementations are gated behind additive features to reduce compilation time
-/// when only a subset of benchmarks are needed.
-///
-/// However, when benchmarks are feature gated, we want to provide a useful diagnostic when
-/// users try to run a benchmark targeting the blocked out method.
-///
-/// To do this, we use stub implementations that use "dispatch matching" to match the same
-/// `CentralDispatch` enum as the base benchmark, but return an error that describes
-/// feature required to enable the backend benchmark.
-macro_rules! stub_impl {
-    ($feature:literal, $input:path $(,)?) => {
-        #[cfg(not(feature = $feature))]
-        mod imp {
-            use diskann_benchmark_runner::{output::Output, Benchmark, Checkpoint, Registry};
-
-            use crate::inputs;
-
-            pub(super) fn register(name: &str, registry: &mut Registry) -> anyhow::Result<()> {
-                Ok(registry.register(name, Stub)?)
-            }
-
-            /// An empty placeholder to provide a hint for the necessary feature.
-            pub(super) struct Stub;
-
-            impl Benchmark for Stub {
-                type Input = $input;
-                type Output = serde_json::Value;
-
-                fn try_match(
-                    &self,
-                    _input: &$input,
-                    context: &diskann_benchmark_runner::benchmark::MatchContext,
-                ) -> diskann_benchmark_runner::benchmark::Score {
-                    context.fail(0, &concat!("Requires the \"", $feature, "\" feature"))
-                }
-
-                fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    writeln!(f, "{}", concat!("Requires the \"", $feature, "\" feature"))
-                }
-
-                fn run(
-                    &self,
-                    _input: &$input,
-                    _checkpoint: Checkpoint<'_>,
-                    _output: &mut dyn Output,
-                ) -> anyhow::Result<serde_json::Value> {
-                    panic!("this function should not be called!");
-                }
-            }
-        }
-    };
-}
-
-pub(crate) use stub_impl;
-
 /////////////////
 // SmallBanner //
 /////////////////
