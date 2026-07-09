@@ -1152,10 +1152,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
     /// Attempt to deserialize an `spherical::Quantizer` flatbuffer into [`Impl`].
     #[cfg(feature = "flatbuffers")]
     #[cfg_attr(docsrs, doc(cfg(feature = "flatbuffers")))]
-    pub fn try_deserialize(
-        data: &[u8],
-        alloc: A,
-    ) -> Result<Self, DeserializationError>
+    pub fn try_deserialize(data: &[u8], alloc: A) -> Result<Self, DeserializationError>
     where
         Self: Constructible<A>,
     {
@@ -1174,13 +1171,14 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         if nbits as usize == NBITS {
             Self::try_deserialize_from(proto, alloc)
         } else {
+            println!("here with {}", nbits);
             Err(DeserializationError::UnsupportedBitWidth(nbits))
         }
     }
 
     fn try_deserialize_from(
         proto: fb::spherical::SphericalQuantizer<'_>,
-        alloc: A
+        alloc: A,
     ) -> Result<Self, DeserializationError>
     where
         Self: Constructible<A>,
@@ -2055,7 +2053,7 @@ where
                 return Err(err.into());
             }
             Err(CompoundError::Constructor(err)) => {
-                return Err(err.into());
+                return Err(err);
             }
         };
         Ok(poly!({ Quantizer<O> }, imp))
@@ -2616,20 +2614,15 @@ mod tests {
         use super::*;
         use crate::alloc::{BumpAllocator, GlobalAllocator};
 
-        #[inline(never)]
-        fn test_plan_serialization(
+        fn test_deserialization_inner(
             quantizer: &dyn Quantizer,
+            deserialized: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<f32>,
+            dataset: MatrixView<'_, f32>,
         ) {
-            // Run bit-width agnostic tests.
-            assert_eq!(quantizer.full_dim(), dataset.ncols());
             let scoped_global = ScopedAllocator::global();
 
-            let serialized = quantizer.serialize(GlobalAllocator).unwrap();
-            let deserialized =
-                try_deserialize::<GlobalAllocator, _>(&serialized, GlobalAllocator).unwrap();
-
+            assert_eq!(quantizer.nbits(), nbits);
             assert_eq!(deserialized.nbits(), nbits);
             assert_eq!(deserialized.bytes(), quantizer.bytes());
             assert_eq!(deserialized.dim(), quantizer.dim());
@@ -2740,6 +2733,84 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+
+        #[inline(never)]
+        fn test_plan_serialization(
+            quantizer: &dyn Quantizer,
+            nbits: usize,
+            dataset: MatrixView<f32>,
+        ) {
+            let global = GlobalAllocator;
+
+            // Run bit-width agnostic tests.
+            assert_eq!(quantizer.full_dim(), dataset.ncols());
+
+            let serialized = quantizer.serialize(global).unwrap();
+            let deserialized = try_deserialize::<GlobalAllocator, _>(&serialized, global).unwrap();
+
+            test_deserialization_inner(quantizer, &*deserialized, nbits, dataset);
+
+            // Go through the direct deserialization interface.
+            match nbits {
+                1 => {
+                    test_deserialization_inner(
+                        quantizer,
+                        &Impl::<1, _>::try_deserialize(&serialized, global).unwrap(),
+                        nbits,
+                        dataset,
+                    );
+
+                    // Verify that we can't reload with a different bit-width.
+                    assert!(matches!(
+                        Impl::<2, _>::try_deserialize(&serialized, global),
+                        Err(DeserializationError::UnsupportedBitWidth(1)),
+                    ));
+                }
+                2 => {
+                    test_deserialization_inner(
+                        quantizer,
+                        &Impl::<2, _>::try_deserialize(&serialized, global).unwrap(),
+                        nbits,
+                        dataset,
+                    );
+
+                    // Verify that we can't reload with a different bit-width.
+                    assert!(matches!(
+                        Impl::<1, _>::try_deserialize(&serialized, global),
+                        Err(DeserializationError::UnsupportedBitWidth(2)),
+                    ));
+                }
+                4 => {
+                    test_deserialization_inner(
+                        quantizer,
+                        &Impl::<4, _>::try_deserialize(&serialized, global).unwrap(),
+                        nbits,
+                        dataset,
+                    );
+
+                    // Verify that we can't reload with a different bit-width.
+                    assert!(matches!(
+                        Impl::<8, _>::try_deserialize(&serialized, global),
+                        Err(DeserializationError::UnsupportedBitWidth(4)),
+                    ));
+                }
+                8 => {
+                    test_deserialization_inner(
+                        quantizer,
+                        &Impl::<8, _>::try_deserialize(&serialized, global).unwrap(),
+                        nbits,
+                        dataset,
+                    );
+
+                    // Verify that we can't reload with a different bit-width.
+                    assert!(matches!(
+                        Impl::<4, _>::try_deserialize(&serialized, global),
+                        Err(DeserializationError::UnsupportedBitWidth(8)),
+                    ));
+                }
+                _ => panic!("bit width {} is not supported", nbits),
             }
         }
 
