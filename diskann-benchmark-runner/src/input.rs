@@ -68,7 +68,7 @@ impl Registered<'_> {
         self.0.example()
     }
 
-    /// Return the visibility of the attach input.
+    /// Return the visibility of the attached input.
     pub(crate) fn visibility(&self) -> Visibility<'_> {
         self.0.visibility()
     }
