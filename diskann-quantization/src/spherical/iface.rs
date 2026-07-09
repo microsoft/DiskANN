@@ -1149,7 +1149,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         .map_err(|e| e.into())
     }
 
-    /// Attempt to deserialize an `spherical::Quantizer` flatbuffer into [`Impl`].
+    /// Attempt to deserialize a FlatBuffer `fb::spherical::Quantizer` (as produced by [`Quantizer::serialize`]) into [`Impl`].
     #[cfg(feature = "flatbuffers")]
     #[cfg_attr(docsrs, doc(cfg(feature = "flatbuffers")))]
     pub fn try_deserialize(data: &[u8], alloc: A) -> Result<Self, DeserializationError>
