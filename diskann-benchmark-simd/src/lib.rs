@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     utils::{
         datatype::{AsDataType, DataType},
         num::{relative_change, NonNegativeFinite},
@@ -433,10 +433,6 @@ trait AsArch: Sized + 'static {
 
     fn try_new() -> Result<Self, ArchNotSupported>;
 
-    fn is_match(arch: Arch) -> bool {
-        arch == Self::ARCH && Self::is_available()
-    }
-
     fn describe(arch: Arch) -> ArchDescribe {
         if arch != Self::ARCH {
             ArchDescribe::Mismatch {
@@ -527,23 +523,26 @@ where
     type Output = Vec<RunResult>;
 
     // Matching simply requires that we match the inner type.
-    fn try_match(&self, from: &SimdOp) -> Result<MatchScore, FailureScore> {
-        let mut failscore: Option<u32> = None;
-        if !Q::is_match(from.query_type) {
-            *failscore.get_or_insert(0) += 10;
-        }
-        if !D::is_match(from.data_type) {
-            *failscore.get_or_insert(0) += 10;
-        }
-        if !A::is_match(from.arch) {
-            let penalty = if from.arch == A::ARCH { 2 } else { 3 };
-            *failscore.get_or_insert(0) += penalty;
+    fn try_match(&self, from: &SimdOp, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        let desc = Q::describe(from.query_type);
+        if !desc.is_match() {
+            score.fail(10, &format_args!("Mismatched query type: {}", desc));
         }
 
-        match failscore {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
+        let desc = D::describe(from.data_type);
+        if !desc.is_match() {
+            score.fail(10, &format_args!("Mismatched data type: {}", desc));
         }
+
+        let desc = A::describe(from.arch);
+        if !desc.is_match() {
+            let penalty = if from.arch == A::ARCH { 2 } else { 3 };
+            score.fail(penalty, &format_args!("Mismatched architecture: {}", desc));
+        }
+
+        score
     }
 
     fn run(
@@ -567,34 +566,10 @@ where
         Ok(results)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&SimdOp>,
-    ) -> std::fmt::Result {
-        match input {
-            None => {
-                writeln!(f, "- Query Type: {}", Q::DATA_TYPE)?;
-                writeln!(f, "- Data Type: {}", D::DATA_TYPE)?;
-                writeln!(f, "- Implementation: {}", A::DISPLAY_NAME)?;
-            }
-            Some(input) => {
-                let desc = Q::describe(input.query_type);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched query type: {}", desc)?;
-                }
-
-                let desc = D::describe(input.data_type);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched data type: {}", desc)?;
-                }
-
-                let desc = A::describe(input.arch);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched architecture: {}", desc)?;
-                }
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- Query Type: {}", Q::DATA_TYPE)?;
+        writeln!(f, "- Data Type: {}", D::DATA_TYPE)?;
+        writeln!(f, "- Implementation: {}", A::DISPLAY_NAME)?;
         Ok(())
     }
 }
