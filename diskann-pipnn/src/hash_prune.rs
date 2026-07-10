@@ -113,12 +113,114 @@ impl<T> std::ops::Deref for MmapSlab<T> {
     }
 }
 
-/// Fallback slab for non-Linux: regular Vec. Eager-fault behavior tracks the
-/// host allocator. Only Linux gets the mmap fast path.
-#[cfg(not(target_os = "linux"))]
+/// Windows counterpart of the Linux mmap slab. `VirtualAlloc(MEM_RESERVE |
+/// MEM_COMMIT, PAGE_READWRITE)` reserves a zero-backed anonymous range whose
+/// pages fault in on first write — the same lazy-commit behavior as
+/// `mmap(MAP_ANONYMOUS)`, so Windows gets the same peak-RSS win instead of the
+/// eager-fault `Vec` fallback.
+#[cfg(windows)]
+mod winmem {
+    // Minimal FFI to the Win32 memory API — avoids pulling in the `windows`
+    // crate for four extern declarations.
+    pub(super) type LPVOID = *mut core::ffi::c_void;
+    pub(super) const MEM_COMMIT: u32 = 0x0000_1000;
+    pub(super) const MEM_RESERVE: u32 = 0x0000_2000;
+    pub(super) const MEM_RELEASE: u32 = 0x0000_8000;
+    pub(super) const PAGE_READWRITE: u32 = 0x04;
+
+    extern "system" {
+        pub(super) fn VirtualAlloc(
+            lpAddress: LPVOID,
+            dwSize: usize,
+            flAllocationType: u32,
+            flProtect: u32,
+        ) -> LPVOID;
+        pub(super) fn VirtualFree(lpAddress: LPVOID, dwSize: usize, dwFreeType: u32) -> i32;
+    }
+}
+
+#[cfg(windows)]
+struct MmapSlab<T> {
+    ptr: *mut T,
+    len: usize,
+}
+
+#[cfg(windows)]
+unsafe impl<T: Send> Send for MmapSlab<T> {}
+#[cfg(windows)]
+unsafe impl<T: Sync> Sync for MmapSlab<T> {}
+
+#[cfg(windows)]
+impl<T> MmapSlab<T> {
+    fn new_zeroed(len: usize) -> Self {
+        if len == 0 {
+            return Self {
+                ptr: std::ptr::NonNull::<T>::dangling().as_ptr(),
+                len: 0,
+            };
+        }
+        let bytes = len * std::mem::size_of::<T>();
+        // SAFETY: MEM_RESERVE|MEM_COMMIT + PAGE_READWRITE returns a zero-backed
+        // RW region; physical pages fault in on first write only. Windows
+        // zero-fills committed pages, matching mmap's MAP_ANONYMOUS contract.
+        unsafe {
+            let ptr = winmem::VirtualAlloc(
+                std::ptr::null_mut(),
+                bytes,
+                winmem::MEM_RESERVE | winmem::MEM_COMMIT,
+                winmem::PAGE_READWRITE,
+            );
+            assert!(
+                !ptr.is_null(),
+                "MmapSlab VirtualAlloc failed for {} bytes",
+                bytes
+            );
+            Self {
+                ptr: ptr as *mut T,
+                len,
+            }
+        }
+    }
+
+    #[inline]
+    fn as_ptr(&self) -> *const T {
+        self.ptr
+    }
+
+    #[inline]
+    #[allow(dead_code)] // parity with the Linux slab; madvise (Linux-only) is the sole caller
+    fn bytes(&self) -> usize {
+        self.len * std::mem::size_of::<T>()
+    }
+}
+
+#[cfg(windows)]
+impl<T> Drop for MmapSlab<T> {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            // SAFETY: ptr came from VirtualAlloc; MEM_RELEASE requires dwSize=0.
+            unsafe {
+                winmem::VirtualFree(self.ptr as winmem::LPVOID, 0, winmem::MEM_RELEASE);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl<T> std::ops::Deref for MmapSlab<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        // SAFETY: ptr+len describe a valid initialized slice (zero-init).
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+/// Fallback slab for platforms that are neither Linux nor Windows: regular Vec.
+/// Eager-fault behavior tracks the host allocator.
+#[cfg(not(any(target_os = "linux", windows)))]
 struct MmapSlab<T>(Vec<T>);
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 impl<T: Copy + Default> MmapSlab<T> {
     fn new_zeroed(len: usize) -> Self {
         Self(vec![T::default(); len])
@@ -133,7 +235,7 @@ impl<T: Copy + Default> MmapSlab<T> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 impl<T> std::ops::Deref for MmapSlab<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
@@ -512,11 +614,12 @@ unsafe fn insert_locked(
 /// runtime fill) replaces two heap allocs per call — at 10M points this saves
 /// 20M short-lived allocations on the extract path, with no fixed-size cap.
 ///
-/// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
-/// `scan_lanes` elements each.
+/// SAFETY: caller holds the slot lock; `distances` and `neighbors` are valid
+/// for `hot.len` elements.
 unsafe fn collect_sorted_neighbors(
     hot: &HotSlot,
-    cold: ColdSlotPtrs,
+    distances: *const u16,
+    neighbors: *const u32,
     cap: usize,
 ) -> Vec<(u32, f32)> {
     thread_local! {
@@ -529,7 +632,7 @@ unsafe fn collect_sorted_neighbors(
         scratch.clear();
         scratch.reserve(n);
         for i in 0..n {
-            scratch.push((*cold.neighbors.add(i), *cold.distances.add(i)));
+            scratch.push((*neighbors.add(i), *distances.add(i)));
         }
         scratch.sort_unstable_by_key(|&(_, d)| d);
         let out_len = n.min(cap);
@@ -606,7 +709,9 @@ impl HashPruneReservoir {
     pub(crate) fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
         let cold = self.cold();
         // SAFETY: single-threaded test wrapper.
-        unsafe { collect_sorted_neighbors(&self.hot, cold, usize::MAX) }
+        unsafe {
+            collect_sorted_neighbors(&self.hot, cold.distances, cold.neighbors, usize::MAX)
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -697,7 +802,10 @@ impl HashPrune {
 
         // Hint hugepages on slabs > 2 MB so DTLB pressure scales with 2 MB
         // pages instead of 4 KB. Non-fatal on failure; no-op on kernels
-        // without THP.
+        // without THP. Linux-only: the Windows MEM_LARGE_PAGES equivalent must
+        // be requested at VirtualAlloc time AND needs SeLockMemoryPrivilege
+        // (off by default), so a failure would abort the slab rather than
+        // silently fall back — not worth it for a DTLB hint.
         #[cfg(target_os = "linux")]
         {
             let hot_bytes = hot.len() * std::mem::size_of::<HotSlot>();
@@ -907,18 +1015,20 @@ impl HashPrune {
             cold_neighbors,
             ..
         } = self;
+        drop(cold_hashes);
         (0..hot.len())
             .into_par_iter()
             .map(|i| {
                 let off = i * scan_lanes;
-                let cold = ColdSlotPtrs {
-                    hashes: (cold_hashes.as_ptr() as *mut u16).wrapping_add(off),
-                    distances: (cold_distances.as_ptr() as *mut u16).wrapping_add(off),
-                    neighbors: (cold_neighbors.as_ptr() as *mut u32).wrapping_add(off),
-                    scan_lanes,
-                };
                 // SAFETY: i < hot.len() == npoints; off + scan_lanes within slab.
-                let nbrs = unsafe { collect_sorted_neighbors(&hot[i], cold, cap) };
+                let nbrs = unsafe {
+                    collect_sorted_neighbors(
+                        &hot[i],
+                        cold_distances.as_ptr().wrapping_add(off),
+                        cold_neighbors.as_ptr().wrapping_add(off),
+                        cap,
+                    )
+                };
                 nbrs.into_iter().map(&project).collect()
             })
             .collect_installed()

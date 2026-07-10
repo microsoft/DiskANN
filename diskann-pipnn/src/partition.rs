@@ -277,7 +277,7 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
 
     let n_oversized: usize = clusters.iter().filter(|c| c.len() > config.c_max).count();
     let n_finished: usize = clusters.iter().filter(|c| !c.is_empty() && c.len() <= config.c_max).count();
-    tracing::info!(
+    tracing::debug!(
         level = item.level,
         n = n,
         num_leaders = num_leaders,
