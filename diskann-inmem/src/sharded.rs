@@ -21,7 +21,10 @@ pub(crate) struct Sharded<I>
 where
     I: Hash + Eq,
 {
+    // The external ID space for `I` is not guaranteed to be contiguous - use `DashMap`.
     forward: DashMap<I, u32>,
+    // Since we know the internal IDs are contiguous from `[0..self.capacity)`, we can
+    // use a lighter-weight `backward` ID map than a full `DashMap`.
     backward: Vec<RwLock<Box<[Option<I>]>>>,
     capacity: usize,
 }
