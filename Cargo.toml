@@ -116,9 +116,13 @@ codegen-units = 1
 debug = true
 split-debuginfo = "packed"
 
-[profile.ci]
-inherits = "dev"
+# Much of our code relies on inlining and at least moderate optimizations to run in a
+# reasonable time. Setting `opt-level=1` decreases end-to-end test execution significantly
+# without blowing up compile times.
+#
+# Since `profile.test` inherits from `profile.dev` - debug assertions, overflow checks,
+# and such are still applied.
+#
+# See: https://doc.rust-lang.org/cargo/reference/profiles.html#test
+[profile.test]
 opt-level = 1
-debug = true
-debug-assertions = true
-overflow-checks = true
