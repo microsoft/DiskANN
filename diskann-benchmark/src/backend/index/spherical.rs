@@ -335,10 +335,7 @@ mod imp {
 
                             for &layout in self.input.query_layouts.iter() {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
-                                let search_results = if let (Some(eta), Some(power)) = (
-                                    search_phase.multi_attribute_diversity_eta,
-                                    search_phase.multi_attribute_diversity_power,
-                                ) {
+                                let search_results = if let Some(norm) = search_phase.multi_attribute_diversity_norm {
                                     let knn = benchmark_core::search::graph::multi_attribute_diversity::MultiAttributeDiversity::new(
                                         index.clone(),
                                         queries.clone(),
@@ -349,8 +346,7 @@ mod imp {
                                         &knn,
                                         &groundtruth,
                                         steps,
-                                        eta,
-                                        power,
+                                        norm,
                                         search_phase.multi_attribute_diversity_results_k,
                                     )?
                                 } else if let (Some(eta), Some(power)) = (

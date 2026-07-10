@@ -94,15 +94,14 @@ pub(crate) fn run_multi_attribute_diversity<I>(
     runner: &dyn MultiAttributeDiversityKnn<I>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: SearchSteps<'_>,
-    eta: f64,
-    power: f64,
+    norm: f64,
     results_k: Option<usize>,
 ) -> anyhow::Result<Vec<SearchResults>>
 {
     run_search_with_builder(steps, |setup, search_l, search_n| {
         let base = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
         let processor =
-            MultiAttributeDiversitySearchParams::new(results_k.unwrap_or(search_n), eta, power)
+            MultiAttributeDiversitySearchParams::new(results_k.unwrap_or(search_n), norm)
                 .map_err(|err| {
                     anyhow::anyhow!("Invalid multi-attribute-diversity parameters: {err}")
                 })?;

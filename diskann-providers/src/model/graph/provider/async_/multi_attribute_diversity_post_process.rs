@@ -18,17 +18,17 @@ use super::postprocess::{AsDeletionCheck, DeletionCheck};
 
 #[derive(Debug)]
 pub enum MultiAttributeDiversityError {
-    InvalidTopK { top_k: usize },
-    InvalidEta { eta: f64 },
-    InvalidPower { power: f64 },
+    InvalidTopNashK { top_nash_k: usize },
+    InvalidNorm { norm: f64 },
 }
 
 impl std::fmt::Display for MultiAttributeDiversityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidTopK { top_k } => write!(f, "top_k must be > 0, got {top_k}"),
-            Self::InvalidEta { eta } => write!(f, "eta must be >= 0.0, got {eta}"),
-            Self::InvalidPower { power } => write!(f, "power must be > 0.0, got {power}"),
+            Self::InvalidTopNashK { top_nash_k } => {
+                write!(f, "top_nash_k must be > 0, got {top_nash_k}")
+            }
+            Self::InvalidNorm { norm } => write!(f, "norm must be > 0.0, got {norm}"),
         }
     }
 }
@@ -37,37 +37,28 @@ impl std::error::Error for MultiAttributeDiversityError {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct MultiAttributeDiversitySearchParams {
-    pub top_k: usize,
-    pub multi_attribute_diversity_eta: f64,
-    pub multi_attribute_diversity_power: f64,
+    pub top_nash_k: usize,
+    pub multi_attribute_diversity_norm: f64,
 }
 
 impl MultiAttributeDiversitySearchParams {
     pub fn new(
-        top_k: usize,
-        multi_attribute_diversity_eta: f64,
-        multi_attribute_diversity_power: f64,
+        top_nash_k: usize,
+        multi_attribute_diversity_norm: f64,
     ) -> Result<Self, MultiAttributeDiversityError> {
-        if top_k == 0 {
-            return Err(MultiAttributeDiversityError::InvalidTopK { top_k });
+        if top_nash_k == 0 {
+            return Err(MultiAttributeDiversityError::InvalidTopNashK { top_nash_k });
         }
 
-        if multi_attribute_diversity_eta < 0.0 || !multi_attribute_diversity_eta.is_finite() {
-            return Err(MultiAttributeDiversityError::InvalidEta {
-                eta: multi_attribute_diversity_eta,
-            });
-        }
-
-        if multi_attribute_diversity_power <= 0.0 || !multi_attribute_diversity_power.is_finite() {
-            return Err(MultiAttributeDiversityError::InvalidPower {
-                power: multi_attribute_diversity_power,
+        if multi_attribute_diversity_norm <= 0.0 || !multi_attribute_diversity_norm.is_finite() {
+            return Err(MultiAttributeDiversityError::InvalidNorm {
+                norm: multi_attribute_diversity_norm,
             });
         }
 
         Ok(Self {
-            top_k,
-            multi_attribute_diversity_eta,
-            multi_attribute_diversity_power,
+            top_nash_k,
+            multi_attribute_diversity_norm,
         })
     }
 }
@@ -106,7 +97,7 @@ where
                 .partial_cmp(&right.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        values.truncate(self.top_k);
+        values.truncate(self.top_nash_k);
 
         std::future::ready(Ok(output.extend(values)))
     }
