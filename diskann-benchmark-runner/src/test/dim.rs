@@ -99,7 +99,7 @@ impl Benchmark for SimpleBench {
 
     fn try_match(&self, input: &DimInput, context: &MatchContext) -> Score {
         if input.dim.is_none() {
-            context.success(0)
+            context.success(10)
         } else {
             context.fail(1000, &"expected dim=None")
         }
@@ -129,7 +129,7 @@ impl Benchmark for DimBench {
     type Output = usize;
 
     fn try_match(&self, _input: &DimInput, context: &MatchContext) -> Score {
-        context.success(0)
+        context.success(10)
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

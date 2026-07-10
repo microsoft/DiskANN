@@ -62,7 +62,7 @@ use std::{io::Write, path::PathBuf};
 use clap::{Parser, Subcommand};
 
 use crate::{
-    internal,
+    internal::{self, visibility::Filter as VisibilityFilter},
     jobs::{self, Jobs},
     output::Output,
     registry,
@@ -88,10 +88,19 @@ pub enum Commands {
     /// List the kinds of input formats available for ingestion.
     Inputs {
         /// Describe the layout of the named input kind.
+        #[arg(conflicts_with = "all")]
         describe: Option<String>,
+
+        /// Print all inputs, including those that are feature gated.
+        #[arg(long, conflicts_with = "describe")]
+        all: bool,
     },
     /// List the available benchmarks.
-    Benchmarks {},
+    Benchmarks {
+        /// Print all benchmarks, including those that are feature gated.
+        #[arg(long)]
+        all: bool,
+    },
     /// Provide a skeleton JSON file for running a set of benchmarks.
     Skeleton,
     /// Run a list of benchmarks.
@@ -194,7 +203,7 @@ impl App {
     ) -> anyhow::Result<()> {
         match &self.command {
             // If a named benchmark isn't given, then list the available benchmarks.
-            Commands::Inputs { describe } => {
+            Commands::Inputs { describe, all } => {
                 if let Some(describe) = describe {
                     if let Some(input) = registry.input(describe) {
                         let repr = jobs::Unprocessed::format_input(input)?;
@@ -212,24 +221,85 @@ impl App {
                     return Ok(());
                 }
 
+                // The algorithm below does a number of things. It:
+                //
+                // 1. Gathers all registered inputs.
+                // 2. Filters out inputs by visibility (but notes if any *were* filtered out)
+                // 3. Sorts and displays the inputs.
+                // 4. Notifies the user if additional unprinted inputs remain.
                 writeln!(output, "Available input kinds are listed below:")?;
-                let mut tags: Vec<_> = registry.input_tags().collect();
-                tags.sort();
-                for i in tags.iter() {
-                    writeln!(output, "    {}", i)?;
+
+                let mut has_hidden = false;
+                let filter = if *all {
+                    VisibilityFilter::All
+                } else {
+                    VisibilityFilter::OnlyAvailable
+                };
+
+                let mut inputs: Vec<_> = registry
+                    .inputs()
+                    .filter(|i| {
+                        let vis = i.visibility();
+                        if !vis.is_available() {
+                            has_hidden = true;
+                        }
+
+                        filter.matches(&vis)
+                    })
+                    .collect();
+
+                inputs.sort_by(crate::input::order_inputs);
+
+                for i in inputs.iter() {
+                    writeln!(output, "    {}", i.display())?;
+                }
+
+                // If we did not print all inputs and there are hidden inputs - inform the user.
+                let should_notify_of_hidden = !*all && has_hidden;
+                if should_notify_of_hidden {
+                    writeln!(
+                        output,
+                        "\nOne or more inputs are hidden, use \"inputs --all\" to list all inputs"
+                    )?;
                 }
             }
             // List the available benchmarks.
-            Commands::Benchmarks {} => {
+            Commands::Benchmarks { all } => {
                 writeln!(output, "Registered Benchmarks:")?;
-                for (name, description) in registry.names() {
-                    write!(output, "    {name}:")?;
-                    if description.is_empty() {
-                        writeln!(output)?;
-                    } else {
-                        writeln!(output)?;
-                        writeln!(output, "{}", Indent::new(&description, 8))?;
-                    }
+
+                let mut has_hidden = false;
+                let filter = if *all {
+                    VisibilityFilter::All
+                } else {
+                    VisibilityFilter::OnlyAvailable
+                };
+
+                let mut benchmarks: Vec<_> = registry
+                    .benchmarks()
+                    .iter()
+                    .filter(|b| {
+                        let vis = b.visibility();
+                        if !vis.is_available() {
+                            has_hidden = true;
+                        }
+
+                        filter.matches(&vis)
+                    })
+                    .collect();
+
+                benchmarks.sort_by(registry::RegisteredBenchmark::order);
+
+                for b in benchmarks {
+                    writeln!(output, "{}", Indent::new(&b.display().to_string(), 4))?;
+                }
+
+                // If we did not print all inputs and there are hidden inputs - inform the user.
+                let should_notify_of_hidden = !*all && has_hidden;
+                if should_notify_of_hidden {
+                    writeln!(
+                        output,
+                        "\nOne or more benchmarks are hidden, use \"benchmarks --all\" to list all benchmarks"
+                    )?;
                 }
             }
             Commands::Skeleton => {
@@ -256,12 +326,7 @@ impl App {
                             "Could not find a match for the following input:\n\n{}\n",
                             repr
                         )?;
-                        writeln!(output, "Closest matches:\n")?;
-                        for (i, mismatch) in mismatches.into_iter().enumerate() {
-                            writeln!(output, "    {}. \"{}\":", i + 1, mismatch.method(),)?;
-                            writeln!(output, "{}\n", Indent::new(mismatch.reason(), 8),)?;
-                        }
-                        writeln!(output)?;
+                        writeln!(output, "{}", mismatches)?;
 
                         return Err(anyhow::Error::msg(
                             "could not find a benchmark for all inputs",
@@ -474,7 +539,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use crate::{registry, ux};
+    use crate::{registry, test::TestConfig, ux};
 
     const ENV: &str = "DISKANN_TEST";
 
@@ -483,6 +548,10 @@ mod tests {
     const STDOUT: &str = "stdout.txt";
     const INPUT_FILE: &str = "input.json";
     const OUTPUT_FILE: &str = "output.json";
+
+    // Optional list of enabled features, one feature name per line. When absent, no
+    // features are enabled.
+    const FEATURES_FILE: &str = "features.txt";
 
     // Regression Extension
     const TOLERANCES_FILE: &str = "tolerances.json";
@@ -590,12 +659,29 @@ mod tests {
             }
         }
 
+        // Build the registration config from the fixture's `features.txt`, if present. Each
+        // non-empty line names one enabled feature.
+        fn config(&self) -> TestConfig {
+            let path = self.dir.join(FEATURES_FILE);
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => TestConfig::with_features(
+                    contents
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(str::to_owned),
+                ),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => TestConfig::new(),
+                Err(err) => panic!("failed to read {:?}: {}", path, err),
+            }
+        }
+
         fn run(&self, tempdir: &Path) {
             let apps = self.parse_stdin(tempdir);
 
             // Register outputs
             let mut registry = registry::Registry::new();
-            crate::test::register_benchmarks(&mut registry).unwrap();
+            crate::test::register_benchmarks(&mut registry, &self.config()).unwrap();
 
             // Run each app invocation - collecting the last output into a buffer.
             //
