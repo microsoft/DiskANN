@@ -13,7 +13,9 @@ use std::{
 
 use diskann::graph::{self, DiskANNIndex, InplaceDeleteMethod, StartPointStrategy};
 use diskann_benchmark_core::{
-    self as benchmark_core, build as build_core, recall, search as core_search,
+    self as benchmark_core, build as build_core, recall,
+    recall::GroundTruthMode,
+    search as core_search,
     streaming::{self, executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
@@ -560,6 +562,7 @@ fn _knn(
                 groundtruth,
                 instance.recall_k,
                 instance.knn.k_value().get(),
+                GroundTruthMode::Fixed,
             )?;
 
             results.extend(r);
