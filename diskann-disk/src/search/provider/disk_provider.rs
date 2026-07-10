@@ -24,7 +24,8 @@ use diskann::{
         search_output_buffer, DiskANNIndex,
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
-    provider::{DataProvider, DefaultContext, HasId, NoopGuard},    utils::{IntoUsize, VectorRepr},
+    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
+    utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
 use diskann_providers::storage::StorageReadProvider;
@@ -522,32 +523,44 @@ where
     {
         let provider = accessor.provider;
 
-        let candidate_ids: Vec<u32> = match self.filter {
-            PostprocessStrategy::AcceptAll => candidates.map(|candidate| candidate.id).collect(),
-            PostprocessStrategy::Apply(f) => candidates
-                .map(|candidate| candidate.id)
-                .filter(|id| f(id))
-                .collect(),
+        // Reuse full-precision distances already computed during traversal
+        // (cached in `distance_cache`); only fetch vectors and recompute for
+        // candidates that missed the cache.
+        let mut uncached_ids = Vec::new();
+        let mut reranked = {
+            let mut process = |n: u32| {
+                if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
+                    Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
+                } else {
+                    uncached_ids.push(n);
+                    None
+                }
+            };
+            match self.filter {
+                PostprocessStrategy::AcceptAll => candidates
+                    .map(|n| n.id)
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+                PostprocessStrategy::Apply(f) => candidates
+                    .map(|n| n.id)
+                    .filter(|id| f(id))
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
         };
 
-        if candidate_ids.is_empty() {
-            return Ok(0);
+        if !uncached_ids.is_empty() {
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            for n in &uncached_ids {
+                let v = accessor.scratch.vertex_provider.get_vector(n)?;
+                let d = provider.distance_comparer.evaluate_similarity(query, v);
+                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
+                reranked.push(((*n, *a), d));
+            }
         }
 
-        ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
-
-        // Rerank the candidate pool with exact distances so the bucket
-        // selection walks candidates in true nearest-first order.
-        let mut reranked: Vec<((u32, Data::AssociatedDataType), f32)> =
-            Vec::with_capacity(candidate_ids.len());
-        for id in &candidate_ids {
-            let vector = accessor.scratch.vertex_provider.get_vector(id)?;
-            let distance = provider
-                .distance_comparer
-                .evaluate_similarity(query, vector);
-            let data = accessor.scratch.vertex_provider.get_associated_data(id)?;
-            reranked.push(((*id, *data), distance));
-        }
+        // Sort by exact distance so the bucket selection walks candidates in
+        // true nearest-first order.
         reranked
             .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
