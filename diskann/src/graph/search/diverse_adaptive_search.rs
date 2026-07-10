@@ -39,9 +39,7 @@ use diskann_utils::future::SendFuture;
 use hashbrown::HashMap;
 
 use super::{
-    AdaptiveL, Knn, Search,
-    inline_filter_search::compute_adaptive_l,
-    scratch::SearchScratch,
+    AdaptiveL, Knn, Search, inline_filter_search::compute_adaptive_l, scratch::SearchScratch,
 };
 use crate::{
     ANNResult,
@@ -120,8 +118,7 @@ where
                 .into_ann_result()?;
 
             let num_starting_points = accessor.num_starting_points().await?;
-            let mut scratch =
-                index.search_scratch(self.inner.l_value().get(), num_starting_points);
+            let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
 
             let stats = diverse_adaptive_search_internal(
                 index.max_degree_with_slack(),
@@ -219,12 +216,8 @@ where
         if !l_adjusted && sample_visited >= adaptive_l.sample_count() {
             l_adjusted = true;
             let matched = diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
-            let new_l = compute_adaptive_l(
-                l_search,
-                sample_visited,
-                matched,
-                adaptive_l.scale_factor(),
-            );
+            let new_l =
+                compute_adaptive_l(l_search, sample_visited, matched, adaptive_l.scale_factor());
             if new_l > l_search {
                 scratch.resize(new_l);
             }
@@ -301,7 +294,10 @@ mod tests {
         // 100 nodes across 100 distinct buckets => yield 1.0 => no growth.
         let all_distinct = std::iter::repeat_n(1usize, 100);
         let matched = diverse_matched_slots(all_distinct, 1);
-        assert_eq!(compute_adaptive_l(base_l, 100, matched, max_multiplier), base_l);
+        assert_eq!(
+            compute_adaptive_l(base_l, 100, matched, max_multiplier),
+            base_l
+        );
 
         // 100 nodes across 10 distinct buckets => yield 0.1 => 2x growth.
         let ten_buckets = std::iter::repeat_n(10usize, 10);
