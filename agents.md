@@ -36,7 +36,7 @@ This guide helps coding agents understand how to work efficiently with the DiskA
 The repository uses a Cargo workspace with crates organized into functional tiers. See [`Cargo.toml`](Cargo.toml) for:
 - Workspace members and their dependencies
 - Shared dependency versions
-- Build profiles (release, ci)
+- Build profiles (release, test)
 - Workspace-level lints
 
 ### Crate Organization
@@ -91,9 +91,6 @@ cargo test -p diskann
 
 # Run specific test
 cargo test -p diskann -- --exact test_name
-
-# Run with CI profile (faster)
-cargo test --profile ci
 
 # Run doc tests
 cargo test --doc
