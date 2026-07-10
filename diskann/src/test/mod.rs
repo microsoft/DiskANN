@@ -19,3 +19,9 @@ macro_rules! assert_message_contains {
 }
 
 pub(crate) use assert_message_contains;
+
+#[test]
+fn version_works() {
+    let version = super::version();
+    assert!(!version.is_empty(), "version should not be empty");
+}
