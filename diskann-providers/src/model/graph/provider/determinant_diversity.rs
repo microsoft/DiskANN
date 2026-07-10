@@ -445,6 +445,13 @@ fn determinant_diversity_select_sherman_morrison(
 /// Finds the available candidate maximizing the Sherman-Morrison marginal gain
 /// `ln(1 + x^T M^{-1} x)`. Returns its row index, the product `M^{-1} x`
 /// (reused for the inverse update), and the raw residual `x^T M^{-1} x`.
+///
+/// Because `ln(1 + r)` is strictly increasing in `r`, the candidate that
+/// maximizes the log-gain also maximizes the raw residual `r = x^T M^{-1} x`.
+/// We therefore compare on `r` directly: this preserves the selection order
+/// while avoiding f32 underflow of `ln(1 + r)` to `0.0` when the relevance-
+/// scaled vectors are tiny (e.g. all-equal distances collapse the similarity
+/// weight to `EPSILON`), which would otherwise erase all gain differences.
 fn best_sherman_morrison_candidate(
     candidates: &MutMatrixView<'_, f32>,
     available: &[bool],
@@ -457,11 +464,11 @@ fn best_sherman_morrison_candidate(
             let vector = candidates.row(i);
             let matrix_vector = matrix_vector_product(matrix_inverse, vector, dimensions);
             let residual_sq = dot_product(vector, &matrix_vector);
-            let gain = (1.0 + residual_sq.max(0.0)).ln();
-            (i, matrix_vector, residual_sq, gain)
+            (i, matrix_vector, residual_sq)
         })
-        .max_by(|(_, _, _, left_gain), (_, _, _, right_gain)| left_gain.total_cmp(right_gain))
-        .map(|(idx, matrix_vector, residual_sq, _)| (idx, matrix_vector, residual_sq))
+        .max_by(|(_, _, left_residual), (_, _, right_residual)| {
+            left_residual.max(0.0).total_cmp(&right_residual.max(0.0))
+        })
 }
 
 /// Applies the Sherman-Morrison rank-1 update
