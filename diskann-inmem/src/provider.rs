@@ -192,7 +192,7 @@ impl Config {
 // Data Provider //
 ///////////////////
 
-/// A zero-sied [`diskann::provider::ExecutionContext`] for [`Provider`].
+/// A zero-sized [`diskann::provider::ExecutionContext`] for [`Provider`].
 #[derive(Debug, Clone, Default)]
 pub struct Context;
 

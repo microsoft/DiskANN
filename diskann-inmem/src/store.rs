@@ -350,7 +350,7 @@ impl Store {
     fn scan_acquire(&self) -> Option<Slot<'_>> {
         // This is potentially quite slow - but stop if we've scanned the entire range
         // without finding anything.
-        let mut remaining = self.unfrozen;
+        let mut remaining = self.unfrozen.div_ceil(RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
         let mut acquired: Option<Slot<'_>> = None;
 

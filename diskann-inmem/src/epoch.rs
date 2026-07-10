@@ -84,7 +84,7 @@ pub(crate) struct Registry {
 
     // We use four queues for storing retiring items. The rationale is documented below.
     //
-    // ```text
+    // ```
     //
     //                                1. Safe to drain
     //                           +--------------------------
@@ -162,9 +162,9 @@ impl Registry {
         for i in 0..nguards {
             let slot = hint.wrapping_add(i) % nguards;
 
-            let m = &self.guards[slot];
+            let guard_slot = &self.guards[slot];
             delay.pre_cas();
-            if m.compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed)
+            if guard_slot.compare_exchange(0, epoch, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
                 delay.post_cas();
@@ -188,11 +188,11 @@ impl Registry {
                 }
 
                 if reset {
-                    m.store(epoch, Ordering::Relaxed);
+                    guard_slot.store(epoch, Ordering::Relaxed);
                 }
 
                 return Ok(Guard {
-                    slot: m,
+                    slot: guard_slot,
                     retire: &self.retiring[queue(epoch)],
                     #[cfg(test)]
                     epoch,
