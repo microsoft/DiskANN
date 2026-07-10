@@ -32,7 +32,7 @@ cfg_if::cfg_if! {
     } else {
         pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
             registry.register_partially_gated::<crate::inputs::multi_vector::MultiVectorOp>(
-                "multi-vector",
+                "multi-vector-op",
                 diskann_benchmark_runner::Features::new("multi-vector"),
                 "Multi-vector distance function benchmarks",
             )?;

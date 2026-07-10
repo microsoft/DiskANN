@@ -88,7 +88,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         "graph-index-stream-bftree-spherical-quantization",
         "graph-index-stream-bftree-spherical-quantization",
         diskann_benchmark_runner::Features::new("bftree"),
-        "BFTree powered graph index streaming with spherical (RabitQ) quantizatiohn",
+        "BFTree powered graph index streaming with spherical (RabitQ) quantization",
     )?;
 
     Ok(())
