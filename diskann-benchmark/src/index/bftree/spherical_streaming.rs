@@ -11,7 +11,10 @@ use std::{borrow::Cow, io::Write, num::NonZeroUsize, sync::Arc};
 use diskann::graph::{DiskANNIndex, InplaceDeleteMethod};
 use diskann::utils::ONE;
 use diskann_benchmark_core as benchmark_core;
-use diskann_benchmark_core::{recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::{
+    recall::{GroundTruthMode, Rows},
+    streaming::executors::bigann,
+};
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},
     output::Output,
@@ -106,6 +109,7 @@ impl ManagedStream<f32> for BfTreeSQStream {
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
+            GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))
