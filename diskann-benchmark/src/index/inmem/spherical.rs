@@ -67,6 +67,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod imp {
     use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
+    use diskann_benchmark_core::recall::GroundTruthMode;
     use diskann_benchmark_runner::{
         benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
@@ -365,7 +366,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
-            let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+            let steps = search::knn::SearchSteps::new(
+                topk.reps,
+                &topk.num_threads,
+                &topk.runs,
+                GroundTruthMode::Fixed,
+            );
 
             let knn = benchmark_core::search::graph::KNN::new(
                 index.clone(),
@@ -452,6 +458,7 @@ mod imp {
                 betafilter.reps,
                 &betafilter.num_threads,
                 &betafilter.runs,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
@@ -502,8 +509,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+            let steps = search::knn::SearchSteps::new(
+                multihop.reps,
+                &multihop.num_threads,
+                &multihop.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -552,8 +563,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+            let steps = search::knn::SearchSteps::new(
+                inline.reps,
+                &inline.num_threads,
+                &inline.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 
