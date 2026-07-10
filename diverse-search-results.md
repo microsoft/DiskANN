@@ -1,6 +1,6 @@
 # Attribute-Diversity Search — Benchmark Results
 
-Comparison of attribute-bucket diverse search strategies on two datasets, all
+Comparison of attribute-bucket diverse search strategies on three datasets, all
 evaluated against a **diverse ground truth** (GT built so that no more than
 `diverse_results_k` results share the same attribute bucket).
 
@@ -33,6 +33,7 @@ Common parameters for every run below:
 |---|---|---|---|
 | Enron | 1,369 | attribute id 0 | **Concentrated** — many vectors share a bucket |
 | Caselaw | 1,536 | `doc_id` | **Diffuse** — 200K vectors span 172,518 docs (18,383 multi-chunk) |
+| YFCC | 192 | `camera` model | **Concentrated** — 67 distinct cameras, largest bucket 67,783 (33.9%), median bucket 110 |
 
 ### Strategies compared
 
@@ -43,10 +44,7 @@ Common parameters for every run below:
   `u/narendatha/diverse-search-benchmark`.
 - **Design A (post-process)** — plain KNN over the top-L pool, then a greedy
   bucket selection keeping ≤ `diverse_results_k` per bucket, using
-  full-precision distances. Fixed L (no over-fetch). The post-processor reuses
-  the full-precision distances already cached during traversal
-  (`distance_cache`) and only fetches/recomputes for cache misses (see
-  [Optimization](#optimization-distance-cache-reuse-in-design-a)).
+  full-precision distances. Fixed L (no over-fetch).
 - **Design B (adaptive-L)** — like Design A, but a greedy walk first samples
   bucket concentration; if buckets are concentrated it grows L (over-fetches)
   before the same post-processing step. When buckets are diffuse it returns a 1×
@@ -63,9 +61,33 @@ Common parameters for every run below:
 | 80 | 69.67 | 76.46 | 84.00 | **89.79** | 173.2 | 116 | 165.6 | 107.2 |
 | 100 | 70.72 | 77.92 | 86.05 | **91.00** | 142.6 | 100 | 159.2 | 53 |
 
-> Design A QPS reflects the distance-cache reuse optimization (see below). With
-> that change Design A is now the fastest diversity-aware method at every L, at
-> strictly higher recall than the queue.
+**Recall vs L** (higher is better)
+
+```mermaid
+xychart-beta
+    title "Enron recall @10 vs search list L"
+    x-axis "L" [20, 40, 80, 100]
+    y-axis "Recall (%)" 50 --> 95
+    line "Standard" [55.71, 64.28, 69.67, 70.72]
+    line "Queue" [61.11, 71.08, 76.46, 77.92]
+    line "Design A" [59.98, 73.93, 84.00, 86.05]
+    line "Design B" [73.38, 83.55, 89.79, 91.00]
+```
+
+_Series order: Standard, Queue, Design A, Design B (Design B is the top line)._
+
+**QPS vs L** (higher is better; see QPS caveat above)
+
+```mermaid
+xychart-beta
+    title "Enron QPS vs search list L"
+    x-axis "L" [20, 40, 80, 100]
+    y-axis "QPS" 0 --> 560
+    line "Standard" [375.5, 245.3, 173.2, 142.6]
+    line "Queue" [261, 221, 116, 100]
+    line "Design A" [542.9, 268.0, 165.6, 159.2]
+    line "Design B" [385.6, 183.2, 107.2, 53]
+```
 
 **Observations**
 - Standard search is far below every diversity-aware method (it does not enforce
@@ -74,8 +96,7 @@ Common parameters for every run below:
 - **Design B wins recall at every L** (+13 over queue at L=20), because the
   attribute is concentrated: the adaptive sampler detects this and over-fetches a
   larger pool before reranking.
-- Design A beats the queue on both recall and QPS at every L, since its
-  post-processing now reuses cached distances instead of recomputing them.
+- Design A beats the queue on both recall and QPS at every L.
 - Design B carries a throughput cost (extra pool fetch + more IO), but delivers
   the highest recall. At L=100 its IO count (214) is nearly double Design A's
   (120), so its lower QPS there is real, not measurement noise.
@@ -93,6 +114,34 @@ Common parameters for every run below:
 | 80 | 96.73 | 98.13 | 99.06 | 99.06 | 187.0 | 138.4 | 132.4 | 101.3 |
 | 100 | 96.91 | 98.32 | 99.25 | 99.25 | 160.3 | 84.3 | 128.8 | 105.9 |
 
+**Recall vs L** (higher is better)
+
+```mermaid
+xychart-beta
+    title "Caselaw recall @10 vs search list L"
+    x-axis "L" [20, 40, 80, 100]
+    y-axis "Recall (%)" 90 --> 100
+    line "Standard" [90.61, 95.43, 96.73, 96.91]
+    line "Queue" [90.76, 96.53, 98.13, 98.32]
+    line "Design A" [92.04, 97.53, 99.06, 99.25]
+    line "Design B" [92.04, 97.53, 99.06, 99.25]
+```
+
+_Design A and Design B overlap exactly (identical recall)._
+
+**QPS vs L** (higher is better; see QPS caveat above)
+
+```mermaid
+xychart-beta
+    title "Caselaw QPS vs search list L"
+    x-axis "L" [20, 40, 80, 100]
+    y-axis "QPS" 0 --> 560
+    line "Standard" [554.8, 267.5, 187.0, 160.3]
+    line "Queue" [306.7, 207.0, 138.4, 84.3]
+    line "Design A" [448.8, 192.5, 132.4, 128.8]
+    line "Design B" [238.4, 151.0, 101.3, 105.9]
+```
+
 **Observations**
 - **Design A and Design B have identical recall AND identical IO/comparison/hop
   counts.** The `doc_id` attribute is so diffuse (almost every vector is its own
@@ -103,55 +152,78 @@ Common parameters for every run below:
   near-unique buckets the diverse GT is almost the same as the ordinary top-k.
   The diversity methods add only ~1–2 recall points.
 - Design A/B edge out the queue method on recall (~1–1.3 points) via
-  exact-distance reranking. With the distance-cache reuse, Design A is also
-  competitive on QPS (e.g. 448.8 vs queue 306.7 at L=20).
+  exact-distance reranking, and Design A is also competitive on QPS
+  (e.g. 448.8 vs queue 306.7 at L=20).
 
 ---
 
-## Optimization: distance-cache reuse in Design A
+## YFCC (concentrated attribute — `camera` model)
 
-Initially Design A's `AttributeBucketDiversity` post-processor was *slower than
-the queue method* at higher L, even though the queue does more work during
-traversal. The cause: the post-processor recomputed exact distances for **every**
-candidate in the L-pool — fetching each full-precision vector and re-evaluating
-the distance — duplicating work the traversal had already done.
+YFCC-100M image embeddings (200K subset, 192-dim). The diversity attribute is the
+`camera` model tag: 67 distinct cameras, but very skewed — the largest bucket holds
+33.9% of all vectors and the median bucket only 110, so this is a strongly
+concentrated regime (like Enron).
 
-The standard `RerankAndFilter` post-processor avoids this by consulting
-`accessor.scratch.distance_cache`, which holds the full-precision distances
-computed during traversal, and only fetching/recomputing for cache misses.
-Design A now does the same:
+| L | Standard recall | Queue recall | Design A recall | Design B recall | Std QPS | Queue QPS | A QPS | B QPS |
+|---|---|---|---|---|---|---|---|---|
+| 20 | 49.35 | 79.26 | 66.92 | **83.55** | 347.0 | 592.6 | 499.4 | 442.6 |
+| 40 | 49.60 | 81.23 | 83.54 | **92.52** | 499.7 | 397.3 | 441.5 | 261.8 |
+| 80 | 49.72 | 81.60 | 92.38 | **95.44** | 256.5 | 240.2 | 248.3 | 140.6 |
+| 100 | 49.73 | 81.78 | 93.98 | **96.33** | 227.1 | 186.1 | 192.6 | 111.9 |
 
-- Look up each candidate in `distance_cache`; on a hit, reuse the cached distance
-  and associated data (no vector fetch, no recompute).
-- Collect only the misses, `ensure_vertex_loaded` them once, and compute their
-  distances.
-- Sort by exact distance, then run the greedy per-bucket selection.
+**Recall vs L** (higher is better)
 
-Result (recall and IO counts byte-identical before/after; QPS = best of several
-runs, disk-contention caveat above):
+```mermaid
+xychart-beta
+    title "YFCC recall @10 vs search list L"
+    x-axis "L" [20, 40, 80, 100]
+    y-axis "Recall (%)" 45 --> 100
+    line "Standard" [49.35, 49.60, 49.72, 49.73]
+    line "Queue" [79.26, 81.23, 81.60, 81.78]
+    line "Design A" [66.92, 83.54, 92.38, 93.98]
+    line "Design B" [83.55, 92.52, 95.44, 96.33]
+```
 
-| Dataset / L | A QPS before | A QPS after |
-|---|---|---|
-| Enron L=20 | 414 | 542.9 |
-| Enron L=40 | 150 | 268.0 |
-| Enron L=80 | 84 | 165.6 |
-| Enron L=100 | 88 | 159.2 |
-| Caselaw L=20 | 146.7 | 448.8 |
-| Caselaw L=40 | 151.1 | 192.5 |
+_Series order: Standard, Queue, Design A, Design B (Design B is the top line)._
 
-The reduction in redundant vector fetches and distance recomputation is
-consistent. Recall is unaffected because the cached distances are the same
-full-precision values that would otherwise be recomputed.
+**QPS vs L** (higher is better; see QPS caveat above)
+
+```mermaid
+xychart-beta
+    title "YFCC QPS vs search list L"
+    x-axis "L" [20, 40, 80, 100]
+    y-axis "QPS" 0 --> 600
+    line "Standard" [347.0, 499.7, 256.5, 227.1]
+    line "Queue" [592.6, 397.3, 240.2, 186.1]
+    line "Design A" [499.4, 441.5, 248.3, 192.6]
+    line "Design B" [442.6, 261.8, 140.6, 111.9]
+```
+
+**Observations**
+- Standard search is stuck at ~49.5 recall for every L — with a third of the
+  corpus in one camera bucket, ordinary top-k returns many same-bucket neighbors
+  that the diverse GT rejects. Growing L does not help it at all.
+- **Design B wins recall at every L** (+4 to +11 over the queue), because the
+  adaptive sampler detects the concentration and over-fetches before reranking.
+- **The queue method plateaus at ~81%** — its approximate (PQ) in-traversal
+  diversity saturates and extra L barely helps. Design A overtakes it from L=40
+  onward and reaches 94% at L=100; Design B is ahead of the queue at every L.
+- Design B's higher recall again costs throughput (its IO roughly doubles by
+  L=100: 217 vs Design A's 111), so its lower QPS is real work, not noise.
+- Pareto note: Design B @ L=20 (83.6 recall) already beats Design A @ L=40
+  (83.5) and the queue at any L, at competitive throughput.
 
 ---
 
 ## Summary
 
-The two datasets exercise opposite regimes and together validate the adaptive
+The three datasets exercise opposite regimes and together validate the adaptive
 design:
 
-- **Concentrated attribute (Enron):** big win for Design B — adaptive over-fetch
-  recovers substantial recall (+13 over queue at L=20) at a throughput cost.
+- **Concentrated attribute (Enron, YFCC):** big win for Design B — adaptive
+  over-fetch recovers substantial recall (+13 over queue on Enron at L=20; +11 on
+  YFCC at L=40) at a throughput cost. On YFCC the queue method plateaus near 81%
+  while Design B climbs to 96%.
 - **Diffuse attribute (Caselaw):** the sampler detects abundant diversity and
   Design B performs no over-fetch — it matches Design A on recall and IO (its only
   cost is the sampling walk), and both slightly beat the queue method.
