@@ -61,14 +61,19 @@ pub enum SearchMode<'a> {
         params: DeterminantDiversityParams,
     },
 
-    /// Attribute-bucket diversity done purely in post-processing: run a plain
-    /// greedy graph search over an enlarged candidate pool (`L`) and then
-    /// greedily select, in ascending distance order, at most
-    /// `diverse_results_k` results per distinct attribute value.
+    /// Attribute-bucket diversity done in post-processing: run a greedy graph
+    /// search over an enlarged candidate pool (`L`) and then greedily select,
+    /// in ascending distance order, at most `diverse_results_k` results per
+    /// distinct attribute value.
+    ///
+    /// `adaptive_l = Some(_)` enables Design B: the search samples bucket
+    /// concentration during traversal and grows `L` when few distinct buckets
+    /// are seen. `None` runs Design A with a fixed `L`.
     DiverseAttribute {
         provider: Arc<DynAttributeProvider>,
         diverse_attribute_id: usize,
         diverse_results_k: usize,
+        adaptive_l: Option<AdaptiveL>,
     },
 }
 
@@ -159,18 +164,23 @@ impl<'a> SearchMode<'a> {
         }
     }
 
-    /// Attribute-bucket diversity via post-processing only. The plain greedy
-    /// search collects the top-`L` pool, then a bucket-selection step keeps at
-    /// most `diverse_results_k` results per distinct attribute value.
+    /// Attribute-bucket diversity via post-processing. The greedy search
+    /// collects the top-`L` pool, then a bucket-selection step keeps at most
+    /// `diverse_results_k` results per distinct attribute value.
+    ///
+    /// `adaptive_l = Some(_)` grows `L` mid-search from the observed bucket
+    /// concentration (Design B); `None` uses a fixed `L` (Design A).
     pub fn diverse_attribute(
         provider: Arc<DynAttributeProvider>,
         diverse_attribute_id: usize,
         diverse_results_k: usize,
+        adaptive_l: Option<AdaptiveL>,
     ) -> Self {
         Self::DiverseAttribute {
             provider,
             diverse_attribute_id,
             diverse_results_k,
+            adaptive_l,
         }
     }
 }

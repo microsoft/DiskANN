@@ -20,7 +20,7 @@ use diskann::{
         self,
         ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
-        search::{AdaptiveL, InlineFilterSearch, Knn},
+        search::{AdaptiveL, DiverseAdaptiveSearch, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -1295,11 +1295,18 @@ where
                 provider,
                 diverse_attribute_id: _,
                 diverse_results_k,
+                adaptive_l,
             } => {
-                // Design A: plain greedy search collects the top-`L` pool, then
-                // `AttributeBucketDiversity` selects a bucket-diverse top-`k`
-                // from it in post-processing. The over-fetch is inherent in
-                // `L > k` and is controlled by the caller's search list size.
+                // Attribute-bucket diversity: a greedy search collects the
+                // top-`L` pool, then `AttributeBucketDiversity` selects a
+                // bucket-diverse top-`k` from it in post-processing.
+                //
+                // Design A (`adaptive_l = None`): fixed `L`; the over-fetch is
+                // inherent in `L > k` and controlled by the search list size.
+                //
+                // Design B (`adaptive_l = Some(_)`): the traversal samples
+                // bucket concentration and grows `L` when few distinct buckets
+                // are seen, sizing the over-fetch per query.
                 let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
                 let knn_search = Knn::new(k, l, beam_width)?;
                 let processor = AttributeBucketDiversity::new(
@@ -1307,14 +1314,32 @@ where
                     provider.clone(),
                     *diverse_results_k,
                 );
-                self.runtime.block_on(self.index.search_with(
-                    knn_search,
-                    &strategy,
-                    processor,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                match adaptive_l {
+                    Some(adaptive_l) => {
+                        let search = DiverseAdaptiveSearch::new(
+                            knn_search,
+                            provider.clone(),
+                            *diverse_results_k,
+                            adaptive_l.clone(),
+                        );
+                        self.runtime.block_on(self.index.search_with(
+                            search,
+                            &strategy,
+                            processor,
+                            &DefaultContext,
+                            query,
+                            &mut result_output_buffer,
+                        ))?
+                    }
+                    None => self.runtime.block_on(self.index.search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ))?,
+                }
             }
         };
         query_stats.total_comparisons = stats.cmps;

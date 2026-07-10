@@ -119,3 +119,6 @@ pub use range_search::{Range, RangeSearchError};
 
 mod diverse_search;
 pub use diverse_search::Diverse;
+
+mod diverse_adaptive_search;
+pub use diverse_adaptive_search::DiverseAdaptiveSearch;

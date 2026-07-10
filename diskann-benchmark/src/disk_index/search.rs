@@ -246,6 +246,16 @@ where
     };
     let diverse_results_k = search_params.diverse_results_k;
     let diverse_attribute_id = search_params.diverse_attribute_id;
+    // Design B: when the diverse path is active and `adaptive_l` is configured,
+    // grow `L` per query from the observed bucket concentration.
+    let diverse_adaptive_l = search_params
+        .search_mode
+        .adaptive_l
+        .as_ref()
+        .map(|a| {
+            diskann::graph::search::AdaptiveL::new(a.sample_count.into(), a.scale_factor)
+                .expect("validated adaptive L must construct")
+        });
 
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
@@ -287,6 +297,7 @@ where
                         provider.clone(),
                         diverse_attribute_id,
                         diverse_results_k.unwrap_or(search_params.recall_at as usize),
+                        diverse_adaptive_l.clone(),
                     ),
                     None => {
                         let has_filter = search_params.vector_filters_file.is_some();
