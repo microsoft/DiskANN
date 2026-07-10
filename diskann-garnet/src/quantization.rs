@@ -4,7 +4,7 @@ use diskann::utils::VectorRepr;
 use diskann_quantization::{
     CompressInto,
     algorithms::{Transform, TransformKind, transforms::NewTransformError},
-    alloc::{GlobalAllocator, ScopedAllocator},
+    alloc::{GlobalAllocator, Poly, ScopedAllocator},
     minmax,
     num::POSITIVE_ONE_F32,
     spherical::{
@@ -34,6 +34,10 @@ pub(crate) enum GarnetQuantizerError {
     ZeroDim,
     #[error("Transform error: {0}")]
     BadTransform(#[from] NewTransformError),
+    #[error("Unsupported serialization/deserialization")]
+    UnsupportedSerialization,
+    #[error("Quantizer deserialization error: {0}")]
+    Deserialization(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 /// Quantizer trait that all diskann-garnet quantizers must implement
@@ -55,6 +59,10 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     fn distance_computer(&self) -> Result<GarnetDistanceComputer, GarnetQuantizerError>;
     /// Returns a query computer for comparing distances to a particular query
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError>;
+    // Serialize the quantizer state.
+    fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError>;
+    // Deserialize the quantizer state.
+    fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError>;
 }
 
 /// Type-erased distance computer
@@ -172,6 +180,29 @@ impl GarnetQuantizer for Spherical1Bit {
             Err(GarnetQuantizerError::NoQuantizer)
         }
     }
+
+    fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
+        let guard = self.inner.read().unwrap();
+        if let Some(quantizer) = &*guard {
+            quantizer
+                .serialize(GlobalAllocator)
+                .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))
+        } else {
+            Err(GarnetQuantizerError::NoQuantizer)
+        }
+    }
+
+    fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        let mut guard = self.inner.write().unwrap();
+        if guard.is_some() {
+            Err(GarnetQuantizerError::UnsupportedSerialization)
+        } else {
+            let q = spherical::iface::Impl::<1>::try_deserialize(state, GlobalAllocator)
+                .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
+            *guard = Some(q);
+            Ok(())
+        }
+    }
 }
 
 impl DynDistanceComputer for iface::DistanceComputer {
@@ -272,6 +303,14 @@ impl GarnetQuantizer for MinMax8Bit {
             self.metric,
         )?);
         Ok(computer)
+    }
+
+    fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
+        Err(GarnetQuantizerError::UnsupportedSerialization)
+    }
+
+    fn deserialize(&self, _state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        Err(GarnetQuantizerError::UnsupportedSerialization)
     }
 }
 
