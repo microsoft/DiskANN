@@ -242,15 +242,22 @@ where
                 dist <= radius
             });
 
+            let max_returned = if let Some(max) = self.max_returned() {
+                max
+            } else {
+                usize::MAX
+            };
+
+            let matched_truncated = all_matched.iter().take(max_returned);
+
+            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
-                    all_matched
-                        .iter()
-                        .copied()
-                        .take(self.max_returned().unwrap_or(usize::MAX)),
+                    matched_truncated.copied(),
                     &mut filtered,
                 )
+                .await
                 .into_ann_result()?;
 
             Ok(SearchStats {
