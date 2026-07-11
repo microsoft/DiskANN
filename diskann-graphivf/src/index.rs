@@ -37,16 +37,16 @@ use rayon::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::{
-    centroids,
-    params::{BuildParams, Metric, SearchParams},
+    centroids, cluster,
+    params::{AssignMethod, BuildParams, Metric, SearchParams},
     profile::{BuildProfile, SearchProfile},
     storage::{self, Layout},
     GraphIvfError, Result,
 };
 
-const LISTS_SUFFIX: &str = ".graphivf_lists";
-const META_SUFFIX: &str = ".graphivf_meta";
-const CENTROIDS_SUFFIX: &str = ".graphivf_centroids.fbin";
+pub(crate) const LISTS_SUFFIX: &str = ".graphivf_lists";
+pub(crate) const META_SUFFIX: &str = ".graphivf_meta";
+pub(crate) const CENTROIDS_SUFFIX: &str = ".graphivf_centroids.fbin";
 
 /// The platform-specific aligned reader produced by [`AlignedFileReaderFactory`]
 /// (io_uring on Linux, IOCP on Windows, buffered elsewhere).
@@ -86,20 +86,32 @@ impl<T: VectorRepr> std::fmt::Debug for GraphIvfIndex<T> {
     }
 }
 
-/// Strategy for producing the cluster centroids that seed the IVF partition.
+/// Strategy for choosing the **initial** cluster centroids that seed the IVF
+/// partition.
 ///
-/// The graph and inverted lists are built identically regardless of how the
-/// centroids are obtained; this only controls the centroid-production stage.
+/// This controls only how the initial `num_clusters x dim` centers are
+/// obtained. Lloyd refinement is applied separately per
+/// [`BuildParams::kmeans_iters`] (zero iterations reuses the initial centers
+/// unchanged). The graph and inverted lists are built identically regardless of
+/// how the centroids are obtained, so new clustering strategies compose by
+/// adding a variant here and reusing the rest of the pipeline verbatim.
 #[derive(Debug, Clone, Copy)]
-pub enum Seed<'a> {
-    /// Draw `samples` rows from the corpus (RNG seeded by [`BuildParams::seed`]),
-    /// take the first [`BuildParams::num_clusters`] of them as the initial
-    /// centers (Forgy initialization), then apply [`BuildParams::kmeans_iters`]
-    /// Lloyd iterations over the sample.
-    Sampled {
+pub enum CentroidInit<'a> {
+    /// K-means Forgy initialization: draw `samples` rows from the corpus (RNG
+    /// seeded by [`BuildParams::seed`]), take the first
+    /// [`BuildParams::num_clusters`] of them as the initial centers, then apply
+    /// [`BuildParams::kmeans_iters`] Lloyd iterations over the sample.
+    Forgy {
         /// Number of corpus rows to sample for k-means.
         samples: usize,
     },
+    /// Random partition: draw exactly [`BuildParams::num_clusters`] rows from
+    /// the corpus uniformly at random (RNG seeded by [`BuildParams::seed`]) and
+    /// use them as the initial centers, refining over the **full** corpus for
+    /// [`BuildParams::kmeans_iters`] Lloyd iterations. With `kmeans_iters == 0`
+    /// this yields an unrefined random clustering (each point assigned to its
+    /// nearest random center).
+    RandomUniform,
     /// Load precomputed centroids from `path` (a `*.graphivf_centroids.fbin`
     /// written by a previous build) and refine them with
     /// [`BuildParams::kmeans_iters`] Lloyd iterations over the **full** corpus.
@@ -110,12 +122,13 @@ pub enum Seed<'a> {
     },
 }
 
-impl Seed<'_> {
+impl CentroidInit<'_> {
     /// Produce the centroids for `work` (the f32 corpus used for clustering),
     /// recording the sample/k-means timings into `profile`.
     ///
-    /// Both strategies finish with [`refine_centroids`] (Lloyd iterations); they
-    /// differ only in how the initial centers and clustering data are obtained.
+    /// Every strategy finishes with [`refine_centroids`] (Lloyd iterations);
+    /// they differ only in how the initial centers and clustering data are
+    /// obtained.
     fn centroids(
         self,
         work: MatrixView<'_, f32>,
@@ -129,7 +142,7 @@ impl Seed<'_> {
             // Cluster a corpus sample: draw `samples` rows (RNG seeded by
             // `params.seed`), take the first `num_clusters` as the initial
             // centers (Forgy initialization), and refine over the sample.
-            Seed::Sampled { samples } => {
+            CentroidInit::Forgy { samples } => {
                 let sample_start = Instant::now();
                 let mut rng = StdRng::seed_from_u64(params.seed);
                 let idx = rand::seq::index::sample(&mut rng, work.nrows(), samples).into_vec();
@@ -145,8 +158,22 @@ impl Seed<'_> {
                 let init = &sample.as_slice()[..num_clusters * dim];
                 refine_centroids(sample.as_view(), init, params, pool, profile)
             }
+            // Draw exactly `num_clusters` rows uniformly at random as the
+            // initial centers and refine over the full corpus. With
+            // `kmeans_iters == 0` the random centers are used unrefined.
+            CentroidInit::RandomUniform => {
+                let sample_start = Instant::now();
+                let mut rng = StdRng::seed_from_u64(params.seed);
+                let idx = rand::seq::index::sample(&mut rng, work.nrows(), num_clusters).into_vec();
+                let mut buf = vec![0.0f32; num_clusters * dim];
+                for (dst, &p) in buf.chunks_mut(dim).zip(idx.iter()) {
+                    dst.copy_from_slice(work.row(p));
+                }
+                profile.sample = sample_start.elapsed();
+                refine_centroids(work, &buf, params, pool, profile)
+            }
             // Refine precomputed centroids over the full corpus.
-            Seed::Precomputed { path } => {
+            CentroidInit::Precomputed { path } => {
                 let mut file = File::open(path)?;
                 let centroids: Matrix<f32> =
                     read_bin(&mut file).map_err(|e| GraphIvfError::malformed(e.to_string()))?;
@@ -176,9 +203,9 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
     /// Like [`build`](Self::build), but also returns a [`BuildProfile`]
     /// attributing the build wall-clock to its individual stages.
     ///
-    /// Centroids are produced from a corpus *sample* via k-means++
-    /// ([`Seed::Sampled`]); for a precomputed-centroid build use
-    /// [`build_seeded_profiled`](Self::build_seeded_profiled).
+    /// Centroids are produced from a corpus *sample* via Forgy init
+    /// ([`CentroidInit::Forgy`]); for other centroid-initialization strategies
+    /// use [`build_seeded_profiled`](Self::build_seeded_profiled).
     pub fn build_profiled(
         data: MatrixView<'_, f32>,
         params: &BuildParams,
@@ -187,22 +214,23 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         let samples = params.effective_sample_size(data.nrows());
         Self::build_core(
             Corpus::Plain(data),
-            Seed::Sampled { samples },
+            CentroidInit::Forgy { samples },
             params,
             prefix,
         )
     }
 
     /// Build an index from a full-precision corpus, producing centroids per the
-    /// given [`Seed`] strategy.
+    /// given [`CentroidInit`] strategy.
     ///
-    /// With [`Seed::Sampled`] this is equivalent to
-    /// [`build_profiled`](Self::build_profiled); with [`Seed::Precomputed`] the
-    /// centroids are loaded from disk and refined with `params.kmeans_iters`
-    /// Lloyd iterations over the entire `data` (no sampling).
+    /// With [`CentroidInit::Forgy`] this is equivalent to
+    /// [`build_profiled`](Self::build_profiled); with
+    /// [`CentroidInit::Precomputed`] the centroids are loaded from disk and
+    /// refined with `params.kmeans_iters` Lloyd iterations over the entire
+    /// `data` (no sampling).
     pub fn build_seeded_profiled(
         data: MatrixView<'_, f32>,
-        seed: Seed<'_>,
+        seed: CentroidInit<'_>,
         params: &BuildParams,
         prefix: &Path,
     ) -> Result<(Self, BuildProfile)> {
@@ -211,20 +239,20 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
 
     /// Build an index from a corpus that is **already stored** in the target
     /// representation `T` (e.g. 8-bit MinMax quantized rows), producing
-    /// centroids per the given [`Seed`] strategy.
+    /// centroids per the given [`CentroidInit`] strategy.
     ///
     /// Each row of `corpus` is one canonical `T` vector; it is decompressed to
     /// `f32` (via [`VectorRepr::as_f32_into`]) only for clustering and graph
     /// construction, while the inverted lists store the original `T` rows
-    /// verbatim. With [`Seed::Precomputed`] and `params.kmeans_iters == 0` the
-    /// loaded centroids are reused unchanged, yielding an index directly
+    /// verbatim. With [`CentroidInit::Precomputed`] and `params.kmeans_iters ==
+    /// 0` the loaded centroids are reused unchanged, yielding an index directly
     /// comparable to a full-precision build sharing the same centroids.
     ///
     /// For cosine, stored rows are written verbatim, so the corpus must be
     /// pre-normalized before compression.
     pub fn build_compressed_profiled(
         corpus: MatrixView<'_, T>,
-        seed: Seed<'_>,
+        seed: CentroidInit<'_>,
         params: &BuildParams,
         prefix: &Path,
     ) -> Result<(Self, BuildProfile)> {
@@ -236,7 +264,7 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
     /// entry point is a thin wrapper over this core.
     fn build_core(
         corpus: Corpus<'_, T>,
-        seed: Seed<'_>,
+        seed: CentroidInit<'_>,
         params: &BuildParams,
         prefix: &Path,
     ) -> Result<(Self, BuildProfile)> {
@@ -305,9 +333,18 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             .map_err(|e| GraphIvfError::malformed(e.to_string()))?;
         profile.write_centroids = write_centroids_start.elapsed();
 
-        // 2. Build the in-memory graph over the centroids.
+        // 2. Build the in-memory graph over the centroids. This graph is used
+        //    for the L2 centroid assignment that follows, so it is always built
+        //    with squared-L2 (clustering/assignment is L2 for every metric,
+        //    including the hybrid `InnerProduct`). The search-time graph is
+        //    rebuilt with the search metric on load.
         let build_graph_start = Instant::now();
-        let centroids = centroids::build(centroids_mat, &params.graph, params.num_threads)?;
+        let centroids = centroids::build(
+            centroids_mat,
+            &params.graph,
+            params.num_threads,
+            VMetric::L2,
+        )?;
         profile.build_graph = build_graph_start.elapsed();
 
         // 3. Assign every corpus point to its nearest centroid via graph search.
@@ -379,7 +416,12 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         let mut centroids_file = File::open(with_suffix(prefix, CENTROIDS_SUFFIX))?;
         let centroids_mat: Matrix<f32> =
             read_bin(&mut centroids_file).map_err(|e| GraphIvfError::malformed(e.to_string()))?;
-        let centroids = centroids::build(centroids_mat, &layout.graph, num_threads)?;
+        // Rebuild the search-time centroid graph with the *search* metric: a
+        // hybrid `InnerProduct` index navigates the centroids by inner product
+        // (the f32 IP distance is negated, so the graph still finds the
+        // maximum-IP centroids); `L2`/`Cosine` navigate by squared-L2.
+        let graph_metric = search_graph_metric(metric);
+        let centroids = centroids::build(centroids_mat, &layout.graph, num_threads, graph_metric)?;
 
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
 
@@ -540,7 +582,8 @@ impl<T: VectorRepr> PreparedCorpus<'_, T> {
 /// Refine `seed` (a `num_clusters x dim` row-major buffer) with
 /// `params.kmeans_iters` Lloyd iterations over `data` (no k-means++ pivot
 /// selection). Records `profile.kmeans`. `data` is the corpus sample for
-/// [`Seed::Sampled`] and the full corpus for [`Seed::Precomputed`].
+/// [`CentroidInit::Forgy`] and the full corpus for [`CentroidInit::RandomUniform`]
+/// and [`CentroidInit::Precomputed`].
 fn refine_centroids(
     data: MatrixView<'_, f32>,
     seed: &[f32],
@@ -550,21 +593,38 @@ fn refine_centroids(
 ) -> Result<Matrix<f32>> {
     let dim = data.ncols();
     let kmeans_start = Instant::now();
-    let mut centers = seed.to_vec();
-    let mut cancel = false;
-    diskann_disk::utils::run_lloyds(
-        data.as_slice(),
-        data.nrows(),
-        dim,
-        &mut centers,
-        params.num_clusters,
+    let mut centroids =
+        Matrix::try_from(seed.to_vec().into_boxed_slice(), params.num_clusters, dim)
+            .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))?;
+
+    let mut assigner: Box<dyn cluster::Assigner> = match params.assign_method {
+        AssignMethod::Exact => Box::new(cluster::ExactAssigner::default()),
+        AssignMethod::Graph {
+            rebuild_every,
+            rerank,
+        } => Box::new(cluster::GraphAssigner::new(
+            params.graph,
+            params.assign_l,
+            rebuild_every,
+            rerank,
+            params.num_threads,
+        )),
+    };
+
+    let outcome = cluster::lloyd(
+        data,
+        &mut centroids,
+        assigner.as_mut(),
         params.kmeans_iters,
-        &mut cancel,
-        pool.as_ref(),
+        params.empty_clusters,
+        params.normalize_centroids,
+        pool,
     )?;
+    debug_assert_eq!(outcome.assignments.len(), data.nrows());
+    debug_assert!(outcome.iters_run <= params.kmeans_iters);
+    debug_assert!(outcome.residual.is_finite());
     profile.kmeans = kmeans_start.elapsed();
-    Matrix::try_from(centers.into_boxed_slice(), params.num_clusters, dim)
-        .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))
+    Ok(centroids)
 }
 
 /// A single-threaded query handle into a [`GraphIvfIndex`].
@@ -645,11 +705,20 @@ impl<T: VectorRepr> Searcher<T> {
 
         // Preprocess the query once into a `T`-space scorer reused across every
         // candidate. Query and corpus are both `T`, so scoring runs directly
-        // over `T` via `T::QueryDistance` with no per-candidate decode. Cosine
-        // is reduced to squared-L2 (the caller normalizes the query, matching
-        // the corpus normalized at build time).
+        // over `T` via `T::QueryDistance` with no per-candidate decode.
+        //
+        // * `L2`/`Cosine`: score by squared-L2 (cosine relies on the caller
+        //   normalizing the query, matching the corpus normalized at build
+        //   time).
+        // * `InnerProduct`: score by inner product. The distance function
+        //   returns the *negated* inner product, so — like L2 — smaller is
+        //   better and the top-k selection sorts ascending.
         let preprocess_start = Instant::now();
-        let scorer = T::query_distance(query, VMetric::L2);
+        let score_metric = match self.metric {
+            Metric::InnerProduct => VMetric::InnerProduct,
+            Metric::L2 | Metric::Cosine => VMetric::L2,
+        };
+        let scorer = T::query_distance(query, score_metric);
 
         // The centroid graph is full-precision `f32`, so decode the query to
         // `f32` once for the centroid KNN (a no-op when `T == f32`).
@@ -747,6 +816,9 @@ impl<T: VectorRepr> Searcher<T> {
         profile.score = score_start.elapsed();
 
         let topk_start = Instant::now();
+        // All supported metrics use the "smaller is better" convention: L2 and
+        // cosine are squared-L2, and the inner-product distance is negated. So
+        // the best candidates are the ones with the smallest score.
         if candidates.len() > k {
             candidates.select_nth_unstable_by(k - 1, |a, b| a.1.total_cmp(&b.1));
             candidates.truncate(k);
@@ -756,6 +828,23 @@ impl<T: VectorRepr> Searcher<T> {
 
         profile.total = total_start.elapsed();
         Ok((candidates, profile))
+    }
+}
+
+/// Distance metric used to build and navigate the *search-time* centroid graph
+/// for an index with the given [`Metric`].
+///
+/// `InnerProduct` navigates by inner product so queries reach the centroids
+/// that maximize it; `L2` and `Cosine` navigate by squared-L2 (`Cosine`
+/// vectors are already normalized, making L2 order equivalent to cosine).
+fn search_graph_metric(metric: Metric) -> VMetric {
+    match metric {
+        // An inner-product index navigates the centroid graph by inner product
+        // so queries reach the centroids that maximize it. `L2` and `Cosine`
+        // navigate by squared-L2 (`Cosine` vectors are already normalized,
+        // making L2 order equivalent to cosine).
+        Metric::InnerProduct => VMetric::InnerProduct,
+        Metric::L2 | Metric::Cosine => VMetric::L2,
     }
 }
 
@@ -812,7 +901,7 @@ fn normalize(v: &mut [f32]) {
 }
 
 /// Append `suffix` to a path prefix, e.g. `/a/idx` + `.graphivf_meta`.
-fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
     let mut s: OsString = prefix.as_os_str().to_owned();
     s.push(suffix);
     PathBuf::from(s)

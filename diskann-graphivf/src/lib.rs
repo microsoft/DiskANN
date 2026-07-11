@@ -34,8 +34,10 @@
 #[allow(dead_code)]
 mod cache;
 mod centroids;
+mod cluster;
 mod error;
 mod index;
+mod online;
 mod params;
 mod profile;
 mod storage;
@@ -43,6 +45,9 @@ mod storage;
 pub use diskann::utils::VectorRepr;
 pub use diskann_vector::Half;
 pub use error::{GraphIvfError, Result};
-pub use index::{GraphIvfIndex, Searcher, Seed};
-pub use params::{BuildParams, GraphParams, Metric, SearchParams};
+pub use index::{CentroidInit, GraphIvfIndex, Searcher};
+pub use online::{BuildTelemetry, OnlineClusterer, OnlineParams, SeedStrategy, SplitEvent};
+pub use params::{
+    AssignMethod, BuildParams, EmptyClusterPolicy, GraphParams, Metric, SearchParams,
+};
 pub use profile::{BuildProfile, SearchProfile};

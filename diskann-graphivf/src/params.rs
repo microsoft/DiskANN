@@ -5,14 +5,23 @@
 
 //! Tunable parameters for building and searching a graph-IVF index.
 
-/// Distance metric. Internally everything is reduced to squared-L2; `Cosine`
-/// is realized by L2-normalizing vectors at build and query time.
+/// Distance metric.
+///
+/// `L2` and `Cosine` reduce everything to squared-L2 (`Cosine` additionally
+/// L2-normalizes vectors at build and query time). `InnerProduct` is a *hybrid*
+/// metric intended for maximum-inner-product (MIPS) datasets: the index is
+/// still **built** (clustering, centroid assignment) under squared-L2, but at
+/// **search** time both the centroids and the inverted-list points are scored
+/// by inner product (larger is better).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Metric {
     /// Squared Euclidean distance.
     L2,
     /// Cosine similarity (vectors are L2-normalized).
     Cosine,
+    /// Maximum inner product. Build (clustering + assignment) uses squared-L2;
+    /// search scores centroids and inverted-list points by inner product.
+    InnerProduct,
 }
 
 impl Metric {
@@ -20,6 +29,7 @@ impl Metric {
         match self {
             Metric::L2 => 0,
             Metric::Cosine => 1,
+            Metric::InnerProduct => 2,
         }
     }
 
@@ -27,6 +37,7 @@ impl Metric {
         match v {
             0 => Some(Metric::L2),
             1 => Some(Metric::Cosine),
+            2 => Some(Metric::InnerProduct),
             _ => None,
         }
     }
@@ -61,6 +72,42 @@ impl Default for GraphParams {
     }
 }
 
+/// Strategy for assigning corpus points to their nearest centroid during the
+/// k-means (Lloyd's) iterations that refine the centroids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum AssignMethod {
+    /// Exact brute-force nearest-centroid assignment (GEMM-based). Cost is
+    /// `O(num_points * num_clusters * dim)` per iteration; the historical
+    /// default and the most accurate option.
+    #[default]
+    Exact,
+    /// Graph-accelerated approximate nearest-centroid assignment. Builds an
+    /// in-memory graph over the centroids and searches it for each point,
+    /// optionally re-ranking the top `rerank` candidates exactly. Scales to
+    /// large `num_clusters` where the exact scan is intractable.
+    Graph {
+        /// Rebuild the centroid graph every this many iterations (`1` rebuilds
+        /// every iteration). Clamped to `>= 1`.
+        rebuild_every: usize,
+        /// Number of graph candidates to re-rank exactly per point (`1` trusts
+        /// the graph's nearest result directly). Clamped to `>= 1`.
+        rerank: usize,
+    },
+}
+
+/// Policy for centroids whose cluster received no points in a Lloyd's iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum EmptyClusterPolicy {
+    /// Zero the centroid (legacy behavior of the brute-force k-means driver).
+    Zero,
+    /// Keep the centroid at its previous position.
+    #[default]
+    PreserveOld,
+    /// Move the centroid onto the corpus point farthest from its assigned
+    /// centroid, splitting the most spread-out cluster.
+    ReseedFarthest,
+}
+
 /// Parameters controlling an index build.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BuildParams {
@@ -80,6 +127,15 @@ pub struct BuildParams {
     pub num_threads: usize,
     /// RNG seed for sampling and k-means (for reproducibility).
     pub seed: u64,
+    /// Nearest-centroid assignment strategy used during the k-means refinement.
+    pub assign_method: AssignMethod,
+    /// Policy for clusters that become empty during k-means refinement.
+    pub empty_clusters: EmptyClusterPolicy,
+    /// L2-normalize every centroid onto the unit sphere after each Lloyd's
+    /// update. Useful for unit-normalized corpora where the raw cluster mean
+    /// (which shrinks inward) is a worse angular representative than its
+    /// projection back onto the sphere.
+    pub normalize_centroids: bool,
 }
 
 impl BuildParams {
@@ -162,10 +218,10 @@ mod tests {
 
     #[test]
     fn metric_u8_round_trips() {
-        for m in [Metric::L2, Metric::Cosine] {
+        for m in [Metric::L2, Metric::Cosine, Metric::InnerProduct] {
             assert_eq!(Metric::from_u8(m.as_u8()), Some(m));
         }
-        assert_eq!(Metric::from_u8(2), None);
+        assert_eq!(Metric::from_u8(3), None);
         assert!(!Metric::L2.normalizes());
         assert!(Metric::Cosine.normalizes());
     }
@@ -180,9 +236,11 @@ mod tests {
             graph: GraphParams::default(),
             num_threads: 2,
             seed: 0,
+            assign_method: AssignMethod::Exact,
+            empty_clusters: EmptyClusterPolicy::PreserveOld,
+            normalize_centroids: false,
         }
     }
-
     #[test]
     fn build_validate_accepts_good_params() {
         assert!(valid_build().validate(100, 4).is_ok());
