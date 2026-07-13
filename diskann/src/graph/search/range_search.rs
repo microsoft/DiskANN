@@ -212,7 +212,6 @@ where
 
             let stats = if scratch.in_range.len()
                 >= ((self.starting_l() as f32) * self.initial_slack()) as usize
-                && scratch.in_range.len() < self.max_returned().unwrap_or(usize::MAX)
             {
                 // Move to range search
                 let range_stats = range_search_internal(
