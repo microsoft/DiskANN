@@ -1,0 +1,37 @@
+{
+  "file": "diskann/src/graph/test/cases/range_search.rs",
+  "test": "graph/test/cases/range_search/max_results_respected_and_second_round_triggered",
+  "payload": {
+    "comparisons": 11,
+    "grid_size": 5,
+    "hops": 15,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 50.0,
+    "range_search_second_round": true,
+    "result_count": 4,
+    "results": [
+      [
+        124,
+        3.0
+      ],
+      [
+        123,
+        6.0
+      ],
+      [
+        119,
+        6.0
+      ],
+      [
+        99,
+        6.0
+      ]
+    ],
+    "starting_l": 4
+  }
+}
