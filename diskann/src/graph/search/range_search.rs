@@ -38,7 +38,6 @@ pub enum RangeSearchError {
     InnerRadiusValueError,
     #[error("max_returned must be greater than or equal to starting_l")]
     MaxReturnedLessThanInitialL,
-
 }
 
 impl From<RangeSearchError> for ANNError {
@@ -205,8 +204,8 @@ where
 
             let mut in_range = Vec::with_capacity(self.starting_l().into_usize());
 
-            let starting_l = self.starting_l().into_usize(); 
-             let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
+            let starting_l = self.starting_l().into_usize();
+            let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             for neighbor in scratch.best.iter().take(starting_l) {
                 if neighbor.distance <= self.radius() {
