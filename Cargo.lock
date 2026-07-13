@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "diskann"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-core"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "diskann",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-runner"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-simd"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "diskann-benchmark-runner",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-bftree"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "bf-tree",
  "bytemuck",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-disk"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -763,7 +763,6 @@ dependencies = [
  "criterion",
  "diskann",
  "diskann-linalg",
- "diskann-platform",
  "diskann-providers",
  "diskann-quantization",
  "diskann-utils",
@@ -785,11 +784,12 @@ dependencies = [
  "tokio",
  "tracing",
  "vfs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "diskann-garnet"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "bytemuck",
  "crossbeam",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-label-filter"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-linalg"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "approx",
  "cfg-if",
@@ -843,18 +843,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "diskann-platform"
-version = "0.54.0"
-dependencies = [
- "io-uring",
- "libc",
- "tracing",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "diskann-providers"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "approx",
  "arc-swap",
@@ -863,7 +853,6 @@ dependencies = [
  "byteorder",
  "cfg-if",
  "diskann",
- "diskann-platform",
  "diskann-quantization",
  "diskann-utils",
  "diskann-vector",
@@ -873,7 +862,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.13.0",
  "num-traits",
- "opentelemetry",
  "proptest",
  "prost",
  "rand",
@@ -890,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-quantization"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -911,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-record"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -921,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-tools"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -930,7 +918,6 @@ dependencies = [
  "byteorder",
  "clap",
  "diskann",
- "diskann-disk",
  "diskann-label-filter",
  "diskann-providers",
  "diskann-quantization",
@@ -954,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-utils"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -970,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-vector"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "approx",
  "bytemuck",
@@ -985,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-wide"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "bytemuck",
  "cfg-if",

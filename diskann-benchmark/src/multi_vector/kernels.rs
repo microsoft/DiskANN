@@ -13,7 +13,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     utils::{datatype::AsDataType, num::relative_change},
     Benchmark, Checkpoint, Output, Registry,
 };
@@ -47,19 +47,14 @@ where
     type Input = MultiVectorOp;
     type Output = Vec<RunResult>;
 
-    fn try_match(&self, from: &MultiVectorOp) -> Result<MatchScore, FailureScore> {
-        let mut failscore: Option<u32> = None;
-        if crate::utils::match_data_type::<T>(from.element_type).is_err() {
-            *failscore.get_or_insert(0) += 1;
-        }
+    fn try_match(&self, from: &MultiVectorOp, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        crate::utils::match_data_type::<T>(&mut score, from.element_type);
         let isa: MaxSimIsa = from.isa.into();
         if !isa.is_available() {
-            *failscore.get_or_insert(0) += 1;
+            score.fail(1, &format_args!("ISA unavailable on this CPU: {}", isa));
         }
-        match failscore {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
-        }
+        score
     }
 
     fn run(
@@ -79,25 +74,8 @@ where
         Ok(results)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&MultiVectorOp>,
-    ) -> std::fmt::Result {
-        match input {
-            None => writeln!(f, "- Element Type: {}", <T as AsDataType>::DATA_TYPE)?,
-            Some(input) => {
-                let desc = <T as AsDataType>::describe(input.element_type);
-                if !desc.is_match() {
-                    writeln!(f, "\n    - Mismatched element type: {}", desc)?;
-                }
-                let isa: MaxSimIsa = input.isa.into();
-                if !isa.is_available() {
-                    writeln!(f, "\n    - ISA unavailable on this CPU: {}", isa)?;
-                }
-            }
-        }
-        Ok(())
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- Element Type: {}", <T as AsDataType>::DATA_TYPE)
     }
 }
 

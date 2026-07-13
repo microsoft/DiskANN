@@ -2,17 +2,19 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+use std::time::Instant;
+
 use clap::Parser;
-use diskann_providers::{storage::FileStorageProvider, utils::Timer};
+use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{
-    compute_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType, GraphDataF32Vector,
-    GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
+    compute_ground_truth_from_datafiles, init_subscriber, CMDResult, DataType,
 };
 use diskann_vector::distance::Metric;
+use diskann_vector::Half;
 
 fn main() -> CMDResult<()> {
     init_subscriber();
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     let args = ComputeGroundTruthArgs::parse();
 
@@ -24,70 +26,62 @@ fn main() -> CMDResult<()> {
     let storage_provider = FileStorageProvider;
 
     let err = match args.data_type {
-        DataType::Float => {
-            compute_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.filter_bitmap_file.as_deref(),
-                args.recall_at,
-                insert_file,
-                skip_base,
-                args.associated_data_file,
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
-        DataType::Fp16 => {
-            compute_ground_truth_from_datafiles::<GraphDataHalfVector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.filter_bitmap_file.as_deref(),
-                args.recall_at,
-                insert_file,
-                skip_base,
-                args.associated_data_file,
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
-        DataType::Uint8 => {
-            compute_ground_truth_from_datafiles::<GraphDataU8Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.filter_bitmap_file.as_deref(),
-                args.recall_at,
-                insert_file,
-                skip_base,
-                args.associated_data_file,
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
-        DataType::Int8 => {
-            compute_ground_truth_from_datafiles::<GraphDataInt8Vector, FileStorageProvider>(
-                &storage_provider,
-                args.distance_function,
-                &args.base_file,
-                &args.query_file,
-                &args.ground_truth_file,
-                args.filter_bitmap_file.as_deref(),
-                args.recall_at,
-                insert_file,
-                skip_base,
-                args.associated_data_file,
-                args.base_file_labels.as_deref(),
-                args.query_file_labels.as_deref(),
-            )
-        }
+        DataType::Float => compute_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.filter_bitmap_file.as_deref(),
+            args.recall_at,
+            insert_file,
+            skip_base,
+            args.associated_data_file,
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
+        DataType::Fp16 => compute_ground_truth_from_datafiles::<Half, (), FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.filter_bitmap_file.as_deref(),
+            args.recall_at,
+            insert_file,
+            skip_base,
+            args.associated_data_file,
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
+        DataType::Uint8 => compute_ground_truth_from_datafiles::<u8, (), FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.filter_bitmap_file.as_deref(),
+            args.recall_at,
+            insert_file,
+            skip_base,
+            args.associated_data_file,
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
+        DataType::Int8 => compute_ground_truth_from_datafiles::<i8, (), FileStorageProvider>(
+            &storage_provider,
+            args.distance_function,
+            &args.base_file,
+            &args.query_file,
+            &args.ground_truth_file,
+            args.filter_bitmap_file.as_deref(),
+            args.recall_at,
+            insert_file,
+            skip_base,
+            args.associated_data_file,
+            args.base_file_labels.as_deref(),
+            args.query_file_labels.as_deref(),
+        ),
     };
 
     match err {

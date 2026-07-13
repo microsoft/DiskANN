@@ -1,0 +1,24 @@
+{
+  "search_directories": [],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "phantom-input",
+      "content": {
+        "value": 42
+      }
+    },
+    {
+      "type": "test-input-dim",
+      "content": {
+        "dim": 42
+      }
+    },
+    {
+      "type": "sample-input",
+      "content": {
+        "value": "hello"
+      }
+    }
+  ]
+}
