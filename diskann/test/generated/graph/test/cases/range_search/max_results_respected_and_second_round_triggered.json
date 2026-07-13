@@ -4,7 +4,7 @@
   "payload": {
     "comparisons": 11,
     "grid_size": 5,
-    "hops": 15,
+    "hops": 12,
     "inner_radius": null,
     "query": [
       5.0,
