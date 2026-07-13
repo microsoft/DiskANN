@@ -412,6 +412,9 @@ mod tests {
 
         // Invalid inner radius > radius
         assert!(Range::with_options(None, 100, None, 0.5, Some(1.0), 1.0, 1.0).is_err());
+
+        // Invalid max_results < initial_l_search
+        assert!(Range::with_options(Some(50), 100, None, 0.5, None, 1.0, 1.0).is_err());
     }
 
     #[test]

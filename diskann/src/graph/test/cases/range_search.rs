@@ -294,9 +294,9 @@ fn max_results_respected_means_no_second_round() {
 
     let grid_size = 5;
     let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 50.0; // every point will be in range with this radius
+    let radius = 1.0e9; // every point will be in range with this radius
     let starting_l = 4; // small set to trigger multiple rounds
-    let max_results = 4; // max_returned limited to starting_l, so no second round should be triggered
+    let max_results = 4; // max_returned = starting_l, so second round should not be triggered
 
     let range_search =
         Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
@@ -352,7 +352,7 @@ fn max_results_respected_and_second_round_triggered() {
 
     let grid_size = 5;
     let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 50.0; // every point will be in range with this radius
+    let radius = 1.0e9; // every point will be in range with this radius
     let starting_l = 4; // small set to trigger multiple rounds
     let max_results = 5; // max_returned greater than starting_l, so second round should be triggered
 
