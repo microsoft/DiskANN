@@ -103,6 +103,10 @@ impl LeafBuffers {
             self.knn_result
                 .reserve(max_knn - self.knn_result.capacity());
         }
+        // `edges` is materialized only under cfg(test) (see
+        // materialize_edges_from_csr); production consumes the CSR directly, so
+        // don't reserve the buffer off the hot build path.
+        #[cfg(test)]
         if self.edges.capacity() < max_edges {
             self.edges.reserve(max_edges - self.edges.capacity());
         }

@@ -637,15 +637,20 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                     &mut p_slice[i * ndims..(i + 1) * ndims]);
             }
             diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice);
-            // Batch-precompute ||p||² for all rows in one tight SIMD loop —
-            // hoisted out of `process_row` so the inner per-leader loop
-            // doesn't recompute it every call.
-            let p_norm_sq = compute_p_norm_sq_batch(p_slice, np, ndims);
+            // ||p||² is a per-point constant, so it shifts every leader's L2
+            // distance by the same amount and can't change the top-k ranking;
+            // CosineNormalized/InnerProduct ignore it too. Only Cosine (which
+            // divides by ‖p‖) actually needs it — skip the batch reduce otherwise.
+            let p_norm_sq = if matches!(metric, Metric::Cosine) {
+                compute_p_norm_sq_batch(p_slice, np, ndims)
+            } else {
+                Vec::new()
+            };
             for i in 0..np {
                 let dot_row = &dots_slice[i * nl..(i + 1) * nl];
                 let out = &mut assignments[i * num_assign..(i + 1) * num_assign];
                 crate::partition_inner::process_row(
-                    dot_row, p_norm_sq[i], &l_norms, metric, num_assign, out,
+                    dot_row, p_norm_sq.get(i).copied().unwrap_or(0.0), &l_norms, metric, num_assign, out,
                 );
             }
         });
@@ -676,12 +681,18 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                             &mut p_slice[i * ndims..(i + 1) * ndims]);
                     }
                     diskann_linalg::sgemm_abt(p_slice, chunk_rows, ndims, &l_data, nl, dots_slice);
-                    let p_norm_sq = compute_p_norm_sq_batch(p_slice, chunk_rows, ndims);
+                    // Only Cosine needs ‖p‖ (see skip-MB path); L2's constant
+                    // ‖p‖² offset can't reorder the top-k.
+                    let p_norm_sq = if matches!(metric, Metric::Cosine) {
+                        compute_p_norm_sq_batch(p_slice, chunk_rows, ndims)
+                    } else {
+                        Vec::new()
+                    };
                     for i in 0..chunk_rows {
                         let dot_row = &dots_slice[i * nl..(i + 1) * nl];
                         let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
                         crate::partition_inner::process_row(
-                            dot_row, p_norm_sq[i], &l_norms, metric, num_assign, out,
+                            dot_row, p_norm_sq.get(i).copied().unwrap_or(0.0), &l_norms, metric, num_assign, out,
                         );
                     }
                 });
@@ -715,6 +726,12 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 local
             })
             .collect_installed();
+
+        // `assignments` is dead once `partials` holds the scattered IDs — free
+        // it before building `clusters` so the two full-payload copies
+        // (partials + clusters) don't also coexist with the np×num_assign
+        // assignment array (~400 MB at 10M points × fanout 10).
+        drop(assignments);
 
         // Sum per-leader sizes once so each final Vec is allocated with
         // exact capacity (no realloc churn).

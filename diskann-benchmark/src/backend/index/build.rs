@@ -31,10 +31,68 @@ use serde::Serialize;
 
 use crate::inputs::async_::IndexBuild;
 
+/// Process peak resident-set size in GiB (high-water mark since start).
+/// Linux: `/proc/self/status` VmHWM. Windows: `PeakWorkingSetSize`. Returns
+/// `None` on platforms/paths where it can't be read.
+pub(super) fn peak_rss_gb() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmHWM:") {
+                let kb: f64 = rest.split_whitespace().next()?.parse().ok()?;
+                return Some(kb / 1024.0 / 1024.0);
+            }
+        }
+        None
+    }
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct ProcessMemoryCounters {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set_size: usize,
+            working_set_size: usize,
+            quota_peak_paged_pool_usage: usize,
+            quota_paged_pool_usage: usize,
+            quota_peak_non_paged_pool_usage: usize,
+            quota_non_paged_pool_usage: usize,
+            pagefile_usage: usize,
+            peak_pagefile_usage: usize,
+        }
+        extern "system" {
+            fn GetCurrentProcess() -> isize;
+        }
+        #[link(name = "psapi")]
+        extern "system" {
+            fn GetProcessMemoryInfo(
+                process: isize,
+                counters: *mut ProcessMemoryCounters,
+                cb: u32,
+            ) -> i32;
+        }
+        // SAFETY: passing a zeroed, correctly-sized PROCESS_MEMORY_COUNTERS to
+        // the psapi call; we read peak_working_set_size only on success.
+        unsafe {
+            let mut c: ProcessMemoryCounters = std::mem::zeroed();
+            c.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+            if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 {
+                Some(c.peak_working_set_size as f64 / 1024.0 / 1024.0 / 1024.0)
+            } else {
+                None
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
+    }
+}
+
 ///////////////////////////////
 // Start Point Configuration //
 ///////////////////////////////
-
 pub(super) fn set_start_points<DP, T>(
     provider: &DP,
     data: MatrixView<'_, T>,

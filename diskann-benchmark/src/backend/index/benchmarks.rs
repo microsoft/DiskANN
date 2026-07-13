@@ -335,6 +335,10 @@ where
     let index = create(data.as_view())?;
     let build_stats = build(index.clone(), build_strategy.clone(), data, input, output)?;
 
+    if let Some(gb) = build::peak_rss_gb() {
+        writeln!(&mut *output, "Peak RSS (build stage): {:.2} GiB", gb)?;
+    }
+
     Ok((index, build_stats))
 }
 
