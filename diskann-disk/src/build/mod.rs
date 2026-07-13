@@ -6,7 +6,7 @@
 //! Build-related modules for disk index construction and configuration.
 //!
 //! This module contains all the components needed for building disk indexes,
-//! including builders, chunking utilities, and configuration parameters.
+//! including builders and configuration parameters.
 
 pub mod builder;
 pub mod chunking;

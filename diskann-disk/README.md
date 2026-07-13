@@ -12,7 +12,7 @@ The `disk-index` crate contains all the components specifically needed for build
 src/
 ├── build/             # Disk index building pipeline
 │   ├── builder/       # Core disk index builder and logic
-│   ├── chunking/      # Checkpointing and continuation handling
+│   ├── chunking/      # Build batch size configuration
 │   └── configuration/ # Build parameters and quantization configuration
 ├── search/            # Disk index search infrastructure
 │   ├── provider/      # Disk vertex providers and caching implementations
@@ -29,7 +29,7 @@ This crate has been populated with the core disk index functionality from the ma
 ### Build Module
 
 - **Builder**: Core disk index builder, quantizer, and build operations
-- **Chunking**: Checkpoint and continuation handling for large builds
+- **Chunking**: Configurable batch sizes for large builds
 - **Configuration**: Disk build parameters, filter parameters, and quantization types
 
 ### Search Module

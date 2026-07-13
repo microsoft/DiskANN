@@ -3,5 +3,5 @@
  * Licensed under the MIT license.
  */
 
-pub mod checkpoint;
-pub mod continuation;
+mod chunking_config;
+pub use chunking_config::ChunkingConfig;

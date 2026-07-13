@@ -20,12 +20,7 @@ use rand::{seq::SliceRandom, Rng};
 use tracing::info;
 
 use crate::{
-    build::chunking::{
-        checkpoint::{
-            CheckpointContext, CheckpointManager, CheckpointManagerExt, Progress, WorkStage,
-        },
-        continuation::ChunkingConfig,
-    },
+    build::chunking::ChunkingConfig,
     disk_index_build_parameter::BYTES_IN_GB,
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
     utils::partition_with_ram_budget,
@@ -77,8 +72,6 @@ where
 
     pub chunking_config: ChunkingConfig,
 
-    pub checkpoint_record_manager: Box<dyn CheckpointManager>,
-
     pub storage_provider: &'a StorageProvider,
 
     pub _phantom: std::marker::PhantomData<Data>,
@@ -90,16 +83,8 @@ where
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
     pub(crate) fn create_disk_layout(&mut self) -> ANNResult<()> {
-        self.checkpoint_record_manager.execute_stage(
-            WorkStage::WriteDiskLayout,
-            WorkStage::End,
-            || {
-                self.index_writer
-                    .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
-                Ok(())
-            },
-            || Ok(()),
-        )?;
+        self.index_writer
+            .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
 
         self.index_writer
             .index_build_cleanup(self.storage_provider)?;
@@ -508,62 +493,30 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
         Data: GraphDataType<VectorIdType = u32>,
         StorageProvider: StorageReadProvider + StorageWriteProvider,
     {
-        // Advance to PartitionData stage if current stage is InMemIndexBuild
-        builder.checkpoint_record_manager.execute_stage(
-            WorkStage::InMemIndexBuild,
-            WorkStage::PartitionData,
-            || Ok(()),
-            || Ok(()),
-        )?;
+        let num_points = builder.index_configuration.max_points;
+        let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / num_points as f64;
+        let ram_budget_in_bytes = builder.disk_build_param.build_memory_limit().in_bytes() as f64;
 
-        // Partition data stage
-        builder.checkpoint_record_manager.execute_stage(
-            WorkStage::PartitionData,
-            WorkStage::BuildIndicesOnShards(0),
-            || {
-                let num_points = builder.index_configuration.max_points;
-                let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / num_points as f64;
-
-                let ram_budget_in_bytes =
-                    builder.disk_build_param.build_memory_limit().in_bytes() as f64;
-                // calculate how many partitions we need, in order to fit in RAM budget
-                // save id_map for each partition to disk
-                partition_with_ram_budget::<Data::VectorDataType, _, _>(
-                    &self.dataset_file,
-                    builder.index_configuration.dim,
-                    sampling_rate,
-                    ram_budget_in_bytes,
-                    2, // k_base
-                    &self.merged_index_prefix,
-                    builder.storage_provider,
-                    &mut self.rng,
-                    self.pool,
-                    |num_points, dim| {
-                        let datasize = std::mem::size_of::<Data::VectorDataType>() as u64;
-                        let graph_degree = 2 * self.max_degree / 3;
-                        estimate_build_index_ram_usage(
-                            num_points,
-                            dim,
-                            datasize,
-                            graph_degree as u64,
-                            builder.disk_build_param.build_quantization(),
-                        )
-                    },
+        partition_with_ram_budget::<Data::VectorDataType, _, _>(
+            &self.dataset_file,
+            builder.index_configuration.dim,
+            sampling_rate,
+            ram_budget_in_bytes,
+            2,
+            &self.merged_index_prefix,
+            builder.storage_provider,
+            &mut self.rng,
+            self.pool,
+            |num_points, dim| {
+                let datasize = std::mem::size_of::<Data::VectorDataType>() as u64;
+                let graph_degree = 2 * self.max_degree / 3;
+                estimate_build_index_ram_usage(
+                    num_points,
+                    dim,
+                    datasize,
+                    graph_degree as u64,
+                    builder.disk_build_param.build_quantization(),
                 )
-            },
-            || {
-                // load num_parts based on file names
-                let mut p = 0;
-                while builder.storage_provider.exists(
-                    &DiskIndexWriter::get_merged_index_subshard_id_map_file(
-                        &self.merged_index_prefix,
-                        p,
-                    ),
-                ) {
-                    p += 1;
-                }
-                info!("Found {} existing partitions from previous run", p);
-                Ok(p)
             },
         )
     }
@@ -577,47 +530,11 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
         Data: GraphDataType<VectorIdType = u32>,
         StorageProvider: StorageReadProvider + StorageWriteProvider,
     {
-        if builder
-            .checkpoint_record_manager
-            .get_resumption_point(WorkStage::MergeIndices)?
-            .is_some()
-        {
-            builder.merge_shards_and_cleanup(
-                &self.merged_index_prefix,
-                num_parts,
-                self.max_degree,
-                &mut self.rng,
-            )?;
-            builder
-                .checkpoint_record_manager
-                .update(Progress::Completed, WorkStage::WriteDiskLayout)?;
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn get_shard_context<'b, Data, StorageProvider>(
-        &self,
-        builder: &'b DiskIndexBuilderCore<'_, Data, StorageProvider>,
-        p: usize,
-        num_parts: usize,
-    ) -> CheckpointContext<'b>
-    where
-        Data: GraphDataType<VectorIdType = u32>,
-        StorageProvider: StorageReadProvider + StorageWriteProvider,
-    {
-        let current_stage = WorkStage::BuildIndicesOnShards(p);
-        let next_stage = if p == num_parts - 1 {
-            // If this is the last shard, next stage is MergeIndices
-            WorkStage::MergeIndices
-        } else {
-            // Otherwise, continue with the next shard
-            WorkStage::BuildIndicesOnShards(p + 1)
-        };
-        CheckpointContext::new(
-            builder.checkpoint_record_manager.as_ref(),
-            current_stage,
-            next_stage,
+        builder.merge_shards_and_cleanup(
+            &self.merged_index_prefix,
+            num_parts,
+            self.max_degree,
+            &mut self.rng,
         )
     }
 }
@@ -663,11 +580,6 @@ pub(crate) mod disk_index_builder_tests {
     const INDEX_PATH_PREFIX: &str = "/disk_index_build/sift_learn_test_disk_index_build";
     const TRUTH_INDEX_PATH_PREFIX_R4_L50: &str = "/disk_index_build/truth_sift_learn_R4_L50";
 
-    pub struct CheckpointParams {
-        pub chunking_config: ChunkingConfig,
-        pub checkpoint_record_manager: Box<dyn CheckpointManager>,
-    }
-
     pub struct TestParams {
         pub dim: usize,
         pub full_dim: usize,
@@ -679,7 +591,7 @@ pub(crate) mod disk_index_builder_tests {
         pub index_path_prefix: String,
         pub associated_data_path: Option<String>,
         pub index_build_ram_gb: f64,
-        pub checkpoint_params: Option<CheckpointParams>,
+        pub chunking_config: Option<ChunkingConfig>,
         pub num_threads: usize,
         pub metric: Metric,
         pub block_size: usize,
@@ -698,7 +610,7 @@ pub(crate) mod disk_index_builder_tests {
                 index_path_prefix: INDEX_PATH_PREFIX.to_string(),
                 associated_data_path: None,
                 index_build_ram_gb: 1.0,
-                checkpoint_params: None,
+                chunking_config: None,
                 num_threads: 1,
                 metric: L2,
                 block_size: DEFAULT_DISK_SECTOR_LEN,
@@ -804,20 +716,14 @@ pub(crate) mod disk_index_builder_tests {
                 self.params.block_size,
             )?;
 
-            let mut disk_index = match self.params.checkpoint_params {
-                Some(ref checkpoint_params) => {
-                    let checkpoint_record_manager =
-                        checkpoint_params.checkpoint_record_manager.clone_box();
-                    let chunking_config = checkpoint_params.chunking_config.clone();
-                    DiskIndexBuilder::<T, _>::new_with_chunking_config(
-                        self.storage_provider.as_ref(),
-                        disk_index_build_parameters,
-                        config,
-                        disk_index_writer,
-                        chunking_config,
-                        checkpoint_record_manager,
-                    )
-                }
+            let mut disk_index = match self.params.chunking_config.as_ref() {
+                Some(chunking_config) => DiskIndexBuilder::<T, _>::new_with_chunking_config(
+                    self.storage_provider.as_ref(),
+                    disk_index_build_parameters,
+                    config,
+                    disk_index_writer,
+                    chunking_config.clone(),
+                ),
                 None => DiskIndexBuilder::<T, _>::new(
                     self.storage_provider.as_ref(),
                     disk_index_build_parameters,

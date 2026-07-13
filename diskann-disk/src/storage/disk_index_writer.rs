@@ -582,10 +582,6 @@ impl DiskIndexWriter {
         format!("{}_subshard-{}.bin", prefix, shard)
     }
 
-    pub fn get_merged_index_subshard_prefix(prefix: &str, shard: usize) -> String {
-        format!("{}_subshard-{}", prefix, shard)
-    }
-
     pub fn get_merged_index_subshard_mem_index_file(prefix: &str, shard: usize) -> String {
         format!("{}_subshard-{}_mem.index", prefix, shard)
     }
@@ -890,16 +886,6 @@ mod disk_index_storage_test {
         assert_eq!(
             DiskIndexWriter::get_merged_index_subshard_data_file(prefix, shard),
             "test_prefix_subshard-5.bin"
-        );
-    }
-
-    #[test]
-    fn test_get_merged_index_subshard_prefix() {
-        let prefix = "test_prefix";
-        let shard = 5;
-        assert_eq!(
-            DiskIndexWriter::get_merged_index_subshard_prefix(prefix, shard),
-            "test_prefix_subshard-5"
         );
     }
 
