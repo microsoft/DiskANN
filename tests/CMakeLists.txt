@@ -39,3 +39,54 @@ target_link_libraries(${PROJECT_NAME}_unit_tests ${PROJECT_NAME} ${DISKANN_TOOLS
 
 add_test(NAME ${PROJECT_NAME}_unit_tests COMMAND ${PROJECT_NAME}_unit_tests)
 
+# insert_fast lives entirely in the neighbor.h header, and its lower_bound
+# dispatch is selected at compile time by USE_AVX512 / USE_AVX2 (else scalar
+# binary search). To cover all three code paths we build the same test source
+# three times with different SIMD defines. These targets only need the header,
+# so they link Boost alone -- not the DiskANN library (which is compiled with a
+# single project-wide arch and cannot have its defines overridden per target).
+# Each variant is "name|space-separated defines|arch flag" (fields may be empty).
+set(INSERT_FAST_SIMD_VARIANTS
+    "avx512|USE_AVX512 USE_AVX2|/arch:AVX512"
+    "avx2|USE_AVX2|/arch:AVX2"
+    "scalar||")
+
+foreach(variant ${INSERT_FAST_SIMD_VARIANTS})
+    string(REPLACE "|" ";" variant_fields "${variant}")
+    list(GET variant_fields 0 v_name)
+    list(GET variant_fields 1 v_defs)
+    list(GET variant_fields 2 v_arch)
+
+    set(v_target ${PROJECT_NAME}_insert_fast_${v_name})
+    add_executable(${v_target} main.cpp neighbor_insert_fast_tests.cpp)
+    target_include_directories(${v_target} PRIVATE ${PROJECT_SOURCE_DIR}/include ${Boost_INCLUDE_DIR})
+    target_link_libraries(${v_target} Boost::unit_test_framework)
+
+    # On Windows the nuget Boost uses auto-link pragmas that request the
+    # versioned .lib by bare name, so its lib dir must be on the link path.
+    if(MSVC AND DEFINED DISKANN_MSVC_PACKAGES)
+        target_link_directories(${v_target} PRIVATE
+            "${DISKANN_MSVC_PACKAGES}/boost_unit_test_framework-vc${MSVC_TOOLSET_VERSION}/lib/native")
+    endif()
+
+    if(v_defs)
+        separate_arguments(v_defs_list NATIVE_COMMAND "${v_defs}")
+        target_compile_definitions(${v_target} PRIVATE ${v_defs_list})
+    endif()
+
+    if(v_arch)
+        if(MSVC)
+            target_compile_options(${v_target} PRIVATE ${v_arch})
+        else()
+            # GCC/Clang: translate MSVC /arch flags to -m equivalents.
+            if(v_arch STREQUAL "/arch:AVX512")
+                target_compile_options(${v_target} PRIVATE -mavx512f -mavx512bw -mavx2 -mfma)
+            elseif(v_arch STREQUAL "/arch:AVX2")
+                target_compile_options(${v_target} PRIVATE -mavx2 -mfma)
+            endif()
+        endif()
+    endif()
+
+    add_test(NAME ${v_target} COMMAND ${v_target})
+endforeach()
+

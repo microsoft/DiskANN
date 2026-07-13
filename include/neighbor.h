@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 #include <assert.h>
+#include <immintrin.h>
 #include <tsl/robin_map.h>
 //#include "utils.h"
 #include "color_info.h"
@@ -90,6 +91,7 @@ public:
     NeighborVector(size_t capacity)
         : _capacity(capacity)
         , _data(capacity + 1, Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()))
+        , _dist_arr(capacity + 1, std::numeric_limits<float>::max())
     {
     }
 
@@ -108,12 +110,46 @@ public:
     virtual void insert(const Neighbor& nbr, int lo, int /*kick_loc*/, int size) override
     {
         std::memmove(&_data[lo + 1], &_data[lo], (size - lo) * sizeof(Neighbor));
+        std::memmove(&_dist_arr[lo + 1], &_dist_arr[lo], (size - lo) * sizeof(float));
         _data[lo] = { nbr.id, nbr.distance };
+        _dist_arr[lo] = nbr.distance;
+    }
+
+    // SIMD lower-bound insertion (Rust-style): finds first position where
+    // distance >= target, inserts there. Caller's visited set prevents duplicates.
+    // Returns insertion index, or capacity+1 if rejected.
+    size_t insert_fast(const Neighbor& nbr, size_t size, size_t capacity)
+    {
+        float dist = nbr.distance;
+
+        if (size >= capacity && dist >= _dist_arr[size - 1])
+        {
+            if (dist > _dist_arr[size - 1])
+                return capacity + 1;
+            if (_data[size - 1].id <= nbr.id)
+                return capacity + 1;
+        }
+
+        size_t lo = _lower_bound(dist, nbr.id, size);
+
+        if (lo < capacity)
+        {
+            size_t move_count = (size < capacity ? size : capacity - 1) - lo;
+            if (move_count > 0)
+            {
+                std::memmove(&_data[lo + 1], &_data[lo], move_count * sizeof(Neighbor));
+                std::memmove(&_dist_arr[lo + 1], &_dist_arr[lo], move_count * sizeof(float));
+            }
+            _data[lo] = { nbr.id, nbr.distance };
+            _dist_arr[lo] = nbr.distance;
+        }
+        return lo;
     }
 
     void resize(size_t capacity)
     {
         _data.resize(capacity + 1, Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()));
+        _dist_arr.resize(capacity + 1, std::numeric_limits<float>::max());
         _capacity = capacity;
     }
 
@@ -127,8 +163,97 @@ public:
         // no need additional clear up
     }
 
+    float* distances() { return _dist_arr.data(); }
+
 private:
+    // Find the lower-bound position: first index where _dist_arr[i] > dist,
+    // or _dist_arr[i] == dist && _data[i].id >= id
+    size_t _lower_bound(float dist, uint32_t id, size_t size)
+    {
+        size_t lo = 0;
+#ifdef USE_AVX512
+        // AVX-512: 16 floats per iteration (512-bit)
+        __m512 target512 = _mm512_set1_ps(dist);
+        for (; lo + 16 <= size; lo += 16)
+        {
+            __m512 d = _mm512_loadu_ps(&_dist_arr[lo]);
+            __mmask16 ge_mask = _mm512_cmp_ps_mask(d, target512, _CMP_GE_OQ);
+            if (ge_mask)
+            {
+                lo += _tzcnt_u32((uint32_t)ge_mask);
+                while (lo < size && _dist_arr[lo] == dist && _data[lo].id < id)
+                    lo++;
+                return lo;
+            }
+        }
+        // AVX2 tail: handle remaining 8-15 elements
+        if (lo + 8 <= size)
+        {
+            __m256 target256 = _mm256_set1_ps(dist);
+            __m256 d = _mm256_loadu_ps(&_dist_arr[lo]);
+            int mask8 = _mm256_movemask_ps(_mm256_cmp_ps(d, target256, _CMP_GE_OQ));
+            if (mask8)
+            {
+                lo += _tzcnt_u32(mask8);
+                while (lo < size && _dist_arr[lo] == dist && _data[lo].id < id)
+                    lo++;
+                return lo;
+            }
+            lo += 8;
+        }
+#elif defined(USE_AVX2)
+        // AVX2: 8 floats per iteration (256-bit)
+        __m256 target = _mm256_set1_ps(dist);
+        for (; lo + 8 <= size; lo += 8)
+        {
+            __m256 d = _mm256_loadu_ps(&_dist_arr[lo]);
+            int ge_mask = _mm256_movemask_ps(_mm256_cmp_ps(d, target, _CMP_GE_OQ));
+            if (ge_mask)
+            {
+                lo += _tzcnt_u32(ge_mask);
+                while (lo < size && _dist_arr[lo] == dist && _data[lo].id < id)
+                    lo++;
+                return lo;
+            }
+        }
+#else
+        // No SIMD: binary search O(log n)
+        size_t hi = size;
+        while (lo < hi)
+        {
+            size_t mid = (lo + hi) >> 1;
+            if (dist < _dist_arr[mid])
+            {
+                hi = mid;
+            }
+            else if (_dist_arr[mid] < dist)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                // dist == _dist_arr[mid], tie-break by id
+                if (id <= _data[mid].id)
+                    hi = mid;
+                else
+                    lo = mid + 1;
+            }
+        }
+        return lo;
+#endif
+        // Scalar tail for SIMD paths (remaining < 8 elements)
+        for (; lo < size; lo++)
+        {
+            if (_dist_arr[lo] > dist)
+                return lo;
+            if (_dist_arr[lo] == dist && _data[lo].id >= id)
+                return lo;
+        }
+        return lo;
+    }
+
     std::vector<Neighbor> _data;
+    std::vector<float> _dist_arr;  // SoA distance array for SIMD scan
     size_t _capacity = 0;
 };
 
@@ -499,7 +624,13 @@ public:
 
     virtual void insert(const Neighbor& nbr) override
     {
-        NeighborPriorityQueueBase::insert(nbr, _data);
+        size_t lo = _data.insert_fast(nbr, _size, _capacity);
+        if (lo > _capacity)
+            return;
+        if (_size < _capacity)
+            _size++;
+        if (lo < _cur)
+            _cur = lo;
     }
 
     virtual Neighbor closest_unexpanded() override
