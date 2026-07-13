@@ -363,9 +363,7 @@ mod imp {
     }
 
     impl algos::CreateQuantComputer<Store> for Plan {
-        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<
-            &'a diskann_providers::model::pq::FixedChunkPQTable,
-        >;
+        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<'a>;
 
         fn create_quant_computer<'a>(
             &self,
