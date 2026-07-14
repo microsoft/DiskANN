@@ -61,33 +61,9 @@ Common parameters for every run below:
 | 80 | 69.67 | 76.46 | 84.00 | **89.79** | 173.2 | 116 | 165.6 | 107.2 |
 | 100 | 70.72 | 77.92 | 86.05 | **91.00** | 142.6 | 100 | 159.2 | 53 |
 
-**Recall vs L** (higher is better)
+**QPS vs recall @ L=100** (up and to the right is better)
 
-```mermaid
-xychart-beta
-    title "Enron recall @10 vs search list L"
-    x-axis "L" [20, 40, 80, 100]
-    y-axis "Recall (%)" 50 --> 95
-    line "Standard" [55.71, 64.28, 69.67, 70.72]
-    line "Queue" [61.11, 71.08, 76.46, 77.92]
-    line "Design A" [59.98, 73.93, 84.00, 86.05]
-    line "Design B" [73.38, 83.55, 89.79, 91.00]
-```
-
-_Series order: Standard, Queue, Design A, Design B (Design B is the top line)._
-
-**QPS vs L** (higher is better; see QPS caveat above)
-
-```mermaid
-xychart-beta
-    title "Enron QPS vs search list L"
-    x-axis "L" [20, 40, 80, 100]
-    y-axis "QPS" 0 --> 560
-    line "Standard" [375.5, 245.3, 173.2, 142.6]
-    line "Queue" [261, 221, 116, 100]
-    line "Design A" [542.9, 268.0, 165.6, 159.2]
-    line "Design B" [385.6, 183.2, 107.2, 53]
-```
+![Enron QPS vs recall](assets/diverse-search/enron-qps-vs-recall.png)
 
 **Observations**
 - Standard search is far below every diversity-aware method (it does not enforce
@@ -114,33 +90,9 @@ xychart-beta
 | 80 | 96.73 | 98.13 | 99.06 | 99.06 | 187.0 | 138.4 | 132.4 | 101.3 |
 | 100 | 96.91 | 98.32 | 99.25 | 99.25 | 160.3 | 84.3 | 128.8 | 105.9 |
 
-**Recall vs L** (higher is better)
+**QPS vs recall @ L=100** (up and to the right is better)
 
-```mermaid
-xychart-beta
-    title "Caselaw recall @10 vs search list L"
-    x-axis "L" [20, 40, 80, 100]
-    y-axis "Recall (%)" 90 --> 100
-    line "Standard" [90.61, 95.43, 96.73, 96.91]
-    line "Queue" [90.76, 96.53, 98.13, 98.32]
-    line "Design A" [92.04, 97.53, 99.06, 99.25]
-    line "Design B" [92.04, 97.53, 99.06, 99.25]
-```
-
-_Design A and Design B overlap exactly (identical recall)._
-
-**QPS vs L** (higher is better; see QPS caveat above)
-
-```mermaid
-xychart-beta
-    title "Caselaw QPS vs search list L"
-    x-axis "L" [20, 40, 80, 100]
-    y-axis "QPS" 0 --> 560
-    line "Standard" [554.8, 267.5, 187.0, 160.3]
-    line "Queue" [306.7, 207.0, 138.4, 84.3]
-    line "Design A" [448.8, 192.5, 132.4, 128.8]
-    line "Design B" [238.4, 151.0, 101.3, 105.9]
-```
+![Caselaw QPS vs recall](assets/diverse-search/caselaw-qps-vs-recall.png)
 
 **Observations**
 - **Design A and Design B have identical recall AND identical IO/comparison/hop
@@ -171,33 +123,9 @@ concentrated regime (like Enron).
 | 80 | 49.72 | 81.60 | 92.38 | **95.44** | 256.5 | 240.2 | 248.3 | 140.6 |
 | 100 | 49.73 | 81.78 | 93.98 | **96.33** | 227.1 | 186.1 | 192.6 | 111.9 |
 
-**Recall vs L** (higher is better)
+**QPS vs recall @ L=100** (up and to the right is better)
 
-```mermaid
-xychart-beta
-    title "YFCC recall @10 vs search list L"
-    x-axis "L" [20, 40, 80, 100]
-    y-axis "Recall (%)" 45 --> 100
-    line "Standard" [49.35, 49.60, 49.72, 49.73]
-    line "Queue" [79.26, 81.23, 81.60, 81.78]
-    line "Design A" [66.92, 83.54, 92.38, 93.98]
-    line "Design B" [83.55, 92.52, 95.44, 96.33]
-```
-
-_Series order: Standard, Queue, Design A, Design B (Design B is the top line)._
-
-**QPS vs L** (higher is better; see QPS caveat above)
-
-```mermaid
-xychart-beta
-    title "YFCC QPS vs search list L"
-    x-axis "L" [20, 40, 80, 100]
-    y-axis "QPS" 0 --> 600
-    line "Standard" [347.0, 499.7, 256.5, 227.1]
-    line "Queue" [592.6, 397.3, 240.2, 186.1]
-    line "Design A" [499.4, 441.5, 248.3, 192.6]
-    line "Design B" [442.6, 261.8, 140.6, 111.9]
-```
+![YFCC QPS vs recall](assets/diverse-search/yfcc-qps-vs-recall.png)
 
 **Observations**
 - Standard search is stuck at ~49.5 recall for every L — with a third of the
