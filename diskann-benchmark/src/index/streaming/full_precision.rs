@@ -11,7 +11,7 @@ use diskann::{
     utils::{VectorRepr, ONE},
     ANNError, ANNErrorKind, ANNResult,
 };
-use diskann_benchmark_core::recall::Rows;
+use diskann_benchmark_core::recall::{GroundTruthMode, Rows};
 use diskann_providers::model::graph::provider::async_::{
     common,
     inmem::{self, DefaultProvider},
@@ -103,6 +103,7 @@ where
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
+            GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))

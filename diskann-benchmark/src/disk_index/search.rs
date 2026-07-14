@@ -22,7 +22,7 @@ use diskann_disk::{
         search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
-    utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
+    utils::{instrumentation::PerfLogger, statistics, QueryStatistics},
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
@@ -271,8 +271,8 @@ where
         CachingStrategy::None
     };
 
-    let reader_factory = AlignedFileReaderFactory::new(disk_index_path);
-    let vertex_provider_factory = DiskVertexProviderFactory::new(reader_factory, caching_strategy)?;
+    let vertex_provider_factory =
+        DiskVertexProviderFactory::from_disk_index_path(disk_index_path, caching_strategy)?;
 
     let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
         search_params.num_threads,

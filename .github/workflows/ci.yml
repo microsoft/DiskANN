@@ -187,7 +187,7 @@ jobs:
             cargo clippy --locked --package "$crate" \
               --no-default-features \
               --all-targets \
-              --profile ci \
+              --profile test \
               --no-deps \
               --config "$RUST_CONFIG" \
               -- -Dwarnings
@@ -215,7 +215,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build workspace
-        run: cargo build --workspace --locked --profile ci
+        run: cargo build --workspace --locked --profile test
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -294,7 +294,7 @@ jobs:
       - name: "SDE Baseline Tests (Nehalem)"
         run: |
           set -euxo pipefail
-          cargo test --locked --profile ci \
+          cargo test --locked \
               --package diskann-wide \
               --package diskann-vector \
               --package diskann-quantization \
@@ -355,7 +355,7 @@ jobs:
       - name: "SDE Tests (AVX-512)"
         run: |
           set -euxo pipefail
-          cargo test --locked --profile ci \
+          cargo test --locked \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
@@ -390,8 +390,8 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo nextest run --locked --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
@@ -422,11 +422,10 @@ jobs:
         run: |
           set -euxo pipefail
           cargo nextest run --locked --workspace \
-            --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -456,7 +455,7 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest --locked --cargo-profile ci \
+          cargo llvm-cov nextest --locked \
             --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
@@ -465,7 +464,7 @@ jobs:
         env:
           RUSTFLAGS: "--cfg=miri"
         run: |
-          cargo +nightly llvm-cov nextest --locked --cargo-profile ci \
+          cargo +nightly llvm-cov nextest --locked \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 

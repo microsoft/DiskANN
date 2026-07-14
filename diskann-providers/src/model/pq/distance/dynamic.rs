@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use diskann::{ANNError, ANNResult};
 use diskann_utils::object_pool::ObjectPool;
@@ -15,19 +15,13 @@ use crate::model::pq::fixed_chunk_pq_table::FixedChunkPQTable;
 
 /// A quantized computation that works for multiple distance functions.
 #[derive(Debug)]
-pub enum QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    L2(TableL2<T>),
-    IP(TableIP<T>),
-    Cosine(DirectCosine<T>),
+pub enum QueryComputer<'a> {
+    L2(TableL2<'a>),
+    IP(TableIP<'a>),
+    Cosine(DirectCosine<'a>),
 }
 
-impl<T> QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl<'a> QueryComputer<'a> {
     /// Create a new query computer implementing the `PreprocessedDistanceFunction` API.
     ///
     /// The returned object will implement the requested distance according to the provided
@@ -68,7 +62,7 @@ where
     /// Even though PQ does not necessarily preserve the norms of compressed vectors, using L2
     /// for Cosine Normalized seems to work well enough in practice to work as a temporary fix.
     pub fn new(
-        table: T,
+        table: &'a FixedChunkPQTable,
         metric: Metric,
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
@@ -90,10 +84,7 @@ where
     }
 }
 
-impl<T> PreprocessedDistanceFunction<&[u8], f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl PreprocessedDistanceFunction<&[u8], f32> for QueryComputer<'_> {
     fn evaluate_similarity(&self, changing: &[u8]) -> f32 {
         match self {
             QueryComputer::L2(f) => PreprocessedDistanceFunction::evaluate_similarity(f, changing),
@@ -152,18 +143,12 @@ impl VTable {
 ///
 /// Internally, a mini v-table is kept to invoke the correct distance function.
 #[derive(Debug)]
-pub struct DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    table: T,
+pub struct DistanceComputer<'a> {
+    table: &'a FixedChunkPQTable,
     vtable: VTable,
 }
 
-impl<T> DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl<'a> DistanceComputer<'a> {
     /// Create a new distance computer implementing the `DistanceFunction` API for
     /// full-precision/quant and quant/quant combinations.
     ///
@@ -177,7 +162,7 @@ where
     /// * `Metric::Cosine`
     /// * `Metric::CosineNormalized`
     ///
-    pub fn new(table: T, distance: Metric) -> Self {
+    pub fn new(table: &'a FixedChunkPQTable, distance: Metric) -> Self {
         Self {
             table,
             vtable: VTable::new(distance),
@@ -188,10 +173,7 @@ where
 const INVALID_PQ_DIMENSION: &str = "invalid PQ dimension";
 
 /// Perform a comparison between a full-precision vector and quantized vector.
-impl<T> DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &[u8]) -> f32 {
         assert_eq!(
@@ -207,21 +189,18 @@ where
             "{}",
             INVALID_PQ_DIMENSION
         );
-        (self.vtable.distance_fn)(&self.table, fp, q)
+        (self.vtable.distance_fn)(self.table, fp, q)
     }
 }
 
 /// Perform a comparison between two quantized vectors.
-impl<T> DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &[u8], q1: &[u8]) -> f32 {
         let num_pq_chunks = self.table.get_num_chunks();
         assert_eq!(q0.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
         assert_eq!(q1.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
-        (self.vtable.distance_fn_qq)(&self.table, q0, q1)
+        (self.vtable.distance_fn_qq)(self.table, q0, q1)
     }
 }
 
@@ -242,18 +221,12 @@ mod tests {
     // `PreprocessedDistanceFunction`.
     //
     // This lets us reuse the testing infrastructure for the `QueryComputer`.
-    struct PreprocessedWrapper<T>
-    where
-        T: Deref<Target = FixedChunkPQTable>,
-    {
-        table: DistanceComputer<T>,
+    struct PreprocessedWrapper<'a> {
+        table: DistanceComputer<'a>,
         query: Vec<f32>,
     }
 
-    impl<T> PreprocessedDistanceFunction<&[u8], f32> for PreprocessedWrapper<T>
-    where
-        T: Deref<Target = FixedChunkPQTable>,
-    {
+    impl PreprocessedDistanceFunction<&[u8], f32> for PreprocessedWrapper<'_> {
         fn evaluate_similarity(&self, x: &[u8]) -> f32 {
             self.table.evaluate_similarity(&*self.query, x)
         }
