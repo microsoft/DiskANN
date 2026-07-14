@@ -241,6 +241,7 @@ private:
         }
         return lo;
 #endif
+#if defined(USE_AVX512) || defined(USE_AVX2)
         // Scalar tail for SIMD paths (remaining < 8 elements)
         for (; lo < size; lo++)
         {
@@ -250,6 +251,7 @@ private:
                 return lo;
         }
         return lo;
+#endif
     }
 
     std::vector<Neighbor> _data;
