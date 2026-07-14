@@ -426,15 +426,16 @@ mod imp {
             )?;
 
             let result = search::range::run(&range, &groundtruth, steps, |range_search| {
-                diskann::graph::search::Range::with_options(
-                    range_search.max_returned(),
+                diskann::graph::search::Range::builder(
                     range_search.starting_l(),
-                    range_search.beam_width(),
                     range_search.radius(),
-                    range_search.inner_radius(),
-                    range_search.initial_slack(),
-                    range_search.range_slack(),
                 )
+                .max_returned(range_search.max_returned())
+                .beam_width(range_search.beam_width())
+                .inner_radius(range_search.inner_radius())
+                .initial_slack(range_search.initial_slack())
+                .range_slack(range_search.range_slack())
+                .build()
                 .map_err(Into::into)
             })?;
 
@@ -495,15 +496,16 @@ mod imp {
 
             let result =
                 search::range::run(&filtered_range, &groundtruth, steps, |range_search| {
-                    diskann::graph::search::FilteredRange::with_options(
-                        range_search.max_returned(),
+                    diskann::graph::search::FilteredRange::builder(
                         range_search.starting_l(),
-                        range_search.beam_width(),
                         range_search.radius(),
-                        range_search.inner_radius(),
-                        range_search.initial_slack(),
-                        range_search.range_slack(),
                     )
+                    .max_returned(range_search.max_returned())
+                    .beam_width(range_search.beam_width())
+                    .inner_radius(range_search.inner_radius())
+                    .initial_slack(range_search.initial_slack())
+                    .range_slack(range_search.range_slack())
+                    .build()
                     .map_err(Into::into)
                 })?;
 

@@ -156,9 +156,10 @@ fn inner_radius_filtering() {
     let starting_l = 32;
     let filter = AlwaysTrueFilter;
 
-    let filtered_range =
-        FilteredRange::with_options(None, starting_l, None, radius, Some(inner_radius), 1.0, 1.0)
-            .unwrap();
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .inner_radius(Some(inner_radius))
+        .build()
+        .unwrap();
 
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
@@ -286,9 +287,10 @@ fn max_results_respected_means_no_second_round() {
     let max_results = 4;
     let filter = AlwaysTrueFilter;
 
-    let filtered_range =
-        FilteredRange::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
-            .unwrap();
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .max_returned(Some(max_results))
+        .build()
+        .unwrap();
 
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
@@ -345,9 +347,10 @@ fn max_results_respected_and_second_round_triggered() {
     let max_results = 200;
     let filter = AlwaysTrueFilter;
 
-    let filtered_range =
-        FilteredRange::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
-            .unwrap();
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .max_returned(Some(max_results))
+        .build()
+        .unwrap();
 
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
@@ -510,9 +513,10 @@ fn divisible_by_four_filter_no_second_round_from_max_results() {
     let max_results = starting_l / 4;
     let filter = DivisibleByFourFilter;
 
-    let filtered_range =
-        FilteredRange::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0)
-            .unwrap();
+    let filtered_range = FilteredRange::builder(starting_l, radius)
+        .max_returned(Some(max_results))
+        .build()
+        .unwrap();
 
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);

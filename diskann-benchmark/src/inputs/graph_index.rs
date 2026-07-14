@@ -81,15 +81,13 @@ impl GraphRangeSearch {
         self.initial_search_l
             .iter()
             .map(|&l| {
-                Range::with_options(
-                    self.max_returned,
-                    l,
-                    self.beam_width,
-                    self.radius,
-                    self.inner_radius,
-                    self.initial_search_slack,
-                    self.range_search_slack,
-                )
+                Range::builder(l, self.radius)
+                    .max_returned(self.max_returned)
+                    .beam_width(self.beam_width)
+                    .inner_radius(self.inner_radius)
+                    .initial_slack(self.initial_search_slack)
+                    .range_slack(self.range_search_slack)
+                    .build()
             })
             .collect()
     }

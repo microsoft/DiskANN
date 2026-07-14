@@ -30,34 +30,37 @@ pub struct FilteredRange {
     range_params: Range,
 }
 
+/// Builder for [`FilteredRange`] search parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct FilteredRangeBuilder {
+    max_returned: Option<usize>,
+    starting_l: usize,
+    beam_width: Option<usize>,
+    radius: f32,
+    inner_radius: Option<f32>,
+    initial_slack: f32,
+    range_slack: f32,
+}
+
 impl FilteredRange {
     /// Create range search with default slack values.
     pub fn new(starting_l: usize, radius: f32) -> Result<Self, RangeSearchError> {
-        let range_params = Range::with_options(None, starting_l, None, radius, None, 1.0, 1.0)?;
-        Ok(Self { range_params })
+        Self::builder(starting_l, radius).build()
     }
 
-    /// Create range search with full options.
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_options(
-        max_returned: Option<usize>,
-        starting_l: usize,
-        beam_width: Option<usize>,
-        radius: f32,
-        inner_radius: Option<f32>,
-        initial_slack: f32,
-        range_slack: f32,
-    ) -> Result<Self, RangeSearchError> {
-        let range_params = Range::with_options(
-            max_returned,
+    /// Create a builder for filtered range search parameters.
+    ///
+    /// The builder starts with the same defaults as [`Self::new`].
+    pub fn builder(starting_l: usize, radius: f32) -> FilteredRangeBuilder {
+        FilteredRangeBuilder {
+            max_returned: None,
             starting_l,
-            beam_width,
+            beam_width: None,
             radius,
-            inner_radius,
-            initial_slack,
-            range_slack,
-        )?;
-        Ok(Self { range_params })
+            inner_radius: None,
+            initial_slack: 1.0,
+            range_slack: 1.0,
+        }
     }
 
     /// Returns the maximum number of results to return.
@@ -100,6 +103,50 @@ impl FilteredRange {
     #[inline]
     pub fn range_slack(&self) -> f32 {
         self.range_params.range_slack()
+    }
+}
+
+impl FilteredRangeBuilder {
+    /// Set maximum results to return (`None` means unlimited).
+    pub fn max_returned(mut self, value: Option<usize>) -> Self {
+        self.max_returned = value;
+        self
+    }
+
+    /// Set the beam width.
+    pub fn beam_width(mut self, value: Option<usize>) -> Self {
+        self.beam_width = value;
+        self
+    }
+
+    /// Set the inner radius.
+    pub fn inner_radius(mut self, value: Option<f32>) -> Self {
+        self.inner_radius = value;
+        self
+    }
+
+    /// Set the initial-search slack factor.
+    pub fn initial_slack(mut self, value: f32) -> Self {
+        self.initial_slack = value;
+        self
+    }
+
+    /// Set the range-search slack factor.
+    pub fn range_slack(mut self, value: f32) -> Self {
+        self.range_slack = value;
+        self
+    }
+
+    /// Build validated [`FilteredRange`] parameters.
+    pub fn build(self) -> Result<FilteredRange, RangeSearchError> {
+        let range_params = Range::builder(self.starting_l, self.radius)
+            .max_returned(self.max_returned)
+            .beam_width(self.beam_width)
+            .inner_radius(self.inner_radius)
+            .initial_slack(self.initial_slack)
+            .range_slack(self.range_slack)
+            .build()?;
+        Ok(FilteredRange { range_params })
     }
 }
 
@@ -383,11 +430,26 @@ mod tests {
         assert!(FilteredRange::new(0, 0.5).is_err());
 
         // Invalid slack values
-        assert!(FilteredRange::with_options(None, 100, None, 0.5, None, 1.5, 1.0).is_err());
-        assert!(FilteredRange::with_options(None, 100, None, 0.5, None, 1.0, 0.5).is_err());
+        assert!(
+            FilteredRange::builder(100, 0.5)
+                .initial_slack(1.5)
+                .build()
+                .is_err()
+        );
+        assert!(
+            FilteredRange::builder(100, 0.5)
+                .range_slack(0.5)
+                .build()
+                .is_err()
+        );
 
         // Invalid inner radius > radius
-        assert!(FilteredRange::with_options(None, 100, None, 0.5, Some(1.0), 1.0, 1.0).is_err());
+        assert!(
+            FilteredRange::builder(100, 0.5)
+                .inner_radius(Some(1.0))
+                .build()
+                .is_err()
+        );
     }
 
     #[test]

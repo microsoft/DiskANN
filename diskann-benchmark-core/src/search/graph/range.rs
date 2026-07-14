@@ -263,7 +263,11 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             range.clone(),
-            graph::search::Range::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+            graph::search::Range::builder(10, 2.0)
+                .initial_slack(0.8)
+                .range_slack(1.2)
+                .build()
+                .unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -282,11 +286,19 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Range::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::search::Range::builder(10, 2.0)
+                    .initial_slack(0.8)
+                    .range_slack(1.2)
+                    .build()
+                    .unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Range::with_options(None, 15, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::search::Range::builder(15, 2.0)
+                    .initial_slack(0.8)
+                    .range_slack(1.2)
+                    .build()
+                    .unwrap(),
                 setup.clone(),
             ),
         ];

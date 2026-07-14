@@ -189,8 +189,10 @@ fn inner_radius_filtering() {
     let inner_radius = 6.0; // exclude closest neighbors
     let starting_l = 32;
 
-    let range_search =
-        Range::with_options(None, starting_l, None, radius, Some(inner_radius), 1.0, 1.0).unwrap();
+    let range_search = Range::builder(starting_l, radius)
+        .inner_radius(Some(inner_radius))
+        .build()
+        .unwrap();
     let mut results: Vec<Neighbor<u32>> = Vec::new();
 
     let stats = rt
