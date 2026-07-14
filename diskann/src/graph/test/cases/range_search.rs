@@ -30,6 +30,10 @@ use crate::{
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct RangeSearchBaseline {
+    /// A description of what to expect, what trends to observe, and anything else
+    /// a reviewer may need to either understand why this test is checked in or to validate
+    /// any changes that occur in the checked-in file.
+    pub(super) description: String,
     pub(super) grid_size: usize,
     pub(super) query: Vec<f32>,
     pub(super) radius: f32,
@@ -43,6 +47,7 @@ pub(super) struct RangeSearchBaseline {
 }
 
 verbose_eq!(RangeSearchBaseline {
+    description,
     grid_size,
     query,
     radius,
@@ -120,6 +125,10 @@ pub(super) fn assert_range_invariants(
 
 #[test]
 fn basic_range_search() {
+    let description = "Basic range search test to validate that the range /
+     search returns results within the specified radius and that there are /
+     no duplicate results.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -144,6 +153,7 @@ fn basic_range_search() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -165,6 +175,9 @@ fn basic_range_search() {
 
 #[test]
 fn inner_radius_filtering() {
+    let description = "Inner radius filtering test to validate that the \
+    range search correctly excludes neighbors within the inner radius.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -191,6 +204,7 @@ fn inner_radius_filtering() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -212,6 +226,10 @@ fn inner_radius_filtering() {
 
 #[test]
 fn two_round_search() {
+    let description = "Two round search test to validate that a /
+    low starting L with a large radius triggers a second round /
+    of range search.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -236,6 +254,7 @@ fn two_round_search() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -291,4 +310,3 @@ fn empty_results() {
         "empty results shouldn't trigger a second round"
     );
 }
-

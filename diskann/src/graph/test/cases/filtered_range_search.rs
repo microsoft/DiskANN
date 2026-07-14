@@ -82,15 +82,23 @@ fn assert_divisible_by_four(results: &[Neighbor<u32>]) {
     }
 }
 
-//////////////////////////////////////////////////////
-// Tests with an always-true filter that validate   //
-// that filtered range search gives correct answers //
-// and respects parameters such as inner_radius and //
-// max_results.                                     //
-//////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+// Tests with an always-true filter that validate    //
+// that filtered range search gives correct answers  //
+// and respects parameters such as inner_radius and  //
+// max_results. Note that identical behavior to the  //
+// unfiltered range search is NOT expected even when //
+// using an always-true filter, because the filtered //
+// initial search returns every predicate-satisfying //
+// point it finds as opposed to only those in        //
+// `scratch.best`.                                   //
+///////////////////////////////////////////////////////
 
 #[test]
 fn basic_range_search() {
+    let description = "Basic range search test with an always-true filter. Validates /
+     that the filtered range search returns correct results without any duplicates.";
+
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("basic_range_search");
@@ -109,6 +117,7 @@ fn basic_range_search() {
     );
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -133,6 +142,9 @@ fn basic_range_search() {
 
 #[test]
 fn inner_radius_filtering() {
+    let description = "Inner radius filtering test to validate that the \
+    range search correctly excludes neighbors within the inner radius.";
+
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("inner_radius_filtering");
@@ -152,6 +164,7 @@ fn inner_radius_filtering() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -176,6 +189,10 @@ fn inner_radius_filtering() {
 
 #[test]
 fn two_round_search() {
+    let description = "Two round search test to validate that a /
+    low starting L with a large radius triggers a second round /
+    of range search.";
+
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("two_round_search");
@@ -192,6 +209,7 @@ fn two_round_search() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -254,6 +272,9 @@ fn empty_results() {
 
 #[test]
 fn max_results_respected_means_no_second_round() {
+    let description = "Test of `max_results` that sets `initial_l_search` equal /
+     to `max_results`, with a permissive radius so that `max_results` is met / 
+     without needing a second round.";
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("max_results_respected_means_no_second_round");
@@ -273,6 +294,7 @@ fn max_results_respected_means_no_second_round() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -307,6 +329,11 @@ fn max_results_respected_means_no_second_round() {
 
 #[test]
 fn max_results_respected_and_second_round_triggered() {
+    let description = "Test of `max_results` that sets `initial_l_search` /
+     below `max_results` so that a second round of search is triggered. Note that /
+     the result set size is expected to be below `max_results` due to filtering /
+     out start points during `post_process`.";
+
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("max_results_respected_and_second_round_triggered");
@@ -326,6 +353,7 @@ fn max_results_respected_and_second_round_triggered() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -368,6 +396,10 @@ fn max_results_respected_and_second_round_triggered() {
 
 #[test]
 fn divisible_by_four_filter_second_round_triggered() {
+    let description = "Test that a small starting L triggers a second /
+     round of search when using the divisible-by-4 filter. Tests for /
+     no duplicates, respect for the radius, and respect for the filter.";
+
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("divisible_by_four_filter_second_round_triggered");
@@ -384,6 +416,7 @@ fn divisible_by_four_filter_second_round_triggered() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -413,6 +446,10 @@ fn divisible_by_four_filter_second_round_triggered() {
 
 #[test]
 fn divisible_by_four_filter_no_second_round_from_l_search() {
+    let description = "Test of divisible-by-4 filter with a larger starting L. \
+     Since only 1/4 of discovered points will satisfy the filter, the second \
+     round of search should not be triggered.";
+
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("divisible_by_four_filter_no_second_round_from_l_search");
@@ -429,6 +466,7 @@ fn divisible_by_four_filter_no_second_round_from_l_search() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -458,6 +496,9 @@ fn divisible_by_four_filter_no_second_round_from_l_search() {
 
 #[test]
 fn divisible_by_four_filter_no_second_round_from_max_results() {
+    let description = "A test of the divisible-by-4 filter with `max_results` /
+    set to starting_l / 4. The second round of search should not be triggered /
+    since the correct number of results should be discovered.";
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push("divisible_by_four_filter_no_second_round_from_max_results");
@@ -477,6 +518,7 @@ fn divisible_by_four_filter_no_second_round_from_max_results() {
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
