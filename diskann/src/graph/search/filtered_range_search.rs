@@ -16,11 +16,13 @@ use crate::{
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::inline_filter_search::{Ret, inline_filter_search_internal},
         search::{Range, RangeSearchError, range_search::RangeBuilder, record::NoopSearchRecord},
-        search_output_buffer::{self, SearchOutputBuffer},
+        search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::DataProvider,
 };
+
+use super::range_search::DistanceFiltered;
 
 /// Parameters for range-based search.
 ///
@@ -235,52 +237,6 @@ where
                 range_search_second_round: stats.range_search_second_round,
             })
         }
-    }
-}
-
-/// A [`SearchOutputBuffer`] wrapper that filters results by distance before
-/// forwarding them to an inner buffer.
-struct DistanceFiltered<'a, F, B: ?Sized> {
-    predicate: F,
-    inner: &'a mut B,
-}
-
-impl<'a, F, B: ?Sized> DistanceFiltered<'a, F, B> {
-    fn new(inner: &'a mut B, predicate: F) -> Self {
-        Self { predicate, inner }
-    }
-}
-
-impl<I, F, B> SearchOutputBuffer<I> for DistanceFiltered<'_, F, B>
-where
-    F: FnMut(f32) -> bool,
-    B: SearchOutputBuffer<I> + ?Sized,
-{
-    fn size_hint(&self) -> Option<usize> {
-        self.inner.size_hint()
-    }
-
-    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
-        if (self.predicate)(distance) {
-            self.inner.push(id, distance)
-        } else {
-            match self.inner.size_hint() {
-                Some(0) => search_output_buffer::BufferState::Full,
-                _ => search_output_buffer::BufferState::Available,
-            }
-        }
-    }
-
-    fn current_len(&self) -> usize {
-        self.inner.current_len()
-    }
-
-    fn extend<Itr>(&mut self, itr: Itr) -> usize
-    where
-        Itr: IntoIterator<Item = (I, f32)>,
-    {
-        self.inner
-            .extend(itr.into_iter().filter(|(_, dist)| (self.predicate)(*dist)))
     }
 }
 

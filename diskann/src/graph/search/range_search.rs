@@ -336,13 +336,13 @@ where
 
 /// A [`SearchOutputBuffer`] wrapper that filters results by distance before
 /// forwarding them to an inner buffer.
-struct DistanceFiltered<'a, F, B: ?Sized> {
+pub(crate) struct DistanceFiltered<'a, F, B: ?Sized> {
     predicate: F,
     inner: &'a mut B,
 }
 
 impl<'a, F, B: ?Sized> DistanceFiltered<'a, F, B> {
-    fn new(inner: &'a mut B, predicate: F) -> Self {
+    pub(crate) fn new(inner: &'a mut B, predicate: F) -> Self {
         Self { predicate, inner }
     }
 }
