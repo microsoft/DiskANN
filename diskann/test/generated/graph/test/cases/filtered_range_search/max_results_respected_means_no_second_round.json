@@ -3,6 +3,7 @@
   "test": "graph/test/cases/filtered_range_search/max_results_respected_means_no_second_round",
   "payload": {
     "comparisons": 10,
+    "description": "Test of `max_results` that sets `initial_l_search` equal /\n     to `max_results`, with a permissive radius so that `max_results` is met / \n     without needing a second round.",
     "grid_size": 5,
     "hops": 5,
     "inner_radius": null,

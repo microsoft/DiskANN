@@ -3,6 +3,7 @@
   "test": "graph/test/cases/filtered_range_search/divisible_by_four_filter_second_round_triggered",
   "payload": {
     "comparisons": 10,
+    "description": "Test that a small starting L triggers a second /\n     round of search when using the divisible-by-4 filter. Tests for /\n     no duplicates, respect for the radius, and respect for the filter.",
     "grid_size": 5,
     "hops": 120,
     "inner_radius": null,

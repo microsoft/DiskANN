@@ -3,6 +3,7 @@
   "test": "graph/test/cases/filtered_range_search/basic_range_search",
   "payload": {
     "comparisons": 53,
+    "description": "Basic range search test with an always-true filter. Validates /\n     that the filtered range search returns correct results without any duplicates.",
     "grid_size": 5,
     "hops": 33,
     "inner_radius": null,

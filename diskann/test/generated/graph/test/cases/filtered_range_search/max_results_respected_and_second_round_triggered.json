@@ -3,6 +3,7 @@
   "test": "graph/test/cases/filtered_range_search/max_results_respected_and_second_round_triggered",
   "payload": {
     "comparisons": 10,
+    "description": "Test of `max_results` that sets `initial_l_search` /\n     below `max_results` so that a second round of search is triggered. Note that /\n     the result set size is expected to be below `max_results` due to filtering /\n     out start points during `post_process`.",
     "grid_size": 5,
     "hops": 120,
     "inner_radius": null,

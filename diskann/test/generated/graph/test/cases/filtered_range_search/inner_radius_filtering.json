@@ -3,6 +3,7 @@
   "test": "graph/test/cases/filtered_range_search/inner_radius_filtering",
   "payload": {
     "comparisons": 53,
+    "description": "Inner radius filtering test to validate that the range search correctly excludes neighbors within the inner radius.",
     "grid_size": 5,
     "hops": 33,
     "inner_radius": 6.0,

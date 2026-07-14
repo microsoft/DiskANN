@@ -151,6 +151,8 @@ where
             )
             .await?;
 
+            let first_round_radius = self.radius() * self.range_slack();
+
             // merge matched_results with the best results from the first round, filtering by radius
 
             let mut merged = HashMap::with_capacity(self.starting_l() + matched_results.len());
@@ -161,14 +163,9 @@ where
                 .take(self.starting_l())
                 .chain(matched_results.iter().copied())
             {
-                if neighbor.distance <= self.radius() * self.range_slack() {
+                if neighbor.distance <= first_round_radius {
                     merged
                         .entry(neighbor.id)
-                        .and_modify(|best: &mut Neighbor<_>| {
-                            if neighbor.distance < best.distance {
-                                *best = neighbor;
-                            }
-                        })
                         .or_insert(neighbor);
                 }
             }
@@ -182,7 +179,7 @@ where
 
             let mut matched_from_first_round = Vec::with_capacity(matched_results.len());
             for neighbor in matched_results.iter().copied() {
-                if neighbor.distance <= self.radius() * self.range_slack() {
+                if neighbor.distance <= first_round_radius {
                     matched_from_first_round.push(neighbor);
                 }
             }
