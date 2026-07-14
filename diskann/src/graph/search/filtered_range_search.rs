@@ -164,9 +164,7 @@ where
                 .chain(matched_results.iter().copied())
             {
                 if neighbor.distance <= first_round_radius {
-                    merged
-                        .entry(neighbor.id)
-                        .or_insert(neighbor);
+                    merged.entry(neighbor.id).or_insert(neighbor);
                 }
             }
 
