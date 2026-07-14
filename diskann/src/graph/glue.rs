@@ -314,7 +314,7 @@ impl<T> Reject<T> {
 /// Filter decision for [`FilteredAccessor`].
 ///
 /// Both variants carry the item `T` since rejected items are useful for graph navigation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum Decision<T> {
     /// The item satisfies the filter criteria.
     Accept(Accept<T>),
