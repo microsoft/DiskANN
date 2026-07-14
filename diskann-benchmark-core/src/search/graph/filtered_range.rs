@@ -214,3 +214,150 @@ where
         })
     }
 }
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
+
+    #[derive(Debug)]
+    struct NoOdds;
+
+    impl labeled::QueryLabelProvider<u32> for NoOdds {
+        fn is_match(&self, id: u32) -> bool {
+            id.is_multiple_of(2)
+        }
+    }
+
+    #[test]
+    fn test_filtered_range() {
+        let index = search::graph::test_grid_provider();
+
+        let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
+        queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
+        queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
+        queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
+        queries.row_mut(3).copy_from_slice(&[0.0, 0.0, 4.0, 0.0]);
+        queries.row_mut(4).copy_from_slice(&[0.0, 0.0, 0.0, 4.0]);
+
+        let queries = Arc::new(queries);
+        let labels: Arc<[_]> = (0..queries.nrows())
+            .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
+            .collect();
+
+        let filtered_range = FilteredRange::new(
+            index,
+            queries.clone(),
+            Strategy::broadcast(provider::Strategy::new()),
+            labels,
+        )
+        .unwrap();
+
+        // Test the standard search interface.
+        let rt = crate::tokio::runtime(2).unwrap();
+        let results = search::search(
+            filtered_range.clone(),
+            graph::search::FilteredRange::with_options(None, 10, None, 2.0, None, 0.8, 1.2)
+                .unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+            &rt,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), queries.nrows());
+        let rows = results.ids().as_rows();
+
+        // Check that only even IDs are returned.
+        for r in 0..rows.nrows() {
+            for &id in rows.row(r) {
+                assert_eq!(id % 2, 0, "Found odd ID {} in row {}", id, r);
+            }
+        }
+
+        const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+        let setup = search::Setup {
+            threads: TWO,
+            tasks: TWO,
+            reps: TWO,
+        };
+
+        // Try the aggregated strategy.
+        let parameters = [
+            search::Run::new(
+                graph::search::FilteredRange::with_options(None, 10, None, 2.0, None, 0.8, 1.2)
+                    .unwrap(),
+                setup.clone(),
+            ),
+            search::Run::new(
+                graph::search::FilteredRange::with_options(None, 15, None, 2.0, None, 0.8, 1.2)
+                    .unwrap(),
+                setup.clone(),
+            ),
+        ];
+
+        let all = search::search_all(filtered_range, parameters, Aggregator::new(rows)).unwrap();
+
+        assert_eq!(all.len(), 2);
+        for summary in all {
+            assert_eq!(summary.setup, setup);
+            assert_eq!(summary.end_to_end_latencies.len(), TWO.get());
+            assert_eq!(summary.mean_latencies.len(), TWO.get());
+            assert_eq!(summary.p90_latencies.len(), TWO.get());
+            assert_eq!(summary.p99_latencies.len(), TWO.get());
+
+            let ap = summary.average_precision;
+            assert_eq!(ap.num_queries, queries.nrows());
+            assert_eq!(
+                ap.average_precision, 1.0,
+                "we used a search as the groundtruth"
+            );
+        }
+    }
+
+    #[test]
+    fn test_filtered_range_error() {
+        let index = search::graph::test_grid_provider();
+        let queries = Arc::new(Matrix::new(0.0f32, 2, index.provider().dim()));
+
+        let labels: Arc<[_]> = (0..queries.nrows() + 1)
+            .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
+            .collect();
+
+        let strategy = provider::Strategy::new();
+
+        // Error for a mismatch between strategies and queries.
+        let err = FilteredRange::new(
+            index.clone(),
+            queries.clone(),
+            Strategy::collection([strategy.clone()]),
+            labels.clone(),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("1 strategy was provided when 2 were expected"),
+            "failed with {msg}"
+        );
+
+        // Error for a mismatch between label providers and queries.
+        let err = FilteredRange::new(
+            index,
+            queries.clone(),
+            Strategy::broadcast(strategy),
+            labels,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "Number of label providers (3) must be equal to the number of queries (2)"
+            ),
+            "failed with {msg}"
+        );
+    }
+}
