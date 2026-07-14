@@ -150,8 +150,8 @@ where
                 None,
             )
             .await?;
-
-            let first_round_radius = self.radius() * self.range_slack();
+            
+            let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             // merge matched_results with the best results from the first round, filtering by radius
 
@@ -163,7 +163,7 @@ where
                 .take(self.starting_l())
                 .chain(matched_results.iter().copied())
             {
-                if neighbor.distance <= first_round_radius {
+                if neighbor.distance <= self.radius() {
                     merged.entry(neighbor.id).or_insert(neighbor);
                 }
             }
@@ -175,59 +175,55 @@ where
                     .then_with(|| left.id.cmp(&right.id))
             });
 
-            let mut matched_from_first_round = Vec::with_capacity(matched_results.len());
+            let mut matched_within_radius = Vec::with_capacity(matched_results.len());
             for neighbor in matched_results.iter().copied() {
-                if neighbor.distance <= first_round_radius {
-                    matched_from_first_round.push(neighbor);
+                if neighbor.distance <= self.radius() {
+                    matched_within_radius.push(neighbor);
                 }
             }
 
             // clear the visited set and repopulate it with all in-range points found so far, filtered and unfiltered
             scratch.visited.clear();
+            scratch.range_frontier.clear();
             for neighbor in in_range.iter() {
                 scratch.visited.insert(neighbor.id);
+                scratch.range_frontier.push_back(neighbor.id);
             }
-            scratch.in_range = in_range;
 
-            let (stats, all_matched) = if scratch.in_range.len()
+            let stats = if in_range.len()
                 >= ((self.starting_l() as f32) * self.initial_slack()) as usize
-                && matched_from_first_round.len() < self.max_returned().unwrap_or(usize::MAX)
+                && matched_within_radius.len() < max_returned
             {
                 // Move to filtered range search
-                let (range_stats, matched_from_second_round) = filtered_range_search_internal(
+                let range_stats = filtered_range_search_internal(
                     index.max_degree_with_slack(),
                     &self,
                     &mut accessor,
                     &mut scratch,
+                    &mut matched_within_radius,
                 )
                 .await?;
 
-                let mut all_matched = matched_from_first_round;
-                let mut matched_from_second_round = matched_from_second_round;
-                all_matched.append(&mut matched_from_second_round);
+                
+                InternalSearchStats {
+                    cmps,
+                    hops: hops + range_stats.hops,
+                    range_search_second_round: true,
+                }
 
-                (
-                    InternalSearchStats {
-                        cmps,
-                        hops: hops + range_stats.hops,
-                        range_search_second_round: true,
-                    },
-                    all_matched,
-                )
             } else {
-                (
-                    InternalSearchStats {
-                        cmps,
-                        hops,
-                        range_search_second_round: false,
-                    },
-                    matched_from_first_round,
-                )
+                InternalSearchStats {
+                    cmps,
+                    hops,
+                    range_search_second_round: false,
+                }
             };
 
             // Post-process results directly into the output buffer, filtering by radius.
             let radius = self.radius();
             let inner_radius = self.inner_radius();
+
+
             let mut filtered = DistanceFiltered::new(output, |dist| {
                 if let Some(ir) = inner_radius
                     && dist <= ir
@@ -237,19 +233,13 @@ where
                 dist <= radius
             });
 
-            let max_returned = if let Some(max) = self.max_returned() {
-                max
-            } else {
-                usize::MAX
-            };
-
-            let matched_truncated = all_matched.iter().take(max_returned);
+            let truncated_matched = matched_within_radius.iter().copied().take(max_returned);
 
             let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
-                    matched_truncated.copied(),
+                    truncated_matched,
                     &mut filtered,
                 )
                 .await
@@ -324,21 +314,16 @@ pub(crate) async fn filtered_range_search_internal<A>(
     search_params: &FilteredRange,
     accessor: &mut A,
     scratch: &mut SearchScratch<A::Id>,
-) -> ANNResult<(InternalSearchStats, Vec<Neighbor<A::Id>>)>
+    matched_in_range: &mut Vec<Neighbor<A::Id>>,
+) -> ANNResult<InternalSearchStats>
 where
     A: FilteredAccessor,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 
-    for neighbor in &scratch.in_range {
-        scratch.range_frontier.push_back(neighbor.id);
-    }
-
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
 
     let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
-
-    let mut matched_in_range = Vec::new();
 
     while !scratch.range_frontier.is_empty() && matched_in_range.len() < max_returned {
         scratch.beam_nodes.clear();
@@ -370,7 +355,6 @@ where
                 let id = decision.into_inner();
 
                 scratch.range_frontier.push_back(id);
-                scratch.in_range.push(Neighbor::new(id, distance));
 
                 if is_accept && matched_in_range.len() < max_returned {
                     matched_in_range.push(Neighbor::new(id, distance));
@@ -381,14 +365,11 @@ where
         scratch.hops += scratch.beam_nodes.len() as u32;
     }
 
-    Ok((
-        InternalSearchStats {
-            cmps: scratch.cmps,
-            hops: scratch.hops,
-            range_search_second_round: true,
-        },
-        matched_in_range,
-    ))
+    Ok(InternalSearchStats {
+        cmps: scratch.cmps,
+        hops: scratch.hops,
+        range_search_second_round: true,
+    })    
 }
 
 ///////////

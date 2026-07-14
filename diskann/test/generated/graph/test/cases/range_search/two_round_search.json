@@ -3,6 +3,7 @@
   "test": "graph/test/cases/range_search/two_round_search",
   "payload": {
     "comparisons": 11,
+    "description": "Two round search test to validate that a /\n    low starting L with a large radius triggers a second round /\n    of range search.",
     "grid_size": 5,
     "hops": 120,
     "inner_radius": null,

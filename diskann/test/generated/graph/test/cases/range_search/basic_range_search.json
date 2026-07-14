@@ -3,6 +3,7 @@
   "test": "graph/test/cases/range_search/basic_range_search",
   "payload": {
     "comparisons": 54,
+    "description": "Basic range search test to validate that the range /\n     search returns results within the specified radius and that there are /\n     no duplicate results.",
     "grid_size": 5,
     "hops": 33,
     "inner_radius": null,
