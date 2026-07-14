@@ -1,6 +1,7 @@
 # Attribute-Diversity Search — Benchmark Results
 
-Comparison of attribute-bucket diverse search strategies on three datasets, all
+Comparison of attribute-bucket diverse search strategies across several dataset
+and attribute regimes, all
 evaluated against a **diverse ground truth** (GT built so that no more than
 `diverse_results_k` results share the same attribute bucket).
 
@@ -32,8 +33,16 @@ Common parameters for every run below:
 | Dataset | Dim | Diversity attribute | Attribute character |
 |---|---|---|---|
 | Enron | 1,369 | attribute id 0 | **Concentrated** — many vectors share a bucket |
-| Caselaw | 1,536 | `doc_id` | **Diffuse** — 200K vectors span 172,518 docs (18,383 multi-chunk) |
-| YFCC | 192 | `camera` model | **Concentrated** — 67 distinct cameras, largest bucket 67,783 (33.9%), median bucket 110 |
+| Caselaw | 1,536 | `doc_id` | **Diffuse, uncorrelated** — 200K vectors span 172,518 docs (18,383 multi-chunk) |
+| Caselaw | 1,536 | `court_jurisdiction` | **Concentrated + distance-correlated** — 60 courts, largest bucket 47,358 (23.7%), median 1,668 |
+| YFCC | 192 | `camera` model | **Concentrated, ~uncorrelated** — 67 distinct cameras, largest bucket 67,783 (33.9%), median bucket 110 |
+
+Two axes matter for diversity search: how **concentrated** the buckets are (does
+the sampler need to over-fetch?) and how **correlated** the attribute is with
+distance (are same-bucket vectors clustered together in the search pool?). The
+caselaw `court_jurisdiction` attribute is the interesting case: cases from the
+same court share citations and legal boilerplate, so their embeddings cluster —
+the attribute is *both* concentrated and strongly correlated with distance.
 
 ### Strategies compared
 
@@ -81,7 +90,7 @@ Common parameters for every run below:
 
 ---
 
-## Caselaw (diffuse attribute — `doc_id`)
+## Caselaw (diffuse, uncorrelated attribute — `doc_id`)
 
 | L | Standard recall | Queue recall | Design A recall | Design B recall | Std QPS | Queue QPS | A QPS | B QPS |
 |---|---|---|---|---|---|---|---|---|
@@ -106,6 +115,50 @@ Common parameters for every run below:
 - Design A/B edge out the queue method on recall (~1–1.3 points) via
   exact-distance reranking, and Design A is also competitive on QPS
   (e.g. 448.8 vs queue 306.7 at L=20).
+
+---
+
+## Caselaw (concentrated + distance-correlated attribute — `court_jurisdiction`)
+
+Same 200K caselaw vectors and index as above, but the diversity attribute is now
+the natural `court_jurisdiction` field (60 US courts) instead of `doc_id`. This
+attribute is **both** concentrated (largest bucket 23.7%, median 1,668) **and
+strongly correlated with distance** — cases from the same court cluster together
+in embedding space. This is the hardest and most realistic regime: a query's
+nearest neighbors are dominated by a few jurisdictions, so enforcing one-per-bucket
+forces the search to reach far past the plain top-L pool.
+
+| L | Standard recall | Queue recall | Design A recall | Design B recall | Std QPS | Queue QPS | A QPS | B QPS |
+|---|---|---|---|---|---|---|---|---|
+| 20 | 34.74 | 71.35 | 46.30 | 59.24 | 387.9 | 434.9 | 413.5 | 317.1 |
+| 40 | 35.37 | 76.19 | 59.68 | 69.58 | 394.3 | 278.7 | 303.8 | 203.3 |
+| 80 | 35.79 | 78.72 | 69.74 | 77.62 | 212.2 | 176.4 | 211.1 | 114.2 |
+| 100 | 35.91 | 79.12 | 72.59 | **79.92** | 165.6 | 152.1 | 174.5 | 96.0 |
+
+**QPS vs recall @ L=100** (up and to the right is better)
+
+![Caselaw jurisdiction QPS vs recall](assets/diverse-search/caselaw-jurisdiction-qps-vs-recall.png)
+
+**Observations**
+- **This regime inverts the earlier ranking: the queue beats Design A at every L**
+  (e.g. 71.4 vs 46.3 at L=20). When the attribute is correlated with distance, the
+  plain top-L pool that Design A reranks is *saturated* with the dominant
+  jurisdictions, so no amount of exact-distance reranking can recover the missing
+  buckets. The queue enforces diversity *during* traversal, steering the walk out
+  of the dominant cluster early — exactly what post-processing cannot do.
+- **Design B recovers most of the gap** via adaptive over-fetch (59.2 vs A's 46.3
+  at L=20) and finally edges past the queue on recall at L=100 (79.9 vs 79.1) — but
+  only by fetching a much larger pool (IO 210 vs queue's 114), so its QPS is the
+  lowest of all methods there. On the QPS-vs-recall plot the queue **dominates
+  Design B** (same recall, ~1.6× the throughput).
+- Standard search collapses to ~35% and never improves with L — with buckets both
+  concentrated and distance-correlated, the ordinary top-k is almost entirely the
+  wrong jurisdictions.
+- Takeaway: **for a distance-correlated attribute, in-traversal diversity (queue)
+  is the efficient choice; post-processing (Design A/B) must over-fetch heavily to
+  compete, and even then only matches — never beats — the queue on the
+  recall/QPS frontier.** This is the opposite of the uncorrelated concentrated
+  case (YFCC) where Design B is the clear winner.
 
 ---
 
@@ -145,17 +198,28 @@ concentrated regime (like Enron).
 
 ## Summary
 
-The three datasets exercise opposite regimes and together validate the adaptive
-design:
+The datasets exercise the two axes that govern diverse search — bucket
+**concentration** and attribute/distance **correlation**:
 
-- **Concentrated attribute (Enron, YFCC):** big win for Design B — adaptive
-  over-fetch recovers substantial recall (+13 over queue on Enron at L=20; +11 on
-  YFCC at L=40) at a throughput cost. On YFCC the queue method plateaus near 81%
-  while Design B climbs to 96%.
-- **Diffuse attribute (Caselaw):** the sampler detects abundant diversity and
-  Design B performs no over-fetch — it matches Design A on recall and IO (its only
-  cost is the sampling walk), and both slightly beat the queue method.
+- **Concentrated, ~uncorrelated attribute (Enron, YFCC):** big win for Design B —
+  adaptive over-fetch recovers substantial recall (+13 over queue on Enron at
+  L=20; +11 on YFCC at L=40) at a throughput cost. On YFCC the queue method
+  plateaus near 81% while Design B climbs to 96%.
+- **Diffuse attribute (Caselaw `doc_id`):** the sampler detects abundant diversity
+  and Design B performs no over-fetch — it matches Design A on recall and IO (its
+  only cost is the sampling walk), and both slightly beat the queue method.
+- **Concentrated + distance-correlated attribute (Caselaw `court_jurisdiction`):**
+  the ranking *inverts*. Because same-bucket vectors cluster in distance, the plain
+  top-L pool is saturated with the dominant buckets, so post-processing (Design A)
+  falls far behind the queue (46 vs 71 recall at L=20). The queue enforces diversity
+  during traversal and is the efficient choice; Design B claws back most of the gap
+  via heavy over-fetch and ties the queue on recall at L=100, but at ~1.6× the IO,
+  so the queue dominates it on the recall/QPS frontier.
 
-Recommendation: prefer **Design B**. It matches Design A when diversity is free
-(diffuse attributes) and outperforms both Design A and the queue method when the
-attribute is concentrated, without needing per-dataset tuning of L.
+Recommendation: the best strategy depends on the attribute. For **concentrated,
+distance-uncorrelated** attributes, **Design B** wins (adaptive over-fetch, no
+per-dataset L tuning). For **distance-correlated** attributes, in-traversal
+diversity (the **queue**) is more efficient than any post-processing approach —
+diversity has to be enforced during the walk, not after it. Design A remains a
+cheap, effective choice whenever the top-L pool already contains enough distinct
+buckets (diffuse or weakly-correlated attributes).
