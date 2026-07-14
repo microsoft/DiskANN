@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Range-based search within a distance radius.
+//! Filtered range-based search with a distance radius
 
 use diskann_utils::future::SendFuture;
 
