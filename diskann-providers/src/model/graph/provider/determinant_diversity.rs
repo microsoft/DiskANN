@@ -20,10 +20,16 @@
 //! alpha_i = similarity(d_i)^power / sqrt(eta) derived from its distance d_i
 //! to the query (see `distance_to_similarity`). Letting X be the matrix of
 //! scaled rows x_i = alpha_i * v_i, we approximately maximize
-//! det(X_S * X_S^T + eta * I) over subsets S of size k via greedy pivoted
-//! Gram-Schmidt: at each step we pick the row with the largest residual norm
-//! and deflate the rest against it. See [`greedy_orthogonal_select`] for the
-//! full derivation.
+//! det(X_S * X_S^T + eta * I) over subsets S of size k using one of two greedy
+//! selection strategies depending on the regularization:
+//!
+//! - `eta == 0`: pivoted modified Gram-Schmidt (max-volume QR). At each step we
+//!   pick the row with the largest residual norm and deflate the rest against
+//!   it. See [`determinant_diversity_select_qr`].
+//! - `eta > 0`: Sherman-Morrison updates of the inverse Gram matrix. At each
+//!   step we pick the row with the largest marginal log-determinant gain
+//!   `ln(1 + x^T M^{-1} x)` and rank-1 update `M^{-1}`. See
+//!   [`determinant_diversity_select_sherman_morrison`].
 //!
 //! # Parameters
 //!
@@ -241,103 +247,154 @@ pub fn determinant_diversity(
         }
     };
 
-    // For eta=0, the inv_sqrt_eta factor is 1.0 (greedy orthogonalization without regularization).
-    // For eta>0, the factor scales residuals for ridge-regularized determinant computation.
-    let inv_sqrt_eta = if params.eta() > 0.0 {
-        1.0 / params.eta().sqrt()
+    // Dispatch to one of two selection algorithms depending on regularization:
+    //   * eta == 0  -> pivoted modified Gram-Schmidt (max-volume QR), O(n * k * dim).
+    //   * eta  > 0  -> ridge-regularized selection via Sherman-Morrison updates
+    //                  of the inverse Gram matrix, O(n * k * dim^2).
+    if params.eta() == 0.0 {
+        Ok(determinant_diversity_select_qr(
+            candidates,
+            distances,
+            k,
+            params.power(),
+            distance_range,
+        ))
     } else {
-        1.0
-    };
-
-    Ok(greedy_orthogonal_select(
-        candidates,
-        distances,
-        k,
-        params.power(),
-        inv_sqrt_eta,
-        distance_range,
-    ))
+        let inv_sqrt_eta = 1.0 / params.eta().sqrt();
+        Ok(determinant_diversity_select_sherman_morrison(
+            candidates,
+            distances,
+            k,
+            params.power(),
+            inv_sqrt_eta,
+            distance_range,
+        ))
+    }
 }
 
-/// Core greedy selection algorithm for Determinant-Diversity.
+/// Selection algorithm for the unregularized (`eta == 0`) variant.
 ///
-/// # Mathematical formulation
-///
-/// Let the input candidate set be represented by matrix rows v_i (for i = 1..n)
-/// and a parallel distance slice d_i, where d_i is the candidate distance to the
-/// query and v_i is the full-precision vector in R^dim. Define the per-candidate scale
-///
-/// ```text
-/// alpha_i = similarity(d_i)^power * (1 / sqrt(eta))
-/// ```
-///
-/// where similarity(.) in [0, 1] is the normalized "lower-distance-is-better"
-/// score from `distance_to_similarity`, and `1 / sqrt(eta)` is `inv_sqrt_eta`
-/// (it equals 1 in the unregularized eta == 0 branch -- see the caller). The
-/// scaled vectors are
+/// Performs greedy max-volume selection via incremental *column-pivoted
+/// modified Gram-Schmidt* (QR) on the relevance-scaled candidate rows. Each
+/// row is scaled in place by `similarity(d_i)^power` and then treated as a
+/// residual vector `r_i`. At every step the row with the largest residual
+/// norm is chosen as the next pivot and projected out of all remaining rows:
 ///
 /// ```text
-/// x_i = alpha_i * v_i.
+/// q      = r_j / ||r_j||
+/// r_i   := r_i - (r_i . q) q
+/// ||r_i||^2 -= (r_i . q)^2      (rank-1 Pythagorean update, clamped at 0)
 /// ```
 ///
-/// Define the (regularized) Gram matrix of any subset S = { i_1, ..., i_m } as
-///
-/// ```text
-/// G_S = X_S * X_S^T + eta * I,
-/// ```
-///
-/// where X_S stacks the rows x_i for i in S. The goal is to pick S of size k
-/// that approximately maximizes det(G_S), i.e. selects vectors whose scaled
-/// rows span the largest volume -- geometrically diverse, while alpha_i keeps
-/// relevance. We solve this greedily, which is equivalent to *column-pivoted
-/// modified Gram-Schmidt / QR* on the rows x_i.
-///
-/// # Algorithm (pivoted QR view)
-///
-/// Maintain a residual vector r_i for each candidate. Initially r_i = x_i and
-/// ||r_i||^2 = <x_i, x_i>. At each step:
-///
-/// 1. **Pivot.** Pick the available candidate i* with the largest residual
-///    norm: i* = argmax over available i of ||r_i||^2. This is the direction
-///    that contributes the most to the running volume / determinant expansion
-///    (since det(G_S) = product of ||r_{i_j*}||^2 along the selection path).
-///
-/// 2. **Project & deflate.** For every remaining candidate i, project r_i
-///    onto the chosen pivot direction r* = r_{i*} and remove that component:
-///
-///    ```text
-///    pi_i = <r_i, r*> / ||r*||^2
-///    r_i  := r_i - pi_i * r*
-///    ```
-///
-/// 3. **Norm update (Pythagoras).** Because the new r_i is orthogonal to r*
-///    by construction,
-///
-///    ```text
-///    ||r_i_new||^2 = ||r_i||^2 - pi_i^2 * ||r*||^2.
-///    ```
-///
-///    We update the cached squared norm in place using this identity (clamped
-///    at 0 for numerical safety) instead of recomputing the dot product.
-///
-/// Repeat until k pivots are selected. The returned order is the order in
-/// which pivots were chosen, which is the diversity-promoting reranking.
-///
-/// # Parameters
-///
-/// - `inv_sqrt_eta`: scalar 1 / sqrt(eta) baked into the residuals so that
-///   the residual norms reflect the regularized Gram matrix X X^T + eta * I.
-///   Use 1.0 for the unregularized (eta == 0) variant.
-/// - `distances`: candidate distances parallel to matrix rows.
-/// - `power`: relevance exponent applied to the per-candidate similarity.
-/// - `distance_range`: min/max distances among the candidates, used to
-///   normalize distances into similarities in [0, 1].
+/// The returned order is the order in which pivots were chosen, which is the
+/// diversity-promoting reranking.
 ///
 /// # Complexity
 ///
-/// O(n * k * dim) -- for each of k pivots we touch all n residual rows of
-/// length `dim`. Memory is O(n * dim) for the contiguous residual matrix.
-fn greedy_orthogonal_select(
+/// O(n * k * dim): for each of `k` pivots we sweep all `n` residual rows of
+/// length `dim`.
+fn determinant_diversity_select_qr(
+    mut candidates: MutMatrixView<'_, f32>,
+    distances: &[f32],
+    k: usize,
+    power: f32,
+    distance_range: DistanceRange,
+) -> Vec<usize> {
+    /// Residual norms at or below this threshold are treated as numerically
+    /// zero: the remaining rows already lie in the span of the selected pivots.
+    const LINEAR_DEPENDENCE_TOLERANCE: f32 = 1e-12;
+
+    let n = candidates.nrows();
+    let dim = candidates.ncols();
+    let k = k.min(n);
+    if k == 0 {
+        return Vec::new();
+    }
+
+    // Scale rows in place to form the initial residuals
+    // r_i = similarity(d_i)^power * v_i.
+    for (i, distance_to_query) in distances.iter().enumerate() {
+        let scale = distance_to_similarity(*distance_to_query, distance_range).powf(power);
+        for value in candidates.row_mut(i) {
+            *value *= scale;
+        }
+    }
+
+    // Squared residual norms, updated in place via ||r'||^2 = ||r||^2 - (r . q)^2.
+    let mut residual_norm_sq: Vec<f32> = (0..n)
+        .map(|i| qr_dot(candidates.row(i), candidates.row(i)))
+        .collect();
+    let mut available = vec![true; n];
+    let mut selected = Vec::with_capacity(k);
+    // Reused scratch for the pivot residual -- avoids a per-iteration allocation.
+    let mut pivot = vec![0.0f32; dim];
+
+    while selected.len() < k {
+        // Pick the available candidate with the largest residual norm. `>=`
+        // keeps the last maximal index, matching prior tie-breaking behavior.
+        let mut best_idx = None;
+        let mut best_score = f32::NEG_INFINITY;
+        for i in 0..n {
+            if available[i] && residual_norm_sq[i] >= best_score {
+                best_score = residual_norm_sq[i];
+                best_idx = Some(i);
+            }
+        }
+        let Some(best_idx) = best_idx else {
+            break;
+        };
+
+        available[best_idx] = false;
+        selected.push(best_idx);
+
+        if best_score <= LINEAR_DEPENDENCE_TOLERANCE {
+            // Remaining residuals already lie in the span of the selected
+            // vectors; keep taking them in arbitrary order until full.
+            continue;
+        }
+
+        // Copy the pivot residual out once so the matrix can be mutated freely.
+        // Fold the normalization into a single scalar:
+        //   q = r_j / ||r_j||  =>  r_i -= (r_i . q) q = ((r_i . r_j)/||r_j||^2) r_j.
+        pivot.copy_from_slice(candidates.row(best_idx));
+        let inv_pivot_norm_sq = 1.0 / best_score;
+
+        // Project the pivot direction out of every remaining residual -- O(n * dim).
+        for i in 0..n {
+            if !available[i] {
+                continue;
+            }
+            let row = candidates.row_mut(i);
+            let dot_with_pivot = qr_dot(row, &pivot); // r_i . r_j
+            if dot_with_pivot == 0.0 {
+                continue;
+            }
+            let alpha = dot_with_pivot * inv_pivot_norm_sq; // (r_i . r_j)/||r_j||^2
+            qr_axpy(-alpha, &pivot, row); // r_i -= alpha * r_j
+            // Rank-1 norm update:
+            // ||r'||^2 = ||r||^2 - (r_i . q)^2 = ||r||^2 - (r_i . r_j) * alpha.
+            residual_norm_sq[i] = (residual_norm_sq[i] - dot_with_pivot * alpha).max(0.0);
+        }
+    }
+
+    selected
+}
+
+/// Selection algorithm for the ridge-regularized (`eta > 0`) variant.
+///
+/// Greedily maximizes the log-determinant of the regularized Gram matrix
+/// `X_S * X_S^T + eta * I` by maintaining the inverse of `I + sum_j x_j x_j^T`
+/// and applying a Sherman-Morrison rank-1 update after each pick. Each
+/// candidate row is scaled in place by `similarity(d_i)^power / sqrt(eta)`.
+///
+/// At each step the candidate maximizing the marginal gain
+/// `ln(1 + x^T M^{-1} x)` is selected, where `M^{-1}` is the current inverse.
+///
+/// # Complexity
+///
+/// O(n * k * dim^2): each of `k` steps forms an `M^{-1} x` product (O(dim^2))
+/// for all `n` candidates and applies an O(dim^2) rank-1 inverse update.
+fn determinant_diversity_select_sherman_morrison(
     mut candidates: MutMatrixView<'_, f32>,
     distances: &[f32],
     k: usize,
@@ -346,103 +403,144 @@ fn greedy_orthogonal_select(
     distance_range: DistanceRange,
 ) -> Vec<usize> {
     let n = candidates.nrows();
+    let dim = candidates.ncols();
     let k = k.min(n);
     if k == 0 {
         return Vec::new();
     }
 
-    // Cached squared norms ||r_i||^2 for each row. Updated in place via the
-    // Pythagorean identity in step 3 above.
-    let mut norms_sq = Vec::with_capacity(n);
-
-    // Step 0: scale rows in-place to initialize residuals r_i = alpha_i * v_i,
-    // then compute their squared norms.
-    // alpha_i = similarity(d_i)^power * inv_sqrt_eta.
+    // Scale rows in place: x_i = similarity(d_i)^power * inv_sqrt_eta * v_i.
     for (i, distance_to_query) in distances.iter().enumerate() {
         let scale =
             distance_to_similarity(*distance_to_query, distance_range).powf(power) * inv_sqrt_eta;
         for value in candidates.row_mut(i) {
             *value *= scale;
         }
-        let norm_sq = dot_product(candidates.row(i), candidates.row(i));
-        norms_sq.push(norm_sq);
     }
 
+    let mut matrix_inverse = identity_matrix(dim);
     let mut available = vec![true; n];
     let mut selected = Vec::with_capacity(k);
-    // Scratch buffer: projection coefficient pi_i for each row against the
-    // current pivot. Sized n once and overwritten each iteration.
-    let mut projections = vec![0.0f32; n];
 
-    for _ in 0..k {
-        // --- Step 1: Pivot ---
-        // Pick the available candidate with the largest residual norm.
-        // partial_cmp can return None for NaN; treat NaN as Equal so the
-        // iterator's max picks the first non-NaN candidate it has seen.
-        let best_idx = available
-            .iter()
-            .enumerate()
-            .filter(|&(_, &avail)| avail)
-            .max_by(|(i, _), (j, _)| {
-                norms_sq[*i]
-                    .partial_cmp(&norms_sq[*j])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(i, _)| i);
-
-        let Some(selected_index) = best_idx else {
+    while selected.len() < k && available.iter().any(|&avail| avail) {
+        let Some((best_idx, best_matrix_vector, best_residual_sq)) =
+            best_sherman_morrison_candidate(&candidates, &available, &matrix_inverse, dim)
+        else {
             break;
         };
 
-        selected.push(selected_index);
-        available[selected_index] = false;
-
-        // No more deflation needed once the last pivot has been chosen.
-        if selected.len() == k {
-            break;
-        }
-
-        let best_norm_sq = norms_sq[selected_index];
-        // If the pivot has zero (or numerically negative) residual norm, the
-        // remaining rows already lie in the span of previously selected
-        // pivots; skip deflation to avoid dividing by zero.
-        if best_norm_sq <= 0.0 {
-            continue;
-        }
-
-        // 1 / ||r*||^2, factored out of the projection formula below.
-        let inv_norm_sq = 1.0 / best_norm_sq;
-        // Snapshot the pivot row r* before mutably iterating over the other
-        // rows of `residuals` (they share the same backing storage).
-        let r_star_copy: Vec<f32> = candidates.row(selected_index).to_vec();
-
-        // --- Step 2a: Compute projection coefficients pi_i = <r_i, r*> / ||r*||^2.
-        for i in 0..n {
-            if !available[i] {
-                projections[i] = 0.0;
-            } else {
-                projections[i] = dot_product(candidates.row(i), &r_star_copy) * inv_norm_sq;
-            }
-        }
-
-        // --- Step 2b: Deflate r_i <- r_i - pi_i * r*, and
-        // --- Step 3:  update ||r_i||^2 <- ||r_i||^2 - pi_i^2 * ||r*||^2.
-        for i in 0..n {
-            if !available[i] {
-                continue;
-            }
-
-            let projection = projections[i];
-            for (residual, &star) in candidates.row_mut(i).iter_mut().zip(r_star_copy.iter()) {
-                *residual -= projection * star;
-            }
-
-            // Pythagorean update; clamp at 0 to absorb floating-point drift.
-            norms_sq[i] = (norms_sq[i] - projection * projection * best_norm_sq).max(0.0);
-        }
+        available[best_idx] = false;
+        selected.push(best_idx);
+        update_sherman_morrison_inverse(
+            &mut matrix_inverse,
+            &best_matrix_vector,
+            1.0 + best_residual_sq,
+            dim,
+        );
     }
 
     selected
+}
+
+/// Finds the available candidate maximizing the Sherman-Morrison marginal gain
+/// `ln(1 + x^T M^{-1} x)`. Returns its row index, the product `M^{-1} x`
+/// (reused for the inverse update), and the raw residual `x^T M^{-1} x`.
+///
+/// Because `ln(1 + r)` is strictly increasing in `r`, the candidate that
+/// maximizes the log-gain also maximizes the raw residual `r = x^T M^{-1} x`.
+/// We therefore compare on `r` directly: this preserves the selection order
+/// while avoiding f32 underflow of `ln(1 + r)` to `0.0` when the relevance-
+/// scaled vectors are tiny (e.g. all-equal distances collapse the similarity
+/// weight to `EPSILON`), which would otherwise erase all gain differences.
+fn best_sherman_morrison_candidate(
+    candidates: &MutMatrixView<'_, f32>,
+    available: &[bool],
+    matrix_inverse: &[f32],
+    dimensions: usize,
+) -> Option<(usize, Vec<f32>, f32)> {
+    (0..candidates.nrows())
+        .filter(|&i| available[i])
+        .map(|i| {
+            let vector = candidates.row(i);
+            let matrix_vector = matrix_vector_product(matrix_inverse, vector, dimensions);
+            let residual_sq = dot_product(vector, &matrix_vector);
+            (i, matrix_vector, residual_sq)
+        })
+        .max_by(|(_, _, left_residual), (_, _, right_residual)| {
+            left_residual.max(0.0).total_cmp(&right_residual.max(0.0))
+        })
+}
+
+/// Applies the Sherman-Morrison rank-1 update
+/// `M^{-1} := M^{-1} - (M^{-1} x)(M^{-1} x)^T / denominator` in place.
+fn update_sherman_morrison_inverse(
+    matrix_inverse: &mut [f32],
+    matrix_vector: &[f32],
+    denominator: f32,
+    dimensions: usize,
+) {
+    if denominator == 0.0 {
+        return;
+    }
+
+    for row in 0..dimensions {
+        for column in 0..dimensions {
+            matrix_inverse[row * dimensions + column] -=
+                matrix_vector[row] * matrix_vector[column] / denominator;
+        }
+    }
+}
+
+/// Builds a `dimensions x dimensions` row-major identity matrix.
+fn identity_matrix(dimensions: usize) -> Vec<f32> {
+    let mut matrix = vec![0.0; dimensions * dimensions];
+    for idx in 0..dimensions {
+        matrix[idx * dimensions + idx] = 1.0;
+    }
+    matrix
+}
+
+/// Multiplies a `dimensions x dimensions` row-major matrix by `vector`.
+fn matrix_vector_product(matrix: &[f32], vector: &[f32], dimensions: usize) -> Vec<f32> {
+    (0..dimensions)
+        .map(|row| dot_product(&matrix[row * dimensions..(row + 1) * dimensions], vector))
+        .collect()
+}
+
+/// Dot product with independent lane accumulators so the compiler can
+/// vectorize it. The default `.iter().sum()` reduction is blocked by strict
+/// f32 associativity; unrolling into `LANES` partial sums exposes the
+/// parallelism. Used only by the `eta == 0` QR path. For lengths below `LANES`
+/// this reduces to the scalar tail loop and is bit-identical to a
+/// left-to-right sum.
+#[inline]
+fn qr_dot(a: &[f32], b: &[f32]) -> f32 {
+    const LANES: usize = 8;
+    let mut acc = [0.0f32; LANES];
+    let mut a_chunks = a.chunks_exact(LANES);
+    let mut b_chunks = b.chunks_exact(LANES);
+    for (chunk_a, chunk_b) in a_chunks.by_ref().zip(b_chunks.by_ref()) {
+        for lane in 0..LANES {
+            acc[lane] += chunk_a[lane] * chunk_b[lane];
+        }
+    }
+    let mut sum = 0.0f32;
+    for lane_sum in acc {
+        sum += lane_sum;
+    }
+    for (rem_a, rem_b) in a_chunks.remainder().iter().zip(b_chunks.remainder().iter()) {
+        sum += rem_a * rem_b;
+    }
+    sum
+}
+
+/// Fused multiply-add over a slice: `r += a * x`. Autovectorizes cleanly.
+/// Used only by the `eta == 0` QR path.
+#[inline]
+fn qr_axpy(a: f32, x: &[f32], r: &mut [f32]) {
+    for (r_value, x_value) in r.iter_mut().zip(x.iter()) {
+        *r_value += a * *x_value;
+    }
 }
 
 /// Maps a raw distance into a similarity score in `(0, 1]` using the candidate
