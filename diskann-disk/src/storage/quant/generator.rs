@@ -154,13 +154,13 @@ where
             let write_offset = start_index * compressed_size + std::mem::size_of::<i32>() * 2;
             compressed_data_writer.seek(SeekFrom::Start(write_offset as u64))?;
             compressed_data_writer.write_all(block_compressed_base)?;
-            compressed_data_writer.flush()?;
             Ok(())
         };
 
         for block_index in 0..num_blocks {
             action(block_index)?;
         }
+        compressed_data_writer.flush()?;
 
         info!(
             "Quant data generation took {} seconds",
