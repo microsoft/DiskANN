@@ -161,10 +161,30 @@ mod tests {
             .expect_err("flat search with a post_processor must be invalid");
         assert!(err.to_string().contains("does not support post_processor"));
     }
+
+    #[test]
+    fn disk_search_phase_rejects_legacy_phase_level_search_mode_fields() {
+        let error = serde_json::from_str::<DiskSearchPhase>(
+            r#"{
+                "queries": "queries.fbin",
+                "groundtruth": "groundtruth.bin",
+                "num_threads": 1,
+                "beam_width": 1,
+                "search_list": [1],
+                "recall_at": 1,
+                "distance": "squared_l2",
+                "is_flat_search": true
+            }"#,
+        )
+        .expect_err("legacy phase-level search settings must be rejected");
+
+        assert!(error.to_string().contains("is_flat_search"));
+    }
 }
 
 /// Search phase configuration
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DiskSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
