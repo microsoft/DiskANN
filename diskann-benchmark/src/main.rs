@@ -369,6 +369,20 @@ mod tests {
         run_integration_test(raw);
     }
 
+    // Guardrail: the bf-tree direct (non-Managed) streaming path uses absolute
+    // runbook tag IDs as provider slot IDs, so the provider must be sized to the
+    // dataset ID space rather than the runbook's max concurrent active-point
+    // count. This runbook drives the max tag above the max active count, which
+    // fails with "Vector id is out of boundary in the dataset" if the provider
+    // is mis-sized to `max_pts`.
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_capacity_integration() {
+        let raw =
+            value_from_file(&example_directory().join("graph-index-bftree-stream-capacity.json"));
+        run_integration_test(raw);
+    }
+
     #[test]
     #[cfg(feature = "bftree")]
     fn graph_index_bftree_save_load_roundtrip() {
