@@ -15,7 +15,7 @@ use crate::{
         glue::{self, FilteredAccessor, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::inline_filter_search::{Ret, inline_filter_search_internal},
-        search::{Range, RangeSearchError, record::NoopSearchRecord},
+        search::{Range, RangeSearchError, range_search::RangeBuilder, record::NoopSearchRecord},
         search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
@@ -30,37 +30,17 @@ pub struct FilteredRange {
     range_params: Range,
 }
 
-/// Builder for [`FilteredRange`] search parameters.
-#[derive(Debug, Clone, Copy)]
-pub struct FilteredRangeBuilder {
-    max_returned: Option<usize>,
-    starting_l: usize,
-    beam_width: Option<usize>,
-    radius: f32,
-    inner_radius: Option<f32>,
-    initial_slack: f32,
-    range_slack: f32,
-}
-
 impl FilteredRange {
     /// Create range search with default slack values.
     pub fn new(starting_l: usize, radius: f32) -> Result<Self, RangeSearchError> {
-        Self::builder(starting_l, radius).build()
+        Self::builder(starting_l, radius).build_filtered()
     }
 
     /// Create a builder for filtered range search parameters.
     ///
     /// The builder starts with the same defaults as [`Self::new`].
-    pub fn builder(starting_l: usize, radius: f32) -> FilteredRangeBuilder {
-        FilteredRangeBuilder {
-            max_returned: None,
-            starting_l,
-            beam_width: None,
-            radius,
-            inner_radius: None,
-            initial_slack: 1.0,
-            range_slack: 1.0,
-        }
+    pub fn builder(starting_l: usize, radius: f32) -> RangeBuilder {
+        Range::builder(starting_l, radius)
     }
 
     /// Returns the maximum number of results to return.
@@ -106,46 +86,10 @@ impl FilteredRange {
     }
 }
 
-impl FilteredRangeBuilder {
-    /// Set maximum results to return (`None` means unlimited).
-    pub fn max_returned(mut self, value: Option<usize>) -> Self {
-        self.max_returned = value;
-        self
-    }
-
-    /// Set the beam width.
-    pub fn beam_width(mut self, value: Option<usize>) -> Self {
-        self.beam_width = value;
-        self
-    }
-
-    /// Set the inner radius.
-    pub fn inner_radius(mut self, value: Option<f32>) -> Self {
-        self.inner_radius = value;
-        self
-    }
-
-    /// Set the initial-search slack factor.
-    pub fn initial_slack(mut self, value: f32) -> Self {
-        self.initial_slack = value;
-        self
-    }
-
-    /// Set the range-search slack factor.
-    pub fn range_slack(mut self, value: f32) -> Self {
-        self.range_slack = value;
-        self
-    }
-
+impl RangeBuilder {
     /// Build validated [`FilteredRange`] parameters.
-    pub fn build(self) -> Result<FilteredRange, RangeSearchError> {
-        let range_params = Range::builder(self.starting_l, self.radius)
-            .max_returned(self.max_returned)
-            .beam_width(self.beam_width)
-            .inner_radius(self.inner_radius)
-            .initial_slack(self.initial_slack)
-            .range_slack(self.range_slack)
-            .build()?;
+    pub fn build_filtered(self) -> Result<FilteredRange, RangeSearchError> {
+        let range_params = self.build()?;
         Ok(FilteredRange { range_params })
     }
 }
@@ -433,13 +377,13 @@ mod tests {
         assert!(
             FilteredRange::builder(100, 0.5)
                 .initial_slack(1.5)
-                .build()
+                .build_filtered()
                 .is_err()
         );
         assert!(
             FilteredRange::builder(100, 0.5)
                 .range_slack(0.5)
-                .build()
+                .build_filtered()
                 .is_err()
         );
 
@@ -447,7 +391,7 @@ mod tests {
         assert!(
             FilteredRange::builder(100, 0.5)
                 .inner_radius(Some(1.0))
-                .build()
+                .build_filtered()
                 .is_err()
         );
     }

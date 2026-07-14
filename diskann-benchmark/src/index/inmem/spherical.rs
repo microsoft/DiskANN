@@ -505,7 +505,7 @@ mod imp {
                     .inner_radius(range_search.inner_radius())
                     .initial_slack(range_search.initial_slack())
                     .range_slack(range_search.range_slack())
-                    .build()
+                    .build_filtered()
                     .map_err(Into::into)
                 })?;
 

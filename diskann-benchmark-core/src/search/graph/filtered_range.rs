@@ -265,7 +265,7 @@ mod tests {
             graph::search::FilteredRange::builder(10, 2.0)
                 .initial_slack(0.8)
                 .range_slack(1.2)
-                .build()
+                .build_filtered()
                 .unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
@@ -295,7 +295,7 @@ mod tests {
                 graph::search::FilteredRange::builder(10, 2.0)
                     .initial_slack(0.8)
                     .range_slack(1.2)
-                    .build()
+                    .build_filtered()
                     .unwrap(),
                 setup.clone(),
             ),
@@ -303,7 +303,7 @@ mod tests {
                 graph::search::FilteredRange::builder(15, 2.0)
                     .initial_slack(0.8)
                     .range_slack(1.2)
-                    .build()
+                    .build_filtered()
                     .unwrap(),
                 setup.clone(),
             ),

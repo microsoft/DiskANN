@@ -158,7 +158,7 @@ fn inner_radius_filtering() {
 
     let filtered_range = FilteredRange::builder(starting_l, radius)
         .inner_radius(Some(inner_radius))
-        .build()
+        .build_filtered()
         .unwrap();
 
     let (filtered_stats, filtered_results) =
@@ -289,7 +289,7 @@ fn max_results_respected_means_no_second_round() {
 
     let filtered_range = FilteredRange::builder(starting_l, radius)
         .max_returned(Some(max_results))
-        .build()
+        .build_filtered()
         .unwrap();
 
     let (filtered_stats, filtered_results) =
@@ -349,7 +349,7 @@ fn max_results_respected_and_second_round_triggered() {
 
     let filtered_range = FilteredRange::builder(starting_l, radius)
         .max_returned(Some(max_results))
-        .build()
+        .build_filtered()
         .unwrap();
 
     let (filtered_stats, filtered_results) =
@@ -515,7 +515,7 @@ fn divisible_by_four_filter_no_second_round_from_max_results() {
 
     let filtered_range = FilteredRange::builder(starting_l, radius)
         .max_returned(Some(max_results))
-        .build()
+        .build_filtered()
         .unwrap();
 
     let (filtered_stats, filtered_results) =
