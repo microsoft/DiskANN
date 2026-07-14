@@ -6,7 +6,6 @@
 //! Range-based search within a distance radius.
 
 use diskann_utils::future::SendFuture;
-use hashbrown::HashMap;
 
 use super::{Knn, Search, scratch::SearchScratch};
 use crate::{
@@ -150,25 +149,26 @@ where
                 None,
             )
             .await?;
-            
+
             let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             // merge matched_results with the best results from the first round, filtering by radius
 
-            let mut merged = HashMap::with_capacity(self.starting_l() + matched_results.len());
-
-            for neighbor in scratch
+            let mut in_range: Vec<_> = scratch
                 .best
                 .iter()
                 .take(self.starting_l())
                 .chain(matched_results.iter().copied())
-            {
-                if neighbor.distance <= self.radius() {
-                    merged.entry(neighbor.id).or_insert(neighbor);
-                }
-            }
+                .filter(|neighbor| neighbor.distance <= self.radius())
+                .collect();
 
-            let mut in_range: Vec<_> = merged.into_values().collect();
+            in_range.sort_unstable_by(|left, right| {
+                left.id
+                    .cmp(&right.id)
+                    .then_with(|| left.distance.total_cmp(&right.distance))
+            });
+            in_range.dedup_by_key(|neighbor| neighbor.id);
+
             in_range.sort_unstable_by(|left, right| {
                 left.distance
                     .total_cmp(&right.distance)
@@ -204,13 +204,11 @@ where
                 )
                 .await?;
 
-                
                 InternalSearchStats {
                     cmps,
                     hops: hops + range_stats.hops,
                     range_search_second_round: true,
                 }
-
             } else {
                 InternalSearchStats {
                     cmps,
@@ -222,7 +220,6 @@ where
             // Post-process results directly into the output buffer, filtering by radius.
             let radius = self.radius();
             let inner_radius = self.inner_radius();
-
 
             let mut filtered = DistanceFiltered::new(output, |dist| {
                 if let Some(ir) = inner_radius
@@ -236,12 +233,7 @@ where
             let truncated_matched = matched_within_radius.iter().copied().take(max_returned);
 
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    truncated_matched,
-                    &mut filtered,
-                )
+                .post_process(&mut accessor, query, truncated_matched, &mut filtered)
                 .await
                 .into_ann_result()?;
 
@@ -369,7 +361,7 @@ where
         cmps: scratch.cmps,
         hops: scratch.hops,
         range_search_second_round: true,
-    })    
+    })
 }
 
 ///////////
