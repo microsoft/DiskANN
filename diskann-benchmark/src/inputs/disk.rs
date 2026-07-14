@@ -76,6 +76,8 @@ pub(crate) struct DiskSearchMode {
 
 impl DiskSearchMode {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.validate_compatibility()?;
+
         if let Some(adaptive_l) = self.adaptive_l.as_mut() {
             adaptive_l.validate(checker)?;
         }
@@ -88,6 +90,21 @@ impl DiskSearchMode {
         }
         Ok(())
     }
+
+    fn validate_compatibility(&self) -> Result<(), anyhow::Error> {
+        if !self.is_flat_search {
+            return Ok(());
+        }
+
+        match (self.adaptive_l.is_some(), self.post_processor.is_some()) {
+            (false, false) => Ok(()),
+            (true, false) => anyhow::bail!("flat disk search does not support adaptive_l"),
+            (false, true) => anyhow::bail!("flat disk search does not support post_processor"),
+            (true, true) => {
+                anyhow::bail!("flat disk search does not support adaptive_l or post_processor")
+            }
+        }
+    }
 }
 
 impl fmt::Display for DiskSearchMode {
@@ -98,6 +115,51 @@ impl fmt::Display for DiskSearchMode {
         } else {
             write!(f, "{}", base)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
+
+    use super::*;
+
+    #[test]
+    fn flat_disk_search_rejects_adaptive_l() {
+        let mode = DiskSearchMode {
+            is_flat_search: true,
+            adaptive_l: Some(AdaptiveL {
+                sample_count: NonZeroUsize::MIN,
+                scale_factor: 1.0,
+            }),
+            vector_filters_file: None,
+            post_processor: None,
+        };
+
+        let err = mode
+            .validate_compatibility()
+            .expect_err("flat search with adaptive_l must be invalid");
+        assert!(err.to_string().contains("does not support adaptive_l"));
+    }
+
+    #[test]
+    fn flat_disk_search_rejects_post_processor() {
+        let mode: DiskSearchMode = serde_json::from_str(
+            r#"{
+                "is_flat_search": true,
+                "post_processor": {
+                    "type": "determinant-diversity",
+                    "power": 1.0,
+                    "eta": 0.0
+                }
+            }"#,
+        )
+        .expect("test post-processor configuration must deserialize");
+
+        let err = mode
+            .validate_compatibility()
+            .expect_err("flat search with a post_processor must be invalid");
+        assert!(err.to_string().contains("does not support post_processor"));
     }
 }
 

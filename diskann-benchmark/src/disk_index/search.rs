@@ -164,8 +164,7 @@ impl DiskSearchResult {
 /// config plus the per-query filter and post-processor supplied at search time.
 fn build_search_mode<'a>(
     mode: &'a DiskSearchMode,
-    has_vector_filters: bool,
-    vector_filter: &'a HashSet<u32>,
+    vector_filter: Option<&'a HashSet<u32>>,
     post_processor: Option<&TopkPostProcessor>,
 ) -> SearchMode<'a> {
     let adaptive_l = mode.adaptive_l.as_ref().map(|adaptive_l| {
@@ -175,32 +174,32 @@ fn build_search_mode<'a>(
 
     match (
         mode.is_flat_search,
-        has_vector_filters,
+        vector_filter,
         post_processor,
         adaptive_l,
     ) {
-        (true, false, _, _) => SearchMode::flat(),
-        (true, true, _, _) => {
+        (true, None, _, _) => SearchMode::flat(),
+        (true, Some(vector_filter), _, _) => {
             SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
         }
-        (false, false, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
+        (false, None, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
             SearchMode::diverse_graph(*params)
         }
-        (false, true, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
+        (false, Some(vector_filter), Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
             SearchMode::diverse_graph_filtered(
                 move |vid: &u32| vector_filter.contains(vid),
                 *params,
             )
         }
-        (false, false, None, Some(adaptive_l)) => {
+        (false, None, None, Some(adaptive_l)) => {
             SearchMode::inline_filter(|_| true, Some(adaptive_l))
         }
-        (false, true, None, Some(adaptive_l)) => SearchMode::inline_filter(
+        (false, Some(vector_filter), None, Some(adaptive_l)) => SearchMode::inline_filter(
             move |vid: &u32| vector_filter.contains(vid),
             Some(adaptive_l),
         ),
-        (false, false, None, None) => SearchMode::graph(),
-        (false, true, None, None) => {
+        (false, None, None, None) => SearchMode::graph(),
+        (false, Some(vector_filter), None, None) => {
             SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
         }
     }
@@ -236,12 +235,18 @@ where
     let vector_filters = match &search_params.search_mode.vector_filters_file {
         Some(vector_filters_file) => {
             let vector_filters_file = vector_filters_file.to_string_lossy().to_string();
-            search_index_utils::load_vector_filters(storage_provider, &vector_filters_file)?
+            Some(search_index_utils::load_vector_filters(
+                storage_provider,
+                &vector_filters_file,
+            )?)
         }
-        None => vec![HashSet::<u32>::new(); num_queries],
+        None => None,
     };
 
-    if vector_filters.len() != num_queries {
+    if vector_filters
+        .as_ref()
+        .is_some_and(|filters| filters.len() != num_queries)
+    {
         anyhow::bail!("Mismatch in query and vector filter sizes");
     }
 
@@ -307,7 +312,7 @@ where
 
         let zipped = queries
             .par_row_iter()
-            .zip(vector_filters.par_iter())
+            .enumerate()
             .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
             .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
             .zip(statistics_vec.par_iter_mut())
@@ -315,15 +320,16 @@ where
 
         zipped.for_each_in_pool(
             pool.as_ref(),
-            |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+            |(((((query_index, q), id_chunk), dist_chunk), stats), rc)| {
                 // Construct the SearchMode from the JSON-driven
                 // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
                 // benchmark only supplies the per-query filter and post-processor.
-                let has_filter = search_params.search_mode.vector_filters_file.is_some();
+                let vector_filter = vector_filters
+                    .as_ref()
+                    .and_then(|filters| filters.get(query_index));
                 let mode: SearchMode<'_> = build_search_mode(
                     &search_params.search_mode,
-                    has_filter,
-                    vf,
+                    vector_filter,
                     search_params.search_mode.post_processor.as_ref(),
                 );
 
