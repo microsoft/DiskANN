@@ -83,6 +83,11 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     /// Retrieve the neighbor list of a vector.
     ///
     /// Does not acquire any lock. Callers must ensure appropriate synchronization.
+    ///
+    /// `neighbors` is cleared first upon each invocation. A vector with no
+    /// stored neighbor list yet (bf-tree `NotFound`) yields an empty list rather
+    /// than an error, so neighbor lists are created lazily on first write.
+    /// Involves one data copy, from the bf-tree into `neighbors`.
     pub fn get_neighbors(&self, vector_id: I, neighbors: &mut AdjacencyList<I>) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
@@ -149,9 +154,15 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
                 ));
             }
             bf_tree::LeafReadResult::NotFound => {
-                return Err(ANNError::log_index_error(
-                    "The bf-tree entry for the vector key is marked as not found",
-                ));
+                // The vertex has no stored neighbor list yet. bf-tree natively
+                // distinguishes "absent" from "present but empty", so treat
+                // absence as an empty adjacency list rather than an error. This
+                // lets neighbor lists be created lazily on first write, avoiding
+                // an O(max_points) eager initialization at construction.
+                //
+                // `guard` is dropped at the end of this match without `finish`,
+                // which clears `neighbors` to the empty list (identical to the
+                // `Found(0)` case above).
             }
         };
 
@@ -454,6 +465,70 @@ mod tests {
 
         neighbor_provider.delete_vector(1).unwrap();
         assert!(neighbor_provider.get_neighbors(1, &mut result).is_err());
+    }
+
+    /// Lazy init: reading ids that were never written must yield an empty list
+    /// rather than erroring or panicking. This hammers a wide sweep of unwritten
+    /// ids (including some interleaved with written ones) to confirm the
+    /// `NotFound` -> empty mapping holds and never crashes.
+    #[test]
+    fn test_get_unwritten_ids_returns_empty() {
+        let locks = Arc::new(StripedLocks::new());
+        let neighbor_provider = new_provider(64);
+        let mut scratch = neighbor_provider.scratch(&locks);
+
+        // Write neighbor lists for a sparse set of ids, leaving large gaps.
+        let written: [u32; 3] = [10, 1_000, 100_000];
+        for &id in &written {
+            scratch.write_neighbors(id, &[1, 2, 3]).unwrap();
+        }
+
+        let mut result = AdjacencyList::with_capacity(64);
+
+        // Sweep a wide id range, including the written ids and the gaps between
+        // and beyond them. The buffer is reused across calls to confirm it is
+        // cleared on every read.
+        for id in 0u32..200_000 {
+            neighbor_provider.get_neighbors(id, &mut result).unwrap();
+            if written.contains(&id) {
+                assert_eq!(&[1, 2, 3], &*result, "written id {id} lost its list");
+            } else {
+                assert!(result.is_empty(), "unwritten id {id} should be empty");
+            }
+        }
+
+        // Ids far beyond anything ever written are still just empty, not errors.
+        for id in [u32::MAX - 1, u32::MAX] {
+            neighbor_provider.get_neighbors(id, &mut result).unwrap();
+            assert!(result.is_empty());
+        }
+    }
+
+    /// Lazy init under concurrency: many threads simultaneously hammering reads
+    /// of never-written ids must all observe empty lists with no panics, lost
+    /// updates, or errors.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_reads_of_unwritten_ids() {
+        let neighbor_provider = new_shared_provider(64);
+        let num_threads = stress_thread_count();
+
+        let mut set = JoinSet::new();
+        for t in 0..num_threads {
+            let neighbor_provider = Arc::clone(&neighbor_provider);
+            set.spawn(async move {
+                let mut result = AdjacencyList::with_capacity(64);
+                // Overlapping id ranges across threads to maximize contention on
+                // the shared bf-tree read path for absent keys.
+                for id in (t * 1_000)..(t * 1_000 + 10_000) {
+                    neighbor_provider.get_neighbors(id, &mut result).unwrap();
+                    assert!(result.is_empty());
+                }
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            res.unwrap();
+        }
     }
 
     /// Test the interleaved and parallel traversal of the Bf-Tree

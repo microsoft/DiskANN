@@ -352,18 +352,11 @@ where
 
         let provider = Self::new_empty(params.clone(), quant_precursor)?;
         provider.set_start_points(Hidden(()), start_points)?;
-        {
-            // Initialize all neighborhoods to be empty lists.
-            // This is a temporary solution to the problem of trying to access
-            // an uninitialized neighbor list in functions `consolidate_deletes` and
-            // `consolidate_simple` and getting an error. This is a stop-gap solution
-            // until BF-tree API is improved to handle `exists` queries.
-            let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
-            for i in 0..params.max_points {
-                let vector_id = i as u32;
-                scratch.write_neighbors(vector_id, &[])?;
-            }
-        }
+        // Neighbor lists are created lazily on first write. `get_neighbors`
+        // treats a bf-tree `NotFound` as an empty adjacency list, so there is no
+        // need to eagerly initialize an empty list for every id up front. This
+        // keeps construction O(num_start_points) instead of O(max_points),
+        // which matters for billion-scale, larger-than-memory datasets.
         Ok(provider)
     }
 
@@ -2504,11 +2497,12 @@ mod tests {
         //
         let mut out = AdjacencyList::from_iter_untrusted([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
-        // Attempt to access non-existant vector's neighbor list should fail as NotFound
-        assert!(provider
+        // Accessing a vector with no stored neighbor list yet succeeds and
+        // yields an empty list (lazy initialization via bf-tree `NotFound`).
+        provider
             .neighbor_provider
             .get_neighbors(200, &mut out)
-            .is_err());
+            .unwrap();
         assert!(out.is_empty());
     }
 
