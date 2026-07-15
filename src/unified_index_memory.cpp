@@ -108,7 +108,7 @@ std::pair<uint32_t, uint32_t> unified_index_memory<T>::iterate_to_fixed_point(
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(L);
-    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    auto &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();

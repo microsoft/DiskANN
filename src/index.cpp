@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "boost/dynamic_bitset.hpp"
+#include "parallel_hashmap/phmap.h"
 #include "index_factory.h"
 #include "memory_mapper.h"
 #include "timer.h"
@@ -1064,16 +1065,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         best_L_nodes = &(best_diverse_nodes_ref);
     }
     
-    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    phmap::flat_hash_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
-    std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
     std::vector<std::uint64_t>& query_bitmask_buf = scratch->query_label_bitmask();
-
-    float *pq_dists = nullptr;
 
     _pq_data_store->preprocess_query(aligned_query, scratch);
 
@@ -1100,12 +1098,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     // Lambda to determine if a node has been visited
     auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const uint32_t id) {
         return fast_iterate ? inserted_into_pool_bs[id] == 0
-                            : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
-    };
-
-    // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
-        _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
+                            : !inserted_into_pool_rs.contains(id);
     };
 
     label_filter_match_holder match_proxy(
@@ -1163,7 +1156,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
     cmps += static_cast<uint32_t>(init_ids.size());
-    std::vector<location_t> tmp_neighbor_list;
 
     while (best_L_nodes->has_unexpanded_node())
     {
@@ -1190,7 +1182,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         // Find which of the nodes in des have not been visited before
         id_scratch.clear();
-        dist_scratch.clear();
         if (_dynamic_index)
         {
             LockGuard guard(_locks[n]);
@@ -1214,19 +1205,25 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                 }
 
+                if (fast_iterate)
+                {
+                    inserted_into_pool_bs[id] = 1;
+                }
+                else
+                {
+                    inserted_into_pool_rs.insert(id);
+                }
                 id_scratch.push_back(id);
 
             }
         }
         else
         {
-            tmp_neighbor_list.clear();
+            // Static graph: iterate neighbors directly under shared lock,
+            // mark visited and collect unvisited into id_scratch
             _locks[n].lock_shared();
             auto nbrs = _graph_store->get_neighbours(n);
-            tmp_neighbor_list.resize(nbrs.size());
-            memcpy(tmp_neighbor_list.data(), nbrs.data(), nbrs.size() * sizeof(location_t));
-            _locks[n].unlock_shared();
-            for (auto id : tmp_neighbor_list)
+            for (auto id : nbrs)
             {
                 assert(id < _max_points);
 
@@ -1245,36 +1242,41 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                 }
 
-
+                if (fast_iterate)
+                {
+                    inserted_into_pool_bs[id] = 1;
+                }
+                else
+                {
+                    inserted_into_pool_rs.insert(id);
+                }
                 id_scratch.push_back(id);
-
             }
+            _locks[n].unlock_shared();
         }
 
-        // Mark nodes visited
-        for (auto id : id_scratch)
-        {
-            if (fast_iterate)
-            {
-                inserted_into_pool_bs[id] = 1;
-            }
-            else
-            {
-                inserted_into_pool_rs.insert(id);
-            }
-        }
-
-        dist_scratch.resize(id_scratch.size());
-        //assert(dist_scratch.capacity() >= id_scratch.size());
-        compute_dists(id_scratch, dist_scratch);
+        // Sliding-window prefetch (lookahead=8) + compute + immediate insert.
+        // Pre-prefetch the first batch, then maintain the window during the loop.
+        constexpr size_t PREFETCH_LOOKAHEAD = 8;
         cmps += (uint32_t)id_scratch.size();
-
-        // Insert <id, dist> pairs into the pool of candidates
-        for (size_t m = 0; m < id_scratch.size(); ++m)
+        const size_t id_count = id_scratch.size();
+        const size_t prefetch_init = std::min(PREFETCH_LOOKAHEAD, id_count);
+        for (size_t p = 0; p < prefetch_init; ++p)
         {
-            best_L_nodes->insert(Neighbor(id_scratch[m], dist_scratch[m]));
+            _pq_data_store->prefetch_vector(id_scratch[p]);
+        }
+        for (size_t m = 0; m < id_count; ++m)
+        {
+            if (m + PREFETCH_LOOKAHEAD < id_count)
+            {
+                _pq_data_store->prefetch_vector(id_scratch[m + PREFETCH_LOOKAHEAD]);
+            }
+            float distances[] = {std::numeric_limits<float>::max()};
+            uint32_t ids[] = {id_scratch[m]};
+            _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
+            best_L_nodes->insert(Neighbor(id_scratch[m], distances[0]));
             if (debug_info != nullptr)
-                debug_info->record_visited(id_scratch[m], dist_scratch[m]);
+                debug_info->record_visited(id_scratch[m], distances[0]);
         }
     }
     return std::make_pair(hops, cmps);
