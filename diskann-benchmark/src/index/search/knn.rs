@@ -108,7 +108,7 @@ where
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::knn::Aggregator::new(
                 groundtruth,
                 recall_k,
@@ -140,7 +140,7 @@ where
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::knn::Aggregator::new(
                 groundtruth,
                 recall_k,
@@ -172,7 +172,7 @@ where
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::knn::Aggregator::new(
                 groundtruth,
                 recall_k,

@@ -1075,10 +1075,8 @@ where
             stats,
         };
 
-        for ((vertex_id, distance), associated_data) in indices
-            .into_iter()
-            .zip(distances.into_iter())
-            .zip(associated_data.into_iter())
+        for ((vertex_id, distance), associated_data) in
+            indices.into_iter().zip(distances).zip(associated_data)
         {
             search_result.results.push(SearchResultItem {
                 vertex_id,

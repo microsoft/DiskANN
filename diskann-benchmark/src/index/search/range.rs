@@ -90,7 +90,7 @@ where
     ) -> anyhow::Result<Vec<RangeSearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::range::Aggregator::new(groundtruth),
         )?;
 
