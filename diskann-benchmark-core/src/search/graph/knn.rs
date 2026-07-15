@@ -164,6 +164,11 @@ pub struct Summary {
     /// This contains one entry per repetition in the batch.
     pub p99_latencies: Vec<MicroSeconds>,
 
+    /// The 99.9th percentile latency for individual queries.
+    ///
+    /// This contains one entry per repetition in the batch.
+    pub p999_latencies: Vec<MicroSeconds>,
+
     /// The recall metrics for search.
     ///
     /// This implementation assumes that search is deterministic and only
@@ -239,20 +244,29 @@ where
         let mut mean_latencies = Vec::with_capacity(results.len());
         let mut p90_latencies = Vec::with_capacity(results.len());
         let mut p99_latencies = Vec::with_capacity(results.len());
+        let mut p999_latencies = Vec::with_capacity(results.len());
 
         results.iter_mut().for_each(|r| {
             match percentiles::compute_percentiles(r.latencies_mut()) {
                 Ok(values) => {
-                    let percentiles::Percentiles { mean, p90, p99, .. } = values;
+                    let percentiles::Percentiles {
+                        mean,
+                        p90,
+                        p99,
+                        p999,
+                        ..
+                    } = values;
                     mean_latencies.push(mean);
                     p90_latencies.push(p90);
                     p99_latencies.push(p99);
+                    p999_latencies.push(p999);
                 }
                 Err(_) => {
                     let zero = MicroSeconds::new(0);
                     mean_latencies.push(0.0);
                     p90_latencies.push(zero);
                     p99_latencies.push(zero);
+                    p999_latencies.push(zero);
                 }
             }
         });
@@ -265,6 +279,7 @@ where
             mean_latencies,
             p90_latencies,
             p99_latencies,
+            p999_latencies,
             mean_cmps: utils::average_all(
                 results
                     .iter()

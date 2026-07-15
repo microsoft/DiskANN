@@ -92,6 +92,7 @@ pub(super) struct SearchResults {
     pub(super) mean_latencies: Vec<f64>,
     pub(super) p90_latencies: Vec<MicroSeconds>,
     pub(super) p99_latencies: Vec<MicroSeconds>,
+    pub(super) p999_latencies: Vec<MicroSeconds>,
     pub(super) recall: utils::recall::RecallMetrics,
     pub(super) mean_cmps: f32,
     pub(super) mean_hops: f32,
@@ -106,6 +107,7 @@ impl SearchResults {
             mean_latencies,
             p90_latencies,
             p99_latencies,
+            p999_latencies,
             recall,
             mean_cmps,
             mean_hops,
@@ -126,6 +128,7 @@ impl SearchResults {
             mean_latencies,
             p90_latencies,
             p99_latencies,
+            p999_latencies,
             recall: (&recall).into(),
             mean_cmps: mean_cmps as f32,
             mean_hops: mean_hops as f32,
@@ -155,7 +158,9 @@ where
             "Avg hops",
             "QPS - mean(max)",
             "Avg Latency",
+            "p90 Latency",
             "p99 Latency",
+            "p999 Latency",
             "Recall",
             "Threads",
         ]
@@ -167,7 +172,9 @@ where
             "Avg hops",
             "QPS - mean(max)",
             "Avg Latency",
+            "p90 Latency",
             "p99 Latency",
+            "p999 Latency",
             "Recall",
             "Threads",
         ]
@@ -206,13 +213,29 @@ where
         row.insert(
             format!(
                 "{:.1}us ({:.1})",
-                MaybeDisplay(percentiles::mean(&r.p99_latencies), "missing"),
-                MaybeDisplay(r.p99_latencies.iter().max(), "missing"),
+                MaybeDisplay(percentiles::mean(&r.p90_latencies), "missing"),
+                MaybeDisplay(r.p90_latencies.iter().max(), "missing"),
             ),
             col_idx + 6,
         );
-        row.insert(format!("{:3}", r.recall.average), col_idx + 7);
-        row.insert(r.num_tasks, col_idx + 8);
+        row.insert(
+            format!(
+                "{:.1}us ({:.1})",
+                MaybeDisplay(percentiles::mean(&r.p99_latencies), "missing"),
+                MaybeDisplay(r.p99_latencies.iter().max(), "missing"),
+            ),
+            col_idx + 7,
+        );
+        row.insert(
+            format!(
+                "{:.1}us ({:.1})",
+                MaybeDisplay(percentiles::mean(&r.p999_latencies), "missing"),
+                MaybeDisplay(r.p999_latencies.iter().max(), "missing"),
+            ),
+            col_idx + 8,
+        );
+        row.insert(format!("{:3}", r.recall.average), col_idx + 9);
+        row.insert(r.num_tasks, col_idx + 10);
     });
 
     write!(f, "{}", table)

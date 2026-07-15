@@ -314,6 +314,7 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    TopkMultihopLiveFilter(MultiHopSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -340,6 +341,7 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkMultihopLiveFilter(_) => SearchPhaseKind::TopkMultihopLiveFilter,
         }
     }
 
@@ -384,6 +386,18 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_multihop_live_filter(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopLiveFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopLiveFilter,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -393,6 +407,7 @@ impl SearchPhase {
             SearchPhase::Range(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopLiveFilter(phase) => phase.validate(checker),
         }
     }
 }
@@ -403,6 +418,7 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkMultihopLiveFilter,
 }
 
 impl SearchPhaseKind {
@@ -412,6 +428,7 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkMultihopLiveFilter => "topk-multihop-live-filter",
         }
     }
 }

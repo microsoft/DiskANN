@@ -183,3 +183,15 @@ impl TopkMultihopFilter {
         SearchPhaseKind::TopkMultihopFilter
     }
 }
+
+/// A search plugin for multi-hop filtered search that evaluates the filter predicate live
+/// (per visited node) against an in-memory attribute index, instead of a precomputed bitmap.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilter;
+
+impl TopkMultihopLiveFilter {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilter`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilter
+    }
+}

@@ -22,6 +22,11 @@ use diskann_providers::model::graph::provider::layers::BetaFilter;
 use diskann_tools::utils::ground_truth::read_labels_and_compute_bitmap;
 use std::sync::Arc;
 
+use diskann_label_filter::attribute::Attribute;
+use diskann_label_filter::{
+    read_and_parse_queries, read_baselabels, FrozenAttributeIndex, InlineAttributeIndex,
+};
+
 pub struct QueryBitmapEvaluator {
     pub ast_expr: ASTExpr,
     evaluated_bitmap: RoaringPostingList,
@@ -114,6 +119,54 @@ where
 
 pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider<u32>> {
     Arc::new(BitmapFilter(set))
+}
+
+/// Build an in-memory inline attribute index from a jsonl label file (one document per line).
+///
+/// Each document's flattened `(field, value)` pairs are encoded to integer attribute-ids and
+/// stored as a roaring set keyed by `doc_id`. This is a one-time index build, reused across
+/// all queries; the per-node match decision itself is computed live during search.
+pub(crate) fn build_inline_attribute_index(
+    data_labels: &InputFile,
+) -> anyhow::Result<Arc<FrozenAttributeIndex>> {
+    let docs = read_baselabels(data_labels.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to read base labels: {e}"))?;
+    let mut index = InlineAttributeIndex::new();
+    let mut attrs: Vec<Attribute> = Vec::new();
+    for doc in &docs {
+        attrs.clear();
+        if let Some(obj) = doc.label.as_object() {
+            for (field, value) in obj {
+                attrs.push(Attribute::from_json_value(field, value).map_err(|e| {
+                    anyhow::anyhow!("attribute conversion failed for field '{field}': {e:?}")
+                })?);
+            }
+        }
+        index
+            .insert_document(doc.doc_id as u32, &attrs)
+            .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
+    }
+    Ok(Arc::new(index.freeze()))
+}
+
+/// Parse per-query predicates and build one live [`QueryLabelProvider`] per query, all sharing
+/// the same attribute `index`. The predicate is encoded once here; matching happens per node
+/// during search.
+pub(crate) fn make_live_providers(
+    index: &FrozenAttributeIndex,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    let mut providers = Vec::with_capacity(parsed.len());
+    for (_query_id, ast) in parsed {
+        providers.push(
+            index
+                .make_provider(&ast)
+                .map_err(|e| anyhow::anyhow!("failed to build live provider: {e:?}"))?,
+        );
+    }
+    Ok(providers)
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ pub struct Percentiles<T> {
     pub median: f64,
     pub p90: T,
     pub p99: T,
+    pub p999: T,
 }
 
 pub trait AsF64Lossy: Copy {
@@ -77,6 +78,7 @@ where
 
     let p90 = x[((9 * len) / 10).min(len - 1)];
     let p99 = x[((99 * len) / 100).min(len - 1)];
+    let p999 = x[((999 * len) / 1000).min(len - 1)];
 
     Ok(Percentiles {
         minimum: x[0],
@@ -84,6 +86,7 @@ where
         median,
         p90,
         p99,
+        p999,
     })
 }
 
@@ -163,6 +166,7 @@ mod tests {
                 median: 10.0,
                 p90: 10,
                 p99: 10,
+                p999: 10,
             };
             assert_eq!(p, e);
         }
@@ -177,6 +181,7 @@ mod tests {
                 median: 1.5,
                 p90: 2,
                 p99: 2,
+                p999: 2,
             };
             assert_eq!(p, e);
         }
@@ -191,6 +196,7 @@ mod tests {
                 median: 2.0,
                 p90: 3,
                 p99: 3,
+                p999: 3,
             };
             assert_eq!(p, e);
         }
@@ -205,6 +211,7 @@ mod tests {
                 median: 5.0,
                 p90: 9,
                 p99: 9,
+                p999: 9,
             };
             assert_eq!(p, e);
         }
@@ -219,6 +226,7 @@ mod tests {
                 median: 5.5,
                 p90: 10,
                 p99: 10,
+                p999: 10,
             };
             assert_eq!(p, e);
         }
@@ -233,6 +241,7 @@ mod tests {
                 median: 6.0,
                 p90: 10,
                 p99: 11,
+                p999: 11,
             };
             assert_eq!(p, e);
         }
