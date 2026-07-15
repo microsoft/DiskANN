@@ -562,7 +562,7 @@ where
             benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
         )?;
 
-        let result = search::range::run(&range, &groundtruth, steps, Ok)?;
+        let result = search::range::run(&range, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Range(result))
     }
 }
@@ -628,19 +628,7 @@ where
             labels,
         )?;
 
-        let result = search::range::run(&filtered_range, &groundtruth, steps, |range_search| {
-            diskann::graph::search::FilteredRange::builder(
-                range_search.starting_l(),
-                range_search.radius(),
-            )
-            .max_returned(range_search.max_returned())
-            .beam_width(range_search.beam_width())
-            .inner_radius(range_search.inner_radius())
-            .initial_slack(range_search.initial_slack())
-            .range_slack(range_search.range_slack())
-            .build_filtered()
-            .map_err(Into::into)
-        })?;
+        let result = search::range::run(&filtered_range, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Range(result))
     }
 }

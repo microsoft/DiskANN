@@ -5,7 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann::graph::search::{FilteredRange as FilteredRangeParameters, Range as RangeParameters};
+use diskann::graph::search::Range as RangeParameters;
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
 use crate::{index::result::RangeSearchResults, inputs::graph_index::GraphRangeSearch};
@@ -41,16 +41,11 @@ pub(crate) trait Range<I> {
     ) -> anyhow::Result<Vec<RangeSearchResults>>;
 }
 
-pub(crate) fn run<I, R, F>(
-    runner: &R,
+pub(crate) fn run<I>(
+    runner: &dyn Range<I, Parameters = RangeParameters>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: RangeSearchSteps<'_>,
-    mut map_parameters: F,
-) -> anyhow::Result<Vec<RangeSearchResults>>
-where
-    R: Range<I>,
-    F: FnMut(RangeParameters) -> anyhow::Result<R::Parameters>,
-{
+) -> anyhow::Result<Vec<RangeSearchResults>> {
     let mut all = Vec::new();
 
     for threads in steps.num_tasks.iter() {
@@ -65,12 +60,9 @@ where
                 .construct_params()?
                 .into_iter()
                 .map(|range_search_params| {
-                    Ok(core_search::Run::new(
-                        map_parameters(range_search_params)?,
-                        setup.clone(),
-                    ))
+                    core_search::Run::new(range_search_params, setup.clone())
                 })
-                .collect::<anyhow::Result<Vec<_>>>()?;
+                .collect();
 
             all.extend(runner.search_all(parameters, groundtruth)?);
         }
@@ -114,11 +106,11 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::filtered_range::FilteredRange<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = FilteredRangeParameters,
+        Parameters = RangeParameters,
         Output = core_search::graph::filtered_range::Metrics,
     >,
 {
-    type Parameters = FilteredRangeParameters;
+    type Parameters = RangeParameters;
 
     fn search_all(
         &self,

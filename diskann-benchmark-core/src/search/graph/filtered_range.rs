@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// A built-in helper for benchmarking the filtered range search method
-/// [`graph::DiskANNIndex::search`] with [`graph::search::FilteredRange`].
+/// [`graph::DiskANNIndex::search`].
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
 /// [`search::search_all`] and provides some basic additional metrics for the
@@ -27,7 +27,7 @@ use crate::{
 /// [`Aggregator`] type.
 ///
 /// The provided implementation of [`Search`] accepts
-/// [`graph::search::FilteredRange`] and returns [`Metrics`] as additional output.
+/// [`graph::search::Range`] and returns [`Metrics`] as additional output.
 #[derive(Debug)]
 pub struct FilteredRange<DP, T, S>
 where
@@ -98,7 +98,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::search::FilteredRange;
+    type Parameters = graph::search::Range;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -119,7 +119,14 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let filtered_range_search = *parameters;
+        let filtered_range_search =
+            graph::search::FilteredRange::builder(parameters.starting_l(), parameters.radius())
+                .max_returned(parameters.max_returned())
+                .beam_width(parameters.beam_width())
+                .inner_radius(parameters.inner_radius())
+                .initial_slack(parameters.initial_slack())
+                .range_slack(parameters.range_slack())
+                .build_filtered()?;
         let strategy =
             labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
         let _ = self
@@ -143,7 +150,7 @@ where
 #[non_exhaustive]
 pub struct Summary {
     pub setup: search::Setup,
-    pub parameters: graph::search::FilteredRange,
+    pub parameters: graph::search::Range,
     pub end_to_end_latencies: Vec<MicroSeconds>,
     pub mean_latencies: Vec<f64>,
     pub p90_latencies: Vec<MicroSeconds>,
@@ -163,7 +170,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<graph::search::FilteredRange, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<graph::search::Range, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -172,7 +179,7 @@ where
     #[inline(never)]
     fn aggregate(
         &mut self,
-        run: search::Run<graph::search::FilteredRange>,
+        run: search::Run<graph::search::Range>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         let average_precision = match results.first() {
@@ -262,10 +269,10 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             filtered_range.clone(),
-            graph::search::FilteredRange::builder(10, 2.0)
+            graph::search::Range::builder(10, 2.0)
                 .initial_slack(0.8)
                 .range_slack(1.2)
-                .build_filtered()
+                .build()
                 .unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
@@ -292,18 +299,18 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::FilteredRange::builder(10, 2.0)
+                graph::search::Range::builder(10, 2.0)
                     .initial_slack(0.8)
                     .range_slack(1.2)
-                    .build_filtered()
+                    .build()
                     .unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::FilteredRange::builder(15, 2.0)
+                graph::search::Range::builder(15, 2.0)
                     .initial_slack(0.8)
                     .range_slack(1.2)
-                    .build_filtered()
+                    .build()
                     .unwrap(),
                 setup.clone(),
             ),
