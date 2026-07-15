@@ -509,30 +509,30 @@ macro_rules! impl_build {
                 writeln!(output, "{}", self.input)?;
                 let (index, build_stats) = match &self.input.source {
                     IndexSource::Build(build) => {
-                        let (index, build_stats) = run_build(
-                            &build,
-                            common::FullPrecision,
-                            None,
-                            output,
-                            |data| {
-                                let index = diskann_async::new_index::<$T, _>(
-                                    build.try_as_config()?.build()?,
-                                    build.inmem_parameters(data.nrows(), data.ncols()),
-                                    common::NoDeletes,
-                                )?;
-                                build::set_start_points(
-                                    index.provider(),
-                                    data.as_view(),
-                                    build.start_point_strategy,
-                                )?;
-                                Ok(index)
-                            },
-                            if build.pipnn.is_some() {
-                                build::pipnn_insert
-                            } else {
-                                single_or_multi_insert
-                            },
-                        )?;
+                        let (index, build_stats) = if build.pipnn.is_some() {
+                            build::run_pipnn_build::<$T>(build, output)?
+                        } else {
+                            run_build(
+                                &build,
+                                common::FullPrecision,
+                                None,
+                                output,
+                                |data| {
+                                    let index = diskann_async::new_index::<$T, _>(
+                                        build.try_as_config()?.build()?,
+                                        build.inmem_parameters(data.nrows(), data.ncols()),
+                                        common::NoDeletes,
+                                    )?;
+                                    build::set_start_points(
+                                        index.provider(),
+                                        data.as_view(),
+                                        build.start_point_strategy,
+                                    )?;
+                                    Ok(index)
+                                },
+                                single_or_multi_insert,
+                            )?
+                        };
 
                         // save the index if requested
                         if let Some(save_path) = &build.save_path {

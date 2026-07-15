@@ -3,7 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, sync::Arc, time::Instant};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+    num::NonZeroUsize,
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::Context;
 use diskann::{
@@ -19,11 +25,17 @@ use diskann_benchmark_runner::{
 };
 use diskann_providers::{
     self,
-    model::{configuration::IndexConfiguration, graph::provider::async_::inmem::SetStartPoints},
+    index::diskann_async,
+    model::{
+        configuration::IndexConfiguration,
+        graph::provider::async_::{common::SetElementHelper, inmem::SetStartPoints},
+    },
     storage::{AsyncIndexMetadata, LoadWith, SaveWith},
 };
 use diskann_utils::{
     future::AsyncFriendly,
+    io::Metadata,
+    sampling::WithApproximateNorm,
     views::{Matrix, MatrixView},
 };
 use indicatif::{ProgressBar, ProgressStyle};
@@ -169,37 +181,25 @@ where
     }
 }
 
-/// Build using PiPNN instead of Vamana.
-///
-/// Has the same `BF` signature as `single_or_multi_insert` for drop-in use in `run_build`.
-pub(super) fn pipnn_insert<U, V, D, T, S>(
-    index: Arc<
-        DiskANNIndex<
-            diskann_providers::model::graph::provider::async_::inmem::DefaultProvider<U, V, D>,
-        >,
-    >,
-    _strategy: S,
-    data: Arc<Matrix<T>>,
+/// Load a dataset directly into the search provider, then build it with PiPNN.
+pub(super) fn run_pipnn_build<T>(
     input: &IndexBuild,
     mut output: &mut dyn Output,
-) -> anyhow::Result<BuildStats>
+) -> anyhow::Result<(diskann_async::MemoryIndex<T>, BuildStats)>
 where
-    T: diskann::utils::VectorRepr + Send + Sync + bytemuck::Pod,
-    U: AsyncFriendly
-        + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>
-        + diskann_providers::model::graph::provider::async_::common::FlatVectorAccess<T>,
-    V: AsyncFriendly
-        + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
-    D: AsyncFriendly,
+    T: diskann::graph::SampleableForStart
+        + diskann::utils::VectorRepr
+        + WithApproximateNorm
+        + AsyncFriendly,
 {
     use std::io::Write;
 
     let pipnn_cfg = input
         .pipnn
         .as_ref()
-        .expect("pipnn_insert called without PiPNN config");
+        .expect("run_pipnn_build called without PiPNN config");
     let diskann_disk::build::configuration::BuildAlgorithm::PiPNN(algo_config) = pipnn_cfg else {
-        anyhow::bail!("pipnn_insert called but build algorithm is not PiPNN");
+        anyhow::bail!("run_pipnn_build called but build algorithm is not PiPNN");
     };
     let max_degree = std::num::NonZeroUsize::new(input.max_degree)
         .context("max_degree must be non-zero for PiPNN build")?;
@@ -211,50 +211,61 @@ where
     )
     .map_err(|e| anyhow::anyhow!("invalid PiPNN config: {e}"))?;
 
-    let npoints = data.nrows();
-    let ndims = data.ncols();
+    let file = File::open(&*input.data)
+        .with_context(|| format!("failed to open dataset {}", input.data.display()))?;
+    let file_len = file.metadata()?.len();
+    let mut reader = BufReader::new(file);
+    let (npoints, ndims) = Metadata::read(&mut reader)
+        .with_context(|| format!("failed to read dataset header {}", input.data.display()))?
+        .into_dims();
+    let row_bytes = ndims
+        .checked_mul(std::mem::size_of::<T>())
+        .context("dataset row size overflow")?;
+    let expected = npoints
+        .checked_mul(row_bytes)
+        .context("dataset size overflow")? as u64;
+    let available = file_len.saturating_sub(8);
+    anyhow::ensure!(
+        available >= expected,
+        "dataset {} declares {npoints} x {ndims} values ({} bytes), but only {available} payload bytes are available",
+        input.data.display(),
+        std::mem::size_of::<T>(),
+    );
+    anyhow::ensure!(
+        row_bytes.is_multiple_of(64),
+        "PiPNN direct provider build requires rows whose byte size is a multiple of 64; got {ndims} dimensions x {} bytes = {row_bytes} bytes",
+        std::mem::size_of::<T>(),
+    );
 
+    let index = diskann_async::new_index::<T, _>(
+        input.try_as_config()?.build()?,
+        input.inmem_parameters(npoints, ndims),
+        diskann_providers::model::graph::provider::async_::common::NoDeletes,
+    )?;
     writeln!(output, "PiPNN build: {} points x {} dims", npoints, ndims)?;
 
-    // PiPNN reads ALL points at once (partition + leaf build), unlike Vamana's
-    // serial "read source row i → greedy-search the store → insert row i", which
-    // needs the source `Matrix` and the accumulating store to coexist. PiPNN has
-    // no such dependency, so it only needs ONE copy of the dataset. We therefore:
-    //   1. copy the vectors into the provider store (which search reads anyway),
-    //   2. DROP the source `Matrix` — freeing the second copy before the
-    //      memory-heavy leaf-build/reservoir phase,
-    //   3. build directly FROM the store's contiguous buffer.
-    // Result: peak RSS holds one dataset copy instead of two.
-
-    // Step 1: populate the search store from the source Matrix.
     let t_store = Instant::now();
-    {
-        let provider = &index.data_provider;
-        let rt = diskann_benchmark_core::tokio::runtime(input.num_threads)?;
-        rt.block_on(async {
-            for i in 0..npoints {
-                let id = i as u32;
-                let row: &[T] = data.row(i);
-                provider.base_vectors.set_element(&id, row)?;
-            }
-            Ok::<(), anyhow::Error>(())
-        })?;
+    let mut row = vec![T::default(); ndims];
+    for id in 0..npoints {
+        reader.read_exact(bytemuck::must_cast_slice_mut(&mut row))?;
+        index
+            .data_provider
+            .base_vectors
+            .set_element(&(id as u32), &row)?;
     }
     let store_secs = t_store.elapsed().as_secs_f64();
-    writeln!(output, "  Vector store:  {:.3}s", store_secs)?;
+    writeln!(output, "  Vector load:   {:.3}s", store_secs)?;
 
-    // Step 2: drop the source Matrix — the store now holds the only copy.
-    drop(data);
+    // SAFETY: loading is complete, no concurrent writes occur, and the first
+    // `npoints` rows are initialized. `flat_prefix` verifies dense packing.
+    let flat = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
+    let data = MatrixView::try_from(flat, npoints, ndims).map_err(|e| e.as_static())?;
+    set_start_points(index.provider(), data, input.start_point_strategy)?;
 
-    // Step 3: build directly from the store's contiguous buffer. SAFETY: the
-    // store was fully populated in Step 1 and is not written again until after
-    // the build; `flat_prefix` asserts dense packing (holds for these dims).
+    // SAFETY: start-point writes target the frozen rows after `npoints`; the
+    // loaded prefix is initialized, densely packed, and no longer mutated.
     let flat: &[T] = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(input.num_threads)
-        .build()?;
-    let graph =
-        pool.install(|| diskann_pipnn::builder::build_typed::<T>(flat, npoints, ndims, &ctx))?;
+    let graph = diskann_pipnn::builder::build_typed::<T>(flat, npoints, ndims, &ctx)?;
 
     writeln!(output, "{}", graph.build_stats)?;
     writeln!(
@@ -265,7 +276,6 @@ where
         graph.num_isolated(),
     )?;
 
-    // Step 4: Transfer adjacency lists into the index.
     let t_transfer = Instant::now();
     {
         let provider = index.provider();
@@ -288,7 +298,7 @@ where
     let total_secs = graph.build_stats.total_secs + store_secs + transfer_secs;
     writeln!(
         output,
-        "  Total (incl. store + transfer): {:.3}s\n",
+        "  Total (incl. load + transfer): {:.3}s\n",
         total_secs
     )?;
 
@@ -296,12 +306,18 @@ where
     let per_vec = MicroSeconds::from(std::time::Duration::from_secs_f64(
         total_secs / npoints as f64,
     ));
-    Ok(BuildStats {
+    let stats = BuildStats {
         kind: BuildKind::PiPNN,
         total_time: total_us,
         vectors_inserted: npoints,
         insert_latencies: percentiles::compute_percentiles(&mut [per_vec; 1])?,
-    })
+    };
+
+    if let Some(gb) = peak_rss_gb() {
+        writeln!(output, "Peak RSS (build stage): {:.2} GiB", gb)?;
+    }
+
+    Ok((index, stats))
 }
 
 #[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]
@@ -442,6 +458,73 @@ impl build_core::Progress for Meter {
     }
     fn finish(&self) {
         self.meter.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+
+    use diskann::graph::StartPointStrategy;
+    use diskann_benchmark_runner::{files::InputFile, output::Memory, utils::datatype::DataType};
+    use diskann_disk::build::configuration::BuildAlgorithm;
+    use diskann_utils::{io::write_bin, views::MatrixView};
+
+    use super::run_pipnn_build;
+    use crate::{inputs::async_::IndexBuild, utils::SimilarityMeasure};
+
+    #[test]
+    fn pipnn_build_streams_bin_directly_into_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vectors.fbin");
+        const NDIMS: usize = 16;
+        let data: Vec<f32> = (0..64 * NDIMS).map(|x| x as f32).collect();
+        let view = MatrixView::try_from(data.as_slice(), 64, NDIMS).unwrap();
+        write_bin(view, &mut File::create(&path).unwrap()).unwrap();
+
+        let mut input = IndexBuild {
+            data_type: DataType::Float32,
+            data: InputFile::new(path),
+            distance: SimilarityMeasure::SquaredL2,
+            max_degree: 8,
+            l_build: 8,
+            insert_retry: None,
+            start_point_strategy: StartPointStrategy::FirstVector,
+            alpha: 1.2,
+            backedge_ratio: 1.0,
+            num_threads: 1,
+            multi_insert: None,
+            save_path: None,
+            pipnn: Some(BuildAlgorithm::PiPNN(diskann_pipnn::PiPNNConfig {
+                num_hash_planes: 4,
+                c_max: 64,
+                c_min: 2,
+                p_samp: 0.5,
+                fanout: vec![2],
+                k: 2,
+                replicas: 1,
+                l_max: 8,
+                final_prune: true,
+                alpha: 1.2,
+            })),
+        };
+        let mut output = Memory::new();
+        let (index, stats) = run_pipnn_build::<f32>(&input, &mut output).unwrap();
+
+        let loaded = unsafe { index.data_provider.base_vectors.flat_prefix(64) };
+        assert_eq!(loaded, data);
+        assert_eq!(stats.vectors_inserted, 64);
+
+        let unaligned_path = dir.path().join("unaligned.fbin");
+        let unaligned = vec![0.0f32; 64 * 17];
+        let view = MatrixView::try_from(unaligned.as_slice(), 64, 17).unwrap();
+        write_bin(view, &mut File::create(&unaligned_path).unwrap()).unwrap();
+        input.data = InputFile::new(unaligned_path);
+
+        let error = run_pipnn_build::<f32>(&input, &mut output).err().unwrap();
+        assert!(error.to_string().contains(
+            "PiPNN direct provider build requires rows whose byte size is a multiple of 64"
+        ));
     }
 }
 
