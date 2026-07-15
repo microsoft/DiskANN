@@ -16,6 +16,7 @@ use diskann_vector::distance::Metric;
 use crate::{
     graph::{
         self, DiskANNIndex,
+        index::SearchStats,
         search::Range,
         test::{provider as test_provider, synthetic::Grid},
     },
@@ -44,6 +45,31 @@ pub(super) struct RangeSearchBaseline {
     pub(super) hops: usize,
     pub(super) result_count: usize,
     pub(super) range_search_second_round: bool,
+}
+
+impl RangeSearchBaseline {
+    pub(super) fn new(
+        range: &Range,
+        results: &[Neighbor<u32>],
+        stats: SearchStats,
+        grid_size: usize,
+        description: impl Into<String>,
+        query: Vec<f32>,
+    ) -> Self {
+        Self {
+            description: description.into(),
+            grid_size,
+            query,
+            radius: range.radius(),
+            inner_radius: range.inner_radius(),
+            starting_l: range.starting_l(),
+            results: results.iter().map(|n| (n.id, n.distance)).collect(),
+            comparisons: stats.cmps as usize,
+            hops: stats.hops as usize,
+            result_count: stats.result_count as usize,
+            range_search_second_round: stats.range_search_second_round,
+        }
+    }
 }
 
 verbose_eq!(RangeSearchBaseline {

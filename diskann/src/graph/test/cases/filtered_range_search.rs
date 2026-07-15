@@ -108,30 +108,23 @@ fn basic_range_search() {
     let radius = 12.0;
     let starting_l = 32;
     let filter = AlwaysTrueFilter;
+    let filtered_range = FilteredRange::new(starting_l, radius).unwrap();
 
     let (filtered_stats, filtered_results) = run_filtered_range_search(
         &index,
         query.as_slice(),
-        FilteredRange::new(starting_l, radius).unwrap(),
+        filtered_range,
         &filter,
     );
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -164,22 +157,14 @@ fn inner_radius_filtering() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: Some(inner_radius),
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -209,22 +194,14 @@ fn two_round_search() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -295,22 +272,14 @@ fn max_results_respected_means_no_second_round() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -355,22 +324,14 @@ fn max_results_respected_and_second_round_triggered() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -418,22 +379,14 @@ fn divisible_by_four_filter_second_round_triggered() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -468,22 +421,14 @@ fn divisible_by_four_filter_no_second_round_from_l_search() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -521,22 +466,14 @@ fn divisible_by_four_filter_no_second_round_from_max_results() {
     let (filtered_stats, filtered_results) =
         run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
+    let baseline = RangeSearchBaseline::new(
+        &filtered_range.range(),
+        &filtered_results,
+        filtered_stats,
         grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: filtered_results
-            .iter()
-            .map(|n| (n.id, n.distance))
-            .collect(),
-        comparisons: filtered_stats.cmps as usize,
-        hops: filtered_stats.hops as usize,
-        result_count: filtered_results.len(),
-        range_search_second_round: filtered_stats.range_search_second_round,
-    };
+        description,
+        query.clone(),
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);

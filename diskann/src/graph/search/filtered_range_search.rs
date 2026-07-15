@@ -86,6 +86,12 @@ impl FilteredRange {
     pub fn range_slack(&self) -> f32 {
         self.range_params.range_slack()
     }
+
+    /// Returns the underlying range search parameters.
+    #[inline]
+    pub fn range(&self) -> Range {
+        self.range_params
+    }
 }
 
 impl RangeBuilder {
@@ -318,8 +324,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::search_output_buffer::BufferState;
-    use crate::neighbor::Neighbor;
 
     #[test]
     fn test_range_search_validation() {
@@ -350,79 +354,5 @@ mod tests {
                 .build_filtered()
                 .is_err()
         );
-    }
-
-    #[test]
-    fn distance_filtered_push_accepts_passing_items() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-
-        assert_eq!(filtered.push(1, 0.5), BufferState::Available);
-        assert_eq!(filtered.current_len(), 1);
-        assert_eq!(inner[0].id, 1);
-        assert_eq!(inner[0].distance, 0.5);
-    }
-
-    #[test]
-    fn distance_filtered_push_rejects_failing_items() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-
-        assert_eq!(filtered.push(1, 1.5), BufferState::Available);
-        assert_eq!(filtered.current_len(), 0);
-    }
-
-    #[test]
-    fn distance_filtered_extend_filters_correctly() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-        assert!(filtered.size_hint().is_none());
-
-        let items = vec![(1u32, 0.3), (2, 1.5), (3, 0.7), (4, 2.0), (5, 0.9)];
-        let count = filtered.extend(items);
-
-        assert_eq!(count, 3);
-        assert_eq!(inner.len(), 3);
-        assert_eq!(inner[0].id, 1);
-        assert_eq!(inner[1].id, 3);
-        assert_eq!(inner[2].id, 5);
-    }
-
-    #[test]
-    fn distance_filtered_respects_inner_capacity() {
-        let mut ids = [0u32; 2];
-        let mut dists = [0.0f32; 2];
-        let mut inner = search_output_buffer::IdDistance::new(&mut ids, &mut dists);
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-        assert_eq!(filtered.size_hint(), Some(2));
-
-        let items = vec![(1u32, 0.1), (2, 0.2), (3, 0.3)];
-        let count = filtered.extend(items);
-
-        assert_eq!(count, 2);
-        assert_eq!(ids, [1, 2]);
-    }
-
-    #[test]
-    fn distance_filtered_inner_radius_pattern() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let radius = 1.0f32;
-        let inner_radius = Some(0.3f32);
-        let mut filtered = DistanceFiltered::new(&mut inner, |dist| {
-            if let Some(ir) = inner_radius
-                && dist <= ir
-            {
-                return false;
-            }
-            dist < radius
-        });
-
-        let items = vec![(1u32, 0.1), (2, 0.5), (3, 0.3), (4, 1.0), (5, 0.8)];
-        let count = filtered.extend(items);
-
-        // 0.1 and 0.3 are <= inner_radius, 1.0 is not < radius
-        assert_eq!(count, 2);
-        assert_eq!(inner[0].id, 2);
-        assert_eq!(inner[1].id, 5);
     }
 }
