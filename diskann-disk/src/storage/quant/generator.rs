@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
+use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider},
     utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
@@ -58,8 +58,8 @@ where
     /// The implementation is adapted from generate_quantized_data_internal in pq_construction.rs
     //
     /// # Processing Flow
-    /// 1. Deletes any existing output.
-    /// 2. Opens source data file and reads metadata (num_points and dimension)
+    /// 1. Opens the source data file and validates its metadata.
+    /// 2. Deletes any existing output.
     /// 3. Creates or opens output compressed file and writes metadata header - [num_points as i32, compressed_vector_size as i32]
     /// 4. Processes data in bounded blocks.
     /// 5. Compresses each block in small batch sizes in parallel to (potentially) take advantage of batch compression with quantizer
@@ -77,6 +77,16 @@ where
 
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
         let (num_points, dim) = metadata.into_dims();
+        if max_block_size == 0 {
+            return Err(ANNError::log_pq_error(
+                "Data compression chunk vector count must be greater than zero",
+            ));
+        }
+        if num_points == 0 {
+            return Err(ANNError::log_pq_error(
+                "Cannot generate compressed data for an empty dataset",
+            ));
+        }
 
         let compressed_path = self.compressed_data_path.as_str();
 
@@ -316,6 +326,43 @@ mod generator_tests {
         data.chunks_exact(output_dim as usize)
             .for_each(|chunk| assert_eq!(chunk, generator.quantizer.code.as_slice()));
 
+        Ok(())
+    }
+
+    #[test]
+    fn generate_data_rejects_empty_dataset() -> ANNResult<()> {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/test_data")
+            .expect("Could not create test directory");
+
+        let data_path = "/test_data/empty.bin".to_string();
+        let compressed_path = "/test_data/empty_compressed.bin".to_string();
+        Metadata::new(0, 8)?.write(&mut storage_provider.create_for_write(data_path.as_str())?)?;
+
+        let (_, result) = create_and_call_generator(
+            compressed_path.clone(),
+            &storage_provider,
+            data_path,
+            4,
+            10_000,
+        );
+
+        assert!(result.is_err());
+        assert!(!storage_provider.exists(&compressed_path));
+        Ok(())
+    }
+
+    #[test]
+    fn generate_data_rejects_zero_chunk_size() -> ANNResult<()> {
+        let (storage_provider, data_path, compressed_path) = generate_data_files(1, 8)?;
+
+        let (_, result) =
+            create_and_call_generator(compressed_path.clone(), &storage_provider, data_path, 4, 0);
+
+        assert!(result.is_err());
+        assert!(!storage_provider.exists(&compressed_path));
         Ok(())
     }
 }
