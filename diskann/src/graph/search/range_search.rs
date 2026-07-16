@@ -36,6 +36,8 @@ pub enum RangeSearchError {
     RangeSearchSlackValueError,
     #[error("inner_radius must be less than or equal to radius")]
     InnerRadiusValueError,
+    #[error("max_returned must be greater than or equal to starting_l")]
+    MaxReturnedLessThanInitialL,
 }
 
 impl From<RangeSearchError> for ANNError {
@@ -116,6 +118,11 @@ impl Range {
         }
         if starting_l == 0 {
             return Err(RangeSearchError::LZero);
+        }
+        if let Some(max) = max_returned
+            && max < starting_l
+        {
+            return Err(RangeSearchError::MaxReturnedLessThanInitialL);
         }
         if !(0.0..=1.0).contains(&initial_slack) {
             return Err(RangeSearchError::StartingListSlackValueError);
@@ -268,7 +275,10 @@ where
 
             let mut in_range = Vec::with_capacity(self.starting_l().into_usize());
 
-            for neighbor in scratch.best.iter().take(self.starting_l().into_usize()) {
+            let starting_l = self.starting_l().into_usize();
+            let max_returned = self.max_returned().unwrap_or(usize::MAX);
+
+            for neighbor in scratch.best.iter().take(starting_l) {
                 if neighbor.distance <= self.radius() {
                     in_range.push(neighbor);
                 }
@@ -282,7 +292,8 @@ where
             scratch.in_range = in_range;
 
             let stats = if scratch.in_range.len()
-                >= ((self.starting_l() as f32) * self.initial_slack()) as usize
+                >= ((starting_l as f32) * self.initial_slack()) as usize
+                && scratch.in_range.len() < max_returned
             {
                 // Move to range search
                 let range_stats = range_search_internal(
@@ -520,6 +531,14 @@ mod tests {
                 .build()
                 .is_err()
         );
+
+        assert!(
+            Range::builder(100, 0.5)
+                .max_returned(Some(1.0))
+                .build()
+                .is_err()
+        );
+
     }
 
     #[test]

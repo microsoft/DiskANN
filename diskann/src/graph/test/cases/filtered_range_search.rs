@@ -110,12 +110,8 @@ fn basic_range_search() {
     let filter = AlwaysTrueFilter;
     let filtered_range = FilteredRange::new(starting_l, radius).unwrap();
 
-    let (filtered_stats, filtered_results) = run_filtered_range_search(
-        &index,
-        query.as_slice(),
-        filtered_range,
-        &filter,
-    );
+    let (filtered_stats, filtered_results) =
+        run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
 
     let baseline = RangeSearchBaseline::new(
         &filtered_range.range(),
