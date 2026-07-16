@@ -538,7 +538,6 @@ mod tests {
                 .build()
                 .is_err()
         );
-
     }
 
     #[test]
