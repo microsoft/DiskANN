@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-garnet"
-version = "4.0.0"
+version = "4.0.1"
 dependencies = [
  "bytemuck",
  "crossbeam",
