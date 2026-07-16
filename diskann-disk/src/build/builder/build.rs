@@ -31,17 +31,14 @@ use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 use crate::{
-    build::{
-        builder::{
-            core::{
-                determine_build_strategy, DiskIndexBuilderCore, IndexBuildStrategy,
-                MergedVamanaIndexWorkflow,
-            },
-            inmem_builder::{new_inmem_index_builder, InmemIndexBuilder},
-            quantizer::BuildQuantizer,
-            tokio::create_runtime,
+    build::builder::{
+        core::{
+            determine_build_strategy, DiskIndexBuilderCore, IndexBuildStrategy,
+            MergedVamanaIndexWorkflow,
         },
-        chunking::ChunkingConfig,
+        inmem_builder::{new_inmem_index_builder, InmemIndexBuilder},
+        quantizer::BuildQuantizer,
+        tokio::create_runtime,
     },
     storage::{
         quant::{PQGeneration, PQGenerationContext, QuantDataGenerator},
@@ -99,23 +96,6 @@ where
         index_configuration: IndexConfiguration,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
-        Self::new_with_chunking_config(
-            storage_provider,
-            disk_build_param,
-            index_configuration,
-            index_writer,
-            ChunkingConfig::default(),
-        )
-    }
-
-    /// Creates a disk index builder with a custom data-compression chunk size.
-    pub fn new_with_chunking_config(
-        storage_provider: &'a StorageProvider,
-        disk_build_param: DiskIndexBuildParameters,
-        index_configuration: IndexConfiguration,
-        index_writer: DiskIndexWriter,
-        chunking_config: ChunkingConfig,
-    ) -> ANNResult<Self> {
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
             &(index_writer.get_index_path_prefix() + "_pq_compressed.bin"),
@@ -136,7 +116,6 @@ where
             index_writer,
             storage_provider,
             pq_storage,
-            chunking_config,
             _phantom: std::marker::PhantomData,
         };
 
@@ -230,7 +209,11 @@ where
             self.pq_storage.get_compressed_data_path().into(),
             &quantizer_context,
         )?;
-        generator.generate_data(storage_provider, pool, &self.chunking_config)
+        generator.generate_data(
+            storage_provider,
+            pool,
+            self.disk_build_param.data_compression_chunk_vector_count(),
+        )
     }
 
     async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {

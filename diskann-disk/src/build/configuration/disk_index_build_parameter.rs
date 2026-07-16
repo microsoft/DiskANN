@@ -19,6 +19,8 @@ pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
 /// smallest block size when reading/writing index data from/to disk.
 pub const DISK_SECTOR_LEN: usize = 4096;
 
+const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
+
 /// Errors returned when validating PQ chunk parameters.
 #[derive(Debug, Error, PartialEq)]
 #[error("Budget must be greater than zero")]
@@ -113,6 +115,9 @@ pub struct DiskIndexBuildParameters {
 
     /// QuantizationType used to instantiate quantized DataProvider for DiskANN Index during build.
     build_quantization: QuantizationType,
+
+    /// Number of vectors processed per data-compression chunk.
+    data_compression_chunk_vector_count: usize,
 }
 
 impl DiskIndexBuildParameters {
@@ -126,7 +131,17 @@ impl DiskIndexBuildParameters {
             build_memory_limit,
             search_pq_chunks,
             build_quantization,
+            data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
         }
+    }
+
+    /// Set the number of vectors processed per data-compression chunk.
+    pub fn with_data_compression_chunk_vector_count(
+        mut self,
+        data_compression_chunk_vector_count: usize,
+    ) -> Self {
+        self.data_compression_chunk_vector_count = data_compression_chunk_vector_count;
+        self
     }
 
     /// Get the configured memory budget for index building.
@@ -142,6 +157,11 @@ impl DiskIndexBuildParameters {
     /// Get user specified PQ chunks count for in-memory search data.
     pub fn search_pq_chunks(&self) -> NumPQChunks {
         self.search_pq_chunks
+    }
+
+    /// Get the number of vectors processed per data-compression chunk.
+    pub fn data_compression_chunk_vector_count(&self) -> usize {
+        self.data_compression_chunk_vector_count
     }
 }
 
@@ -170,6 +190,25 @@ mod dataset_test {
         );
 
         assert_eq!(result.search_pq_chunks().get(), num_pq_chunks.get());
+        assert_eq!(
+            result.data_compression_chunk_vector_count(),
+            DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT
+        );
+    }
+
+    #[test]
+    fn data_compression_chunk_vector_count_can_be_configured() {
+        let memory_budget = MemoryBudget::try_from_gb(2.0).unwrap();
+        let num_pq_chunks = NumPQChunks::new_with(20, 128).unwrap();
+
+        let result = DiskIndexBuildParameters::new(
+            memory_budget,
+            QuantizationType::default(),
+            num_pq_chunks,
+        )
+        .with_data_compression_chunk_vector_count(10_000);
+
+        assert_eq!(result.data_compression_chunk_vector_count(), 10_000);
     }
 
     #[test]

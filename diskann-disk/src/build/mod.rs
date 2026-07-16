@@ -9,7 +9,6 @@
 //! including builders and configuration parameters.
 
 pub mod builder;
-pub mod chunking;
 pub mod configuration;
 
 // Re-export key types for convenience

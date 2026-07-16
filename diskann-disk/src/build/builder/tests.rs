@@ -10,11 +10,8 @@ mod disk_index_build_tests {
     use rstest::rstest;
 
     use crate::{
-        build::{
-            builder::core::disk_index_builder_tests::{
-                new_vfs, verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
-            },
-            chunking::ChunkingConfig,
+        build::builder::core::disk_index_builder_tests::{
+            new_vfs, verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
         },
         QuantizationType,
     };
@@ -97,9 +94,7 @@ mod disk_index_build_tests {
             max_degree,
             index_path_prefix: index_path_prefix.clone(),
             index_build_ram_gb: get_index_build_ram_gb(use_sharded_build),
-            chunking_config: Some(ChunkingConfig {
-                data_compression_chunk_vector_count: 10,
-            }),
+            data_compression_chunk_vector_count: Some(10),
             build_quantization_type,
             ..TestParams::default()
         };

@@ -18,7 +18,7 @@ use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
-use crate::{build::chunking::ChunkingConfig, storage::quant::compressor::QuantCompressor};
+use crate::storage::quant::compressor::QuantCompressor;
 
 /// [`QuantDataGenerator`] orchestrates the process of reading vector data, applying quantization,
 /// and writing compressed results to storage in batches.
@@ -68,7 +68,7 @@ where
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
         pool: RayonThreadPoolRef<'_>, // Thread pool for parallel processing
-        chunking_config: &ChunkingConfig,
+        max_block_size: usize,
     ) -> ANNResult<()>
     where
         Storage: StorageReadProvider + StorageWriteProvider,
@@ -94,7 +94,6 @@ where
             .write(&mut compressed_data_writer)?;
 
         let compressed_size = self.quantizer.compressed_bytes();
-        let max_block_size = chunking_config.data_compression_chunk_vector_count;
         let block_size = std::cmp::min(num_points, max_block_size);
         let num_blocks = num_points / block_size + !num_points.is_multiple_of(block_size) as usize;
 
@@ -267,7 +266,7 @@ mod generator_tests {
         storage_provider: &VirtualStorageProvider<F>,
         data_path: String,
         output_dim: u32,
-        chunking_config: &ChunkingConfig,
+        max_block_size: usize,
     ) -> (QuantDataGenerator<f32, DummyCompressor>, ANNResult<()>) {
         let pool: diskann_providers::utils::RayonThreadPool = create_thread_pool_for_test();
         let generator = QuantDataGenerator::<f32, DummyCompressor>::new(
@@ -276,7 +275,7 @@ mod generator_tests {
             &output_dim,
         )
         .unwrap();
-        let result = generator.generate_data(storage_provider, pool.as_ref(), chunking_config);
+        let result = generator.generate_data(storage_provider, pool.as_ref(), max_block_size);
         (generator, result)
     }
 
@@ -290,16 +289,12 @@ mod generator_tests {
         #[case] output_dim: u32,
     ) -> ANNResult<()> {
         let (storage_provider, data_path, compressed_path) = generate_data_files(num_points, dim)?;
-        let chunking_config = ChunkingConfig {
-            data_compression_chunk_vector_count: 10_000,
-        };
-
         let (generator, result) = create_and_call_generator(
             compressed_path.clone(),
             &storage_provider,
             data_path,
             output_dim,
-            &chunking_config,
+            10_000,
         );
 
         result?;

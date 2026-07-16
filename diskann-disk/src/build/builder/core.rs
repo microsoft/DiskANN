@@ -20,7 +20,6 @@ use rand::{seq::SliceRandom, Rng};
 use tracing::info;
 
 use crate::{
-    build::chunking::ChunkingConfig,
     disk_index_build_parameter::BYTES_IN_GB,
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
     utils::partition_with_ram_budget,
@@ -69,8 +68,6 @@ where
     pub disk_build_param: DiskIndexBuildParameters,
 
     pub index_configuration: IndexConfiguration,
-
-    pub chunking_config: ChunkingConfig,
 
     pub storage_provider: &'a StorageProvider,
 
@@ -591,7 +588,7 @@ pub(crate) mod disk_index_builder_tests {
         pub index_path_prefix: String,
         pub associated_data_path: Option<String>,
         pub index_build_ram_gb: f64,
-        pub chunking_config: Option<ChunkingConfig>,
+        pub data_compression_chunk_vector_count: Option<usize>,
         pub num_threads: usize,
         pub metric: Metric,
         pub block_size: usize,
@@ -610,7 +607,7 @@ pub(crate) mod disk_index_builder_tests {
                 index_path_prefix: INDEX_PATH_PREFIX.to_string(),
                 associated_data_path: None,
                 index_build_ram_gb: 1.0,
-                chunking_config: None,
+                data_compression_chunk_vector_count: None,
                 num_threads: 1,
                 metric: L2,
                 block_size: DEFAULT_DISK_SECTOR_LEN,
@@ -670,11 +667,15 @@ pub(crate) mod disk_index_builder_tests {
             StorageProvider::Reader: std::marker::Send + Read,
         {
             // Create disk index build parameters
-            let disk_index_build_parameters = DiskIndexBuildParameters::new(
+            let mut disk_index_build_parameters = DiskIndexBuildParameters::new(
                 MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?,
                 self.params.build_quantization_type,
                 NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
             );
+            if let Some(chunk_vector_count) = self.params.data_compression_chunk_vector_count {
+                disk_index_build_parameters = disk_index_build_parameters
+                    .with_data_compression_chunk_vector_count(chunk_vector_count);
+            }
 
             let config = config::Builder::new_with(
                 self.params.max_degree.into_usize(),
@@ -716,21 +717,12 @@ pub(crate) mod disk_index_builder_tests {
                 self.params.block_size,
             )?;
 
-            let mut disk_index = match self.params.chunking_config.as_ref() {
-                Some(chunking_config) => DiskIndexBuilder::<T, _>::new_with_chunking_config(
-                    self.storage_provider.as_ref(),
-                    disk_index_build_parameters,
-                    config,
-                    disk_index_writer,
-                    chunking_config.clone(),
-                ),
-                None => DiskIndexBuilder::<T, _>::new(
-                    self.storage_provider.as_ref(),
-                    disk_index_build_parameters,
-                    config,
-                    disk_index_writer,
-                ),
-            }?;
+            let mut disk_index = DiskIndexBuilder::<T, _>::new(
+                self.storage_provider.as_ref(),
+                disk_index_build_parameters,
+                config,
+                disk_index_writer,
+            )?;
 
             let timer = Instant::now();
             disk_index.build()?;
