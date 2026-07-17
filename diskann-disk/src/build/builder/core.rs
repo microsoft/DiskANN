@@ -2,26 +2,30 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use std::mem::{self, size_of};
+use std::{
+    marker::PhantomData,
+    mem::{self, size_of},
+};
 
 use crate::data_model::GraphDataType;
-use diskann::ANNResult;
+use diskann::{utils::VectorRepr, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
-    storage::PQStorage,
     utils::{
         load_metadata_from_file, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
         READ_WRITE_BLOCK_SIZE,
     },
 };
 use diskann_utils::io::read_bin;
-use rand::{seq::SliceRandom, Rng};
+use rand::seq::SliceRandom;
 use tracing::info;
 
 use crate::{
+    build::builder::{build::build_inmem_index, quantizer::BuildQuantizer},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
+    utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
     utils::partition_with_ram_budget,
     DiskIndexBuildParameters, QuantizationType,
 };
@@ -57,46 +61,73 @@ fn estimate_build_index_ram_usage(
     OVERHEAD_FACTOR * (graph_size + (single_vec_size * num_points) as f64)
 }
 
-/// Core shared functionality between sync and async disk index builders.
-/// Contains only fields and methods that are truly needed by both builder types.
-pub struct DiskIndexBuilderCore<'a, Data, StorageProvider>
+/// Builds a merged Vamana index from overlapping dataset shards.
+pub(super) struct MergedVamanaIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    pub index_writer: DiskIndexWriter,
-
-    pub pq_storage: PQStorage,
-
-    pub disk_build_param: DiskIndexBuildParameters,
-
-    pub index_configuration: IndexConfiguration,
-
-    pub storage_provider: &'a StorageProvider,
-
-    pub _phantom: std::marker::PhantomData<Data>,
+    index_configuration: &'a IndexConfiguration,
+    disk_build_param: &'a DiskIndexBuildParameters,
+    index_writer: &'a DiskIndexWriter,
+    build_quantizer: &'a BuildQuantizer,
+    storage_provider: &'a StorageProvider,
+    rng: diskann_providers::utils::StandardRng,
+    _phantom: PhantomData<Data>,
 }
 
-impl<'a, Data, StorageProvider> DiskIndexBuilderCore<'a, Data, StorageProvider>
+impl<'a, Data, StorageProvider> MergedVamanaIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    StorageProvider: StorageReadProvider + StorageWriteProvider,
+    Data::VectorDataType: VectorRepr,
+    StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
+    <StorageProvider as StorageReadProvider>::Reader: Send,
 {
-    pub(crate) fn create_disk_layout(&mut self) -> ANNResult<()> {
-        self.index_writer
-            .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
+    pub(super) fn new(
+        index_configuration: &'a IndexConfiguration,
+        disk_build_param: &'a DiskIndexBuildParameters,
+        index_writer: &'a DiskIndexWriter,
+        build_quantizer: &'a BuildQuantizer,
+        storage_provider: &'a StorageProvider,
+    ) -> Self {
+        Self {
+            index_configuration,
+            disk_build_param,
+            index_writer,
+            build_quantizer,
+            storage_provider,
+            rng: diskann_providers::utils::create_rnd_from_optional_seed(
+                index_configuration.random_seed,
+            ),
+            _phantom: PhantomData,
+        }
+    }
 
-        self.index_writer
-            .index_build_cleanup(self.storage_provider)?;
+    pub(super) async fn build(mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+        let mut logger = PerfLogger::new_disk_index_build_logger();
+        let dataset_file = self.index_writer.get_dataset_file();
+        let merged_index_prefix = self.index_writer.get_merged_index_prefix();
+        let output_vamana = self.index_writer.get_mem_index_file();
+        let max_degree = self.index_configuration.config.pruned_degree_u32().get();
+
+        let num_parts =
+            self.partition_data(&dataset_file, &merged_index_prefix, max_degree, pool)?;
+        logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::PartitionData);
+
+        for shard_id in 0..num_parts {
+            self.build_shard_index(&dataset_file, &merged_index_prefix, shard_id)
+                .await?;
+        }
+        logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::BuildIndicesOnShards);
+
+        self.merge_and_cleanup(&merged_index_prefix, num_parts, max_degree, output_vamana)?;
+        logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::MergeIndices);
 
         Ok(())
     }
 
-    pub(crate) fn create_shard_index_config(
-        &self,
-        shard_base_file: &str,
-    ) -> ANNResult<IndexConfiguration> {
-        let base_config = &self.index_configuration;
+    fn create_shard_index_config(&self, shard_base_file: &str) -> ANNResult<IndexConfiguration> {
+        let base_config = self.index_configuration;
         let storage_provider = self.storage_provider;
 
         let search_list_size = base_config.config.l_build().get();
@@ -112,14 +143,14 @@ where
 
         let metadata = load_metadata_from_file(storage_provider, shard_base_file)?;
 
-        let mut index_config = base_config.clone();
+        let mut index_config = (*base_config).clone();
         index_config.max_points = metadata.npoints();
         index_config.config = low_degree_params;
 
         Ok(index_config)
     }
 
-    pub(crate) fn retrieve_shard_data_from_ids<T>(
+    fn retrieve_shard_data_from_ids<T>(
         &self,
         dataset_file: &str,
         shard_ids_file: &str,
@@ -174,14 +205,45 @@ where
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn merge_shards(
+    async fn build_shard_index(
         &self,
+        dataset_file: &str,
+        merged_index_prefix: &str,
+        shard_id: usize,
+    ) -> ANNResult<()> {
+        let shard_base_file =
+            DiskIndexWriter::get_merged_index_subshard_data_file(merged_index_prefix, shard_id);
+        let shard_ids_file =
+            DiskIndexWriter::get_merged_index_subshard_id_map_file(merged_index_prefix, shard_id);
+        self.retrieve_shard_data_from_ids::<Data::VectorDataType>(
+            dataset_file,
+            &shard_ids_file,
+            &shard_base_file,
+        )?;
+        info!("Generated data for shard {}", shard_id);
+
+        let index_config = self.create_shard_index_config(&shard_base_file)?;
+        let shard_index_file = DiskIndexWriter::get_merged_index_subshard_mem_index_file(
+            merged_index_prefix,
+            shard_id,
+        );
+
+        build_inmem_index::<Data::VectorDataType, _>(
+            index_config,
+            self.build_quantizer,
+            &shard_base_file,
+            &shard_index_file,
+            self.storage_provider,
+        )
+        .await
+    }
+
+    fn merge_shards(
+        &mut self,
         merged_index_prefix: &str,
         num_parts: usize,
         max_degree: u32,
         output_vamana: String,
-        rng: &mut impl Rng,
     ) -> ANNResult<()> {
         // Read ID maps
         let mut vamana_names = vec![String::new(); num_parts];
@@ -293,7 +355,7 @@ where
         for pair in &node_shard {
             let (node_id, shard_id) = *pair;
             if cur_id < node_id {
-                final_nbrs.shuffle(rng);
+                final_nbrs.shuffle(&mut self.rng);
 
                 let nnbrs: u32 = std::cmp::min(final_nbrs.len() as u32, max_degree);
                 merged_vamana_cached_writer.write(&nnbrs.to_le_bytes())?;
@@ -341,7 +403,7 @@ where
         }
 
         // write the last node, to be refactored...
-        final_nbrs.shuffle(rng);
+        final_nbrs.shuffle(&mut self.rng);
 
         let nnbrs: u32 = std::cmp::min(final_nbrs.len() as u32, max_degree);
         merged_vamana_cached_writer.write(&nnbrs.to_le_bytes())?;
@@ -371,21 +433,49 @@ where
         Ok(data.into_inner().into_vec())
     }
 
-    fn merge_shards_and_cleanup(
-        &self,
+    fn partition_data(
+        &mut self,
+        dataset_file: &str,
+        merged_index_prefix: &str,
+        max_degree: u32,
+        pool: RayonThreadPoolRef<'_>,
+    ) -> ANNResult<usize> {
+        let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / self.index_configuration.max_points as f64;
+        let ram_budget_in_bytes = self.disk_build_param.build_memory_limit().in_bytes() as f64;
+
+        partition_with_ram_budget::<Data::VectorDataType, _, _>(
+            dataset_file,
+            self.index_configuration.dim,
+            sampling_rate,
+            ram_budget_in_bytes,
+            PARTITION_ASSIGNMENTS_PER_VECTOR,
+            merged_index_prefix,
+            self.storage_provider,
+            &mut self.rng,
+            pool,
+            |num_points, dim| {
+                let datasize = std::mem::size_of::<Data::VectorDataType>() as u64;
+                let graph_degree = 2 * max_degree / 3;
+                estimate_build_index_ram_usage(
+                    num_points,
+                    dim,
+                    datasize,
+                    graph_degree as u64,
+                    self.disk_build_param.build_quantization(),
+                )
+            },
+        )
+    }
+
+    fn merge_and_cleanup(
+        &mut self,
         merged_index_prefix: &str,
         num_parts: usize,
         max_degree: u32,
-        rng: &mut impl Rng,
+        output_vamana: String,
     ) -> ANNResult<()> {
         // merge all in-memory indices into one
-        self.merge_shards(
-            merged_index_prefix,
-            num_parts,
-            max_degree,
-            self.index_writer.get_mem_index_file(),
-            rng,
-        )?;
+        self.merge_shards(merged_index_prefix, num_parts, max_degree, output_vamana)?;
 
         // delete tempFiles
         for p in 0..num_parts {
@@ -401,8 +491,7 @@ where
             self.storage_provider.delete(&shard_base_file)?;
             self.storage_provider.delete(&shard_ids_file)?;
             self.storage_provider.delete(&shard_index_file)?;
-            // Check if shard dataset file exists before deleting it.
-            // Async build path doesn't always create this file.
+            // Async build path does not always create the shard dataset file.
             if self.storage_provider.exists(&shard_index_file_data) {
                 self.storage_provider.delete(&shard_index_file_data)?;
             }
@@ -449,93 +538,6 @@ pub(crate) fn determine_build_strategy<Data: GraphDataType>(
             estimated_index_ram_in_bytes / BYTES_IN_GB
         );
         IndexBuildStrategy::OneShot
-    }
-}
-
-pub(crate) struct MergedVamanaIndexWorkflow<'a> {
-    pool: RayonThreadPoolRef<'a>,
-    rng: diskann_providers::utils::StandardRng,
-    dataset_file: String,
-    max_degree: u32,
-    pub merged_index_prefix: String,
-}
-
-impl<'a> MergedVamanaIndexWorkflow<'a> {
-    pub(crate) fn new<Data, StorageProvider>(
-        builder: &mut DiskIndexBuilderCore<'_, Data, StorageProvider>,
-        pool: RayonThreadPoolRef<'a>,
-    ) -> Self
-    where
-        Data: GraphDataType<VectorIdType = u32>,
-        StorageProvider: StorageReadProvider + StorageWriteProvider,
-    {
-        let rng = diskann_providers::utils::create_rnd_from_optional_seed(
-            builder.index_configuration.random_seed,
-        );
-        let dataset_file = builder.index_writer.get_dataset_file();
-        let merged_index_prefix = builder.index_writer.get_merged_index_prefix();
-        let max_degree = builder.index_configuration.config.pruned_degree_u32().get();
-
-        Self {
-            pool,
-            rng,
-            dataset_file,
-            merged_index_prefix,
-            max_degree,
-        }
-    }
-
-    pub(crate) fn partition_data<Data, StorageProvider>(
-        &mut self,
-        builder: &mut DiskIndexBuilderCore<'_, Data, StorageProvider>,
-    ) -> ANNResult<usize>
-    where
-        Data: GraphDataType<VectorIdType = u32>,
-        StorageProvider: StorageReadProvider + StorageWriteProvider,
-    {
-        let num_points = builder.index_configuration.max_points;
-        let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / num_points as f64;
-        let ram_budget_in_bytes = builder.disk_build_param.build_memory_limit().in_bytes() as f64;
-
-        partition_with_ram_budget::<Data::VectorDataType, _, _>(
-            &self.dataset_file,
-            builder.index_configuration.dim,
-            sampling_rate,
-            ram_budget_in_bytes,
-            2,
-            &self.merged_index_prefix,
-            builder.storage_provider,
-            &mut self.rng,
-            self.pool,
-            |num_points, dim| {
-                let datasize = std::mem::size_of::<Data::VectorDataType>() as u64;
-                let graph_degree = 2 * self.max_degree / 3;
-                estimate_build_index_ram_usage(
-                    num_points,
-                    dim,
-                    datasize,
-                    graph_degree as u64,
-                    builder.disk_build_param.build_quantization(),
-                )
-            },
-        )
-    }
-
-    pub(crate) fn merge_and_cleanup<Data, StorageProvider>(
-        &mut self,
-        builder: &mut DiskIndexBuilderCore<'_, Data, StorageProvider>,
-        num_parts: usize,
-    ) -> ANNResult<()>
-    where
-        Data: GraphDataType<VectorIdType = u32>,
-        StorageProvider: StorageReadProvider + StorageWriteProvider,
-    {
-        builder.merge_shards_and_cleanup(
-            &self.merged_index_prefix,
-            num_parts,
-            self.max_degree,
-            &mut self.rng,
-        )
     }
 }
 

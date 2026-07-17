@@ -5,8 +5,8 @@
 
 //! Async disk index builder implementation.
 use std::{
+    marker::PhantomData,
     num::NonZeroUsize,
-    ops::{Deref, DerefMut},
     sync::{Arc, Mutex},
 };
 
@@ -32,10 +32,7 @@ use tracing::{debug, info};
 
 use crate::{
     build::builder::{
-        core::{
-            determine_build_strategy, DiskIndexBuilderCore, IndexBuildStrategy,
-            MergedVamanaIndexWorkflow,
-        },
+        core::{determine_build_strategy, IndexBuildStrategy, MergedVamanaIndexBuilder},
         inmem_builder::{new_inmem_index_builder, InmemIndexBuilder},
         quantizer::BuildQuantizer,
         tokio::create_runtime,
@@ -44,43 +41,22 @@ use crate::{
         quant::{PQGeneration, PQGenerationContext, QuantDataGenerator},
         DiskIndexWriter,
     },
-    utils::instrumentation::{
-        BuildMergedVamanaIndexCheckpoint, DiskIndexBuildCheckpoint, PerfLogger,
-    },
+    utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
     DiskIndexBuildParameters,
 };
 
-/// Disk index builder that composes with DiskIndexBuilderCore.
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    pub core: DiskIndexBuilderCore<'a, Data, StorageProvider>,
-    /// Async-specific field: actual quantizers for async processing
-    pub build_quantizer: BuildQuantizer,
-}
-
-impl<'a, Data, StorageProvider> Deref for DiskIndexBuilder<'a, Data, StorageProvider>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    StorageProvider: StorageReadProvider + StorageWriteProvider,
-{
-    type Target = DiskIndexBuilderCore<'a, Data, StorageProvider>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl<'a, Data, StorageProvider> DerefMut for DiskIndexBuilder<'a, Data, StorageProvider>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    StorageProvider: StorageReadProvider + StorageWriteProvider,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.core
-    }
+    index_writer: DiskIndexWriter,
+    pq_storage: PQStorage,
+    disk_build_param: DiskIndexBuildParameters,
+    index_configuration: IndexConfiguration,
+    storage_provider: &'a StorageProvider,
+    build_quantizer: BuildQuantizer,
+    _phantom: PhantomData<Data>,
 }
 
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
@@ -114,18 +90,14 @@ where
             storage_provider,
         )?;
 
-        let core = DiskIndexBuilderCore {
+        Ok(Self {
             disk_build_param,
             index_configuration,
             index_writer,
             storage_provider,
             pq_storage,
-            _phantom: std::marker::PhantomData,
-        };
-
-        Ok(Self {
-            core,
             build_quantizer,
+            _phantom: PhantomData,
         })
     }
 
@@ -164,7 +136,7 @@ where
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
-        let storage_provider = self.core.storage_provider;
+        let storage_provider = self.storage_provider;
 
         info!(
             "Compressing data into {} bytes per vector for disk search",
@@ -211,53 +183,14 @@ where
     }
 
     async fn build_merged_vamana_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
-        let mut logger = PerfLogger::new_disk_index_build_logger();
-        let mut workflow = MergedVamanaIndexWorkflow::new(self, pool);
-
-        // Partition data stage
-        let num_parts = workflow.partition_data(self)?;
-        logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::PartitionData);
-
-        // build in-memory index for each partition
-        for p in 0..num_parts {
-            // build in-memory disk for current shard partition:{shard_base_file} and save to disk
-            self.build_shard_index(&workflow.merged_index_prefix, p)
-                .await?;
-        }
-        logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::BuildIndicesOnShards);
-
-        workflow.merge_and_cleanup(self, num_parts)?;
-        logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::MergeIndices);
-
-        Ok(())
-    }
-
-    async fn build_shard_index(&self, merged_index_prefix: &str, shard_id: usize) -> ANNResult<()> {
-        let shard_base_file =
-            DiskIndexWriter::get_merged_index_subshard_data_file(merged_index_prefix, shard_id);
-
-        let shard_ids_file =
-            DiskIndexWriter::get_merged_index_subshard_id_map_file(merged_index_prefix, shard_id);
-        self.retrieve_shard_data_from_ids::<Data::VectorDataType>(
-            &self.index_writer.get_dataset_file(),
-            &shard_ids_file,
-            &shard_base_file,
-        )?;
-        info!("Generated data for shard {}", shard_id);
-
-        let index_config = self.create_shard_index_config(&shard_base_file)?;
-        let shard_index_file = DiskIndexWriter::get_merged_index_subshard_mem_index_file(
-            merged_index_prefix,
-            shard_id,
-        );
-
-        build_inmem_index::<Data::VectorDataType, _>(
-            index_config,
+        MergedVamanaIndexBuilder::<Data, _>::new(
+            &self.index_configuration,
+            &self.disk_build_param,
+            &self.index_writer,
             &self.build_quantizer,
-            &shard_base_file,
-            &shard_index_file,
-            self.core.storage_provider,
+            self.storage_provider,
         )
+        .build(pool)
         .await
     }
 
@@ -267,13 +200,22 @@ where
             &self.build_quantizer,
             &self.index_writer.get_dataset_file(),
             &self.index_writer.get_mem_index_file(),
-            self.core.storage_provider,
+            self.storage_provider,
         )
         .await
     }
+
+    fn create_disk_layout(&mut self) -> ANNResult<()> {
+        self.index_writer
+            .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
+        self.index_writer
+            .index_build_cleanup(self.storage_provider)?;
+
+        Ok(())
+    }
 }
 
-async fn build_inmem_index<T, StorageProvider>(
+pub(super) async fn build_inmem_index<T, StorageProvider>(
     config: IndexConfiguration,
     quantizer: &BuildQuantizer,
     data_path: &str,
