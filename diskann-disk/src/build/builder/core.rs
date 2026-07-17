@@ -485,16 +485,10 @@ where
                 DiskIndexWriter::get_merged_index_subshard_id_map_file(merged_index_prefix, p);
             let shard_index_file =
                 DiskIndexWriter::get_merged_index_subshard_mem_index_file(merged_index_prefix, p);
-            let shard_index_file_data =
-                DiskIndexWriter::get_merged_index_subshard_mem_dataset_file(&shard_index_file);
 
             self.storage_provider.delete(&shard_base_file)?;
             self.storage_provider.delete(&shard_ids_file)?;
             self.storage_provider.delete(&shard_index_file)?;
-            // Async build path does not always create the shard dataset file.
-            if self.storage_provider.exists(&shard_index_file_data) {
-                self.storage_provider.delete(&shard_index_file_data)?;
-            }
         }
 
         Ok(())
