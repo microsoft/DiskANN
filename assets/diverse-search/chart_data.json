@@ -1,0 +1,52 @@
+{
+  "_comment": "QPS-vs-recall data at L=100 for the diverse-search benchmark charts. Recall is deterministic and authoritative; QPS is the best (least-contended) of several single-threaded runs (see diverse-search-results.md). Update these values when rerunning benchmarks, then regenerate the PNGs with plot_qps_vs_recall.py.",
+  "methods": ["Standard", "Queue", "Design A", "Design B"],
+  "colors": {
+    "Standard": "#7f7f7f",
+    "Queue": "#1f77b4",
+    "Design A": "#2ca02c",
+    "Design B": "#d62728"
+  },
+  "charts": [
+    {
+      "output": "enron-qps-vs-recall.png",
+      "title": "Enron (concentrated attribute)",
+      "points": {
+        "Standard": {"recall": 70.72, "qps": 142.6},
+        "Queue": {"recall": 77.92, "qps": 100.0},
+        "Design A": {"recall": 86.05, "qps": 159.2},
+        "Design B": {"recall": 93.01, "qps": 53.0}
+      }
+    },
+    {
+      "output": "caselaw-qps-vs-recall.png",
+      "title": "Caselaw (diffuse attribute \u2014 doc_id)",
+      "points": {
+        "Standard": {"recall": 96.91, "qps": 160.3},
+        "Queue": {"recall": 98.32, "qps": 84.3},
+        "Design A": {"recall": 99.25, "qps": 128.8},
+        "Design B": {"recall": 99.25, "qps": 105.9}
+      }
+    },
+    {
+      "output": "caselaw-jurisdiction-qps-vs-recall.png",
+      "title": "Caselaw (concentrated + distance-correlated \u2014 court_jurisdiction)",
+      "points": {
+        "Standard": {"recall": 35.91, "qps": 165.6},
+        "Queue": {"recall": 79.12, "qps": 152.1},
+        "Design A": {"recall": 72.59, "qps": 174.5},
+        "Design B": {"recall": 78.97, "qps": 96.0}
+      }
+    },
+    {
+      "output": "yfcc-qps-vs-recall.png",
+      "title": "YFCC (concentrated attribute \u2014 camera)",
+      "points": {
+        "Standard": {"recall": 49.73, "qps": 227.1},
+        "Queue": {"recall": 81.78, "qps": 186.1},
+        "Design A": {"recall": 93.98, "qps": 192.6},
+        "Design B": {"recall": 96.92, "qps": 111.9}
+      }
+    }
+  ]
+}
