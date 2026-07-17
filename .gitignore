@@ -337,3 +337,6 @@ target/
 
 # Ignore local settings for claude code AI agent
 .claude/settings.local.json
+
+# Benchmark run outputs (kept out of the repo; archive externally if needed)
+diskann-benchmark/output/

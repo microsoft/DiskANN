@@ -138,7 +138,7 @@ where
             let num_starting_points = accessor.num_starting_points().await?;
             let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
 
-            let stats = diverse_adaptive_search_internal(
+            let (stats, mut candidates) = diverse_adaptive_search_internal(
                 index.max_degree_with_slack(),
                 &self.inner,
                 self.provider.as_ref(),
@@ -149,8 +149,17 @@ where
             )
             .await?;
 
+            // The diversity post-processor selects results by walking candidates
+            // in ascending distance order. `candidates` is accumulated in
+            // discovery order, so sort it here.
+            candidates.sort_unstable_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
             let result_count = processor
-                .post_process(&mut accessor, query, scratch.best.iter(), output)
+                .post_process(&mut accessor, query, candidates.into_iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -167,7 +176,7 @@ async fn diverse_adaptive_search_internal<I, A, P>(
     adaptive_l: &AdaptiveL,
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
-) -> ANNResult<InternalSearchStats>
+) -> ANNResult<(InternalSearchStats, Vec<Neighbor<I>>)>
 where
     I: VectorId,
     A: SearchAccessor<Id = I>,
@@ -187,10 +196,19 @@ where
     let mut sample_visited: usize = 0;
     let mut l_adjusted = false;
 
+    // Every distinct node discovered during traversal, retained with its
+    // distance. The diversity post-processor selects from this full visited set
+    // rather than the `L`-bounded navigation frontier (`scratch.best`), so a
+    // diverse-but-distant node evicted from `best` by closer non-diverse nodes
+    // still remains eligible as a final answer.
+    let mut candidates: Vec<Neighbor<I>> = Vec::new();
+
     accessor
         .start_point_distances(|id, distance| {
             scratch.visited.insert(id);
-            scratch.best.insert(Neighbor::new(id, distance));
+            let neighbor = Neighbor::new(id, distance);
+            scratch.best.insert(neighbor);
+            candidates.push(neighbor);
             scratch.cmps += 1;
         })
         .await?;
@@ -221,6 +239,7 @@ where
 
         for neighbor in neighbors.iter() {
             scratch.best.insert(*neighbor);
+            candidates.push(*neighbor);
 
             // Sample the bucket of each newly visited node until L is resized.
             if !l_adjusted {
@@ -253,11 +272,14 @@ where
         }
     }
 
-    Ok(InternalSearchStats {
-        cmps: scratch.cmps,
-        hops: scratch.hops,
-        range_search_second_round: false,
-    })
+    Ok((
+        InternalSearchStats {
+            cmps: scratch.cmps,
+            hops: scratch.hops,
+            range_search_second_round: false,
+        },
+        candidates,
+    ))
 }
 
 /// Count the "useful" diverse slots observed in a bucket-count sample.
