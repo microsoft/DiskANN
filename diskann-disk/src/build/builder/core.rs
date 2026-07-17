@@ -29,6 +29,9 @@ use crate::{
 /// Overhead factor for RAM estimation during index build (10% buffer).
 const OVERHEAD_FACTOR: f64 = 1.1f64;
 
+/// Number of nearest shards each vector is assigned to during partitioning.
+const PARTITION_ASSIGNMENTS_PER_VECTOR: usize = 2;
+
 /// Estimate RAM usage in bytes for building an index.
 #[inline]
 fn estimate_build_index_ram_usage(

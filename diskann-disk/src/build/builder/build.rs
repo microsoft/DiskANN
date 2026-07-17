@@ -47,7 +47,7 @@ use crate::{
     utils::instrumentation::{
         BuildMergedVamanaIndexCheckpoint, DiskIndexBuildCheckpoint, PerfLogger,
     },
-    DiskIndexBuildParameters, QuantizationType,
+    DiskIndexBuildParameters,
 };
 
 /// Disk index builder that composes with DiskIndexBuilderCore.
@@ -102,7 +102,11 @@ where
             Some(&index_writer.get_dataset_file()),
         );
 
-        let build_quantizer = Self::train_build_quantizer(
+        info!(
+            "Training quantizer for {} quantized builds.",
+            disk_build_param.build_quantization().to_string()
+        );
+        let build_quantizer = BuildQuantizer::train::<Data, _>(
             disk_build_param.build_quantization(),
             &index_writer.get_index_path_prefix(),
             &index_configuration,
@@ -123,27 +127,6 @@ where
             core,
             build_quantizer,
         })
-    }
-
-    fn train_build_quantizer(
-        build_quantization_type: &QuantizationType,
-        index_path_prefix: &str,
-        index_configuration: &IndexConfiguration,
-        pq_storage: &PQStorage,
-        storage_provider: &StorageProvider,
-    ) -> ANNResult<BuildQuantizer> {
-        info!(
-            "Training quantizer for {} quantized builds.",
-            build_quantization_type.to_string()
-        );
-
-        BuildQuantizer::train::<Data, _>(
-            build_quantization_type,
-            index_path_prefix,
-            index_configuration,
-            pq_storage,
-            storage_provider,
-        )
     }
 
     pub fn build(&mut self) -> ANNResult<()> {
@@ -268,30 +251,22 @@ where
             shard_id,
         );
 
-        self.build_inmem_index_from_data(index_config, &shard_base_file, &shard_index_file)
-            .await
-    }
-
-    async fn build_one_shot_vamana_index(&mut self) -> ANNResult<()> {
-        self.build_inmem_index_from_data(
-            self.index_configuration.clone(),
-            &self.index_writer.get_dataset_file(),
-            &self.index_writer.get_mem_index_file(),
+        build_inmem_index::<Data::VectorDataType, _>(
+            index_config,
+            &self.build_quantizer,
+            &shard_base_file,
+            &shard_index_file,
+            self.core.storage_provider,
         )
         .await
     }
 
-    async fn build_inmem_index_from_data(
-        &self,
-        config: IndexConfiguration,
-        data_path: &str,
-        save_path: &str,
-    ) -> ANNResult<()> {
+    async fn build_one_shot_vamana_index(&mut self) -> ANNResult<()> {
         build_inmem_index::<Data::VectorDataType, _>(
-            config,
+            self.index_configuration.clone(),
             &self.build_quantizer,
-            data_path,
-            save_path,
+            &self.index_writer.get_dataset_file(),
+            &self.index_writer.get_mem_index_file(),
             self.core.storage_provider,
         )
         .await
