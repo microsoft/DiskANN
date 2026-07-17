@@ -34,7 +34,11 @@ mod compile {
             )
         });
         let out_dir = env::var_os("OUT_DIR").expect("This should be set by Cargo");
-        let input_files = ["transforms_v001.fbs", "spherical_v001.fbs"];
+        let input_files = [
+            "transforms_v001.fbs",
+            "spherical_v001.fbs",
+            "minmax_v001.fbs",
+        ];
 
         // Let `cargo` know that we want to rerun under the following conditions:
         //
@@ -55,7 +59,7 @@ mod compile {
         //
         // We first remove the current contents of the generated `flatbuffers` directory
         // to ensure we don't leave cruft behind.
-        let output_dirs = ["transforms", "spherical"];
+        let output_dirs = ["transforms", "spherical", "minmax"];
 
         let generated_folder = "./src/flatbuffers";
 
