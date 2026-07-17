@@ -14,7 +14,7 @@ byteorder.workspace = true
 clap = { workspace = true, features = ["derive"] }
 diskann-providers = { workspace = true, default-features = false } # see `linalg/Cargo.toml`
 diskann-vector = { workspace = true }
-diskann-utils = { workspace = true }
+diskann-utils = { workspace = true, features = ["bigann"] }
 bytemuck.workspace = true
 num_cpus.workspace = true
 rayon.workspace = true

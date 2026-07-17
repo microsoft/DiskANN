@@ -1,5 +1,0 @@
-parsing dataset "dataset" in file "<TEST_DIR>/runbook.yaml"
-
-Caused by:
-    0: processing stage 1
-    1: YAML type is not a map

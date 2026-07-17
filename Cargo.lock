@@ -691,7 +691,6 @@ dependencies = [
  "diskann-vector",
  "futures-util",
  "itertools 0.13.0",
- "serde_yaml",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -943,8 +942,10 @@ dependencies = [
 name = "diskann-utils"
 version = "0.55.0"
 dependencies = [
+ "anyhow",
  "bytemuck",
  "cfg-if",
+ "diskann-benchmark-runner",
  "diskann-vector",
  "diskann-wide",
  "half",
@@ -952,6 +953,8 @@ dependencies = [
  "rand_distr",
  "rayon",
  "rstest",
+ "serde_yaml",
+ "tempfile",
  "thiserror 2.0.17",
 ]
 

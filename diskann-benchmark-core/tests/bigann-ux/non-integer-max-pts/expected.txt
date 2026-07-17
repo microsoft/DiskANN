@@ -1,4 +1,0 @@
-parsing dataset "dataset" in file "<TEST_DIR>/runbook.yaml"
-
-Caused by:
-    failed to parse "max_pts" as a usize

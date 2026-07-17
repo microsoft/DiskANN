@@ -5,18 +5,15 @@
 
 //! # BigANN Runbook Support
 //!
-//! This module provides an executor for processing BigANN-style runbooks.
-//! Please refer to the [`RunBook`] documentation for more details.
+//! Runbook parsing and execution are provided by `diskann-utils`.
+//! This module provides benchmark-specific adaptors over those shared types.
 //!
 //! Users can also leverage the [`WithData`] adaptor to convert raw index ranges
 //! into actual data points for a dataset.
 
-mod parsing;
-mod runbook;
-mod validate;
 mod withdata;
 
-pub use runbook::{
+pub use diskann_utils::streaming::executors::bigann::{
     Args, Delete, FindGroundtruth, Insert, Replace, RunBook, ScanDirectory, Search, Stage,
 };
 pub use withdata::{DataArgs, WithData};
