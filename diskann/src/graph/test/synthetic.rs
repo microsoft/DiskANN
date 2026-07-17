@@ -111,7 +111,7 @@ impl Grid {
                     i += 1;
                     this
                 });
-                Matrix::new(init, size, 1)
+                Matrix::from_gen(init, size, 1)
             }
             Self::Two => {
                 let mut v = [0; 2];
@@ -126,7 +126,7 @@ impl Grid {
                     value
                 });
 
-                Matrix::new(init, size.pow(self.dim().into()), 2)
+                Matrix::from_gen(init, size.pow(self.dim().into()), 2)
             }
             Self::Three => {
                 // The whole we do with the array here is to avoid a `Default` bound on `R`
@@ -145,7 +145,7 @@ impl Grid {
                     value
                 });
 
-                Matrix::new(init, size.pow(self.dim().into()), 3)
+                Matrix::from_gen(init, size.pow(self.dim().into()), 3)
             }
             Self::Four => {
                 let mut v = [0; 4];
@@ -160,7 +160,7 @@ impl Grid {
                     value
                 });
 
-                Matrix::new(init, size.pow(self.dim().into()), 4)
+                Matrix::from_gen(init, size.pow(self.dim().into()), 4)
             }
         }
     }

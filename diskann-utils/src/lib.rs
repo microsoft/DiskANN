@@ -22,6 +22,8 @@ pub mod sampling;
 pub mod strided;
 pub mod views;
 
+pub mod matrix;
+
 mod lazystring;
 pub use lazystring::LazyString;
 

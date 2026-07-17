@@ -51,7 +51,7 @@ where
     C: CreateQuantComputer<Q> + Sync,
 {
     let mut output =
-        diskann_utils::views::Matrix::<u32>::new(u32::MAX, queries.nrows(), results_per_query);
+        diskann_utils::views::Matrix::<u32>::from_gen(u32::MAX, queries.nrows(), results_per_query);
 
     struct Times {
         preprocess: MicroSeconds,

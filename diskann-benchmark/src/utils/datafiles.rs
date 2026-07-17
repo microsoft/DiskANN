@@ -76,7 +76,7 @@ impl ConvertingLoad for f32 {
             U: Default + Clone + From<T>,
             T: Copy,
         {
-            let mut to = Matrix::new(U::default(), from.nrows(), from.ncols());
+            let mut to = Matrix::from_gen(U::default(), from.nrows(), from.ncols());
             std::iter::zip(to.as_mut_slice().iter_mut(), from.as_slice().iter())
                 .for_each(|(t, f)| *t = (*f).into());
             to
@@ -111,7 +111,7 @@ pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::R
         (num_points, dim)
     };
 
-    let mut groundtruth = Matrix::<u32>::new(0, num_points, dim);
+    let mut groundtruth = Matrix::<u32>::from_gen(0, num_points, dim);
     let groundtruth_slice: &mut [u8] = bytemuck::cast_slice_mut(groundtruth.as_mut_slice());
     file.read_exact(groundtruth_slice)?;
 

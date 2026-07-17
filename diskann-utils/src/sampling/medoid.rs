@@ -242,11 +242,11 @@ mod tests {
     #[test]
     fn test_f32() {
         // No Rows
-        let x = Matrix::<f32>::new(0.0f32, 0, 10);
+        let x = Matrix::<f32>::from_gen(0.0f32, 0, 10);
         assert_eq!(f32::compute_medoid(x.as_view()), vec![0.0; x.ncols()]);
 
         // No Cols
-        let x = Matrix::<f32>::new(0.0f32, 10, 0);
+        let x = Matrix::<f32>::from_gen(0.0f32, 10, 0);
         assert_eq!(f32::compute_medoid(x.as_view()), Vec::<f32>::new());
 
         let mut rng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -254,7 +254,7 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<f32>::new(Init(|| dist.sample(&mut rng)), 1, dim);
+            let x = Matrix::<f32>::from_gen(Init(|| dist.sample(&mut rng)), 1, dim);
             assert_eq!(&*f32::compute_medoid(x.as_view()), x.row(0));
         }
 
@@ -267,14 +267,14 @@ mod tests {
     #[test]
     fn test_f16() {
         // No Rows
-        let x = Matrix::<f16>::new(f16::default(), 0, 10);
+        let x = Matrix::<f16>::from_gen(f16::default(), 0, 10);
         assert_eq!(
             f16::compute_medoid(x.as_view()),
             vec![f16::default(); x.ncols()]
         );
 
         // No Cols
-        let x = Matrix::<f16>::new(f16::default(), 10, 0);
+        let x = Matrix::<f16>::from_gen(f16::default(), 10, 0);
         assert_eq!(f16::compute_medoid(x.as_view()), Vec::<f16>::new());
 
         let mut rng = StdRng::seed_from_u64(0x88e2f7096fc9b90e);
@@ -282,13 +282,13 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<f16>::new(Init(|| f16::from_f32(dist.sample(&mut rng))), 1, dim);
+            let x = Matrix::<f16>::from_gen(Init(|| f16::from_f32(dist.sample(&mut rng))), 1, dim);
             assert_eq!(&*f16::compute_medoid(x.as_view()), x.row(0));
         }
 
         // Example dataset
         let (data, expected) = example_dataset();
-        let mut data_f16 = Matrix::<f16>::new(f16::default(), data.nrows(), data.ncols());
+        let mut data_f16 = Matrix::<f16>::from_gen(f16::default(), data.nrows(), data.ncols());
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
 
         let mut expected_f16 = vec![f16::default(); expected.len()];
@@ -316,18 +316,18 @@ mod tests {
     #[test]
     fn test_u8() {
         // No Rows
-        let x = Matrix::<u8>::new(0u8, 0, 10);
+        let x = Matrix::<u8>::from_gen(0u8, 0, 10);
         assert_eq!(u8::compute_medoid(x.as_view()), vec![0u8; x.ncols()]);
 
         // No Cols
-        let x = Matrix::<u8>::new(0u8, 10, 0);
+        let x = Matrix::<u8>::from_gen(0u8, 10, 0);
         assert_eq!(u8::compute_medoid(x.as_view()), Vec::<u8>::new());
         let mut rng = StdRng::seed_from_u64(0x8f2f5fa0b5161acf);
 
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<u8>::new(Init(|| dist.sample(&mut rng)), 1, dim);
+            let x = Matrix::<u8>::from_gen(Init(|| dist.sample(&mut rng)), 1, dim);
             assert_eq!(&*u8::compute_medoid(x.as_view()), x.row(0));
         }
 
@@ -356,11 +356,11 @@ mod tests {
     #[test]
     fn test_i8() {
         // No Rows
-        let x = Matrix::<i8>::new(0i8, 0, 10);
+        let x = Matrix::<i8>::from_gen(0i8, 0, 10);
         assert_eq!(i8::compute_medoid(x.as_view()), vec![0i8; x.ncols()]);
 
         // No Cols
-        let x = Matrix::<i8>::new(0i8, 10, 0);
+        let x = Matrix::<i8>::from_gen(0i8, 10, 0);
         assert_eq!(i8::compute_medoid(x.as_view()), Vec::<i8>::new());
 
         let mut rng = StdRng::seed_from_u64(0x8f2f5fa0b5161acf);
@@ -368,7 +368,7 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<i8>::new(Init(|| dist.sample(&mut rng)), 1, dim);
+            let x = Matrix::<i8>::from_gen(Init(|| dist.sample(&mut rng)), 1, dim);
             assert_eq!(&*i8::compute_medoid(x.as_view()), x.row(0));
         }
 

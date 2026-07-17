@@ -144,7 +144,7 @@ mod tests {
     use crate::algorithms::transforms::NullTransform;
     use crate::bits::{Representation, Unsigned};
     use crate::minmax::{Data, MinMaxQuantizer};
-    use crate::multi_vector::{Defaulted, Mat, Standard};
+    use crate::multi_vector::{Defaulted, Mat, RowMajor};
     use crate::num::Positive;
     use diskann_utils::ReborrowMut;
     use std::num::NonZeroUsize;
@@ -202,7 +202,7 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
     {
-        let input_mat = MatRef::new(Standard::<f32>::new(n, dim).unwrap(), input).unwrap();
+        let input_mat = MatRef::new(RowMajor::<f32>::new(n, dim).unwrap(), input).unwrap();
         let mut output: Mat<MinMaxMeta<NBITS>> =
             Mat::new(MinMaxMeta::new(n, dim), Defaulted).unwrap();
         quantizer

@@ -53,7 +53,7 @@ where
         });
     }
 
-    let mut data = Matrix::new(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
+    let mut data = Matrix::from_gen(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
 
     reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(data.as_mut_slice()))?;
     Ok(data)
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn round_trip_f32() {
         let mut counter = 1.0f32;
-        let matrix = Matrix::<f32>::new(
+        let matrix = Matrix::<f32>::from_gen(
             Init(|| {
                 let v = counter;
                 counter += 1.0;

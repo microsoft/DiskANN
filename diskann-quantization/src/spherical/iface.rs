@@ -43,7 +43,7 @@
 //! use diskann_utils::views::Matrix;
 //!
 //! // For illustration purposes, the dataset consists of just a single vector.
-//! let mut data = Matrix::new(1.0, 1, 4);
+//! let mut data = Matrix::from_gen(1.0, 1, 4);
 //! let quantizer = SphericalQuantizer::train(
 //!     data.as_view(),
 //!     TransformKind::Null,

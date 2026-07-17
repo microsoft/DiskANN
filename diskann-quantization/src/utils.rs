@@ -317,12 +317,12 @@ mod tests {
     #[test]
     fn test_normalized_means_corner_cases() {
         // If the input data has no columns, the returned vector should be empty.
-        let data = Matrix::new(1.0f32, 10, 0);
+        let data = Matrix::from_gen(1.0f32, 10, 0);
         let means = compute_normalized_means(data.as_view()).unwrap();
         assert!(means.is_empty());
 
         // If the data has no rows, an error should be returned.
-        let data = Matrix::new(1.0f32, 0, 10);
+        let data = Matrix::from_gen(1.0f32, 0, 10);
         let _: CannotBeEmpty = compute_normalized_means(data.as_view()).unwrap_err();
     }
 

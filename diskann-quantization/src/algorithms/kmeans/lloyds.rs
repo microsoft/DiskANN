@@ -9,7 +9,7 @@ use super::common::square_norm;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 use diskann_utils::{
     strided::StridedView,
-    views::{Matrix, MatrixView, MutMatrixView},
+    views::{Matrix, MatrixView, MatrixViewMut},
 };
 
 ////////////////////////////////
@@ -342,8 +342,8 @@ fn update((d0, i0): (f32s, u32s), (d1, i1): (f32s, u32s)) -> (f32s, u32s) {
 // Update Step //
 /////////////////
 
-fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: StridedView<'_, f32>, map: &[u32]) {
-    let mut sums = Matrix::<f64>::new(0.0, centers.nrows(), centers.ncols());
+fn update_centroids(mut centers: MatrixViewMut<'_, f32>, data: StridedView<'_, f32>, map: &[u32]) {
+    let mut sums = Matrix::<f64>::from_gen(0.0, centers.nrows(), centers.ncols());
     let mut counts: Vec<u32> = vec![0; centers.nrows()];
     data.row_iter().zip(map.iter()).for_each(|(row, &center)| {
         counts[center as usize] += 1;
@@ -373,7 +373,7 @@ pub(crate) fn lloyds_inner(
     data: StridedView<'_, f32>,
     square_norms: &[f32],
     transpose: BlockTransposedRef<'_, f32, 16>,
-    mut centers: MutMatrixView<'_, f32>,
+    mut centers: MatrixViewMut<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
     // Check our requirements.
@@ -440,7 +440,7 @@ pub(crate) fn lloyds_inner(
 /// dimension.
 pub fn lloyds(
     data: MatrixView<'_, f32>,
-    centers: MutMatrixView<'_, f32>,
+    centers: MatrixViewMut<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
     assert_eq!(
@@ -494,8 +494,8 @@ mod tests {
     ) {
         let context = lazy_format!("ncenters = {}, ndata = {}, dim = {}", ncenters, ndata, dim,);
 
-        let mut centers = Matrix::new(0.0, ncenters, dim);
-        let mut data = Matrix::new(0.0, ndata, dim);
+        let mut centers = Matrix::from_gen(0.0, ncenters, dim);
+        let mut data = Matrix::from_gen(0.0, ndata, dim);
 
         // A list of random "nice" offsets that get applied to each center and data point
         // to ensure proper visitation during computation.
@@ -583,8 +583,8 @@ mod tests {
     // We do not perform any value-dependent control-flow for memory accesses.
     // Therefore, the miri tests don't require any setup (this helps everything run faseter).
     fn test_miri_distances_in_place_impl(ndata: usize, ncenters: usize, dim: usize) {
-        let centers = Matrix::new(0.0, ncenters, dim);
-        let data = Matrix::new(0.0, ndata, dim);
+        let centers = Matrix::from_gen(0.0, ncenters, dim);
+        let data = Matrix::from_gen(0.0, ndata, dim);
         let data_norms = vec![0.0; ndata];
         let center_norms = vec![0.0; ncenters];
         let mut nearest = vec![0; ndata];
@@ -658,8 +658,8 @@ mod tests {
             .collect();
 
         let mut center_order: Vec<usize> = (0..setup.ncenters).collect();
-        let mut data = Matrix::new(0.0, setup.ncenters * setup.data_per_center, setup.ndim);
-        let mut centers = Matrix::new(0.0, setup.ncenters, setup.ndim);
+        let mut data = Matrix::from_gen(0.0, setup.ncenters * setup.data_per_center, setup.ndim);
+        let mut centers = Matrix::from_gen(0.0, setup.ncenters, setup.ndim);
 
         for trial in 0..setup.ntrials {
             values.shuffle(rng);
@@ -751,9 +751,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "dataset and data norms should have the same length")]
     fn distances_in_place_panics_data_norms() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = Matrix::from_gen(0.0, 5, 8);
         let data_norms = vec![0.0; data.nrows() + 1]; // Incorrect
-        let centers = Matrix::new(0.0, 2, 8);
+        let centers = Matrix::from_gen(0.0, 2, 8);
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
@@ -768,9 +768,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "dataset and centers should have the same dimension")]
     fn distances_in_place_panics_different_dim() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = Matrix::from_gen(0.0, 5, 8);
         let data_norms = vec![0.0; data.nrows()];
-        let centers = Matrix::new(0.0, 2, 9); // Incorrect
+        let centers = Matrix::from_gen(0.0, 2, 9); // Incorrect
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
@@ -785,9 +785,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "centers and center norms should have the same length")]
     fn distances_in_place_panics_center_norms() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = Matrix::from_gen(0.0, 5, 8);
         let data_norms = vec![0.0; data.nrows()];
-        let centers = Matrix::new(0.0, 2, 8);
+        let centers = Matrix::from_gen(0.0, 2, 8);
         let center_norms = vec![0.0; centers.nrows() + 1]; // Incorrect
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
@@ -802,9 +802,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "dataset and nearest-buffer should have the same length")]
     fn distances_in_place_panics_nearest() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = Matrix::from_gen(0.0, 5, 8);
         let data_norms = vec![0.0; data.nrows()];
-        let centers = Matrix::new(0.0, 2, 8);
+        let centers = Matrix::from_gen(0.0, 2, 8);
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows() + 1]; // Incorrect
         distances_in_place(
@@ -823,9 +823,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and norms should have the same length")]
     fn lloyds_inner_panics_norms_length() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = Matrix::from_gen(0.0, 5, 8);
         let square_norms = vec![0.0; data.nrows() + 1]; // Incorrect
-        let mut centers = Matrix::new(0.0, 2, 8);
+        let mut centers = Matrix::from_gen(0.0, 2, 8);
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -838,10 +838,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and transpose should have the same length")]
     fn lloyds_inner_panics_transpose_length() {
-        let data = Matrix::new(0.0, 5, 8);
-        let data_incorrect = Matrix::new(0.0, 5 + 1, 8); // Incorrect
+        let data = Matrix::from_gen(0.0, 5, 8);
+        let data_incorrect = Matrix::from_gen(0.0, 5 + 1, 8); // Incorrect
         let square_norms = vec![0.0; data.nrows()];
-        let mut centers = Matrix::new(0.0, 2, 8);
+        let mut centers = Matrix::from_gen(0.0, 2, 8);
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -854,10 +854,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and transpose should have the same dimensions")]
     fn lloyds_inner_panics_transpose_dim() {
-        let data = Matrix::new(0.0, 5, 8);
-        let data_incorrect = Matrix::new(0.0, 5, 8 + 1); // Incorrect
+        let data = Matrix::from_gen(0.0, 5, 8);
+        let data_incorrect = Matrix::from_gen(0.0, 5, 8 + 1); // Incorrect
         let square_norms = vec![0.0; data.nrows()];
-        let mut centers = Matrix::new(0.0, 2, 8);
+        let mut centers = Matrix::from_gen(0.0, 2, 8);
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -870,9 +870,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and centers should have the same dimensions")]
     fn lloyds_inner_panics_centers_dim() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = Matrix::from_gen(0.0, 5, 8);
         let square_norms = vec![0.0; data.nrows()];
-        let mut centers = Matrix::new(0.0, 2, 8 + 1); // Incorrect
+        let mut centers = Matrix::from_gen(0.0, 2, 8 + 1); // Incorrect
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -889,8 +889,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and centers must have the same dimension")]
     fn lloyds_panics_dim_mismatch() {
-        let data = Matrix::new(0.0, 5, 8);
-        let mut centers = Matrix::new(0.0, 5, 8 + 1); // Incorrect
+        let data = Matrix::from_gen(0.0, 5, 8);
+        let mut centers = Matrix::from_gen(0.0, 5, 8 + 1); // Incorrect
         lloyds(data.as_view(), centers.as_mut_view(), 1);
     }
 }

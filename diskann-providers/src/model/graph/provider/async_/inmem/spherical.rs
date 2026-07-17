@@ -768,7 +768,7 @@ mod tests {
     }
 
     fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> Matrix<f32> {
-        Matrix::new(
+        Matrix::from_gen(
             diskann_utils::views::Init(|| StandardNormal {}.sample(rng)),
             nrows,
             ncols,

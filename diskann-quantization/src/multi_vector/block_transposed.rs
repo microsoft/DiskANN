@@ -82,7 +82,7 @@ use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 use diskann_utils::{
     Reborrow, ReborrowMut,
     strided::StridedView,
-    views::{MatrixView, MutMatrixView},
+    views::{MatrixView, MatrixViewMut},
 };
 
 use super::matrix::{
@@ -578,27 +578,21 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprOwned
 // ════════════════════════════════════════════════════════════════════
 
 // SAFETY: The returned `Mat` contains a `Box` with exactly `self.storage_len()` elements.
-unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewOwned<T>
-    for BlockTransposedRepr<T, GROUP, PACK>
-{
-    type Error = crate::error::Infallible;
-
-    fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[T]> = vec![value; self.storage_len()].into_boxed_slice();
-
-        // SAFETY: By construction, `b.len() == self.storage_len()`.
-        Ok(unsafe { self.box_to_mat(b) })
-    }
-}
-
-// SAFETY: This safely re-uses `<Self as NewOwned<T>>`.
+//
+// Only `NewOwned<Defaulted>` is provided (no generic `NewOwned<T>` value-fill): `Defaulted`
+// now lives in `diskann-utils`, so a value-fill impl would overlap with this one under the
+// intercrate coherence rules (the compiler cannot prove `Defaulted: !Default` for a foreign
+// type). Block-transposed matrices are only ever default-initialized.
 unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<Defaulted>
     for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Error = crate::error::Infallible;
 
     fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
-        self.new_owned(T::default())
+        let b: Box<[T]> = vec![T::default(); self.storage_len()].into_boxed_slice();
+
+        // SAFETY: By construction, `b.len() == self.storage_len()`.
+        Ok(unsafe { self.box_to_mat(b) })
     }
 }
 
@@ -944,12 +938,12 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     ///
     /// Panics if `block >= self.full_blocks()`.
     #[allow(clippy::expect_used)]
-    pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
+    pub fn block_mut(&mut self, block: usize) -> MatrixViewMut<'_, T> {
         self.reborrow_mut().block_mut_inner(block)
     }
 
     #[allow(clippy::expect_used)]
-    fn block_mut_inner(mut self, block: usize) -> MutMatrixView<'a, T> {
+    fn block_mut_inner(mut self, block: usize) -> MatrixViewMut<'a, T> {
         let repr = *self.data.repr();
         assert!(block < repr.full_blocks());
         let offset = repr.block_offset(block);
@@ -962,19 +956,19 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
                 stride,
             )
         };
-        MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
+        MatrixViewMut::try_from(data, pncols / PACK, GROUP * PACK)
             .expect("base data should have been sized correctly")
     }
 
     /// Return a mutable view over the remainder block, or `None` if there is no
     /// remainder.
     #[allow(clippy::expect_used)]
-    pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
+    pub fn remainder_block_mut(&mut self) -> Option<MatrixViewMut<'_, T>> {
         self.reborrow_mut().remainder_block_mut_inner()
     }
 
     #[allow(clippy::expect_used)]
-    fn remainder_block_mut_inner(mut self) -> Option<MutMatrixView<'a, T>> {
+    fn remainder_block_mut_inner(mut self) -> Option<MatrixViewMut<'a, T>> {
         let repr = *self.data.repr();
         if repr.remainder() == 0 {
             None
@@ -990,7 +984,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
                 )
             };
             Some(
-                MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
+                MatrixViewMut::try_from(data, pncols / PACK, GROUP * PACK)
                     .expect("base data should have been sized correctly"),
             )
         }
@@ -1075,13 +1069,13 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
 
     /// See [`BlockTransposedMut::block_mut`].
     #[allow(clippy::expect_used)]
-    pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
+    pub fn block_mut(&mut self, block: usize) -> MatrixViewMut<'_, T> {
         self.as_view_mut().block_mut_inner(block)
     }
 
     /// See [`BlockTransposedMut::remainder_block_mut`].
     #[allow(clippy::expect_used)]
-    pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
+    pub fn remainder_block_mut(&mut self) -> Option<MatrixViewMut<'_, T>> {
         self.as_view_mut().remainder_block_mut_inner()
     }
 
@@ -1288,7 +1282,7 @@ mod tests {
 
         // ── Construction ─────────────────────────────────────────
 
-        let mut data = Matrix::new(T::default(), nrows, ncols);
+        let mut data = Matrix::from_gen(T::default(), nrows, ncols);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1844,7 +1838,7 @@ mod tests {
         ncols: usize,
         gen_element: fn(usize) -> T,
     ) {
-        let mut data = Matrix::new(T::default(), nrows, ncols);
+        let mut data = Matrix::from_gen(T::default(), nrows, ncols);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()

@@ -333,7 +333,7 @@ mod imp {
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
             let mut data =
-                diskann_utils::views::Matrix::new(0, input.nrows(), quantizer.get_num_chunks());
+                diskann_utils::views::Matrix::from_gen(0, input.nrows(), quantizer.get_num_chunks());
 
             // Compress the data.
             #[allow(clippy::disallowed_methods)]

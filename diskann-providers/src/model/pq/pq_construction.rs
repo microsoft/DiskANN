@@ -25,7 +25,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{MatrixView, MutMatrixView},
+    views::{MatrixView, MatrixViewMut},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
@@ -293,7 +293,7 @@ pub fn move_train_data_by_centroid(
 /// # Panics
 ///
 /// Panics if `y.len() != x.ncols()`.
-pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
+pub fn accum_row_inplace<T>(mut x: MatrixViewMut<T>, y: &[T])
 where
     T: Copy + std::ops::AddAssign,
 {
@@ -362,7 +362,7 @@ where
     // Instead of subtracting the center from each data set component, we instead
     // add it to each center.
     let mut full_pivot_data_mat =
-        MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
+        MatrixViewMut::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
             .bridge_err()?;
     accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
 
@@ -430,7 +430,7 @@ where
         // Wrap the data in `MatrixViews` so we do not need to manually construct view
         // in the compression loop.
         let mut compressed_block =
-            MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
+            MatrixViewMut::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
                 .bridge_err()?;
         let base_block = MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
 

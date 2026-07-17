@@ -53,7 +53,7 @@
 
 use std::fmt;
 
-use diskann_utils::views::MutMatrixView;
+use diskann_utils::views::MatrixViewMut;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
 /// Parameters for Determinant-Diversity post-processor with validation.
@@ -199,7 +199,7 @@ struct DistanceRange {
 /// An empty candidate set, a `k` of zero, or zero-dimensional vectors yield an
 /// empty result.
 pub fn determinant_diversity(
-    candidates: MutMatrixView<'_, f32>,
+    candidates: MatrixViewMut<'_, f32>,
     distances: &[f32],
     query: &[f32],
     k: usize,
@@ -338,7 +338,7 @@ pub fn determinant_diversity(
 /// O(n * k * dim) -- for each of k pivots we touch all n residual rows of
 /// length `dim`. Memory is O(n * dim) for the contiguous residual matrix.
 fn greedy_orthogonal_select(
-    mut candidates: MutMatrixView<'_, f32>,
+    mut candidates: MatrixViewMut<'_, f32>,
     distances: &[f32],
     k: usize,
     power: f32,
@@ -530,7 +530,7 @@ mod tests {
         }
 
         let dim = candidates[0].2.len();
-        let mut matrix = Matrix::new(0.0f32, candidates.len(), dim);
+        let mut matrix = Matrix::from_gen(0.0f32, candidates.len(), dim);
         let mut ids = Vec::with_capacity(candidates.len());
         let mut distances = Vec::with_capacity(candidates.len());
 
@@ -564,7 +564,7 @@ mod tests {
         // A zero-length query against non-empty candidates is a structural
         // mismatch (candidate columns != query dimension), not a valid request
         // that trivially returns nothing.
-        let mut matrix = Matrix::new(0.0f32, 1, 2);
+        let mut matrix = Matrix::from_gen(0.0f32, 1, 2);
         matrix.row_mut(0).copy_from_slice(&[1.0, 2.0]);
         let params = DeterminantDiversityParams::new(1.0, 0.5).unwrap();
 
@@ -582,7 +582,7 @@ mod tests {
     fn test_mismatched_dimensions_errors() {
         // Candidate vectors are 2-D, but the query is 3-D, so
         // `determinant_diversity` should report a dimension mismatch.
-        let mut matrix = Matrix::new(0.0f32, 1, 2);
+        let mut matrix = Matrix::from_gen(0.0f32, 1, 2);
         matrix.row_mut(0).copy_from_slice(&[1.0, 2.0]);
         let params = DeterminantDiversityParams::new(1.0, 0.5).unwrap();
 
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn test_mismatched_distances_errors() {
         // Two candidate rows but only one distance is a structural mismatch.
-        let mut matrix = Matrix::new(0.0f32, 2, 2);
+        let mut matrix = Matrix::from_gen(0.0f32, 2, 2);
         matrix.row_mut(0).copy_from_slice(&[1.0, 0.0]);
         matrix.row_mut(1).copy_from_slice(&[0.0, 1.0]);
         let params = DeterminantDiversityParams::new(1.0, 0.5).unwrap();

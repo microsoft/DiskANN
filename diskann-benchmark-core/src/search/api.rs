@@ -517,7 +517,7 @@ where
     T: Search,
 {
     let mut lengths = Vec::with_capacity(range.len());
-    let mut ids = Matrix::new(views::Init(T::Id::default), range.len(), num_ids.into());
+    let mut ids = Matrix::from_gen(views::Init(T::Id::default), range.len(), num_ids.into());
 
     let mut latencies = Vec::<MicroSeconds>::with_capacity(range.len());
     let mut outputs = Vec::<T::Output>::with_capacity(range.len());

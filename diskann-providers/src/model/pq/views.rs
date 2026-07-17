@@ -41,9 +41,9 @@ impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
 }
 
 // Compatibility with ANNError.
-impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
+impl From<Bridge<views::TryFromError>> for ANNError {
     #[track_caller]
-    fn from(value: Bridge<views::TryFromError<T>>) -> Self {
+    fn from(value: Bridge<views::TryFromError>) -> Self {
         ANNError::log_pq_error(value.into_inner())
     }
 }
@@ -106,7 +106,7 @@ mod tests {
         let data = vec![0; ncols * nrows];
 
         test_error(|| {
-            views::MatrixView::try_from(&*data, nrows, ncols + 1)
+            views::MatrixView::try_from(&data, nrows, ncols + 1)
                 .bridge_err()
                 .unwrap_err()
         });

@@ -5,7 +5,7 @@
 
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
-use diskann_utils::views::{DenseData, MatrixBase, MatrixView};
+use diskann_utils::views::{DenseData, Matrix, MatrixView};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
 
@@ -29,7 +29,9 @@ where
     T: DenseData<Elem = f32>,
     U: DenseData<Elem = usize>,
 {
-    pivots: MatrixBase<T>,
+    pivots: T,
+    num_pivots: usize,
+    pivot_dim: usize,
     offsets: ChunkOffsetsBase<U>,
 }
 
@@ -62,11 +64,12 @@ where
     /// # Error
     ///
     /// Returns an error if `pivots.ncols() != offsets.dim()` or if `pivots.nrows() == 0`.
-    pub fn new(
-        pivots: MatrixBase<T>,
+    fn from_parts(
+        pivots: T,
+        num_pivots: usize,
+        pivot_dim: usize,
         offsets: ChunkOffsetsBase<U>,
     ) -> Result<Self, BasicTableError> {
-        let pivot_dim = pivots.ncols();
         let offsets_dim = offsets.dim();
 
         if pivot_dim != offsets_dim {
@@ -74,16 +77,23 @@ where
                 pivot_dim,
                 offsets_dim,
             })
-        } else if pivots.nrows() == 0 {
+        } else if num_pivots == 0 {
             Err(BasicTableError::PivotsEmpty)
         } else {
-            Ok(Self { pivots, offsets })
+            Ok(Self {
+                pivots,
+                num_pivots,
+                pivot_dim,
+                offsets,
+            })
         }
     }
 
     /// Return a view over the pivot table.
+    #[allow(clippy::expect_used)]
     pub fn view_pivots(&self) -> MatrixView<'_, f32> {
-        self.pivots.as_view()
+        MatrixView::try_from(self.pivots.as_slice(), self.num_pivots, self.pivot_dim)
+            .expect("valid pivot dimensions")
     }
 
     /// Return a view over the schema offsets.
@@ -93,7 +103,7 @@ where
 
     /// Return the number of pivots in each PQ chunk.
     pub fn ncenters(&self) -> usize {
-        self.pivots.nrows()
+        self.num_pivots
     }
 
     /// Return the number of PQ chunks.
@@ -103,7 +113,29 @@ where
 
     /// Return the dimensionality of the full-precision vectors associated with this table.
     pub fn dim(&self) -> usize {
-        self.pivots.ncols()
+        self.pivot_dim
+    }
+}
+
+impl BasicTable {
+    /// Construct an owned table over `pivots` and `offsets`.
+    pub fn new(
+        pivots: Matrix<f32>,
+        offsets: ChunkOffsetsBase<Box<[usize]>>,
+    ) -> Result<Self, BasicTableError> {
+        let (num_pivots, pivot_dim) = (pivots.nrows(), pivots.ncols());
+        Self::from_parts(pivots.into_inner(), num_pivots, pivot_dim, offsets)
+    }
+}
+
+impl<'a> BasicTableView<'a> {
+    /// Construct a borrowed table over `pivots` and `offsets`.
+    pub fn new(
+        pivots: MatrixView<'a, f32>,
+        offsets: ChunkOffsetsView<'a>,
+    ) -> Result<Self, BasicTableError> {
+        let (num_pivots, pivot_dim) = (pivots.nrows(), pivots.ncols());
+        Self::from_parts(pivots.as_slice(), num_pivots, pivot_dim, offsets)
     }
 }
 
@@ -169,13 +201,14 @@ where
             return Err(Self::Error::InvalidOutputDim(self.nchunks(), to.len()));
         }
 
+        let pivots = self.view_pivots();
         to.iter_mut().enumerate().try_for_each(|(chunk, to)| {
             let mut min_distance = f32::INFINITY;
             let mut min_index = usize::MAX;
             let range = self.offsets.at(chunk);
             let slice = &from[range.clone()];
 
-            self.pivots.row_iter().enumerate().for_each(|(index, row)| {
+            pivots.row_iter().enumerate().for_each(|(index, row)| {
                 let distance: f32 = SquaredL2::evaluate(slice, &row[range.clone()]);
                 if distance < min_distance {
                     min_distance = distance;
@@ -219,7 +252,7 @@ mod tests {
     // disagree.
     #[test]
     fn error_on_mismatch_dim() {
-        let pivots = views::Matrix::new(0.0, 3, 5);
+        let pivots = views::Matrix::from_gen(0.0, 3, 5);
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 6])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "dimensions are not equal");
@@ -232,7 +265,7 @@ mod tests {
     // Test that the table constructor errors when there are no pivots.
     #[test]
     fn error_on_no_pivots() {
-        let pivots = views::Matrix::new(0.0, 0, 5);
+        let pivots = views::Matrix::from_gen(0.0, 0, 5);
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 2, 5])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "pivots is empty");
@@ -244,7 +277,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xd96bac968083ec29);
         for dim in [5, 10, 12] {
             for total in [1, 2, 3] {
-                let pivots = views::Matrix::new(
+                let pivots = views::Matrix::from_gen(
                     views::Init(|| -> f32 { StandardUniform {}.sample(&mut rng) }),
                     total,
                     dim,
@@ -322,7 +355,7 @@ mod tests {
 
         // Set up `ncenters > 256`.
         {
-            let pivots = views::Matrix::new(0.0, 257, dim);
+            let pivots = views::Matrix::from_gen(0.0, 257, dim);
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];
@@ -341,7 +374,7 @@ mod tests {
 
         // Setup input dim not equal to expected.
         {
-            let pivots = views::Matrix::new(0.0, 10, dim);
+            let pivots = views::Matrix::from_gen(0.0, 10, dim);
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim - 1];
@@ -360,7 +393,7 @@ mod tests {
 
         // Setup output dim not equal to expected.
         {
-            let pivots = views::Matrix::new(0.0, 10, dim);
+            let pivots = views::Matrix::from_gen(0.0, 10, dim);
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];

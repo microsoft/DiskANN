@@ -243,7 +243,7 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
     // Create training data with spread-out values.
     let nrows = 8;
     let mut counter = 0.0f32;
-    let data = Matrix::new(
+    let data = Matrix::from_gen(
         Init(move || {
             counter += 0.5;
             counter

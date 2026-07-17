@@ -389,7 +389,7 @@ mod imp {
             // The APIs below should correctly handle these variables.
             let output_dim = quantizer.output_dim();
             let bytes = Data::<NBITS>::canonical_bytes(output_dim);
-            let mut data = diskann_utils::views::Matrix::new(0, input.nrows(), bytes);
+            let mut data = diskann_utils::views::Matrix::from_gen(0, input.nrows(), bytes);
 
             // Compress the data.
             //

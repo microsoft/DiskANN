@@ -13,13 +13,13 @@
 //! ```
 //! use diskann_quantization::multi_vector::{
 //!     distance::QueryMatRef,
-//!     Chamfer, Mat, MatMut, MatRef, MaxSim, Standard,
+//!     Chamfer, Mat, MatMut, MatRef, MaxSim, RowMajor,
 //! };
 //! use diskann_utils::ReborrowMut;
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 //!
 //! // Create an owned matrix (2 vectors, dim 3, initialized to 0.0)
-//! let mut owned = Mat::new(Standard::new(2, 3).unwrap(), 0.0f32).unwrap();
+//! let mut owned = Mat::new(RowMajor::new(2, 3).unwrap(), 0.0f32).unwrap();
 //! assert_eq!(owned.num_vectors(), 2);
 //!
 //! // Modify via mutable view
@@ -34,10 +34,10 @@
 //!
 //! // Wrap query as QueryMatRef for type-safe asymmetric distance
 //! let query: QueryMatRef<_> = MatRef::new(
-//!     Standard::new(2, 2).unwrap(),
+//!     RowMajor::new(2, 2).unwrap(),
 //!     &query_data,
 //! ).unwrap().into();
-//! let doc = MatRef::new(Standard::new(2, 2).unwrap(), &doc_data).unwrap();
+//! let doc = MatRef::new(RowMajor::new(2, 2).unwrap(), &doc_data).unwrap();
 //!
 //! // Chamfer distance (sum of max similarities)
 //! let distance = Chamfer::evaluate(query, doc);
@@ -53,14 +53,14 @@
 
 pub mod block_transposed;
 pub mod distance;
-pub(crate) mod matrix;
+pub(crate) use diskann_utils::matrix;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
 pub use distance::{
     BoxErase, Chamfer, Erase, MaxSim, MaxSimElement, MaxSimError, MaxSimIsa, MaxSimKernel,
     NotSupported, ProjectedEigen, QueryMatRef, build_max_sim,
 };
-pub use matrix::{
+pub use diskann_utils::matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
-    Repr, ReprMut, ReprOwned, SliceError, Standard,
+    Repr, ReprMut, ReprOwned, SliceError, RowMajor,
 };
