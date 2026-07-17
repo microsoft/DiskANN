@@ -260,8 +260,7 @@ where
         // from a full diverse set => larger L.
         if !l_adjusted && sample_visited >= adaptive_l.sample_count() {
             l_adjusted = true;
-            let matched =
-                diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
+            let matched = diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
             let diversity_yield =
                 diverse_yield(matched, num_buckets, diverse_results_k, sample_visited);
             let new_l =
