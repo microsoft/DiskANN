@@ -119,7 +119,7 @@ where
             self.index_configuration.num_threads
         );
 
-        self.generate_compressed_data(pool.as_ref()).await?;
+        self.generate_compressed_data(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
         self.build_inmem_index(pool.as_ref()).await?;
@@ -132,7 +132,7 @@ where
         Ok(())
     }
 
-    async fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+    fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
@@ -177,32 +177,28 @@ where
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
             self.disk_build_param.build_quantization(),
         ) {
-            IndexBuildStrategy::Merged => self.build_merged_vamana_index(pool).await,
-            IndexBuildStrategy::OneShot => self.build_one_shot_vamana_index().await,
+            IndexBuildStrategy::Merged => {
+                MergedVamanaIndexBuilder::<Data, _>::new(
+                    &self.index_configuration,
+                    &self.disk_build_param,
+                    &self.index_writer,
+                    &self.build_quantizer,
+                    self.storage_provider,
+                )
+                .build(pool)
+                .await
+            }
+            IndexBuildStrategy::OneShot => {
+                build_inmem_index::<Data::VectorDataType, _>(
+                    self.index_configuration.clone(),
+                    &self.build_quantizer,
+                    &self.index_writer.get_dataset_file(),
+                    &self.index_writer.get_mem_index_file(),
+                    self.storage_provider,
+                )
+                .await
+            }
         }
-    }
-
-    async fn build_merged_vamana_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
-        MergedVamanaIndexBuilder::<Data, _>::new(
-            &self.index_configuration,
-            &self.disk_build_param,
-            &self.index_writer,
-            &self.build_quantizer,
-            self.storage_provider,
-        )
-        .build(pool)
-        .await
-    }
-
-    async fn build_one_shot_vamana_index(&mut self) -> ANNResult<()> {
-        build_inmem_index::<Data::VectorDataType, _>(
-            self.index_configuration.clone(),
-            &self.build_quantizer,
-            &self.index_writer.get_dataset_file(),
-            &self.index_writer.get_mem_index_file(),
-            self.storage_provider,
-        )
-        .await
     }
 
     fn create_disk_layout(&mut self) -> ANNResult<()> {
