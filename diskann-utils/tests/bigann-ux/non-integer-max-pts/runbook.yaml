@@ -1,0 +1,6 @@
+dataset:
+  max_pts: "not_an_integer"
+  0:
+    operation: insert
+    start: 0
+    end: 100
