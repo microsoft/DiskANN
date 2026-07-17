@@ -1308,6 +1308,7 @@ where
                 provider,
                 diverse_attribute_id: _,
                 diverse_results_k,
+                yield_k,
                 adaptive_l,
             } => {
                 // Attribute-bucket diversity: a greedy search collects the
@@ -1332,7 +1333,7 @@ where
                         let search = DiverseAdaptiveSearch::new(
                             knn_search,
                             provider.clone(),
-                            *diverse_results_k,
+                            *yield_k,
                             adaptive_l.clone(),
                         );
                         self.runtime.block_on(self.index.search_with(

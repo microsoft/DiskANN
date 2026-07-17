@@ -248,6 +248,12 @@ impl MultihopFilterSearchPhase {
 pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
     pub(crate) scale_factor: f64,
+    /// Per-bucket cap used by the Design-B diversity sampler when estimating
+    /// yield. Decoupled from `diverse_results_k` (the output cap); when unset it
+    /// defaults to the effective `diverse_results_k`. Only used by attribute
+    /// diversity search.
+    #[serde(default)]
+    pub(crate) yield_k: Option<NonZeroUsize>,
 }
 
 impl AdaptiveL {

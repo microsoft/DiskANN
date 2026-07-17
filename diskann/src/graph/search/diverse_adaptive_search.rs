@@ -29,7 +29,7 @@
 //! ```
 //!
 //! where `count_b` is the number of sampled nodes in bucket `b`, `k` is
-//! `diverse_results_k` (the per-bucket cap applied downstream), `num_buckets`
+//! `yield_k` (the per-bucket cap used for *this* sampling estimate), `num_buckets`
 //! is the total number of distinct attribute buckets in the dataset (reported
 //! by [`AttributeValueProvider::num_buckets`]), and `sample_visited` is the
 //! number of nodes sampled. The denominator is the tight upper bound on the
@@ -42,7 +42,16 @@
 //! * many buckets, small sample → denominator is `sample_visited`, so a fully
 //!   distinct sample reaches `1.0` and diffuse data leaves `L` unchanged.
 //!
+//! `yield_k` is decoupled from the downstream `diverse_results_k` (the per-bucket
+//! cap on the *final* result set). Setting `yield_k > diverse_results_k` requires
+//! the sample to see several points per bucket before the yield saturates, which
+//! keeps `L` growing on distance-correlated attributes — there the first point in
+//! each bucket is often far from the query, so a low output `k` would otherwise
+//! declare the buckets "covered" before the closer attribute-satisfying points
+//! are reached.
+//!
 //! Unlike inline-filter specificity — where a value of `0.5` over a large
+
 //! sample is already good enough to stop enlarging `L` — a diversity yield of
 //! `0.5` means only ~50% of the achievable diversity has been observed so far,
 //! so `L` should still grow substantially. `L` is therefore scaled from the
@@ -83,7 +92,7 @@ where
 {
     inner: Knn,
     provider: Arc<P>,
-    diverse_results_k: usize,
+    yield_k: usize,
     adaptive_l: AdaptiveL,
 }
 
@@ -92,16 +101,23 @@ where
     P: AttributeValueProvider + ?Sized,
 {
     /// Create new adaptive diverse search parameters.
+    ///
+    /// `yield_k` is the per-bucket cap used when estimating the diversity
+    /// *yield* during traversal. It is deliberately decoupled from the
+    /// downstream `diverse_results_k` (the per-bucket cap on the final result
+    /// set): requiring the sample to see several points per bucket before the
+    /// yield saturates keeps `L` growing on distance-correlated attributes,
+    /// where the first point in each bucket is often far from the query.
     pub fn new(
         inner: Knn,
         provider: Arc<P>,
-        diverse_results_k: usize,
+        yield_k: usize,
         adaptive_l: AdaptiveL,
     ) -> Self {
         Self {
             inner,
             provider,
-            diverse_results_k,
+            yield_k,
             adaptive_l,
         }
     }
@@ -142,7 +158,7 @@ where
                 index.max_degree_with_slack(),
                 &self.inner,
                 self.provider.as_ref(),
-                self.diverse_results_k,
+                self.yield_k,
                 &self.adaptive_l,
                 &mut accessor,
                 &mut scratch,
@@ -163,7 +179,7 @@ async fn diverse_adaptive_search_internal<I, A, P>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     provider: &P,
-    diverse_results_k: usize,
+    yield_k: usize,
     adaptive_l: &AdaptiveL,
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
@@ -241,10 +257,8 @@ where
         // from a full diverse set => larger L.
         if !l_adjusted && sample_visited >= adaptive_l.sample_count() {
             l_adjusted = true;
-            let matched =
-                diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
-            let diversity_yield =
-                diverse_yield(matched, num_buckets, diverse_results_k, sample_visited);
+            let matched = diverse_matched_slots(bucket_counts.values().copied(), yield_k);
+            let diversity_yield = diverse_yield(matched, num_buckets, yield_k, sample_visited);
             let new_l =
                 compute_diverse_adaptive_l(l_search, diversity_yield, adaptive_l.scale_factor());
             if new_l > l_search {
@@ -263,15 +277,16 @@ where
 /// Count the "useful" diverse slots observed in a bucket-count sample.
 ///
 /// This is `Σ_b min(count_b, k)`: each distinct bucket contributes at most `k`
-/// slots, mirroring the per-bucket cap applied by the downstream bucket
-/// selector.
-fn diverse_matched_slots<I>(bucket_counts: I, diverse_results_k: usize) -> usize
+/// (`yield_k`) slots. `yield_k` is the sampling cap, which may exceed the
+/// downstream per-bucket result cap so that concentrated buckets keep counting
+/// toward the deficit.
+fn diverse_matched_slots<I>(bucket_counts: I, yield_k: usize) -> usize
 where
     I: IntoIterator<Item = usize>,
 {
     bucket_counts
         .into_iter()
-        .map(|count| count.min(diverse_results_k))
+        .map(|count| count.min(yield_k))
         .sum()
 }
 
@@ -281,7 +296,7 @@ where
 /// upper bound is `min(sample_visited, num_buckets · k)`: `matched` can never
 /// exceed the number of nodes sampled, nor the total capped slots across every
 /// bucket. Dividing by that bound couples the yield to all three quantities that
-/// bound the achievable diversity — `diverse_results_k`, `num_buckets`, and the
+/// bound the achievable diversity — `yield_k`, `num_buckets`, and the
 /// sample size — so the yield spans the full `[0, 1]` range in both regimes:
 ///
 /// * few buckets, large sample (`num_buckets · k ≤ sample_visited`): the
@@ -303,11 +318,11 @@ where
 fn diverse_yield(
     matched: usize,
     num_buckets: Option<usize>,
-    diverse_results_k: usize,
+    yield_k: usize,
     sample_visited: usize,
 ) -> f64 {
     let achievable = match num_buckets {
-        Some(n) => n.saturating_mul(diverse_results_k).min(sample_visited),
+        Some(n) => n.saturating_mul(yield_k).min(sample_visited),
         None => sample_visited,
     };
     if achievable == 0 {

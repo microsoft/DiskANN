@@ -73,6 +73,7 @@ pub enum SearchMode<'a> {
         provider: Arc<DynAttributeProvider>,
         diverse_attribute_id: usize,
         diverse_results_k: usize,
+        yield_k: usize,
         adaptive_l: Option<AdaptiveL>,
     },
 }
@@ -170,16 +171,23 @@ impl<'a> SearchMode<'a> {
     ///
     /// `adaptive_l = Some(_)` grows `L` mid-search from the observed bucket
     /// concentration (Design B); `None` uses a fixed `L` (Design A).
+    ///
+    /// `yield_k` is the per-bucket cap used by the Design-B sampler when
+    /// estimating diversity yield; it is decoupled from `diverse_results_k` (the
+    /// output cap) so that a larger `yield_k` keeps `L` growing on
+    /// distance-correlated attributes.
     pub fn diverse_attribute(
         provider: Arc<DynAttributeProvider>,
         diverse_attribute_id: usize,
         diverse_results_k: usize,
+        yield_k: usize,
         adaptive_l: Option<AdaptiveL>,
     ) -> Self {
         Self::DiverseAttribute {
             provider,
             diverse_attribute_id,
             diverse_results_k,
+            yield_k,
             adaptive_l,
         }
     }
