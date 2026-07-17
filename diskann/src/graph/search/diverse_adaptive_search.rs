@@ -47,9 +47,11 @@
 //! `0.5` means only ~50% of the achievable diversity has been observed so far,
 //! so `L` should still grow substantially. `L` is therefore scaled from the
 //! *deficit* `1 − yield`: a yield near `1.0` leaves `L` unchanged, while a low
-//! yield grows it toward the configured maximum multiplier. If the provider
-//! cannot report `num_buckets`, adaptive growth is skipped and `L` stays at its
-//! base value.
+//! yield grows it toward the configured maximum multiplier. When the provider
+//! cannot report `num_buckets`, the denominator falls back to `sample_visited`
+//! alone: `L` still grows on concentrated samples (never worse than the
+//! fixed-`L` Design A), though without the bucket total it may over-fetch on
+//! few-bucket datasets.
 
 use std::sync::Arc;
 
@@ -174,8 +176,10 @@ where
     let beam_width = search_params.beam_width().get();
     let l_search = search_params.l_value().get();
 
-    // Total distinct buckets in the dataset. When unknown, adaptive growth is
-    // disabled: the yield cannot be normalized, so `L` stays at its base value.
+    // Total distinct buckets in the dataset, when the provider can report it.
+    // When unknown, the yield normalizes by the sample size alone (the
+    // pre-normalization heuristic): still over-fetches on concentrated samples,
+    // but may grow `L` more than necessary on few-bucket datasets.
     let num_buckets = provider.num_buckets();
 
     // Bucket-concentration sampling state. Sampling stops once L is (re)sized.
@@ -237,19 +241,14 @@ where
         // from a full diverse set => larger L.
         if !l_adjusted && sample_visited >= adaptive_l.sample_count() {
             l_adjusted = true;
-            if let Some(num_buckets) = num_buckets {
-                let matched =
-                    diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
-                let diversity_yield =
-                    diverse_yield(matched, num_buckets, diverse_results_k, sample_visited);
-                let new_l = compute_diverse_adaptive_l(
-                    l_search,
-                    diversity_yield,
-                    adaptive_l.scale_factor(),
-                );
-                if new_l > l_search {
-                    scratch.resize(new_l);
-                }
+            let matched =
+                diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
+            let diversity_yield =
+                diverse_yield(matched, num_buckets, diverse_results_k, sample_visited);
+            let new_l =
+                compute_diverse_adaptive_l(l_search, diversity_yield, adaptive_l.scale_factor());
+            if new_l > l_search {
+                scratch.resize(new_l);
             }
         }
     }
@@ -292,15 +291,25 @@ where
 ///   denominator is `sample_visited`, so a fully distinct sample reaches `1.0`
 ///   and diffuse data keeps `L` unchanged (Design-A behavior).
 ///
+/// When `num_buckets` is `None` the denominator falls back to `sample_visited`:
+/// the sample itself is the only available signal, so a concentrated sample
+/// still grows `L` while a fully distinct one leaves it unchanged. This may
+/// over-grow `L` on few-bucket datasets (the sample can look concentrated even
+/// after every bucket has been seen), but never under-fetches relative to the
+/// fixed-`L` Design-A baseline.
+///
 /// The result is clamped to `[0, 1]`; a zero denominator yields `1.0` (nothing
 /// to diversify over, so no over-fetch is warranted).
 fn diverse_yield(
     matched: usize,
-    num_buckets: usize,
+    num_buckets: Option<usize>,
     diverse_results_k: usize,
     sample_visited: usize,
 ) -> f64 {
-    let achievable = num_buckets.saturating_mul(diverse_results_k).min(sample_visited);
+    let achievable = match num_buckets {
+        Some(n) => n.saturating_mul(diverse_results_k).min(sample_visited),
+        None => sample_visited,
+    };
     if achievable == 0 {
         return 1.0;
     }
@@ -373,17 +382,17 @@ mod tests {
         // many nodes were visited to get there.
         let all_distinct = std::iter::repeat_n(1usize, 60);
         let matched = diverse_matched_slots(all_distinct, 1);
-        assert_eq!(diverse_yield(matched, 60, 1, 1000), 1.0);
+        assert_eq!(diverse_yield(matched, Some(60), 1, 1000), 1.0);
 
         // Half the buckets covered => yield 0.5.
         let half = std::iter::repeat_n(1usize, 30);
         let matched = diverse_matched_slots(half, 1);
-        assert_eq!(diverse_yield(matched, 60, 1, 1000), 0.5);
+        assert_eq!(diverse_yield(matched, Some(60), 1, 1000), 0.5);
 
         // Everything in a single bucket => near-zero yield.
         let one_bucket = std::iter::once(1000usize);
         let matched = diverse_matched_slots(one_bucket, 1);
-        assert!((diverse_yield(matched, 60, 1, 1000) - 1.0 / 60.0).abs() < 1e-9);
+        assert!((diverse_yield(matched, Some(60), 1, 1000) - 1.0 / 60.0).abs() < 1e-9);
     }
 
     #[test]
@@ -393,12 +402,12 @@ mod tests {
         // yields 1.0 (no over-fetch) rather than being stuck near zero.
         let all_distinct = std::iter::repeat_n(1usize, 100);
         let matched = diverse_matched_slots(all_distinct, 1);
-        assert_eq!(diverse_yield(matched, 12_849, 1, 100), 1.0);
+        assert_eq!(diverse_yield(matched, Some(12_849), 1, 100), 1.0);
 
         // Same dataset, but the sample piles into a few buckets => low yield.
         let concentrated = [40usize, 30, 30];
         let matched = diverse_matched_slots(concentrated, 1);
-        assert!((diverse_yield(matched, 12_849, 1, 100) - 3.0 / 100.0).abs() < 1e-9);
+        assert!((diverse_yield(matched, Some(12_849), 1, 100) - 3.0 / 100.0).abs() < 1e-9);
     }
 
     #[test]
@@ -409,13 +418,30 @@ mod tests {
         let counts = [5usize, 1];
         let matched = diverse_matched_slots(counts, 2);
         assert_eq!(matched, 3);
-        assert!((diverse_yield(matched, 10, 2, 20) - 3.0 / 20.0).abs() < 1e-9);
+        assert!((diverse_yield(matched, Some(10), 2, 20) - 3.0 / 20.0).abs() < 1e-9);
     }
 
     #[test]
     fn yield_zero_buckets_is_full() {
         // No buckets to diversify over => treat as fully satisfied, no growth.
-        assert_eq!(diverse_yield(0, 0, 1, 100), 1.0);
+        assert_eq!(diverse_yield(0, Some(0), 1, 100), 1.0);
+    }
+
+    #[test]
+    fn yield_unknown_buckets_uses_sample_size() {
+        // Provider cannot report num_buckets: denominator is sample_visited, so
+        // the yield reduces to the fraction of the sample that is useful
+        // (the pre-normalization heuristic).
+        // Fully distinct sample => yield 1.0, no growth.
+        let all_distinct = std::iter::repeat_n(1usize, 100);
+        let matched = diverse_matched_slots(all_distinct, 1);
+        assert_eq!(diverse_yield(matched, None, 1, 100), 1.0);
+
+        // Concentrated sample => low yield => grow L, matching the old behavior
+        // even though num_buckets is unavailable.
+        let concentrated = [40usize, 30, 30];
+        let matched = diverse_matched_slots(concentrated, 1);
+        assert!((diverse_yield(matched, None, 1, 100) - 3.0 / 100.0).abs() < 1e-9);
     }
 
     #[test]
