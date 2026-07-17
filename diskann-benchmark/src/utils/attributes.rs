@@ -31,6 +31,7 @@ const NAVIGATION_BUCKET: u32 = u32::MAX;
 #[derive(Debug, Clone)]
 pub(crate) struct FileAttributeProvider {
     attributes: Vec<u32>,
+    num_buckets: usize,
 }
 
 impl FileAttributeProvider {
@@ -55,7 +56,16 @@ impl FileAttributeProvider {
             })
             .collect::<anyhow::Result<Vec<u32>>>()?;
 
-        Ok(Self { attributes })
+        let num_buckets = attributes
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<u32>>()
+            .len();
+
+        Ok(Self {
+            attributes,
+            num_buckets,
+        })
     }
 }
 
@@ -73,5 +83,9 @@ impl AttributeValueProvider for FileAttributeProvider {
                 .copied()
                 .unwrap_or(NAVIGATION_BUCKET),
         )
+    }
+
+    fn num_buckets(&self) -> Option<usize> {
+        Some(self.num_buckets)
     }
 }

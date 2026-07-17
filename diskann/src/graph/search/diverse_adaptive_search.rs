@@ -17,30 +17,46 @@
 //! large enough that the top-`L` pool contains enough distinct buckets to fill a
 //! diverse top-`k`. When a query lands in a region dominated by a few buckets,
 //! a fixed `L` under-fetches and recall suffers. Design B sizes `L` per query
-//! from the observed bucket concentration, reusing the same piecewise scaling as
-//! inline-filter [`AdaptiveL`].
+//! from the observed bucket concentration.
 //!
 //! # Yield metric
 //!
-//! Analogous to filter specificity, the diversity *yield* of a sample is
+//! The diversity *yield* of a sample measures how close the sampled nodes are
+//! to a maximally diverse set, normalized to `[0, 1]`:
 //!
 //! ```text
-//! yield = (Σ_b min(count_b, k)) / visited
+//! yield = (Σ_b min(count_b, k)) / min(sample_visited, num_buckets · k)
 //! ```
 //!
-//! where `count_b` is the number of sampled nodes in bucket `b` and `k` is
-//! `diverse_results_k`. For `k = 1` this is simply `distinct_buckets / visited`.
-//! A low yield (many duplicate buckets) triggers a larger `L`; a high yield
-//! (mostly distinct buckets) leaves `L` unchanged.
+//! where `count_b` is the number of sampled nodes in bucket `b`, `k` is
+//! `diverse_results_k` (the per-bucket cap applied downstream), `num_buckets`
+//! is the total number of distinct attribute buckets in the dataset (reported
+//! by [`AttributeValueProvider::num_buckets`]), and `sample_visited` is the
+//! number of nodes sampled. The denominator is the tight upper bound on the
+//! numerator, coupling the yield to all three quantities so it spans the full
+//! `[0, 1]` range regardless of how few buckets the dataset has or how small
+//! the sample is:
+//!
+//! * few buckets, large sample → denominator is `num_buckets · k`, so covering
+//!   every bucket reaches `1.0`;
+//! * many buckets, small sample → denominator is `sample_visited`, so a fully
+//!   distinct sample reaches `1.0` and diffuse data leaves `L` unchanged.
+//!
+//! Unlike inline-filter specificity — where a value of `0.5` over a large
+//! sample is already good enough to stop enlarging `L` — a diversity yield of
+//! `0.5` means only ~50% of the achievable diversity has been observed so far,
+//! so `L` should still grow substantially. `L` is therefore scaled from the
+//! *deficit* `1 − yield`: a yield near `1.0` leaves `L` unchanged, while a low
+//! yield grows it toward the configured maximum multiplier. If the provider
+//! cannot report `num_buckets`, adaptive growth is skipped and `L` stays at its
+//! base value.
 
 use std::sync::Arc;
 
 use diskann_utils::future::SendFuture;
 use hashbrown::HashMap;
 
-use super::{
-    AdaptiveL, Knn, Search, inline_filter_search::compute_adaptive_l, scratch::SearchScratch,
-};
+use super::{AdaptiveL, Knn, Search, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -158,6 +174,10 @@ where
     let beam_width = search_params.beam_width().get();
     let l_search = search_params.l_value().get();
 
+    // Total distinct buckets in the dataset. When unknown, adaptive growth is
+    // disabled: the yield cannot be normalized, so `L` stays at its base value.
+    let num_buckets = provider.num_buckets();
+
     // Bucket-concentration sampling state. Sampling stops once L is (re)sized.
     let mut bucket_counts: HashMap<P::Value, usize> = HashMap::new();
     let mut sample_visited: usize = 0;
@@ -210,16 +230,26 @@ where
         scratch.cmps += neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Once enough nodes are sampled, estimate bucket-concentration yield and
-        // grow L. `matched` is the number of "useful" diverse slots observed:
-        // Σ_b min(count_b, k). A low yield => few distinct buckets => larger L.
+        // Once enough nodes are sampled, estimate the bucket-diversity yield
+        // and grow L from its deficit. `matched` is the number of "useful"
+        // diverse slots observed (Σ_b min(count_b, k)); dividing by the maximum
+        // achievable slots normalizes the yield to [0, 1]. A low yield => far
+        // from a full diverse set => larger L.
         if !l_adjusted && sample_visited >= adaptive_l.sample_count() {
             l_adjusted = true;
-            let matched = diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
-            let new_l =
-                compute_adaptive_l(l_search, sample_visited, matched, adaptive_l.scale_factor());
-            if new_l > l_search {
-                scratch.resize(new_l);
+            if let Some(num_buckets) = num_buckets {
+                let matched =
+                    diverse_matched_slots(bucket_counts.values().copied(), diverse_results_k);
+                let diversity_yield =
+                    diverse_yield(matched, num_buckets, diverse_results_k, sample_visited);
+                let new_l = compute_diverse_adaptive_l(
+                    l_search,
+                    diversity_yield,
+                    adaptive_l.scale_factor(),
+                );
+                if new_l > l_search {
+                    scratch.resize(new_l);
+                }
             }
         }
     }
@@ -235,10 +265,7 @@ where
 ///
 /// This is `Σ_b min(count_b, k)`: each distinct bucket contributes at most `k`
 /// slots, mirroring the per-bucket cap applied by the downstream bucket
-/// selector. Feeding this as `matched` into [`compute_adaptive_l`] makes the
-/// adaptive-L yield equal to the fraction of visited nodes that would survive
-/// bucket selection — high yield (mostly distinct buckets) leaves `L`
-/// unchanged, low yield (heavy bucket concentration) grows it.
+/// selector.
 fn diverse_matched_slots<I>(bucket_counts: I, diverse_results_k: usize) -> usize
 where
     I: IntoIterator<Item = usize>,
@@ -247,6 +274,61 @@ where
         .into_iter()
         .map(|count| count.min(diverse_results_k))
         .sum()
+}
+
+/// Normalize observed diverse slots into a `[0, 1]` yield.
+///
+/// `matched` is `Σ_b min(count_b, k)` (see [`diverse_matched_slots`]). Its tight
+/// upper bound is `min(sample_visited, num_buckets · k)`: `matched` can never
+/// exceed the number of nodes sampled, nor the total capped slots across every
+/// bucket. Dividing by that bound couples the yield to all three quantities that
+/// bound the achievable diversity — `diverse_results_k`, `num_buckets`, and the
+/// sample size — so the yield spans the full `[0, 1]` range in both regimes:
+///
+/// * few buckets, large sample (`num_buckets · k ≤ sample_visited`): the
+///   denominator is `num_buckets · k`, so seeing every bucket up to its cap
+///   reaches `1.0`.
+/// * many buckets, small sample (`sample_visited < num_buckets · k`): the
+///   denominator is `sample_visited`, so a fully distinct sample reaches `1.0`
+///   and diffuse data keeps `L` unchanged (Design-A behavior).
+///
+/// The result is clamped to `[0, 1]`; a zero denominator yields `1.0` (nothing
+/// to diversify over, so no over-fetch is warranted).
+fn diverse_yield(
+    matched: usize,
+    num_buckets: usize,
+    diverse_results_k: usize,
+    sample_visited: usize,
+) -> f64 {
+    let achievable = num_buckets.saturating_mul(diverse_results_k).min(sample_visited);
+    if achievable == 0 {
+        return 1.0;
+    }
+    (matched as f64 / achievable as f64).clamp(0.0, 1.0)
+}
+
+/// Compute adaptive L from the observed diversity yield.
+///
+/// `L` is scaled linearly from the yield *deficit* `1 − yield`, so higher yields
+/// (closer to a full diverse set) grow `L` less:
+///   yield = 1.0 → 1× L (no change; the sample already covers the buckets)
+///   yield = 0.5 → midway between 1× and `max_multiplier`× L
+///   yield = 0.0 → `max_multiplier`× L (maximum expansion)
+///
+/// This differs from inline-filter [`compute_adaptive_l`](super::inline_filter_search)
+/// on purpose: filter specificity of `0.5` is already good, whereas a diversity
+/// yield of `0.5` means only half of the achievable diversity has been seen and
+/// warrants substantial further search.
+///
+/// The multiplier is clamped to `[1, max_multiplier]`.
+pub(crate) fn compute_diverse_adaptive_l(
+    base_l: usize,
+    diversity_yield: f64,
+    max_multiplier: f64,
+) -> usize {
+    let deficit = (1.0 - diversity_yield).clamp(0.0, 1.0);
+    let multiplier = (1.0 + (max_multiplier - 1.0) * deficit).clamp(1.0, max_multiplier);
+    (base_l as f64 * multiplier) as usize
 }
 
 ///////////
@@ -285,34 +367,89 @@ mod tests {
     }
 
     #[test]
-    fn matched_slots_drives_adaptive_l_growth() {
-        // 100 visited nodes, k=1. High concentration (few distinct buckets)
-        // must grow L; full diversity (all distinct) must leave it unchanged.
+    fn yield_is_normalized_to_unit_range() {
+        // 60 buckets, k=1, large sample (1000): denominator is num_buckets·k=60.
+        // Seeing all 60 distinct buckets is full diversity, independent of how
+        // many nodes were visited to get there.
+        let all_distinct = std::iter::repeat_n(1usize, 60);
+        let matched = diverse_matched_slots(all_distinct, 1);
+        assert_eq!(diverse_yield(matched, 60, 1, 1000), 1.0);
+
+        // Half the buckets covered => yield 0.5.
+        let half = std::iter::repeat_n(1usize, 30);
+        let matched = diverse_matched_slots(half, 1);
+        assert_eq!(diverse_yield(matched, 60, 1, 1000), 0.5);
+
+        // Everything in a single bucket => near-zero yield.
+        let one_bucket = std::iter::once(1000usize);
+        let matched = diverse_matched_slots(one_bucket, 1);
+        assert!((diverse_yield(matched, 60, 1, 1000) - 1.0 / 60.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn yield_many_buckets_small_sample_reaches_one() {
+        // Diffuse dataset: far more buckets than the sample size. The
+        // denominator is capped at sample_visited, so a fully distinct sample
+        // yields 1.0 (no over-fetch) rather than being stuck near zero.
+        let all_distinct = std::iter::repeat_n(1usize, 100);
+        let matched = diverse_matched_slots(all_distinct, 1);
+        assert_eq!(diverse_yield(matched, 12_849, 1, 100), 1.0);
+
+        // Same dataset, but the sample piles into a few buckets => low yield.
+        let concentrated = [40usize, 30, 30];
+        let matched = diverse_matched_slots(concentrated, 1);
+        assert!((diverse_yield(matched, 12_849, 1, 100) - 3.0 / 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn yield_caps_per_bucket_with_k() {
+        // k=2, 10 buckets, sample 20: denominator is num_buckets·k=20. One
+        // saturated bucket (>=2) plus one singleton contributes 2 + 1 = 3
+        // useful slots => yield 3/20.
+        let counts = [5usize, 1];
+        let matched = diverse_matched_slots(counts, 2);
+        assert_eq!(matched, 3);
+        assert!((diverse_yield(matched, 10, 2, 20) - 3.0 / 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn yield_zero_buckets_is_full() {
+        // No buckets to diversify over => treat as fully satisfied, no growth.
+        assert_eq!(diverse_yield(0, 0, 1, 100), 1.0);
+    }
+
+    #[test]
+    fn diverse_adaptive_l_scales_from_deficit() {
         let base_l = 100;
         let max_multiplier = 8.0;
 
-        // 100 nodes across 100 distinct buckets => yield 1.0 => no growth.
-        let all_distinct = std::iter::repeat_n(1usize, 100);
-        let matched = diverse_matched_slots(all_distinct, 1);
+        // Full diversity => no growth.
         assert_eq!(
-            compute_adaptive_l(base_l, 100, matched, max_multiplier),
+            compute_diverse_adaptive_l(base_l, 1.0, max_multiplier),
             base_l
         );
 
-        // 100 nodes across 10 distinct buckets => yield 0.1 => 2x growth.
-        let ten_buckets = std::iter::repeat_n(10usize, 10);
-        let matched = diverse_matched_slots(ten_buckets, 1);
+        // Zero yield => maximum expansion.
         assert_eq!(
-            compute_adaptive_l(base_l, 100, matched, max_multiplier),
-            2 * base_l
+            compute_diverse_adaptive_l(base_l, 0.0, max_multiplier),
+            base_l * 8
         );
 
-        // 100 nodes in a single bucket => yield 0.01 => 4x growth.
-        let one_bucket = std::iter::once(100usize);
-        let matched = diverse_matched_slots(one_bucket, 1);
+        // A yield of 0.5 is "bad" for diversity and must grow L a lot: halfway
+        // between 1x and 8x => 4.5x.
         assert_eq!(
-            compute_adaptive_l(base_l, 100, matched, max_multiplier),
-            4 * base_l
+            compute_diverse_adaptive_l(base_l, 0.5, max_multiplier),
+            (base_l as f64 * 4.5) as usize
+        );
+
+        // Out-of-range yields are clamped.
+        assert_eq!(
+            compute_diverse_adaptive_l(base_l, 1.5, max_multiplier),
+            base_l
+        );
+        assert_eq!(
+            compute_diverse_adaptive_l(base_l, -0.5, max_multiplier),
+            base_l * 8
         );
     }
 }

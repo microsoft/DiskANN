@@ -276,6 +276,18 @@ pub trait AttributeValueProvider: crate::provider::HasId + Send + Sync + std::fm
     /// # Returns
     /// * `Option<Self::Value>` - The attribute value if it exists, None otherwise
     fn get(&self, id: Self::Id) -> Option<Self::Value>;
+
+    /// Total number of distinct attribute buckets across the dataset.
+    ///
+    /// Adaptive-L diverse search uses this to normalize the observed diversity
+    /// yield into `[0, 1]`: without it, the yield of a sample is bounded by
+    /// `num_buckets / sample_count` and can never approach `1.0` when the
+    /// dataset has few buckets. Providers that cannot report this cheaply
+    /// return `None`, which disables adaptive-L growth (`L` stays at its base
+    /// value).
+    fn num_buckets(&self) -> Option<usize> {
+        None
+    }
 }
 
 #[cfg(test)]
