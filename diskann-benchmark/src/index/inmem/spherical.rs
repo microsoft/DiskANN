@@ -67,8 +67,9 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod imp {
     use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
+    use diskann_benchmark_core::recall::GroundTruthMode;
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
@@ -185,85 +186,60 @@ mod imp {
                 type Input = SphericalQuantBuild;
                 type Output = SphericalBuildResult;
 
-                fn try_match(
-                    &self,
-                    input: &SphericalQuantBuild,
-                ) -> Result<MatchScore, FailureScore> {
-                    let mut failure_score: Option<u32> = None;
+                fn try_match(&self, input: &SphericalQuantBuild, context: &MatchContext) -> Score {
+                    let mut score = context.success(0);
+
                     if input.build.multi_insert().is_some() {
-                        failure_score = Some(1);
+                        score.fail(1, &"Spherical Quantization does not support multi-insert");
                     }
 
                     if !f32::is_match(input.build.data_type()) {
-                        *failure_score.get_or_insert(0) += 1;
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Only `float32` data type is supported. Instead, got {}",
+                                input.build.data_type()
+                            ),
+                        );
                     }
 
                     if !self.search.is_match(&input.search_phase) {
-                        *failure_score.get_or_insert(0) += 1;
+                        score.fail(
+                            1,
+                            &format_args!(
+                                "Unsupported search phase: \"{}\" - expected one of {}",
+                                input.search_phase.kind(),
+                                self.search.format_kinds(),
+                            ),
+                        )
                     }
 
                     let num_bits = input.num_bits.get();
                     if num_bits != $N {
-                        *failure_score.get_or_insert(0) += ($N as usize)
+                        let penalty = ($N as usize)
                             .abs_diff(num_bits)
                             .try_into()
                             .unwrap_or(u32::MAX);
+
+                        score.fail(
+                            penalty,
+                            &format_args!("Expected {} bits, got {}", $N, num_bits),
+                        );
                     }
 
-                    match failure_score {
-                        None => Ok(MatchScore(0)),
-                        Some(score) => Err(FailureScore(score)),
-                    }
+                    score
                 }
 
-                fn description(
-                    &self,
-                    f: &mut std::fmt::Formatter<'_>,
-                    input: Option<&SphericalQuantBuild>,
-                ) -> std::fmt::Result {
-                    match input {
-                        None => {
-                            writeln!(
-                                f,
-                                "- Index Build and Search using {}-bit spherical quantization",
-                                $N
-                            )?;
-                            writeln!(f, "- Requires `float32` data")?;
-                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                            writeln!(f, "- Does not support multi-insert")?;
-                            writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
-                        }
-                        Some(input) => {
-                            let num_bits = input.num_bits.get();
-                            if num_bits != $N {
-                                writeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
-                            }
-
-                            if input.build.multi_insert().is_some() {
-                                writeln!(
-                                    f,
-                                    "- Spherical Quantization does not support multi-insert"
-                                )?;
-                            }
-
-                            if !f32::is_match(input.build.data_type()) {
-                                writeln!(
-                                    f,
-                                    "- Only `float32` data type is supported. Instead, got {}",
-                                    input.build.data_type()
-                                )?;
-                            }
-
-                            if !self.search.is_match(&input.search_phase) {
-                                writeln!(
-                                    f,
-                                    "- Unsupported search phase: \"{}\" - expected one of {}",
-                                    input.search_phase.kind(),
-                                    self.search.format_kinds(),
-                                )?;
-                            }
-                        }
-                    }
+                fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    writeln!(
+                        f,
+                        "- Index Build and Search using {}-bit spherical quantization",
+                        $N
+                    )?;
+                    writeln!(f, "- Requires `float32` data")?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
+                    writeln!(f, "- Does not support multi-insert")?;
+                    writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
                     Ok(())
                 }
 
@@ -390,7 +366,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
-            let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+            let steps = search::knn::SearchSteps::new(
+                topk.reps,
+                &topk.num_threads,
+                &topk.runs,
+                GroundTruthMode::Fixed,
+            );
 
             let knn = benchmark_core::search::graph::KNN::new(
                 index.clone(),
@@ -477,6 +458,7 @@ mod imp {
                 betafilter.reps,
                 &betafilter.num_threads,
                 &betafilter.runs,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
@@ -527,8 +509,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+            let steps = search::knn::SearchSteps::new(
+                multihop.reps,
+                &multihop.num_threads,
+                &multihop.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -577,8 +563,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+            let steps = search::knn::SearchSteps::new(
+                inline.reps,
+                &inline.num_threads,
+                &inline.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 

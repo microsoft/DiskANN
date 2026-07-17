@@ -6,12 +6,13 @@
 use std::{
     io::{Seek, SeekFrom, Write},
     marker::PhantomData,
+    time::Instant,
 };
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::utils::{
-    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, Timer,
+use diskann_providers::{
+    storage::{StorageReadProvider, StorageWriteProvider},
+    utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
@@ -107,7 +108,7 @@ where
     where
         Storage: StorageReadProvider + StorageWriteProvider,
     {
-        let timer = Timer::new();
+        let timer = Instant::now();
 
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
         let (num_points, dim) = metadata.into_dims();

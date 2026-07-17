@@ -1,0 +1,586 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+//! Backend for flat-index (brute-force kNN) benchmarks.
+//!
+//! This exercises [`diskann::flat::FlatIndex::knn_search`] over an in-memory
+//! provider, measuring recall and latency.
+
+use std::{io::Write, num::NonZeroUsize, sync::Arc};
+
+use diskann::{
+    flat::{DistancesUnordered, FlatIndex, SearchStrategy},
+    graph::{glue::CopyIds, SearchOutputBuffer},
+    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
+    utils::VectorRepr,
+    ANNResult,
+};
+use diskann_benchmark_core::{self as benchmark_core, recall::GroundTruthMode, search};
+use diskann_benchmark_runner::{
+    benchmark::{MatchContext, Score},
+    output::Output,
+    utils::{datatype::AsDataType, percentiles, MicroSeconds},
+    Benchmark, Checkpoint, Registry,
+};
+use diskann_utils::{future::SendFuture, views::Matrix};
+use diskann_vector::{distance::Metric, PreprocessedDistanceFunction};
+use half::f16;
+use serde::Serialize;
+
+use crate::{
+    inputs::flat::FlatSearch,
+    utils::{self, datafiles, recall::RecallMetrics},
+};
+
+////////////////////////////
+// Benchmark Registration //
+////////////////////////////
+
+const NAME: &str = "flat-index";
+
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register(NAME, Flat::<f32>::new())?;
+    registry.register(NAME, Flat::<f16>::new())?;
+    registry.register(NAME, Flat::<u8>::new())?;
+    registry.register(NAME, Flat::<i8>::new())?;
+    Ok(())
+}
+
+/////////////////
+// FlatSearch  //
+/////////////////
+
+/// A minimal in-memory provider for flat search benchmarks.
+///
+/// Wraps a loaded [`Matrix<T>`] and implements [`DataProvider`] with identity
+/// ID mapping.
+struct InMemProvider<T> {
+    data: Arc<Matrix<T>>,
+}
+
+impl<T: VectorRepr> DataProvider for InMemProvider<T> {
+    type Context = DefaultContext;
+    type InternalId = u32;
+    type ExternalId = u32;
+    type Error = diskann::ANNError;
+    type Guard = NoopGuard<u32>;
+
+    fn to_internal_id(&self, _ctx: &DefaultContext, gid: &u32) -> Result<u32, Self::Error> {
+        Ok(*gid)
+    }
+
+    fn to_external_id(&self, _ctx: &DefaultContext, id: u32) -> Result<u32, Self::Error> {
+        Ok(id)
+    }
+}
+
+struct Flat<T> {
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> Flat<T> {
+    fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> Benchmark for Flat<T>
+where
+    T: VectorRepr + AsDataType,
+{
+    type Input = FlatSearch;
+    type Output = FlatResult;
+
+    fn try_match(&self, input: &FlatSearch, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        let desc = T::describe(input.data_type);
+        if !desc.is_match() {
+            score.fail(1, &format_args!("Data Type: {}", desc));
+        }
+
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data Type: {}", T::DATA_TYPE)
+    }
+
+    fn run(
+        &self,
+        input: &FlatSearch,
+        _checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<FlatResult> {
+        writeln!(output, "{}", input)?;
+
+        let metric: Metric = input.distance.into();
+
+        // Load dataset
+        writeln!(output, "Loading dataset...")?;
+        let data: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data))?;
+        let nrows = data.nrows();
+        let ncols = data.ncols();
+        anyhow::ensure!(
+            nrows <= u32::MAX as usize,
+            "flat-index benchmark requires <= {} vectors (got {}) to fit in u32 ids",
+            u32::MAX,
+            nrows,
+        );
+        writeln!(output, "  Loaded {} vectors of dimension {}", nrows, ncols)?;
+
+        // Build the provider and wrap in FlatIndex
+        let data = Arc::new(data);
+        let provider = InMemProvider { data: data.clone() };
+        let index = FlatIndex::new(provider);
+
+        // Load queries and groundtruth
+        let queries: Matrix<T> =
+            datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?;
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&input.search.groundtruth),
+            Some(input.search.k.get()),
+        )?;
+        anyhow::ensure!(
+            ncols == queries.ncols(),
+            "dataset dimension ({}) does not match query dimension ({})",
+            ncols,
+            queries.ncols(),
+        );
+
+        writeln!(
+            output,
+            "  Queries: {}, Groundtruth: {}x{}",
+            queries.nrows(),
+            groundtruth.nrows(),
+            groundtruth.ncols(),
+        )?;
+
+        // Run searches for each thread count
+        let k = input.search.k;
+        let reps = input.search.reps;
+        anyhow::ensure!(
+            k.get() <= nrows,
+            "k ({}) must be <= number of dataset vectors ({})",
+            k,
+            nrows,
+        );
+
+        let mut results = Vec::new();
+
+        let searcher = Arc::new(Searcher {
+            index,
+            queries,
+            strategy: Strategy::new(metric),
+        });
+
+        for &threads in &input.search.num_threads {
+            let setup = search::Setup {
+                threads,
+                tasks: threads,
+                reps,
+            };
+
+            let run = search::Run::new(SearchParameters { k }, setup);
+            let aggregated = search::search_all(
+                searcher.clone(),
+                std::iter::once(run),
+                Aggregator::new(&groundtruth, k.get()),
+            )?;
+
+            for item in aggregated {
+                results.push(item);
+            }
+        }
+
+        let result = FlatResult { results };
+        writeln!(output, "\n\n{}", result)?;
+        Ok(result)
+    }
+}
+
+///////////////////////
+// Flat SearchStrategy //
+///////////////////////
+
+/// A [`SearchStrategy`] implementation for [`InMemProvider`] that drives
+/// a full sequential scan over all vectors.
+struct Strategy<T: VectorRepr> {
+    metric: Metric,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T: VectorRepr> Strategy<T> {
+    fn new(metric: Metric) -> Self {
+        Self {
+            metric,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// The visitor that iterates over all vectors in the provider.
+struct Visitor<'a, T> {
+    data: &'a Matrix<T>,
+}
+
+impl<T: VectorRepr> HasId for Visitor<'_, T> {
+    type Id = u32;
+}
+
+impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for Visitor<'_, T> {
+    type ElementRef<'a> = &'a [T];
+    type Error = diskann::error::Infallible;
+
+    fn distances_unordered<F>(
+        &mut self,
+        computer: &T::QueryDistance,
+        mut f: F,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        F: Send + FnMut(Self::Id, f32),
+    {
+        async move {
+            for (i, vector) in self.data.row_iter().enumerate() {
+                let dist = computer.evaluate_similarity(vector);
+                f(i as u32, dist);
+            }
+            Ok(())
+        }
+    }
+}
+
+impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
+    type ElementRef<'a> = &'a [T];
+    type QueryComputer = T::QueryDistance;
+    type QueryComputerError = diskann::error::Infallible;
+    type Visitor<'a>
+        = Visitor<'a, T>
+    where
+        Self: 'a,
+        InMemProvider<T>: 'a;
+    type Error = diskann::error::Infallible;
+
+    fn create_visitor<'a>(
+        &'a self,
+        provider: &'a InMemProvider<T>,
+        _context: &'a DefaultContext,
+    ) -> Result<Self::Visitor<'a>, Self::Error> {
+        Ok(Visitor {
+            data: &provider.data,
+        })
+    }
+
+    fn build_query_computer(
+        &self,
+        query: &[T],
+    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
+        Ok(T::query_distance(query, self.metric))
+    }
+}
+
+//////////////////////////////////////////
+// benchmark_core::search::Search impl  //
+//////////////////////////////////////////
+
+/// Wraps a [`FlatIndex`] and queries to implement the [`Search`] trait from benchmark_core.
+struct Searcher<T: VectorRepr> {
+    index: FlatIndex<InMemProvider<T>>,
+    queries: Matrix<T>,
+    strategy: Strategy<T>,
+}
+
+/// Search parameters for flat-index benchmarks.
+#[derive(Debug, Clone, Copy)]
+struct SearchParameters {
+    k: NonZeroUsize,
+}
+
+/// Additional metrics collected during flat search.
+#[derive(Debug, Clone, Copy)]
+struct Metrics {
+    /// The number of distance comparisons performed.
+    pub comparisons: u32,
+}
+
+impl<T> search::Search for Searcher<T>
+where
+    T: VectorRepr,
+{
+    type Id = u32;
+    type Parameters = SearchParameters;
+    type Output = Metrics;
+
+    fn num_queries(&self) -> usize {
+        self.queries.nrows()
+    }
+
+    fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
+        search::IdCount::Fixed(parameters.k)
+    }
+
+    async fn search<O>(
+        &self,
+        parameters: &Self::Parameters,
+        buffer: &mut O,
+        index: usize,
+    ) -> ANNResult<Self::Output>
+    where
+        O: SearchOutputBuffer<u32> + Send,
+    {
+        let context = DefaultContext;
+        let query = self.queries.row(index);
+
+        let stats = self
+            .index
+            .knn_search(
+                parameters.k,
+                &self.strategy,
+                CopyIds,
+                &context,
+                query,
+                buffer,
+            )
+            .await?;
+
+        Ok(Metrics {
+            comparisons: stats.cmps,
+        })
+    }
+}
+
+//////////////////
+// Aggregation  //
+//////////////////
+
+/// Aggregates results from multiple flat search runs, computing recall metrics.
+struct Aggregator<'a> {
+    groundtruth: &'a Matrix<u32>,
+    recall_k: usize,
+}
+
+impl<'a> Aggregator<'a> {
+    fn new(groundtruth: &'a Matrix<u32>, recall_k: usize) -> Self {
+        Self {
+            groundtruth,
+            recall_k,
+        }
+    }
+}
+
+/// Results of a single flat search run.
+#[derive(Debug, Clone, Serialize)]
+struct SearchResults {
+    num_tasks: usize,
+    k: usize,
+    qps: Vec<f64>,
+    search_latencies: Vec<MicroSeconds>,
+    mean_latencies: Vec<f64>,
+    p90_latencies: Vec<MicroSeconds>,
+    p99_latencies: Vec<MicroSeconds>,
+    recall: RecallMetrics,
+    mean_cmps: f32,
+}
+
+impl search::Aggregate<SearchParameters, u32, Metrics> for Aggregator<'_> {
+    type Output = SearchResults;
+
+    fn aggregate(
+        &mut self,
+        run: search::Run<SearchParameters>,
+        mut results: Vec<search::SearchResults<u32, Metrics>>,
+    ) -> anyhow::Result<SearchResults> {
+        // Compute recall using the first repetition's results.
+        let recall = match results.first() {
+            Some(first) => benchmark_core::recall::knn(
+                self.groundtruth,
+                None,
+                first.ids().as_rows(),
+                self.recall_k,
+                run.parameters().k.get(),
+                GroundTruthMode::Fixed,
+            )?,
+            None => anyhow::bail!("Results must be non-empty"),
+        };
+
+        let mut mean_latencies = Vec::with_capacity(results.len());
+        let mut p90_latencies = Vec::with_capacity(results.len());
+        let mut p99_latencies = Vec::with_capacity(results.len());
+
+        for r in results.iter_mut() {
+            let percentiles::Percentiles { mean, p90, p99, .. } =
+                percentiles::compute_percentiles(r.latencies_mut())?;
+            mean_latencies.push(mean);
+            p90_latencies.push(p90);
+            p99_latencies.push(p99);
+        }
+
+        let qps: Vec<f64> = results
+            .iter()
+            .map(|r| recall.num_queries as f64 / r.end_to_end_latency().as_seconds())
+            .collect();
+
+        let mean_cmps = benchmark_core::utils::average_all(
+            results
+                .iter()
+                .flat_map(|r| r.output().iter().map(|o| o.comparisons)),
+        ) as f32;
+
+        Ok(SearchResults {
+            num_tasks: run.setup().tasks.into(),
+            k: run.parameters().k.get(),
+            qps,
+            search_latencies: results.iter().map(|r| r.end_to_end_latency()).collect(),
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            recall: (&recall).into(),
+            mean_cmps,
+        })
+    }
+}
+
+//////////////
+// Results  //
+//////////////
+
+#[derive(Debug, Serialize)]
+struct FlatResult {
+    results: Vec<SearchResults>,
+}
+
+impl std::fmt::Display for FlatResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.results.is_empty() {
+            return Ok(());
+        }
+
+        let headers: &[&str] = &[
+            "K",
+            "Avg cmps",
+            "QPS - mean(max)",
+            "Avg Latency",
+            "p99 Latency",
+            "Recall",
+            "Threads",
+        ];
+
+        let mut table =
+            diskann_benchmark_runner::utils::fmt::Table::new(headers, self.results.len());
+        for (i, r) in self.results.iter().enumerate() {
+            let mut row = table.row(i);
+            row.insert(r.k, 0);
+            row.insert(r.mean_cmps, 1);
+            row.insert(
+                format!(
+                    "{:.1} ({:.1})",
+                    utils::MaybeDisplay(percentiles::mean(&r.qps), "missing"),
+                    utils::MaybeDisplay(percentiles::max_f64(&r.qps), "missing"),
+                ),
+                2,
+            );
+            row.insert(
+                format!(
+                    "{:.1}us ({:.1}us)",
+                    utils::MaybeDisplay(percentiles::mean(&r.mean_latencies), "missing"),
+                    utils::MaybeDisplay(percentiles::max_f64(&r.mean_latencies), "missing"),
+                ),
+                3,
+            );
+            row.insert(
+                format!(
+                    "{:.1}us ({:.1})",
+                    utils::MaybeDisplay(percentiles::mean(&r.p99_latencies), "missing"),
+                    utils::MaybeDisplay(r.p99_latencies.iter().max(), "missing"),
+                ),
+                4,
+            );
+            row.insert(format!("{:3}", r.recall.average), 5);
+            row.insert(r.num_tasks, 6);
+        }
+
+        write!(f, "{}", table)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inputs::Example;
+    use diskann_benchmark_runner::utils::MicroSeconds;
+
+    fn make_dummy_results(num_results: usize) -> FlatResult {
+        let results = (0..num_results)
+            .map(|i| SearchResults {
+                num_tasks: i + 1,
+                k: 10,
+                qps: vec![100.0],
+                search_latencies: vec![MicroSeconds::new(1000)],
+                mean_latencies: vec![10.0],
+                p90_latencies: vec![MicroSeconds::new(900)],
+                p99_latencies: vec![MicroSeconds::new(990)],
+                recall: RecallMetrics {
+                    recall_k: 10,
+                    recall_n: 10,
+                    num_queries: 100,
+                    average: 0.95,
+                },
+                mean_cmps: 256.0,
+            })
+            .collect();
+        FlatResult { results }
+    }
+
+    #[test]
+    fn display_empty_flat_result() {
+        let result = FlatResult {
+            results: Vec::new(),
+        };
+        let text = format!("{}", result);
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn display_flat_result_with_data() {
+        let result = make_dummy_results(1);
+        let text = format!("{}", result);
+        assert!(text.contains("K"));
+        assert!(text.contains("Recall"));
+    }
+
+    #[test]
+    fn description_without_input() {
+        let benchmark = Flat::<f32>::new();
+        let text = format!("{}", DescriptionHelper::<f32>(&benchmark));
+        assert!(text.contains("Data Type: float32"));
+    }
+
+    #[test]
+    fn description_with_mismatched_type() {
+        use diskann_benchmark_runner::{benchmark::TestScore, utils::datatype::DataType};
+        let benchmark = Flat::<f32>::new();
+        let mut input = crate::inputs::flat::FlatSearch::example();
+        input.data_type = DataType::UInt8;
+
+        let score = MatchContext::test(&benchmark, &input);
+        match score {
+            TestScore::Failure { reasons, .. } => {
+                let reasons = reasons.unwrap();
+                assert!(reasons[0].contains("Data Type: expected \"float32\" but found \"uint8\""));
+            }
+            _ => panic!("matching should fail"),
+        }
+    }
+
+    /// Helper to call `description()` via `Display`.
+    struct DescriptionHelper<'a, T: VectorRepr + AsDataType>(&'a Flat<T>);
+
+    impl<T: VectorRepr + AsDataType> std::fmt::Display for DescriptionHelper<'_, T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.description(f)
+        }
+    }
+}

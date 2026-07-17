@@ -49,6 +49,8 @@ pub(crate) fn compute_multiple_recalls<T>(
 where
     T: benchmark_core::recall::RecallCompatible,
 {
+    use diskann_benchmark_core::recall::GroundTruthMode;
+
     let mut result = Vec::new();
     for k in recall_k {
         for n in recall_n {
@@ -62,7 +64,7 @@ where
                 results,
                 *k,
                 *n,
-                benchmark_core::recall::GroundTruthMode::Fixed,
+                GroundTruthMode::Fixed,
             )?;
             result.push((&recall).into());
         }

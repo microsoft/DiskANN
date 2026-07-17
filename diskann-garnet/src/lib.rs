@@ -178,7 +178,7 @@ fn create_index_impl<T: VectorRepr>(
     max_degree: usize,
     callbacks: Callbacks,
     context: Context,
-) -> Result<Arc<Index>, GarnetProviderError> {
+) -> Result<(Arc<Index>, bool), GarnetProviderError> {
     let provider = GarnetProvider::<T>::new(
         dim,
         quant_type,
@@ -192,13 +192,24 @@ fn create_index_impl<T: VectorRepr>(
     } else {
         AtomicUsize::new(IndexState::NoStartPoints as usize)
     };
-    Ok(Arc::new(Index {
-        inner: Box::new(DiskANNIndex::new_with_current_thread_runtime(
-            config, provider,
-        )),
-        quant_type,
-        state,
-    }))
+
+    let quant_needed = match quant_type {
+        VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
+            provider.quantization_needed()
+        }
+        _ => false,
+    };
+
+    Ok((
+        Arc::new(Index {
+            inner: Box::new(DiskANNIndex::new_with_current_thread_runtime(
+                config, provider,
+            )),
+            quant_type,
+            state,
+        }),
+        quant_needed,
+    ))
 }
 
 /// # Safety
@@ -218,7 +229,10 @@ pub unsafe extern "C" fn create_index(
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
     filter_callback: FilterCallback,
+    quantization_needed: *mut bool,
 ) -> *const c_void {
+    unsafe { *quantization_needed = false };
+
     let metric_type = match Metric::try_from(metric_type) {
         Ok(m) => m,
         Err(_) => return ptr::null(),
@@ -251,7 +265,7 @@ pub unsafe extern "C" fn create_index(
     match quant_type {
         VectorQuantType::Invalid => ptr::null(),
         VectorQuantType::XNoQuantU8 | VectorQuantType::XBinU8 => {
-            if let Ok(index) = create_index_impl::<u8>(
+            if let Ok((index, quant_needed)) = create_index_impl::<u8>(
                 quant_type,
                 config,
                 dim as usize,
@@ -260,13 +274,14 @@ pub unsafe extern "C" fn create_index(
                 callbacks,
                 context,
             ) {
+                unsafe { *quantization_needed = quant_needed };
                 Arc::into_raw(index).cast::<c_void>()
             } else {
                 ptr::null()
             }
         }
         VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
-            if let Ok(index) = create_index_impl::<i8>(
+            if let Ok((index, quant_needed)) = create_index_impl::<i8>(
                 quant_type,
                 config,
                 dim as usize,
@@ -275,13 +290,14 @@ pub unsafe extern "C" fn create_index(
                 callbacks,
                 context,
             ) {
+                unsafe { *quantization_needed = quant_needed };
                 Arc::into_raw(index).cast::<c_void>()
             } else {
                 ptr::null()
             }
         }
         VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
-            if let Ok(index) = create_index_impl::<f32>(
+            if let Ok((index, quant_needed)) = create_index_impl::<f32>(
                 quant_type,
                 config,
                 dim as usize,
@@ -290,6 +306,7 @@ pub unsafe extern "C" fn create_index(
                 callbacks,
                 context,
             ) {
+                unsafe { *quantization_needed = quant_needed };
                 Arc::into_raw(index).cast::<c_void>()
             } else {
                 ptr::null()
@@ -886,7 +903,8 @@ mod tests {
     }
 
     fn check_create_index(quant_type: VectorQuantType) {
-        let store = Store;
+        let store = Store::new();
+        let mut quant_needed = false;
         let index_ptr = unsafe {
             super::create_index(
                 0,
@@ -901,6 +919,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                &mut quant_needed,
             )
         };
         assert!(!index_ptr.is_null());
@@ -915,7 +934,8 @@ mod tests {
 
     #[test]
     fn create_index() {
-        let store = Store;
+        let store = Store::new();
+        let mut quant_needed = false;
 
         let index_ptr = unsafe {
             super::create_index(
@@ -931,6 +951,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                &mut quant_needed,
             )
         };
         assert!(index_ptr.is_null());

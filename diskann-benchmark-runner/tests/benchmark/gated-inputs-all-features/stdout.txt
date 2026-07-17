@@ -1,0 +1,5 @@
+Available input kinds are listed below:
+    phantom-input
+    sample-input
+    test-input-dim
+    test-input-types

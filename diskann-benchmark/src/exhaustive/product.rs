@@ -28,7 +28,7 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        benchmark::{FailureScore, MatchScore},
+        benchmark::{MatchContext, Score},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -192,22 +192,13 @@ mod imp {
         type Input = inputs::exhaustive::Product;
         type Output = Results;
 
-        fn try_match(
-            &self,
-            _input: &inputs::exhaustive::Product,
-        ) -> Result<MatchScore, FailureScore> {
-            Ok(MatchScore(0))
+        fn try_match(&self, _input: &inputs::exhaustive::Product, context: &MatchContext) -> Score {
+            context.success(0)
         }
 
-        fn description(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-            input: Option<&inputs::exhaustive::Product>,
-        ) -> std::fmt::Result {
-            if input.is_none() {
-                writeln!(f, "- Exhaustive search for product quantization",)?;
-                writeln!(f, "- Requires `float32` data")?;
-            }
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "- Exhaustive search for product quantization",)?;
+            writeln!(f, "- Requires `float32` data")?;
             Ok(())
         }
 
@@ -372,9 +363,7 @@ mod imp {
     }
 
     impl algos::CreateQuantComputer<Store> for Plan {
-        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<
-            &'a diskann_providers::model::pq::FixedChunkPQTable,
-        >;
+        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<'a>;
 
         fn create_quant_computer<'a>(
             &self,
