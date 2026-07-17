@@ -206,12 +206,13 @@ std::pair<uint32_t, uint32_t> unified_index_memory<T>::iterate_to_fixed_point(
 
 template <typename T> void unified_index_memory<T>::search_impl(UnifiedSearchContext &ctx)
 {
-    if (_query_scratch.size() == 0)
-    {
-        throw ANNException("unified_index_memory::search_impl: scratch pool empty (was load() called?)", -1,
-                           __FUNCSIG__, __FILE__, __LINE__);
-    }
-
+    // Borrow per-thread scratch. ScratchStoreManager blocks until a scratch
+    // object is available, so when more queries arrive concurrently than the
+    // pool holds, callers wait for a free slot rather than failing. The pool is
+    // always populated by load() (init_scratch_pool allocates >= 1 entry), so no
+    // "was load() called?" pre-check is needed -- and such a check would be a bug
+    // here: under concurrent load the pool is transiently empty while every
+    // scratch is checked out, which is normal, not an error.
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     InMemQueryScratch<T> *scratch = manager.scratch_space();
     scratch->resize_for_new_L(std::max<uint32_t>(ctx.L, static_cast<uint32_t>(ctx.K)));
