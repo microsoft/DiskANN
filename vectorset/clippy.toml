@@ -1,0 +1,4 @@
+# vectorset is excluded from the workspace and does not share the root
+# clippy.toml. This local (empty) config stops clippy from walking up to the
+# repo-root clippy.toml, whose disallowed-methods reference paths (e.g.
+# `rand::thread_rng`) that do not exist in vectorset's dependency tree.

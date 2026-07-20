@@ -71,6 +71,9 @@ jobs:
       - test-workspace
       - test-workspace-features
       - coverage
+      - vectorset-clippy
+      - vectorset-fmt
+      - vectorset-build
     if: ${{ always() && (cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
     steps:
       - name: Gate failure
@@ -151,7 +154,6 @@ jobs:
             --features ${{ env.DISKANN_FEATURES }} \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
-
 
   clippy-no-default-features:
     name: clippy (no default features)
@@ -236,6 +238,61 @@ jobs:
   #       env:
   #         RUSTDOCFLAGS: -Dwarnings
 
+  vectorset-fmt:
+    name: vectorset format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Check fmt
+      - name: "vectorset: cargo fmt --check"
+        run: |
+          cd vectorset
+          if ! cargo fmt --all --check; then
+            printf "Please run \`cargo fmt --all\` to fix rustfmt errors.\n" >&2
+            exit 1
+          fi
+
+  vectorset-clippy:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - windows-latest
+      fail-fast: false
+    name: vectorset-clippy (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "vectorset: clippy --all-targets"
+        run: |
+          cd vectorset
+          cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  vectorset-build:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - windows-latest
+      fail-fast: false
+    name: vectorset-build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: "vectorset: build debug & release"
+        run: |
+          cd vectorset
+          cargo build --locked
+          cargo build --locked --release
 
   # Test micro-architecture detection and dispatching.
   #
@@ -300,7 +357,6 @@ jobs:
               --package diskann-quantization \
               -- --skip compile_tests \
                  --skip pivots::tests::run_test_happy_path
-
 
   # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
   #
