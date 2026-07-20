@@ -5,9 +5,6 @@
 
 use diskann_benchmark_runner::Registry;
 
-// Create a stub-module if the "scalar-quantization" feature is disabled.
-crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOperation);
-
 pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "scalar-quantization")]
     {
@@ -44,9 +41,12 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
         )?;
     }
 
-    // Stub implementation
     #[cfg(not(feature = "scalar-quantization"))]
-    imp::register("graph-index-sq", benchmarks)?;
+    benchmarks.register_partially_gated::<crate::inputs::graph_index::IndexSQOperation>(
+        "graph-index-sq",
+        diskann_benchmark_runner::Features::new("scalar-quantization"),
+        "Scalar-quantized graph index build and search",
+    )?;
 
     Ok(())
 }
