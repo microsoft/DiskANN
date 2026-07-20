@@ -20,10 +20,10 @@ use diskann::utils::VectorRepr;
 use diskann_providers::utils::MAX_MEDOID_SAMPLE_SIZE;
 use rayon::prelude::*;
 
+use crate::cpu_dispatch::{tier, SimdTier};
 use crate::hash_prune::HashPrune;
 use crate::leaf_build;
 use crate::partition::PartitionConfig;
-use crate::cpu_dispatch::{tier, SimdTier};
 use crate::rayon_util::ParIterInstalled;
 use crate::{PiPNNBuildContext, PiPNNError, PiPNNResult};
 
@@ -187,83 +187,6 @@ impl diskann_providers::storage::bin::GetAdjacencyList for PiPNNGraph {
     }
 }
 
-/// Search is only available for testing.
-/// Production search goes through DiskANN's disk-based search pipeline.
-#[cfg(test)]
-impl PiPNNGraph {
-    /// Perform greedy graph search starting from the cached medoid.
-    ///
-    /// This method is for testing and benchmarking only. Production search
-    /// should use DiskANN's disk-based search pipeline which operates on the
-    /// saved graph format.
-    ///
-    /// Returns the indices and distances of the `k` approximate nearest neighbors.
-    pub fn search(
-        &self,
-        data: &[f32],
-        query: &[f32],
-        k: usize,
-        search_list_size: usize,
-    ) -> Vec<(usize, f32)> {
-        let ndims = self.ndims;
-        let npoints = self.npoints;
-
-        if npoints == 0 {
-            return Vec::new();
-        }
-
-        let dist_fn = make_dist_fn(self.metric, ndims);
-
-        let start = self.medoid;
-
-        // Greedy best-first search with a sorted candidate list of size L.
-        let l = search_list_size.max(k);
-        let mut visited = vec![false; npoints];
-        let mut candidates: Vec<(usize, f32)> = Vec::with_capacity(l + 1);
-
-        let start_dist = dist_fn.call(&data[start * ndims..(start + 1) * ndims], query);
-        candidates.push((start, start_dist));
-        visited[start] = true;
-
-        let mut pointer = 0;
-
-        while pointer < candidates.len() {
-            let (current, _) = candidates[pointer];
-            pointer += 1;
-
-            for &neighbor in &self.adjacency[current] {
-                let neighbor = neighbor as usize;
-                if neighbor >= npoints || visited[neighbor] {
-                    continue;
-                }
-                visited[neighbor] = true;
-
-                let dist = dist_fn.call(&data[neighbor * ndims..(neighbor + 1) * ndims], query);
-
-                if candidates.len() < l || dist < candidates.last().map(|c| c.1).unwrap_or(f32::MAX)
-                {
-                    let pos = candidates
-                        .binary_search_by(|c| {
-                            c.1.partial_cmp(&dist).unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .unwrap_or_else(|e| e);
-                    candidates.insert(pos, (neighbor, dist));
-                    if candidates.len() > l {
-                        candidates.truncate(l);
-                    }
-
-                    if pos < pointer {
-                        pointer = pos;
-                    }
-                }
-            }
-        }
-
-        candidates.truncate(k);
-        candidates
-    }
-}
-
 /// Find the medoid (point closest to the centroid) using squared L2.
 ///
 /// Centroid is averaged over a stride-sample capped at
@@ -302,11 +225,18 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNN
                     return (bi, bd, buf);
                 }
                 let d = dist_fn.call(&buf, &centroid);
-                if d < bd { (i, d, buf) } else { (bi, bd, buf) }
+                if d < bd {
+                    (i, d, buf)
+                } else {
+                    (bi, bd, buf)
+                }
             },
         )
         .map(|(bi, bd, _buf)| (bi, bd))
-        .reduce(|| (usize::MAX, f32::MAX), |a, b| if a.1 <= b.1 { a } else { b });
+        .reduce(
+            || (usize::MAX, f32::MAX),
+            |a, b| if a.1 <= b.1 { a } else { b },
+        );
 
     if best_idx == usize::MAX {
         return Err(PiPNNError::Conversion(
@@ -476,7 +406,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         leaf_build::LEAF_BUFFERS.with(|cell| {
             let mut bufs = cell.borrow_mut();
             for leaf in chunk {
-                let _edge_count = leaf_build::build_leaf_into(
+                let group_edges = leaf_build::build_leaf_into(
                     data,
                     ndims,
                     &leaf.indices,
@@ -485,7 +415,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
                     &mut bufs,
                 );
                 let n = leaf.indices.len();
-                let group_edges = bufs.group_starts[n] as usize;
                 total_edges.fetch_add(group_edges, Ordering::Relaxed);
 
                 // Gather a small (n × num_planes) per-leaf sketches cache.
@@ -550,9 +479,8 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             config.l_max
         );
 
-        let adj = final_prune_from_candidates(
-            data, ndims, candidates, max_degree, metric, config.alpha,
-        );
+        let adj =
+            final_prune_from_candidates(data, ndims, candidates, max_degree, metric, config.alpha);
 
         let final_prune_secs = t4.elapsed().as_secs_f64();
         (adj, extract_secs, final_prune_secs)
@@ -797,15 +725,17 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                                 }
                                 let cand_f32 = &mut cf[..nc * ndims];
                                 for (ci, &id) in candidates.iter().enumerate() {
-                                    let src =
-                                        &data[id as usize * ndims..(id as usize + 1) * ndims];
-                                    T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                                        .unwrap_or_else(|e| {
-                                            panic!(
-                                                "VectorRepr::as_f32_into failed during final_prune: {}",
-                                                e
-                                            )
-                                        });
+                                    let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
+                                    T::as_f32_into(
+                                        src,
+                                        &mut cand_f32[ci * ndims..(ci + 1) * ndims],
+                                    )
+                                    .unwrap_or_else(|e| {
+                                        panic!(
+                                            "VectorRepr::as_f32_into failed during final_prune: {}",
+                                            e
+                                        )
+                                    });
                                 }
 
                                 // Node x's own vector as fresh f32. final_prune
@@ -845,8 +775,9 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                                 // would NOT be order-invariant — the index→id
                                 // map differs between layouts; the id is stable.
                                 order.sort_unstable_by(|a, b| {
-                                    a.0.total_cmp(&b.0)
-                                        .then_with(|| candidates[a.1 as usize].cmp(&candidates[b.1 as usize]))
+                                    a.0.total_cmp(&b.0).then_with(|| {
+                                        candidates[a.1 as usize].cmp(&candidates[b.1 as usize])
+                                    })
                                 });
 
                                 // Lazy RobustPrune (paper "Optimizing RobustPrune"):
@@ -909,57 +840,6 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
         .collect_installed()
 }
 
-/// Standalone benchmark entry point: runs ONLY the leaf-build + HashPrune-insert
-/// loop given pre-computed partition leaves and an initialised [`HashPrune`].
-/// Returns `(wall_secs, total_edges)`. Used by isolation benches/perf profiles
-/// to attribute cycles strictly to leaf+HP without partition / LSH-init /
-/// extract / final-prune contamination.
-///
-/// Gated behind the `bench` feature so it is not part of the production API
-/// surface; callers exercising it must opt in.
-#[cfg(any(test, feature = "bench"))]
-pub fn bench_leaf_hp_phase<T: VectorRepr + Send + Sync + 'static>(
-    data: &[T],
-    ndims: usize,
-    leaves: &[crate::partition::Leaf],
-    hash_prune: &HashPrune,
-    k: usize,
-    metric: Metric,
-) -> (f64, usize) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let nthreads = rayon::current_num_threads().max(1);
-    let leaf_batch = (leaves.len() / (nthreads * 4)).clamp(1, 256);
-    let total_edges = AtomicUsize::new(0);
-    let num_planes = hash_prune.num_planes();
-    let t = Instant::now();
-    leaves.par_chunks(leaf_batch).for_each_installed(|chunk| {
-        leaf_build::LEAF_BUFFERS.with(|cell| {
-            let mut bufs = cell.borrow_mut();
-            for leaf in chunk {
-                let _ = leaf_build::build_leaf_into(
-                    data, ndims, &leaf.indices, k, metric, &mut bufs,
-                );
-                let n = leaf.indices.len();
-                let group_edges = bufs.group_starts[n] as usize;
-                total_edges.fetch_add(group_edges, Ordering::Relaxed);
-                let need = n * num_planes;
-                if bufs.local_sketches.len() < need {
-                    bufs.local_sketches.resize(need, 0.0);
-                }
-                hash_prune.gather_sketches_into(&leaf.indices, &mut bufs.local_sketches[..need]);
-                hash_prune.add_edges_grouped_local_sketches(
-                    &bufs.group_starts,
-                    &bufs.group_data[..group_edges],
-                    &leaf.indices,
-                    &bufs.local_sketches[..need],
-                );
-            }
-        });
-    });
-    let wall = t.elapsed().as_secs_f64();
-    (wall, total_edges.load(Ordering::Relaxed))
-}
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
@@ -1013,86 +893,6 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, PiPNNError::DataLengthMismatch { .. }));
-    }
-
-    #[test]
-    fn test_search_basic() {
-        let npoints = 200;
-        let ndims = 8;
-        let data = generate_random_data(npoints, ndims, 42);
-
-        let config = PiPNNConfig {
-            c_max: 64,
-            c_min: 16,
-            k: 4,
-            replicas: 2,
-            l_max: 64,
-            ..Default::default()
-        };
-        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
-
-        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
-
-        let query = &data[0..ndims];
-        let results = graph.search(&data, query, 10, 50);
-
-        assert!(!results.is_empty());
-        assert_eq!(results[0].0, 0);
-        assert!(results[0].1 < 1e-6);
-    }
-
-    #[test]
-    fn test_recall() {
-        use crate::leaf_build::brute_force_knn;
-
-        let npoints = 500;
-        let ndims = 16;
-        let data = generate_random_data(npoints, ndims, 42);
-
-        let config = PiPNNConfig {
-            c_max: 128,
-            c_min: 32,
-            k: 4,
-            replicas: 2,
-            l_max: 64,
-            ..Default::default()
-        };
-        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
-
-        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
-
-        let k = 10;
-        let search_l = 100;
-        let num_queries = 20;
-
-        use rand::{Rng, SeedableRng};
-        let mut rng = rand::rngs::StdRng::seed_from_u64(999);
-        let mut total_recall = 0.0;
-
-        for _ in 0..num_queries {
-            let query: Vec<f32> = (0..ndims)
-                .map(|_| rng.random_range(-1.0f32..1.0f32))
-                .collect();
-
-            let approx = graph.search(&data, &query, k, search_l);
-            let exact = brute_force_knn(&data, ndims, npoints, &query, k);
-
-            let exact_set: std::collections::HashSet<usize> =
-                exact.iter().map(|&(id, _)| id).collect();
-            let recall = approx
-                .iter()
-                .filter(|&&(id, _)| exact_set.contains(&id))
-                .count() as f64
-                / k as f64;
-
-            total_recall += recall;
-        }
-
-        let avg_recall = total_recall / num_queries as f64;
-        // Test-only println: avoids capturing tracing subscriber config.
-        println!("Average recall@{}: {:.4}", k, avg_recall);
-
-        assert!(avg_recall > 0.2, "recall too low: {:.4}", avg_recall);
     }
 
     #[test]
@@ -1481,129 +1281,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_empty_graph() {
-        let graph = PiPNNGraph {
-            adjacency: vec![],
-            npoints: 0,
-            ndims: 4,
-            medoid: 0,
-            metric: Metric::L2,
-            build_stats: Default::default(),
-        };
-        let query = vec![1.0f32, 2.0, 3.0, 4.0];
-        let results = graph.search(&[], &query, 5, 10);
-        assert!(
-            results.is_empty(),
-            "search on empty graph should return empty results"
-        );
-    }
-
-    #[test]
-    fn test_search_k_larger_than_npoints() {
-        let npoints = 10;
-        let ndims = 4;
-        let data = generate_random_data(npoints, ndims, 42);
-        let config = PiPNNConfig {
-            c_max: 32,
-            c_min: 4,
-            k: 3,
-            replicas: 1,
-            l_max: 32,
-            ..Default::default()
-        };
-        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
-        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
-        let query = &data[0..ndims];
-        // Request more neighbors than points exist.
-        let results = graph.search(&data, query, 100, 200);
-        assert!(
-            results.len() <= npoints,
-            "should not return more results than npoints, got {}",
-            results.len()
-        );
-    }
-
-    #[test]
-    fn test_search_with_self_query() {
-        let npoints = 100;
-        let ndims = 8;
-        let data = generate_random_data(npoints, ndims, 42);
-        let config = PiPNNConfig {
-            c_max: 64,
-            c_min: 16,
-            k: 4,
-            replicas: 2,
-            l_max: 64,
-            ..Default::default()
-        };
-        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
-        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
-        // Query with the medoid point itself.
-        let medoid = graph.medoid;
-        let query = &data[medoid * ndims..(medoid + 1) * ndims];
-        let results = graph.search(&data, query, 5, 50);
-        assert!(
-            !results.is_empty(),
-            "search should return at least one result"
-        );
-        assert_eq!(
-            results[0].0, medoid,
-            "searching with a data point should find itself first"
-        );
-        assert!(
-            results[0].1 < 1e-6,
-            "self-distance should be near zero, got {}",
-            results[0].1
-        );
-    }
-
-    #[test]
-    fn test_search_different_l_values() {
-        use crate::leaf_build::brute_force_knn;
-
-        let npoints = 300;
-        let ndims = 8;
-        let data = generate_random_data(npoints, ndims, 42);
-        let config = PiPNNConfig {
-            c_max: 64,
-            c_min: 16,
-            k: 4,
-            replicas: 2,
-            l_max: 64,
-            ..Default::default()
-        };
-        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
-        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
-
-        let k = 10;
-        let query = &data[0..ndims];
-        let exact = brute_force_knn(&data, ndims, npoints, query, k);
-        let exact_set: std::collections::HashSet<usize> = exact.iter().map(|&(id, _)| id).collect();
-
-        // Compare recall for small L vs large L.
-        let results_small_l = graph.search(&data, query, k, k);
-        let recall_small: f64 = results_small_l
-            .iter()
-            .filter(|&&(id, _)| exact_set.contains(&id))
-            .count() as f64
-            / k as f64;
-
-        let results_large_l = graph.search(&data, query, k, 200);
-        let recall_large: f64 = results_large_l
-            .iter()
-            .filter(|&&(id, _)| exact_set.contains(&id))
-            .count() as f64
-            / k as f64;
-
-        assert!(
-            recall_large >= recall_small,
-            "larger L ({:.4}) should give recall >= smaller L ({:.4})",
-            recall_large,
-            recall_small
-        );
-    }
-
-    #[test]
     fn test_build_typed_data_length_mismatch() {
         let data = vec![1.0f32; 30]; // 30 elements
         let ctx =
@@ -1972,18 +1649,6 @@ mod tests {
             graph_yes.avg_degree(),
             graph_no.avg_degree()
         );
-
-        // Both should be searchable.
-        let query = &data[0..ndims];
-        let r1 = crate::leaf_build::brute_force_knn(&data, ndims, npoints, query, 10);
-        let s_no = graph_no.search(&data, query, 10, 50);
-        let s_yes = graph_yes.search(&data, query, 10, 50);
-        assert!(!s_no.is_empty(), "no_prune search should return results");
-        assert!(!s_yes.is_empty(), "prune search should return results");
-
-        // Both should find the nearest neighbor (query is point 0).
-        assert_eq!(s_no[0].0, r1[0].0, "no_prune should find NN");
-        assert_eq!(s_yes[0].0, r1[0].0, "prune should find NN");
     }
 
     #[test]
@@ -2013,13 +1678,6 @@ mod tests {
         let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert!(graph.avg_degree() > 0.0);
         assert_eq!(graph.metric, Metric::CosineNormalized);
-
-        // Search should work with cosine metric.
-        let query = &data[0..ndims];
-        let results = graph.search(&data, query, 5, 20);
-        assert!(!results.is_empty());
-        // First result should be the query point itself.
-        assert_eq!(results[0].0, 0);
     }
 
     #[test]
@@ -2039,10 +1697,6 @@ mod tests {
         let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert!(graph.avg_degree() > 0.0);
         assert_eq!(graph.metric, Metric::InnerProduct);
-
-        let query = &data[0..ndims];
-        let results = graph.search(&data, query, 5, 20);
-        assert!(!results.is_empty());
     }
 
     #[test]

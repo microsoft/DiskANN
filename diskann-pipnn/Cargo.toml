@@ -21,12 +21,6 @@ tracing = { workspace = true }
 parking_lot = "0.12"
 libc = "0.2"
 
-[features]
-default = []
-# Exposes `bench_leaf_hp_phase` and similar isolation entry points used by
-# microbench harnesses. Not part of the production API.
-bench = []
-
 [dev-dependencies]
 criterion = { workspace = true }
 rand = { workspace = true }

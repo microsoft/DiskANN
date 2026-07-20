@@ -260,8 +260,9 @@ fn sketches_from_data<T: VectorRepr + Send + Sync>(
     seed: u64,
 ) -> LshSketches {
     LshSketches::new(npoints, ndims, num_planes, seed, |i, out| {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out)
-            .unwrap_or_else(|e| panic!("VectorRepr::as_f32_into failed during LSH sketches: {}", e));
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out).unwrap_or_else(|e| {
+            panic!("VectorRepr::as_f32_into failed during LSH sketches: {}", e)
+        });
     })
 }
 
@@ -379,7 +380,11 @@ unsafe fn find_hash_avx512(
         let m = _mm512_cmpeq_epi16_mask(v, t) as u128;
         combined |= m << (chunk * 32);
     }
-    let len_mask: u128 = if len >= 128 { u128::MAX } else { (1u128 << len) - 1 };
+    let len_mask: u128 = if len >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << len) - 1
+    };
     let valid = combined & len_mask;
     if valid != 0 {
         Some(valid.trailing_zeros() as usize)
@@ -662,70 +667,9 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
     out
 }
 
-// ─── Test-only thin wrapper preserving the old HashPruneReservoir API ─────────
-
-#[cfg(test)]
-pub(crate) struct HashPruneReservoir {
-    hot: HotSlot,
-    hashes: Vec<u16>,
-    distances: Vec<u16>,
-    neighbors: Vec<u32>,
-    scan_lanes: usize,
-    l_max: u8,
-}
-
-#[cfg(test)]
-impl HashPruneReservoir {
-    pub(crate) fn new(l_max: usize) -> Self {
-        assert!(l_max <= MAX_RESERVOIR_LEN);
-        let scan_lanes = round_up_to_32(l_max).max(32);
-        Self {
-            hot: HotSlot::new_empty(),
-            hashes: vec![0u16; scan_lanes],
-            distances: vec![0u16; scan_lanes],
-            neighbors: vec![0u32; scan_lanes],
-            scan_lanes,
-            l_max: l_max as u8,
-        }
-    }
-
-    fn cold(&self) -> ColdSlotPtrs {
-        ColdSlotPtrs {
-            hashes: self.hashes.as_ptr() as *mut u16,
-            distances: self.distances.as_ptr() as *mut u16,
-            neighbors: self.neighbors.as_ptr() as *mut u32,
-            scan_lanes: self.scan_lanes,
-        }
-    }
-
-    pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
-        // SAFETY: single-threaded test wrapper; cold ptrs alias self.hashes
-        // etc. but we hold &mut self so no other reference can exist for the
-        // duration. insert_locked only touches the slot at index 0.
-        let cold = self.cold();
-        unsafe { insert_locked(&mut self.hot, cold, hash, neighbor, distance, self.l_max) }
-    }
-
-    pub(crate) fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
-        let cold = self.cold();
-        // SAFETY: single-threaded test wrapper.
-        unsafe {
-            collect_sorted_neighbors(&self.hot, cold.distances, cold.neighbors, usize::MAX)
-        }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.hot.len as usize
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.hot.len == 0
-    }
-}
-
 // ─── HashPrune ────────────────────────────────────────────────────────────────
 
-pub struct HashPrune {
+pub(crate) struct HashPrune {
     hot: Vec<HotSlot>,
     /// AoSoA hashes slab: `npoints * scan_lanes` u16.
     cold_hashes: MmapSlab<u16>,
@@ -748,7 +692,7 @@ unsafe impl Send for HashPrune {}
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
-    pub fn new<T: VectorRepr + Send + Sync>(
+    pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: &[T],
         npoints: usize,
         ndims: usize,
@@ -814,9 +758,18 @@ impl HashPrune {
             unsafe {
                 for (ptr, bytes) in [
                     (hot.as_ptr() as *mut libc::c_void, hot_bytes),
-                    (cold_hashes.as_ptr() as *mut libc::c_void, cold_hashes.bytes()),
-                    (cold_distances.as_ptr() as *mut libc::c_void, cold_distances.bytes()),
-                    (cold_neighbors.as_ptr() as *mut libc::c_void, cold_neighbors.bytes()),
+                    (
+                        cold_hashes.as_ptr() as *mut libc::c_void,
+                        cold_hashes.bytes(),
+                    ),
+                    (
+                        cold_distances.as_ptr() as *mut libc::c_void,
+                        cold_distances.bytes(),
+                    ),
+                    (
+                        cold_neighbors.as_ptr() as *mut libc::c_void,
+                        cold_neighbors.bytes(),
+                    ),
                 ] {
                     if bytes > 2 * 1024 * 1024 {
                         libc::madvise(ptr, bytes, libc::MADV_HUGEPAGE);
@@ -874,44 +827,7 @@ impl HashPrune {
         }
     }
 
-    #[cfg(test)]
-    #[inline]
-    pub(crate) fn add_edge(&self, p: usize, c: usize, distance: f32) {
-        let hash = self.sketches.relative_hash(p, c);
-        let l_max = self.l_max as u8;
-        self.with_locked(p, |hot, cold| {
-            // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
-            unsafe { insert_locked(hot, cold, hash, c as u32, distance, l_max) };
-        });
-    }
-
-    pub fn add_edges_batched(&self, edges: &[crate::leaf_build::Edge]) {
-        if edges.is_empty() {
-            return;
-        }
-        let l_max = self.l_max as u8;
-
-        let mut i = 0;
-        while i < edges.len() {
-            let src = edges[i].src;
-            let mut j = i + 1;
-            while j < edges.len() && edges[j].src == src {
-                j += 1;
-            }
-            self.with_locked(src as usize, |hot, cold| {
-                for edge in &edges[i..j] {
-                    let hash = self
-                        .sketches
-                        .relative_hash(edge.src as usize, edge.dst as usize);
-                    // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
-                    unsafe { insert_locked(hot, cold, hash, edge.dst, edge.distance, l_max) };
-                }
-            });
-            i = j;
-        }
-    }
-
-    pub fn add_edges_grouped_local_sketches(
+    pub(crate) fn add_edges_grouped_local_sketches(
         &self,
         group_starts: &[u32],
         group_data: &[(u32, f32)],
@@ -984,7 +900,7 @@ impl HashPrune {
         }
     }
 
-    pub fn gather_sketches_into(&self, indices: &[u32], out: &mut [f32]) {
+    pub(crate) fn gather_sketches_into(&self, indices: &[u32], out: &mut [f32]) {
         let m = self.sketches.num_planes();
         let src = self.sketches.sketches();
         debug_assert_eq!(out.len(), indices.len() * m);
@@ -994,7 +910,7 @@ impl HashPrune {
         }
     }
 
-    pub fn num_planes(&self) -> usize {
+    pub(crate) fn num_planes(&self) -> usize {
         self.sketches.num_planes()
     }
 
@@ -1034,7 +950,7 @@ impl HashPrune {
             .collect_installed()
     }
 
-    pub fn extract_graph(self) -> Vec<Vec<u32>> {
+    pub(crate) fn extract_graph(self) -> Vec<Vec<u32>> {
         let cap = self.max_degree;
         self.extract_into(cap, |(id, _)| id)
     }
@@ -1044,7 +960,7 @@ impl HashPrune {
     /// reservoir) BEFORE materializing the copy, so only the neighbors slab
     /// overlaps it — and emits bare `u32` ids since final-prune recomputes
     /// distances and ignores both the stored distance and the reservoir order.
-    pub fn extract_graph_ids(self) -> Vec<Vec<u32>> {
+    pub(crate) fn extract_graph_ids(self) -> Vec<Vec<u32>> {
         let cap = self.l_max;
         let scan_lanes = self.scan_lanes;
         drop(self.sketches);
@@ -1063,7 +979,8 @@ impl HashPrune {
         (0..hot.len())
             .into_par_iter()
             .map(|i| {
-                let neighbors = (cold_neighbors.as_ptr() as *const u32).wrapping_add(i * scan_lanes);
+                let neighbors =
+                    (cold_neighbors.as_ptr() as *const u32).wrapping_add(i * scan_lanes);
                 // SAFETY: i < hot.len() == npoints; the row spans scan_lanes
                 // slots, hot[i].len <= l_max <= scan_lanes are valid u32.
                 unsafe { collect_neighbor_ids(&hot[i], neighbors, cap) }
@@ -1075,6 +992,70 @@ impl HashPrune {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Reservoir {
+        hot: HotSlot,
+        hashes: Vec<u16>,
+        distances: Vec<u16>,
+        neighbors: Vec<u32>,
+        scan_lanes: usize,
+        l_max: u8,
+    }
+
+    impl Reservoir {
+        fn new(l_max: usize) -> Self {
+            assert!(l_max <= MAX_RESERVOIR_LEN);
+            let scan_lanes = round_up_to_32(l_max).max(32);
+            Self {
+                hot: HotSlot::new_empty(),
+                hashes: vec![0; scan_lanes],
+                distances: vec![0; scan_lanes],
+                neighbors: vec![0; scan_lanes],
+                scan_lanes,
+                l_max: l_max as u8,
+            }
+        }
+
+        fn cold(&self) -> ColdSlotPtrs {
+            ColdSlotPtrs {
+                hashes: self.hashes.as_ptr() as *mut u16,
+                distances: self.distances.as_ptr() as *mut u16,
+                neighbors: self.neighbors.as_ptr() as *mut u32,
+                scan_lanes: self.scan_lanes,
+            }
+        }
+
+        fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
+            let cold = self.cold();
+            // SAFETY: the test owns the reservoir and holds its only mutable reference.
+            unsafe { insert_locked(&mut self.hot, cold, hash, neighbor, distance, self.l_max) }
+        }
+
+        fn neighbors(&self) -> Vec<(u32, f32)> {
+            let cold = self.cold();
+            // SAFETY: the test owns the reservoir; all cold slabs span scan_lanes entries.
+            unsafe {
+                collect_sorted_neighbors(&self.hot, cold.distances, cold.neighbors, usize::MAX)
+            }
+        }
+
+        fn len(&self) -> usize {
+            self.hot.len as usize
+        }
+
+        fn is_empty(&self) -> bool {
+            self.hot.len == 0
+        }
+    }
+
+    fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
+        let hash = hp.sketches.relative_hash(src, dst);
+        let l_max = hp.l_max as u8;
+        hp.with_locked(src, |hot, cold| {
+            // SAFETY: with_locked guards the row and supplies valid cold-slab pointers.
+            unsafe { insert_locked(hot, cold, hash, dst as u32, distance, l_max) };
+        });
+    }
 
     #[test]
     fn test_relative_hash_local_avx2_matches_scalar_semantics() {
@@ -1108,7 +1089,7 @@ mod tests {
 
     #[test]
     fn test_reservoir_basic() {
-        let mut reservoir = HashPruneReservoir::new(3);
+        let mut reservoir = Reservoir::new(3);
         assert!(reservoir.is_empty());
 
         assert!(reservoir.insert(0, 1, 1.0));
@@ -1119,14 +1100,14 @@ mod tests {
         assert!(reservoir.insert(3, 4, 0.5));
         assert_eq!(reservoir.len(), 3);
 
-        let neighbors = reservoir.get_neighbors_sorted();
+        let neighbors = reservoir.neighbors();
         assert!(!neighbors.iter().any(|(id, _)| *id == 3));
         assert!(neighbors.iter().any(|(id, _)| *id == 4));
     }
 
     #[test]
     fn test_reservoir_same_hash_keeps_closer() {
-        let mut reservoir = HashPruneReservoir::new(10);
+        let mut reservoir = Reservoir::new(10);
 
         assert!(reservoir.insert(0, 1, 2.0));
         assert_eq!(reservoir.len(), 1);
@@ -1134,7 +1115,7 @@ mod tests {
         assert!(reservoir.insert(0, 2, 1.0));
         assert_eq!(reservoir.len(), 1);
 
-        let neighbors = reservoir.get_neighbors_sorted();
+        let neighbors = reservoir.neighbors();
         assert_eq!(neighbors[0].0, 2);
         assert_eq!(neighbors[0].1, 1.0);
 
@@ -1144,9 +1125,7 @@ mod tests {
 
     #[test]
     fn test_lsh_sketches() {
-        let data = vec![
-            1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0,
-        ];
+        let data = vec![1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0];
         let sketches = sketches_from_data(&data, 4, 2, 4, 42);
 
         let h00 = sketches.relative_hash(0, 0);
@@ -1163,15 +1142,15 @@ mod tests {
 
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 3, 42);
 
-        hp.add_edge(0, 1, 1.0);
-        hp.add_edge(0, 2, 1.0);
-        hp.add_edge(0, 3, 1.414);
-        hp.add_edge(1, 0, 1.0);
-        hp.add_edge(1, 3, 1.0);
-        hp.add_edge(2, 0, 1.0);
-        hp.add_edge(2, 3, 1.0);
-        hp.add_edge(3, 1, 1.0);
-        hp.add_edge(3, 2, 1.0);
+        add_edge(&hp, 0, 1, 1.0);
+        add_edge(&hp, 0, 2, 1.0);
+        add_edge(&hp, 0, 3, 1.414);
+        add_edge(&hp, 1, 0, 1.0);
+        add_edge(&hp, 1, 3, 1.0);
+        add_edge(&hp, 2, 0, 1.0);
+        add_edge(&hp, 2, 3, 1.0);
+        add_edge(&hp, 3, 1, 1.0);
+        add_edge(&hp, 3, 2, 1.0);
 
         let graph = hp.extract_graph();
         assert_eq!(graph.len(), 4);
@@ -1183,7 +1162,7 @@ mod tests {
 
     #[test]
     fn test_reservoir_lazy_allocation() {
-        let mut res = HashPruneReservoir::new(5);
+        let mut res = Reservoir::new(5);
         assert!(res.is_empty());
         assert!(res.insert(0, 1, 1.0));
         assert_eq!(res.len(), 1);
@@ -1191,32 +1170,32 @@ mod tests {
 
     #[test]
     fn test_reservoir_insert_then_evict_cycle() {
-        let mut res = HashPruneReservoir::new(3);
+        let mut res = Reservoir::new(3);
         res.insert(0, 10, 3.0);
         res.insert(1, 11, 2.0);
         res.insert(2, 12, 1.0);
         assert_eq!(res.len(), 3);
         assert!(res.insert(3, 13, 0.5));
         assert_eq!(res.len(), 3);
-        let neighbors = res.get_neighbors_sorted();
+        let neighbors = res.neighbors();
         assert!(neighbors.iter().all(|&(_, d)| d <= 2.0));
     }
 
     #[test]
     fn test_reservoir_all_same_hash() {
-        let mut res = HashPruneReservoir::new(5);
+        let mut res = Reservoir::new(5);
         res.insert(0, 1, 3.0);
         res.insert(0, 2, 2.0);
         res.insert(0, 3, 1.0);
         assert_eq!(res.len(), 1);
-        let neighbors = res.get_neighbors_sorted();
+        let neighbors = res.neighbors();
         assert_eq!(neighbors[0].0, 3);
         assert_eq!(neighbors[0].1, 1.0);
     }
 
     #[test]
     fn test_reservoir_all_same_distance() {
-        let mut res = HashPruneReservoir::new(5);
+        let mut res = Reservoir::new(5);
         res.insert(0, 1, 1.0);
         res.insert(1, 2, 1.0);
         res.insert(2, 3, 1.0);
@@ -1229,8 +1208,8 @@ mod tests {
         let data = vec![0.0f32; 100 * 4];
         let hp = HashPrune::new(&data, 100, 4, 4, 10, 5, 42);
         (0..50).into_par_iter().for_each_installed(|i| {
-            hp.add_edge(i, (i + 1) % 100, 1.0);
-            hp.add_edge((i + 1) % 100, i, 1.0);
+            add_edge(&hp, i, (i + 1) % 100, 1.0);
+            add_edge(&hp, (i + 1) % 100, i, 1.0);
         });
         let graph = hp.extract_graph();
         assert_eq!(graph.len(), 100);
@@ -1243,7 +1222,7 @@ mod tests {
         for i in 0..10 {
             for j in 0..10 {
                 if i != j {
-                    hp.add_edge(i, j, (i as f32 - j as f32).abs());
+                    add_edge(&hp, i, j, (i as f32 - j as f32).abs());
                 }
             }
         }
@@ -1260,9 +1239,9 @@ mod tests {
     fn test_hash_prune_extract_sorted() {
         let data = vec![0.0f32; 4 * 2];
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 3, 42);
-        hp.add_edge(0, 1, 3.0);
-        hp.add_edge(0, 2, 1.0);
-        hp.add_edge(0, 3, 2.0);
+        add_edge(&hp, 0, 1, 3.0);
+        add_edge(&hp, 0, 2, 1.0);
+        add_edge(&hp, 0, 3, 2.0);
         let graph = hp.extract_graph();
         assert!(!graph[0].is_empty());
     }
@@ -1296,12 +1275,12 @@ mod tests {
     fn test_extract_graph_ids_returns_full_reservoir() {
         let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
-        hp.add_edge(0, 1, 1.0);
-        hp.add_edge(0, 2, 1.0);
-        hp.add_edge(0, 3, 1.414);
-        hp.add_edge(1, 0, 1.0);
-        hp.add_edge(2, 0, 1.0);
-        hp.add_edge(3, 0, 1.414);
+        add_edge(&hp, 0, 1, 1.0);
+        add_edge(&hp, 0, 2, 1.0);
+        add_edge(&hp, 0, 3, 1.414);
+        add_edge(&hp, 1, 0, 1.0);
+        add_edge(&hp, 2, 0, 1.0);
+        add_edge(&hp, 3, 0, 1.414);
 
         let full = hp.extract_graph_ids();
         assert_eq!(full.len(), 4);
@@ -1328,9 +1307,9 @@ mod tests {
     fn test_extract_graph_truncates_to_max_degree() {
         let data = vec![0.0f32; 4 * 2];
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
-        hp.add_edge(0, 1, 1.0);
-        hp.add_edge(0, 2, 2.0);
-        hp.add_edge(0, 3, 3.0);
+        add_edge(&hp, 0, 1, 1.0);
+        add_edge(&hp, 0, 2, 2.0);
+        add_edge(&hp, 0, 3, 3.0);
 
         let graph = hp.extract_graph();
         assert!(
@@ -1341,13 +1320,13 @@ mod tests {
 
     #[test]
     fn test_reservoir_farthest_cache_after_eviction() {
-        let mut res = HashPruneReservoir::new(3);
+        let mut res = Reservoir::new(3);
         res.insert(0, 10, 5.0);
         res.insert(1, 11, 4.0);
         res.insert(2, 12, 3.0);
         assert!(res.insert(3, 13, 2.0));
         assert!(res.insert(4, 14, 1.0));
-        let neighbors = res.get_neighbors_sorted();
+        let neighbors = res.neighbors();
         assert_eq!(neighbors.len(), 3);
         for &(_, d) in &neighbors {
             assert!(d <= 3.1, "expected dist <= 3.0, got {}", d);
@@ -1356,36 +1335,13 @@ mod tests {
 
     #[test]
     fn test_reservoir_farthest_insert_before_farthest_idx() {
-        let mut res = HashPruneReservoir::new(4);
+        let mut res = Reservoir::new(4);
         res.insert(5, 1, 1.0);
         res.insert(10, 2, 3.0);
         res.insert(15, 3, 2.0);
         res.insert(3, 4, 0.5);
-        let neighbors = res.get_neighbors_sorted();
+        let neighbors = res.neighbors();
         assert_eq!(neighbors.len(), 4);
         assert_eq!(neighbors[0].0, 4);
-    }
-
-    #[test]
-    fn test_add_edges_batched() {
-        use crate::leaf_build::Edge;
-        let data = vec![0.0f32; 10 * 4];
-        let hp = HashPrune::new(&data, 10, 4, 4, 10, 5, 42);
-        let edges = vec![
-            Edge { src: 0, dst: 1, distance: 1.0 },
-            Edge { src: 1, dst: 0, distance: 1.0 },
-            Edge { src: 2, dst: 3, distance: 2.0 },
-            Edge { src: 3, dst: 2, distance: 2.0 },
-        ];
-        hp.add_edges_batched(&edges);
-        let graph = hp.extract_graph();
-        assert!(
-            !graph[0].is_empty(),
-            "node 0 should have neighbors after batched add"
-        );
-        assert!(
-            !graph[2].is_empty(),
-            "node 2 should have neighbors after batched add"
-        );
     }
 }

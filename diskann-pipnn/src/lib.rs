@@ -13,12 +13,11 @@
 
 pub mod builder;
 pub(crate) mod cpu_dispatch;
-pub mod hash_prune;
-pub mod leaf_build;
-pub mod partition;
+pub(crate) mod hash_prune;
+pub(crate) mod leaf_build;
+pub(crate) mod partition;
 pub(crate) mod partition_inner;
 pub(crate) mod rayon_util;
-
 
 use std::num::NonZeroUsize;
 

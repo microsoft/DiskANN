@@ -11,10 +11,6 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand::{Rng, SeedableRng};
 
 use diskann_linalg as gemm;
-use diskann_pipnn::hash_prune::HashPrune;
-use diskann_pipnn::leaf_build;
-use diskann_pipnn::partition::{self, PartitionConfig};
-use diskann_vector::distance::Metric;
 
 /// Generate random f32 data for benchmarking.
 fn random_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
@@ -71,94 +67,6 @@ fn bench_sgemm_abt(c: &mut Criterion) {
     group.finish();
 }
 
-// ========================
-// Leaf build benchmarks
-// ========================
-
-fn bench_build_leaf(c: &mut Criterion) {
-    let mut group = c.benchmark_group("leaf_build/build_leaf");
-
-    for &(n, ndims, k) in &[(128, 128, 3), (512, 128, 4), (1024, 128, 4), (512, 384, 5)] {
-        let data = random_data(n, ndims, 42);
-        let indices: Vec<u32> = (0..n as u32).collect();
-
-        group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(
-            BenchmarkId::new("n_d_k", format!("{}x{}x{}", n, ndims, k)),
-            &(),
-            |b, _| {
-                b.iter(|| {
-                    leaf_build::build_leaf(&data, ndims, &indices, k, Metric::L2);
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-// ========================
-// HashPrune benchmarks
-// ========================
-
-fn bench_hash_prune_add_edges(c: &mut Criterion) {
-    let mut group = c.benchmark_group("hash_prune/add_edges_batched");
-
-    for &npoints in &[10_000, 100_000] {
-        let ndims = 128;
-        let data = random_data(npoints, ndims, 42);
-        let hp = HashPrune::new(&data, npoints, ndims, 12, 128, 64, 42);
-
-        // Simulate edges from a single leaf
-        let leaf_size = 512;
-        let k = 4;
-        let leaf_data = random_data(leaf_size, ndims, 99);
-        let leaf_indices: Vec<u32> = (0..leaf_size as u32).collect();
-        let edges = leaf_build::build_leaf(&leaf_data, ndims, &leaf_indices, k, Metric::L2);
-
-        group.throughput(Throughput::Elements(edges.len() as u64));
-        group.bench_with_input(BenchmarkId::new("npoints", npoints), &(), |b, _| {
-            b.iter(|| {
-                hp.add_edges_batched(&edges);
-            });
-        });
-    }
-    group.finish();
-}
-
-// ==========================
-// Partition benchmarks
-// ==========================
-
-fn bench_partition(c: &mut Criterion) {
-    let mut group = c.benchmark_group("partition/partition");
-    group.sample_size(10);
-
-    for &(npoints, ndims) in &[(10_000, 128), (50_000, 128), (10_000, 384)] {
-        let data = random_data(npoints, ndims, 42);
-        let config = PartitionConfig::new(
-            1024,       // c_max
-            256,        // c_min
-            0.05,       // p_samp
-            vec![8],    // fanout
-            Metric::L2, // metric
-            1000,       // leader_cap
-        )
-        .expect("valid partition config");
-
-        group.throughput(Throughput::Elements(npoints as u64));
-        group.bench_with_input(
-            BenchmarkId::new("n_d", format!("{}x{}", npoints, ndims)),
-            &(),
-            |b, _| {
-                b.iter(|| {
-                    partition::partition(&data, ndims, npoints, &config, 42);
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
 // ==========================
 // End-to-end build benchmark
 // ==========================
@@ -204,18 +112,6 @@ fn bench_full_build(c: &mut Criterion) {
 
 criterion_group!(gemm_benches, bench_sgemm_aat, bench_sgemm_abt,);
 
-criterion_group!(leaf_benches, bench_build_leaf,);
-
-criterion_group!(hash_prune_benches, bench_hash_prune_add_edges,);
-
-criterion_group!(partition_benches, bench_partition,);
-
 criterion_group!(build_benches, bench_full_build,);
 
-criterion_main!(
-    gemm_benches,
-    leaf_benches,
-    hash_prune_benches,
-    partition_benches,
-    build_benches,
-);
+criterion_main!(gemm_benches, build_benches,);

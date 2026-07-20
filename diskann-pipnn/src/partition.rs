@@ -25,7 +25,7 @@ pub const MAX_FANOUT: usize = 16;
 /// Uses `u32` instead of `usize` to halve memory on 64-bit platforms.
 /// Sufficient for datasets up to 4 billion points.
 #[derive(Debug, Clone)]
-pub struct Leaf {
+pub(crate) struct Leaf {
     pub indices: Vec<u32>,
 }
 
@@ -34,7 +34,7 @@ pub struct Leaf {
 /// Fields are private; construct via [`PartitionConfig::new`], which enforces
 /// the partition-layer invariants on `fanout` and `leader_cap`.
 #[derive(Debug, Clone)]
-pub struct PartitionConfig {
+pub(crate) struct PartitionConfig {
     pub(crate) c_max: usize,
     pub(crate) c_min: usize,
     pub(crate) p_samp: f64,
@@ -54,7 +54,7 @@ pub(crate) const LEADER_CAP: usize = 1000;
 impl PartitionConfig {
     /// Construct a validated [`PartitionConfig`]. Returns an error if any
     /// partition-layer invariant is violated (see [`Self::validate_params`]).
-    pub fn new(
+    pub(crate) fn new(
         c_max: usize,
         c_min: usize,
         p_samp: f64,
@@ -150,7 +150,7 @@ struct WorkItem {
 /// Uses an iterative work-queue: each round processes all oversized clusters in parallel,
 /// producing new work items for the next round. Completed leaves are pushed to a shared
 /// result vec. No recursion, parallel at every level.
-pub fn partition<T: VectorRepr + Send + Sync>(
+pub(crate) fn partition<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
     npoints: usize,

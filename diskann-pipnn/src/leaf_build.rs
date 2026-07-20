@@ -14,13 +14,8 @@
 
 use std::cell::RefCell;
 
-use diskann::utils::VectorRepr;
-#[cfg(test)]
-use diskann_vector::distance::SquaredL2;
-#[cfg(test)]
-use diskann_vector::PureDistanceFunction;
-
 use crate::cpu_dispatch::{tier, SimdTier};
+use diskann::utils::VectorRepr;
 
 /// Thread-local reusable buffers for leaf building.
 /// Avoids repeated allocation/deallocation of large matrices.
@@ -31,8 +26,6 @@ pub(crate) struct LeafBuffers {
     pub seen: Vec<bool>,
     /// Reusable buffer for knn results: (local_dst_idx, distance) per row×k.
     pub knn_result: Vec<(u32, f32)>,
-    /// Reusable buffer for bidirected edges output.
-    pub edges: Vec<Edge>,
     /// Reusable Cosine sqrt-of-norms scratch (only filled for `Metric::Cosine`).
     pub cosine_denoms: Vec<f32>,
     /// CSR-style per-source edge groups: data[starts[src]..starts[src+1]] is
@@ -61,14 +54,13 @@ impl Default for LeafBuffers {
 }
 
 impl LeafBuffers {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             local_data: Vec::new(),
             norms_sq: Vec::new(),
             dot_matrix: Vec::new(),
             seen: Vec::new(),
             knn_result: Vec::new(),
-            edges: Vec::new(),
             cosine_denoms: Vec::new(),
             group_starts: Vec::new(),
             group_data: Vec::new(),
@@ -94,7 +86,7 @@ impl LeafBuffers {
         if self.seen.len() < nn {
             self.seen.resize(nn, false);
         }
-        // Pre-size knn_result and edges so per-leaf push/extend hits no realloc
+        // Pre-size knn_result so per-leaf writes hit no realloc
         // (Vec realloc contends on the glibc malloc arena at high thread count).
         let actual_k = k.min(n.saturating_sub(1));
         let max_knn = n * actual_k.max(1);
@@ -103,18 +95,13 @@ impl LeafBuffers {
             self.knn_result
                 .reserve(max_knn - self.knn_result.capacity());
         }
-        // `edges` is materialized only under cfg(test) (see
-        // materialize_edges_from_csr); production consumes the CSR directly, so
-        // don't reserve the buffer off the hot build path.
-        #[cfg(test)]
-        if self.edges.capacity() < max_edges {
-            self.edges.reserve(max_edges - self.edges.capacity());
-        }
         if self.group_starts.capacity() < n + 1 {
-            self.group_starts.reserve(n + 1 - self.group_starts.capacity());
+            self.group_starts
+                .reserve(n + 1 - self.group_starts.capacity());
         }
         if self.group_data.capacity() < max_edges {
-            self.group_data.reserve(max_edges - self.group_data.capacity());
+            self.group_data
+                .reserve(max_edges - self.group_data.capacity());
         }
         // worst[] threshold array: n entries (+15 for the 16-wide chunk tail
         // load so we can read past `i` without OOB). Initialised by caller.
@@ -144,7 +131,6 @@ pub(crate) fn release_thread_buffers() {
         bufs.dot_matrix = Vec::new();
         bufs.seen = Vec::new();
         bufs.knn_result = Vec::new();
-        bufs.edges = Vec::new();
         bufs.cosine_denoms = Vec::new();
         bufs.group_starts = Vec::new();
         bufs.group_data = Vec::new();
@@ -444,7 +430,9 @@ unsafe fn fused_dual_topk_avx512<K: MetricKernel>(
                     // chunk may have already tightened the threshold. Without this,
                     // a strictly-worse lane displaces the genuine k-th best because
                     // insert_topk_linear writes unconditionally to slot k-1.
-                    if d >= local_worst_i { continue; }
+                    if d >= local_worst_i {
+                        continue;
+                    }
                     let j_abs = (j + lane) as u32;
                     local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j_abs, d);
                 }
@@ -454,8 +442,7 @@ unsafe fn fused_dual_topk_avx512<K: MetricKernel>(
                     m &= m - 1;
                     let d = *d_arr.get_unchecked(lane);
                     let j_target = j + lane;
-                    let new_worst =
-                        insert_topk_linear(knn_result, j_target * k, k, i as u32, d);
+                    let new_worst = insert_topk_linear(knn_result, j_target * k, k, i as u32, d);
                     *worst.get_unchecked_mut(j_target) = new_worst;
                 }
             }
@@ -526,7 +513,9 @@ unsafe fn fused_dual_topk_avx2<K: MetricKernel>(
                     // chunk may have already tightened the threshold. Without this,
                     // a strictly-worse lane displaces the genuine k-th best because
                     // insert_topk_linear writes unconditionally to slot k-1.
-                    if d >= local_worst_i { continue; }
+                    if d >= local_worst_i {
+                        continue;
+                    }
                     let j_abs = (j + lane) as u32;
                     local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j_abs, d);
                 }
@@ -536,8 +525,7 @@ unsafe fn fused_dual_topk_avx2<K: MetricKernel>(
                     m &= m - 1;
                     let d = *d_arr.get_unchecked(lane);
                     let j_target = j + lane;
-                    let new_worst =
-                        insert_topk_linear(knn_result, j_target * k, k, i as u32, d);
+                    let new_worst = insert_topk_linear(knn_result, j_target * k, k, i as u32, d);
                     *worst.get_unchecked_mut(j_target) = new_worst;
                 }
             }
@@ -609,91 +597,56 @@ fn fused_dual_topk(
     unsafe {
         match (tier(), metric) {
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx512, Metric::L2) => fused_dual_topk_avx512::<KL2>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx512, Metric::L2) => {
+                fused_dual_topk_avx512::<KL2>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx512, Metric::CosineNormalized) => fused_dual_topk_avx512::<KCosNorm>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx512, Metric::CosineNormalized) => {
+                fused_dual_topk_avx512::<KCosNorm>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx512, Metric::Cosine) => fused_dual_topk_avx512::<KCosine>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx512, Metric::Cosine) => {
+                fused_dual_topk_avx512::<KCosine>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx512, Metric::InnerProduct) => fused_dual_topk_avx512::<KIp>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx512, Metric::InnerProduct) => {
+                fused_dual_topk_avx512::<KIp>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx2, Metric::L2) => fused_dual_topk_avx2::<KL2>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx2, Metric::L2) => {
+                fused_dual_topk_avx2::<KL2>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx2, Metric::CosineNormalized) => fused_dual_topk_avx2::<KCosNorm>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx2, Metric::CosineNormalized) => {
+                fused_dual_topk_avx2::<KCosNorm>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx2, Metric::Cosine) => fused_dual_topk_avx2::<KCosine>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx2, Metric::Cosine) => {
+                fused_dual_topk_avx2::<KCosine>(dot, norms, knn_result, worst, n, k)
+            }
             #[cfg(target_arch = "x86_64")]
-            (SimdTier::Avx2, Metric::InnerProduct) => fused_dual_topk_avx2::<KIp>(dot, norms, knn_result, worst, n, k),
+            (SimdTier::Avx2, Metric::InnerProduct) => {
+                fused_dual_topk_avx2::<KIp>(dot, norms, knn_result, worst, n, k)
+            }
             (_, Metric::L2) => fused_dual_topk_scalar::<KL2>(dot, norms, knn_result, worst, n, k),
-            (_, Metric::CosineNormalized) => fused_dual_topk_scalar::<KCosNorm>(dot, norms, knn_result, worst, n, k),
-            (_, Metric::Cosine) => fused_dual_topk_scalar::<KCosine>(dot, norms, knn_result, worst, n, k),
-            (_, Metric::InnerProduct) => fused_dual_topk_scalar::<KIp>(dot, norms, knn_result, worst, n, k),
+            (_, Metric::CosineNormalized) => {
+                fused_dual_topk_scalar::<KCosNorm>(dot, norms, knn_result, worst, n, k)
+            }
+            (_, Metric::Cosine) => {
+                fused_dual_topk_scalar::<KCosine>(dot, norms, knn_result, worst, n, k)
+            }
+            (_, Metric::InnerProduct) => {
+                fused_dual_topk_scalar::<KIp>(dot, norms, knn_result, worst, n, k)
+            }
         }
     }
 }
 
-/// An edge produced by leaf building: `(source, destination, distance)`.
+/// Build a leaf into the caller-provided CSR buffers and return the edge count.
 ///
-/// Returned by [`build_leaf`] for benchmarking. Production code uses
-/// [`build_leaf_into`] which writes edges into a caller-provided buffer.
-#[derive(Debug, Clone, Copy)]
-pub struct Edge {
-    /// Global source point index.
-    pub src: u32,
-    /// Global destination point index.
-    pub dst: u32,
-    /// Distance from `src` to `dst` under the build metric.
-    pub distance: f32,
-}
-
-/// Build a leaf partition: compute all-pairs distances and extract bi-directed k-NN edges.
-///
-/// Returns edges as (global_src, global_dst, distance).
-pub fn build_leaf<T: VectorRepr + 'static>(
-    data: &[T],
-    ndims: usize,
-    indices: &[u32],
-    k: usize,
-    metric: diskann_vector::distance::Metric,
-) -> Vec<Edge> {
-    let n = indices.len();
-    if n <= 1 {
-        return Vec::new();
-    }
-
-    LEAF_BUFFERS.with(|cell| {
-        let mut bufs = cell.borrow_mut();
-        build_leaf_with_buffers(data, ndims, indices, k, metric, &mut bufs)
-    })
-}
-
-/// Materialize `bufs.edges` from the CSR (`group_starts`, `group_data`) layout.
-/// Called from `build_leaf_with_buffers` for back-compat — the public `Vec<Edge>`
-/// return is used by tests and `build_leaf`. Production callers go through
-/// `build_leaf_into` and consume the CSR directly via
-/// `HashPrune::add_edges_grouped_local_sketches`, but `bufs.edges` is also
-/// re-populated here so the API stays consistent for downstream readers.
-fn materialize_edges_from_csr(bufs: &mut LeafBuffers, indices: &[u32]) {
-    let n = indices.len();
-    let total = bufs.group_starts[n] as usize;
-    bufs.edges.clear();
-    bufs.edges.reserve(total);
-    for local_src in 0..n {
-        let start = bufs.group_starts[local_src] as usize;
-        let end = bufs.group_starts[local_src + 1] as usize;
-        let src = indices[local_src];
-        for &(dst_local, dist) in &bufs.group_data[start..end] {
-            bufs.edges.push(Edge {
-                src,
-                dst: indices[dst_local as usize],
-                distance: dist,
-            });
-        }
-    }
-}
-
-/// Build a leaf into `bufs.edges` without allocating. Returns edge count.
-/// The caller reads edges from `bufs.edges[..returned_count]`.
+/// Pipeline: one triangular GEMM (`sgemm_aat_lower`) over the full leaf, read
+/// per-row norms off the SYRK diagonal, then either the fused dual-end SIMD
+/// scan (L2 + k=3 + AVX-512) or symmetrize + per-row convert + per-row top-k.
 pub(crate) fn build_leaf_into<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
@@ -702,24 +655,6 @@ pub(crate) fn build_leaf_into<T: VectorRepr + 'static>(
     metric: diskann_vector::distance::Metric,
     bufs: &mut LeafBuffers,
 ) -> usize {
-    let _edges = build_leaf_with_buffers(data, ndims, indices, k, metric, bufs);
-    bufs.group_starts[indices.len()] as usize
-}
-
-
-/// Build a leaf using caller-provided buffers, bypassing thread-local access.
-///
-/// Pipeline: one triangular GEMM (`sgemm_aat_lower`) over the full leaf, read
-/// per-row norms off the SYRK diagonal, then either the fused dual-end SIMD
-/// scan (L2 + k=3 + AVX-512) or symmetrize + per-row convert + per-row top-k.
-pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
-    data: &[T],
-    ndims: usize,
-    indices: &[u32],
-    k: usize,
-    metric: diskann_vector::distance::Metric,
-    bufs: &mut LeafBuffers,
-) -> Vec<Edge> {
     use diskann_vector::distance::Metric;
 
     let n = indices.len();
@@ -852,44 +787,44 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
         }
     }
 
-    if cfg!(test) {
-        materialize_edges_from_csr(bufs, indices);
-    }
-    std::mem::take(&mut bufs.edges)
-}
-
-/// Brute-force exact k-NN under squared-L2 distance. Test-only helper.
-#[cfg(test)]
-pub(crate) fn brute_force_knn(
-    data: &[f32],
-    ndims: usize,
-    npoints: usize,
-    query: &[f32],
-    k: usize,
-) -> Vec<(usize, f32)> {
-    let mut dists: Vec<(usize, f32)> = (0..npoints)
-        .map(|i| {
-            let point = &data[i * ndims..(i + 1) * ndims];
-            let dist = SquaredL2::evaluate(point, query);
-            (i, dist)
-        })
-        .collect();
-
-    let actual_k = k.min(npoints);
-    if actual_k > 0 && actual_k < dists.len() {
-        dists.select_nth_unstable_by(actual_k - 1, |a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        dists.truncate(actual_k);
-    }
-    dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    dists
+    total_edges_n
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use diskann_vector::distance::{DistanceProvider, Metric};
+
+    #[derive(Debug, Clone, Copy)]
+    struct Edge {
+        src: u32,
+        dst: u32,
+        distance: f32,
+    }
+
+    fn build_leaf(
+        data: &[f32],
+        ndims: usize,
+        indices: &[u32],
+        k: usize,
+        metric: Metric,
+    ) -> Vec<Edge> {
+        let mut bufs = LeafBuffers::new();
+        build_leaf_into(data, ndims, indices, k, metric, &mut bufs);
+        let mut edges = Vec::with_capacity(bufs.group_starts[indices.len()] as usize);
+        for local_src in 0..indices.len() {
+            let start = bufs.group_starts[local_src] as usize;
+            let end = bufs.group_starts[local_src + 1] as usize;
+            for &(local_dst, distance) in &bufs.group_data[start..end] {
+                edges.push(Edge {
+                    src: indices[local_src],
+                    dst: indices[local_dst as usize],
+                    distance,
+                });
+            }
+        }
+        edges
+    }
 
     #[test]
     fn test_gemm_aat() {
@@ -943,21 +878,6 @@ mod tests {
             assert!(edge.src != edge.dst);
             assert!(edge.distance >= 0.0);
         }
-    }
-
-    #[test]
-    fn test_brute_force_knn() {
-        let data = vec![
-            0.0, 0.0, // point 0
-            1.0, 0.0, // point 1
-            0.0, 1.0, // point 2
-            1.0, 1.0, // point 3
-        ];
-        let query = vec![0.1, 0.1];
-        let results = brute_force_knn(&data, 2, 4, &query, 2);
-
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, 0);
     }
 
     #[test]
@@ -1051,14 +971,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_leaf_with_buffers_reuse() {
-        // Call build_leaf_with_buffers twice and verify buffers are reused.
+    fn test_build_leaf_buffer_reuse() {
+        // Call the production leaf builder twice and verify buffers are reused.
         let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let indices = vec![0, 1, 2, 3];
         let mut bufs = LeafBuffers::new();
 
-        let edges1 = build_leaf_with_buffers(&data, 2, &indices, 2, Metric::L2, &mut bufs);
-        assert!(!edges1.is_empty(), "first call should produce edges");
+        let edges1 = build_leaf_into(&data, 2, &indices, 2, Metric::L2, &mut bufs);
+        assert!(edges1 > 0, "first call should produce edges");
 
         // Verify buffers are allocated.
         assert!(
@@ -1067,45 +987,10 @@ mod tests {
         );
 
         // Second call with same data should still work.
-        let edges2 = build_leaf_with_buffers(&data, 2, &indices, 2, Metric::L2, &mut bufs);
+        let edges2 = build_leaf_into(&data, 2, &indices, 2, Metric::L2, &mut bufs);
         assert_eq!(
-            edges1.len(),
-            edges2.len(),
+            edges1, edges2,
             "same input should produce same number of edges with reused buffers"
-        );
-    }
-
-    #[test]
-    fn test_brute_force_knn_single_point() {
-        let data = vec![5.0f32, 10.0];
-        let query = vec![5.0, 10.0];
-        let results = brute_force_knn(&data, 2, 1, &query, 5);
-        assert_eq!(
-            results.len(),
-            1,
-            "brute force on 1 point should return 1 result"
-        );
-        assert_eq!(results[0].0, 0, "should return the only point (index 0)");
-        assert!(
-            results[0].1 < 1e-6,
-            "distance to identical query should be near zero"
-        );
-    }
-
-    #[test]
-    fn test_brute_force_knn_identity() {
-        // query = data point, first result should be self with distance 0.
-        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let query = vec![1.0, 0.0]; // same as point 1
-        let results = brute_force_knn(&data, 2, 4, &query, 3);
-        assert_eq!(
-            results[0].0, 1,
-            "query identical to point 1 should find it first"
-        );
-        assert!(
-            results[0].1 < 1e-6,
-            "self-distance should be 0, got {}",
-            results[0].1
         );
     }
 
@@ -1217,15 +1102,16 @@ mod tests {
         // First call with large leaf, second with small — buffers should handle both.
         let data_large = vec![1.0f32; 20 * 4];
         let indices_large: Vec<u32> = (0..20).collect();
-        let edges1 = build_leaf(&data_large, 4, &indices_large, 2, Metric::L2);
-        assert!(!edges1.is_empty());
+        let mut bufs = LeafBuffers::new();
+        let edges1 = build_leaf_into(&data_large, 4, &indices_large, 2, Metric::L2, &mut bufs);
+        assert!(edges1 > 0);
 
         // Second call with smaller leaf on same thread — should reuse thread-local buffers.
         let data_small = vec![1.0f32; 4 * 4];
         let indices_small: Vec<u32> = (0..4).collect();
-        let edges2 = build_leaf(&data_small, 4, &indices_small, 2, Metric::L2);
+        let edges2 = build_leaf_into(&data_small, 4, &indices_small, 2, Metric::L2, &mut bufs);
         assert!(
-            !edges2.is_empty(),
+            edges2 > 0,
             "small leaf after large should work with reused buffers"
         );
     }
