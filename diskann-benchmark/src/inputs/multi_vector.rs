@@ -231,3 +231,81 @@ impl std::fmt::Display for MultiVectorQuantOp {
         Ok(())
     }
 }
+
+///////////////////////////////
+// Multi-Vector Tiled f16 Op  //
+///////////////////////////////
+
+/// An **f16** multi-vector MaxSim A/B benchmark job: the coarse tiler's f16 path
+/// (build-time f16→f32 widen + f32 store kernel) vs the production `f16.rs`
+/// preprocess path (per-tile f16→f32 convert + fused f32 kernel).
+///
+/// Not apples-to-apples — the tiler is strip-based and converts once in build; the
+/// reference is fused and converts per tile inside the timed loop. Read the ratio as
+/// a ceiling, not a pure abstraction delta. Element type is f16 and the ISA is fixed
+/// to V3/AVX2, so neither is a JSON field. x86_64-only.
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MultiVectorTiledF16Op {
+    pub(crate) runs: Vec<Run>,
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl MultiVectorTiledF16Op {
+    pub(crate) const fn tag() -> &'static str {
+        "multi-vector-tiled-f16-op"
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl Input for MultiVectorTiledF16Op {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        Self::tag()
+    }
+
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
+        const NUM_DOC_VECTORS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+        const DIM: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+        const LOOPS_PER_MEASUREMENT: NonZeroUsize = NonZeroUsize::new(50).unwrap();
+        const NUM_MEASUREMENTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
+
+        let runs = vec![
+            Run {
+                num_query_vectors: NonZeroUsize::new(32).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+            Run {
+                num_query_vectors: NonZeroUsize::new(64).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+        ];
+
+        Self { runs }
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl std::fmt::Display for MultiVectorTiledF16Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Multi-Vector Tiled f16 Operation\n")?;
+        write_field!(f, "tag", Self::tag())?;
+        write_field!(f, "number of runs", self.runs.len())?;
+        Ok(())
+    }
+}

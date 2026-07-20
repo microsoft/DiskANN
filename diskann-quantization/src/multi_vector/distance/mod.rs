@@ -60,3 +60,15 @@ pub use projected_eigen::ProjectedEigen;
 /// (V3/AVX2 only) — not yet unified into [`MaxSimIsa`]/[`build_max_sim`].
 #[cfg(target_arch = "x86_64")]
 pub use kernels::{QuantStagedDocs, QuantStagedQuery};
+
+/// Standalone POC entry for the coarse `Tiler`/`Tile` rebuild (V3/AVX2 only) — the
+/// 4-bit MinMax kernel where tilers own movement and the kernel is pinned on the
+/// A/B panel types. The i8 A/B baseline is `QuantStaged*`.
+#[cfg(target_arch = "x86_64")]
+pub use kernels::{QuantTiledDocs, QuantTiledQuery};
+
+/// Standalone POC entry for the coarse tiler's **f16** path (V3/AVX2 only) — each
+/// tile is widened f16→f32 into a reused buffer, then an f32 store kernel + identity
+/// postprocess reuse the same tiled pipeline.
+#[cfg(target_arch = "x86_64")]
+pub use kernels::{QuantTiledF16Docs, QuantTiledF16Query};
