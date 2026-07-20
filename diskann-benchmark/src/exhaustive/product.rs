@@ -7,14 +7,16 @@ use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 
-crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
-
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     registry.register(NAME, imp::ProductQ)?;
 
     #[cfg(not(feature = "product-quantization"))]
-    imp::register(NAME, registry)?;
+    registry.register_partially_gated::<crate::inputs::exhaustive::Product>(
+        NAME,
+        diskann_benchmark_runner::Features::new("product-quantization"),
+        "Product quantization exhaustive search",
+    )?;
 
     Ok(())
 }
@@ -363,9 +365,7 @@ mod imp {
     }
 
     impl algos::CreateQuantComputer<Store> for Plan {
-        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<
-            &'a diskann_providers::model::pq::FixedChunkPQTable,
-        >;
+        type Computer<'a> = diskann_providers::model::pq::distance::QueryComputer<'a>;
 
         fn create_quant_computer<'a>(
             &self,

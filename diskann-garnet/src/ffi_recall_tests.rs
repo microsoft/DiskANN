@@ -156,6 +156,7 @@ mod tests {
         store.clear();
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
+        let mut quant_needed = false;
 
         let reduce_dimensions = 0;
         let l_build = 100;
@@ -174,6 +175,7 @@ mod tests {
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
+                &mut quant_needed,
             )
         };
         assert!(!index_ptr.is_null());
@@ -281,28 +283,28 @@ mod tests {
 
     #[test]
     fn grid_l2_recall_1d_100() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 1, 100, 3);
         assert!(recall >= 0.99, "1D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_2d_10() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 2, 10, 3);
         assert!(recall >= 0.99, "2D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_3d_7() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 3, 7, 3);
         assert!(recall >= 0.99, "3D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_4d_5() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_grid_recall(&store, 4, 5, 3);
         assert!(recall >= 0.99, "4D grid recall too low: {recall:.4}");
     }
@@ -345,7 +347,7 @@ mod tests {
     /// Circle with 100 points, radius=1.0, cosine distance, k=5
     #[test]
     fn circle_cosine_recall_r1_100pt() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_circle_recall(&store, 100, 1.0, 5);
         assert!(recall >= 0.99, "circle r=1 recall too low: {recall:.4}");
     }
@@ -353,7 +355,7 @@ mod tests {
     /// Circle with 93 points, radius=534.0, cosine distance, k=5
     #[test]
     fn circle_cosine_recall_r534_93pt() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_circle_recall(&store, 93, 534.0, 5);
         assert!(recall >= 0.99, "circle r=534 recall too low: {recall:.4}");
     }
@@ -361,7 +363,7 @@ mod tests {
     /// Circle with 50 points, radius=10.0, cosine distance, k=3
     #[test]
     fn circle_cosine_recall_r10_50pt() {
-        let store = Store;
+        let store = Store::new();
         let recall = run_circle_recall(&store, 50, 10.0, 3);
         assert!(recall >= 0.99, "circle r=10 recall too low: {recall:.4}");
     }

@@ -7,8 +7,6 @@ use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "minmax-exhaustive-search";
 
-crate::utils::stub_impl!("minmax-quantization", inputs::exhaustive::MinMax);
-
 // MinMax - requires feature "minmax-quantization"
 #[cfg(feature = "minmax-quantization")]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
@@ -23,7 +21,13 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 // Stub implementation
 #[cfg(not(feature = "minmax-quantization"))]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    imp::register(NAME, registry)
+    registry.register_partially_gated::<crate::inputs::exhaustive::MinMax>(
+        NAME,
+        diskann_benchmark_runner::Features::new("minmax-quantization"),
+        "MinMax quantization exhaustive search",
+    )?;
+
+    Ok(())
 }
 
 /////////////
