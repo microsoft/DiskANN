@@ -265,16 +265,16 @@ pub trait NewCloned: ReprOwned {
 ///
 /// - `Row<'a>`: `&'a [T]`
 /// - `RowMut<'a>`: `&'a mut [T]`
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Standard<T> {
     nrows: usize,
     ncols: usize,
     _elem: PhantomData<T>,
 }
 
-// Hand-written so `Standard<T>` is `Copy`/`Clone` for every `T`: it only stores two `usize`
-// and a `PhantomData<T>`, so a derive would spuriously require `T: Copy`/`T: Clone` (and the
-// `Repr: Copy` supertrait must hold regardless of the element type).
+// Hand-written so `Standard<T>` is `Copy`/`Clone`/`PartialEq`/`Eq` for every `T`: it only
+// stores two `usize` and a `PhantomData<T>`, so derives would spuriously require the same
+// bound on `T` (and the `Repr: Copy` supertrait must hold regardless of the element type).
 impl<T> Copy for Standard<T> {}
 
 impl<T> Clone for Standard<T> {
@@ -282,6 +282,14 @@ impl<T> Clone for Standard<T> {
         *self
     }
 }
+
+impl<T> PartialEq for Standard<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nrows == other.nrows && self.ncols == other.ncols
+    }
+}
+
+impl<T> Eq for Standard<T> {}
 
 impl<T> Standard<T> {
     /// Create a new `Standard` for data of type `T`.
@@ -507,21 +515,27 @@ where
 {
     type Error = crate::error::Infallible;
     fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[T]> = (0..self.num_elements()).map(|_| value.clone()).collect();
+        let b: Box<[T]> = std::iter::repeat_n(value, self.num_elements()).collect();
 
         // SAFETY: By construction, `b` has length `self.num_elements()`.
         Ok(unsafe { self.box_to_mat(b) })
     }
 }
 
-// SAFETY: This safely reuses `<Self as NewOwned<T>>`.
+// SAFETY: The implementation uses guarantees from `Box` to ensure that the pointer
+// initialized by it is non-null and properly aligned to the underlying type.
 unsafe impl<T> NewOwned<Defaulted> for Standard<T>
 where
-    T: Clone + Default,
+    T: Default,
 {
     type Error = crate::error::Infallible;
     fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
-        self.new_owned(T::default())
+        let b: Box<[T]> = std::iter::repeat_with(T::default)
+            .take(self.num_elements())
+            .collect();
+
+        // SAFETY: By construction, `b` has length `self.num_elements()`.
+        Ok(unsafe { self.box_to_mat(b) })
     }
 }
 
@@ -560,7 +574,7 @@ where
     T: Clone,
 {
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
-        let b: Box<[T]> = v.rows().flatten().cloned().collect();
+        let b: Box<[T]> = v.as_slice().iter().cloned().collect();
 
         // SAFETY: By construction, `b` has length `v.repr().num_elements()`.
         unsafe { v.repr().box_to_mat(b) }
