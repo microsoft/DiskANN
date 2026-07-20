@@ -6,7 +6,7 @@
 use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
+use diskann::{graph::AdjacencyList, provider::HasId, ANNError, ANNResult};
 use diskann_vector::contains::ContainsSimd;
 use tracing::trace;
 
@@ -225,13 +225,13 @@ impl SaveWith<(u32, u32, DiskGraphOnly)> for SimpleNeighborProviderAsync {
     where
         P: StorageWriteProvider,
     {
-        let graph = DiskAdaptor {
-            provider: self,
-            inmem_start_point: *imem_start_point,
-            actual_start_point: *actual_start_point,
-        };
-
-        storage::bin::save_graph(&graph, provider, *actual_start_point, metadata.prefix())
+        storage::bin::save_graph_with_remapped_start(
+            self,
+            provider,
+            *imem_start_point,
+            *actual_start_point,
+            metadata.prefix(),
+        )
     }
 }
 
@@ -293,66 +293,6 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
 
     fn max_degree(&self) -> Option<u32> {
         Some((self.graph.dim() - 1) as u32)
-    }
-}
-
-/// This adaptor translates between the in-memory async index representation
-/// and the on-disk index format during serialization.
-///
-/// Key differences between the formats:
-/// 1. Disk format requires a valid vector ID as start point, while async index uses a
-///    virtual ID (max_points + 1) that exceeds the valid dataset range
-/// 2. In-memory index appends the virtual start point at the end of adjacency lists
-/// 3. Disk format expects additional_points = 0, while async index uses additional_points = 1
-///
-/// This adaptor handles these differences by:
-/// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
-/// - Excluding the virtual point from the total count (subtracting 1 from length)
-/// - Setting additional_points to 0 as required by the disk format specification
-///
-/// Used with [`storage::bin::save_graph`] to persist an async index in standard DiskANN format.
-struct DiskAdaptor<'a> {
-    provider: &'a SimpleNeighborProviderAsync,
-    inmem_start_point: u32,
-    actual_start_point: u32,
-}
-
-impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
-    type Element = u32;
-    type Item<'item>
-        = Vec<u32>
-    where
-        Self: 'item;
-
-    fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>> {
-        let mut list = AdjacencyList::new();
-        self.provider.get_neighbors_sync(i, &mut list)?;
-
-        // Need to change to a `Vec` because remapping the start point can cause duplicates,
-        // and changing the logic to not have duplicates changes the exact nature of the
-        // graph and breaks integration tests for the disk index builder.
-        let mut list: Vec<_> = list.into();
-        for i in list.iter_mut() {
-            if *i == self.inmem_start_point {
-                *i = self.actual_start_point;
-            }
-        }
-
-        Ok(list)
-    }
-
-    fn total(&self) -> usize {
-        // Don't include any start points at the end.
-        self.provider.locks.len() - self.provider.num_start_points
-    }
-
-    /// Fixed to 0 for the disk format
-    fn additional_points(&self) -> u64 {
-        0
-    }
-
-    fn max_degree(&self) -> Option<u32> {
-        None
     }
 }
 

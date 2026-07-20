@@ -90,6 +90,7 @@ fn bench_full_build(c: &mut Criterion) {
         let ctx = diskann_pipnn::PiPNNBuildContext::new(
             config,
             std::num::NonZeroUsize::new(32).unwrap(),
+            1.2,
             diskann_vector::distance::Metric::L2,
             0,
         )

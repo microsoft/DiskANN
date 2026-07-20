@@ -29,7 +29,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PiPNNError {
-    /// PiPNNConfig validation failed (e.g. `c_max < c_min`, `alpha < 1.0`).
+    /// PiPNN configuration validation failed.
     #[error("configuration error: {0}")]
     Config(String),
 
@@ -44,21 +44,15 @@ pub enum PiPNNError {
         ndims: usize,
     },
 
-    /// I/O error from `PiPNNGraph::save_graph`.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// A `VectorRepr::as_f32_into` call failed during build. The contained
     /// message preserves the underlying error's `Display` text, since the
     /// associated `T::Error` type is erased at the public boundary.
     #[error("vector conversion failed: {0}")]
     Conversion(String),
 
-    /// Persisting a built graph failed (writer / encoder error from the
-    /// storage backend). Distinct from `Io` so retry logic can target only
-    /// transient persistence failures.
-    #[error("persist failed: {0}")]
-    Persist(String),
+    /// Shared Vamana RobustPrune rejected the candidate pool.
+    #[error("robust prune failed: {0}")]
+    Prune(String),
 }
 
 /// Result type for PiPNN operations.
@@ -66,7 +60,7 @@ pub type PiPNNResult<T> = Result<T, PiPNNError>;
 
 /// Configuration for the PiPNN index builder.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PiPNNConfig {
     /// Number of LSH hyperplanes for HashPrune.
     pub num_hash_planes: usize,
@@ -79,7 +73,6 @@ pub struct PiPNNConfig {
     /// Fanout at each partitioning level (overlap factor).
     pub fanout: Vec<usize>,
     /// k for k-NN in leaf building.
-    #[serde(alias = "leaf_k")]
     pub k: usize,
     /// Number of independent partitioning passes (replicas).
     pub replicas: usize,
@@ -87,10 +80,6 @@ pub struct PiPNNConfig {
     pub l_max: usize,
     /// Whether to apply a final diversity-prune pass (occlusion-based, similar to RobustPrune).
     pub final_prune: bool,
-    /// Alpha (occlusion factor) for final diversity prune. Same as DiskANN's `alpha` parameter.
-    /// Higher values yield sparser graphs. Default: 1.2 (matches DiskANN default).
-    #[serde(alias = "final_prune_alpha")]
-    pub alpha: f32,
 }
 
 impl PiPNNConfig {
@@ -127,15 +116,6 @@ impl PiPNNConfig {
                 self.num_hash_planes
             )));
         }
-        if self.alpha < 1.0 {
-            return Err(PiPNNError::Config(format!(
-                "alpha ({}) must be >= 1.0",
-                self.alpha
-            )));
-        }
-        if !self.alpha.is_finite() {
-            return Err(PiPNNError::Config("alpha must be finite".into()));
-        }
         Ok(())
     }
 }
@@ -157,7 +137,6 @@ impl Default for PiPNNConfig {
             replicas: 1,
             l_max: 64,
             final_prune: true,
-            alpha: 1.2,
         }
     }
 }
@@ -167,6 +146,7 @@ impl Default for PiPNNConfig {
 pub struct PiPNNBuildContext {
     config: PiPNNConfig,
     max_degree: NonZeroUsize,
+    alpha: f32,
     metric: Metric,
     num_threads: usize,
 }
@@ -176,13 +156,20 @@ impl PiPNNBuildContext {
     pub fn new(
         config: PiPNNConfig,
         max_degree: NonZeroUsize,
+        alpha: f32,
         metric: Metric,
         num_threads: usize,
     ) -> PiPNNResult<Self> {
         config.validate()?;
+        if !alpha.is_finite() || alpha < 1.0 {
+            return Err(PiPNNError::Config(format!(
+                "alpha ({alpha}) must be finite and >= 1.0"
+            )));
+        }
         Ok(Self {
             config,
             max_degree,
+            alpha,
             metric,
             num_threads,
         })
@@ -194,6 +181,10 @@ impl PiPNNBuildContext {
 
     pub fn max_degree(&self) -> NonZeroUsize {
         self.max_degree
+    }
+
+    pub fn alpha(&self) -> f32 {
+        self.alpha
     }
 
     pub fn metric(&self) -> Metric {

@@ -207,10 +207,12 @@ where
         writeln!(output, "{}", input)?;
         let (index, build_stats) = match &input.source {
             IndexSource::Build(build) => {
-                let (index, build_stats) = if build.pipnn.is_some() {
-                    build::run_pipnn_build::<T>(build, output)?
-                } else {
-                    run_build(
+                #[cfg(feature = "pipnn")]
+                let (index, build_stats) = match build.build_algorithm() {
+                    diskann_disk::BuildAlgorithm::PiPNN(config) => {
+                        build::run_pipnn_build::<T>(build, config, output)?
+                    }
+                    _ => run_build(
                         build,
                         common::FullPrecision,
                         None,
@@ -229,8 +231,29 @@ where
                             Ok(index)
                         },
                         single_or_multi_insert,
-                    )?
+                    )?,
                 };
+                #[cfg(not(feature = "pipnn"))]
+                let (index, build_stats) = run_build(
+                    build,
+                    common::FullPrecision,
+                    None,
+                    output,
+                    |data| {
+                        let index = diskann_async::new_index::<T, _>(
+                            build.try_as_config()?.build()?,
+                            build.inmem_parameters(data.nrows(), data.ncols()),
+                            common::NoDeletes,
+                        )?;
+                        build::set_start_points(
+                            index.provider(),
+                            data.as_view(),
+                            *build.start_point_strategy(),
+                        )?;
+                        Ok(index)
+                    },
+                    single_or_multi_insert,
+                )?;
 
                 // save the index if requested
                 if let Some(save_path) = build.save_path() {
@@ -389,10 +412,6 @@ where
 
     let index = create(data.as_view())?;
     let build_stats = build(index.clone(), build_strategy.clone(), data, input, output)?;
-
-    if let Some(gb) = build::peak_rss_gb() {
-        writeln!(&mut *output, "Peak RSS (build stage): {:.2} GiB", gb)?;
-    }
 
     Ok((index, build_stats))
 }

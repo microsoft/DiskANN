@@ -50,6 +50,7 @@ clippy.uninlined_format_args = "allow"
 rand.workspace = true
 tempfile.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits"] }
+diskann-benchmark-runner = { workspace = true, features = ["test-fixtures"] }
 
 [features]
 default = []

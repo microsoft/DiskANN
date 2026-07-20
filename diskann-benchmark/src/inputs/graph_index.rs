@@ -680,17 +680,10 @@ pub(crate) struct IndexBuild {
     num_threads: usize,
     multi_insert: Option<MultiInsert>,
     save_path: Option<String>,
-    /// When present, uses PiPNN graph builder instead of Vamana.
+    #[cfg(feature = "pipnn")]
     #[serde(default)]
-    pub(crate) pipnn: Option<PiPNNInmemConfig>,
+    build_algorithm: diskann_disk::BuildAlgorithm,
 }
-
-/// PiPNN-specific parameters for inmem index build.
-///
-/// Reuses the same `BuildAlgorithm::PiPNN` variant shape as the disk path so
-/// JSON configs are identical between inmem and disk builds. Shared knobs
-/// (`max_degree`, `metric`, `num_threads`) come from the parent `IndexBuild`.
-pub(crate) type PiPNNInmemConfig = diskann_disk::build::configuration::BuildAlgorithm;
 
 impl IndexBuild {
     pub(crate) const fn tag() -> &'static str {
@@ -701,7 +694,7 @@ impl IndexBuild {
         (self.max_degree as f32 * 1.3) as usize
     }
 
-    #[cfg(feature = "bftree")]
+    #[cfg(any(feature = "bftree", feature = "pipnn"))]
     pub(crate) fn max_degree(&self) -> u32 {
         self.max_degree as u32
     }
@@ -788,18 +781,6 @@ impl IndexBuild {
             None => write_field!(f, "Save Path", "None")?,
             Some(p) => write_field!(f, "Save Path", p)?,
         }
-        if let Some(diskann_disk::build::configuration::BuildAlgorithm::PiPNN(cfg)) =
-            self.pipnn.as_ref()
-        {
-            write_field!(f, "build algorithm", "PiPNN")?;
-            write_field!(f, "pipnn.c_max", cfg.c_max)?;
-            write_field!(f, "pipnn.c_min", cfg.c_min)?;
-            write_field!(f, "pipnn.leaf_k", cfg.k)?;
-            write_field!(f, "pipnn.l_max", cfg.l_max)?;
-            write_field!(f, "pipnn.replicas", cfg.replicas)?;
-        } else {
-            write_field!(f, "build algorithm", "Vamana")?;
-        }
         Ok(())
     }
 
@@ -835,7 +816,16 @@ impl IndexBuild {
         self.num_threads
     }
 
-    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    #[cfg(any(
+        feature = "spherical-quantization",
+        feature = "bftree",
+        feature = "pipnn"
+    ))]
     pub(crate) fn distance(&self) -> SimilarityMeasure {
         self.distance
     }
@@ -855,6 +845,11 @@ impl IndexBuild {
     pub(crate) fn save_path(&self) -> Option<&str> {
         self.save_path.as_deref()
     }
+
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn build_algorithm(&self) -> &diskann_disk::BuildAlgorithm {
+        &self.build_algorithm
+    }
 }
 
 impl Example for IndexBuild {
@@ -872,7 +867,8 @@ impl Example for IndexBuild {
             insert_retry: None,
             start_point_strategy: StartPointStrategy::Medoid,
             save_path: None,
-            pipnn: None,
+            #[cfg(feature = "pipnn")]
+            build_algorithm: diskann_disk::BuildAlgorithm::Vamana,
         }
     }
 }
@@ -891,7 +887,7 @@ impl std::fmt::Display for IndexBuild {
 #[serde(tag = "index-source")] // Use tagged enums for JSON
 pub enum IndexSource {
     Load(IndexLoad),
-    Build(Box<IndexBuild>),
+    Build(IndexBuild),
 }
 
 impl IndexSource {
@@ -939,7 +935,7 @@ impl IndexOperation {
 impl Example for IndexOperation {
     fn example() -> Self {
         Self {
-            source: IndexSource::Build(Box::new(IndexBuild::example())),
+            source: IndexSource::Build(IndexBuild::example()),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
         }
     }

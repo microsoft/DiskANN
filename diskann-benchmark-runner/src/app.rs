@@ -484,11 +484,179 @@ impl App {
     }
 }
 
+/// Cached CLI-fixture support shared by benchmark applications.
+///
+/// A fixture directory contains `stdin.txt`, `stdout.txt`, and optional JSON files.
+/// Set `DISKANN_TEST=overwrite` to regenerate expected output.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub mod fixture {
+    use std::{
+        ffi::OsString,
+        io::Write,
+        path::{Path, PathBuf},
+    };
+
+    use super::App;
+    use crate::{output, ux, Registry};
+
+    const ENV: &str = "DISKANN_TEST";
+    const STDIN: &str = "stdin.txt";
+    const STDOUT: &str = "stdout.txt";
+    const INPUT_FILE: &str = "input.json";
+    const OUTPUT_FILE: &str = "output.json";
+    const TOLERANCES_FILE: &str = "tolerances.json";
+    const REGRESSION_INPUT_FILE: &str = "regression_input.json";
+    const CHECK_OUTPUT_FILE: &str = "checks.json";
+    const FEATURES_FILE: &str = "features.txt";
+    const GENERATED_OUTPUTS: [&str; 2] = [OUTPUT_FILE, CHECK_OUTPUT_FILE];
+    const WORKSPACE: &str = "$WORKSPACE";
+
+    fn read(path: &Path) -> String {
+        ux::normalize(
+            std::fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display())),
+        )
+    }
+
+    fn overwrite() -> bool {
+        match std::env::var(ENV) {
+            Ok(value) if value == "overwrite" => true,
+            Ok(value) => panic!("unknown {ENV} value {value:?}; expected \"overwrite\""),
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => panic!("failed to read {ENV}: {error}"),
+        }
+    }
+
+    fn resolve(value: &str, input: &Path, dir: &Path, tempdir: &Path) -> PathBuf {
+        match value {
+            "$INPUT" => input.into(),
+            "$OUTPUT" => tempdir.join(OUTPUT_FILE),
+            "$SETUP_OUTPUT" => tempdir.join("setup-output.json"),
+            "$TOLERANCES" => dir.join(TOLERANCES_FILE),
+            "$REGRESSION_INPUT" => dir.join(REGRESSION_INPUT_FILE),
+            "$CHECK_OUTPUT" => tempdir.join(CHECK_OUTPUT_FILE),
+            _ => value.into(),
+        }
+    }
+
+    fn parse_apps(dir: &Path, input: &Path, tempdir: &Path) -> Vec<App> {
+        let apps: Vec<_> = read(&dir.join(STDIN))
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let args = line
+                    .split_whitespace()
+                    .map(|value| OsString::from(resolve(value, input, dir, tempdir)));
+                App::try_parse_from(std::iter::once(OsString::from("test-app")).chain(args))
+                    .unwrap()
+            })
+            .collect();
+        assert!(
+            !apps.is_empty(),
+            "{}/stdin.txt has no command",
+            dir.display()
+        );
+        apps
+    }
+
+    fn materialize_input(dir: &Path, tempdir: &Path) -> PathBuf {
+        let input = dir.join(INPUT_FILE);
+        if !input.is_file() {
+            return input;
+        }
+
+        let source = read(&input);
+        if !source.contains(WORKSPACE) && !source.contains("$TEMPDIR") {
+            return input;
+        }
+
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        let tempdir_text = tempdir.display().to_string().replace('\\', "/");
+        let rendered = source
+            .replace("$TEMPDIR", &tempdir_text)
+            .replace(WORKSPACE, &workspace);
+        let materialized = tempdir.join(INPUT_FILE);
+        std::fs::write(&materialized, rendered).unwrap();
+        materialized
+    }
+
+    /// Read the optional feature list attached to a fixture.
+    pub fn features(dir: &Path) -> Vec<String> {
+        match std::fs::read_to_string(dir.join(FEATURES_FILE)) {
+            Ok(contents) => contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => panic!("failed to read fixture features: {error}"),
+        }
+    }
+
+    /// Run a cached CLI fixture with the supplied production registry.
+    pub fn run(dir: &Path, registry: &Registry) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let input = materialize_input(dir, tempdir.path());
+        let apps = parse_apps(dir, &input, tempdir.path());
+        let mut buffer = output::Memory::new();
+
+        for (index, app) in apps.iter().enumerate() {
+            let last = index + 1 == apps.len();
+            let mut sink = output::Sink::new();
+            let mut target: &mut dyn crate::Output = if last { &mut buffer } else { &mut sink };
+            if let Err(error) = app.run(registry, target) {
+                if last {
+                    write!(target, "{error:?}").unwrap();
+                } else {
+                    panic!("fixture setup command failed: {error:?}");
+                }
+            }
+        }
+
+        let actual = ux::scrub_path(
+            ux::normalize(ux::strip_backtrace(
+                String::from_utf8(buffer.into_inner()).unwrap(),
+            )),
+            tempdir.path(),
+            "$TEMPDIR",
+        );
+        let expected_path = dir.join(STDOUT);
+        if overwrite() {
+            std::fs::write(&expected_path, &actual).unwrap();
+        } else {
+            assert_eq!(actual, read(&expected_path));
+        }
+
+        for filename in GENERATED_OUTPUTS {
+            let generated = tempdir.path().join(filename);
+            let expected = dir.join(filename);
+            match (overwrite(), generated.is_file(), expected.is_file()) {
+                (true, true, _) => {
+                    std::fs::copy(generated, expected).unwrap();
+                }
+                (true, false, true) => std::fs::remove_file(expected).unwrap(),
+                (false, true, true) => assert_eq!(read(&generated), read(&expected)),
+                (false, true, false) => panic!("{filename} was generated unexpectedly"),
+                (false, false, true) => panic!("{filename} was not generated"),
+                _ => {}
+            }
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
 
-/// The integration test below look inside the `tests` directory for folders.
+/// The integration tests below look inside the `tests` directory for folders and use
+/// [`fixture`] for execution.
 ///
 /// ## Input Files
 ///
@@ -532,271 +700,16 @@ impl App {
 /// to the output did not occur.
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::{Path, PathBuf};
 
-    use std::{
-        ffi::OsString,
-        path::{Path, PathBuf},
-    };
-
-    use crate::{registry, test::TestConfig, ux};
-
-    const ENV: &str = "DISKANN_TEST";
-
-    // Expected I/O files.
-    const STDIN: &str = "stdin.txt";
-    const STDOUT: &str = "stdout.txt";
-    const INPUT_FILE: &str = "input.json";
-    const OUTPUT_FILE: &str = "output.json";
-
-    // Optional list of enabled features, one feature name per line. When absent, no
-    // features are enabled.
-    const FEATURES_FILE: &str = "features.txt";
-
-    // Regression Extension
-    const TOLERANCES_FILE: &str = "tolerances.json";
-    const REGRESSION_INPUT_FILE: &str = "regression_input.json";
-    const CHECK_OUTPUT_FILE: &str = "checks.json";
-
-    const ALL_GENERATED_OUTPUTS: [&str; 2] = [OUTPUT_FILE, CHECK_OUTPUT_FILE];
-
-    // Read the entire contents of a file to a string.
-    fn read_to_string<P: AsRef<Path>>(path: P, ctx: &str) -> String {
-        match std::fs::read_to_string(path.as_ref()) {
-            Ok(s) => ux::normalize(s),
-            Err(err) => panic!(
-                "failed to read {} {:?} with error: {}",
-                ctx,
-                path.as_ref(),
-                err
-            ),
-        }
-    }
-
-    // Check if `DISKANN_TEST=overwrite` is configured. Return `true` if so - otherwise
-    // return `false`.
-    //
-    // If `DISKANN_TEST` is set but its value is not `overwrite` - panic.
-    fn overwrite() -> bool {
-        match std::env::var(ENV) {
-            Ok(v) => {
-                if v == "overwrite" {
-                    true
-                } else {
-                    panic!(
-                        "Unknown value for {}: \"{}\". Expected \"overwrite\"",
-                        ENV, v
-                    );
-                }
-            }
-            Err(std::env::VarError::NotPresent) => false,
-            Err(std::env::VarError::NotUnicode(_)) => {
-                panic!("Value for {} is not unicode", ENV);
-            }
-        }
-    }
-
-    // Test Runner
-    struct Test {
-        dir: PathBuf,
-        overwrite: bool,
-    }
-
-    impl Test {
-        fn new(dir: &Path) -> Self {
-            Self {
-                dir: dir.into(),
-                overwrite: overwrite(),
-            }
-        }
-
-        fn parse_stdin(&self, tempdir: &Path) -> Vec<App> {
-            let path = self.dir.join(STDIN);
-
-            // Read the standard input file to a string.
-            let stdin = read_to_string(&path, "standard input");
-
-            let output: Vec<App> = stdin
-                .lines()
-                .filter_map(|line| {
-                    if line.starts_with('#') || line.is_empty() {
-                        None
-                    } else {
-                        Some(self.parse_line(line, tempdir))
-                    }
-                })
-                .collect();
-
-            if output.is_empty() {
-                panic!("File \"{}/stdin.txt\" has no command!", self.dir.display());
-            }
-
-            output
-        }
-
-        fn parse_line(&self, line: &str, tempdir: &Path) -> App {
-            // Split and resolve special symbols
-            let args: Vec<OsString> = line
-                .split_whitespace()
-                .map(|v| -> OsString { self.resolve(v, tempdir).into() })
-                .collect();
-
-            App::try_parse_from(std::iter::once(OsString::from("test-app")).chain(args)).unwrap()
-        }
-
-        fn resolve(&self, s: &str, tempdir: &Path) -> PathBuf {
-            match s {
-                // Standard workflow
-                "$INPUT" => self.dir.join(INPUT_FILE),
-                "$OUTPUT" => tempdir.join(OUTPUT_FILE),
-                // Regression extension
-                "$TOLERANCES" => self.dir.join(TOLERANCES_FILE),
-                "$REGRESSION_INPUT" => self.dir.join(REGRESSION_INPUT_FILE),
-                "$CHECK_OUTPUT" => tempdir.join(CHECK_OUTPUT_FILE),
-
-                // Catch-all: no interpolation
-                _ => s.into(),
-            }
-        }
-
-        // Build the registration config from the fixture's `features.txt`, if present. Each
-        // non-empty line names one enabled feature.
-        fn config(&self) -> TestConfig {
-            let path = self.dir.join(FEATURES_FILE);
-            match std::fs::read_to_string(&path) {
-                Ok(contents) => TestConfig::with_features(
-                    contents
-                        .lines()
-                        .map(str::trim)
-                        .filter(|line| !line.is_empty())
-                        .map(str::to_owned),
-                ),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => TestConfig::new(),
-                Err(err) => panic!("failed to read {:?}: {}", path, err),
-            }
-        }
-
-        fn run(&self, tempdir: &Path) {
-            let apps = self.parse_stdin(tempdir);
-
-            // Register outputs
-            let mut registry = registry::Registry::new();
-            crate::test::register_benchmarks(&mut registry, &self.config()).unwrap();
-
-            // Run each app invocation - collecting the last output into a buffer.
-            //
-            // Only the last run is allowed to return an error - if it does, format the
-            // error to the output buffer as well using the debug formatting option.
-            let mut buffer = crate::output::Memory::new();
-            for (i, app) in apps.iter().enumerate() {
-                let is_last = i + 1 == apps.len();
-
-                // Select where to route the test output.
-                //
-                // Only the last run gets saved. Setup output is discarded — if a setup
-                // command fails, the panic message includes the error.
-                let mut b: &mut dyn crate::Output = if is_last {
-                    &mut buffer
-                } else {
-                    &mut crate::output::Sink::new()
-                };
-
-                if let Err(err) = app.run(&registry, b) {
-                    if is_last {
-                        write!(b, "{:?}", err).unwrap();
-                    } else {
-                        panic!(
-                            "App {} of {} failed with error: {:?}",
-                            i + 1,
-                            apps.len(),
-                            err
-                        );
-                    }
-                }
-            }
-
-            // Check that `stdout` matches
-            let stdout: String =
-                ux::normalize(ux::strip_backtrace(buffer.into_inner().try_into().unwrap()));
-            let stdout = ux::scrub_path(stdout, tempdir, "$TEMPDIR");
-            let output = self.dir.join(STDOUT);
-            if self.overwrite {
-                std::fs::write(output, stdout).unwrap();
-            } else {
-                let expected = read_to_string(&output, "expected standard output");
-                if stdout != expected {
-                    panic!("Got:\n--\n{}\n--\nExpected:\n--\n{}\n--", stdout, expected);
-                }
-            }
-
-            // Check that the output files match.
-            for file in ALL_GENERATED_OUTPUTS {
-                self.check_output_file(tempdir, file);
-            }
-        }
-
-        fn check_output_file(&self, tempdir: &Path, filename: &str) {
-            let generated_path = tempdir.join(filename);
-            let was_generated = generated_path.is_file();
-
-            let expected_path = self.dir.join(filename);
-            let is_expected = expected_path.is_file();
-
-            if self.overwrite {
-                // Copy the output file to the destination.
-                if was_generated {
-                    println!(
-                        "Moving generated file {:?} to {:?}",
-                        generated_path, expected_path
-                    );
-
-                    if let Err(err) = std::fs::rename(&generated_path, &expected_path) {
-                        panic!(
-                            "Moving generated file {:?} to expected location {:?} failed: {}",
-                            generated_path, expected_path, err
-                        );
-                    }
-                } else if is_expected {
-                    println!("Removing outdated file {:?}", expected_path);
-                    if let Err(err) = std::fs::remove_file(&expected_path) {
-                        panic!("Failed removing outdated file {:?}: {}", expected_path, err);
-                    }
-                }
-            } else {
-                match (was_generated, is_expected) {
-                    (true, true) => {
-                        let output_contents = read_to_string(generated_path, "generated");
-
-                        let expected_contents = read_to_string(expected_path, "expected");
-
-                        if output_contents != expected_contents {
-                            panic!(
-                                "{}: Got:\n\n{}\n\nExpected:\n\n{}\n",
-                                filename, output_contents, expected_contents
-                            );
-                        }
-                    }
-                    (true, false) => {
-                        let output_contents = read_to_string(generated_path, "generated");
-
-                        panic!(
-                            "{} was generated when none was expected. Contents:\n\n{}",
-                            filename, output_contents
-                        );
-                    }
-                    (false, true) => {
-                        panic!("{} was not generated when it was expected", filename);
-                    }
-                    (false, false) => { /* this is okay */ }
-                }
-            }
-        }
-    }
+    use crate::{app::fixture, registry, test::TestConfig};
 
     fn run_specific_test(test_dir: &Path) {
         println!("running test in {:?}", test_dir);
-        let temp_dir = tempfile::tempdir().unwrap();
-        Test::new(test_dir).run(temp_dir.path());
+        let mut registry = registry::Registry::new();
+        let config = TestConfig::with_features(fixture::features(test_dir));
+        crate::test::register_benchmarks(&mut registry, &config).unwrap();
+        fixture::run(test_dir, &registry);
     }
 
     fn run_all_tests_in(dir: &str) {

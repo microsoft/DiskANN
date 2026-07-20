@@ -1,0 +1,2 @@
+run --input-file $INPUT --output-file $SETUP_OUTPUT --allow-debug
+inputs disk-index

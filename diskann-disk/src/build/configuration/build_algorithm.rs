@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 /// Selects the graph construction algorithm for index building.
 ///
 /// - [`Vamana`](BuildAlgorithm::Vamana): the default incremental insert + prune
-///   builder. Its tuning knobs (`l_build`, `alpha`) live on the outer
-///   `DiskIndexBuildParameters` / index configuration because they're shared
-///   with the search-time prune.
+///   builder. Graph-wide tuning knobs such as `l_build` and `alpha` live on the
+///   outer index configuration.
 /// - [`PiPNN`](BuildAlgorithm::PiPNN): partition-based batch builder
 ///   (arXiv:2602.21247). Carries a [`diskann_pipnn::PiPNNConfig`] with its
-///   tuning knobs so they don't pollute the outer config when Vamana is selected.
+///   algorithm-specific partition and candidate-generation knobs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "algorithm")]
 #[non_exhaustive]
@@ -81,7 +80,6 @@ mod tests {
                 l_max: 256,
                 num_hash_planes: 12,
                 final_prune: false,
-                alpha: 1.2,
             }
         }
 
@@ -101,17 +99,10 @@ mod tests {
             assert_eq!(algo, back);
         }
 
-        /// Legacy field names from the pre-refactor wire format still bind
-        /// to the canonical `k` / `alpha` fields via serde aliases.
         #[test]
-        fn serde_pipnn_legacy_aliases() {
+        fn serde_pipnn_rejects_obsolete_fields() {
             let json = r#"{"algorithm":"PiPNN","leaf_k":7,"final_prune_alpha":1.5}"#;
-            let back: BuildAlgorithm = serde_json::from_str(json).unwrap();
-            let BuildAlgorithm::PiPNN(cfg) = back else {
-                panic!("expected PiPNN variant");
-            };
-            assert_eq!(cfg.k, 7);
-            assert_eq!(cfg.alpha, 1.5);
+            assert!(serde_json::from_str::<BuildAlgorithm>(json).is_err());
         }
 
         #[test]
@@ -124,7 +115,6 @@ mod tests {
             );
         }
 
-        /// JSON shape from previous wire format: tag + flat PiPNN knobs.
         #[test]
         fn serde_pipnn_inline_fields() {
             let json = r#"{"algorithm":"PiPNN","c_max":512,"c_min":128,"k":5}"#;

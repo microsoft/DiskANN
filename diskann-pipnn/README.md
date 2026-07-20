@@ -1,139 +1,75 @@
-# PiPNN: Pick-in-Partitions Nearest Neighbors for DiskANN
+# PiPNN graph builder
 
-A fast graph index builder for [DiskANN](https://github.com/microsoft/DiskANN) based on the [PiPNN algorithm](https://arxiv.org/abs/2602.21247) (Rubel et al., 2026).
+`diskann-pipnn` implements Pick-in-Partitions Nearest Neighbors graph construction. It
+partitions vectors with randomized ball carving, builds local k-NN edges, merges them
+with HashPrune, and optionally runs DiskANN's shared Vamana RobustPrune implementation.
 
-PiPNN replaces Vamana's incremental beam-search insertion with a partition-then-build approach:
+## Responsibility boundary
 
-1. **Partition** the dataset into overlapping clusters via Randomized Ball Carving (RBC)
-2. **Build** local k-NN graphs within each cluster using GEMM-based all-pairs distance
-3. **Merge** edges from overlapping clusters using HashPrune (LSH-based online pruning)
-4. **Prune** (optional) with RobustPrune for diversity
+The crate's public build boundary is `builder::build_typed`. It receives a dense matrix
+and produces adjacency lists plus build statistics. Every row is an ordinary graph node
+to the PiPNN core; the core does not select medoids, create frozen points, search the
+graph, or serialize it.
 
-The output is a standard DiskANN graph file that can be loaded and searched by the existing DiskANN infrastructure.
+The existing DiskANN wrappers own those responsibilities:
 
-## Results
+- In-memory builds create start/frozen points through the same provider and
+  `StartPointStrategy` path used by Vamana, then include those rows in the PiPNN build.
+- Disk builds select a medoid, append its vector as the frozen row, and include it in the
+  PiPNN build. When writing the disk graph, the wrapper omits the frozen row, remaps its
+  edges to the real medoid ID, and writes that real ID in the header, matching Vamana.
 
-### SIFT-1M (128d, L2, R=64, 1M vectors)
+PiPNN graph construction currently supports full-precision build data only. Disk-search
+PQ generation remains independent and is controlled by `num_pq_chunks`.
+PiPNN disk builds run in one pass and do not read or write build checkpoint state.
 
-| Builder | Build Time | Speedup | Recall@10 (L=100) |
-|---------|-----------|---------|-------------------|
-| DiskANN Vamana | 81.7s | 1.0x | 0.997 |
-| **PiPNN** | **8.0s** | **10.2x** | **0.985** |
+## Benchmark runner
 
-### Enron (384d, fp16, cosine_normalized, R=59, 1.09M vectors)
+Enable `pipnn` and choose PiPNN with the standard benchmark runner's
+`build_algorithm` field. The same field works for graph-index and disk-index builds.
 
-| Builder | Build Time | Speedup | Recall@1000 (L=2000) |
-|---------|-----------|---------|---------------------|
-| DiskANN Vamana | 78.1s | 1.0x | 0.950 |
-| **PiPNN** | **15.2s** | **5.1x** | **0.949** |
-
-Speedup scales with dataset size and is highest on lower-dimensional data where GEMM throughput dominates. Hardware: AMD EPYC 7763, 16 cores.
-
-## Build
-
-```bash
-cargo build --release -p diskann-pipnn
-```
-
-For best performance on your CPU:
-
-```bash
-RUSTFLAGS="-C target-cpu=native" cargo build --release -p diskann-pipnn
-```
-
-## Usage
-
-### Build a PiPNN index and save as DiskANN graph
-
-```bash
-./target/release/pipnn-bench \
-  --data <path_to_vectors.fbin> \
-  --max-degree 64 \
-  --c-max 2048 --c-min 1024 \
-  --leaf-k 4 --fanout "8" \
-  --replicas 1 --final-prune \
-  --save-path <output_graph_prefix>
-```
-
-The output graph is written in DiskANN's canonical format at `<output_graph_prefix>`. Copy or symlink your data file to `<output_graph_prefix>.data` for the DiskANN benchmark loader.
-
-### Key parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--max-degree` | 64 | Maximum graph degree (R) |
-| `--c-max` | 1024 | Maximum leaf partition size |
-| `--c-min` | c_max/4 | Minimum cluster size before merging |
-| `--leaf-k` | 3 | k-NN within each leaf |
-| `--fanout` | "10,3" | Overlap factor per partition level (comma-separated) |
-| `--replicas` | 1 | Independent partitioning passes |
-| `--l-max` | 128 | HashPrune reservoir size per node |
-| `--p-samp` | 0.05 | Leader sampling fraction |
-| `--final-prune` | false | Apply RobustPrune after HashPrune |
-| `--fp16` | false | Read input as fp16 (auto-converts to f32) |
-| `--cosine` | false | Use cosine distance (for normalized vectors) |
-| `--save-path` | none | Save graph in DiskANN format |
-
-### Recommended configurations
-
-**Low-dimensional (d <= 128):**
-```bash
---c-max 2048 --c-min 1024 --leaf-k 4 --fanout "8" --p-samp 0.01 --final-prune
-```
-
-**High-dimensional (d >= 256):**
-```bash
---c-max 2048 --c-min 1024 --leaf-k 5 --fanout "8" --p-samp 0.01 --final-prune
-```
-
-### Search with DiskANN benchmark
-
-After building, search the graph using the standard DiskANN benchmark:
-
-```bash
-# Symlink your data file
-ln -s <path_to_vectors.fbin> <output_graph_prefix>.data
-
-# Create a search config (JSON)
-cat > search.json << 'EOF'
+```json
 {
-  "search_directories": ["."],
-  "jobs": [{
-    "type": "async-index-build",
-    "content": {
-      "source": {
-        "index-source": "Load",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "load_path": "<output_graph_prefix>",
-        "max_degree": 64
-      },
-      "search_phase": {
-        "search-type": "topk",
-        "queries": "<queries.fbin>",
-        "groundtruth": "<groundtruth.bin>",
-        "reps": 1,
-        "num_threads": [1],
-        "runs": [{"search_n": 10, "search_l": [100, 200], "recall_k": 10}]
-      }
-    }
-  }]
+  "build_algorithm": {
+    "algorithm": "PiPNN",
+    "num_hash_planes": 14,
+    "c_max": 512,
+    "c_min": 64,
+    "p_samp": 0.01,
+    "fanout": [10, 3],
+    "k": 2,
+    "replicas": 1,
+    "l_max": 72,
+    "final_prune": true
+  }
 }
-EOF
-
-cargo run --release -p diskann-benchmark -- run --input-file search.json --output-file results.json
 ```
 
-## Architecture
+Final-prune `alpha` comes from the enclosing graph configuration, alongside the
+graph degree and distance metric.
 
+For a disk build, set `quantization_type` to `"FP"`. Run an input derived from the
+existing `diskann-benchmark/example/graph-index.json` or `disk-index.json`:
+
+```bash
+cargo run --release -p diskann-benchmark --features disk-index,pipnn -- \
+  run --input-file input.json --output-file output.json
 ```
-diskann-pipnn/
-  src/
-    lib.rs          - Config and module structure
-    partition.rs    - Randomized Ball Carving with fused GEMM + assignment
-    leaf_build.rs   - GEMM-based all-pairs distance + bi-directed k-NN
-    hash_prune.rs   - LSH-based online pruning with per-point reservoirs
-    builder.rs      - Main PiPNN orchestrator
-    bin/
-      pipnn_bench.rs - CLI benchmark and index writer
+
+## Core build benchmark
+
+The remaining example measures only the PiPNN core and intentionally excludes provider
+loading, frozen-point handling, persistence, and search. Use `/usr/bin/time -v` for peak
+RSS; its own `RSS_post` value is only the resident set after the build.
+
+```bash
+cargo build --release -p diskann-pipnn --example inmem_build_bench
+/usr/bin/time -v target/release/examples/inmem_build_bench DATA.fbin [NPOINTS]
+```
+
+## Tests
+
+```bash
+cargo test -p diskann-pipnn --lib
+cargo test -p diskann-benchmark --features disk-index,pipnn pipnn_cached_cli_fixtures
 ```

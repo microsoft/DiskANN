@@ -50,15 +50,7 @@ impl Cli {
     fn run(&self, output: &mut dyn runner::Output) -> anyhow::Result<()> {
         self.check_target(output)?;
 
-        // Collect benchmarks.
-        let mut registry = runner::Registry::new();
-        exhaustive::register_benchmarks(&mut registry)?;
-        disk_index::register_benchmarks(&mut registry)?;
-        flat::register_benchmarks(&mut registry)?;
-        index::register_benchmarks(&mut registry)?;
-        filters::register_benchmarks(&mut registry)?;
-        multi_vector::register_benchmarks(&mut registry)?;
-
+        let registry = registry()?;
         self.app.run(&registry, output)
     }
 
@@ -126,6 +118,17 @@ WARNING
     fn check_target(&self, mut _output: &mut dyn runner::Output) -> anyhow::Result<()> {
         Ok(())
     }
+}
+
+fn registry() -> anyhow::Result<runner::Registry> {
+    let mut registry = runner::Registry::new();
+    exhaustive::register_benchmarks(&mut registry)?;
+    disk_index::register_benchmarks(&mut registry)?;
+    flat::register_benchmarks(&mut registry)?;
+    index::register_benchmarks(&mut registry)?;
+    filters::register_benchmarks(&mut registry)?;
+    multi_vector::register_benchmarks(&mut registry)?;
+    Ok(registry)
 }
 
 ///////////
@@ -732,6 +735,18 @@ mod tests {
         assert!(output_path.exists());
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+    }
+
+    #[test]
+    #[cfg(all(feature = "disk-index", feature = "pipnn"))]
+    fn pipnn_cached_cli_fixtures() {
+        let registry = registry().unwrap();
+        for name in ["inmemory", "disk"] {
+            diskann_benchmark_runner::app::fixture::run(
+                &project_directory().join("tests/pipnn").join(name),
+                &registry,
+            );
+        }
     }
 
     #[test]

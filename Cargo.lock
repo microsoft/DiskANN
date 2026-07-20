@@ -851,7 +851,6 @@ dependencies = [
  "criterion",
  "diskann",
  "diskann-linalg",
- "diskann-providers",
  "diskann-vector",
  "half",
  "libc",

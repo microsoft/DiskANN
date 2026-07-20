@@ -74,20 +74,20 @@ fn main() {
 
     // Fixed A/B configuration.
     let config = PiPNNConfig {
-        num_hash_planes: 12,
+        num_hash_planes: 14,
         c_max: 512,
         c_min: 64,
-        p_samp: 0.005,
+        p_samp: 0.01,
         fanout: vec![10, 3],
         k: 2,
         replicas: 1,
         l_max: 72,
         final_prune: true,
-        alpha: 1.2,
     };
     let ctx = PiPNNBuildContext::new(
         config.clone(),
         NonZeroUsize::new(64).unwrap(),
+        1.2,
         Metric::L2,
         16,
     )
@@ -105,7 +105,7 @@ fn main() {
         "BUILD_WALL={:.3}s  RSS_post={} MB  npoints={}  avg_degree={:.2}",
         dt.as_secs_f64(),
         rss_post / 1024,
-        graph.npoints,
+        graph.adjacency.len(),
         graph.avg_degree()
     );
     println!("stats: {:?}", graph.build_stats);
