@@ -39,8 +39,10 @@ Benchmarks](https://github.com/harsha-simhadri/big-ann-benchmarks)'s
 `create_dataset.py` to download datasets. Once you have a dataset and Garnet is
 running, copy config.toml.example to config.toml and modify as necessary.
 
-Since vectorset has its own workspace in the DiskANN repo, the following examples should be run from the `vectorset` directory in the repo. Running `cargo run --release -- --help` will enumerate
-all the various subcommands and arguments.
+Since vectorset has its own workspace in the DiskANN repo, the following
+examples should be run from the `vectorset` directory in the repo. Running
+`cargo run --release -- --help` and `cargo run --release -- <subcommand> --help`
+will enumerate all the various subcommands and arguments.
 
 ### Ingest
 
@@ -53,3 +55,19 @@ The `ingest` subcommand will ingest vectors and build the index. The following e
 The `query` subcommand queries the database while calculating recall against precomputed ground truth. By default, it will measure 10-recall@10. The following example queries the index created above and reports queries per second (QPS) and recall results.
 
 `cargo run --release -- --config path/to/config.toml --quantizer no-quant query --tasks 32 -k 100 -n 100 --l-search 192 path/to/data/wikipedia_cohere/wikipedia_query.bin path/to/data/wikipedia_cohere/wikipedia-10M`
+
+### Run
+
+The `run` subcommand executes [Big ANN
+Benchmark](https://github.com/harsha-simhadri/big-ann-benchmarks) style
+runbooks. It requires a dataset catalog, describing metadata about available
+datasets. You can find an example in the `datasets` directory. Aside from
+console output, it will write reports to disk in the `reports` directory by
+default.
+
+Unlike the `query` command, searches executed from runbooks are not pipelined in
+order to get more accurate latency metrics.
+
+The following example command executes a runbook:
+
+`cargo run --release -- --config path/to/config.toml --quantizer no-quant --threads 8 run --tasks 8 --degree 48 --l-build 300 --l-search 100 path/to/runbook.yaml path/to/datasets`
