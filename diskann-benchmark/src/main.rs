@@ -321,18 +321,18 @@ mod tests {
     }
 
     ////////////////////////////
-    //      Dynamic Index     //
+    //    Streaming Index     //
     ////////////////////////////
 
     #[test]
-    fn graph_index_dynamic_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
+    fn graph_index_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-stream.json"));
         run_integration_test(raw);
     }
 
     #[test]
-    fn graph_index_dynamic_yfcc_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index-dynamic-yfcc.json"));
+    fn graph_index_stream_yfcc_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-stream-yfcc.json"));
         run_integration_test(raw);
     }
 
@@ -358,6 +358,28 @@ mod tests {
     #[cfg(feature = "bftree")]
     fn graph_index_bftree_stream_integration() {
         let raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_spherical_integration() {
+        let raw =
+            value_from_file(&example_directory().join("graph-index-bftree-stream-spherical.json"));
+        run_integration_test(raw);
+    }
+
+    // Guardrail: the bf-tree direct (non-Managed) streaming path uses absolute
+    // runbook tag IDs as provider slot IDs, so the provider must be sized to the
+    // dataset ID space rather than the runbook's max concurrent active-point
+    // count. This runbook drives the max tag above the max active count, which
+    // fails with "Vector id is out of boundary in the dataset" if the provider
+    // is mis-sized to `max_pts`.
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_capacity_integration() {
+        let raw =
+            value_from_file(&example_directory().join("graph-index-bftree-stream-capacity.json"));
         run_integration_test(raw);
     }
 
@@ -425,7 +447,11 @@ mod tests {
                 cfg.insert("use_snapshot".into(), serde_json::Value::Bool(true));
             }
         }
-        if let Some(cfg) = content.get_mut("quant_store_config") {
+        // Spherical configs nest the quant store under `quantization`.
+        if let Some(cfg) = content
+            .get_mut("quantization")
+            .and_then(|q| q.get_mut("quant_store_config"))
+        {
             if let Some(obj) = cfg.as_object_mut() {
                 obj.insert("use_snapshot".into(), serde_json::Value::Bool(true));
             }

@@ -12,9 +12,7 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_benchmark_core::{
-    self as benchmark_core,
-    recall::GroundTruthMode,
-    streaming::{executors::bigann, Executor},
+    self as benchmark_core, recall::GroundTruthMode, streaming::executors::bigann,
 };
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},
@@ -42,11 +40,14 @@ use super::{
 };
 use crate::{
     index::{
+        inmem::InmemMaintainer,
         result::{AggregatedSearchResults, BuildResult},
         search::plugins,
-        streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
+        streaming::{self, managed, stats::StreamStats, Managed, StreamRunner},
     },
-    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::graph_index::{
+        IndexBuild, IndexOperation, IndexSource, SearchPhase, StreamingIndexRun,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -58,7 +59,7 @@ use crate::{
 // Benchmark Registration //
 ////////////////////////////
 
-pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     // Notes on registration:
     //
     // We register all supported search types for `f32`, but intentionally limit the number
@@ -95,22 +96,22 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         FullPrecision::<i8>::new().search(plugins::Topk),
     )?;
 
-    // Dynamic Full Precision
+    // Streaming Full Precision
     registry.register(
-        "graph-index-dynamic-full-precision-f32",
-        DynamicFullPrecision::<f32>::new(),
+        "graph-index-stream-full-precision-f32",
+        StreamingFullPrecision::<f32>::new(),
     )?;
     registry.register(
-        "graph-index-dynamic-full-precision-f16",
-        DynamicFullPrecision::<f16>::new(),
+        "graph-index-stream-full-precision-f16",
+        StreamingFullPrecision::<f16>::new(),
     )?;
     registry.register(
-        "graph-index-dynamic-full-precision-u8",
-        DynamicFullPrecision::<u8>::new(),
+        "graph-index-stream-full-precision-u8",
+        StreamingFullPrecision::<u8>::new(),
     )?;
     registry.register(
-        "graph-index-dynamic-full-precision-i8",
-        DynamicFullPrecision::<i8>::new(),
+        "graph-index-stream-full-precision-i8",
+        StreamingFullPrecision::<i8>::new(),
     )?;
 
     product::register_benchmarks(registry)?;
@@ -129,7 +130,7 @@ type FullPrecisionProvider<T> = inmem::DefaultProvider<
 /// Associate a type (usually a [`diskann::provider::DataProvider`]) with a full-precision
 /// element type. This is used in implementations of [`plugins::Plugin`] to derive the
 /// correct query types to load.
-pub(crate) trait QueryType {
+pub(super) trait QueryType {
     type Element: VectorRepr;
 }
 
@@ -178,13 +179,13 @@ where
 
     fn try_match(&self, input: &IndexOperation, context: &MatchContext) -> Score {
         let mut score = context.success(0);
-        utils::match_data_type::<T>(&mut score, *input.source.data_type());
-        if !self.plugins.is_match(&input.search_phase) {
+        utils::match_data_type::<T>(&mut score, *input.source().data_type());
+        if !self.plugins.is_match(input.search_phase()) {
             score.fail(
                 1,
                 &format_args!(
                     "Unsupported search phase: \"{}\" - expected one of {}",
-                    input.search_phase.kind(),
+                    input.search_phase().kind(),
                     self.plugins.format_kinds(),
                 ),
             );
@@ -205,7 +206,7 @@ where
         mut output: &mut dyn Output,
     ) -> anyhow::Result<BuildResult> {
         writeln!(output, "{}", input)?;
-        let (index, build_stats) = match &input.source {
+        let (index, build_stats) = match input.source() {
             IndexSource::Build(build) => {
                 let (index, build_stats) = run_build(
                     build,
@@ -250,7 +251,7 @@ where
 
         let search_results = self.plugins.run(
             index,
-            &input.search_phase,
+            input.search_phase(),
             &Strategy::new(common::FullPrecision),
         )?;
 
@@ -261,12 +262,12 @@ where
     }
 }
 
-// Graph Index Dynamic Run
-pub(crate) struct DynamicFullPrecision<T> {
+// Graph Index Streaming Run
+pub(super) struct StreamingFullPrecision<T> {
     _type: std::marker::PhantomData<T>,
 }
 
-impl<T> DynamicFullPrecision<T> {
+impl<T> StreamingFullPrecision<T> {
     fn new() -> Self {
         Self {
             _type: std::marker::PhantomData,
@@ -274,16 +275,16 @@ impl<T> DynamicFullPrecision<T> {
     }
 }
 
-impl<T> Benchmark for DynamicFullPrecision<T>
+impl<T> Benchmark for StreamingFullPrecision<T>
 where
     T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
 {
-    type Input = DynamicIndexRun;
+    type Input = StreamingIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
-    fn try_match(&self, input: &DynamicIndexRun, context: &MatchContext) -> Score {
+    fn try_match(&self, input: &StreamingIndexRun, context: &MatchContext) -> Score {
         let mut score = context.success(0);
-        utils::match_data_type::<T>(&mut score, input.build.data_type());
+        utils::match_data_type::<T>(&mut score, input.build().data_type());
         score
     }
 
@@ -293,70 +294,24 @@ where
 
     fn run(
         &self,
-        input: &DynamicIndexRun,
+        input: &StreamingIndexRun,
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Vec<managed::Stats<StreamStats>>> {
         writeln!(output, "{}", input)?;
 
-        let groundtruth_directory = input
-            .runbook_params
-            .resolved_gt_directory
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Ground truth directory path was not resolved during validation")
-            })?;
-
-        let mut runbook = bigann::RunBook::load(
-            &input.runbook_params.runbook_path,
-            &input.runbook_params.dataset_name,
-            &mut bigann::ScanDirectory::new(groundtruth_directory)?,
-        )?;
-
-        let mut streamer = full_precision_streaming::<T>(input, runbook.max_points())?;
-
-        let mut results = Vec::new();
-        let stages = runbook.len();
-        let mut i = 1;
-
-        runbook.run_with(
-            &mut streamer,
-            |o: managed::Stats<StreamStats>| -> anyhow::Result<()> {
-                if o.inner().is_maintain() {
-                    let message = format!("Ran maintenance before stage {}", i);
-                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
-                } else {
-                    let message =
-                        format!("Finished stage {} of {}: {}", i, stages, o.inner().kind());
-                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
-                    i += 1;
-                }
-                writeln!(output, "{}", o)?;
-                results.push(o);
-                Ok(())
-            },
-        )?;
-
-        write!(
+        streaming::run_streaming::<T, Managed<T, StreamStats>, _>(
+            input.runbook_params(),
+            |max_points| full_precision_streaming::<T>(input, max_points),
             output,
-            "{}",
-            crate::utils::SmallBanner("End of Run Summary")
-        )?;
-
-        writeln!(
-            output,
-            "{}",
-            streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
-        )?;
-
-        Ok(results)
+        )
     }
 }
 
 // Simplify reasoning about this rather hefty type.
 type Index<DP> = Arc<DiskANNIndex<DP>>;
 
-pub(crate) fn run_build<T, BF, CF, B, DP>(
+pub(super) fn run_build<T, BF, CF, B, DP>(
     input: &IndexBuild,
     build_strategy: B,
     data: Option<Arc<Matrix<T>>>,
@@ -394,14 +349,14 @@ where
 /// This exists so we can implement [`search::Plugin`] for a raw generic `DP` without
 /// forming a blanket implementation for all `DP`/parameter `P` pairs.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Strategy<S>(S);
+pub(super) struct Strategy<S>(S);
 
 impl<S> Strategy<S> {
-    pub(crate) fn new(strategy: S) -> Self {
+    pub(super) fn new(strategy: S) -> Self {
         Self(strategy)
     }
 
-    pub(crate) fn inner(&self) -> S
+    pub(super) fn inner(&self) -> S
     where
         S: Clone,
     {
@@ -756,7 +711,7 @@ where
 
 /// The stack looks like this:
 ///
-/// - Bottom: [`FullPrecisionStream`]: The core streaming index implementation.
+/// - Bottom: [`StreamRunner`]: The core streaming index implementation.
 /// - Middle: [`Managed`]: Since the in-mem index currently does not split internal and external
 ///   IDs, the [`Managed`] layer is introduced as a temporary measure. This is responsible
 ///   for ID mapping.
@@ -764,64 +719,49 @@ where
 ///
 /// This function constructs the entire stack.
 fn full_precision_streaming<T>(
-    input: &DynamicIndexRun,
+    input: &StreamingIndexRun,
     max_points: usize,
 ) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
 where
     T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
-    let topk = input.search_phase.as_topk()?;
+    let search = input.search();
 
     let consolidate_threshold: f32 = input
-        .runbook_params
+        .runbook_params()
         .consolidate_threshold
         .ok_or_else(|| anyhow::anyhow!("consolidate_threshold is required for inmem streaming"))?;
+    let capacity = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
 
-    let data = datafiles::load_dataset::<T>(datafiles::BinFile(input.build.data()))?;
-    let queries = Arc::new(datafiles::load_dataset::<T>(datafiles::BinFile(
-        &topk.queries,
-    ))?);
+    streaming::build_managed_streamer(
+        input.build().data(),
+        search,
+        streaming::managed::SlotReclaim::Deferred(consolidate_threshold),
+        capacity,
+        |data, capacity| {
+            let index = diskann_async::new_index::<T, _>(
+                input.try_as_config(input.build().l_build())?.build()?,
+                input.inmem_parameters(capacity, data.ncols()),
+                common::TableBasedDeletes,
+            )?;
 
-    // Create a little extra headroom to handle deferred maintenance.
-    let max_points = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
+            build::set_start_points(
+                index.provider(),
+                data.as_view(),
+                *input.build().start_point_strategy(),
+            )?;
 
-    let index = diskann_async::new_index::<T, _>(
-        input.try_as_config(input.build.l_build())?.build()?,
-        input.inmem_parameters(max_points, data.ncols()),
-        common::TableBasedDeletes,
-    )?;
-
-    build::set_start_points(
-        index.provider(),
-        data.as_view(),
-        *input.build.start_point_strategy(),
-    )?;
-
-    let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();
-    let managed_stream = FullPrecisionStream {
-        index,
-        search: topk.clone(),
-        runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-        ntasks: num_threads_and_tasks,
-        inplace_delete_num_to_replace: input.runbook_params.ip_delete_num_to_replace,
-        inplace_delete_method: input.runbook_params.ip_delete_method.into(),
-    };
-
-    let managed = Managed::new(
-        max_points,
-        managed::SlotReclaim::Deferred(consolidate_threshold),
-        managed_stream,
-    );
-
-    // compute the maximum value of k used in any search
-    let max_k = topk.max_k();
-
-    let layered = bigann::WithData::new(managed, data, queries, move |path| {
-        Ok(Box::new(datafiles::load_groundtruth(
-            datafiles::BinFile(path),
-            Some(max_k),
-        )?))
-    });
-
-    Ok(layered)
+            let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
+            Ok(StreamRunner::new(
+                index,
+                common::FullPrecision,
+                search.clone(),
+                benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                num_threads_and_tasks,
+                input.runbook_params().ip_delete_num_to_replace,
+                input.runbook_params().ip_delete_method.into(),
+                InmemMaintainer,
+            ))
+        },
+    )
 }
