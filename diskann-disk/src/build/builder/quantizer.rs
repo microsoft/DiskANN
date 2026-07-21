@@ -21,7 +21,7 @@ use tracing::info;
 
 use crate::QuantizationType;
 
-/// Quantizer types used specifically for async disk index building.
+/// Quantizer types used for disk index building.
 #[derive(Clone)]
 pub enum BuildQuantizer {
     NoQuant(NoStore),

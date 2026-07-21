@@ -22,7 +22,7 @@ use rand::seq::SliceRandom;
 use tracing::info;
 
 use crate::{
-    build::builder::{build::build_inmem_index, quantizer::BuildQuantizer},
+    build::builder::{inmem_builder::build_inmem_index, quantizer::BuildQuantizer},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},

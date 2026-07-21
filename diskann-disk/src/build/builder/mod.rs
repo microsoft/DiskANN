@@ -5,11 +5,11 @@
 
 //! Disk index builders and related functionality.
 pub mod build;
-pub mod core;
+mod merged_index;
 pub mod quantizer;
 
 pub mod inmem_builder;
 pub mod tokio;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
