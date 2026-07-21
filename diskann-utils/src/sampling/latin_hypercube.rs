@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::views::{Matrix, MatrixView};
+use crate::matrix::{Matrix, MatrixView};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 /// Return multiple rows sampled using Latin Hypercube Sampling in `data` that aproximetely uniformly distributed.
@@ -25,12 +25,12 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
         let nrows = data.nrows();
         let ncols = data.ncols();
         if ncols == 0 || nrows == 0 {
-            return Matrix::from_gen(T::default(), num_samples, ncols);
+            return Matrix::new(T::default(), num_samples, ncols);
         }
 
         let seed = seed.unwrap_or(0xaf2f5fa0b5161acf);
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut result: Matrix<Self> = Matrix::from_gen(T::default(), num_samples, ncols);
+        let mut result: Matrix<Self> = Matrix::new(T::default(), num_samples, ncols);
 
         // sample a random partitions down the diagonal
         for (s, res) in result.row_iter_mut().enumerate() {
@@ -67,7 +67,7 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 mod tests {
     use std::fmt::Display;
 
-    use crate::views::{Init, Matrix};
+    use crate::matrix::{Init, Matrix};
     use diskann_vector::conversion::CastFromSlice;
     use half::f16;
     use rand::{
@@ -178,17 +178,17 @@ mod tests {
         StandardUniform: Distribution<T>,
     {
         // No Rows
-        let x = Matrix::<T>::from_gen(T::default(), 0, 10);
+        let x = Matrix::<T>::new(T::default(), 0, 10);
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            Matrix::<T>::from_gen(T::default(), 1, x.ncols())
+            Matrix::<T>::new(T::default(), 1, x.ncols())
         );
 
         // No Cols0
-        let x = Matrix::<T>::from_gen(T::default(), 1, 0);
+        let x = Matrix::<T>::new(T::default(), 1, 0);
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            Matrix::<T>::from_gen(T::default(), 1, x.ncols())
+            Matrix::<T>::new(T::default(), 1, x.ncols())
         );
 
         let mut rng: StdRng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -196,7 +196,7 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<T>::from_gen(Init(|| dist.sample(&mut rng)), 1, dim);
+            let x = Matrix::<T>::new(Init(|| dist.sample(&mut rng)), 1, dim);
             assert_eq!(
                 T::sample_latin_hypercube(x.as_view(), 1, None),
                 Matrix::<T>::try_from(x.row(0).to_vec().into_boxed_slice(), 1, dim).unwrap()
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn test_f16() {
         let data = example_dataset();
-        let mut data_f16 = Matrix::<f16>::from_gen(f16::default(), data.nrows(), data.ncols());
+        let mut data_f16 = Matrix::<f16>::new(f16::default(), data.nrows(), data.ncols());
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
         test_for_type(data_f16);
     }

@@ -44,7 +44,7 @@
 //!     1.0, 0.0, 0.0, 0.0,  // query vector 0
 //!     0.0, 1.0, 0.0, 0.0,  // query vector 1
 //! ];
-//! let query_input = MatRef::new(
+//! let query_input = MatRef::from_repr(
 //!     RowMajor::new(num_query_vectors, dim).unwrap(), &query_data
 //! ).unwrap();
 //!
@@ -54,15 +54,15 @@
 //!     1.0, 0.0, 0.0, 0.0,  // doc vector 1
 //!     0.0, 0.0, 1.0, 0.0,  // doc vector 2
 //! ];
-//! let doc_input = MatRef::new(
+//! let doc_input = MatRef::from_repr(
 //!     RowMajor::new(num_doc_vectors, dim).unwrap(), &doc_data
 //! ).unwrap();
 //!
-//! // Create owned matrices for quantized output using Mat::new
+//! // Create owned matrices for quantized output using Mat::from_repr
 //! let mut query_out: Mat<MinMaxMeta<NBITS>> =
-//!     Mat::new(MinMaxMeta::new(num_query_vectors, dim), Defaulted).unwrap();
+//!     Mat::from_repr(MinMaxMeta::new(num_query_vectors, dim), Defaulted).unwrap();
 //! let mut doc_out: Mat<MinMaxMeta<NBITS>> =
-//!     Mat::new(MinMaxMeta::new(num_doc_vectors, dim), Defaulted).unwrap();
+//!     Mat::from_repr(MinMaxMeta::new(num_doc_vectors, dim), Defaulted).unwrap();
 //!
 //! // Quantize both multi-vectors
 //! quantizer.compress_into(query_input, query_out.reborrow_mut()).unwrap();

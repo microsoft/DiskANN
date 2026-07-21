@@ -9,8 +9,8 @@ use std::{
 };
 
 use diskann_utils::{
+    matrix::{Matrix, MatrixView},
     strided::StridedView,
-    views::{Matrix, MatrixView},
 };
 use thiserror::Error;
 
@@ -364,7 +364,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::{self, Matrix};
+    use diskann_utils::{Matrix, matrix};
 
     use super::*;
 
@@ -379,8 +379,8 @@ mod tests {
     #[test]
     fn test_rows() {
         let mut i = 0usize;
-        let mat = Matrix::from_gen(
-            views::Init(|| {
+        let mat = Matrix::new(
+            matrix::Init(|| {
                 let v = i;
                 i += 1;
                 v
@@ -558,16 +558,16 @@ mod tests {
 
     #[test]
     fn test_error_recall_k_and_n() {
-        let groundtruth = Matrix::<u32>::from_gen(0, 10, 10);
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
         let err = knn(&groundtruth, None, &results, 11, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RecallKAndNError(..)));
     }
 
     #[test]
     fn test_error_rows_mismatch() {
-        let groundtruth = Matrix::<u32>::from_gen(0, 11, 10);
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let groundtruth = Matrix::<u32>::new(0, 11, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
         let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RowsMismatch(..)));
         let err_allow_insufficient_results =
@@ -580,8 +580,8 @@ mod tests {
 
     #[test]
     fn test_error_not_enough_groundtruth() {
-        let groundtruth = Matrix::<u32>::from_gen(0, 10, 5);
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let groundtruth = Matrix::<u32>::new(0, 10, 5);
+        let results = Matrix::<u32>::new(0, 10, 10);
         let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
         let err_allow_insufficient_results =
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn test_dynamic_groundtruth_valid() {
         let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
         // Should succeed: each row uses this_recall_k = min(5, 10) = 5
         // Should succeed in Flexible mode, but fail in Fixed mode
         let recall_flexible = knn(
@@ -618,7 +618,7 @@ mod tests {
     fn test_dynamic_groundtruth_full_match() {
         let gt_row: Vec<u32> = (1..=5).collect();
         let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-        let mut results = Matrix::<u32>::from_gen(0, 10, 10);
+        let mut results = Matrix::<u32>::new(0, 10, 10);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
                 results[(i, j)] = v;
@@ -641,7 +641,7 @@ mod tests {
         // groundtruth: [1, 2, 3, 4, 5]; results contain [1, 2, 3, 6, 7, 8, 9, 10, 11, 12]
         let gt_row: Vec<u32> = (1..=5).collect();
         let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-        let mut results = Matrix::<u32>::from_gen(0, 10, 10);
+        let mut results = Matrix::<u32>::new(0, 10, 10);
         let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
         for i in 0..10 {
             for (j, &v) in res_row.iter().enumerate() {
@@ -672,7 +672,7 @@ mod tests {
             groundtruth.push(vec![]);
         }
 
-        let mut results = Matrix::<u32>::from_gen(0, 10, 10);
+        let mut results = Matrix::<u32>::new(0, 10, 10);
         for i in 0..10 {
             for (j, v) in (1u32..=10).enumerate() {
                 results[(i, j)] = v;
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn test_dynamic_groundtruth_all_zero() {
         let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
 
         let recall = knn(
             &groundtruth,
@@ -752,9 +752,9 @@ mod tests {
 
     #[test]
     fn test_error_distance_rows_mismatch() {
-        let groundtruth = Matrix::<u32>::from_gen(0, 10, 10);
-        let distances = Matrix::<f32>::from_gen(0.0, 9, 10);
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let distances = Matrix::<f32>::new(0.0, 9, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
         let err = knn(
             &groundtruth,
             Some(distances.as_view().into()),
@@ -769,9 +769,9 @@ mod tests {
 
     #[test]
     fn test_error_distance_cols_mismatch() {
-        let groundtruth = Matrix::<u32>::from_gen(0, 10, 10);
-        let distances = Matrix::<f32>::from_gen(0.0, 10, 9);
-        let results = Matrix::<u32>::from_gen(0, 10, 10);
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let distances = Matrix::<f32>::new(0.0, 10, 9);
+        let results = Matrix::<u32>::new(0, 10, 10);
         let err = knn(
             &groundtruth,
             Some(distances.as_view().into()),

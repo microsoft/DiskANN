@@ -23,7 +23,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    matrix::{Matrix, MatrixView},
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;

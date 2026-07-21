@@ -5,7 +5,7 @@
 
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
-use diskann_utils::views::{DenseData, Matrix, MatrixView};
+use diskann_utils::{DenseData, Matrix, MatrixView};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
 
@@ -22,25 +22,40 @@ use thiserror::Error;
 ///
 /// # Invariants
 ///
-/// * `offsets.dim() == pivots.nrows()`: The dimensionality of the two must agree.
+/// * `offsets.dim() == pivots.ncols()`: The dimensionality of the two must agree.
 #[derive(Debug, Clone)]
-pub struct BasicTableBase<T, U>
+pub struct BasicTableBase<M, U>
 where
-    T: DenseData<Elem = f32>,
     U: DenseData<Elem = usize>,
 {
-    pivots: T,
-    num_pivots: usize,
-    pivot_dim: usize,
+    pivots: M,
     offsets: ChunkOffsetsBase<U>,
 }
 
 /// A `BasicTableBase` that owns its contents.
-pub type BasicTable = BasicTableBase<Box<[f32]>, Box<[usize]>>;
+pub type BasicTable = BasicTableBase<Matrix<f32>, Box<[usize]>>;
 
 /// A `BasicTableBase` that references its contents. Construction of such a table will
 /// not result in a memory allocation.
-pub type BasicTableView<'a> = BasicTableBase<&'a [f32], &'a [usize]>;
+pub type BasicTableView<'a> = BasicTableBase<MatrixView<'a, f32>, &'a [usize]>;
+
+/// Bridges owned ([`Matrix`]) and borrowed ([`MatrixView`]) pivot storage, exposing a
+/// [`MatrixView`] so a [`BasicTableBase`] reads its dimensions and rows from one place.
+pub trait PivotTable {
+    fn view(&self) -> MatrixView<'_, f32>;
+}
+
+impl PivotTable for Matrix<f32> {
+    fn view(&self) -> MatrixView<'_, f32> {
+        self.as_matrix_view()
+    }
+}
+
+impl PivotTable for MatrixView<'_, f32> {
+    fn view(&self) -> MatrixView<'_, f32> {
+        self.as_matrix_view()
+    }
+}
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -54,9 +69,9 @@ pub enum BasicTableError {
     PivotsEmpty,
 }
 
-impl<T, U> BasicTableBase<T, U>
+impl<M, U> BasicTableBase<M, U>
 where
-    T: DenseData<Elem = f32>,
+    M: PivotTable,
     U: DenseData<Elem = usize>,
 {
     /// Construct a new `BasicTableBase` over the pivot table and offsets.
@@ -64,12 +79,11 @@ where
     /// # Error
     ///
     /// Returns an error if `pivots.ncols() != offsets.dim()` or if `pivots.nrows() == 0`.
-    fn from_parts(
-        pivots: T,
-        num_pivots: usize,
-        pivot_dim: usize,
-        offsets: ChunkOffsetsBase<U>,
-    ) -> Result<Self, BasicTableError> {
+    pub fn new(pivots: M, offsets: ChunkOffsetsBase<U>) -> Result<Self, BasicTableError> {
+        let (num_pivots, pivot_dim) = {
+            let view = pivots.view();
+            (view.nrows(), view.ncols())
+        };
         let offsets_dim = offsets.dim();
 
         if pivot_dim != offsets_dim {
@@ -80,20 +94,13 @@ where
         } else if num_pivots == 0 {
             Err(BasicTableError::PivotsEmpty)
         } else {
-            Ok(Self {
-                pivots,
-                num_pivots,
-                pivot_dim,
-                offsets,
-            })
+            Ok(Self { pivots, offsets })
         }
     }
 
     /// Return a view over the pivot table.
-    #[allow(clippy::expect_used)]
     pub fn view_pivots(&self) -> MatrixView<'_, f32> {
-        MatrixView::try_from(self.pivots.as_slice(), self.num_pivots, self.pivot_dim)
-            .expect("valid pivot dimensions")
+        self.pivots.view()
     }
 
     /// Return a view over the schema offsets.
@@ -103,7 +110,7 @@ where
 
     /// Return the number of pivots in each PQ chunk.
     pub fn ncenters(&self) -> usize {
-        self.num_pivots
+        self.view_pivots().nrows()
     }
 
     /// Return the number of PQ chunks.
@@ -113,29 +120,7 @@ where
 
     /// Return the dimensionality of the full-precision vectors associated with this table.
     pub fn dim(&self) -> usize {
-        self.pivot_dim
-    }
-}
-
-impl BasicTable {
-    /// Construct an owned table over `pivots` and `offsets`.
-    pub fn new(
-        pivots: Matrix<f32>,
-        offsets: ChunkOffsetsBase<Box<[usize]>>,
-    ) -> Result<Self, BasicTableError> {
-        let (num_pivots, pivot_dim) = (pivots.nrows(), pivots.ncols());
-        Self::from_parts(pivots.into_inner(), num_pivots, pivot_dim, offsets)
-    }
-}
-
-impl<'a> BasicTableView<'a> {
-    /// Construct a borrowed table over `pivots` and `offsets`.
-    pub fn new(
-        pivots: MatrixView<'a, f32>,
-        offsets: ChunkOffsetsView<'a>,
-    ) -> Result<Self, BasicTableError> {
-        let (num_pivots, pivot_dim) = (pivots.nrows(), pivots.ncols());
-        Self::from_parts(pivots.as_slice(), num_pivots, pivot_dim, offsets)
+        self.view_pivots().ncols()
     }
 }
 
@@ -152,9 +137,9 @@ pub enum TableCompressionError {
     InfinityOrNaN(usize),
 }
 
-impl<T, U> CompressInto<&[f32], &mut [u8]> for BasicTableBase<T, U>
+impl<M, U> CompressInto<&[f32], &mut [u8]> for BasicTableBase<M, U>
 where
-    T: DenseData<Elem = f32>,
+    M: PivotTable,
     U: DenseData<Elem = usize>,
 {
     type Error = TableCompressionError;
@@ -233,7 +218,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views};
+    use diskann_utils::{lazy_format, matrix};
     use rand::{
         SeedableRng,
         distr::{Distribution, StandardUniform},
@@ -252,7 +237,7 @@ mod tests {
     // disagree.
     #[test]
     fn error_on_mismatch_dim() {
-        let pivots = views::Matrix::from_gen(0.0, 3, 5);
+        let pivots = matrix::Matrix::new(0.0, 3, 5);
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 6])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "dimensions are not equal");
@@ -265,7 +250,7 @@ mod tests {
     // Test that the table constructor errors when there are no pivots.
     #[test]
     fn error_on_no_pivots() {
-        let pivots = views::Matrix::from_gen(0.0, 0, 5);
+        let pivots = matrix::Matrix::new(0.0, 0, 5);
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 2, 5])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "pivots is empty");
@@ -277,8 +262,8 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xd96bac968083ec29);
         for dim in [5, 10, 12] {
             for total in [1, 2, 3] {
-                let pivots = views::Matrix::from_gen(
-                    views::Init(|| -> f32 { StandardUniform {}.sample(&mut rng) }),
+                let pivots = matrix::Matrix::new(
+                    matrix::Init(|| -> f32 { StandardUniform {}.sample(&mut rng) }),
                     total,
                     dim,
                 );
@@ -355,7 +340,7 @@ mod tests {
 
         // Set up `ncenters > 256`.
         {
-            let pivots = views::Matrix::from_gen(0.0, 257, dim);
+            let pivots = matrix::Matrix::new(0.0, 257, dim);
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];
@@ -374,7 +359,7 @@ mod tests {
 
         // Setup input dim not equal to expected.
         {
-            let pivots = views::Matrix::from_gen(0.0, 10, dim);
+            let pivots = matrix::Matrix::new(0.0, 10, dim);
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim - 1];
@@ -393,7 +378,7 @@ mod tests {
 
         // Setup output dim not equal to expected.
         {
-            let pivots = views::Matrix::from_gen(0.0, 10, dim);
+            let pivots = matrix::Matrix::new(0.0, 10, dim);
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];
@@ -418,7 +403,7 @@ mod tests {
     #[test]
     fn test_table_single_compression_errors() {
         check_pqtable_single_compression_errors(
-            &|pivots: views::Matrix<f32>, offsets| BasicTable::new(pivots, offsets).unwrap(),
+            &|pivots: matrix::Matrix<f32>, offsets| BasicTable::new(pivots, offsets).unwrap(),
             &"BasicTable",
         )
     }

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{self, Matrix};
+use diskann_utils::{Matrix, matrix};
 
 use crate::recall;
 
@@ -231,7 +231,7 @@ where
                 len,
                 num_ids,
             } => {
-                let mut dst = Matrix::from_gen(views::Init(|| I::default()), len, num_ids);
+                let mut dst = Matrix::new(matrix::Init(|| I::default()), len, num_ids);
                 let mut lengths = Vec::with_capacity(len);
 
                 let mut output_row = 0;
@@ -279,7 +279,7 @@ mod tests {
         let nrows = data.len();
         let ncols = data.iter().map(|v| v.len()).max().unwrap_or(0);
 
-        let mut matrix = Matrix::from_gen(0u32, nrows, ncols);
+        let mut matrix = Matrix::new(0u32, nrows, ncols);
         let mut lengths = Vec::with_capacity(nrows);
 
         for (row, row_data) in std::iter::zip(matrix.row_iter_mut(), data.iter()) {
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_bounded_new_valid() {
-        let matrix = Matrix::from_gen(0u32, 3, 5);
+        let matrix = Matrix::new(0u32, 3, 5);
         let lengths = vec![2, 3, 1];
         let bounded = Bounded::new(matrix, lengths);
 
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_bounded_length_clamping() {
-        let matrix = Matrix::from_gen(0u32, 3, 3);
+        let matrix = Matrix::new(0u32, 3, 3);
         let lengths = vec![2, 3, 5]; // Last length exceeds number of columns
         let bounded = Bounded::new(matrix, lengths);
 
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "an internal invariant was not upheld")]
     fn test_bounded_new_mismatched_lengths() {
-        let matrix = Matrix::from_gen(0u32, 3, 5);
+        let matrix = Matrix::new(0u32, 3, 5);
         let lengths = vec![2, 3]; // Only 2 lengths for 3 rows
         Bounded::new(matrix, lengths);
     }

@@ -10,7 +10,7 @@ use bit_set::BitSet;
 use diskann::utils::IntoUsize;
 use diskann_benchmark_runner::utils::datatype::DataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_utils::views::Matrix;
+use diskann_utils::Matrix;
 use serde::{Deserialize, Serialize};
 
 pub(crate) struct BinFile<'a>(pub(crate) &'a Path);
@@ -71,12 +71,12 @@ impl ConvertingLoad for f32 {
     ))]
     fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<Matrix<f32>> {
         #[inline(never)]
-        fn convert<T, U>(from: diskann_utils::views::MatrixView<T>) -> Matrix<U>
+        fn convert<T, U>(from: diskann_utils::MatrixView<T>) -> Matrix<U>
         where
             U: Default + Clone + From<T>,
             T: Copy,
         {
-            let mut to = Matrix::from_gen(U::default(), from.nrows(), from.ncols());
+            let mut to = Matrix::new(U::default(), from.nrows(), from.ncols());
             std::iter::zip(to.as_mut_slice().iter_mut(), from.as_slice().iter())
                 .for_each(|(t, f)| *t = (*f).into());
             to
@@ -111,7 +111,7 @@ pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::R
         (num_points, dim)
     };
 
-    let mut groundtruth = Matrix::<u32>::from_gen(0, num_points, dim);
+    let mut groundtruth = Matrix::<u32>::new(0, num_points, dim);
     let groundtruth_slice: &mut [u8] = bytemuck::cast_slice_mut(groundtruth.as_mut_slice());
     file.read_exact(groundtruth_slice)?;
 

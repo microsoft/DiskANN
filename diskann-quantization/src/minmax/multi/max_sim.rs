@@ -202,9 +202,9 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
     {
-        let input_mat = MatRef::new(RowMajor::<f32>::new(n, dim).unwrap(), input).unwrap();
+        let input_mat = MatRef::from_repr(RowMajor::<f32>::new(n, dim).unwrap(), input).unwrap();
         let mut output: Mat<MinMaxMeta<NBITS>> =
-            Mat::new(MinMaxMeta::new(n, dim), Defaulted).unwrap();
+            Mat::from_repr(MinMaxMeta::new(n, dim), Defaulted).unwrap();
         quantizer
             .compress_into(input_mat, output.reborrow_mut())
             .unwrap();
@@ -301,10 +301,10 @@ mod tests {
         let query_data = vec![0u8; 2 * row_bytes];
         let doc_data = vec![0u8; 3 * row_bytes];
 
-        let query: QueryMatRef<_> = MatRef::new(MinMaxMeta::<8>::new(2, dim), &query_data)
+        let query: QueryMatRef<_> = MatRef::from_repr(MinMaxMeta::<8>::new(2, dim), &query_data)
             .unwrap()
             .into();
-        let doc = MatRef::new(MinMaxMeta::<8>::new(3, dim), &doc_data).unwrap();
+        let doc = MatRef::from_repr(MinMaxMeta::<8>::new(3, dim), &doc_data).unwrap();
 
         let mut scores = vec![0.0f32; 5]; // Wrong size
         MaxSim::new(&mut scores).evaluate(query, doc);

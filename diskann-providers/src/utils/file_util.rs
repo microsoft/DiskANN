@@ -10,7 +10,7 @@ use std::io::Read;
 
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::{io::Metadata, views::Matrix};
+use diskann_utils::{io::Metadata, matrix::Matrix};
 
 /// Read metadata of data file.
 pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(
@@ -89,7 +89,7 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
     let mut all_vectors: Vec<Matrix<T>> = Vec::with_capacity(num_points);
 
     for &length in &vec_lengths {
-        let mut vectors = Matrix::<T>::from_gen(T::default(), length as usize, dimension);
+        let mut vectors = Matrix::<T>::new(T::default(), length as usize, dimension);
         reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(
             vectors.as_mut_slice(),
         ))?;

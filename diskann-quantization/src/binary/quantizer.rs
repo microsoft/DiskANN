@@ -129,7 +129,7 @@ impl AsFunctor<Hamming> for BinaryQuantizer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{ReborrowMut, views::Matrix};
+    use diskann_utils::{ReborrowMut, matrix::Matrix};
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::*;
@@ -137,7 +137,7 @@ mod tests {
 
     fn test_compression_impl(len: usize, rng: &mut StdRng) {
         let mut domain = [-10, -1, 0, 1, 10];
-        let mut test_pattern = Matrix::<i32>::from_gen(0, domain.len(), len);
+        let mut test_pattern = Matrix::<i32>::new(0, domain.len(), len);
 
         // Fill the test patterns randomly.
         for col in 0..len {

@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, views::MatrixView};
+use diskann_utils::{ReborrowMut, matrix::MatrixView};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
@@ -1220,7 +1220,7 @@ mod tests {
 
     use diskann_utils::{
         ReborrowMut, lazy_format,
-        views::{self, Matrix},
+        matrix::{self, Matrix},
     };
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
@@ -2273,7 +2273,7 @@ mod tests {
 
     #[test]
     fn err_dim_cannot_be_zero() {
-        let data = Matrix::from_gen(0.0f32, 10, 0);
+        let data = Matrix::new(0.0f32, 10, 0);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2291,7 +2291,7 @@ mod tests {
 
     #[test]
     fn err_norm_must_be_positive() {
-        let data = Matrix::from_gen(0.0f32, 10, 10);
+        let data = Matrix::new(0.0f32, 10, 10);
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2309,7 +2309,7 @@ mod tests {
 
     #[test]
     fn err_norm_cannot_be_infinity() {
-        let mut data = Matrix::from_gen(0.0f32, 10, 10);
+        let mut data = Matrix::new(0.0f32, 10, 10);
         data[(2, 5)] = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
@@ -2329,7 +2329,7 @@ mod tests {
 
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
-        let mut data = Matrix::from_gen(0.0f32, 10, 10);
+        let mut data = Matrix::new(0.0f32, 10, 10);
         data[(2, 5)] = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
@@ -2388,7 +2388,7 @@ mod tests {
     #[test]
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
-        let data = Matrix::<f32>::from_gen(views::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
+        let data = Matrix::<f32>::new(matrix::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),

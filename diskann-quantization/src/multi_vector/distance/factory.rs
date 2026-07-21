@@ -444,7 +444,7 @@ mod tests {
     }
 
     fn make_mat<T: Copy>(data: &[T], nrows: usize, ncols: usize) -> MatRef<'_, RowMajor<T>> {
-        MatRef::new(RowMajor::new(nrows, ncols).unwrap(), data).unwrap()
+        MatRef::from_repr(RowMajor::new(nrows, ncols).unwrap(), data).unwrap()
     }
 
     fn make_test_data<T: FromF32>(len: usize, ceil: usize, shift: usize) -> Vec<T> {

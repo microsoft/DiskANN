@@ -69,7 +69,7 @@ mod imp {
             graph::provider::async_::{common, inmem},
         },
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::{Matrix, MatrixView};
 
     use crate::{
         index::{

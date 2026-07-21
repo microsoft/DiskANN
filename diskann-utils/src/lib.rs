@@ -18,11 +18,10 @@ pub mod io;
 pub mod object_pool;
 pub mod sampling;
 
-// Views
 pub mod strided;
-pub mod views;
 
 pub mod matrix;
+pub use matrix::{DenseData, Init, Matrix, MatrixView, MatrixViewMut, MutDenseData, TryFromError};
 
 mod lazystring;
 pub use lazystring::LazyString;

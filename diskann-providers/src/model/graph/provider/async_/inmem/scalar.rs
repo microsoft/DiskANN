@@ -892,7 +892,7 @@ mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::utils::ONE;
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::MatrixView;
+    use diskann_utils::MatrixView;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 

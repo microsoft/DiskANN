@@ -12,7 +12,7 @@ use diskann_quantization::{
         iface::{self, Opaque, OpaqueMut, Quantizer},
     },
 };
-use diskann_utils::views::MatrixView;
+use diskann_utils::MatrixView;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -357,7 +357,7 @@ impl DynQueryComputer for MinMax8BitQueryComputer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::Matrix;
+    use diskann_utils::Matrix;
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
     use crate::quantization::{GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit};
@@ -386,7 +386,7 @@ mod tests {
             Err(GarnetQuantizerError::NoQuantizer)
         ));
 
-        let mut test_data = Matrix::from_gen(0.0f32, 1000, 2);
+        let mut test_data = Matrix::new(0.0f32, 1000, 2);
         for i in 0..1000 {
             test_data
                 .row_mut(i)
@@ -424,7 +424,7 @@ mod tests {
         let test_v = [0.5f32, 0.5];
         let mut test_q = vec![0u8; quantizer.bytes()];
 
-        let mut test_data = Matrix::from_gen(0.0f32, 1, 2);
+        let mut test_data = Matrix::new(0.0f32, 1, 2);
         test_data.row_mut(0).copy_from_slice(&[1.0f32, 1.0]);
 
         // Training is a no-op, but succeeds.

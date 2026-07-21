@@ -13,7 +13,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::ANNResult;
 use diskann_utils::{
     io::{Metadata, ReadBinError, SaveBinError, read_bin, write_bin},
-    views::{Matrix, MatrixView},
+    matrix::{Matrix, MatrixView},
 };
 
 /// Load a list of vector ids from the stream.

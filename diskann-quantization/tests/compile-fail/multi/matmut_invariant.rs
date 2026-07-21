@@ -18,6 +18,6 @@ where
 
 fn main() {
     let b = 0u8;
-    let mut m = Mat::new(RowMajor::new(4, 3).unwrap(), &b).unwrap();
+    let mut m = Mat::from_repr(RowMajor::new(4, 3).unwrap(), &b).unwrap();
     bad(m.as_view_mut());
 }

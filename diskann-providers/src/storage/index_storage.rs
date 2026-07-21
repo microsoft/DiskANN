@@ -222,7 +222,7 @@ mod tests {
         provider::SetElement,
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{test_data_root, views::MatrixView};
+    use diskann_utils::{matrix::MatrixView, test_data_root};
     use diskann_vector::distance::Metric;
 
     use super::*;

@@ -81,8 +81,8 @@ use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use diskann_utils::{
     Reborrow, ReborrowMut,
+    matrix::{MatrixView, MatrixViewMut},
     strided::StridedView,
-    views::{MatrixView, MatrixViewMut},
 };
 
 use super::matrix::{
@@ -579,10 +579,8 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprOwned
 
 // SAFETY: The returned `Mat` contains a `Box` with exactly `self.storage_len()` elements.
 //
-// Only `NewOwned<Defaulted>` is provided (no generic `NewOwned<T>` value-fill): `Defaulted`
-// now lives in `diskann-utils`, so a value-fill impl would overlap with this one under the
-// intercrate coherence rules (the compiler cannot prove `Defaulted: !Default` for a foreign
-// type). Block-transposed matrices are only ever default-initialized.
+// No generic `NewOwned<T>` value-fill: `Defaulted` is foreign (diskann-utils), so a value-fill
+// impl would overlap with this under intercrate coherence. These matrices are only default-init'd.
 unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<Defaulted>
     for BlockTransposedRepr<T, GROUP, PACK>
 {
@@ -1112,7 +1110,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
         let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)
             .expect("dimensions should not overflow");
         Self {
-            data: Mat::new(repr, Defaulted).expect("infallible"),
+            data: Mat::from_repr(repr, Defaulted).expect("infallible"),
         }
     }
 
@@ -1120,7 +1118,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     pub fn try_new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
         let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)?;
         Ok(Self {
-            data: Mat::new(repr, Defaulted).expect("infallible"),
+            data: Mat::from_repr(repr, Defaulted).expect("infallible"),
         })
     }
 
@@ -1230,7 +1228,7 @@ mod tests {
     //!     parameters to `test_full_api` (`Send`/`Sync`, panic paths,
     //!     non-unit strides, concurrent mutation, etc.).
 
-    use diskann_utils::{lazy_format, views::Matrix};
+    use diskann_utils::{lazy_format, matrix::Matrix};
 
     use super::*;
     use crate::utils::div_round_up;
@@ -1282,7 +1280,7 @@ mod tests {
 
         // ── Construction ─────────────────────────────────────────
 
-        let mut data = Matrix::from_gen(T::default(), nrows, ncols);
+        let mut data = Matrix::new(T::default(), nrows, ncols);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1838,7 +1836,7 @@ mod tests {
         ncols: usize,
         gen_element: fn(usize) -> T,
     ) {
-        let mut data = Matrix::from_gen(T::default(), nrows, ncols);
+        let mut data = Matrix::new(T::default(), nrows, ncols);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()

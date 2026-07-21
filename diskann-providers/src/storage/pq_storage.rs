@@ -11,7 +11,7 @@ use diskann::{
 };
 use diskann_utils::{
     io::{Metadata, read_bin, write_bin},
-    views::{Matrix, MatrixView},
+    matrix::{Matrix, MatrixView},
 };
 use rand::Rng;
 use tracing::info;
@@ -116,7 +116,7 @@ impl PQStorage {
         // Write the centroid of PQ centroid vectors
         let centroid_bytes = match centroid {
             Some(centroid) => write_bin(MatrixView::column_vector(centroid), writer)?,
-            None => write_bin(Matrix::<f32>::from_gen(0.0, dim, 1).as_view(), writer)?,
+            None => write_bin(Matrix::<f32>::new(0.0, dim, 1).as_view(), writer)?,
         };
         cumul_bytes[2] = cumul_bytes[1] + centroid_bytes;
 
@@ -523,7 +523,7 @@ mod pq_storage_tests {
     #[test]
     fn write_read_roundtrip_with_legacy_centroid() {
         use crate::model::pq::accum_row_inplace;
-        use diskann_utils::views::MatrixViewMut;
+        use diskann_utils::MatrixViewMut;
 
         let storage_provider = VirtualStorageProvider::new_memory();
         let pivot_path = "/roundtrip_legacy_centroid_pivots.bin";

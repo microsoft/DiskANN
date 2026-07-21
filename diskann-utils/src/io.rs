@@ -16,7 +16,7 @@ use std::io::{Read, Seek, Write};
 use diskann_wide::{LoHi, SplitJoin};
 use thiserror::Error;
 
-use crate::views::{Matrix, MatrixView};
+use crate::matrix::{Matrix, MatrixView};
 
 /// Read a matrix of `T` from the DiskANN binary format (see [module docs](self)).
 ///
@@ -53,7 +53,7 @@ where
         });
     }
 
-    let mut data = Matrix::from_gen(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
+    let mut data = Matrix::new(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
 
     reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(data.as_mut_slice()))?;
     Ok(data)
@@ -209,14 +209,14 @@ pub enum SaveBinError {
 mod tests {
     use std::io::Cursor;
 
-    use crate::views::Init;
+    use crate::matrix::Init;
 
     use super::*;
 
     #[test]
     fn round_trip_f32() {
         let mut counter = 1.0f32;
-        let matrix = Matrix::<f32>::from_gen(
+        let matrix = Matrix::<f32>::new(
             Init(|| {
                 let v = counter;
                 counter += 1.0;

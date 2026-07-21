@@ -8,7 +8,7 @@ use crate::{
     num::Positive,
     utils::{compute_means_and_average_norm, compute_variances},
 };
-use diskann_utils::views;
+use diskann_utils::matrix;
 
 /// Parameters controlling the generation of the scalar quantization Quantizer.
 ///
@@ -71,7 +71,7 @@ impl ScalarQuantizationParameters {
     /// # Parallelism
     ///
     /// This function is single threaded.
-    pub fn train<T>(&self, data: views::MatrixView<T>) -> ScalarQuantizer
+    pub fn train<T>(&self, data: matrix::MatrixView<T>) -> ScalarQuantizer
     where
         T: Copy + Into<f64> + Into<f32>,
     {

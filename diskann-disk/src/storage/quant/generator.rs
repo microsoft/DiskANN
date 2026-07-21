@@ -14,7 +14,7 @@ use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider},
     utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
 };
-use diskann_utils::{io::Metadata, views};
+use diskann_utils::{io::Metadata, matrix};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
@@ -147,14 +147,14 @@ where
 
             // Wrap the data in `MatrixViews` so we do not need to manually construct view
             // in the compression loop.
-            let mut compressed_block = views::MatrixViewMut::try_from(
+            let mut compressed_block = matrix::MatrixViewMut::try_from(
                 block_compressed_base,
                 cur_block_size,
                 compressed_size,
             )
             .bridge_err()?;
             let base_block =
-                views::MatrixView::try_from(&block_data, cur_block_size, full_dim).bridge_err()?;
+                matrix::MatrixView::try_from(&block_data, cur_block_size, full_dim).bridge_err()?;
             base_block
                 .par_window_iter(BATCH_SIZE)
                 .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
@@ -193,7 +193,7 @@ mod generator_tests {
     use diskann_providers::utils::create_thread_pool_for_test;
     use diskann_utils::{
         io::{write_bin, Metadata},
-        views::MatrixView,
+        matrix::MatrixView,
     };
     use rstest::rstest;
     use vfs::{FileSystem, MemoryFS};
@@ -220,8 +220,8 @@ mod generator_tests {
 
         fn compress(
             &self,
-            _vector: views::MatrixView<f32>,
-            mut output: views::MatrixViewMut<u8>,
+            _vector: matrix::MatrixView<f32>,
+            mut output: matrix::MatrixViewMut<u8>,
         ) -> ANNResult<()> {
             output
                 .row_iter_mut()

@@ -1061,7 +1061,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views};
+    use diskann_utils::{lazy_format, matrix};
     use diskann_vector::{PureDistanceFunction, distance};
     use rand::{
         SeedableRng,
@@ -1520,7 +1520,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 5 must be less than 5")]
     fn get_panics_on_row() {
-        let data = views::Matrix::from_gen(0.0, 5, 10);
+        let data = matrix::Matrix::new(0.0, 5, 10);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(5, 1);
     }
@@ -1528,7 +1528,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 5 must be less than 5")]
     fn get_panics_on_col() {
-        let data = views::Matrix::from_gen(0.0, 10, 5);
+        let data = matrix::Matrix::new(0.0, 10, 5);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(1, 5);
     }
@@ -1547,8 +1547,11 @@ mod tests {
 
     fn test_process_into_impl(dim: usize, total: usize, rng: &mut StdRng) {
         let distribution = Uniform::<i32>::new(-10, 10).unwrap();
-        let base =
-            views::Matrix::<f32>::from_gen(views::Init(|| distribution.sample(rng) as f32), total, dim);
+        let base = matrix::Matrix::<f32>::new(
+            matrix::Init(|| distribution.sample(rng) as f32),
+            total,
+            dim,
+        );
 
         let chunk = Chunk::new(base.as_view().into()).unwrap();
         let mut input = vec![0.0; dim];
@@ -1597,7 +1600,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_from() {
-        let data = views::Matrix::<f32>::from_gen(0.0, 5, 10);
+        let data = matrix::Matrix::<f32>::new(0.0, 5, 10);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1611,7 +1614,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_into() {
-        let data = views::Matrix::<f32>::from_gen(0.0, 5, 10);
+        let data = matrix::Matrix::<f32>::new(0.0, 5, 10);
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);

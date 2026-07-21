@@ -22,8 +22,8 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
 };
 
+use diskann_utils::Matrix;
 use diskann_utils::future::AsyncFriendly;
-use diskann_utils::views::Matrix;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
@@ -438,7 +438,7 @@ where
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
         let candidate_count = candidates.len();
         let store: &FullPrecisionStore<f32> = accessor.as_full_precision();
-        let mut vectors = Matrix::from_gen(0.0f32, candidate_count, query.len());
+        let mut vectors = Matrix::new(0.0f32, candidate_count, query.len());
         let mut ids = Vec::with_capacity(candidate_count);
         let mut distances = Vec::with_capacity(candidate_count);
 

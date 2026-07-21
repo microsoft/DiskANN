@@ -521,9 +521,9 @@ mod tests {
         layouts::RowMajor<T>:
             ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right> + Layout<Element = T>,
     {
-        let a_mat = MatRef::new(RowMajor::new(a_nrows, dim).unwrap(), a_data).unwrap();
+        let a_mat = MatRef::from_repr(RowMajor::new(a_nrows, dim).unwrap(), a_data).unwrap();
         let a_bt = BlockTransposed::<T, GROUP>::from_matrix_view(a_mat.as_matrix_view());
-        let b_mat = MatRef::new(RowMajor::new(b_nrows, dim).unwrap(), b_data).unwrap();
+        let b_mat = MatRef::from_repr(RowMajor::new(b_nrows, dim).unwrap(), b_data).unwrap();
 
         let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
         max_ip_kernel::<A, T, GROUP>(
@@ -741,9 +741,9 @@ mod tests {
             let b_data = gen_data(b_nrows * dim, ceil);
             let expected = naive(&a_data, a_nrows, &b_data, b_nrows, dim);
 
-            let a_mat = MatRef::new(RowMajor::new(a_nrows, dim).unwrap(), &a_data).unwrap();
+            let a_mat = MatRef::from_repr(RowMajor::new(a_nrows, dim).unwrap(), &a_data).unwrap();
             let a_bt = BlockTransposed::<T, GROUP>::from_matrix_view(a_mat.as_matrix_view());
-            let b_mat = MatRef::new(RowMajor::new(b_nrows, dim).unwrap(), &b_data).unwrap();
+            let b_mat = MatRef::from_repr(RowMajor::new(b_nrows, dim).unwrap(), &b_data).unwrap();
             let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
             max_ip_kernel::<A, T, GROUP>(arch, a_bt.as_view(), b_mat, &mut scratch, budget);
 

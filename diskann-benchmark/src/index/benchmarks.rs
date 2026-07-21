@@ -31,7 +31,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    matrix::{Matrix, MatrixView},
 };
 use half::f16;
 

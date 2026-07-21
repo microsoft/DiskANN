@@ -16,7 +16,7 @@ use diskann_providers::{
     utils::{create_thread_pool, BridgeErr, PQPathNames},
 };
 use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-use diskann_utils::views::MatrixView;
+use diskann_utils::MatrixView;
 use tracing::info;
 
 use crate::QuantizationType;

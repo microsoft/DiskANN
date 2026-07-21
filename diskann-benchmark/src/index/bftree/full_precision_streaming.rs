@@ -24,7 +24,7 @@ use diskann_providers::{
     model::graph::provider::async_::common::FullPrecision,
     storage::{FileStorageProvider, SaveWith},
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::{Matrix, MatrixView};
 
 use crate::{
     index::{

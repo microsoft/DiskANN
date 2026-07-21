@@ -4,12 +4,12 @@
  */
 
 use diskann::ANNError;
-use diskann_utils::{strided, views};
+use diskann_utils::{matrix, strided};
 
 use crate::utils::Bridge;
 
 // Compatibility with ANNError.
-impl<T: views::DenseData> From<Bridge<strided::TryFromError<T>>> for ANNError {
+impl<T: matrix::DenseData> From<Bridge<strided::TryFromError<T>>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<strided::TryFromError<T>>) -> Self {
         ANNError::log_pq_error(value.into_inner())

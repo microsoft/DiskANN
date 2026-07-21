@@ -8,8 +8,8 @@ use std::{fmt::Display, num::NonZeroUsize};
 use thiserror::Error;
 
 use diskann_utils::{
+    matrix::{Matrix, MatrixView},
     sampling::WithApproximateNorm,
-    views::{Matrix, MatrixView},
 };
 
 /// 'StartPointStrategy' is an enum that represents the different strategies to select
@@ -98,7 +98,7 @@ impl StartPointStrategy {
                 let indices =
                     rand::seq::index::sample(&mut rng, train_data.nrows(), nsamples.get());
 
-                let mut points = Matrix::from_gen(T::default(), nsamples.get(), train_data.ncols());
+                let mut points = Matrix::new(T::default(), nsamples.get(), train_data.ncols());
                 std::iter::zip(points.row_iter_mut(), indices).for_each(|(dst, src)| {
                     dst.copy_from_slice(train_data.row(src));
                 });
@@ -115,7 +115,7 @@ impl StartPointStrategy {
             } => {
                 let mut rng = StdRng::seed_from_u64(*seed);
                 let dim = train_data.ncols();
-                let mut points = Matrix::from_gen(T::default(), nsamples.get(), dim);
+                let mut points = Matrix::new(T::default(), nsamples.get(), dim);
                 points.row_iter_mut().for_each(|row| {
                     row.copy_from_slice(&WithApproximateNorm::with_approximate_norm(
                         dim, *norm, &mut rng,

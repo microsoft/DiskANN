@@ -9,7 +9,7 @@ use diskann_quantization::{
     product::{self, BasicTable},
     views::ChunkOffsetsBase,
 };
-use diskann_utils::views::{self, Matrix, MatrixView};
+use diskann_utils::{Matrix, MatrixView, matrix};
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
 
@@ -417,7 +417,7 @@ impl FixedChunkPQTable {
     }
 
     /// Return the pivots as a `MatrixView`.
-    pub fn view_pivots(&self) -> views::MatrixView<'_, f32> {
+    pub fn view_pivots(&self) -> matrix::MatrixView<'_, f32> {
         self.table.view_pivots()
     }
 

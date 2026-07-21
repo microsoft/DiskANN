@@ -253,7 +253,7 @@ pub unsafe trait NewOwned<T>: ReprOwned {
 ///
 /// ```rust
 /// use diskann_utils::matrix::{Mat, RowMajor, Defaulted};
-/// let mat = Mat::new(RowMajor::<f32>::new(4, 3).unwrap(), Defaulted).unwrap();
+/// let mat = Mat::from_repr(RowMajor::<f32>::new(4, 3).unwrap(), Defaulted).unwrap();
 /// for i in 0..4 {
 ///     assert!(mat.get_row(i).unwrap().iter().all(|&x| x == 0.0f32));
 /// }
@@ -399,11 +399,7 @@ impl Overflow {
     ///
     /// On failure the error reports the original `(nrows, ncols)` dimensions rather
     /// than the padded capacity.
-    pub fn check_byte_budget<T>(
-        capacity: usize,
-        nrows: usize,
-        ncols: usize,
-    ) -> Result<(), Self> {
+    pub fn check_byte_budget<T>(capacity: usize, nrows: usize, ncols: usize) -> Result<(), Self> {
         let bytes = std::mem::size_of::<T>().saturating_mul(capacity);
         if bytes <= isize::MAX as usize {
             Ok(())
@@ -621,7 +617,7 @@ unsafe impl<T> Sync for Mat<T> where T: ReprOwned + Sync {}
 
 impl<T: ReprOwned> Mat<T> {
     /// Create a new matrix using `init` as the initializer.
-    pub fn new<U>(repr: T, init: U) -> Result<Self, <T as NewOwned<U>>::Error>
+    pub fn from_repr<U>(repr: T, init: U) -> Result<Self, <T as NewOwned<U>>::Error>
     where
         T: NewOwned<U>,
     {
@@ -752,7 +748,7 @@ impl<T: NewCloned> Clone for Mat<T> {
 
 impl<T> Mat<RowMajor<T>> {
     /// Construct a [`Mat`] by filling each element in row-major order from `gen`.
-    pub fn from_gen<U: Generator<T>>(mut gen: U, nrows: usize, ncols: usize) -> Self {
+    pub fn new<U: Generator<T>>(mut gen: U, nrows: usize, ncols: usize) -> Self {
         let repr = RowMajor::new(nrows, ncols).expect("dimension overflow");
         let b: Box<[T]> = (0..repr.num_elements()).map(|_| gen.generate()).collect();
         // SAFETY: `b` has length `repr.num_elements()` by construction.
@@ -811,7 +807,7 @@ unsafe impl<T> Sync for MatRef<'_, T> where T: Repr + Sync {}
 
 impl<'a, T: Repr> MatRef<'a, T> {
     /// Construct a new [`MatRef`] over `data`.
-    pub fn new<U>(repr: T, data: &'a [U]) -> Result<Self, T::Error>
+    pub fn from_repr<U>(repr: T, data: &'a [U]) -> Result<Self, T::Error>
     where
         T: NewRef<U>,
     {
@@ -978,7 +974,7 @@ unsafe impl<T> Sync for MatMut<'_, T> where T: ReprMut + Sync {}
 
 impl<'a, T: ReprMut> MatMut<'a, T> {
     /// Construct a new [`MatMut`] over `data`.
-    pub fn new<U>(repr: T, data: &'a mut [U]) -> Result<Self, T::Error>
+    pub fn from_repr<U>(repr: T, data: &'a mut [U]) -> Result<Self, T::Error>
     where
         T: NewMut<U>,
     {
@@ -1014,9 +1010,6 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    /// # Safety
-    ///
-    /// `i` must be less than `self.num_vectors()`.
     pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
@@ -1146,7 +1139,7 @@ impl<'a, T> MatMut<'a, RowMajor<T>> {
 // Dense (RowMajor) API + aliases
 //////////////////////////////
 
-/// A generator for initializing matrix entries via [`Matrix::from_gen`].
+/// A generator for initializing matrix entries via [`Matrix::new`].
 pub trait Generator<T> {
     fn generate(&mut self) -> T;
 }
@@ -1193,9 +1186,13 @@ pub struct TryFromError {
 impl<'a, T> MatRef<'a, RowMajor<T>> {
     /// View `data` as an `nrows x ncols` matrix.
     pub fn try_from(data: &'a [T], nrows: usize, ncols: usize) -> Result<Self, TryFromError> {
-        let err = || TryFromError { len: data.len(), nrows, ncols };
+        let err = || TryFromError {
+            len: data.len(),
+            nrows,
+            ncols,
+        };
         let repr = RowMajor::new(nrows, ncols).map_err(|_| err())?;
-        MatRef::new(repr, data).map_err(|_| err())
+        MatRef::from_repr(repr, data).map_err(|_| err())
     }
 
     /// View `data` as a single-row matrix.
@@ -1311,15 +1308,11 @@ impl<'a, T> MatRef<'a, RowMajor<T>> {
 
 impl<'a, T> MatMut<'a, RowMajor<T>> {
     /// View `data` as an `nrows x ncols` mutable matrix.
-    pub fn try_from(
-        data: &'a mut [T],
-        nrows: usize,
-        ncols: usize,
-    ) -> Result<Self, TryFromError> {
+    pub fn try_from(data: &'a mut [T], nrows: usize, ncols: usize) -> Result<Self, TryFromError> {
         let len = data.len();
         let err = || TryFromError { len, nrows, ncols };
         let repr = RowMajor::new(nrows, ncols).map_err(|_| err())?;
-        MatMut::new(repr, data).map_err(|_| err())
+        MatMut::from_repr(repr, data).map_err(|_| err())
     }
 
     /// Number of rows.
@@ -1367,9 +1360,7 @@ impl<'a, T> MatMut<'a, RowMajor<T>> {
 
     /// Parallel iterator over mutable rows.
     #[cfg(feature = "rayon")]
-    pub fn par_row_iter_mut(
-        &mut self,
-    ) -> impl rayon::iter::IndexedParallelIterator<Item = &mut [T]>
+    pub fn par_row_iter_mut(&mut self) -> impl rayon::iter::IndexedParallelIterator<Item = &mut [T]>
     where
         T: Send,
     {
@@ -1395,7 +1386,7 @@ impl<T> Mat<RowMajor<T>> {
     where
         T: Clone,
     {
-        Self::from_gen(value, nrows, ncols)
+        Self::new(value, nrows, ncols)
     }
 
     /// Take ownership of `data`, interpreting it as an `nrows x ncols` matrix.
@@ -1531,7 +1522,10 @@ impl<T> Mat<RowMajor<T>> {
         T: Send,
     {
         use rayon::slice::ParallelSliceMut;
-        assert!(batchsize != 0, "par_window_iter_mut batchsize cannot be zero");
+        assert!(
+            batchsize != 0,
+            "par_window_iter_mut batchsize cannot be zero"
+        );
         let ncols = self.ncols();
         self.as_mut_slice()
             .par_chunks_mut(ncols * batchsize)
@@ -1679,7 +1673,10 @@ impl<'a, T> MatMut<'a, RowMajor<T>> {
         T: Send,
     {
         use rayon::slice::ParallelSliceMut;
-        assert!(batchsize != 0, "par_window_iter_mut batchsize cannot be zero");
+        assert!(
+            batchsize != 0,
+            "par_window_iter_mut batchsize cannot be zero"
+        );
         let ncols = self.ncols();
         self.as_mut_slice()
             .par_chunks_mut(ncols * batchsize)
@@ -1834,6 +1831,71 @@ where
 
 impl<'a, T> ExactSizeIterator for RowsMut<'a, T> where T: ReprMut + 'a {}
 impl<'a, T> FusedIterator for RowsMut<'a, T> where T: ReprMut + 'a {}
+
+///////////////
+// DenseData //
+///////////////
+
+/// Abstraction over a type that can yield a dense slice of its contents.
+///
+/// # Safety
+///
+/// `as_slice` must be idempotent: it must **always** return the same slice with the same
+/// length (unsafe code relies on this).
+pub unsafe trait DenseData {
+    type Elem;
+
+    /// Return the underlying data as a slice.
+    fn as_slice(&self) -> &[Self::Elem];
+}
+
+/// A mutable companion to [`DenseData`].
+///
+/// # Safety
+///
+/// `as_mut_slice` must be idempotent and must span the exact same memory as
+/// [`DenseData::as_slice`].
+pub unsafe trait MutDenseData: DenseData {
+    fn as_mut_slice(&mut self) -> &mut [Self::Elem];
+}
+
+// SAFETY: fulfills the idempotency requirement.
+unsafe impl<T> DenseData for &[T] {
+    type Elem = T;
+    fn as_slice(&self) -> &[Self::Elem] {
+        self
+    }
+}
+
+// SAFETY: fulfills the idempotency requirement.
+unsafe impl<T> DenseData for &mut [T] {
+    type Elem = T;
+    fn as_slice(&self) -> &[Self::Elem] {
+        self
+    }
+}
+
+// SAFETY: fulfills the idempotency requirement and spans the same memory as `as_slice`.
+unsafe impl<T> MutDenseData for &mut [T] {
+    fn as_mut_slice(&mut self) -> &mut [Self::Elem] {
+        self
+    }
+}
+
+// SAFETY: fulfills the idempotency requirement.
+unsafe impl<T> DenseData for Box<[T]> {
+    type Elem = T;
+    fn as_slice(&self) -> &[Self::Elem] {
+        self
+    }
+}
+
+// SAFETY: fulfills the idempotency requirement and spans the same memory as `as_slice`.
+unsafe impl<T> MutDenseData for Box<[T]> {
+    fn as_mut_slice(&mut self) -> &mut [Self::Elem] {
+        self
+    }
+}
 
 ///////////
 // Tests //
@@ -2159,7 +2221,7 @@ mod tests {
 
     #[test]
     fn mat_new_and_basic_accessors() {
-        let mat = Mat::new(RowMajor::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
+        let mat = Mat::from_repr(RowMajor::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
         let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 3);
@@ -2181,7 +2243,7 @@ mod tests {
 
     #[test]
     fn mat_new_with_default() {
-        let mat = Mat::new(RowMajor::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
+        let mat = Mat::from_repr(RowMajor::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
         let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 2);
@@ -2209,7 +2271,7 @@ mod tests {
                 // Populate the matrix using `&mut Mat`
                 {
                     let ctx = &lazy_format!("{ctx} - direct");
-                    let mut mat = Mat::new(repr, Defaulted).unwrap();
+                    let mut mat = Mat::from_repr(repr, Defaulted).unwrap();
 
                     assert_eq!(mat.num_vectors(), *nrows);
                     assert_eq!(mat.vector_dim(), *ncols);
@@ -2229,7 +2291,7 @@ mod tests {
                 // Populate the matrix using `MatMut`
                 {
                     let ctx = &lazy_format!("{ctx} - matmut");
-                    let mut mat = Mat::new(repr, Defaulted).unwrap();
+                    let mut mat = Mat::from_repr(repr, Defaulted).unwrap();
                     let matmut = mat.reborrow_mut();
 
                     assert_eq!(matmut.num_vectors(), *nrows);
@@ -2246,7 +2308,7 @@ mod tests {
                 // Populate the matrix using `RowsMut`
                 {
                     let ctx = &lazy_format!("{ctx} - rows_mut");
-                    let mut mat = Mat::new(repr, Defaulted).unwrap();
+                    let mut mat = Mat::from_repr(repr, Defaulted).unwrap();
                     fill_rows_mut(mat.rows_mut(), repr);
 
                     check_mat(&mat, repr, ctx);
@@ -2265,7 +2327,7 @@ mod tests {
                 let repr = RowMajor::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
-                let mut mat = Mat::new(repr, Defaulted).unwrap();
+                let mut mat = Mat::from_repr(repr, Defaulted).unwrap();
                 fill_mat(&mut mat, repr);
 
                 // Clone via Mat::clone
@@ -2329,7 +2391,7 @@ mod tests {
                     let ctx = &lazy_format!("{ctx} - by matmut");
                     let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
                     let ptr = b.as_ptr().cast::<u8>();
-                    let mut matmut = MatMut::new(repr, &mut b).unwrap();
+                    let mut matmut = MatMut::from_repr(repr, &mut b).unwrap();
 
                     assert_eq!(
                         ptr,
@@ -2344,7 +2406,7 @@ mod tests {
                     check_rows(matmut.rows(), repr, ctx);
                     check_rows(matmut.reborrow().rows(), repr, ctx);
 
-                    let matref = MatRef::new(repr, &b).unwrap();
+                    let matref = MatRef::from_repr(repr, &b).unwrap();
                     check_mat_ref(matref, repr, ctx);
                     check_mat_ref(matref.reborrow(), repr, ctx);
                     check_rows(matref.rows(), repr, ctx);
@@ -2355,7 +2417,7 @@ mod tests {
                     let ctx = &lazy_format!("{ctx} - by rows");
                     let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
                     let ptr = b.as_ptr().cast::<u8>();
-                    let mut matmut = MatMut::new(repr, &mut b).unwrap();
+                    let mut matmut = MatMut::from_repr(repr, &mut b).unwrap();
 
                     assert_eq!(
                         ptr,
@@ -2370,7 +2432,7 @@ mod tests {
                     check_rows(matmut.rows(), repr, ctx);
                     check_rows(matmut.reborrow().rows(), repr, ctx);
 
-                    let matref = MatRef::new(repr, &b).unwrap();
+                    let matref = MatRef::from_repr(repr, &b).unwrap();
                     check_mat_ref(matref, repr, ctx);
                     check_mat_ref(matref.reborrow(), repr, ctx);
                     check_rows(matref.rows(), repr, ctx);
@@ -2390,7 +2452,7 @@ mod tests {
 
         for nrows in rows {
             for ncols in cols {
-                let m = Mat::new(RowMajor::new(nrows, ncols).unwrap(), 1usize).unwrap();
+                let m = Mat::from_repr(RowMajor::new(nrows, ncols).unwrap(), 1usize).unwrap();
                 let rows_iter = m.rows();
                 let len = <_ as ExactSizeIterator>::len(&rows_iter);
                 assert_eq!(len, nrows);
@@ -2410,11 +2472,15 @@ mod tests {
         for nrows in rows {
             for ncols in cols {
                 let mut counter = 0u32;
-                let m = Mat::from_gen(Init(|| {
-                    let v = counter;
-                    counter += 1;
-                    v
-                }), nrows, ncols);
+                let m = Mat::new(
+                    Init(|| {
+                        let v = counter;
+                        counter += 1;
+                        v
+                    }),
+                    nrows,
+                    ncols,
+                );
 
                 assert_eq!(counter as usize, nrows * ncols);
                 for (i, row) in m.rows().enumerate() {
@@ -2433,12 +2499,12 @@ mod tests {
 
         // Correct length succeeds
         let data = vec![0u32; 12];
-        assert!(MatRef::new(repr, &data).is_ok());
+        assert!(MatRef::from_repr(repr, &data).is_ok());
 
         // Too short fails
         let short = vec![0u32; 11];
         assert!(matches!(
-            MatRef::new(repr, &short),
+            MatRef::from_repr(repr, &short),
             Err(SliceError::LengthMismatch {
                 expected: 12,
                 found: 11
@@ -2448,7 +2514,7 @@ mod tests {
         // Too long fails
         let long = vec![0u32; 13];
         assert!(matches!(
-            MatRef::new(repr, &long),
+            MatRef::from_repr(repr, &long),
             Err(SliceError::LengthMismatch {
                 expected: 12,
                 found: 13
@@ -2462,12 +2528,12 @@ mod tests {
 
         // Correct length succeeds
         let mut data = vec![0u32; 12];
-        assert!(MatMut::new(repr, &mut data).is_ok());
+        assert!(MatMut::from_repr(repr, &mut data).is_ok());
 
         // Too short fails
         let mut short = vec![0u32; 11];
         assert!(matches!(
-            MatMut::new(repr, &mut short),
+            MatMut::from_repr(repr, &mut short),
             Err(SliceError::LengthMismatch {
                 expected: 12,
                 found: 11
@@ -2477,7 +2543,7 @@ mod tests {
         // Too long fails
         let mut long = vec![0u32; 13];
         assert!(matches!(
-            MatMut::new(repr, &mut long),
+            MatMut::from_repr(repr, &mut long),
             Err(SliceError::LengthMismatch {
                 expected: 12,
                 found: 13
@@ -2490,7 +2556,7 @@ mod tests {
         let data = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
 
         // MatRef
-        let matref = MatRef::new(RowMajor::new(2, 3).unwrap(), &data).unwrap();
+        let matref = MatRef::from_repr(RowMajor::new(2, 3).unwrap(), &data).unwrap();
         let view = matref.as_matrix_view();
         assert_eq!(view.nrows(), 2);
         assert_eq!(view.ncols(), 3);
@@ -2502,7 +2568,7 @@ mod tests {
         assert_eq!(matref.as_slice(), &data);
 
         // Mat
-        let mut mat = Mat::new(RowMajor::<f32>::new(2, 3).unwrap(), 0.0f32).unwrap();
+        let mut mat = Mat::from_repr(RowMajor::<f32>::new(2, 3).unwrap(), 0.0f32).unwrap();
         for i in 0..2 {
             let r = mat.get_row_mut(i).unwrap();
             for j in 0..3 {
@@ -2521,7 +2587,7 @@ mod tests {
 
         // MatMut
         let mut buf = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let matmut = MatMut::new(RowMajor::new(2, 3).unwrap(), &mut buf).unwrap();
+        let matmut = MatMut::from_repr(RowMajor::new(2, 3).unwrap(), &mut buf).unwrap();
         let view = matmut.as_matrix_view();
         assert_eq!(view.nrows(), 2);
         assert_eq!(view.ncols(), 3);
@@ -2538,21 +2604,25 @@ mod tests {
         let repr = RowMajor::<String>::new(2, 3).unwrap();
 
         // Owned fill via NewOwned<T> (Clone).
-        let filled = Mat::new(repr, String::from("x")).unwrap();
+        let filled = Mat::from_repr(repr, String::from("x")).unwrap();
         assert_eq!(filled.num_vectors(), 2);
         assert!(filled.rows().flatten().all(|s| s == "x"));
 
         // NewOwned<Defaulted> (Clone + Default).
-        let defaulted = Mat::new(repr, Defaulted).unwrap();
+        let defaulted = Mat::from_repr(repr, Defaulted).unwrap();
         assert!(defaulted.rows().flatten().all(String::is_empty));
 
         // from_fn.
         let mut counter = 0usize;
-        let mut mat = Mat::from_gen(Init(|| {
-            let s = counter.to_string();
-            counter += 1;
-            s
-        }), 2, 3);
+        let mut mat = Mat::new(
+            Init(|| {
+                let s = counter.to_string();
+                counter += 1;
+                s
+            }),
+            2,
+            3,
+        );
         assert_eq!(counter, 6);
         assert_eq!(mat.get_row(1).unwrap()[0], "3");
 
@@ -2567,12 +2637,12 @@ mod tests {
 
         // Immutable view over a non-Copy slice (NewRef).
         let data = [String::from("a"), String::from("b")];
-        let view = MatRef::new(RowMajor::new(2, 1).unwrap(), &data).unwrap();
+        let view = MatRef::from_repr(RowMajor::new(2, 1).unwrap(), &data).unwrap();
         assert_eq!(view.get_row(1).unwrap()[0], "b");
 
         // Mutable view over a non-Copy slice (NewMut).
         let mut data_mut = [String::from("a"), String::from("b")];
-        let mut view_mut = MatMut::new(RowMajor::new(1, 2).unwrap(), &mut data_mut).unwrap();
+        let mut view_mut = MatMut::from_repr(RowMajor::new(1, 2).unwrap(), &mut data_mut).unwrap();
         view_mut.get_row_mut(0).unwrap()[1] = String::from("z");
         assert_eq!(data_mut[1], "z");
     }

@@ -29,7 +29,7 @@ use crate::multi_vector::{MatRef, MaxSimError, Repr, RowMajor};
 /// use diskann_quantization::multi_vector::distance::QueryMatRef;
 ///
 /// let data = [1.0f32, 2.0, 3.0, 4.0];
-/// let view = MatRef::new(RowMajor::new(2, 2).unwrap(), &data).unwrap();
+/// let view = MatRef::from_repr(RowMajor::new(2, 2).unwrap(), &data).unwrap();
 /// let query: QueryMatRef<_> = view.into();
 /// ```
 #[derive(Debug, Clone, Copy)]
@@ -231,14 +231,14 @@ mod tests {
 
     /// Helper to create a QueryMatRef from raw data
     fn make_query(data: &[f32], nrows: usize, ncols: usize) -> QueryMatRef<'_, RowMajor<f32>> {
-        MatRef::new(RowMajor::new(nrows, ncols).unwrap(), data)
+        MatRef::from_repr(RowMajor::new(nrows, ncols).unwrap(), data)
             .unwrap()
             .into()
     }
 
     /// Helper to create a MatRef from raw data
     fn make_doc(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, RowMajor<f32>> {
-        MatRef::new(RowMajor::new(nrows, ncols).unwrap(), data).unwrap()
+        MatRef::from_repr(RowMajor::new(nrows, ncols).unwrap(), data).unwrap()
     }
 
     /// Naive implementation of max-sim for a single query vector against all doc vectors.
@@ -273,7 +273,7 @@ mod tests {
         #[test]
         fn from_mat_ref_and_deref() {
             let data = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-            let view = MatRef::new(RowMajor::new(2, 3).unwrap(), &data).unwrap();
+            let view = MatRef::from_repr(RowMajor::new(2, 3).unwrap(), &data).unwrap();
             let query: QueryMatRef<_> = view.into();
 
             // Deref access works

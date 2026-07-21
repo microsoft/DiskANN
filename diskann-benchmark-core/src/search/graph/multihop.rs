@@ -10,7 +10,7 @@ use diskann::{
     graph::{self, ext::labeled, glue},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{future::AsyncFriendly, matrix::Matrix};
 
 use crate::search::{self, Search, graph::Strategy};
 
@@ -168,7 +168,7 @@ mod tests {
 
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::from_gen(0.0f32, 5, index.provider().dim());
+        let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn test_multihop_error() {
         let index = search::graph::test_grid_provider();
-        let queries = Arc::new(Matrix::from_gen(0.0f32, 2, index.provider().dim()));
+        let queries = Arc::new(Matrix::new(0.0f32, 2, index.provider().dim()));
 
         let labels: Arc<[_]> = (0..queries.nrows() + 1)
             .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })

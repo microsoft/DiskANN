@@ -25,7 +25,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{MatrixView, MatrixViewMut},
+    matrix::{MatrixView, MatrixViewMut},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;

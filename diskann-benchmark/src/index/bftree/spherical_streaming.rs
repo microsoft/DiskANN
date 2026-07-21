@@ -30,7 +30,7 @@ use diskann_quantization::spherical::{
     iface::{self as spherical_iface, Quantizer},
     SphericalQuantizer,
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::{Matrix, MatrixView};
 use rand::SeedableRng;
 
 use crate::{

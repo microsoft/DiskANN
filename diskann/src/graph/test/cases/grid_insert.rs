@@ -18,7 +18,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann_utils::views::MatrixView;
+use diskann_utils::MatrixView;
 use diskann_vector::distance::Metric;
 
 use crate::{

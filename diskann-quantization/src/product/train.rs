@@ -4,8 +4,8 @@
  */
 
 use diskann_utils::{
+    matrix::{self, Matrix},
     strided::StridedView,
-    views::{self, Matrix},
 };
 #[cfg(feature = "rayon")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -44,7 +44,7 @@ pub struct SimplePivots {
 }
 
 fn flatten<T: Copy + Default>(pivots: &[Matrix<T>], ncenters: usize, dim: usize) -> Matrix<T> {
-    let mut flattened = Matrix::from_gen(T::default(), ncenters, dim);
+    let mut flattened = Matrix::new(T::default(), ncenters, dim);
     let mut col_start = 0;
     for matrix in pivots {
         assert_eq!(matrix.nrows(), flattened.nrows());
@@ -77,7 +77,7 @@ pub trait TrainQuantizer {
 
     fn train<R, C>(
         &self,
-        data: views::MatrixView<f32>,
+        data: matrix::MatrixView<f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -108,7 +108,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
     /// * `NaN` or infinities are observed during the training process.
     fn train<R, C>(
         &self,
-        data: views::MatrixView<f32>,
+        data: matrix::MatrixView<f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -123,7 +123,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
         #[inline(never)]
         fn train(
             trainer: &LightPQTrainingParameters,
-            data: views::MatrixView<f32>,
+            data: matrix::MatrixView<f32>,
             schema: crate::views::ChunkOffsetsView<'_>,
             parallelism: Parallelism,
             rng_builder: &(dyn BoxedRngBuilder<usize> + Sync),
@@ -169,7 +169,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.row_iter().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
-                let mut centers = Matrix::from_gen(0.0, trainer.ncenters, range.len());
+                let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
 
                 // Construct the random number generator seeded by the PQ chunk.
                 let mut rng = rng_builder.build_boxed_rng(i);
@@ -302,7 +302,7 @@ mod tests {
         // Create the sub matrices.
         let matrices: Vec<Matrix<usize>> = std::iter::zip(sub_dims.iter(), prefix_sum.iter())
             .map(|(&this_dim, &offset)| {
-                let mut m = Matrix::from_gen(0, nrows, this_dim);
+                let mut m = Matrix::new(0, nrows, this_dim);
                 for r in 0..nrows {
                     for c in 0..this_dim {
                         m[(r, c)] = dim * r + offset + c;
@@ -358,8 +358,8 @@ mod tests {
                 .map(|chunk| {
                     let dim = schema.at(chunk).len();
 
-                    let mut initial = Matrix::from_gen(0.0, ndata, dim);
-                    let mut centers = Matrix::from_gen(0.0, self.nclusters, 1);
+                    let mut initial = Matrix::new(0.0, ndata, dim);
+                    let mut centers = Matrix::new(0.0, self.nclusters, 1);
 
                     // The starting offset for clusters.
                     let offset = offsets_distribution.sample(rng);
@@ -380,7 +380,7 @@ mod tests {
 
                     // Shuffle the dataset.
                     indices.shuffle(rng);
-                    let mut piece = Matrix::from_gen(0.0, ndata, dim);
+                    let mut piece = Matrix::new(0.0, ndata, dim);
                     for (dst, src) in indices.iter().enumerate() {
                         piece.row_mut(dst).copy_from_slice(initial.row(*src));
                     }
@@ -579,7 +579,7 @@ mod tests {
     // pivots exceeds the number of dataset items.
     #[test]
     fn tests_succeeded_with_too_many_pivots() {
-        let data = Matrix::<f32>::from_gen(1.0, 10, 5);
+        let data = Matrix::<f32>::new(1.0, 10, 5);
         let offsets: Vec<usize> = vec![0, 1, 4, 5];
 
         let trainer = LightPQTrainingParameters::new(2 * data.nrows(), 6);
@@ -650,7 +650,7 @@ mod tests {
                 assert!(format(&err).contains("infinity"));
             };
 
-            let mut data = Matrix::<f32>::from_gen(1.0, nrows, ncols);
+            let mut data = Matrix::<f32>::new(1.0, nrows, ncols);
 
             // Positive Infinity
             data[(r, c)] = f32::INFINITY;
