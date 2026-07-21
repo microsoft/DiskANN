@@ -119,8 +119,6 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
     // Reverse map: external_id -> dataset_offset, needed to resolve Delete/Replace removals.
     let mut ext_to_offset: HashMap<u32, usize> = HashMap::new();
 
-    println!("Using distance function: {:?}", args.distance_function);
-
     let distance_fn = V::distance(args.distance_function, Some(dataset.ncols()));
 
     for (stage_idx, stage) in runbook.stages().iter().enumerate() {
@@ -226,7 +224,7 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
                     })
                     .collect();
 
-                // Warn about queries that got fewer than K results (active set smaller than K).
+                // Fail if any query gets fewer than K results (active set smaller than K).
                 let under_k: Vec<usize> = results
                     .iter()
                     .enumerate()
@@ -239,16 +237,24 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
                     })
                     .collect();
                 if !under_k.is_empty() {
-                    tracing::warn!(
-                        "Stage {}: {} / {} queries have fewer than {} results (active set = {}). \
-                         Query indices: {:?}",
-                        stage_idx,
-                        under_k.len(),
-                        n_queries,
-                        recall_at,
-                        n_active,
-                        under_k,
-                    );
+                    let preview: Vec<usize> = under_k.iter().copied().take(20).collect();
+                    let suffix = if under_k.len() > preview.len() {
+                        format!(" (showing first {} query indices)", preview.len())
+                    } else {
+                        String::new()
+                    };
+                    return Err(CMDToolError {
+                        details: format!(
+                            "Stage {}: {} / {} queries have fewer than {} results (active set = {}). Query indices: {:?}{}",
+                            stage_idx,
+                            under_k.len(),
+                            n_queries,
+                            recall_at,
+                            n_active,
+                            preview,
+                            suffix,
+                        ),
+                    });
                 }
 
                 write_ground_truth::<()>(
