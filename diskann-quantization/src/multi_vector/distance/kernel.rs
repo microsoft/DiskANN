@@ -6,7 +6,13 @@
 use crate::multi_vector::{MatRef, MaxSimError, Standard};
 
 /// Object-safe interface for computing per-query MaxSim scores.
-pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
+///
+/// `Send` (not `Sync`): a built kernel can be **moved** to a worker thread that
+/// owns it (the "each search thread owns its distance computer" model), but is
+/// not required to be shared by reference across threads. Dropping `Sync` is what
+/// lets a kernel own interior-mutable per-call scratch (e.g. the staged f32
+/// kernel's reset-arena) under a `&self` method.
+pub trait MaxSimKernel<T: Copy>: Send + std::fmt::Debug {
     /// Number of query rows whose scores this kernel produces.
     fn nrows(&self) -> usize;
 

@@ -25,9 +25,20 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "multi-vector")] {
         mod driver;
         mod kernels;
+        // The quantized A/B op drives the V3-only staged integer kernel.
+        #[cfg(target_arch = "x86_64")]
+        mod quant;
+        // The f16 A/B op: coarse tiler vs the f16.rs preprocess path (V3-only).
+        #[cfg(target_arch = "x86_64")]
+        mod tiled_f16;
 
         pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-            kernels::register(registry)
+            kernels::register(registry)?;
+            #[cfg(target_arch = "x86_64")]
+            quant::register(registry)?;
+            #[cfg(target_arch = "x86_64")]
+            tiled_f16::register(registry)?;
+            Ok(())
         }
     } else {
         pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {

@@ -18,6 +18,8 @@ use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
 use super::kernels::f16::F16Entry;
 use super::kernels::f32::F32Kernel;
+#[cfg(target_arch = "x86_64")]
+use super::kernels::staged::{F32StagedScratch, StagedF32Kernel, StagedRun};
 use super::max_sim::{MaxSim, MaxSimError};
 use crate::multi_vector::distance::QueryMatRef;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Mat, MatRef, Standard};
@@ -267,6 +269,92 @@ impl<E: Erase<half::f16>>
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Staged kernel (experimental) — selected by MaxSimIsa::X86_64_V3_Staged.
+//  Coexists with the fused `Prepared` path above for A/B benchmarking.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Counterpart to [`Prepared`] for the staged f32 kernel. Owns a
+/// [`F32StagedScratch`] (reset-arena + reused `state`) behind a `RefCell`: because
+/// `compute_max_sim` takes `&self` and [`MaxSimKernel`] is `Send` but not `Sync`,
+/// interior mutability lets each call reset+reuse the scratch with **zero heap
+/// allocation** in steady state.
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug)]
+struct PreparedStaged<A, const GROUP: usize> {
+    arch: A,
+    prepared: BlockTransposed<f32, GROUP>,
+    scratch: std::cell::RefCell<F32StagedScratch>,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl<A, const GROUP: usize> MaxSimKernel<f32> for PreparedStaged<A, GROUP>
+where
+    A: Architecture,
+    StagedF32Kernel<GROUP>: for<'a> diskann_wide::arch::Target3<
+            A,
+            (),
+            BlockTransposedRef<'a, f32, GROUP>,
+            MatRef<'a, Standard<f32>>,
+            StagedRun<'a>,
+        >,
+{
+    fn nrows(&self) -> usize {
+        self.prepared.nrows()
+    }
+
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, Standard<f32>>,
+        scores: &mut [f32],
+    ) -> Result<(), MaxSimError> {
+        if scores.len() != self.nrows() {
+            return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
+        }
+        if doc.num_vectors() == 0 {
+            scores.fill(f32::MAX);
+            return Ok(());
+        }
+        let padded = self.prepared.padded_nrows();
+        let nrows = self.prepared.nrows();
+        // Reset + reuse the owned arena/state scratch (no per-call allocation).
+        self.scratch.borrow_mut().run(padded, |state, alloc| {
+            self.arch.run3(
+                StagedF32Kernel::<GROUP>,
+                self.prepared.reborrow(),
+                doc,
+                StagedRun {
+                    state: &mut state[..],
+                    alloc,
+                },
+            );
+            // Distance = negated max inner product (matches the fused path).
+            for (dst, &src) in scores.iter_mut().zip(state[..nrows].iter()) {
+                *dst = -src;
+            }
+        });
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+struct BuildAndEraseStaged<E>(E);
+
+#[cfg(target_arch = "x86_64")]
+impl<E: Erase<f32>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<f32>>>
+    for BuildAndEraseStaged<E>
+{
+    fn run(self, arch: V3, query: MatRef<'_, Standard<f32>>) -> E::Output {
+        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query.as_matrix_view());
+        let scratch = std::cell::RefCell::new(F32StagedScratch::new(prepared.padded_nrows()));
+        self.0.erase(PreparedStaged {
+            arch,
+            prepared,
+            scratch,
+        })
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  MaxSimElement — sealed trait gating accepted element types.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -325,11 +413,21 @@ impl MaxSimElement for f32 {
                 })?;
                 Ok(arch.run1(BuildAndErase(erase), query))
             }
+            #[cfg(target_arch = "x86_64")]
+            MaxSimIsa::X86_64_V3_Staged => {
+                let arch = V3::new_checked().ok_or(NotSupported {
+                    isa,
+                    reason: "AVX2/FMA unavailable on this CPU",
+                })?;
+                Ok(arch.run1(BuildAndEraseStaged(erase), query))
+            }
             #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }),
+            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 | MaxSimIsa::X86_64_V3_Staged => {
+                Err(NotSupported {
+                    isa,
+                    reason: "x86_64 target only",
+                })
+            }
             #[cfg(target_arch = "aarch64")]
             MaxSimIsa::Neon => {
                 let arch = Neon::new_checked().ok_or(NotSupported {
@@ -393,6 +491,10 @@ impl MaxSimElement for half::f16 {
             MaxSimIsa::Neon => Err(NotSupported {
                 isa,
                 reason: "aarch64 target only",
+            }),
+            MaxSimIsa::X86_64_V3_Staged => Err(NotSupported {
+                isa,
+                reason: "x86-64-v3-staged supports f32 only",
             }),
             MaxSimIsa::Reference => Ok(erase.erase(ReferenceKernel::<half::f16>::new(query))),
         }
@@ -536,6 +638,48 @@ mod tests {
         let query = make_mat(data.as_slice(), 5, 8);
         let kernel = build_max_sim::<half::f16, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
         assert_eq!(kernel.nrows(), 5);
+    }
+
+    /// Reusing one staged f32 `MaxSimKernel` across multiple `compute_max_sim`
+    /// calls (different doc counts) must match the reference each time — the
+    /// regression guard for the `PreparedStaged`-owned reset-arena
+    /// (`F32StagedScratch`): each call rewinds + reuses the scratch, so a stale or
+    /// aliased buffer would corrupt a later call.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn staged_f32_arena_reuse() {
+        if diskann_wide::arch::x86_64::V3::new_checked().is_none() {
+            return; // No AVX2 on this host; the staged f32 path cannot build.
+        }
+
+        const NQ: usize = 17; // exercises the A-panel row padding (17 -> 32)
+        const DIM: usize = 96;
+        let q_data = make_test_data::<f32>(NQ * DIM, DIM, DIM / 2);
+        let query = make_mat(&q_data, NQ, DIM);
+
+        let staged = build_max_sim::<f32, _>(MaxSimIsa::X86_64_V3_Staged, query, BoxErase).unwrap();
+        let reference = build_max_sim::<f32, _>(MaxSimIsa::Reference, query, BoxErase).unwrap();
+
+        // Distinct doc counts (multi-tile, single panel, remainder, one) reusing the
+        // same kernel — the arena is reset, never reallocated, between calls.
+        for (call, &nd) in [200usize, 3, 33, 1].iter().enumerate() {
+            let d_data = make_test_data::<f32>(nd * DIM, DIM, DIM + call);
+            let doc = make_mat(&d_data, nd, DIM);
+
+            let mut got = vec![0.0f32; NQ];
+            staged.compute_max_sim(doc, &mut got).unwrap();
+            let mut want = vec![0.0f32; NQ];
+            reference.compute_max_sim(doc, &mut want).unwrap();
+
+            for i in 0..NQ {
+                assert!(
+                    (got[i] - want[i]).abs() <= 1e-4 * want[i].abs().max(1.0),
+                    "call {call} (nd={nd}) row {i}: reused staged f32 {} != reference {}",
+                    got[i],
+                    want[i],
+                );
+            }
+        }
     }
 
     fn check_size_mismatch<T>(label: &str)
