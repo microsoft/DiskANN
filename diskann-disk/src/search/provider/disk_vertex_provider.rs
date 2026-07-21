@@ -369,7 +369,8 @@ mod disk_vertex_provider_tests {
                 .expect("Failed to delete mem index associated data file");
         }
 
-        disk_index.build().unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        runtime.block_on(disk_index.build()).unwrap();
 
         // Assert that all data was kept in memory and no files were written to the disk.
         assert!(!storage_provider.exists(&mem_index_file_path));

@@ -43,7 +43,7 @@ pub enum SearchMode<'a> {
     },
 
     InlineFilter {
-        filter: Box<dyn QueryLabelProvider<u32> + 'a>,
+        filter: Box<dyn QueryLabelProvider<u32> + Send + 'a>,
         adaptive_l: Option<AdaptiveL>,
     },
 

@@ -43,7 +43,6 @@ use diskann_utils::{
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
-use tokio::runtime::Runtime;
 use tracing::debug;
 
 use crate::{
@@ -810,7 +809,6 @@ pub struct DiskIndexSearcher<
     ProviderFactory: VertexProviderFactory<Data>,
 {
     index: DiskANNIndex<DiskProvider<Data>>,
-    runtime: Runtime,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: ProviderFactory,
@@ -863,20 +861,13 @@ where
     /// * `disk_index_reader` - The disk index reader.
     /// * `vertex_provider_factory` - The vertex provider factory.
     /// * `metric` - Distance metric used for vector similarity calculations.
-    /// * `runtime` - Tokio runtime handle for executing async operations.
     pub fn new(
         num_threads: usize,
         search_io_limit: usize,
         disk_index_reader: &DiskIndexReader,
         vertex_provider_factory: ProviderFactory,
         metric: Metric,
-        runtime: Option<Runtime>,
     ) -> ANNResult<Self> {
-        let runtime = match runtime {
-            Some(rt) => rt,
-            None => tokio::runtime::Builder::new_current_thread().build()?,
-        };
-
         let graph_header = vertex_provider_factory.get_header()?;
         let metadata = graph_header.metadata();
         let max_degree = graph_header.max_degree::<Data::VectorDataType>()? as u32;
@@ -914,7 +905,6 @@ where
         let index = DiskANNIndex::new(config, disk_provider, NonZeroUsize::new(num_threads));
         Ok(Self {
             index,
-            runtime,
             vertex_provider_factory,
             scratch_pool,
         })
@@ -1044,7 +1034,7 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
-    pub fn search(
+    pub async fn search(
         &self,
         query: &[Data::VectorDataType],
         return_list_size: u32,
@@ -1058,17 +1048,19 @@ where
         let mut associated_data =
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
-        let stats = self.search_internal(
-            query,
-            return_list_size as usize,
-            search_list_size,
-            beam_width,
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            &mode,
-        )?;
+        let stats = self
+            .search_internal(
+                query,
+                return_list_size as usize,
+                search_list_size,
+                beam_width,
+                &mut query_stats,
+                &mut indices,
+                &mut distances,
+                &mut associated_data,
+                &mode,
+            )
+            .await?;
 
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),
@@ -1093,7 +1085,7 @@ where
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn search_internal(
+    pub(crate) async fn search_internal(
         &self,
         query: &[Data::VectorDataType],
         k_value: usize,
@@ -1129,13 +1121,14 @@ where
         let stats = match mode {
             SearchMode::FlatScan { filter } => {
                 let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
-                self.runtime.block_on(self.flat_search(
+                self.flat_search(
                     &strategy,
                     query,
                     filter.as_deref(),
                     l,
                     &mut result_output_buffer,
-                ))?
+                )
+                .await?
             }
             SearchMode::Graph { filter } => {
                 let strategy = self.search_strategy(
@@ -1145,13 +1138,15 @@ where
                         .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
                 );
                 let knn_search = Knn::new(k, l, beam_width)?;
-                self.runtime.block_on(self.index.search(
-                    knn_search,
-                    &strategy,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.index
+                    .search(
+                        knn_search,
+                        &strategy,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    )
+                    .await?
             }
             SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
@@ -1159,14 +1154,15 @@ where
                 // its counters reachable from this scope.
                 let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
                 let knn_search = Knn::new(k, l, beam_width)?;
-                self.runtime.block_on(self.filter_search(
+                self.filter_search(
                     strategy,
                     query,
                     knn_search,
                     filter.as_ref(),
                     adaptive_l.clone(),
                     &mut result_output_buffer,
-                ))?
+                )
+                .await?
             }
             SearchMode::DiverseGraph { filter, params } => {
                 // Strategy installs the filter so `RerankAndFilter` would also
@@ -1180,14 +1176,16 @@ where
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
-                self.runtime.block_on(self.index.search_with(
-                    knn_search,
-                    &strategy,
-                    processor,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
+                self.index
+                    .search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    )
+                    .await?
             }
         };
         query_stats.total_comparisons = stats.cmps;
@@ -1483,11 +1481,6 @@ mod disk_provider_tests {
     {
         assert!(params.io_limit > 0);
 
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(params.max_thread_num)
-            .build()
-            .unwrap();
-
         let disk_index_reader = DiskIndexReader::new(
             params.pq_pivot_file_path.to_string(),
             params.pq_compressed_file_path.to_string(),
@@ -1511,7 +1504,6 @@ mod disk_provider_tests {
             &disk_index_reader,
             vertex_provider_factory,
             Metric::L2,
-            Some(runtime),
         )
         .unwrap()
     }
@@ -1571,6 +1563,8 @@ mod disk_provider_tests {
             load_query_result(params.storage_provider, params.truth_result_file_path);
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let handle = runtime.handle().clone();
         queries
             .par_row_iter()
             .enumerate()
@@ -1580,7 +1574,7 @@ mod disk_provider_tests {
                 let mut distances = vec![0f32; 10];
                 let mut associated_data = vec![(); 10];
 
-                let result = params.index_search_engine.search_internal(
+                let result = handle.block_on(params.index_search_engine.search_internal(
                     query,
                     params.k,
                     params.l as u32,
@@ -1590,7 +1584,7 @@ mod disk_provider_tests {
                     &mut distances,
                     &mut associated_data,
                     &SearchMode::graph(),
-                );
+                ));
 
                 // Calculate the range of the truth_result for this query
                 let truth_slice = &truth_result[i * params.k..(i + 1) * params.k];
@@ -1630,19 +1624,20 @@ mod disk_provider_tests {
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let handle = runtime.handle().clone();
         queries
             .par_row_iter()
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
-                let result = params
-                    .index_search_engine
-                    .search(
+                let result = handle
+                    .block_on(params.index_search_engine.search(
                         query,
                         params.k as u32,
                         params.l as u32,
                         beam_width,
                         SearchMode::graph(),
-                    )
+                    ))
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1666,8 +1661,8 @@ mod disk_provider_tests {
             });
     }
 
-    #[test]
-    fn test_disk_search_invalid_input() {
+    #[tokio::test]
+    async fn test_disk_search_invalid_input() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let ctx = &DefaultContext;
 
@@ -1743,24 +1738,26 @@ mod disk_provider_tests {
         let mut associated_data = vec![0u32; 10];
 
         // Set L: {} to a value of at least K:
-        let result = search_engine.search_internal(
-            &query,
-            10,
-            10 - 1,
-            None,
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            &SearchMode::graph(),
-        );
+        let result = search_engine
+            .search_internal(
+                &query,
+                10,
+                10 - 1,
+                None,
+                &mut query_stats,
+                &mut indices,
+                &mut distances,
+                &mut associated_data,
+                &SearchMode::graph(),
+            )
+            .await;
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ANNErrorKind::IndexError);
     }
 
-    #[test]
-    fn test_disk_search_beam_search() {
+    #[tokio::test]
+    async fn test_disk_search_beam_search() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
@@ -1792,14 +1789,15 @@ mod disk_provider_tests {
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 recorded_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer,
-            ))
+            )
+            .await
             .unwrap();
 
         let ids = search_record
@@ -1816,13 +1814,15 @@ mod disk_provider_tests {
 
         let return_list_size = 10;
         let search_list_size = 10;
-        let result = search_engine.search(
-            &query_vector,
-            return_list_size,
-            search_list_size,
-            Some(4),
-            SearchMode::graph(),
-        );
+        let result = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::graph(),
+            )
+            .await;
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
         assert_eq!(
@@ -1837,8 +1837,8 @@ mod disk_provider_tests {
         );
     }
 
-    #[test]
-    fn test_disk_search_determinant_diversity() {
+    #[tokio::test]
+    async fn test_disk_search_determinant_diversity() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -1866,6 +1866,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::graph(),
             )
+            .await
             .unwrap();
         let baseline_ids: std::collections::HashSet<u32> =
             baseline.results.iter().map(|r| r.vertex_id).collect();
@@ -1884,6 +1885,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph(params),
             )
+            .await
             .unwrap();
         let det_div_ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
 
@@ -1922,6 +1924,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph(pure_params),
             )
+            .await
             .unwrap();
         let pure_ids: Vec<u32> = pure_result.results.iter().map(|r| r.vertex_id).collect();
         for id in &pure_ids {
@@ -1943,6 +1946,7 @@ mod disk_provider_tests {
                 Some(4),
                 SearchMode::diverse_graph_filtered(move |id: &u32| *id != excluded, params),
             )
+            .await
             .unwrap();
         let filtered_ids: Vec<u32> = filtered.results.iter().map(|r| r.vertex_id).collect();
         assert!(
@@ -1952,8 +1956,8 @@ mod disk_provider_tests {
     }
 
     #[cfg(feature = "experimental_diversity_search")]
-    #[test]
-    fn test_disk_search_diversity_search() {
+    #[tokio::test]
+    async fn test_disk_search_diversity_search() {
         use diskann::graph::DiverseSearchParams;
         use diskann::neighbor::AttributeValueProvider;
         use std::collections::HashMap;
@@ -2035,14 +2039,15 @@ mod disk_provider_tests {
 
         let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
         let stats = search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 diverse_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer,
-            ))
+            )
+            .await
             .unwrap();
 
         // Verify that search was performed and returned some results
@@ -2076,14 +2081,15 @@ mod disk_provider_tests {
 
         let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
         let stats = search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 diverse_search2,
                 &strategy2,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer2,
-            ))
+            )
+            .await
             .unwrap();
 
         // Verify results
@@ -2221,7 +2227,8 @@ mod disk_provider_tests {
         vec![72, 170, 87, 0, 0, 0, 0, 0, 0, 0],
         vec![256709.69, 256712.5, 256760.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     )]
-    fn test_search_with_vector_filter(
+    #[tokio::test]
+    async fn test_search_with_vector_filter(
         #[case] vector_filter: fn(&u32) -> bool,
         #[case] is_flat_search: bool,
         #[case] expected_result_count: u32,
@@ -2276,17 +2283,19 @@ mod disk_provider_tests {
             }
         };
 
-        let result = search_engine.search_internal(
-            &query,
-            10,
-            10,
-            None, // beam_width
-            &mut query_stats,
-            &mut indices,
-            &mut distances,
-            &mut associated_data,
-            &make_mode(),
-        );
+        let result = search_engine
+            .search_internal(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                &mut query_stats,
+                &mut indices,
+                &mut distances,
+                &mut associated_data,
+                &make_mode(),
+            )
+            .await;
 
         assert!(result.is_ok(), "Expected search to succeed");
         assert_eq!(
@@ -2300,13 +2309,15 @@ mod disk_provider_tests {
             "Expected distances to match"
         );
 
-        let result_with_filter = search_engine.search(
-            &query,
-            10,
-            10,
-            None, // beam_width
-            make_mode(),
-        );
+        let result_with_filter = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                make_mode(),
+            )
+            .await;
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");
         let result_with_filter_unwrapped = result_with_filter.unwrap();
@@ -2350,8 +2361,8 @@ mod disk_provider_tests {
     //    recall@k (would need filter-selective ground truth) — just that the
     //    inline path runs end-to-end and produces filter-conforming output.
 
-    #[test]
-    fn test_adaptive_l_with_no_filter_matches_plain_knn() {
+    #[tokio::test]
+    async fn test_adaptive_l_with_no_filter_matches_plain_knn() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2368,6 +2379,7 @@ mod disk_provider_tests {
 
         let plain = search_engine
             .search(&query, 10, 10, None, SearchMode::graph())
+            .await
             .expect("plain Knn must succeed");
 
         let inline_no_filter = search_engine
@@ -2381,6 +2393,7 @@ mod disk_provider_tests {
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),
             )
+            .await
             .expect("inline filter with accept-all predicate must succeed");
 
         let plain_ids: Vec<u32> = plain.results.iter().map(|r| r.vertex_id).collect();
@@ -2400,8 +2413,8 @@ mod disk_provider_tests {
         );
     }
 
-    #[test]
-    fn test_adaptive_l_with_selective_predicate_returns_only_matches() {
+    #[tokio::test]
+    async fn test_adaptive_l_with_selective_predicate_returns_only_matches() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -2430,6 +2443,7 @@ mod disk_provider_tests {
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),
             )
+            .await
             .expect("inline filter search with AdaptiveL must succeed");
 
         // `result.results` is pre-allocated to `return_list_size`; only the
@@ -2454,8 +2468,8 @@ mod disk_provider_tests {
         );
     }
 
-    #[test]
-    fn test_beam_search_respects_io_limit() {
+    #[tokio::test]
+    async fn test_beam_search_respects_io_limit() {
         let io_limit = 11; // Set a small IO limit for testing
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
@@ -2491,14 +2505,15 @@ mod disk_provider_tests {
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
-            .runtime
-            .block_on(search_engine.index.search(
+            .index
+            .search(
                 recorded_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
                 &mut result_output_buffer,
-            ))
+            )
+            .await
             .unwrap();
         let visited_ids = search_record
             .visited

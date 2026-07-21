@@ -37,7 +37,7 @@ rand.workspace = true
 rayon.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
 vfs = { workspace = true }
 

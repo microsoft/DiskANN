@@ -42,7 +42,6 @@ use crate::{
             },
             inmem_builder::{load_inmem_index_builder, new_inmem_index_builder, InmemIndexBuilder},
             quantizer::BuildQuantizer,
-            tokio::create_runtime,
         },
         chunking::{
             checkpoint::{
@@ -205,22 +204,7 @@ where
         )
     }
 
-    pub fn build(&mut self) -> ANNResult<()> {
-        let runtime = create_runtime(self.index_configuration.num_threads)?;
-        runtime.block_on(async {
-            match self.build_internal().await {
-                Err(err) if err.kind() == ANNErrorKind::BuildInterrupted => {
-                    info!(
-                        "Index build was interrupted by continuation_checker, progress saved for resumption"
-                    );
-                    Ok(()) // Return success for controlled interruptions
-                }
-                result => result, // Pass through any other result (Ok or Err)
-            }
-        })
-    }
-
-    async fn build_internal(&mut self) -> ANNResult<()> {
+    pub async fn build(&mut self) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
 
         let pool = create_thread_pool(self.index_configuration.num_threads)?;
@@ -233,17 +217,30 @@ where
             self.index_configuration.num_threads
         );
 
-        self.generate_compressed_data(pool.as_ref()).await?;
-        logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
+        let result: ANNResult<()> = async {
+            self.generate_compressed_data(pool.as_ref()).await?;
+            logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_inmem_index(pool.as_ref()).await?;
-        logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+            self.build_inmem_index(pool.as_ref()).await?;
+            logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
-        // Use physical file to pass the memory index to the disk writer
-        self.create_disk_layout()?;
-        logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
+            // Use physical file to pass the memory index to the disk writer
+            self.create_disk_layout()?;
+            logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
 
-        Ok(())
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Err(err) if err.kind() == ANNErrorKind::BuildInterrupted => {
+                info!(
+                    "Index build was interrupted by continuation_checker, progress saved for resumption"
+                );
+                Ok(()) // Return success for controlled interruptions
+            }
+            result => result, // Pass through any other result (Ok or Err)
+        }
     }
 
     async fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
