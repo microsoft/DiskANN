@@ -29,10 +29,27 @@
 
 use std::{alloc::Layout, iter::FusedIterator, marker::PhantomData, ptr::NonNull};
 
-use diskann_utils::{Reborrow, ReborrowMut, views::MatrixView};
+use crate::{Reborrow, ReborrowMut};
 use thiserror::Error;
 
-use crate::utils;
+#[cfg(feature = "rayon")]
+use rayon::iter::ParallelIterator;
+
+// Pointer helpers, kept private so the matrix framework is self-contained in diskann-utils.
+fn as_nonnull<T>(slice: &[T]) -> NonNull<T> {
+    // SAFETY: Slices guarantee non-null pointers.
+    unsafe { NonNull::new_unchecked(slice.as_ptr().cast_mut()) }
+}
+
+fn as_nonnull_mut<T>(slice: &mut [T]) -> NonNull<T> {
+    // SAFETY: Slices guarantee non-null pointers.
+    unsafe { NonNull::new_unchecked(slice.as_mut_ptr()) }
+}
+
+fn box_into_nonnull<T>(b: Box<[T]>) -> NonNull<T> {
+    // SAFETY: `Box::into_raw` guarantees the returned pointer is non-null.
+    unsafe { NonNull::new_unchecked(Box::into_raw(b).cast::<T>()) }
+}
 
 /// Representation trait describing the layout and access patterns for a matrix.
 ///
@@ -235,8 +252,8 @@ pub unsafe trait NewOwned<T>: ReprOwned {
 /// to initialize a matrix.
 ///
 /// ```rust
-/// use diskann_quantization::multi_vector::{Mat, Standard, Defaulted};
-/// let mat = Mat::new(Standard::<f32>::new(4, 3).unwrap(), Defaulted).unwrap();
+/// use diskann_utils::matrix::{Mat, RowMajor, Defaulted};
+/// let mat = Mat::new(RowMajor::<f32>::new(4, 3).unwrap(), Defaulted).unwrap();
 /// for i in 0..4 {
 ///     assert!(mat.get_row(i).unwrap().iter().all(|&x| x == 0.0f32));
 /// }
@@ -253,7 +270,7 @@ pub trait NewCloned: ReprOwned {
 }
 
 //////////////
-// Standard //
+// RowMajor //
 //////////////
 
 /// Metadata for dense row-major matrices.
@@ -266,33 +283,33 @@ pub trait NewCloned: ReprOwned {
 /// - `Row<'a>`: `&'a [T]`
 /// - `RowMut<'a>`: `&'a mut [T]`
 #[derive(Debug)]
-pub struct Standard<T> {
+pub struct RowMajor<T> {
     nrows: usize,
     ncols: usize,
     _elem: PhantomData<T>,
 }
 
-// Hand-written so `Standard<T>` is `Copy`/`Clone`/`PartialEq`/`Eq` for every `T`: it only
+// Hand-written so `RowMajor<T>` is `Copy`/`Clone`/`PartialEq`/`Eq` for every `T`: it only
 // stores two `usize` and a `PhantomData<T>`, so derives would spuriously require the same
 // bound on `T` (and the `Repr: Copy` supertrait must hold regardless of the element type).
-impl<T> Copy for Standard<T> {}
+impl<T> Copy for RowMajor<T> {}
 
-impl<T> Clone for Standard<T> {
+impl<T> Clone for RowMajor<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> PartialEq for Standard<T> {
+impl<T> PartialEq for RowMajor<T> {
     fn eq(&self, other: &Self) -> bool {
         self.nrows == other.nrows && self.ncols == other.ncols
     }
 }
 
-impl<T> Eq for Standard<T> {}
+impl<T> Eq for RowMajor<T> {}
 
-impl<T> Standard<T> {
-    /// Create a new `Standard` for data of type `T`.
+impl<T> RowMajor<T> {
+    /// Create a new `RowMajor` for data of type `T`.
     ///
     /// Successful construction requires:
     ///
@@ -346,11 +363,11 @@ impl<T> Standard<T> {
     ///
     /// # Safety
     ///
-    /// The length of `b` must be exactly [`Standard::num_elements`].
+    /// The length of `b` must be exactly [`RowMajor::num_elements`].
     unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
         debug_assert_eq!(b.len(), self.num_elements(), "safety contract violated");
 
-        let ptr = utils::box_into_nonnull(b).cast::<u8>();
+        let ptr = box_into_nonnull(b).cast::<u8>();
 
         // SAFETY: `ptr` is properly aligned and points to a slice of the required length.
         // Additionally, it is dropped via `Box::from_raw`, which is compatible with obtaining
@@ -359,7 +376,7 @@ impl<T> Standard<T> {
     }
 }
 
-/// Error for [`Standard::new`].
+/// Error for [`RowMajor::new`].
 #[derive(Debug, Clone, Copy)]
 pub struct Overflow {
     nrows: usize,
@@ -369,7 +386,7 @@ pub struct Overflow {
 
 impl Overflow {
     /// Construct an `Overflow` error for the given dimensions and element type.
-    pub(crate) fn for_type<T>(nrows: usize, ncols: usize) -> Self {
+    pub fn for_type<T>(nrows: usize, ncols: usize) -> Self {
         Self {
             nrows,
             ncols,
@@ -382,7 +399,7 @@ impl Overflow {
     ///
     /// On failure the error reports the original `(nrows, ncols)` dimensions rather
     /// than the padded capacity.
-    pub(crate) fn check_byte_budget<T>(
+    pub fn check_byte_budget<T>(
         capacity: usize,
         nrows: usize,
         ncols: usize,
@@ -425,7 +442,7 @@ impl std::fmt::Display for Overflow {
 
 impl std::error::Error for Overflow {}
 
-/// Error types for [`Standard`].
+/// Error types for [`RowMajor`].
 #[derive(Debug, Clone, Copy, Error)]
 #[non_exhaustive]
 pub enum SliceError {
@@ -436,7 +453,7 @@ pub enum SliceError {
 // SAFETY: The implementation correctly computes row offsets as `i * ncols` and
 // constructs valid slices of the appropriate length. The `layout` method correctly
 // reports the memory layout requirements.
-unsafe impl<T> Repr for Standard<T> {
+unsafe impl<T> Repr for RowMajor<T> {
     type Row<'a>
         = &'a [T]
     where
@@ -466,7 +483,7 @@ unsafe impl<T> Repr for Standard<T> {
 
 // SAFETY: The implementation correctly computes row offsets and constructs valid mutable
 // slices.
-unsafe impl<T> ReprMut for Standard<T> {
+unsafe impl<T> ReprMut for RowMajor<T> {
     type RowMut<'a>
         = &'a mut [T]
     where
@@ -490,7 +507,7 @@ unsafe impl<T> ReprMut for Standard<T> {
 // SAFETY: The drop implementation correctly reconstructs a Box from the raw pointer
 // using the same length (nrows * ncols) that was used for allocation, allowing Box
 // to properly deallocate the memory.
-unsafe impl<T> ReprOwned for Standard<T> {
+unsafe impl<T> ReprOwned for RowMajor<T> {
     unsafe fn drop(self, ptr: NonNull<u8>) {
         // SAFETY: The caller guarantees that `ptr` was obtained from an implementation of
         // `NewOwned` for an equivalent instance of `self`.
@@ -509,11 +526,11 @@ unsafe impl<T> ReprOwned for Standard<T> {
 
 // SAFETY: The implementation uses guarantees from `Box` to ensure that the pointer
 // initialized by it is non-null and properly aligned to the underlying type.
-unsafe impl<T> NewOwned<T> for Standard<T>
+unsafe impl<T> NewOwned<T> for RowMajor<T>
 where
     T: Clone,
 {
-    type Error = crate::error::Infallible;
+    type Error = std::convert::Infallible;
     fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
         let b: Box<[T]> = std::iter::repeat_n(value, self.num_elements()).collect();
 
@@ -524,11 +541,11 @@ where
 
 // SAFETY: The implementation uses guarantees from `Box` to ensure that the pointer
 // initialized by it is non-null and properly aligned to the underlying type.
-unsafe impl<T> NewOwned<Defaulted> for Standard<T>
+unsafe impl<T> NewOwned<Defaulted> for RowMajor<T>
 where
     T: Default,
 {
-    type Error = crate::error::Infallible;
+    type Error = std::convert::Infallible;
     fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
         let b: Box<[T]> = std::iter::repeat_with(T::default)
             .take(self.num_elements())
@@ -541,35 +558,35 @@ where
 
 // SAFETY: This checks that the slice has the correct length, which is all that is
 // required for [`Repr`].
-unsafe impl<T> NewRef<T> for Standard<T> {
+unsafe impl<T> NewRef<T> for RowMajor<T> {
     type Error = SliceError;
     fn new_ref(self, data: &[T]) -> Result<MatRef<'_, Self>, Self::Error> {
         self.check_slice(data)?;
 
         // SAFETY: The function `check_slice` verifies that `data` is compatible with
-        // the layout requirement of `Standard`.
+        // the layout requirement of `RowMajor`.
         //
         // We've properly checked that the underlying pointer is okay.
-        Ok(unsafe { MatRef::from_raw_parts(self, utils::as_nonnull(data).cast::<u8>()) })
+        Ok(unsafe { MatRef::from_raw_parts(self, as_nonnull(data).cast::<u8>()) })
     }
 }
 
 // SAFETY: This checks that the slice has the correct length, which is all that is
 // required for [`ReprMut`].
-unsafe impl<T> NewMut<T> for Standard<T> {
+unsafe impl<T> NewMut<T> for RowMajor<T> {
     type Error = SliceError;
     fn new_mut(self, data: &mut [T]) -> Result<MatMut<'_, Self>, Self::Error> {
         self.check_slice(data)?;
 
         // SAFETY: The function `check_slice` verifies that `data` is compatible with
-        // the layout requirement of `Standard`.
+        // the layout requirement of `RowMajor`.
         //
         // We've properly checked that the underlying pointer is okay.
-        Ok(unsafe { MatMut::from_raw_parts(self, utils::as_nonnull_mut(data).cast::<u8>()) })
+        Ok(unsafe { MatMut::from_raw_parts(self, as_nonnull_mut(data).cast::<u8>()) })
     }
 }
 
-impl<T> NewCloned for Standard<T>
+impl<T> NewCloned for RowMajor<T>
 where
     T: Clone,
 {
@@ -635,7 +652,10 @@ impl<T: ReprOwned> Mat<T> {
         }
     }
 
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    /// # Safety
+    ///
+    /// `i` must be less than `self.num_vectors()`.
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors(). The constructors for this type
         // ensure that `ptr` is compatible with `T`.
         unsafe { self.repr.get_row(self.ptr, i) }
@@ -697,7 +717,7 @@ impl<T: ReprOwned> Mat<T> {
     ///
     /// 1. Point to memory compatible with [`Repr::layout`].
     /// 2. Be compatible with the drop logic in [`ReprOwned`].
-    pub(crate) unsafe fn from_raw_parts(repr: T, ptr: NonNull<u8>) -> Self {
+    pub unsafe fn from_raw_parts(repr: T, ptr: NonNull<u8>) -> Self {
         Self {
             ptr,
             repr,
@@ -711,7 +731,7 @@ impl<T: ReprOwned> Mat<T> {
     }
 
     /// Return a mutable base pointer for the [`Mat`].
-    pub(crate) fn as_raw_mut_ptr(&mut self) -> *mut u8 {
+    pub fn as_raw_mut_ptr(&mut self) -> *mut u8 {
         self.ptr.as_ptr()
     }
 }
@@ -730,10 +750,11 @@ impl<T: NewCloned> Clone for Mat<T> {
     }
 }
 
-impl<T> Mat<Standard<T>> {
-    /// Construct a [`Mat`] by calling `f` once per element in row-major order.
-    pub fn from_fn<F: FnMut() -> T>(repr: Standard<T>, mut f: F) -> Self {
-        let b: Box<[T]> = (0..repr.num_elements()).map(|_| f()).collect();
+impl<T> Mat<RowMajor<T>> {
+    /// Construct a [`Mat`] by filling each element in row-major order from `gen`.
+    pub fn from_gen<U: Generator<T>>(mut gen: U, nrows: usize, ncols: usize) -> Self {
+        let repr = RowMajor::new(nrows, ncols).expect("dimension overflow");
+        let b: Box<[T]> = (0..repr.num_elements()).map(|_| gen.generate()).collect();
         // SAFETY: `b` has length `repr.num_elements()` by construction.
         unsafe { repr.box_to_mat(b) }
     }
@@ -827,7 +848,10 @@ impl<'a, T: Repr> MatRef<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    /// # Safety
+    ///
+    /// `i` must be less than `self.num_vectors()`.
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
     }
@@ -866,7 +890,7 @@ impl<'a, T: Repr> MatRef<'a, T> {
     }
 }
 
-impl<'a, T> MatRef<'a, Standard<T>> {
+impl<'a, T> MatRef<'a, RowMajor<T>> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -879,19 +903,15 @@ impl<'a, T> MatRef<'a, Standard<T>> {
     #[inline]
     pub fn as_slice(&self) -> &'a [T] {
         let len = self.repr.num_elements();
-        // SAFETY: `Standard<T>` guarantees `nrows * ncols` contiguous `T` elements
+        // SAFETY: `RowMajor<T>` guarantees `nrows * ncols` contiguous `T` elements
         // starting at `self.ptr`. The lifetime `'a` is tied to the original data.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
     }
 
     /// Return a [`MatrixView`] over the backing data.
-    #[allow(clippy::expect_used)]
     #[inline]
     pub fn as_matrix_view(&self) -> MatrixView<'a, T> {
-        // `Standard::new` validates that `nrows * ncols` does not overflow,
-        // so `try_from` is infallible here.
-        MatrixView::try_from(self.as_slice(), self.num_vectors(), self.vector_dim())
-            .expect("Standard<T> has valid dimensions")
+        *self
     }
 }
 
@@ -994,7 +1014,10 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    /// # Safety
+    ///
+    /// `i` must be less than `self.num_vectors()`.
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
     }
@@ -1070,7 +1093,7 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
     }
 
     /// Return a mutable base pointer for the [`MatMut`].
-    pub(crate) fn as_raw_mut_ptr(&mut self) -> *mut u8 {
+    pub fn as_raw_mut_ptr(&mut self) -> *mut u8 {
         self.ptr.as_ptr()
     }
 }
@@ -1097,7 +1120,7 @@ impl<'this, 'a, T: ReprMut> ReborrowMut<'this> for MatMut<'a, T> {
     }
 }
 
-impl<'a, T> MatMut<'a, Standard<T>> {
+impl<'a, T> MatMut<'a, RowMajor<T>> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1116,6 +1139,592 @@ impl<'a, T> MatMut<'a, Standard<T>> {
     #[inline]
     pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
         self.as_view().as_matrix_view()
+    }
+}
+
+//////////////////////////////
+// Dense (RowMajor) API + aliases
+//////////////////////////////
+
+/// A generator for initializing matrix entries via [`Matrix::from_gen`].
+pub trait Generator<T> {
+    fn generate(&mut self) -> T;
+}
+
+impl<T> Generator<T> for T
+where
+    T: Clone,
+{
+    fn generate(&mut self) -> T {
+        self.clone()
+    }
+}
+
+/// A [`Generator`] that invokes a closure to initialize each element.
+pub struct Init<F>(pub F);
+
+impl<T, F> Generator<T> for Init<F>
+where
+    F: FnMut() -> T,
+{
+    fn generate(&mut self) -> T {
+        (self.0)()
+    }
+}
+
+/// Owned dense row-major matrix.
+pub type Matrix<T> = Mat<RowMajor<T>>;
+
+/// Shared dense row-major view.
+pub type MatrixView<'a, T> = MatRef<'a, RowMajor<T>>;
+
+/// Mutable dense row-major view.
+pub type MatrixViewMut<'a, T> = MatMut<'a, RowMajor<T>>;
+
+/// Error returned when a slice length is incompatible with the requested dimensions.
+#[derive(Debug, Error)]
+#[error("cannot view a slice of length {len} as a {nrows}x{ncols} matrix")]
+pub struct TryFromError {
+    pub len: usize,
+    pub nrows: usize,
+    pub ncols: usize,
+}
+
+impl<'a, T> MatRef<'a, RowMajor<T>> {
+    /// View `data` as an `nrows x ncols` matrix.
+    pub fn try_from(data: &'a [T], nrows: usize, ncols: usize) -> Result<Self, TryFromError> {
+        let err = || TryFromError { len: data.len(), nrows, ncols };
+        let repr = RowMajor::new(nrows, ncols).map_err(|_| err())?;
+        MatRef::new(repr, data).map_err(|_| err())
+    }
+
+    /// View `data` as a single-row matrix.
+    pub fn row_vector(data: &'a [T]) -> Self {
+        let ncols = data.len();
+        Self::try_from(data, 1, ncols).expect("row vector length")
+    }
+
+    /// View `data` as a single-column matrix.
+    pub fn column_vector(data: &'a [T]) -> Self {
+        let nrows = data.len();
+        Self::try_from(data, nrows, 1).expect("column vector length")
+    }
+
+    /// Number of rows.
+    #[inline]
+    pub fn nrows(&self) -> usize {
+        self.num_vectors()
+    }
+
+    /// Number of columns.
+    #[inline]
+    pub fn ncols(&self) -> usize {
+        self.vector_dim()
+    }
+
+    /// Row `i`. Panics if `i >= self.nrows()`.
+    pub fn row(&self, i: usize) -> &'a [T] {
+        let ncols = self.ncols();
+        &self.as_slice()[i * ncols..i * ncols + ncols]
+    }
+
+    /// Iterator over rows.
+    pub fn row_iter(&self) -> impl ExactSizeIterator<Item = &'a [T]> {
+        self.as_slice().chunks_exact(self.ncols())
+    }
+
+    /// Iterator over sub-matrices of up to `batchsize` rows.
+    ///
+    /// # Panics
+    /// Panics if `batchsize == 0`.
+    pub fn window_iter(&self, batchsize: usize) -> impl Iterator<Item = MatrixView<'a, T>> {
+        assert!(batchsize != 0, "window_iter batchsize cannot be zero");
+        let ncols = self.ncols();
+        self.as_slice()
+            .chunks(ncols * batchsize)
+            .map(move |d| MatrixView::try_from(d, d.len() / ncols, ncols).expect("exact chunk"))
+    }
+
+    /// Parallel iterator over rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_row_iter(&self) -> impl rayon::iter::IndexedParallelIterator<Item = &'a [T]>
+    where
+        T: Sync,
+    {
+        use rayon::slice::ParallelSlice;
+        self.as_slice().par_chunks_exact(self.ncols())
+    }
+
+    /// Parallel iterator over sub-matrices of up to `batchsize` rows.
+    ///
+    /// # Panics
+    /// Panics if `batchsize == 0`.
+    #[cfg(feature = "rayon")]
+    pub fn par_window_iter(
+        &self,
+        batchsize: usize,
+    ) -> impl rayon::iter::IndexedParallelIterator<Item = MatrixView<'a, T>>
+    where
+        T: Send + Sync,
+    {
+        use rayon::slice::ParallelSlice;
+        assert!(batchsize != 0, "par_window_iter batchsize cannot be zero");
+        let ncols = self.ncols();
+        self.as_slice()
+            .par_chunks(ncols * batchsize)
+            .map(move |d| MatrixView::try_from(d, d.len() / ncols, ncols).expect("exact chunk"))
+    }
+
+    /// View of the rows in `rows`, or `None` if out of bounds.
+    pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'a, T>> {
+        let ncols = self.ncols();
+        let lo = rows.start.checked_mul(ncols)?;
+        let hi = rows.end.checked_mul(ncols)?;
+        let data = self.as_slice().get(lo..hi)?;
+        Some(MatrixView::try_from(data, rows.len(), ncols).expect("exact subview"))
+    }
+
+    /// Element at `(row, col)`, or `None` if out of bounds.
+    pub fn try_get(&self, row: usize, col: usize) -> Option<&'a T> {
+        if row >= self.nrows() || col >= self.ncols() {
+            None
+        } else {
+            let ncols = self.ncols();
+            self.as_slice().get(row * ncols + col)
+        }
+    }
+
+    /// Base pointer of the backing data.
+    pub fn as_ptr(&self) -> *const T {
+        self.as_slice().as_ptr()
+    }
+
+    /// Apply `f` to every element, producing a new owned matrix of the same shape.
+    pub fn map<F, R>(&self, f: F) -> Matrix<R>
+    where
+        F: FnMut(&T) -> R,
+    {
+        let data: Box<[R]> = self.as_slice().iter().map(f).collect();
+        Matrix::try_from(data, self.nrows(), self.ncols()).expect("same shape")
+    }
+}
+
+impl<'a, T> MatMut<'a, RowMajor<T>> {
+    /// View `data` as an `nrows x ncols` mutable matrix.
+    pub fn try_from(
+        data: &'a mut [T],
+        nrows: usize,
+        ncols: usize,
+    ) -> Result<Self, TryFromError> {
+        let len = data.len();
+        let err = || TryFromError { len, nrows, ncols };
+        let repr = RowMajor::new(nrows, ncols).map_err(|_| err())?;
+        MatMut::new(repr, data).map_err(|_| err())
+    }
+
+    /// Number of rows.
+    #[inline]
+    pub fn nrows(&self) -> usize {
+        self.num_vectors()
+    }
+
+    /// Number of columns.
+    #[inline]
+    pub fn ncols(&self) -> usize {
+        self.vector_dim()
+    }
+
+    /// Backing data as a mutable slice.
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        let len = self.nrows() * self.ncols();
+        // SAFETY: the backing allocation holds `len` contiguous `T`, and `&mut self` grants
+        // exclusive access for the returned slice's lifetime.
+        unsafe { std::slice::from_raw_parts_mut(self.as_raw_mut_ptr().cast::<T>(), len) }
+    }
+
+    /// Row `i`. Panics if `i >= self.nrows()`.
+    pub fn row(&self, i: usize) -> &[T] {
+        self.as_view().row(i)
+    }
+
+    /// Iterator over rows.
+    pub fn row_iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
+        let ncols = self.ncols();
+        self.as_slice().chunks_exact(ncols)
+    }
+
+    /// Mutable row `i`. Panics if `i >= self.nrows()`.
+    pub fn row_mut(&mut self, i: usize) -> &mut [T] {
+        let ncols = self.ncols();
+        &mut self.as_mut_slice()[i * ncols..i * ncols + ncols]
+    }
+
+    /// Iterator over mutable rows.
+    pub fn row_iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut [T]> {
+        let ncols = self.ncols();
+        self.as_mut_slice().chunks_exact_mut(ncols)
+    }
+
+    /// Parallel iterator over mutable rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_row_iter_mut(
+        &mut self,
+    ) -> impl rayon::iter::IndexedParallelIterator<Item = &mut [T]>
+    where
+        T: Send,
+    {
+        use rayon::slice::ParallelSliceMut;
+        let ncols = self.ncols();
+        self.as_mut_slice().par_chunks_exact_mut(ncols)
+    }
+
+    /// Element at `(row, col)`, or `None` if out of bounds.
+    pub fn try_get(&self, row: usize, col: usize) -> Option<&T> {
+        self.as_view().try_get(row, col)
+    }
+
+    /// Base pointer of the backing data.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.as_mut_slice().as_mut_ptr()
+    }
+}
+
+impl<T> Mat<RowMajor<T>> {
+    /// Fill a new `nrows x ncols` matrix with clones of `value`.
+    pub fn filled(value: T, nrows: usize, ncols: usize) -> Self
+    where
+        T: Clone,
+    {
+        Self::from_gen(value, nrows, ncols)
+    }
+
+    /// Take ownership of `data`, interpreting it as an `nrows x ncols` matrix.
+    pub fn try_from(data: Box<[T]>, nrows: usize, ncols: usize) -> Result<Self, TryFromError> {
+        let err = TryFromError {
+            len: data.len(),
+            nrows,
+            ncols,
+        };
+        let repr = match RowMajor::new(nrows, ncols) {
+            Ok(repr) if repr.num_elements() == data.len() => repr,
+            _ => return Err(err),
+        };
+        // SAFETY: `data.len()` was checked to equal `repr.num_elements()`.
+        Ok(unsafe { repr.box_to_mat(data) })
+    }
+
+    /// Take ownership of `data` as a single-row matrix.
+    pub fn row_vector(data: Box<[T]>) -> Self {
+        let ncols = data.len();
+        Self::try_from(data, 1, ncols).expect("row vector length")
+    }
+
+    /// Take ownership of `data` as a single-column matrix.
+    pub fn column_vector(data: Box<[T]>) -> Self {
+        let nrows = data.len();
+        Self::try_from(data, nrows, 1).expect("column vector length")
+    }
+
+    /// Number of rows.
+    #[inline]
+    pub fn nrows(&self) -> usize {
+        self.num_vectors()
+    }
+
+    /// Number of columns.
+    #[inline]
+    pub fn ncols(&self) -> usize {
+        self.vector_dim()
+    }
+
+    /// Backing data as a mutable slice.
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        let len = self.nrows() * self.ncols();
+        // SAFETY: the backing allocation holds `len` contiguous `T`, and `&mut self` grants
+        // exclusive access for the returned slice's lifetime.
+        unsafe { std::slice::from_raw_parts_mut(self.as_raw_mut_ptr().cast::<T>(), len) }
+    }
+
+    /// Mutable view over the whole matrix.
+    pub fn as_mut_view(&mut self) -> MatrixViewMut<'_, T> {
+        self.as_view_mut()
+    }
+
+    /// Row `i`. Panics if `i >= self.nrows()`.
+    pub fn row(&self, i: usize) -> &[T] {
+        self.as_view().row(i)
+    }
+
+    /// Iterator over rows.
+    pub fn row_iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
+        let ncols = self.ncols();
+        self.as_slice().chunks_exact(ncols)
+    }
+
+    /// Mutable row `i`. Panics if `i >= self.nrows()`.
+    pub fn row_mut(&mut self, i: usize) -> &mut [T] {
+        let ncols = self.ncols();
+        &mut self.as_mut_slice()[i * ncols..i * ncols + ncols]
+    }
+
+    /// Iterator over mutable rows.
+    pub fn row_iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut [T]> {
+        let ncols = self.ncols();
+        self.as_mut_slice().chunks_exact_mut(ncols)
+    }
+
+    /// Iterator over sub-matrices of up to `batchsize` rows.
+    pub fn window_iter(&self, batchsize: usize) -> impl Iterator<Item = MatrixView<'_, T>> {
+        assert!(batchsize != 0, "window_iter batchsize cannot be zero");
+        let ncols = self.ncols();
+        self.as_slice()
+            .chunks(ncols * batchsize)
+            .map(move |d| MatrixView::try_from(d, d.len() / ncols, ncols).expect("exact chunk"))
+    }
+
+    /// Parallel iterator over rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_row_iter(&self) -> impl rayon::iter::IndexedParallelIterator<Item = &[T]>
+    where
+        T: Sync,
+    {
+        use rayon::slice::ParallelSlice;
+        let ncols = self.ncols();
+        self.as_slice().par_chunks_exact(ncols)
+    }
+
+    /// Parallel iterator over mutable rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_row_iter_mut(&mut self) -> impl rayon::iter::IndexedParallelIterator<Item = &mut [T]>
+    where
+        T: Send,
+    {
+        use rayon::slice::ParallelSliceMut;
+        let ncols = self.ncols();
+        self.as_mut_slice().par_chunks_exact_mut(ncols)
+    }
+
+    /// Parallel iterator over sub-matrices of up to `batchsize` rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_window_iter(
+        &self,
+        batchsize: usize,
+    ) -> impl rayon::iter::IndexedParallelIterator<Item = MatrixView<'_, T>>
+    where
+        T: Send + Sync,
+    {
+        use rayon::slice::ParallelSlice;
+        assert!(batchsize != 0, "par_window_iter batchsize cannot be zero");
+        let ncols = self.ncols();
+        self.as_slice()
+            .par_chunks(ncols * batchsize)
+            .map(move |d| MatrixView::try_from(d, d.len() / ncols, ncols).expect("exact chunk"))
+    }
+
+    /// Parallel iterator over mutable sub-matrices of up to `batchsize` rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_window_iter_mut(
+        &mut self,
+        batchsize: usize,
+    ) -> impl rayon::iter::IndexedParallelIterator<Item = MatrixViewMut<'_, T>>
+    where
+        T: Send,
+    {
+        use rayon::slice::ParallelSliceMut;
+        assert!(batchsize != 0, "par_window_iter_mut batchsize cannot be zero");
+        let ncols = self.ncols();
+        self.as_mut_slice()
+            .par_chunks_mut(ncols * batchsize)
+            .map(move |d| {
+                let nrows = d.len() / ncols;
+                MatrixViewMut::try_from(d, nrows, ncols).expect("exact chunk")
+            })
+    }
+
+    /// View of the rows in `rows`, or `None` if out of bounds.
+    pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'_, T>> {
+        self.as_view().subview(rows)
+    }
+
+    /// Element at `(row, col)`, or `None` if out of bounds.
+    pub fn try_get(&self, row: usize, col: usize) -> Option<&T> {
+        self.as_view().try_get(row, col)
+    }
+
+    /// Base pointer of the backing data.
+    pub fn as_ptr(&self) -> *const T {
+        self.as_slice().as_ptr()
+    }
+
+    /// Mutable base pointer of the backing data.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.as_mut_slice().as_mut_ptr()
+    }
+
+    /// Apply `f` to every element, producing a new owned matrix of the same shape.
+    pub fn map<F, R>(&self, f: F) -> Matrix<R>
+    where
+        F: FnMut(&T) -> R,
+    {
+        self.as_view().map(f)
+    }
+}
+
+// Indexing by `(row, col)`.
+impl<T> std::ops::Index<(usize, usize)> for Mat<RowMajor<T>> {
+    type Output = T;
+    fn index(&self, (row, col): (usize, usize)) -> &T {
+        self.try_get(row, col).expect("index out of bounds")
+    }
+}
+
+impl<T> std::ops::IndexMut<(usize, usize)> for Mat<RowMajor<T>> {
+    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut T {
+        let ncols = self.ncols();
+        assert!(row < self.nrows() && col < ncols, "index out of bounds");
+        &mut self.as_mut_slice()[row * ncols + col]
+    }
+}
+
+impl<T> std::ops::Index<(usize, usize)> for MatRef<'_, RowMajor<T>> {
+    type Output = T;
+    fn index(&self, (row, col): (usize, usize)) -> &T {
+        self.try_get(row, col).expect("index out of bounds")
+    }
+}
+
+impl<T> std::ops::Index<(usize, usize)> for MatMut<'_, RowMajor<T>> {
+    type Output = T;
+    fn index(&self, (row, col): (usize, usize)) -> &T {
+        self.try_get(row, col).expect("index out of bounds")
+    }
+}
+
+impl<T> std::ops::IndexMut<(usize, usize)> for MatMut<'_, RowMajor<T>> {
+    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut T {
+        let ncols = self.ncols();
+        assert!(row < self.nrows() && col < ncols, "index out of bounds");
+        &mut self.as_mut_slice()[row * ncols + col]
+    }
+}
+
+// Equality compares shape and contents.
+impl<T: PartialEq> PartialEq for Mat<RowMajor<T>> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ncols() == other.ncols() && self.as_slice() == other.as_slice()
+    }
+}
+
+impl<T: PartialEq> PartialEq for MatRef<'_, RowMajor<T>> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ncols() == other.ncols() && self.as_slice() == other.as_slice()
+    }
+}
+
+impl<T: PartialEq> PartialEq for MatMut<'_, RowMajor<T>> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ncols() == other.ncols() && self.as_slice() == other.as_slice()
+    }
+}
+
+impl<'a, T> MatRef<'a, RowMajor<T>> {
+    /// Reborrow as a shorter-lived view.
+    pub fn as_view(&self) -> MatrixView<'_, T> {
+        self.reborrow()
+    }
+
+    /// Element at `(row, col)` without bounds checking.
+    ///
+    /// # Safety
+    /// `row < self.nrows()` and `col < self.ncols()`.
+    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &'a T {
+        let ncols = self.ncols();
+        // SAFETY: guaranteed in-bounds by the caller.
+        unsafe { self.as_slice().get_unchecked(row * ncols + col) }
+    }
+}
+
+impl<'a, T> MatMut<'a, RowMajor<T>> {
+    /// Reborrow as a shorter-lived mutable view.
+    pub fn as_mut_view(&mut self) -> MatrixViewMut<'_, T> {
+        self.reborrow_mut()
+    }
+
+    /// Element at `(row, col)` without bounds checking.
+    ///
+    /// # Safety
+    /// `row < self.nrows()` and `col < self.ncols()`.
+    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T {
+        // SAFETY: guaranteed in-bounds by the caller.
+        unsafe { self.as_view().get_unchecked(row, col) }
+    }
+
+    /// Mutable element at `(row, col)` without bounds checking.
+    ///
+    /// # Safety
+    /// `row < self.nrows()` and `col < self.ncols()`.
+    pub unsafe fn get_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T {
+        let ncols = self.ncols();
+        // SAFETY: guaranteed in-bounds by the caller.
+        unsafe { self.as_mut_slice().get_unchecked_mut(row * ncols + col) }
+    }
+
+    /// Parallel iterator over mutable sub-matrices of up to `batchsize` rows.
+    #[cfg(feature = "rayon")]
+    pub fn par_window_iter_mut(
+        &mut self,
+        batchsize: usize,
+    ) -> impl rayon::iter::IndexedParallelIterator<Item = MatrixViewMut<'_, T>>
+    where
+        T: Send,
+    {
+        use rayon::slice::ParallelSliceMut;
+        assert!(batchsize != 0, "par_window_iter_mut batchsize cannot be zero");
+        let ncols = self.ncols();
+        self.as_mut_slice()
+            .par_chunks_mut(ncols * batchsize)
+            .map(move |d| {
+                let nrows = d.len() / ncols;
+                MatrixViewMut::try_from(d, nrows, ncols).expect("exact chunk")
+            })
+    }
+}
+
+impl<T> Mat<RowMajor<T>> {
+    /// Element at `(row, col)` without bounds checking.
+    ///
+    /// # Safety
+    /// `row < self.nrows()` and `col < self.ncols()`.
+    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T {
+        // SAFETY: guaranteed in-bounds by the caller.
+        unsafe { self.as_view().get_unchecked(row, col) }
+    }
+
+    /// Mutable element at `(row, col)` without bounds checking.
+    ///
+    /// # Safety
+    /// `row < self.nrows()` and `col < self.ncols()`.
+    pub unsafe fn get_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T {
+        let ncols = self.ncols();
+        // SAFETY: guaranteed in-bounds by the caller.
+        unsafe { self.as_mut_slice().get_unchecked_mut(row * ncols + col) }
+    }
+
+    /// Consume the matrix, returning its backing storage as a `Box<[T]>`.
+    pub fn into_inner(self) -> Box<[T]> {
+        let len = self.nrows() * self.ncols();
+        let this = core::mem::ManuallyDrop::new(self);
+        let ptr = this.as_raw_ptr().cast::<T>().cast_mut();
+        // SAFETY: the matrix is backed by a `Box<[T]>` of `len` elements (see
+        // `RowMajor::box_to_mat`); `ManuallyDrop` prevents a double free via `Mat`'s `Drop`.
+        unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)) }
+    }
+}
+
+// A dense view converts directly to its backing slice.
+impl<'a, T> From<MatRef<'a, RowMajor<T>>> for &'a [T] {
+    fn from(m: MatRef<'a, RowMajor<T>>) -> Self {
+        m.as_slice()
     }
 }
 
@@ -1236,7 +1845,7 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann_utils::lazy_format;
+    use crate::lazy_format;
 
     /// Helper to assert a type is Copy.
     fn assert_copy<T: Copy>(_: &T) {}
@@ -1256,10 +1865,10 @@ mod tests {
         v
     }
 
-    /// `MatRef` is covariant in `T`: `Standard<&'long u8>` → `Standard<&'short u8>`.
+    /// `MatRef` is covariant in `T`: `RowMajor<&'long u8>` → `RowMajor<&'short u8>`.
     fn _assert_matref_covariant_repr<'long: 'short, 'short, 'a>(
-        v: MatRef<'a, Standard<&'long u8>>,
-    ) -> MatRef<'a, Standard<&'short u8>> {
+        v: MatRef<'a, RowMajor<&'long u8>>,
+    ) -> MatRef<'a, RowMajor<&'short u8>> {
         v
     }
 
@@ -1285,7 +1894,7 @@ mod tests {
         ]
     }
 
-    fn fill_mat(x: &mut Mat<Standard<usize>>, repr: Standard<usize>) {
+    fn fill_mat(x: &mut Mat<RowMajor<usize>>, repr: RowMajor<usize>) {
         assert_eq!(x.repr(), &repr);
         assert_eq!(x.num_vectors(), repr.nrows());
         assert_eq!(x.vector_dim(), repr.ncols());
@@ -1303,7 +1912,7 @@ mod tests {
         }
     }
 
-    fn fill_mat_mut(mut x: MatMut<'_, Standard<usize>>, repr: Standard<usize>) {
+    fn fill_mat_mut(mut x: MatMut<'_, RowMajor<usize>>, repr: RowMajor<usize>) {
         assert_eq!(x.repr(), &repr);
         assert_eq!(x.num_vectors(), repr.nrows());
         assert_eq!(x.vector_dim(), repr.ncols());
@@ -1322,7 +1931,7 @@ mod tests {
         }
     }
 
-    fn fill_rows_mut(x: RowsMut<'_, Standard<usize>>, repr: Standard<usize>) {
+    fn fill_rows_mut(x: RowsMut<'_, RowMajor<usize>>, repr: RowMajor<usize>) {
         assert_eq!(x.len(), repr.nrows());
         // Materialize all rows at once.
         let mut all_rows: Vec<_> = x.collect();
@@ -1335,7 +1944,7 @@ mod tests {
         }
     }
 
-    fn check_mat(x: &Mat<Standard<usize>>, repr: Standard<usize>, ctx: &dyn Display) {
+    fn check_mat(x: &Mat<RowMajor<usize>>, repr: RowMajor<usize>, ctx: &dyn Display) {
         assert_eq!(x.repr(), &repr);
         assert_eq!(x.num_vectors(), repr.nrows());
         assert_eq!(x.vector_dim(), repr.ncols());
@@ -1361,7 +1970,7 @@ mod tests {
         }
     }
 
-    fn check_mat_ref(x: MatRef<'_, Standard<usize>>, repr: Standard<usize>, ctx: &dyn Display) {
+    fn check_mat_ref(x: MatRef<'_, RowMajor<usize>>, repr: RowMajor<usize>, ctx: &dyn Display) {
         assert_eq!(x.repr(), &repr);
         assert_eq!(x.num_vectors(), repr.nrows());
         assert_eq!(x.vector_dim(), repr.ncols());
@@ -1388,7 +1997,7 @@ mod tests {
         }
     }
 
-    fn check_mat_mut(x: MatMut<'_, Standard<usize>>, repr: Standard<usize>, ctx: &dyn Display) {
+    fn check_mat_mut(x: MatMut<'_, RowMajor<usize>>, repr: RowMajor<usize>, ctx: &dyn Display) {
         assert_eq!(x.repr(), &repr);
         assert_eq!(x.num_vectors(), repr.nrows());
         assert_eq!(x.vector_dim(), repr.ncols());
@@ -1414,7 +2023,7 @@ mod tests {
         }
     }
 
-    fn check_rows(x: Rows<'_, Standard<usize>>, repr: Standard<usize>, ctx: &dyn Display) {
+    fn check_rows(x: Rows<'_, RowMajor<usize>>, repr: RowMajor<usize>, ctx: &dyn Display) {
         assert_eq!(x.len(), repr.nrows(), "ctx: {ctx}");
         let all_rows: Vec<_> = x.collect();
         assert_eq!(all_rows.len(), repr.nrows(), "ctx: {ctx}");
@@ -1434,12 +2043,12 @@ mod tests {
     }
 
     //////////////
-    // Standard //
+    // RowMajor //
     //////////////
 
     #[test]
     fn standard_representation() {
-        let repr = Standard::<f32>::new(4, 3).unwrap();
+        let repr = RowMajor::<f32>::new(4, 3).unwrap();
         assert_eq!(repr.nrows(), 4);
         assert_eq!(repr.ncols(), 3);
 
@@ -1451,7 +2060,7 @@ mod tests {
     #[test]
     fn standard_zero_dimensions() {
         for (nrows, ncols) in [(0, 0), (0, 5), (5, 0)] {
-            let repr = Standard::<u8>::new(nrows, ncols).unwrap();
+            let repr = RowMajor::<u8>::new(nrows, ncols).unwrap();
             assert_eq!(repr.nrows(), nrows);
             assert_eq!(repr.ncols(), ncols);
             let layout = repr.layout().unwrap();
@@ -1461,7 +2070,7 @@ mod tests {
 
     #[test]
     fn standard_check_slice() {
-        let repr = Standard::<u32>::new(3, 4).unwrap();
+        let repr = RowMajor::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let data = vec![0u32; 12];
@@ -1488,31 +2097,31 @@ mod tests {
         ));
 
         // Overflow case
-        let overflow_repr = Standard::<u8>::new(usize::MAX, 2).unwrap_err();
+        let overflow_repr = RowMajor::<u8>::new(usize::MAX, 2).unwrap_err();
         assert!(matches!(overflow_repr, Overflow { .. }));
     }
 
     #[test]
     fn standard_new_rejects_element_count_overflow() {
         // nrows * ncols overflows usize even though per-element size is small.
-        assert!(Standard::<u8>::new(usize::MAX, 2).is_err());
-        assert!(Standard::<u8>::new(2, usize::MAX).is_err());
-        assert!(Standard::<u8>::new(usize::MAX, usize::MAX).is_err());
+        assert!(RowMajor::<u8>::new(usize::MAX, 2).is_err());
+        assert!(RowMajor::<u8>::new(2, usize::MAX).is_err());
+        assert!(RowMajor::<u8>::new(usize::MAX, usize::MAX).is_err());
     }
 
     #[test]
     fn standard_new_rejects_byte_count_exceeding_isize_max() {
         // Element count fits in usize, but total bytes exceed isize::MAX.
         let half = (isize::MAX as usize / std::mem::size_of::<u64>()) + 1;
-        assert!(Standard::<u64>::new(half, 1).is_err());
-        assert!(Standard::<u64>::new(1, half).is_err());
+        assert!(RowMajor::<u64>::new(half, 1).is_err());
+        assert!(RowMajor::<u64>::new(1, half).is_err());
     }
 
     #[test]
     fn standard_new_accepts_boundary_below_isize_max() {
         // Largest allocation that still fits in isize::MAX bytes.
         let max_elems = isize::MAX as usize / std::mem::size_of::<u64>();
-        let repr = Standard::<u64>::new(max_elems, 1).unwrap();
+        let repr = RowMajor::<u64>::new(max_elems, 1).unwrap();
         assert_eq!(repr.num_elements(), max_elems);
     }
 
@@ -1520,25 +2129,25 @@ mod tests {
     fn standard_new_zst_rejects_element_count_overflow() {
         // For ZSTs the byte count is always 0, but element-count overflow
         // must still be caught so that `num_elements()` never wraps.
-        assert!(Standard::<()>::new(usize::MAX, 2).is_err());
-        assert!(Standard::<()>::new(usize::MAX / 2 + 1, 3).is_err());
+        assert!(RowMajor::<()>::new(usize::MAX, 2).is_err());
+        assert!(RowMajor::<()>::new(usize::MAX / 2 + 1, 3).is_err());
     }
 
     #[test]
     fn standard_new_zst_accepts_large_non_overflowing() {
         // Large-but-valid ZST matrix: element count fits in usize.
-        let repr = Standard::<()>::new(usize::MAX, 1).unwrap();
+        let repr = RowMajor::<()>::new(usize::MAX, 1).unwrap();
         assert_eq!(repr.num_elements(), usize::MAX);
         assert_eq!(repr.layout().unwrap().size(), 0);
     }
 
     #[test]
     fn standard_new_overflow_error_display() {
-        let err = Standard::<u32>::new(usize::MAX, 2).unwrap_err();
+        let err = RowMajor::<u32>::new(usize::MAX, 2).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("would exceed isize::MAX bytes"), "{msg}");
 
-        let zst_err = Standard::<()>::new(usize::MAX, 2).unwrap_err();
+        let zst_err = RowMajor::<()>::new(usize::MAX, 2).unwrap_err();
         let zst_msg = zst_err.to_string();
         assert!(zst_msg.contains("ZST matrix"), "{zst_msg}");
         assert!(zst_msg.contains("usize::MAX"), "{zst_msg}");
@@ -1550,7 +2159,7 @@ mod tests {
 
     #[test]
     fn mat_new_and_basic_accessors() {
-        let mat = Mat::new(Standard::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
+        let mat = Mat::new(RowMajor::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
         let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 3);
@@ -1572,7 +2181,7 @@ mod tests {
 
     #[test]
     fn mat_new_with_default() {
-        let mat = Mat::new(Standard::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
+        let mat = Mat::new(RowMajor::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
         let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 2);
@@ -1594,7 +2203,7 @@ mod tests {
     fn test_mat() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
+                let repr = RowMajor::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 // Populate the matrix using `&mut Mat`
@@ -1653,7 +2262,7 @@ mod tests {
     fn test_mat_clone() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
+                let repr = RowMajor::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 let mut mat = Mat::new(repr, Defaulted).unwrap();
@@ -1712,7 +2321,7 @@ mod tests {
     fn test_mat_refmut() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
+                let repr = RowMajor::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 // Populate the matrix using `&mut Mat`
@@ -1781,7 +2390,7 @@ mod tests {
 
         for nrows in rows {
             for ncols in cols {
-                let m = Mat::new(Standard::new(nrows, ncols).unwrap(), 1usize).unwrap();
+                let m = Mat::new(RowMajor::new(nrows, ncols).unwrap(), 1usize).unwrap();
                 let rows_iter = m.rows();
                 let len = <_ as ExactSizeIterator>::len(&rows_iter);
                 assert_eq!(len, nrows);
@@ -1801,11 +2410,11 @@ mod tests {
         for nrows in rows {
             for ncols in cols {
                 let mut counter = 0u32;
-                let m = Mat::from_fn(Standard::new(nrows, ncols).unwrap(), || {
+                let m = Mat::from_gen(Init(|| {
                     let v = counter;
                     counter += 1;
                     v
-                });
+                }), nrows, ncols);
 
                 assert_eq!(counter as usize, nrows * ncols);
                 for (i, row) in m.rows().enumerate() {
@@ -1820,7 +2429,7 @@ mod tests {
 
     #[test]
     fn matref_new_slice_length_error() {
-        let repr = Standard::<u32>::new(3, 4).unwrap();
+        let repr = RowMajor::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let data = vec![0u32; 12];
@@ -1849,7 +2458,7 @@ mod tests {
 
     #[test]
     fn matmut_new_slice_length_error() {
-        let repr = Standard::<u32>::new(3, 4).unwrap();
+        let repr = RowMajor::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let mut data = vec![0u32; 12];
@@ -1881,7 +2490,7 @@ mod tests {
         let data = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
 
         // MatRef
-        let matref = MatRef::new(Standard::new(2, 3).unwrap(), &data).unwrap();
+        let matref = MatRef::new(RowMajor::new(2, 3).unwrap(), &data).unwrap();
         let view = matref.as_matrix_view();
         assert_eq!(view.nrows(), 2);
         assert_eq!(view.ncols(), 3);
@@ -1893,7 +2502,7 @@ mod tests {
         assert_eq!(matref.as_slice(), &data);
 
         // Mat
-        let mut mat = Mat::new(Standard::<f32>::new(2, 3).unwrap(), 0.0f32).unwrap();
+        let mut mat = Mat::new(RowMajor::<f32>::new(2, 3).unwrap(), 0.0f32).unwrap();
         for i in 0..2 {
             let r = mat.get_row_mut(i).unwrap();
             for j in 0..3 {
@@ -1912,7 +2521,7 @@ mod tests {
 
         // MatMut
         let mut buf = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let matmut = MatMut::new(Standard::new(2, 3).unwrap(), &mut buf).unwrap();
+        let matmut = MatMut::new(RowMajor::new(2, 3).unwrap(), &mut buf).unwrap();
         let view = matmut.as_matrix_view();
         assert_eq!(view.nrows(), 2);
         assert_eq!(view.ncols(), 3);
@@ -1926,7 +2535,7 @@ mod tests {
 
     #[test]
     fn test_standard_non_copy_element() {
-        let repr = Standard::<String>::new(2, 3).unwrap();
+        let repr = RowMajor::<String>::new(2, 3).unwrap();
 
         // Owned fill via NewOwned<T> (Clone).
         let filled = Mat::new(repr, String::from("x")).unwrap();
@@ -1939,11 +2548,11 @@ mod tests {
 
         // from_fn.
         let mut counter = 0usize;
-        let mut mat = Mat::from_fn(repr, || {
+        let mut mat = Mat::from_gen(Init(|| {
             let s = counter.to_string();
             counter += 1;
             s
-        });
+        }), 2, 3);
         assert_eq!(counter, 6);
         assert_eq!(mat.get_row(1).unwrap()[0], "3");
 
@@ -1958,12 +2567,12 @@ mod tests {
 
         // Immutable view over a non-Copy slice (NewRef).
         let data = [String::from("a"), String::from("b")];
-        let view = MatRef::new(Standard::new(2, 1).unwrap(), &data).unwrap();
+        let view = MatRef::new(RowMajor::new(2, 1).unwrap(), &data).unwrap();
         assert_eq!(view.get_row(1).unwrap()[0], "b");
 
         // Mutable view over a non-Copy slice (NewMut).
         let mut data_mut = [String::from("a"), String::from("b")];
-        let mut view_mut = MatMut::new(Standard::new(1, 2).unwrap(), &mut data_mut).unwrap();
+        let mut view_mut = MatMut::new(RowMajor::new(1, 2).unwrap(), &mut data_mut).unwrap();
         view_mut.get_row_mut(0).unwrap()[1] = String::from("z");
         assert_eq!(data_mut[1], "z");
     }
