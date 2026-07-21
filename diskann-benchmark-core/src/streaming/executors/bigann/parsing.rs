@@ -24,11 +24,16 @@ fn load_mapping(
     dataset: &str,
     groundtruth: &mut dyn super::FindGroundtruth,
 ) -> anyhow::Result<super::RunBook> {
+    // Multiple datasets can exist in the same YAML file.
+    //
+    // Fortunately, all datasets are keyed by their dataset name which allows us to
+    // quickly find whether or not it exists.
     let dataset_value = match mapping.get(dataset) {
         Some(value) => value,
         None => return Err(DumpKeys::new(mapping, dataset, path).into()),
     };
 
+    // Try to coerce the dataset value into a `Mapping`.
     let dataset_mapping: &Mapping = match dataset_value.try_as() {
         Ok(mapping) => mapping,
         Err(_) => anyhow::bail!(
@@ -47,6 +52,7 @@ fn load_mapping(
     })?;
     raw.stages.sort_by_key(|s| s.index);
 
+    // Translate from raw ranges into higher level steps.
     let context = |index: usize| {
         format!(
             "precessing stage {} of dataset \"{}\" in file \"{}\"",
@@ -388,11 +394,295 @@ fn classify(value: &Value) -> &'static str {
     }
 }
 
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::{collections::HashMap, io::Write};
+
+    use tempfile::NamedTempFile;
+
+    use crate::streaming::executors::bigann::Stage;
+
+    /// A test implementation of [`super::super::FindGroundtruth`] that returns
+    /// pre-configured paths for each stage index.
+    struct MockGroundtruth {
+        paths: HashMap<usize, PathBuf>,
+    }
+
+    impl MockGroundtruth {
+        fn new(stages: impl IntoIterator<Item = (usize, PathBuf)>) -> Self {
+            Self {
+                paths: stages.into_iter().collect(),
+            }
+        }
+    }
+
+    impl super::super::FindGroundtruth for MockGroundtruth {
+        fn find_groundtruth(&mut self, stage: usize) -> anyhow::Result<PathBuf> {
+            self.paths
+                .get(&stage)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("no groundtruth configured for stage {}", stage))
+        }
+    }
+
+    /// Helper to create a temporary YAML file with the given content.
+    fn create_yaml_file(content: &str) -> anyhow::Result<NamedTempFile> {
+        let mut file = NamedTempFile::new()?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(file)
+    }
+
+    #[test]
+    fn test_load_simple_insert_only_runbook() {
+        let yaml = r#"
+test_dataset:
+  max_pts: 1000
+  0:
+    operation: insert
+    start: 0
+    end: 500
+"#;
+
+        let file = create_yaml_file(yaml).unwrap();
+        let mut groundtruth = MockGroundtruth::new([]);
+
+        let runbook = load(file.path(), "test_dataset", &mut groundtruth).unwrap();
+
+        assert_eq!(runbook.max_points(), 1000);
+        assert_eq!(runbook.len(), 1);
+
+        assert_eq!(
+            runbook.stages()[0],
+            Stage::Insert {
+                dataset_offsets_and_ids: 0..500
+            }
+        );
+    }
+
+    #[test]
+    fn test_load_runbook_with_search_stage() {
+        let yaml = r#"
+my_dataset:
+  max_pts: 2000
+  0:
+    operation: insert
+    start: 0
+    end: 1000
+  1:
+    operation: search
+"#;
+
+        let file = create_yaml_file(yaml).unwrap();
+        let mut groundtruth =
+            MockGroundtruth::new([(1, PathBuf::from("/path/to/groundtruth.bin"))]);
+
+        let runbook = load(file.path(), "my_dataset", &mut groundtruth).unwrap();
+
+        assert_eq!(runbook.max_points(), 2000);
+        assert_eq!(runbook.len(), 2);
+
+        assert_eq!(
+            runbook.stages()[1],
+            Stage::Search {
+                groundtruth: PathBuf::from("/path/to/groundtruth.bin")
+            }
+        );
+    }
+
+    #[test]
+    fn test_load_runbook_with_all_operation_types() {
+        let yaml = r#"
+full_dataset:
+  max_pts: 5000
+  0:
+    operation: insert
+    start: 0
+    end: 1000
+  1:
+    operation: search
+  2:
+    operation: replace
+    ids_start: 1000
+    ids_end: 1500
+    tags_start: 0
+    tags_end: 500
+  3:
+    operation: delete
+    start: 500
+    end: 1000
+"#;
+
+        let file = create_yaml_file(yaml).unwrap();
+        let mut groundtruth = MockGroundtruth::new([(1, PathBuf::from("/gt/step1.bin"))]);
+
+        let runbook = load(file.path(), "full_dataset", &mut groundtruth).unwrap();
+
+        assert_eq!(runbook.max_points(), 5000);
+        assert_eq!(runbook.len(), 4);
+
+        // Check insert
+        assert_eq!(
+            runbook.stages()[0],
+            Stage::Insert {
+                dataset_offsets_and_ids: 0..1000
+            }
+        );
+
+        // Check search
+        assert_eq!(
+            runbook.stages()[1],
+            Stage::Search {
+                groundtruth: PathBuf::from("/gt/step1.bin")
+            }
+        );
+
+        // Check replace
+        assert_eq!(
+            runbook.stages()[2],
+            Stage::Replace {
+                dataset_offsets: 1000..1500,
+                ids: 0..500
+            }
+        );
+
+        // Check delete
+        assert_eq!(runbook.stages()[3], Stage::Delete { ids: 500..1000 });
+    }
+
+    #[test]
+    fn test_load_stages_out_of_order_are_sorted() {
+        let yaml = r#"
+unordered:
+  max_pts: 1000
+  2:
+    operation: delete
+    start: 500
+    end: 600
+  0:
+    operation: insert
+    start: 0
+    end: 500
+  1:
+    operation: insert
+    start: 500
+    end: 1000
+"#;
+
+        let file = create_yaml_file(yaml).unwrap();
+        let mut groundtruth = MockGroundtruth::new([]);
+
+        let runbook = load(file.path(), "unordered", &mut groundtruth).unwrap();
+
+        assert_eq!(runbook.len(), 3);
+
+        // Stages should be in order 0, 1, 2 regardless of YAML order
+        assert_eq!(
+            runbook.stages()[0],
+            Stage::Insert {
+                dataset_offsets_and_ids: 0..500
+            }
+        );
+
+        assert_eq!(
+            runbook.stages()[1],
+            Stage::Insert {
+                dataset_offsets_and_ids: 500..1000
+            }
+        );
+
+        assert_eq!(runbook.stages()[2], Stage::Delete { ids: 500..600 });
+    }
+
+    #[test]
+    fn test_load_multiple_datasets_in_file() {
+        let yaml = r#"
+dataset_a:
+  max_pts: 100
+  0:
+    operation: insert
+    start: 0
+    end: 100
+
+dataset_b:
+  max_pts: 200
+  0:
+    operation: insert
+    start: 0
+    end: 200
+"#;
+
+        let file = create_yaml_file(yaml).unwrap();
+
+        // Load dataset_a
+        let mut groundtruth_a = MockGroundtruth::new([]);
+        let runbook_a = load(file.path(), "dataset_a", &mut groundtruth_a).unwrap();
+        assert_eq!(runbook_a.max_points(), 100);
+
+        // Load dataset_b
+        let mut groundtruth_b = MockGroundtruth::new([]);
+        let runbook_b = load(file.path(), "dataset_b", &mut groundtruth_b).unwrap();
+        assert_eq!(runbook_b.max_points(), 200);
+    }
+
+    #[test]
+    fn test_load_gt_url_is_ignored() {
+        let yaml = r#"
+with_gt_url:
+  max_pts: 100
+  gt_url: "https://example.com/groundtruth.bin"
+  0:
+    operation: insert
+    start: 0
+    end: 100
+"#;
+
+        let file = create_yaml_file(yaml).unwrap();
+        let mut groundtruth = MockGroundtruth::new([]);
+
+        // Should succeed - gt_url is parsed but ignored
+        let runbook = load(file.path(), "with_gt_url", &mut groundtruth).unwrap();
+        assert_eq!(runbook.max_points(), 100);
+    }
+}
+
 #[cfg(test)]
 mod ux_tests {
     use super::*;
 
+    // Exposed by the `ux-tools` feature of `diskann_benchmark_runner`
     use diskann_benchmark_runner::ux as runner_ux;
+
+    //---------------------------//
+    // File-Based UX Error Tests //
+    //---------------------------//
+    //
+    // These tests use checked-in YAML files and expected output files to verify error messages.
+    // This approach makes it easy to:
+    // 1. Add new test cases (just add a new directory with runbook.yaml, dataset.txt, expected.txt)
+    // 2. See the full error output for review
+    // 3. Regenerate expected output when error messages change
+    //
+    // ## Directory Structure
+    //
+    // Each test case is a directory under `tests/bigann-ux` containing:
+    // - `runbook.yaml` - The YAML runbook file to parse
+    // - `dataset.txt` - Contains the dataset name to load (single line)
+    // - `expected.txt` - The expected error message output
+    //
+    // ## Regenerating Expected Results
+    //
+    // Run tests with the environment variable:
+    // ```
+    // DISKANN_TEST=overwrite
+    // ```
+    // to regenerate the `expected.txt` files. Use `git diff` to review changes.
 
     const TEST_DATA_DIR: &str = "bigann-ux";
     const RUNBOOK_FILE: &str = "runbook.yaml";
@@ -400,7 +690,14 @@ mod ux_tests {
     const EXPECTED_FILE: &str = "expected.txt";
     const PATH_PLACEHOLDER: &str = "<TEST_DIR>";
 
+    /// Replace the test directory path with a placeholder to make tests portable.
+    /// This handles both forward and backslash path separators.
+    ///
+    /// Additionally:
+    /// * All backslashes are replaced with forward slashes.
+    /// * Common OS-specific "file not found" error messages are normalized.
     fn fixup_paths_and_os_errors(s: &str, test_dir: &Path) -> String {
+        // Try both the native path and with normalized separators
         let native_path = test_dir.display().to_string();
         let forward_slash_path = native_path.replace('\\', "/");
 
@@ -409,10 +706,11 @@ mod ux_tests {
 
         s.replace(&native_path, PATH_PLACEHOLDER)
             .replace(&forward_slash_path, PATH_PLACEHOLDER)
-            .replace('\\', "/")
-            .replace(NOT_FOUND_WINDOWS, NOT_FOUND_LINUX)
+            .replace('\\', "/") // Normalize any remaining backslashes
+            .replace(NOT_FOUND_WINDOWS, NOT_FOUND_LINUX) // Normalize error messages
     }
 
+    /// A groundtruth finder that always fails - used for error path testing.
     struct FailingGroundtruth;
 
     impl super::super::FindGroundtruth for FailingGroundtruth {
@@ -424,15 +722,18 @@ mod ux_tests {
         }
     }
 
+    /// Run a single file-based test case.
     fn run_file_test(test_dir: &Path) {
         let runbook_path = test_dir.join(RUNBOOK_FILE);
         let dataset_path = test_dir.join(DATASET_FILE);
         let expected_path = test_dir.join(EXPECTED_FILE);
 
+        // Read the dataset name
         let dataset = std::fs::read_to_string(&dataset_path)
             .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", dataset_path, e));
         let dataset = dataset.trim();
 
+        // Try to load the runbook - we expect an error
         let mut groundtruth = FailingGroundtruth;
         let result = load(&runbook_path, dataset, &mut groundtruth);
 
@@ -444,6 +745,7 @@ mod ux_tests {
             Err(err) => format!("{:?}", err),
         };
 
+        // Replace test directory path with placeholder for portability
         let actual_portable = fixup_paths_and_os_errors(&actual_output, test_dir);
         let actual_normalized = runner_ux::strip_backtrace(runner_ux::normalize(actual_portable));
 
@@ -468,6 +770,7 @@ mod ux_tests {
         }
     }
 
+    /// Run all file-based tests in the test_data directory.
     fn run_all_file_tests() {
         let test_data_path = crate::ux::test_dir().join(TEST_DATA_DIR);
         if !test_data_path.exists() {

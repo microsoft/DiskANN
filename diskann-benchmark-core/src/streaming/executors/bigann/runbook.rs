@@ -16,6 +16,9 @@ use crate::streaming::{self, Executor, Stream};
 use super::{parsing, validate};
 
 /// An executor for [BigANN-style runbooks](https://github.com/harsha-simhadri/big-ann-benchmarks/tree/main/neurips23/streaming).
+///
+/// If using this struct as a [`streaming::Executor`], consider using the
+/// [`super::WithData`] adaptor to provide dataset and query matrices.
 #[derive(Debug, Clone)]
 pub struct RunBook {
     // The individual runbook stages.
@@ -297,6 +300,8 @@ pub struct Delete {
 }
 
 /// The argument type for a [`RunBook`].
+///
+/// See also: [`super::WithData`], [`super::DataArgs`].
 #[derive(Debug, Clone, Copy)]
 pub struct Args;
 
@@ -374,9 +379,10 @@ impl ScanDirectory {
 
         let files = read_dir
             .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let file_type = entry.file_type().ok()?;
-                if file_type.is_file() {
+                if let Ok(entry) = entry
+                    && let Ok(file_type) = entry.file_type()
+                    && file_type.is_file()
+                {
                     Some(entry.file_name().to_string_lossy().into())
                 } else {
                     None
@@ -418,7 +424,7 @@ impl FindGroundtruth for ScanDirectory {
 
         let mut matches = Matches::None;
 
-        for file in &self.files {
+        for file in self.files.iter() {
             if file.starts_with(&prefix) {
                 let suffix = &file[prefix.len()..];
                 if suffix.chars().all(|c| c.is_ascii_digit()) {
@@ -452,6 +458,10 @@ impl FindGroundtruth for ScanDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::fs::File;
+
+    use tempfile::TempDir;
 
     use crate::streaming::Executor;
 
@@ -590,8 +600,230 @@ mod tests {
         let mut stream = MockStream::new(stages.clone());
         let outputs = runbook.run(&mut stream).unwrap();
 
+        // Verify that the outputs match the expected stage indices.
         let expected_outputs: Vec<usize> = (0..stages.len()).collect();
         let non_maintenance: Vec<_> = outputs.iter().filter_map(|o| *o).collect();
         assert_eq!(non_maintenance, expected_outputs);
+    }
+
+    #[test]
+    fn test_load_runbook_from_yaml() {
+        use std::io::Write;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create groundtruth files for search stages (stages 1 and 7)
+        File::create(temp_dir.path().join("step1.gt100")).unwrap();
+        File::create(temp_dir.path().join("step7.gt100")).unwrap();
+
+        // Create a YAML runbook with multiple insert, replace, and delete stages
+        let yaml_content = r#"
+test_dataset:
+  max_pts: 100
+  gt_url: "http://example.com/groundtruth"
+  0:
+    operation: "insert"
+    start: 0
+    end: 1000
+  1:
+    operation: "search"
+  2:
+    operation: "insert"
+    start: 1000
+    end: 2000
+  3:
+    operation: "delete"
+    start: 200
+    end: 400
+  4:
+    operation: "replace"
+    ids_start: 2000
+    ids_end: 2500
+    tags_start: 400
+    tags_end: 900
+  5:
+    operation: "insert"
+    start: 2500
+    end: 3000
+  6:
+    operation: "delete"
+    start: 500
+    end: 700
+  7:
+    operation: "search"
+"#;
+
+        let yaml_path = temp_dir.path().join("runbook.yaml");
+        {
+            let mut file = File::create(&yaml_path).unwrap();
+            file.write_all(yaml_content.as_bytes()).unwrap();
+        }
+
+        // Load the runbook
+        let mut groundtruth_finder = ScanDirectory::new(temp_dir.path()).unwrap();
+        let runbook = RunBook::load(&yaml_path, "test_dataset", &mut groundtruth_finder).unwrap();
+        _assert_is_clone(&runbook);
+
+        // Verify the runbook was loaded correctly
+        assert_eq!(runbook.len(), 8);
+        assert_eq!(runbook.max_points(), 2300);
+        assert_eq!(runbook.max_tag(), Some(2999));
+
+        let stages = runbook.stages();
+
+        // Stage 0: Insert 0..1000
+        assert_eq!(
+            stages[0],
+            Stage::Insert {
+                dataset_offsets_and_ids: 0..1000
+            }
+        );
+
+        // Stage 1: Search
+        assert!(
+            matches!(&stages[1], Stage::Search { groundtruth } if groundtruth.file_name().unwrap() == "step1.gt100")
+        );
+
+        // Stage 2: Insert 1000..2000
+        assert_eq!(
+            stages[2],
+            Stage::Insert {
+                dataset_offsets_and_ids: 1000..2000
+            }
+        );
+
+        // Stage 3: Delete 200..400
+        assert_eq!(stages[3], Stage::Delete { ids: 200..400 });
+
+        // Stage 4: Replace offsets 2000..2500, ids 400..900
+        assert_eq!(
+            stages[4],
+            Stage::Replace {
+                dataset_offsets: 2000..2500,
+                ids: 400..900
+            }
+        );
+
+        // Stage 5: Insert 2500..3000
+        assert_eq!(
+            stages[5],
+            Stage::Insert {
+                dataset_offsets_and_ids: 2500..3000
+            }
+        );
+
+        // Stage 6: Delete 500..700
+        assert_eq!(stages[6], Stage::Delete { ids: 500..700 });
+
+        // Stage 7: Search
+        assert!(
+            matches!(&stages[7], Stage::Search { groundtruth } if groundtruth.file_name().unwrap() == "step7.gt100")
+        );
+    }
+
+    //---------------------//
+    // ScanDirectory Tests //
+    //---------------------//
+
+    #[test]
+    fn scan_directory_finds_groundtruth_file() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a groundtruth file matching the expected pattern
+        File::create(temp_dir.path().join("step0.gt100")).unwrap();
+
+        let mut scanner = ScanDirectory::new(temp_dir.path()).unwrap();
+        let result = scanner.find_groundtruth(0).unwrap();
+        assert_eq!(result, temp_dir.path().join("step0.gt100"));
+    }
+
+    #[test]
+    fn scan_directory_finds_groundtruth_without_suffix_digits() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a groundtruth file with no digits after ".gt"
+        File::create(temp_dir.path().join("step5.gt")).unwrap();
+
+        let mut scanner = ScanDirectory::new(temp_dir.path()).unwrap();
+        let result = scanner.find_groundtruth(5).unwrap();
+        assert_eq!(result, temp_dir.path().join("step5.gt"));
+    }
+
+    #[test]
+    fn scan_directory_errors_when_no_groundtruth_found() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create some files that don't match the pattern
+        File::create(temp_dir.path().join("other_file.bin")).unwrap();
+        File::create(temp_dir.path().join("step0.other")).unwrap();
+
+        let mut scanner = ScanDirectory::new(temp_dir.path()).unwrap();
+        let err = scanner.find_groundtruth(0).unwrap_err();
+
+        let msg = err.to_string();
+        assert!(msg.contains("No groundtruth found"), "Got: {}", msg);
+    }
+
+    #[test]
+    fn scan_directory_errors_when_multiple_groundtruth_files() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create multiple groundtruth files for the same stage
+        File::create(temp_dir.path().join("step0.gt100")).unwrap();
+        File::create(temp_dir.path().join("step0.gt200")).unwrap();
+        File::create(temp_dir.path().join("step0.gt300")).unwrap();
+
+        let mut scanner = ScanDirectory::new(temp_dir.path()).unwrap();
+        let err = scanner.find_groundtruth(0).unwrap_err();
+
+        let msg = err.to_string();
+        assert!(msg.contains("Multiple groundtruth files"), "Got: {}", msg);
+    }
+
+    #[test]
+    fn scan_directory_ignores_non_digit_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create files with non-digit suffixes (should be ignored)
+        File::create(temp_dir.path().join("step0.gtabc")).unwrap();
+        File::create(temp_dir.path().join("step0.gt100")).unwrap();
+
+        let mut scanner = ScanDirectory::new(temp_dir.path()).unwrap();
+        let result = scanner.find_groundtruth(0).unwrap();
+
+        // Should find only the valid one
+        assert_eq!(result, temp_dir.path().join("step0.gt100"));
+    }
+
+    #[test]
+    fn scan_directory_errors_on_nonexistent_directory() {
+        let _ = ScanDirectory::new("/nonexistent/path/that/does/not/exist").unwrap_err();
+    }
+
+    #[test]
+    fn scan_directory_handles_different_stage_indices() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("step0.gt")).unwrap();
+        File::create(temp_dir.path().join("step5.gt")).unwrap();
+        File::create(temp_dir.path().join("step10.gt")).unwrap();
+
+        let mut scanner = ScanDirectory::new(temp_dir.path()).unwrap();
+
+        assert_eq!(
+            scanner.find_groundtruth(0).unwrap(),
+            temp_dir.path().join("step0.gt")
+        );
+        assert_eq!(
+            scanner.find_groundtruth(5).unwrap(),
+            temp_dir.path().join("step5.gt")
+        );
+        assert_eq!(
+            scanner.find_groundtruth(10).unwrap(),
+            temp_dir.path().join("step10.gt")
+        );
+
+        // Stage 1 doesn't exist
+        assert!(scanner.find_groundtruth(1).is_err());
     }
 }
