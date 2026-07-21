@@ -86,8 +86,8 @@ use diskann_utils::{
 };
 
 use super::matrix::{
-    Defaulted, LayoutError, Mat, MatMut, MatRef, NewMut, NewOwned, NewRef, Overflow, Repr, ReprMut,
-    ReprOwned, SliceError,
+    Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
+    Repr, ReprMut, ReprOwned, SliceError,
 };
 use crate::bits::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 use crate::utils;
@@ -602,6 +602,23 @@ unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<D
     }
 }
 
+impl<T: Copy, const GROUP: usize, const PACK: usize> NewCloned
+    for BlockTransposedRepr<T, GROUP, PACK>
+{
+    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
+        let repr = *v.repr();
+        // SAFETY: `v` points to an allocation described by `repr`, which contains
+        // exactly `storage_len` initialized elements.
+        let data =
+            unsafe { std::slice::from_raw_parts(v.as_raw_ptr().cast::<T>(), repr.storage_len()) };
+        let b = data.to_vec().into_boxed_slice();
+
+        // SAFETY: `b` was copied from the complete backing allocation and therefore
+        // has exactly `repr.storage_len()` elements.
+        unsafe { repr.box_to_mat(b) }
+    }
+}
+
 // SAFETY: This checks slice length against storage_len.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewRef<T>
     for BlockTransposedRepr<T, GROUP, PACK>
@@ -677,7 +694,7 @@ macro_rules! delegate_to_ref {
 ///
 /// - [`Row`] — a `Copy` handle supporting `Index<usize>` and `.iter()`.
 /// - [`RowMut`] — a mutable handle supporting `IndexMut<usize>`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockTransposed<T: Copy, const GROUP: usize, const PACK: usize = 1> {
     data: Mat<BlockTransposedRepr<T, GROUP, PACK>>,
 }
@@ -1254,6 +1271,24 @@ mod tests {
     }
     fn gen_u8(i: usize) -> u8 {
         ((i % 255) + 1) as u8
+    }
+
+    #[test]
+    fn clone_has_independent_backing_allocation() {
+        let mut data = Matrix::new(0, 5, 3);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, value)| *value = (i + 1) as i32);
+        let original = BlockTransposed::<i32, 4, 2>::from_matrix_view(data.as_view());
+        let mut cloned = original.clone();
+
+        assert_eq!(cloned.as_slice(), original.as_slice());
+        assert_ne!(cloned.as_ptr(), original.as_ptr());
+
+        cloned.get_row_mut(0).unwrap()[0] = -1;
+        assert_eq!(original[(0, 0)], 1);
+        assert_eq!(cloned[(0, 0)], -1);
     }
 
     // ── Unified parameterized test ──────────────────────────────────
