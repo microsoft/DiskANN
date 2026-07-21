@@ -256,7 +256,7 @@ pub trait NewCloned: ReprOwned {
 // Standard //
 //////////////
 
-/// Metadata for dense row-major matrices of `Copy` types.
+/// Metadata for dense row-major matrices.
 ///
 /// Rows are stored contiguously as `&[T]` slices. This is the default representation
 /// type for standard floating-point multi-vectors.
@@ -265,14 +265,33 @@ pub trait NewCloned: ReprOwned {
 ///
 /// - `Row<'a>`: `&'a [T]`
 /// - `RowMut<'a>`: `&'a mut [T]`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Standard<T> {
     nrows: usize,
     ncols: usize,
     _elem: PhantomData<T>,
 }
 
-impl<T: Copy> Standard<T> {
+// Hand-written so `Standard<T>` is `Copy`/`Clone`/`PartialEq`/`Eq` for every `T`: it only
+// stores two `usize` and a `PhantomData<T>`, so derives would spuriously require the same
+// bound on `T` (and the `Repr: Copy` supertrait must hold regardless of the element type).
+impl<T> Copy for Standard<T> {}
+
+impl<T> Clone for Standard<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> PartialEq for Standard<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nrows == other.nrows && self.ncols == other.ncols
+    }
+}
+
+impl<T> Eq for Standard<T> {}
+
+impl<T> Standard<T> {
     /// Create a new `Standard` for data of type `T`.
     ///
     /// Successful construction requires:
@@ -417,7 +436,7 @@ pub enum SliceError {
 // SAFETY: The implementation correctly computes row offsets as `i * ncols` and
 // constructs valid slices of the appropriate length. The `layout` method correctly
 // reports the memory layout requirements.
-unsafe impl<T: Copy> Repr for Standard<T> {
+unsafe impl<T> Repr for Standard<T> {
     type Row<'a>
         = &'a [T]
     where
@@ -447,7 +466,7 @@ unsafe impl<T: Copy> Repr for Standard<T> {
 
 // SAFETY: The implementation correctly computes row offsets and constructs valid mutable
 // slices.
-unsafe impl<T: Copy> ReprMut for Standard<T> {
+unsafe impl<T> ReprMut for Standard<T> {
     type RowMut<'a>
         = &'a mut [T]
     where
@@ -471,7 +490,7 @@ unsafe impl<T: Copy> ReprMut for Standard<T> {
 // SAFETY: The drop implementation correctly reconstructs a Box from the raw pointer
 // using the same length (nrows * ncols) that was used for allocation, allowing Box
 // to properly deallocate the memory.
-unsafe impl<T: Copy> ReprOwned for Standard<T> {
+unsafe impl<T> ReprOwned for Standard<T> {
     unsafe fn drop(self, ptr: NonNull<u8>) {
         // SAFETY: The caller guarantees that `ptr` was obtained from an implementation of
         // `NewOwned` for an equivalent instance of `self`.
@@ -492,34 +511,37 @@ unsafe impl<T: Copy> ReprOwned for Standard<T> {
 // initialized by it is non-null and properly aligned to the underlying type.
 unsafe impl<T> NewOwned<T> for Standard<T>
 where
-    T: Copy,
+    T: Clone,
 {
     type Error = crate::error::Infallible;
     fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[T]> = (0..self.num_elements()).map(|_| value).collect();
+        let b: Box<[T]> = std::iter::repeat_n(value, self.num_elements()).collect();
 
         // SAFETY: By construction, `b` has length `self.num_elements()`.
         Ok(unsafe { self.box_to_mat(b) })
     }
 }
 
-// SAFETY: This safely reuses `<Self as NewOwned<T>>`.
+// SAFETY: The implementation uses guarantees from `Box` to ensure that the pointer
+// initialized by it is non-null and properly aligned to the underlying type.
 unsafe impl<T> NewOwned<Defaulted> for Standard<T>
 where
-    T: Copy + Default,
+    T: Default,
 {
     type Error = crate::error::Infallible;
     fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
-        self.new_owned(T::default())
+        let b: Box<[T]> = std::iter::repeat_with(T::default)
+            .take(self.num_elements())
+            .collect();
+
+        // SAFETY: By construction, `b` has length `self.num_elements()`.
+        Ok(unsafe { self.box_to_mat(b) })
     }
 }
 
 // SAFETY: This checks that the slice has the correct length, which is all that is
 // required for [`Repr`].
-unsafe impl<T> NewRef<T> for Standard<T>
-where
-    T: Copy,
-{
+unsafe impl<T> NewRef<T> for Standard<T> {
     type Error = SliceError;
     fn new_ref(self, data: &[T]) -> Result<MatRef<'_, Self>, Self::Error> {
         self.check_slice(data)?;
@@ -534,10 +556,7 @@ where
 
 // SAFETY: This checks that the slice has the correct length, which is all that is
 // required for [`ReprMut`].
-unsafe impl<T> NewMut<T> for Standard<T>
-where
-    T: Copy,
-{
+unsafe impl<T> NewMut<T> for Standard<T> {
     type Error = SliceError;
     fn new_mut(self, data: &mut [T]) -> Result<MatMut<'_, Self>, Self::Error> {
         self.check_slice(data)?;
@@ -552,10 +571,10 @@ where
 
 impl<T> NewCloned for Standard<T>
 where
-    T: Copy,
+    T: Clone,
 {
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
-        let b: Box<[T]> = v.rows().flatten().copied().collect();
+        let b: Box<[T]> = v.as_slice().iter().cloned().collect();
 
         // SAFETY: By construction, `b` has length `v.repr().num_elements()`.
         unsafe { v.repr().box_to_mat(b) }
@@ -711,7 +730,7 @@ impl<T: NewCloned> Clone for Mat<T> {
     }
 }
 
-impl<T: Copy> Mat<Standard<T>> {
+impl<T> Mat<Standard<T>> {
     /// Construct a [`Mat`] by calling `f` once per element in row-major order.
     pub fn from_fn<F: FnMut() -> T>(repr: Standard<T>, mut f: F) -> Self {
         let b: Box<[T]> = (0..repr.num_elements()).map(|_| f()).collect();
@@ -847,7 +866,7 @@ impl<'a, T: Repr> MatRef<'a, T> {
     }
 }
 
-impl<'a, T: Copy> MatRef<'a, Standard<T>> {
+impl<'a, T> MatRef<'a, Standard<T>> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1078,7 +1097,7 @@ impl<'this, 'a, T: ReprMut> ReborrowMut<'this> for MatMut<'a, T> {
     }
 }
 
-impl<'a, T: Copy> MatMut<'a, Standard<T>> {
+impl<'a, T> MatMut<'a, Standard<T>> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1903,5 +1922,49 @@ mod tests {
             }
         }
         assert_eq!(matmut.as_slice(), &data);
+    }
+
+    #[test]
+    fn test_standard_non_copy_element() {
+        let repr = Standard::<String>::new(2, 3).unwrap();
+
+        // Owned fill via NewOwned<T> (Clone).
+        let filled = Mat::new(repr, String::from("x")).unwrap();
+        assert_eq!(filled.num_vectors(), 2);
+        assert!(filled.rows().flatten().all(|s| s == "x"));
+
+        // NewOwned<Defaulted> (Clone + Default).
+        let defaulted = Mat::new(repr, Defaulted).unwrap();
+        assert!(defaulted.rows().flatten().all(String::is_empty));
+
+        // from_fn.
+        let mut counter = 0usize;
+        let mut mat = Mat::from_fn(repr, || {
+            let s = counter.to_string();
+            counter += 1;
+            s
+        });
+        assert_eq!(counter, 6);
+        assert_eq!(mat.get_row(1).unwrap()[0], "3");
+
+        // Mutation via get_row_mut.
+        mat.get_row_mut(0).unwrap()[0] = String::from("mutated");
+        assert_eq!(mat.get_row(0).unwrap()[0], "mutated");
+
+        // Clone via NewCloned (Clone): independent allocation, equal contents.
+        let cloned = mat.clone();
+        assert_ne!(mat.as_raw_ptr(), cloned.as_raw_ptr());
+        assert_eq!(cloned.get_row(0).unwrap()[0], "mutated");
+
+        // Immutable view over a non-Copy slice (NewRef).
+        let data = [String::from("a"), String::from("b")];
+        let view = MatRef::new(Standard::new(2, 1).unwrap(), &data).unwrap();
+        assert_eq!(view.get_row(1).unwrap()[0], "b");
+
+        // Mutable view over a non-Copy slice (NewMut).
+        let mut data_mut = [String::from("a"), String::from("b")];
+        let mut view_mut = MatMut::new(Standard::new(1, 2).unwrap(), &mut data_mut).unwrap();
+        view_mut.get_row_mut(0).unwrap()[1] = String::from("z");
+        assert_eq!(data_mut[1], "z");
     }
 }
