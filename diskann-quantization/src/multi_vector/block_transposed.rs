@@ -1280,10 +1280,20 @@ mod tests {
             .iter_mut()
             .enumerate()
             .for_each(|(i, value)| *value = (i + 1) as i32);
-        let original = BlockTransposed::<i32, 4, 2>::from_matrix_view(data.as_view());
+        let mut original = BlockTransposed::<i32, 4, 2>::from_matrix_view(data.as_view());
+        let column_padding = linear_index::<4, 2>(0, 3, original.ncols());
+        let row_padding = linear_index::<4, 2>(5, 0, original.ncols());
+        let row_and_column_padding = linear_index::<4, 2>(5, 3, original.ncols());
+        original.as_mut_slice()[column_padding] = -10;
+        original.as_mut_slice()[row_padding] = -11;
+        original.as_mut_slice()[row_and_column_padding] = -12;
+
         let mut cloned = original.clone();
 
         assert_eq!(cloned.as_slice(), original.as_slice());
+        assert_eq!(cloned.as_slice()[column_padding], -10);
+        assert_eq!(cloned.as_slice()[row_padding], -11);
+        assert_eq!(cloned.as_slice()[row_and_column_padding], -12);
         assert_ne!(cloned.as_ptr(), original.as_ptr());
 
         cloned.get_row_mut(0).unwrap()[0] = -1;
