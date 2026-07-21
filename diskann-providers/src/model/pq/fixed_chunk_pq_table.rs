@@ -9,7 +9,7 @@ use diskann_quantization::{
     product::{self, BasicTable},
     views::ChunkOffsetsBase,
 };
-use diskann_utils::{Matrix, MatrixView, matrix};
+use diskann_utils::matrix::{self, Matrix, MatrixView};
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
 

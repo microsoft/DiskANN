@@ -364,7 +364,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{Matrix, matrix};
+    use diskann_utils::matrix::{self, Matrix};
 
     use super::*;
 

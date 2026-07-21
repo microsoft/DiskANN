@@ -1030,7 +1030,7 @@ where
 /// [`Overlay`](crate::graph::workingset::map::Overlay) for a working set seed compatible
 /// with [`Batch`].
 ///
-/// The primary implementation of this trait is [`Matrix`](diskann_utils::Matrix).
+/// The primary implementation of this trait is [`Matrix`](diskann_utils::matrix::Matrix).
 pub trait Batch: Send + Sync + 'static {
     /// The element type of the batch.
     type Element<'a>: Copy;
@@ -1047,7 +1047,7 @@ pub trait Batch: Send + Sync + 'static {
     }
 }
 
-impl<T: Send + Sync + 'static> Batch for diskann_utils::Matrix<T> {
+impl<T: Send + Sync + 'static> Batch for diskann_utils::matrix::Matrix<T> {
     type Element<'a> = &'a [T];
 
     fn len(&self) -> usize {

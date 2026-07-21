@@ -4,7 +4,7 @@
  */
 
 use diskann::neighbor::Neighbor;
-use diskann_utils::MatrixView;
+use diskann_utils::matrix::MatrixView;
 
 /// Compute the ground truth for a small dataset.
 ///

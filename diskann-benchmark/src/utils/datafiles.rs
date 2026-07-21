@@ -10,7 +10,7 @@ use bit_set::BitSet;
 use diskann::utils::IntoUsize;
 use diskann_benchmark_runner::utils::datatype::DataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_utils::Matrix;
+use diskann_utils::matrix::Matrix;
 use serde::{Deserialize, Serialize};
 
 pub(crate) struct BinFile<'a>(pub(crate) &'a Path);
@@ -71,7 +71,7 @@ impl ConvertingLoad for f32 {
     ))]
     fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<Matrix<f32>> {
         #[inline(never)]
-        fn convert<T, U>(from: diskann_utils::MatrixView<T>) -> Matrix<U>
+        fn convert<T, U>(from: diskann_utils::matrix::MatrixView<T>) -> Matrix<U>
         where
             U: Default + Clone + From<T>,
             T: Copy,

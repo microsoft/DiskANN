@@ -49,7 +49,7 @@ mod imp {
             IndexConfiguration,
         },
     };
-    use diskann_utils::{Matrix, MatrixView};
+    use diskann_utils::matrix::{Matrix, MatrixView};
 
     use diskann_benchmark_runner::{
         benchmark::{MatchContext, Score},

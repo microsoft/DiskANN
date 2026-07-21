@@ -523,7 +523,7 @@ mod pq_storage_tests {
     #[test]
     fn write_read_roundtrip_with_legacy_centroid() {
         use crate::model::pq::accum_row_inplace;
-        use diskann_utils::MatrixViewMut;
+        use diskann_utils::matrix::MatrixViewMut;
 
         let storage_provider = VirtualStorageProvider::new_memory();
         let pivot_path = "/roundtrip_legacy_centroid_pivots.bin";

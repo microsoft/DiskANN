@@ -5,7 +5,7 @@
 
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
-use diskann_utils::{DenseData, Matrix, MatrixView};
+use diskann_utils::matrix::{DenseData, Matrix, MatrixView};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
 

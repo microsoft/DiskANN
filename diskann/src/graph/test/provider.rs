@@ -13,7 +13,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use diskann_utils::Matrix;
+use diskann_utils::matrix::Matrix;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 

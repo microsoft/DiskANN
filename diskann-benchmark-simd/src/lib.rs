@@ -7,7 +7,7 @@
 
 use std::{io::Write, num::NonZeroUsize};
 
-use diskann_utils::{Matrix, MatrixView};
+use diskann_utils::matrix::{Matrix, MatrixView};
 use diskann_vector::distance::simd;
 use diskann_wide::Architecture;
 use half::f16;
@@ -755,7 +755,7 @@ impl<Q, D> Data<Q, D> {
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
         let data = Matrix::<D>::new(
-            diskann_utils::Init(|| StandardUniform.sample(&mut rng)),
+            diskann_utils::matrix::Init(|| StandardUniform.sample(&mut rng)),
             run.num_points.get(),
             run.dim.get(),
         );

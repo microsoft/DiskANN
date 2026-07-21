@@ -101,7 +101,7 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use diskann_utils::Matrix;
+//! use diskann_utils::matrix::Matrix;
 //!
 //! use diskann::graph::workingset::{Map, View, map::{Overlay, Ref, Builder, Capacity}};
 //!
@@ -646,7 +646,7 @@ where
 ///
 /// ```
 /// use std::sync::Arc;
-/// use diskann_utils::Matrix;
+/// use diskann_utils::matrix::Matrix;
 ///
 /// use diskann::graph::workingset::map::{Overlay, Ref};
 ///
@@ -923,7 +923,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use diskann_utils::Matrix;
+    use diskann_utils::matrix::Matrix;
 
     use crate::graph::workingset::View as WorkingSetView;
 

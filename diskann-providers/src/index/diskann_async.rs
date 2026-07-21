@@ -59,7 +59,7 @@ pub(crate) fn simplified_builder(
 }
 
 pub fn train_pq(
-    data: diskann_utils::MatrixView<f32>,
+    data: diskann_utils::matrix::MatrixView<f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
     pool: crate::utils::RayonThreadPoolRef<'_>,
@@ -213,7 +213,7 @@ pub(crate) mod tests {
 
     /// Convert an iterator of vectors into a single Matrix. All elements in `data` must
     /// have the same length, otherwise this function panics.
-    pub(crate) fn squish<'a, To, T, Itr>(data: Itr, dim: usize) -> diskann_utils::Matrix<To>
+    pub(crate) fn squish<'a, To, T, Itr>(data: Itr, dim: usize) -> diskann_utils::matrix::Matrix<To>
     where
         To: Clone + Default,
         T: Clone + Into<To> + 'a,
@@ -221,7 +221,7 @@ pub(crate) mod tests {
     {
         // Assume that all the vectors in `data` have the same length.
         // If they don't, `copy_from_slice` will panic, so we're double checking.
-        let mut mat = diskann_utils::Matrix::new(To::default(), data.len(), dim);
+        let mut mat = diskann_utils::matrix::Matrix::new(To::default(), data.len(), dim);
         std::iter::zip(mat.row_iter_mut(), data).for_each(|(output, input)| {
             assert_eq!(
                 input.len(),
@@ -621,7 +621,8 @@ pub(crate) mod tests {
         //
         // So, when we compute the corpus used during groundtruth generation, we take all
         // but this last point.
-        let corpus: diskann_utils::Matrix<f32> = squish(vectors.iter().take(num_points), dim);
+        let corpus: diskann_utils::matrix::Matrix<f32> =
+            squish(vectors.iter().take(num_points), dim);
 
         let mut paged_tests = Vec::new();
 
@@ -874,7 +875,7 @@ pub(crate) mod tests {
 
         let data = T::generate_spherical(num, dim, radius, rng);
         let table = {
-            let train_data: diskann_utils::Matrix<f32> = squish(data.iter(), dim);
+            let train_data: diskann_utils::matrix::Matrix<f32> = squish(data.iter(), dim);
             train_pq(
                 train_data.as_view(),
                 2.min(dim),
@@ -1065,7 +1066,8 @@ pub(crate) mod tests {
 
         let beta = 0.5;
 
-        let corpus: diskann_utils::Matrix<f32> = squish(vectors.iter().take(num_points), dim);
+        let corpus: diskann_utils::matrix::Matrix<f32> =
+            squish(vectors.iter().take(num_points), dim);
         let query = vec![grid_size as f32; dim];
 
         // The strategy we use here for checking is that we pull in a lot of neighbors and
@@ -2202,7 +2204,7 @@ pub(crate) mod tests {
         parameters: InitParams,
         file: &str,
         start_strategy: StartPointStrategy,
-        train_data: diskann_utils::MatrixView<'_, f32>,
+        train_data: diskann_utils::matrix::MatrixView<'_, f32>,
     ) where
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
             + for<'a> SetElement<&'a [f32]>
@@ -2258,7 +2260,7 @@ pub(crate) mod tests {
         file: &str,
         num_pq_chunks: usize,
         startpoint: StartPointStrategy,
-    ) -> (Arc<TestIndex>, diskann_utils::Matrix<f32>)
+    ) -> (Arc<TestIndex>, diskann_utils::matrix::Matrix<f32>)
     where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
             + MultiInsertStrategy<TestProvider, Matrix<f32>>
@@ -2656,7 +2658,7 @@ pub(crate) mod tests {
         // Randomize the vectors
         let rng = &mut create_rnd_from_seed_in_tests(0x7dc205fcda38d3a3);
         indices.shuffle(rng);
-        let mut queries = diskann_utils::Matrix::new(0.0, data.nrows(), data.ncols());
+        let mut queries = diskann_utils::matrix::Matrix::new(0.0, data.nrows(), data.ncols());
         std::iter::zip(queries.row_iter_mut(), indices.iter()).for_each(|(row, i)| {
             row.copy_from_slice(data.row(*i));
         });

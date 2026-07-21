@@ -4,9 +4,9 @@
  */
 
 // A collection of test helpers to ensure uniformity across tables.
-use diskann_utils::Matrix;
+use diskann_utils::matrix::Matrix;
 #[cfg(not(miri))]
-use diskann_utils::{MatrixView, MatrixViewMut};
+use diskann_utils::matrix::{MatrixView, MatrixViewMut};
 #[cfg(not(miri))]
 use rand::seq::IndexedRandom;
 use rand::{

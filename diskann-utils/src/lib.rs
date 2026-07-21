@@ -21,7 +21,6 @@ pub mod sampling;
 pub mod strided;
 
 pub mod matrix;
-pub use matrix::{DenseData, Init, Matrix, MatrixView, MatrixViewMut, MutDenseData, TryFromError};
 
 mod lazystring;
 pub use lazystring::LazyString;

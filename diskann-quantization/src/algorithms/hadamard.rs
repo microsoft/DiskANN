@@ -383,7 +383,7 @@ mod tests {
     };
 
     use super::*;
-    use diskann_utils::{Matrix, MatrixView, matrix};
+    use diskann_utils::matrix::{self, Matrix, MatrixView};
 
     /// Retrieve the 8x8 hadamard matrix as a `Matrix`.
     fn get_hadamard_8() -> Matrix<f32> {

@@ -4,7 +4,7 @@
  */
 
 use diskann::{utils::VectorRepr, ANNResult};
-use diskann_utils::{MatrixView, MatrixViewMut};
+use diskann_utils::matrix::{MatrixView, MatrixViewMut};
 
 /// [`QuantCompressor`] defines the interface for quantizer with [`QuantDataGenerator`]
 ///

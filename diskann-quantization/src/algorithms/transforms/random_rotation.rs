@@ -31,7 +31,7 @@ use crate::flatbuffers as fb;
 #[cfg_attr(test, derive(PartialEq))]
 pub struct RandomRotation {
     /// This data structure maintains the invariant that this **must** be a square matrix.
-    transform: diskann_utils::Matrix<f32>,
+    transform: diskann_utils::matrix::Matrix<f32>,
 }
 
 impl RandomRotation {
@@ -88,7 +88,7 @@ impl RandomRotation {
         // Lint: By construction, the matrix returned from
         // `diskann_linalg::random_distance_preserving_matrix` will by `matrix_dim x matrix_dim`.
         #[allow(clippy::unwrap_used)]
-        let initial = diskann_utils::Matrix::try_from(
+        let initial = diskann_utils::matrix::Matrix::try_from(
             diskann_linalg::random_distance_preserving_matrix(matrix_dim, rng).into(),
             matrix_dim,
             matrix_dim,
@@ -102,7 +102,7 @@ impl RandomRotation {
                 let indices = rand::seq::index::sample(rng, dim, target_dim);
                 let scaling = (dim as f32 / target_dim as f32).sqrt();
 
-                let mut transform = diskann_utils::Matrix::new(0.0f32, target_dim, dim);
+                let mut transform = diskann_utils::matrix::Matrix::new(0.0f32, target_dim, dim);
                 std::iter::zip(transform.row_iter_mut(), indices.iter()).for_each(|(ro, ri)| {
                     std::iter::zip(ro.iter_mut(), initial.row(ri).iter()).for_each(|(o, i)| {
                         *o = scaling * (*i);
@@ -111,7 +111,7 @@ impl RandomRotation {
                 transform
             }
             std::cmp::Ordering::Greater => {
-                let mut transform = diskann_utils::Matrix::new(0.0f32, target_dim, dim);
+                let mut transform = diskann_utils::matrix::Matrix::new(0.0f32, target_dim, dim);
                 std::iter::zip(transform.row_iter_mut(), initial.row_iter())
                     .for_each(|(o, i)| o.copy_from_slice(&i[..dim]));
                 transform
@@ -220,7 +220,7 @@ impl RandomRotation {
 
         let data = proto.data().into_iter().collect();
         let transform =
-            diskann_utils::Matrix::try_from(data, nrows as usize, ncols as usize)
+            diskann_utils::matrix::Matrix::try_from(data, nrows as usize, ncols as usize)
                 .map_err(|_| RandomRotationError::IncorrectDim)?;
 
         Ok(Self { transform })

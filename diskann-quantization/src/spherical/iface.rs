@@ -40,7 +40,7 @@
 //!     spherical::{iface, SupportedMetric, SphericalQuantizer, PreScale},
 //!     num::PowerOfTwo,
 //! };
-//! use diskann_utils::Matrix;
+//! use diskann_utils::matrix::Matrix;
 //!
 //! // For illustration purposes, the dataset consists of just a single vector.
 //! let mut data = Matrix::new(1.0, 1, 4);
@@ -2086,7 +2086,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{Matrix, MatrixView};
+    use diskann_utils::matrix::{Matrix, MatrixView};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;

@@ -322,17 +322,18 @@ mod imp {
 
     /// A store for quantized data.
     pub(super) struct Store {
-        data: diskann_utils::Matrix<u8>,
+        data: diskann_utils::matrix::Matrix<u8>,
         quantizer: diskann_providers::model::pq::FixedChunkPQTable,
     }
 
     impl Store {
         fn new(
-            input: diskann_utils::MatrixView<f32>,
+            input: diskann_utils::matrix::MatrixView<f32>,
             quantizer: diskann_providers::model::pq::FixedChunkPQTable,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
-            let mut data = diskann_utils::Matrix::new(0, input.nrows(), quantizer.get_num_chunks());
+            let mut data =
+                diskann_utils::matrix::Matrix::new(0, input.nrows(), quantizer.get_num_chunks());
 
             // Compress the data.
             #[allow(clippy::disallowed_methods)]

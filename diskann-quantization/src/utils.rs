@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 
 use thiserror::Error;
 
-use diskann_utils::MatrixView;
+use diskann_utils::matrix::MatrixView;
 
 /// Specify featres and config flags that will be propagated to `docsrs` config.
 macro_rules! features {
@@ -205,7 +205,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::Matrix;
+    use diskann_utils::matrix::Matrix;
     use diskann_vector::{Norm, norm::FastL2Norm};
     use rand::{SeedableRng, rngs::StdRng};
 

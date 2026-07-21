@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::{Init, Matrix};
+use diskann_utils::matrix::{Init, Matrix};
 
 use crate::graph::AdjacencyList;
 

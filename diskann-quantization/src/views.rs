@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{DenseData, MutDenseData};
+use diskann_utils::matrix::{DenseData, MutDenseData};
 use std::ops::{Index, IndexMut};
 use thiserror::Error;
 

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::{Matrix, matrix};
+use diskann_utils::matrix::{self, Matrix};
 
 use crate::recall;
 

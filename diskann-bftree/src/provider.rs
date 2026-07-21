@@ -97,7 +97,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 /// };
 /// use diskann_bftree::NoStore;
 /// use diskann_vector::distance::Metric;
-/// use diskann_utils::{Init, Matrix};
+/// use diskann_utils::matrix::{Init, Matrix};
 /// use bf_tree::Config;
 /// use std::num::NonZeroUsize;
 ///
@@ -134,7 +134,7 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     algorithms::TransformKind,
 ///     spherical::{iface, SphericalQuantizer, SupportedMetric, PreScale},
 /// };
-/// use diskann_utils::{Init, Matrix};
+/// use diskann_utils::matrix::{Init, Matrix};
 /// use diskann_bftree::provider::{
 ///     BfTreeProvider, BfTreeProviderParameters
 /// };
@@ -2020,7 +2020,7 @@ mod tests {
         neighbor::BackInserter,
     };
     use diskann_providers::storage::FileStorageProvider;
-    use diskann_utils::{Init, Matrix};
+    use diskann_utils::matrix::{Init, Matrix};
 
     fn create_quant_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, QuantVectorProvider>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);

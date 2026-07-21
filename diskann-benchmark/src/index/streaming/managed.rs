@@ -11,7 +11,7 @@ use diskann_benchmark_core::{
     streaming::{self, executors},
 };
 use diskann_benchmark_runner::{timed, utils::MicroSeconds};
-use diskann_utils::{Matrix, MatrixView};
+use diskann_utils::matrix::{Matrix, MatrixView};
 
 use crate::utils::streaming::TagSlotManager;
 

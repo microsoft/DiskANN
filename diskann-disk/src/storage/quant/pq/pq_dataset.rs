@@ -8,7 +8,7 @@ use core::fmt::Debug;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::product::TransposedTable;
-use diskann_utils::Matrix;
+use diskann_utils::matrix::Matrix;
 
 #[derive(Debug)]
 pub struct PQData {
