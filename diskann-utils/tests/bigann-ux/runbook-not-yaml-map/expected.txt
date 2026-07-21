@@ -1,1 +1,0 @@
-invalid type: string "item1 item2", expected a YAML mapping

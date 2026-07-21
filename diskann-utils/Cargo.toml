@@ -8,7 +8,6 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits"] }
 cfg-if.workspace = true
 rayon = { workspace = true, optional = true }
@@ -18,7 +17,6 @@ rand = { workspace = true }
 rand_distr = { workspace = true }
 diskann-wide = { workspace = true }
 bytemuck = { workspace = true, features = ["must_cast"] }
-serde_yaml = { version = "0.9.34", optional = true }
 
 [lints]
 workspace = true
@@ -34,8 +32,6 @@ workspace = true
 cfg-if.workspace = true
 rand.workspace = true
 rstest.workspace = true
-tempfile.workspace = true
-diskann-benchmark-runner = { workspace = true, features = ["ux-tools"] }
 
 
 [features]
@@ -45,5 +41,3 @@ default = ["rayon"]
 rayon = ["dep:rayon"]
 # Enable testing utilities like test_data_root()
 testing = []
-# Enable BigANN runbook parsing and execution support.
-bigann = ["dep:serde_yaml"]
