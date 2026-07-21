@@ -691,6 +691,7 @@ dependencies = [
  "diskann-vector",
  "futures-util",
  "itertools 0.13.0",
+ "serde_yaml",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",

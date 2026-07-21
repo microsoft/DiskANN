@@ -17,11 +17,13 @@ futures-util = { workspace = true, default-features = false }
 thiserror.workspace = true
 tokio.workspace = true
 
+serde_yaml = { version = "0.9.34", optional = true }
+
 [features]
 default = []
 
 # BigANN Runbook support requires parsing a YAML file.
-bigann = ["diskann-utils/bigann"]
+bigann = ["dep:serde_yaml"]
 
 [lints]
 workspace = true

@@ -1,0 +1,12 @@
+dataset:
+  max_pts: 100
+  0:
+    operation: insert
+    start: 0
+    end: 100
+  1:
+    operation: replace
+    ids_start: 100
+    ids_end: 50
+    tags_start: 0
+    tags_end: 10

@@ -520,7 +520,7 @@ fn write_range_search_ground_truth<StorageProvider: StorageReadProvider + Storag
 /// Writes out a ground truth file.  ground_truth is a vector of NeighborPriorityQueue objects
 /// where the order of queue objects corresponds to the order of queries used to compute this
 /// ground truth.
-pub fn write_ground_truth<A: Serialize + Copy>(
+fn write_ground_truth<A: Serialize + Copy>(
     storage_provider: &impl StorageWriteProvider,
     ground_truth_file: &str,
     number_of_queries: usize,
