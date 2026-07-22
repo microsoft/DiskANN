@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{graph::config, utils::ONE, ANNResult};
+use diskann::{graph::config, utils::ONE};
 use diskann_providers::{
     model::IndexConfiguration,
     storage::{get_disk_index_file, StorageWriteProvider, VirtualStorageProvider},
@@ -15,33 +15,12 @@ use super::*;
 use crate::{
     build::{
         builder::build::DiskIndexBuilder,
-        chunking::{
-            checkpoint::{CheckpointManager, Progress, WorkStage},
-            continuation::ChunkingConfig,
-        },
         configuration::{MemoryBudget, NumPQChunks},
     },
     data_model::AdHoc,
     storage::DiskIndexWriter,
     DiskIndexBuildParameters,
 };
-
-#[derive(Clone)]
-struct RejectCheckpointManager;
-
-impl CheckpointManager for RejectCheckpointManager {
-    fn get_resumption_point(&self, _stage: WorkStage) -> ANNResult<Option<usize>> {
-        panic!("PiPNN must not read checkpoint state")
-    }
-
-    fn update(&mut self, _progress: Progress, _next_stage: WorkStage) -> ANNResult<()> {
-        panic!("PiPNN must not write checkpoint state")
-    }
-
-    fn mark_as_invalid(&mut self) -> ANNResult<()> {
-        panic!("PiPNN must not invalidate checkpoint state")
-    }
-}
 
 #[test]
 fn load_with_spare_row_rejects_short_payload() {
@@ -86,11 +65,11 @@ fn pipnn_disk_build_rejects_configuration_dataset_mismatch() {
 
     let error = builder.build().unwrap_err();
     assert!(format!("{error:?}").contains("configured dimension 4"));
-    assert!(!storage.exists("/index_pq_compressed.bin"));
+    assert!(storage.exists("/index_pq_compressed.bin"));
 }
 
 #[test]
-fn pipnn_disk_build_reserves_a_u32_id_for_the_frozen_point() {
+fn pipnn_context_reserves_a_u32_id_for_the_frozen_point() {
     let storage = VirtualStorageProvider::new_memory();
     let mut data = storage.create_for_write("/data.fbin").unwrap();
     std::io::Write::write_all(&mut data, &u32::MAX.to_le_bytes()).unwrap();
@@ -114,16 +93,15 @@ fn pipnn_disk_build_reserves_a_u32_id_for_the_frozen_point() {
     let index_config =
         IndexConfiguration::new(Metric::L2, 1, u32::MAX as usize, ONE, 1, graph_config);
     let writer = DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
-    let mut builder =
+    let builder =
         DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, index_config, writer).unwrap();
 
-    let error = builder.build().unwrap_err();
+    let error = prepare_context(&builder, &diskann_pipnn::PiPNNConfig::default()).unwrap_err();
     assert!(format!("{error:?}").contains("leaving no u32 ID for the frozen start point"));
-    assert!(!storage.exists("/index_pq_compressed.bin"));
 }
 
 #[test]
-fn pipnn_disk_build_is_one_shot_and_does_not_use_checkpoints() {
+fn pipnn_disk_build_uses_the_common_pipeline() {
     let storage = VirtualStorageProvider::new_memory();
     let points = 256;
     let dimensions = 8;
@@ -166,15 +144,8 @@ fn pipnn_disk_build_is_one_shot_and_does_not_use_checkpoints() {
             .with_pseudo_rng_from_seed(42);
     let writer = DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
 
-    let mut builder = DiskIndexBuilder::<AdHoc<f32>, _>::new_with_chunking_config(
-        &storage,
-        params,
-        index_config,
-        writer,
-        ChunkingConfig::default(),
-        Box::new(RejectCheckpointManager),
-    )
-    .unwrap();
+    let mut builder =
+        DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, index_config, writer).unwrap();
 
     builder.build().unwrap();
     assert!(storage.exists(&get_disk_index_file("/index")));

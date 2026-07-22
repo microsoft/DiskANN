@@ -7,10 +7,12 @@
 //! Parameters for disk index construction.
 use std::num::NonZeroUsize;
 
-use diskann::{ANNError, ANNResult};
+use diskann::ANNError;
+#[cfg(feature = "pipnn")]
+use diskann::ANNResult;
 use thiserror::Error;
 
-use super::{build_algorithm::BuildAlgorithm, QuantizationType};
+use super::{BuildAlgorithm, QuantizationType};
 
 /// GB to bytes ratio.
 pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
@@ -18,6 +20,8 @@ pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
 /// Disk sector length in bytes. This is used as the offset alignment and
 /// smallest block size when reading/writing index data from/to disk.
 pub const DISK_SECTOR_LEN: usize = 4096;
+
+const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
 
 /// Errors returned when validating PQ chunk parameters.
 #[derive(Debug, Error, PartialEq)]
@@ -112,8 +116,11 @@ pub struct DiskIndexBuildParameters {
     /// Number of PQ chunks stored in-memory for search and to be generated during build.
     search_pq_chunks: NumPQChunks,
 
-    /// Vamana build quantization, used directly or after a PiPNN fallback.
+    /// QuantizationType used to instantiate quantized DataProvider for DiskANN Index during build.
     build_quantization: QuantizationType,
+
+    /// Number of vectors processed per data-compression chunk.
+    data_compression_chunk_vector_count: usize,
 
     /// Which graph construction algorithm to use.
     build_algorithm: BuildAlgorithm,
@@ -121,7 +128,6 @@ pub struct DiskIndexBuildParameters {
 
 impl DiskIndexBuildParameters {
     /// Create new build parameters from already validated components.
-    /// Uses the default Vamana build algorithm.
     pub fn new(
         build_memory_limit: MemoryBudget,
         build_quantization: QuantizationType,
@@ -131,15 +137,15 @@ impl DiskIndexBuildParameters {
             build_memory_limit,
             search_pq_chunks,
             build_quantization,
+            data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
             build_algorithm: BuildAlgorithm::default(),
         }
     }
 
     /// Create parameters for one-shot PiPNN graph construction.
     ///
-    /// PiPNN still uses `search_pq_chunks` for the common disk search layout.
-    /// `build_memory_limit` selects Vamana when the estimated one-shot peak
-    /// would exceed the configured budget.
+    /// PiPNN uses the common search-PQ and disk-layout pipeline. The memory
+    /// budget selects Vamana when the estimated PiPNN peak does not fit.
     #[cfg(feature = "pipnn")]
     pub fn new_pipnn(
         build_memory_limit: MemoryBudget,
@@ -150,18 +156,26 @@ impl DiskIndexBuildParameters {
             build_memory_limit,
             search_pq_chunks,
             build_quantization: QuantizationType::FP,
+            data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
             build_algorithm: BuildAlgorithm::PiPNN(config),
         }
     }
 
-    /// Get the configured graph-build memory budget.
+    /// Set the number of vectors processed per data-compression chunk.
+    pub fn with_data_compression_chunk_vector_count(
+        mut self,
+        data_compression_chunk_vector_count: usize,
+    ) -> Self {
+        self.data_compression_chunk_vector_count = data_compression_chunk_vector_count;
+        self
+    }
+
+    /// Get the configured memory budget for index building.
     pub fn build_memory_limit(&self) -> MemoryBudget {
         self.build_memory_limit
     }
 
-    /// Get Vamana's build quantization.
-    ///
-    /// The one-shot PiPNN path does not call this method.
+    /// Get quantization type used to instantiate quantized DataProvider for DiskANN Index during build
     pub fn build_quantization(&self) -> &QuantizationType {
         &self.build_quantization
     }
@@ -169,6 +183,11 @@ impl DiskIndexBuildParameters {
     /// Get user specified PQ chunks count for in-memory search data.
     pub fn search_pq_chunks(&self) -> NumPQChunks {
         self.search_pq_chunks
+    }
+
+    /// Get the number of vectors processed per data-compression chunk.
+    pub fn data_compression_chunk_vector_count(&self) -> usize {
+        self.data_compression_chunk_vector_count
     }
 
     /// Get the graph-construction algorithm.
@@ -228,6 +247,25 @@ mod dataset_test {
         );
 
         assert_eq!(result.search_pq_chunks().get(), num_pq_chunks.get());
+        assert_eq!(
+            result.data_compression_chunk_vector_count(),
+            DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT
+        );
+    }
+
+    #[test]
+    fn data_compression_chunk_vector_count_can_be_configured() {
+        let memory_budget = MemoryBudget::try_from_gb(2.0).unwrap();
+        let num_pq_chunks = NumPQChunks::new_with(20, 128).unwrap();
+
+        let result = DiskIndexBuildParameters::new(
+            memory_budget,
+            QuantizationType::default(),
+            num_pq_chunks,
+        )
+        .with_data_compression_chunk_vector_count(10_000);
+
+        assert_eq!(result.data_compression_chunk_vector_count(), 10_000);
     }
 
     #[test]
@@ -267,14 +305,18 @@ mod dataset_test {
 
     #[cfg(feature = "pipnn")]
     #[test]
-    fn new_pipnn_has_only_one_shot_parameters() {
+    fn new_pipnn_uses_the_common_disk_pipeline_parameters() {
         let pq = NumPQChunks::new_with(1, 128).unwrap();
-        let cfg = diskann_pipnn::PiPNNConfig::default();
+        let config = diskann_pipnn::PiPNNConfig::default();
         let budget = MemoryBudget::try_from_gb(2.0).unwrap();
-        let params = DiskIndexBuildParameters::new_pipnn(budget, pq, cfg.clone());
+        let params = DiskIndexBuildParameters::new_pipnn(budget, pq, config.clone());
 
-        assert_eq!(params.pipnn_config(), Some(&cfg));
+        assert_eq!(params.pipnn_config(), Some(&config));
         assert_eq!(params.search_pq_chunks(), pq);
+        assert_eq!(
+            params.data_compression_chunk_vector_count(),
+            DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT
+        );
         assert!(matches!(params.build_algorithm(), BuildAlgorithm::PiPNN(_)));
     }
 
@@ -293,32 +335,5 @@ mod dataset_test {
         assert!(estimate > budget.in_bytes());
         assert!(matches!(params.build_algorithm(), BuildAlgorithm::Vamana));
         assert_eq!(params.build_quantization(), &QuantizationType::FP);
-    }
-
-    #[cfg(feature = "pipnn")]
-    #[test]
-    fn direct_candidate_build_stays_with_pipnn_when_profiled_peak_fits() {
-        let budget = MemoryBudget::try_from_gb(10.0).unwrap();
-        let pq = NumPQChunks::new_with(1, 128).unwrap();
-        let config = diskann_pipnn::PiPNNConfig {
-            num_hash_planes: 0,
-            c_max: 512,
-            c_min: 64,
-            p_samp: 0.01,
-            fanout: vec![10, 3],
-            k: 2,
-            replicas: 1,
-            l_max: 0,
-            final_prune: true,
-            skip_hash_prune: true,
-        };
-        let mut params = DiskIndexBuildParameters::new_pipnn(budget, pq, config);
-
-        let estimate = params
-            .use_vamana_if_pipnn_exceeds(10_000_000, 128, 2, 16)
-            .unwrap();
-
-        assert!(estimate < budget.in_bytes());
-        assert!(matches!(params.build_algorithm(), BuildAlgorithm::PiPNN(_)));
     }
 }

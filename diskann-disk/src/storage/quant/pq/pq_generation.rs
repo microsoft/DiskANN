@@ -20,7 +20,7 @@ use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
-use crate::storage::quant::compressor::{CompressionStage, QuantCompressor};
+use crate::storage::quant::compressor::QuantCompressor;
 
 pub struct PQGenerationContext<'a, Storage>
 where
@@ -56,10 +56,7 @@ where
 {
     type CompressorContext = PQGenerationContext<'a, Storage>;
 
-    fn new_at_stage(
-        stage: CompressionStage,
-        context: &Self::CompressorContext,
-    ) -> diskann::ANNResult<Self> {
+    fn new(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
         // validate that the number of chunks is correct.
         if context.num_chunks > context.dim {
             return Err(ANNError::log_pq_error(
@@ -74,13 +71,6 @@ where
         let pool = context.pool;
 
         if !pivots_exists {
-            if stage == CompressionStage::Resume {
-                //checks for error case when stage is Resume and pivot data doesn't exist.
-                return Err(ANNError::log_pq_error(
-                    "Error: Pivot data does not exist when start_vertex_id is not 0.",
-                ));
-            }
-
             let timer = Instant::now();
 
             let rng =
@@ -191,7 +181,7 @@ mod pq_generation_tests {
     use rstest::rstest;
     use vfs::FileSystem;
 
-    use super::{CompressionStage, PQGeneration, PQGenerationContext};
+    use super::{PQGeneration, PQGenerationContext};
     use crate::storage::quant::compressor::QuantCompressor;
 
     const TEST_PQ_DATA_PATH: &str = "/sift/siftsmall_learn.bin";
@@ -206,7 +196,6 @@ mod pq_generation_tests {
     ];
     #[allow(clippy::too_many_arguments)]
     fn create_new_compressor<'a, F: vfs::FileSystem>(
-        stage: CompressionStage,
         provider: &'a VirtualStorageProvider<F>,
         dim: usize,
         num_chunks: usize,
@@ -231,7 +220,7 @@ mod pq_generation_tests {
             metric: Metric::L2,
             dim,
         };
-        PQGeneration::<_, _>::new_at_stage(stage, &context)
+        PQGeneration::<_, _>::new(&context)
     }
 
     #[rstest]
@@ -272,7 +261,6 @@ mod pq_generation_tests {
         .unwrap();
 
         let compressor = create_new_compressor(
-            CompressionStage::Start,
             &storage_provider,
             dim,
             num_chunks,
@@ -308,44 +296,6 @@ mod pq_generation_tests {
     }
 
     #[rstest]
-    fn throw_error_for_resume_and_no_existing_file() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        storage_provider
-            .filesystem()
-            .create_dir("/pq_generation_tests")
-            .expect("Could not create test directory");
-
-        let pivot_file_name = "/pq_generation_tests/generate_pq_pivots_test.bin";
-        let compressed_file_name = "/pq_generation_tests/compressed_not_used.bin";
-        let data_path = "/pq_generation_tests/data_path.bin";
-
-        let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
-
-        write_bin(
-            MatrixView::try_from(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
-            &mut storage_provider.create_for_write(data_path).unwrap(),
-        )
-        .unwrap();
-        let pool = create_thread_pool_for_test();
-
-        let compressor = create_new_compressor(
-            CompressionStage::Resume,
-            &storage_provider,
-            dim,
-            num_chunks,
-            max_k_means_reps,
-            num_centers,
-            1.0,
-            pool.as_ref(),
-            pivot_file_name.to_string(),
-            compressed_file_name.to_string(),
-            Some(data_path),
-        );
-
-        assert!(compressor.is_err());
-    }
-
-    #[rstest]
     fn test_pq_end_to_end_with_codebook() {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
@@ -355,7 +305,6 @@ mod pq_generation_tests {
         let max_k_means_reps = 10;
 
         let compressor = create_new_compressor(
-            CompressionStage::Resume,
             &storage_provider,
             dim,
             num_chunks,
@@ -407,7 +356,6 @@ mod pq_generation_tests {
         let pool = create_thread_pool_for_test();
         let max_k_means_reps = 10;
         let compressor = create_new_compressor(
-            CompressionStage::Start,
             &storage_provider,
             dim,
             num_chunks,

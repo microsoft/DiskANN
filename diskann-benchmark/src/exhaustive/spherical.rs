@@ -7,8 +7,6 @@ use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "spherical-exhaustive-search";
 
-crate::utils::stub_impl!("spherical-quantization", inputs::exhaustive::Spherical);
-
 // Spherical - requires feature "spherical-quantization"
 #[cfg(feature = "spherical-quantization")]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
@@ -23,7 +21,13 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 // Stub implementation
 #[cfg(not(feature = "spherical-quantization"))]
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    imp::register(NAME, registry)
+    registry.register_partially_gated::<crate::inputs::exhaustive::Spherical>(
+        NAME,
+        diskann_benchmark_runner::Features::new("spherical-quantization"),
+        "Spherical quantization (RabitQ) exhaustive search",
+    )?;
+
+    Ok(())
 }
 
 ////////////////
