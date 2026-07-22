@@ -12,7 +12,7 @@
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_pipnn::{PiPNNBuildContext, PiPNNConfig};
 use diskann_providers::{
-    storage::{bin::GetAdjacencyList, StorageReadProvider, StorageWriteProvider},
+    storage::{save_graph, GetAdjacencyList, StorageReadProvider, StorageWriteProvider},
     utils::{find_medoid_with_sampling, MAX_MEDOID_SAMPLE_SIZE},
 };
 use diskann_utils::io::{read_bin, Metadata};
@@ -84,7 +84,7 @@ where
         adjacency: &adjacency,
         max_degree: u32_try_from(builder.index_configuration.config.pruned_degree().get())?,
     };
-    diskann_providers::storage::bin::save_graph(
+    save_graph(
         &graph,
         builder.storage_provider,
         start_id,

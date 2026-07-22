@@ -16,7 +16,8 @@ pub use virtual_storage_provider::VirtualStorageProvider;
 mod api;
 pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
 
-pub mod bin;
+pub(crate) mod bin;
+pub use bin::{GetAdjacencyList, save_graph};
 
 pub(crate) mod file_storage_provider;
 // Use VirtualStorageProvider in tests to avoid filesystem side-effects

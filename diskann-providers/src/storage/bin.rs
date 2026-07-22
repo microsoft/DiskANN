@@ -331,95 +331,9 @@ where
     S: GetAdjacencyList<Element = u32>,
     P: StorageWriteProvider,
 {
-    save_graph_to_writer(graph, start_point, provider.create_for_write(path)?)
-}
+    let file = provider.create_for_write(path)?;
 
-/// Save an in-memory graph while replacing a frozen start-point ID with a real point ID.
-///
-/// Trailing additional storage rows are omitted from the disk graph and references to the
-/// frozen start point are replaced with the corresponding real point ID. The frozen ID
-/// itself need not be the final storage row; this preserves the async Vamana provider's
-/// existing serialization layout.
-pub fn save_graph_with_remapped_start<S, P>(
-    graph: &S,
-    provider: &P,
-    frozen_start: u32,
-    real_start: u32,
-    path: &str,
-) -> ANNResult<usize>
-where
-    S: GetAdjacencyList<Element = u32>,
-    P: StorageWriteProvider,
-{
-    let total = graph.total();
-    if graph.additional_points() != 1 {
-        return Err(ANNError::log_index_error(format_args!(
-            "start-point remapping requires exactly one additional point, got {}",
-            graph.additional_points()
-        )));
-    }
-    let stored_points = total
-        .checked_sub(1)
-        .ok_or_else(|| ANNError::log_index_error("graph has no frozen start point"))?;
-    if frozen_start as usize >= total {
-        return Err(ANNError::log_index_error(format_args!(
-            "frozen start ID {frozen_start} is outside 0..{total}"
-        )));
-    }
-    if real_start as usize >= stored_points {
-        return Err(ANNError::log_index_error(format_args!(
-            "real start ID {real_start} is outside 0..{stored_points}"
-        )));
-    }
-
-    save_graph_to_writer_impl(
-        graph,
-        real_start,
-        provider.create_for_write(path)?,
-        stored_points,
-        0,
-        None,
-        |id| if id == frozen_start { real_start } else { id },
-    )
-}
-
-/// Lower-level variant that writes the canonical graph layout to any
-/// `Write + Seek` sink (e.g. a `std::fs::File`). Use this from contexts that
-/// don't have (or don't need) a `StorageWriteProvider`, such as graph
-/// builders that produce a final on-disk index directly.
-///
-/// The on-disk format is identical to [`save_graph`].
-pub fn save_graph_to_writer<S, W>(graph: &S, start_point: u32, writer: W) -> ANNResult<usize>
-where
-    S: GetAdjacencyList<Element = u32>,
-    W: Write + Seek,
-{
-    save_graph_to_writer_impl(
-        graph,
-        start_point,
-        writer,
-        graph.total(),
-        graph.additional_points(),
-        graph.max_degree(),
-        std::convert::identity,
-    )
-}
-
-fn save_graph_to_writer_impl<S, W, F>(
-    graph: &S,
-    start_point: u32,
-    writer: W,
-    total: usize,
-    additional_points: u64,
-    max_degree: Option<u32>,
-    map_id: F,
-) -> ANNResult<usize>
-where
-    S: GetAdjacencyList<Element = u32>,
-    W: Write + Seek,
-    F: Fn(u32) -> u32,
-{
-    let mut out = BufWriter::new(writer);
+    let mut out = BufWriter::new(file);
 
     let mut index_size: u64 = 24;
     let mut observed_max_degree: u32 = 0;
@@ -428,7 +342,8 @@ where
     out.write_all(&observed_max_degree.to_le_bytes())?; // Will be updated later with correct max_degree
     out.write_all(&start_point.to_le_bytes())?;
 
-    out.write_all(&additional_points.to_le_bytes())?;
+    out.write_all(&graph.additional_points().to_le_bytes())?;
+    let total = graph.total();
 
     for i in 0..total {
         let binding = graph.get_adjacency_list(i)?;
@@ -442,7 +357,6 @@ where
         neighbors
             .iter()
             .copied()
-            .map(&map_id)
             .try_for_each(|n| out.write_all(&n.to_le_bytes()))?;
 
         observed_max_degree = observed_max_degree.max(num_neighbors);
@@ -450,7 +364,7 @@ where
     }
 
     // Use configured max degree if provided, otherwise use observed
-    let max_degree = max_degree.unwrap_or(observed_max_degree);
+    let max_degree = graph.max_degree().unwrap_or(observed_max_degree);
 
     // Finish up by writing the observed index size and max degree.
     out.seek(SeekFrom::Start(0))?;
@@ -458,87 +372,4 @@ where
     out.write_all(&max_degree.to_le_bytes())?;
     out.flush()?;
     Ok(index_size.into_usize())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Read;
-
-    use super::*;
-
-    struct Graph(Vec<Vec<u32>>);
-
-    impl GetAdjacencyList for Graph {
-        type Element = u32;
-        type Item<'a> = &'a [u32];
-
-        fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>> {
-            Ok(&self.0[i])
-        }
-
-        fn total(&self) -> usize {
-            self.0.len()
-        }
-
-        fn additional_points(&self) -> u64 {
-            1
-        }
-
-        fn max_degree(&self) -> Option<u32> {
-            None
-        }
-    }
-
-    #[test]
-    fn remapped_start_omits_frozen_row_and_rewrites_edges() {
-        let graph = Graph(vec![vec![2, 1], vec![0], vec![0]]);
-        let storage = crate::storage::VirtualStorageProvider::new_memory();
-        save_graph_with_remapped_start(&graph, &storage, 2, 1, "/graph").unwrap();
-        let mut bytes = Vec::new();
-        storage
-            .open_reader("/graph")
-            .unwrap()
-            .read_to_end(&mut bytes)
-            .unwrap();
-
-        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 1);
-        assert_eq!(u64::from_le_bytes(bytes[16..24].try_into().unwrap()), 0);
-        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 2);
-        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(bytes[32..36].try_into().unwrap()), 1);
-        assert_eq!(bytes.len(), 44);
-    }
-
-    #[test]
-    fn remapped_start_allows_vamana_start_before_trailing_storage_row() {
-        let graph = Graph(vec![vec![1], vec![0], vec![0]]);
-        let storage = crate::storage::VirtualStorageProvider::new_memory();
-        save_graph_with_remapped_start(&graph, &storage, 1, 0, "/graph").unwrap();
-        let mut bytes = Vec::new();
-        storage
-            .open_reader("/graph")
-            .unwrap()
-            .read_to_end(&mut bytes)
-            .unwrap();
-
-        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 0);
-        assert_eq!(bytes.len(), 40);
-    }
-
-    #[test]
-    fn remapped_start_rejects_out_of_range_frozen_id() {
-        let graph = Graph(vec![vec![2], vec![0], vec![0]]);
-        let storage = crate::storage::VirtualStorageProvider::new_memory();
-
-        assert!(save_graph_with_remapped_start(&graph, &storage, 3, 0, "/graph").is_err());
-    }
-
-    #[test]
-    fn remapped_start_rejects_invalid_real_id() {
-        let graph = Graph(vec![vec![2], vec![0], vec![0]]);
-        let storage = crate::storage::VirtualStorageProvider::new_memory();
-
-        assert!(save_graph_with_remapped_start(&graph, &storage, 2, 2, "/graph").is_err());
-    }
 }
