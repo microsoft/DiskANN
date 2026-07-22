@@ -297,12 +297,12 @@ impl<T: Copy> Standard<T> {
     }
 
     /// Returns `rows`, the number of rows in this matrix.
-    fn nrows(&self) -> usize {
+    pub(crate) fn nrows(&self) -> usize {
         self.nrows
     }
 
     /// Returns `ncols`, the number of elements in a row of this matrix.
-    fn ncols(&self) -> usize {
+    pub(crate) fn ncols(&self) -> usize {
         self.ncols
     }
 
@@ -873,6 +873,11 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
         // so `try_from` is infallible here.
         MatrixView::try_from(self.as_slice(), self.num_vectors(), self.vector_dim())
             .expect("Standard<T> has valid dimensions")
+    }
+
+    #[inline]
+    pub(crate) fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast()
     }
 }
 
