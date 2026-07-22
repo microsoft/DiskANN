@@ -194,15 +194,6 @@ where
     cache
         .try_reserve(pool.len().saturating_sub(cache.len()))
         .map_err(RobustPruneError::Allocation)?;
-    neighbors
-        .try_reserve(
-            policy
-                .degree
-                .min(pool.len())
-                .saturating_sub(neighbors.len()),
-        )
-        .map_err(RobustPruneError::Allocation)?;
-
     states.clear();
     states.resize(pool.len(), State::default());
 
