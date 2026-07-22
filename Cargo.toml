@@ -2,6 +2,8 @@
 # Licensed under the MIT license.
 
 [workspace]
+resolver = "3"
+
 members = [
     # Base and Numerics
     "diskann-wide",
@@ -24,7 +26,6 @@ members = [
     "diskann-benchmark",
     "diskann-record",
     "diskann-tools",
-    "vectorset",
     "diskann-bftree",
 ]
 
@@ -35,10 +36,11 @@ default-members = [
     "diskann-utils",
     "diskann",
 ]
-resolver = "3"
+
+exclude = ["vectorset"]
 
 [workspace.package]
-version = "0.55.0"      # Obeying semver
+version = "0.55.0"                                                                                                                         # Obeying semver
 description = "DiskANN3 is a composable library for bringing scalable, accurate and cost-effective vector indexing to multiple databases."
 authors = ["Microsoft"]
 repository = "https://github.com/microsoft/DiskANN"
@@ -66,7 +68,7 @@ diskann-label-filter = { path = "diskann-label-filter", version = "0.55.0" }
 diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.55.0" }
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.55.0" }
 diskann-tools = { path = "diskann-tools", version = "0.55.0" }
-diskann-bftree = {path = "diskann-bftree", version = "0.55.0" }
+diskann-bftree = { path = "diskann-bftree", version = "0.55.0" }
 diskann-record = { path = "diskann-record", version = "0.55.0" }
 
 # External dependencies (shared versions)
