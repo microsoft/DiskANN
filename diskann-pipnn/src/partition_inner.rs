@@ -8,9 +8,9 @@
 //! architecture-specific functions remain private to this module.
 
 use diskann_vector::distance::Metric;
-use diskann_vector::topk::topk_insert;
 
 use crate::cpu_dispatch::{self, VectorWidth};
+use crate::partition::topk_insert;
 
 /// Hard upper bound on `num_assign`. Mirrors `partition::MAX_FANOUT`.
 const MAX_FANOUT_INNER: usize = crate::partition::MAX_FANOUT;

@@ -6,6 +6,46 @@
 use super::*;
 
 #[test]
+fn topk_accepts_and_sorts_initial_candidates() {
+    let mut top = [(u32::MAX, f32::MAX); 3];
+
+    topk_insert(&mut top, 2, 7, 3.0);
+    topk_insert(&mut top, 2, 8, 1.0);
+    topk_insert(&mut top, 2, 9, 2.0);
+
+    assert_eq!(top, [(8, 1.0), (9, 2.0), (7, 3.0)]);
+}
+
+#[test]
+fn topk_rejects_candidates_worse_than_the_threshold() {
+    let mut top = [(8, 1.0), (9, 2.0), (7, 3.0)];
+
+    topk_insert(&mut top, 2, 11, 5.0);
+
+    assert_eq!(top, [(8, 1.0), (9, 2.0), (7, 3.0)]);
+}
+
+#[test]
+fn topk_displaces_the_worst_candidate_and_resorts() {
+    let mut top = [(8, 1.0), (9, 2.0), (7, 3.0)];
+
+    topk_insert(&mut top, 2, 11, 0.5);
+
+    assert_eq!(top, [(11, 0.5), (8, 1.0), (9, 2.0)]);
+}
+
+#[test]
+fn topk_supports_one_candidate() {
+    let mut top = [(u32::MAX, f32::MAX)];
+
+    topk_insert(&mut top, 0, 5, 2.0);
+    topk_insert(&mut top, 0, 6, 1.0);
+    topk_insert(&mut top, 0, 7, 3.0);
+
+    assert_eq!(top, [(6, 1.0)]);
+}
+
+#[test]
 fn test_partition_basic() {
     let npoints = 1000;
     let ndims = 8;

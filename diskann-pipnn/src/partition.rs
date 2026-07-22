@@ -20,6 +20,30 @@ use rayon::prelude::*;
 /// Enforced by [`crate::PiPNNConfig::validate`].
 pub(crate) const MAX_FANOUT: usize = 16;
 
+/// Insert a candidate into the sorted prefix of the fixed-size top-K buffer.
+///
+/// The partition kernels initialize the buffer with sentinels and pass
+/// `threshold_idx = K - 1`, so the last live slot is always the current worst
+/// candidate. Keeping this helper next to the partition implementation avoids
+/// exposing a PiPNN-specific hot-loop primitive from `diskann-vector`.
+#[inline(always)]
+pub(crate) fn topk_insert<const K: usize>(
+    top: &mut [(u32, f32); K],
+    threshold_idx: usize,
+    idx: u32,
+    dist: f32,
+) {
+    if dist >= top[threshold_idx].1 {
+        return;
+    }
+    top[threshold_idx] = (idx, dist);
+    let mut position = threshold_idx;
+    while position > 0 && top[position].1 < top[position - 1].1 {
+        top.swap(position, position - 1);
+        position -= 1;
+    }
+}
+
 /// A leaf partition containing indices into the original dataset.
 ///
 /// Uses `u32` instead of `usize` to halve memory on 64-bit platforms.
