@@ -176,8 +176,7 @@ impl RunBook {
     }
 
     /// Returns a reference to the stages in this runbook.
-    #[cfg(test)]
-    pub(super) fn stages(&self) -> &[Stage] {
+    pub fn stages(&self) -> &[Stage] {
         &self.stages
     }
 

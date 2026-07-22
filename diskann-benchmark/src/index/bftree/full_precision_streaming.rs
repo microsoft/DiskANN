@@ -48,6 +48,8 @@ use crate::{
 ////////////////////////
 
 type BfTreeFPIndex<T> = Arc<DiskANNIndex<BfTreeProvider<T, NoStore>>>;
+type BfTreeFPStreamer<T> = bigann::WithData<T, u32, Managed<T, StreamStats>>;
+type BfTreeFPStreamingResult<T> = anyhow::Result<(BfTreeFPStreamer<T>, BfTreeFPIndex<T>)>;
 
 /// The bf_tree streaming index implementation.
 ///
@@ -224,13 +226,7 @@ where
     }
 }
 
-fn bftree_streaming<T>(
-    input: &BfTreeDynamicRun,
-    max_points: usize,
-) -> anyhow::Result<(
-    bigann::WithData<T, u32, Managed<T, StreamStats>>,
-    BfTreeFPIndex<T>,
-)>
+fn bftree_streaming<T>(input: &BfTreeDynamicRun, max_points: usize) -> BfTreeFPStreamingResult<T>
 where
     T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
