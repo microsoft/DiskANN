@@ -239,7 +239,11 @@ fn build_in_pool<T: VectorRepr + Send + Sync>(
             )?
         }
         (None, Some(hash_prune), false) => hash_prune.into_nearest_lists(max_degree),
-        _ => {
+        (Some(_), Some(_), true)
+        | (Some(_), Some(_), false)
+        | (Some(_), None, false)
+        | (None, None, true)
+        | (None, None, false) => {
             return Err(crate::config_error(
                 "invalid candidate-merge state after validated PiPNN build",
             ));
