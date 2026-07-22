@@ -35,7 +35,6 @@ tokio = { workspace = true, features = ["full"] }
 
 [features]
 default = []
-experimental_diversity_search = ["diskann/experimental_diversity_search"]
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"

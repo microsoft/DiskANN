@@ -12,9 +12,7 @@ use crate::graph::{SearchOutputBuffer, search_output_buffer};
 mod queue;
 pub use queue::{NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueue};
 
-#[cfg(feature = "experimental_diversity_search")]
 mod diverse_priority_queue;
-#[cfg(feature = "experimental_diversity_search")]
 pub use diverse_priority_queue::{
     Attribute, AttributeValueProvider, DiverseNeighborQueue, VectorIdWithAttribute,
 };

@@ -59,6 +59,18 @@ impl AdaptiveL {
             scale_factor,
         })
     }
+
+    /// Number of nodes to sample before estimating specificity and resizing L.
+    #[inline]
+    pub(crate) fn sample_count(&self) -> usize {
+        self.sample_count
+    }
+
+    /// Maximum multiplier applied to the base L.
+    #[inline]
+    pub(crate) fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
 }
 
 /// Inline filtered search: a standard k-NN search with an additional step
@@ -300,7 +312,12 @@ where
 ///   0 matches in sample → `max_multiplier`× L (maximum expansion)
 ///
 /// Clamped to [1×, max_multiplier] range.
-fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multiplier: f64) -> usize {
+pub(crate) fn compute_adaptive_l(
+    base_l: usize,
+    visited: usize,
+    matched: usize,
+    max_multiplier: f64,
+) -> usize {
     if matched == 0 || visited == 0 {
         // No matches at all — use maximum multiplier
         return (base_l as f64 * max_multiplier) as usize;

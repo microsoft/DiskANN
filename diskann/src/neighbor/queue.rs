@@ -421,7 +421,6 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     ///
     /// # Arguments
     /// * `f` - A predicate that returns `true` for items to keep
-    #[cfg(feature = "experimental_diversity_search")]
     pub fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&Neighbor<I>) -> bool,
@@ -460,7 +459,6 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     ///
     /// # Arguments
     /// * `len` - The new length of the queue
-    #[cfg(feature = "experimental_diversity_search")]
     pub fn truncate(&mut self, len: usize) {
         let new_size = len;
         if new_size < self.size {
@@ -1291,7 +1289,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_retain() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1327,7 +1324,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_retain_empty() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1337,7 +1333,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_retain_remove_all() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1353,7 +1348,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_retain_remove_none() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1371,7 +1365,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_retain_resets_visited_state() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1411,7 +1404,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_truncate() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1433,7 +1425,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_truncate_larger_size() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 
@@ -1447,7 +1438,6 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    #[cfg(feature = "experimental_diversity_search")]
     fn test_truncate_with_cursor() {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
 

@@ -170,6 +170,20 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
     pub(crate) post_processor: Option<TopkPostProcessor>,
+    /// Plaintext file with one integer attribute per line; line `N` is vector `N`'s attribute.
+    ///
+    /// When present, the search phase runs attribute-bucket diversity via
+    /// post-processing (Design A): a plain greedy search over the top-`L` pool
+    /// followed by bucket selection keeping at most `diverse_results_k` results
+    /// per distinct attribute value, instead of the mode selected by
+    /// `search_mode`/`post_processor`.
+    pub(crate) attributes: Option<InputFile>,
+    /// The attribute dimension used for diversity (currently only a single attribute is used).
+    #[serde(default)]
+    pub(crate) diverse_attribute_id: usize,
+    /// The maximum number of results to keep per distinct attribute value.
+    #[serde(default)]
+    pub(crate) diverse_results_k: Option<usize>,
 }
 
 /////////
@@ -320,6 +334,18 @@ impl DiskSearchPhase {
                 .context("invalid disk search post processor")?;
         }
 
+        if let Some(attributes) = self.attributes.as_mut() {
+            attributes
+                .resolve(checker)
+                .context("invalid attributes file")?;
+            match self.diverse_results_k {
+                Some(k) if k > 0 => {}
+                _ => anyhow::bail!(
+                    "diverse_results_k must be a positive integer when attributes is set"
+                ),
+            }
+        }
+
         Ok(())
     }
 }
@@ -367,6 +393,9 @@ impl Example for DiskIndexOperation {
             num_nodes_to_cache: None,
             search_io_limit: None,
             post_processor: None,
+            attributes: None,
+            diverse_attribute_id: 0,
+            diverse_results_k: None,
         };
 
         Self {

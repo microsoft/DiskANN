@@ -9,6 +9,8 @@ use diskann_benchmark_runner::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "disk-index")]
+pub(crate) mod attributes;
 pub(crate) mod datafiles;
 pub(crate) mod filters;
 pub(crate) mod recall;

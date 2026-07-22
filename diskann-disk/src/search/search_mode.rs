@@ -11,13 +11,22 @@
 
 use diskann::graph::ext::labeled::QueryLabelProvider;
 use diskann::graph::search::AdaptiveL;
+use diskann::neighbor::AttributeValueProvider;
 use diskann_providers::model::graph::provider::DeterminantDiversityParams;
+use std::sync::Arc;
 
 /// Owned closure used to filter vector IDs during disk search.
 ///
 /// The `&u32` argument is the disk-side internal/external ID (they coincide
 /// on the disk path by construction).
 pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
+
+/// Type-erased attribute provider used by [`SearchMode::DiverseAttribute`].
+///
+/// `SearchMode` is a non-generic enum, so the concrete provider is erased
+/// behind this trait object. `Value` is pinned to `u32`, matching every
+/// attribute-bucket provider in use.
+pub type DynAttributeProvider = dyn AttributeValueProvider<Id = u32, Value = u32>;
 
 /// Top-level disk search mode.
 ///
@@ -50,6 +59,21 @@ pub enum SearchMode<'a> {
     DiverseGraph {
         filter: Option<SearchPredicate<'a>>,
         params: DeterminantDiversityParams,
+    },
+
+    /// Attribute-bucket diversity done in post-processing: run a greedy graph
+    /// search over an enlarged candidate pool (`L`) and then greedily select,
+    /// in ascending distance order, at most `diverse_results_k` results per
+    /// distinct attribute value.
+    ///
+    /// `adaptive_l = Some(_)` enables Design B: the search samples bucket
+    /// concentration during traversal and grows `L` when few distinct buckets
+    /// are seen. `None` runs Design A with a fixed `L`.
+    DiverseAttribute {
+        provider: Arc<DynAttributeProvider>,
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
+        adaptive_l: Option<AdaptiveL>,
     },
 }
 
@@ -137,6 +161,26 @@ impl<'a> SearchMode<'a> {
         Self::DiverseGraph {
             filter: Some(Box::new(predicate)),
             params,
+        }
+    }
+
+    /// Attribute-bucket diversity via post-processing. The greedy search
+    /// collects the top-`L` pool, then a bucket-selection step keeps at most
+    /// `diverse_results_k` results per distinct attribute value.
+    ///
+    /// `adaptive_l = Some(_)` grows `L` mid-search from the observed bucket
+    /// concentration (Design B); `None` uses a fixed `L` (Design A).
+    pub fn diverse_attribute(
+        provider: Arc<DynAttributeProvider>,
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
+        adaptive_l: Option<AdaptiveL>,
+    ) -> Self {
+        Self::DiverseAttribute {
+            provider,
+            diverse_attribute_id,
+            diverse_results_k,
+            adaptive_l,
         }
     }
 }

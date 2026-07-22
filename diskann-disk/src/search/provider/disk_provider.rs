@@ -20,7 +20,7 @@ use diskann::{
         self,
         ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
-        search::{AdaptiveL, InlineFilterSearch, Knn},
+        search::{AdaptiveL, DiverseAdaptiveSearch, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -53,7 +53,7 @@ use crate::{
             aligned_file_reader::AlignedFileReaderFactory,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
-        search_mode::SearchMode,
+        search_mode::{DynAttributeProvider, SearchMode},
         traits::{VertexProvider, VertexProviderFactory},
     },
     storage::{api::AsyncDiskLoadContext, disk_index_reader::DiskIndexReader},
@@ -464,6 +464,120 @@ where
             let distance = candidate_distances[idx];
             ((id, associated_data[idx]), distance)
         })))
+    }
+}
+
+/// Post-processor implementing attribute-bucket diversity purely over the
+/// candidate pool returned by a plain greedy search (Design A).
+///
+/// Candidates are reranked with exact distances, sorted ascending, and then
+/// greedily emitted while keeping at most `diverse_results_k` results per
+/// distinct attribute value. The output buffer bounds the final count to `k`.
+pub struct AttributeBucketDiversity<'a> {
+    filter: PostprocessStrategy<'a>,
+    provider: Arc<DynAttributeProvider>,
+    diverse_results_k: usize,
+}
+
+impl<'a> AttributeBucketDiversity<'a> {
+    pub fn new(
+        filter: PostprocessStrategy<'a>,
+        provider: Arc<DynAttributeProvider>,
+        diverse_results_k: usize,
+    ) -> Self {
+        Self {
+            filter,
+            provider,
+            diverse_results_k,
+        }
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        DiskAccessor<'_, Data, VP>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for AttributeBucketDiversity<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+    async fn post_process<I, B>(
+        &self,
+        accessor: &mut DiskAccessor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        let provider = accessor.provider;
+
+        // Reuse full-precision distances already computed during traversal
+        // (cached in `distance_cache`); only fetch vectors and recompute for
+        // candidates that missed the cache.
+        let mut uncached_ids = Vec::new();
+        let mut reranked = {
+            let mut process = |n: u32| {
+                if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
+                    Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
+                } else {
+                    uncached_ids.push(n);
+                    None
+                }
+            };
+            match self.filter {
+                PostprocessStrategy::AcceptAll => candidates
+                    .map(|n| n.id)
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+                PostprocessStrategy::Apply(f) => candidates
+                    .map(|n| n.id)
+                    .filter(|id| f(id))
+                    .filter_map(&mut process)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
+        };
+
+        if !uncached_ids.is_empty() {
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            for n in &uncached_ids {
+                let v = accessor.scratch.vertex_provider.get_vector(n)?;
+                let d = provider.distance_comparer.evaluate_similarity(query, v);
+                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
+                reranked.push(((*n, *a), d));
+            }
+        }
+
+        // Sort by exact distance so the bucket selection walks candidates in
+        // true nearest-first order.
+        reranked
+            .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Greedy bucket selection: keep at most `diverse_results_k` per bucket.
+        // `output.extend` truncates the stream to the buffer capacity (`k`).
+        let mut bucket_counts: HashMap<u32, usize> = HashMap::new();
+        let selected = reranked.into_iter().filter(|((id, _), _)| {
+            let bucket = self.provider.get(*id).unwrap_or(u32::MAX);
+            let count = bucket_counts.entry(bucket).or_insert(0);
+            if *count < self.diverse_results_k {
+                *count += 1;
+                true
+            } else {
+                false
+            }
+        });
+
+        Ok(output.extend(selected))
     }
 }
 
@@ -1188,6 +1302,56 @@ where
                     query,
                     &mut result_output_buffer,
                 ))?
+            }
+            SearchMode::DiverseAttribute {
+                provider,
+                diverse_attribute_id: _,
+                diverse_results_k,
+                adaptive_l,
+            } => {
+                // Attribute-bucket diversity: a greedy search collects the
+                // top-`L` pool, then `AttributeBucketDiversity` selects a
+                // bucket-diverse top-`k` from it in post-processing.
+                //
+                // Design A (`adaptive_l = None`): fixed `L`; the over-fetch is
+                // inherent in `L > k` and controlled by the search list size.
+                //
+                // Design B (`adaptive_l = Some(_)`): the traversal samples
+                // bucket concentration and grows `L` when few distinct buckets
+                // are seen, sizing the over-fetch per query.
+                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                let knn_search = Knn::new(k, l, beam_width)?;
+                let processor = AttributeBucketDiversity::new(
+                    PostprocessStrategy::AcceptAll,
+                    provider.clone(),
+                    *diverse_results_k,
+                );
+                match adaptive_l {
+                    Some(adaptive_l) => {
+                        let search = DiverseAdaptiveSearch::new(
+                            knn_search,
+                            provider.clone(),
+                            *diverse_results_k,
+                            adaptive_l.clone(),
+                        );
+                        self.runtime.block_on(self.index.search_with(
+                            search,
+                            &strategy,
+                            processor,
+                            &DefaultContext,
+                            query,
+                            &mut result_output_buffer,
+                        ))?
+                    }
+                    None => self.runtime.block_on(self.index.search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ))?,
+                }
             }
         };
         query_stats.total_comparisons = stats.cmps;
@@ -1951,7 +2115,6 @@ mod disk_provider_tests {
         );
     }
 
-    #[cfg(feature = "experimental_diversity_search")]
     #[test]
     fn test_disk_search_diversity_search() {
         use diskann::graph::DiverseSearchParams;

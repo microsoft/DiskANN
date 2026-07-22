@@ -82,10 +82,7 @@ proptest.workspace = true
 [features]
 default = []
 perf_test = ["dep:opentelemetry"]
-experimental_diversity_search = [
-    "diskann/experimental_diversity_search",
-    "diskann-providers/experimental_diversity_search",
-]
+virtual_storage = ["diskann-providers/virtual_storage"]
 
 [[bench]]
 name = "bench_main"

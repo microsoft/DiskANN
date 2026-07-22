@@ -2869,7 +2869,6 @@ pub(crate) mod tests {
         );
     }
 
-    #[cfg(feature = "experimental_diversity_search")]
     #[tokio::test]
     async fn test_inmemory_search_diversity_search() {
         use diskann::neighbor::AttributeValueProvider;
