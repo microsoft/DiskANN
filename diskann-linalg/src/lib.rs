@@ -154,9 +154,51 @@ pub fn sgemm(
     beta: Option<f32>,
     c: &mut [f32],
 ) -> Result<(), SgemmError> {
-    validate_matrix(MatrixName::A, m, k, a.len())?;
-    validate_matrix(MatrixName::B, k, n, b.len())?;
-    validate_matrix(MatrixName::C, m, n, c.len())?;
+    // Check size requirements with overflow protection.
+    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::A,
+        rows: m,
+        cols: k,
+    })?;
+
+    if a.len() != expected_a_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::A,
+            expected_rows: m,
+            expected_cols: k,
+            actual_len: a.len(),
+        });
+    }
+
+    let expected_b_len = k.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::B,
+        rows: k,
+        cols: n,
+    })?;
+
+    if b.len() != expected_b_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::B,
+            expected_rows: k,
+            expected_cols: n,
+            actual_len: b.len(),
+        });
+    }
+
+    let expected_c_len = m.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::C,
+        rows: m,
+        cols: n,
+    })?;
+
+    if c.len() != expected_c_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::C,
+            expected_rows: m,
+            expected_cols: n,
+            actual_len: c.len(),
+        });
+    }
 
     // Invoke the actual implementation.
     sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
@@ -219,35 +261,6 @@ pub fn random_distance_preserving_matrix<T: Rng + ?Sized>(dim: usize, rng: &mut 
     random_distance_preserving_matrix_impl(dim, rng)
 }
 
-// ─── Convenience GEMM helpers ──────────────────────────────────────────────
-// Common shapes for row-major all-pairs dot-product matrices used by graph
-// builders (PiPNN's leaf k-NN, etc.).
-
-/// `C = A · Bᵀ` where `A` is `m × k` and `B` is `n × k` (both row-major).
-/// Output `C` is `m × n` (row-major).
-#[inline]
-pub fn sgemm_abt(
-    a: &[f32],
-    m: usize,
-    k: usize,
-    b: &[f32],
-    n: usize,
-    c: &mut [f32],
-) -> Result<(), SgemmError> {
-    sgemm(
-        Transpose::None,
-        Transpose::Ordinary,
-        m,
-        n,
-        k,
-        1.0,
-        a,
-        b,
-        None,
-        c,
-    )
-}
-
 /// `C = A · Aᵀ` writing only the LOWER triangle of the `m × m` output.
 /// Upper triangle is left untouched. Caller is expected to symmetrize C
 /// (or read only the lower triangle).
@@ -255,33 +268,35 @@ pub fn sgemm_abt(
 /// Uses faer's `triangular::matmul` and leaves parallelism to the caller.
 #[inline]
 pub fn sgemm_aat_lower(a: &[f32], m: usize, k: usize, c: &mut [f32]) -> Result<(), SgemmError> {
-    validate_matrix(MatrixName::A, m, k, a.len())?;
-    validate_matrix(MatrixName::C, m, m, c.len())?;
-    crate::faer::sgemm_aat_lower_impl(m, k, a, c);
-    Ok(())
-}
-
-fn validate_matrix(
-    matrix_name: MatrixName,
-    rows: usize,
-    cols: usize,
-    actual_len: usize,
-) -> Result<(), SgemmError> {
-    let expected_len = rows
-        .checked_mul(cols)
-        .ok_or(SgemmError::DimensionOverflow {
-            matrix_name,
-            rows,
-            cols,
-        })?;
-    if actual_len != expected_len {
+    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::A,
+        rows: m,
+        cols: k,
+    })?;
+    if a.len() != expected_a_len {
         return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name,
-            expected_rows: rows,
-            expected_cols: cols,
-            actual_len,
+            matrix_name: MatrixName::A,
+            expected_rows: m,
+            expected_cols: k,
+            actual_len: a.len(),
         });
     }
+
+    let expected_c_len = m.checked_mul(m).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::C,
+        rows: m,
+        cols: m,
+    })?;
+    if c.len() != expected_c_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::C,
+            expected_rows: m,
+            expected_cols: m,
+            actual_len: c.len(),
+        });
+    }
+
+    crate::faer::sgemm_aat_lower_impl(m, k, a, c);
     Ok(())
 }
 
@@ -377,24 +392,6 @@ mod tests {
             err.to_string(),
             "expected 2x3 matrix c (m * n) to have length 6, instead got 5"
         );
-    }
-
-    #[test]
-    fn sgemm_abt_reports_invalid_shapes() {
-        let mut c = [7.0f32; 4];
-        let error = sgemm_abt(&[1.0; 5], 2, 3, &[1.0; 6], 2, &mut c)
-            .expect_err("invalid A shape must be reported");
-
-        assert!(matches!(
-            error,
-            SgemmError::InvalidMatrixDimensions {
-                matrix_name: MatrixName::A,
-                expected_rows: 2,
-                expected_cols: 3,
-                actual_len: 5,
-            }
-        ));
-        assert_eq!(c, [7.0; 4], "failed SGEMM must not modify output");
     }
 
     #[test]

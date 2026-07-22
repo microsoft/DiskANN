@@ -587,8 +587,19 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             let p_slice = &mut p_data[..np * ndims];
             let dots_slice = &mut dots[..np * nl];
             gather_rows(data, points, ndims, p_slice)?;
-            diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice)
-                .map_err(ANNError::opaque)?;
+            diskann_linalg::sgemm(
+                diskann_linalg::Transpose::None,
+                diskann_linalg::Transpose::Ordinary,
+                np,
+                nl,
+                ndims,
+                1.0,
+                p_slice,
+                &l_data,
+                None,
+                dots_slice,
+            )
+            .map_err(ANNError::opaque)?;
             // ||p||² is a per-point constant, so it shifts every leader's L2
             // distance by the same amount and can't change the top-k ranking;
             // CosineNormalized/InnerProduct ignore it too. Only Cosine (which
@@ -638,8 +649,19 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                         ndims,
                         p_slice,
                     )?;
-                    diskann_linalg::sgemm_abt(p_slice, chunk_rows, ndims, &l_data, nl, dots_slice)
-                        .map_err(ANNError::opaque)?;
+                    diskann_linalg::sgemm(
+                        diskann_linalg::Transpose::None,
+                        diskann_linalg::Transpose::Ordinary,
+                        chunk_rows,
+                        nl,
+                        ndims,
+                        1.0,
+                        p_slice,
+                        &l_data,
+                        None,
+                        dots_slice,
+                    )
+                    .map_err(ANNError::opaque)?;
                     // Only Cosine needs ‖p‖; L2's constant
                     // ‖p‖² offset can't reorder the top-k.
                     let p_norm_sq = if matches!(metric, Metric::Cosine) {

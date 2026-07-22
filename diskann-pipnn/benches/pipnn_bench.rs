@@ -38,7 +38,19 @@ fn bench_sgemm_abt(c: &mut Criterion) {
             &(m, n, k),
             |b_iter, &(m, n, k)| {
                 b_iter.iter(|| {
-                    gemm::sgemm_abt(&a, m, k, &b, n, &mut result).unwrap();
+                    gemm::sgemm(
+                        gemm::Transpose::None,
+                        gemm::Transpose::Ordinary,
+                        m,
+                        n,
+                        k,
+                        1.0,
+                        &a,
+                        &b,
+                        None,
+                        &mut result,
+                    )
+                    .unwrap();
                 });
             },
         );
