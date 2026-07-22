@@ -4,14 +4,6 @@
  */
 
 //! Disk index builder tests.
-use crate::{data_model::GraphDataType, storage::DiskIndexWriter};
-use diskann_providers::{
-    model::IndexConfiguration,
-    storage::{StorageReadProvider, StorageWriteProvider},
-    utils::load_metadata_from_file,
-};
-use diskann_utils::io::read_bin;
-
 #[cfg(test)]
 pub(crate) mod disk_index_builder_tests {
     use std::{io::Read, sync::Arc, time::Instant};
@@ -24,12 +16,15 @@ pub(crate) mod disk_index_builder_tests {
         utils::{IntoUsize, VectorRepr, ONE},
         ANNResult,
     };
-    use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::storage::{
-        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file,
+    use diskann_providers::{
+        model::IndexConfiguration,
+        storage::{
+            get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, StorageReadProvider,
+            StorageWriteProvider, VirtualStorageProvider,
+        },
+        utils::load_metadata_from_file,
     };
-
-    use diskann_utils::test_data_root;
+    use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::{
         distance::Metric::{self, L2},
         DistanceFunction,
@@ -37,16 +32,15 @@ pub(crate) mod disk_index_builder_tests {
     use rstest::rstest;
     use vfs::OverlayFS;
 
-    use super::*;
     use crate::{
         build::builder::build::DiskIndexBuilder,
-        data_model::{CachingStrategy, GraphHeader},
+        data_model::{CachingStrategy, GraphDataType, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
             aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
-        storage::disk_index_reader::DiskIndexReader,
+        storage::{disk_index_reader::DiskIndexReader, DiskIndexWriter},
         utils::QueryStatistics,
         QuantizationType,
     };
