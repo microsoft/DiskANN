@@ -218,6 +218,13 @@ where
                             build.inmem_parameters(data.nrows(), data.ncols()),
                             common::NoDeletes,
                         )?;
+                        #[cfg(feature = "pipnn")]
+                        if matches!(
+                            build.build_algorithm(),
+                            diskann_disk::BuildAlgorithm::PiPNN(_)
+                        ) {
+                            return Ok(index);
+                        }
                         build::set_start_points(
                             index.provider(),
                             data.as_view(),

@@ -748,9 +748,17 @@ impl IndexBuild {
         num_points: usize,
         dim: usize,
     ) -> DefaultProviderParameters {
+        #[cfg(feature = "pipnn")]
+        let frozen_points = match self.build_algorithm {
+            diskann_disk::BuildAlgorithm::PiPNN(_) => NonZero::new(1).unwrap(),
+            _ => NonZero::new(self.start_point_strategy.count()).unwrap(),
+        };
+        #[cfg(not(feature = "pipnn"))]
+        let frozen_points = NonZero::new(self.start_point_strategy.count()).unwrap();
+
         DefaultProviderParameters {
             max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
+            frozen_points,
             metric: self.distance.into(),
             dim,
             max_degree: self.exact_max_degree() as u32,

@@ -120,7 +120,7 @@ pub(crate) fn pipnn_build<T>(
     config: &diskann_pipnn::PiPNNConfig,
 ) -> anyhow::Result<BuildStats>
 where
-    T: diskann::utils::VectorRepr,
+    T: diskann::graph::SampleableForStart + diskann::utils::VectorRepr,
 {
     use anyhow::Context;
 
@@ -151,21 +151,46 @@ where
     }
     drop(data);
 
-    let total_points = npoints
-        .checked_add(input.start_point_strategy().count())
-        .context("PiPNN point count overflow")?;
-    // SAFETY: all real and start-point rows were populated above or by
-    // set_start_points, the row-size check guarantees dense packing, and no
-    // writes race this build.
-    let build_data = unsafe { index.data_provider.base_vectors.flat_prefix(total_points) };
-    let adjacency =
-        diskann_pipnn::builder::build_typed(build_data, total_points, dimensions, &context)?;
-    for (id, neighbors) in adjacency.into_iter().enumerate() {
+    // SAFETY: all real rows were populated above, the row-size check guarantees
+    // dense packing, and no writes race this build. The provider's trailing
+    // search-start rows are deliberately excluded from PiPNN core input.
+    let build_data = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
+    let adjacency = diskann_pipnn::builder::build_typed(build_data, npoints, dimensions, &context)?;
+
+    let build_data =
+        MatrixView::try_from(build_data, npoints, dimensions).map_err(|error| error.as_static())?;
+    let start_points = StartPointStrategy::Medoid
+        .compute(build_data)
+        .map_err(|error| {
+            ANNError::new(
+                diskann::ANNErrorKind::DiskANN(StartPointComputeError),
+                error,
+            )
+        })?;
+    let start_vector = start_points.row(0);
+    let start_bytes: &[u8] = bytemuck::cast_slice(start_vector);
+    let real_start_id = build_data
+        .row_iter()
+        .position(|row| bytemuck::cast_slice::<T, u8>(row) == start_bytes)
+        .context("PiPNN medoid is not a dataset vector")?;
+
+    for (id, neighbors) in adjacency.iter().enumerate() {
         index
             .provider()
             .neighbors()
-            .set_neighbors_sync(id, &neighbors)?;
+            .set_neighbors_sync(id, neighbors)?;
     }
+    index.provider().set_start_points(start_points.row_iter())?;
+    let start_id = index
+        .provider()
+        .starting_points()?
+        .into_iter()
+        .next()
+        .context("PiPNN provider has no search start slot")?;
+    index
+        .provider()
+        .neighbors()
+        .set_neighbors_sync(start_id as usize, &adjacency[real_start_id])?;
 
     let total_time = MicroSeconds::from(started.elapsed());
     let per_vector = MicroSeconds::new(
