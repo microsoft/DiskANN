@@ -247,20 +247,6 @@ pub trait SetElementHelper<T> {
     fn set_element(&self, index: &u32, element: &[T]) -> ANNResult<()>;
 }
 
-/// A helper trait exposing the store's densely-packed vectors as one contiguous
-/// slice, for batch builders (PiPNN) that read every point at once and want to
-/// build directly from the store instead of holding a second dataset copy.
-pub trait FlatVectorAccess<T> {
-    /// Return the first `first_n` stored vectors as one contiguous
-    /// `&[first_n * dim]` slice. Only valid for densely-packed dims; panics on a
-    /// padded stride (see [`AlignedMemoryVectorStore::flat_prefix`]).
-    ///
-    /// # Safety
-    /// Torn-read caveat: no concurrent writes to the read region; `first_n` must
-    /// be `<= max_vectors`.
-    unsafe fn flat_prefix(&self, first_n: usize) -> &[T];
-}
-
 /// A helper trait to select the quant vector store.
 ///
 /// This is also implemented for [`NoStore`], which explicitly disables deletion

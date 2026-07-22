@@ -240,30 +240,7 @@ where
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
 
-    // Warmup pass: run all queries once to warm the OS page cache and PQ tables.
-    // Results are discarded. This ensures measured QPS reflects steady-state, not cold start.
-    {
-        // Warmup at the largest L to ensure all sectors are cached for every search_list value.
-        let warmup_l = search_params
-            .search_list
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(10);
-        queries.par_row_iter().for_each_in_pool(&pool, |q| {
-            let _ = searcher.search(
-                q,
-                search_params.recall_at,
-                warmup_l,
-                Some(search_params.beam_width),
-                None,
-                search_params.is_flat_search,
-            );
-        });
-        println!("Warmup complete (L={}, {} queries)", warmup_l, num_queries);
-    }
-
-    // Execute search iterations (page cache is warm)
+    // Execute search iterations
     for &l in search_params.search_list.iter() {
         let mut statistics_vec: Vec<QueryStatistics> =
             vec![QueryStatistics::default(); num_queries];

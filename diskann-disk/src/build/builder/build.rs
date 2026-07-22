@@ -29,15 +29,13 @@ use diskann_providers::{
         MAX_MEDOID_SAMPLE_SIZE,
     },
 };
-#[cfg(feature = "pipnn")]
-use diskann_utils::io::Metadata;
 use diskann_utils::io::{read_bin, write_bin};
 use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 #[cfg(feature = "pipnn")]
-use {crate::BuildAlgorithm, diskann_pipnn::PiPNNBuildContext};
+mod pipnn;
 
 use crate::{
     build::{
@@ -134,16 +132,39 @@ where
         mut checkpoint_record_manager: Box<dyn CheckpointManager>,
     ) -> ANNResult<Self> {
         #[cfg(feature = "pipnn")]
-        let is_pipnn = matches!(disk_build_param.build_algorithm(), BuildAlgorithm::PiPNN(_));
-        #[cfg(not(feature = "pipnn"))]
-        let is_pipnn = false;
-
-        if is_pipnn && !matches!(disk_build_param.build_quantization(), QuantizationType::FP) {
-            return Err(ANNError::log_index_error(
-                "PiPNN only supports full-precision graph construction",
-            ));
+        let mut disk_build_param = disk_build_param;
+        #[cfg(feature = "pipnn")]
+        if let Some(config) = disk_build_param.pipnn_config() {
+            config.validate()?;
+            let total_points = index_configuration
+                .max_points
+                .checked_add(index_configuration.num_frozen_pts.get())
+                .ok_or_else(|| ANNError::log_index_error("PiPNN point count overflows usize"))?;
+            let estimate = disk_build_param.use_vamana_if_pipnn_exceeds(
+                total_points,
+                index_configuration.dim,
+                std::mem::size_of::<Data::VectorDataType>(),
+                index_configuration.num_threads,
+            )?;
+            if disk_build_param.pipnn_config().is_some() {
+                info!(
+                    estimated_peak_bytes = estimate,
+                    memory_limit_bytes = disk_build_param.build_memory_limit().in_bytes(),
+                    "PiPNN one-shot build fits the memory limit"
+                );
+            } else {
+                info!(
+                    estimated_peak_bytes = estimate,
+                    memory_limit_bytes = disk_build_param.build_memory_limit().in_bytes(),
+                    "PiPNN one-shot build exceeds the memory limit; using Vamana"
+                );
+            }
         }
 
+        #[cfg(feature = "pipnn")]
+        let is_pipnn = disk_build_param.pipnn_config().is_some();
+        #[cfg(not(feature = "pipnn"))]
+        let is_pipnn = false;
         if !is_pipnn {
             checkpoint_record_manager.execute_stage(
                 WorkStage::Start,
@@ -229,19 +250,6 @@ where
     }
 
     pub fn build(&mut self) -> ANNResult<()> {
-        #[cfg(feature = "pipnn")]
-        if let BuildAlgorithm::PiPNN(config) = self.disk_build_param.build_algorithm() {
-            let context = PiPNNBuildContext::new(
-                config.clone(),
-                self.index_configuration.config.pruned_degree(),
-                self.index_configuration.config.alpha(),
-                self.index_configuration.dist_metric,
-                self.index_configuration.num_threads,
-            )
-            .map_err(|error| ANNError::log_index_error(error.to_string()))?;
-            return self.build_pipnn(context);
-        }
-
         let runtime = create_runtime(self.index_configuration.num_threads)?;
         runtime.block_on(async {
             match self.build_internal().await {
@@ -256,57 +264,36 @@ where
         })
     }
 
-    #[cfg(feature = "pipnn")]
-    fn build_pipnn(&mut self, context: PiPNNBuildContext) -> ANNResult<()> {
-        let pool = create_thread_pool(self.index_configuration.num_threads)?;
-
-        self.generate_compressed_data_from_offset(pool.as_ref(), 0, &ChunkingConfig::default())?;
-
-        self.build_pipnn_graph(&context)?;
-
-        self.index_writer
-            .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
-        self.index_writer
-            .index_build_cleanup(self.storage_provider)?;
-        Ok(())
-    }
-
-    #[cfg(feature = "pipnn")]
-    fn build_pipnn_graph(&mut self, context: &PiPNNBuildContext) -> ANNResult<()> {
-        let data_path = self.index_writer.get_dataset_file();
-        let (npoints, ndims, mut data) =
-            load_data_typed::<Data::VectorDataType, _>(&data_path, self.storage_provider)?;
-        let mut rng = diskann_providers::utils::create_rnd_from_optional_seed(
-            self.index_configuration.random_seed,
-        );
-        let (start_point, start_point_id) = find_medoid_with_sampling::<Data::VectorDataType, _>(
-            &data_path,
-            self.storage_provider,
-            MAX_MEDOID_SAMPLE_SIZE,
-            &mut rng,
-        )?;
-        let frozen_id = u32_try_from(npoints)?;
-        let start_point_id = u32_try_from(start_point_id)?;
-        data.extend_from_slice(&start_point);
-
-        let graph = diskann_pipnn::builder::build_typed(&data, npoints + 1, ndims, context)
-            .map_err(|error| ANNError::log_index_error(error.to_string()))?;
-        diskann_providers::storage::bin::save_graph_with_remapped_start(
-            &AdjacencyView(&graph.adjacency),
-            self.storage_provider,
-            frozen_id,
-            start_point_id,
-            &self.index_writer.get_mem_index_file(),
-        )?;
-
-        Ok(())
-    }
-
     async fn build_internal(&mut self) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
 
         let pool = create_thread_pool(self.index_configuration.num_threads)?;
 
+        #[cfg(feature = "pipnn")]
+        let pipnn_context = self
+            .disk_build_param
+            .pipnn_config()
+            .map(|config| pipnn::prepare_context(self, config))
+            .transpose()?;
+
+        #[cfg(feature = "pipnn")]
+        if pipnn_context.is_some() {
+            info!(
+                "Starting one-shot PiPNN index build: R={} T={}",
+                self.index_configuration.config.pruned_degree(),
+                self.index_configuration.num_threads
+            );
+        } else {
+            info!(
+                "Starting index build: R={} L={} Indexing RAM budget={} T={}",
+                self.index_configuration.config.pruned_degree(),
+                self.index_configuration.config.l_build(),
+                self.disk_build_param.build_memory_limit().in_bytes(),
+                self.index_configuration.num_threads
+            );
+        }
+
+        #[cfg(not(feature = "pipnn"))]
         info!(
             "Starting index build: R={} L={} Indexing RAM budget={} T={}",
             self.index_configuration.config.pruned_degree(),
@@ -318,7 +305,16 @@ where
         self.generate_compressed_data(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_inmem_index(pool.as_ref()).await?;
+        #[cfg(feature = "pipnn")]
+        if let Some(context) = pipnn_context {
+            drop(pool);
+            pipnn::build_graph(self, &context)?;
+        } else {
+            self.build_vamana_graph(pool.as_ref()).await?;
+        }
+
+        #[cfg(not(feature = "pipnn"))]
+        self.build_vamana_graph(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         // Use physical file to pass the memory index to the disk writer
@@ -335,6 +331,17 @@ where
             "Compressing data into {} bytes per vector for disk search",
             num_chunks.get()
         );
+
+        #[cfg(feature = "pipnn")]
+        if self.disk_build_param.pipnn_config().is_some() {
+            let chunking_config = ChunkingConfig::default();
+            return match self.generate_compressed_data_from_offset(pool, 0, &chunking_config)? {
+                Progress::Completed => Ok(()),
+                Progress::Processed(processed) => Err(ANNError::log_build_interrupted(
+                    format_args!("PiPNN search-PQ generation stopped after {processed} chunks"),
+                )),
+            };
+        }
 
         let mut checkpoint_context = OwnedCheckpointContext::new(
             self.checkpoint_record_manager.clone_box(),
@@ -402,7 +409,7 @@ where
         generator.generate_data(storage_provider, pool, chunking_config)
     }
 
-    async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+    async fn build_vamana_graph(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -567,203 +574,6 @@ where
             }
             Progress::Completed => Ok(()),
         }
-    }
-}
-
-#[cfg(feature = "pipnn")]
-struct AdjacencyView<'a>(&'a [Vec<u32>]);
-
-#[cfg(feature = "pipnn")]
-impl diskann_providers::storage::bin::GetAdjacencyList for AdjacencyView<'_> {
-    type Element = u32;
-    type Item<'a>
-        = &'a [u32]
-    where
-        Self: 'a;
-
-    fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>> {
-        self.0
-            .get(i)
-            .map(Vec::as_slice)
-            .ok_or_else(|| ANNError::log_index_error(format_args!("missing node {i}")))
-    }
-
-    fn total(&self) -> usize {
-        self.0.len()
-    }
-
-    fn additional_points(&self) -> u64 {
-        1
-    }
-
-    fn max_degree(&self) -> Option<u32> {
-        None
-    }
-}
-
-#[cfg(feature = "pipnn")]
-fn load_data_typed<T, StorageProvider>(
-    data_path: &str,
-    storage_provider: &StorageProvider,
-) -> ANNResult<(usize, usize, Vec<T>)>
-where
-    T: VectorRepr,
-    StorageProvider: StorageReadProvider,
-{
-    use std::io::Read;
-
-    let mut reader = storage_provider.open_reader(data_path)?;
-    let metadata = Metadata::read(&mut reader)?;
-    let (npoints, ndims) = metadata.into_dims();
-    let elements = npoints
-        .checked_mul(ndims)
-        .ok_or_else(|| ANNError::log_index_error("dataset size overflow"))?;
-    let expected_bytes = elements
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or_else(|| ANNError::log_index_error("dataset byte size overflow"))?;
-    let available_bytes = storage_provider.get_length(data_path)?.saturating_sub(8);
-    if available_bytes < expected_bytes as u64 {
-        return Err(ANNError::log_index_error(format_args!(
-            "dataset declares {expected_bytes} payload bytes, but only {available_bytes} are available"
-        )));
-    }
-    let capacity = elements
-        .checked_add(ndims)
-        .ok_or_else(|| ANNError::log_index_error("dataset capacity overflow"))?;
-    let mut data = Vec::with_capacity(capacity);
-    data.resize(elements, T::default());
-    reader.read_exact(bytemuck::must_cast_slice_mut(&mut data))?;
-    Ok((npoints, ndims, data))
-}
-
-#[cfg(all(test, feature = "pipnn"))]
-mod pipnn_tests {
-    use diskann::graph::config;
-    use diskann_providers::{
-        model::IndexConfiguration,
-        storage::{get_disk_index_file, StorageWriteProvider, VirtualStorageProvider},
-    };
-    use diskann_vector::distance::Metric;
-
-    use super::*;
-    use crate::{
-        build::{
-            chunking::checkpoint::{
-                CheckpointManager, NaiveCheckpointRecordManager, Progress, WorkStage,
-            },
-            configuration::{MemoryBudget, NumPQChunks},
-        },
-        data_model::AdHoc,
-    };
-
-    #[derive(Clone)]
-    struct RejectCheckpointManager;
-
-    impl CheckpointManager for RejectCheckpointManager {
-        fn get_resumption_point(&self, _stage: WorkStage) -> ANNResult<Option<usize>> {
-            panic!("PiPNN must not read checkpoint state")
-        }
-
-        fn update(&mut self, _progress: Progress, _next_stage: WorkStage) -> ANNResult<()> {
-            panic!("PiPNN must not write checkpoint state")
-        }
-
-        fn mark_as_invalid(&mut self) -> ANNResult<()> {
-            panic!("PiPNN must not invalidate checkpoint state")
-        }
-    }
-
-    #[test]
-    fn pipnn_rejects_build_quantization_before_training() {
-        let storage = VirtualStorageProvider::new_memory();
-        let params = DiskIndexBuildParameters::new_with_algorithm(
-            MemoryBudget::try_from_gb(1.0).unwrap(),
-            QuantizationType::PQ { num_chunks: 8 },
-            NumPQChunks::new_with(8, 8).unwrap(),
-            BuildAlgorithm::PiPNN(diskann_pipnn::PiPNNConfig::default()),
-        );
-        let graph_config = config::Builder::new_with(
-            4,
-            config::MaxDegree::default_slack(),
-            8,
-            Metric::L2.into(),
-            |_| {},
-        )
-        .build()
-        .unwrap();
-        let index_config = IndexConfiguration::new(Metric::L2, 8, 16, ONE, 1, graph_config);
-        let writer =
-            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
-
-        let result = DiskIndexBuilder::<AdHoc<f32>, _>::new_with_chunking_config(
-            &storage,
-            params,
-            index_config,
-            writer,
-            ChunkingConfig::default(),
-            Box::<NaiveCheckpointRecordManager>::default(),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn pipnn_disk_build_does_not_use_checkpoints() {
-        let storage = VirtualStorageProvider::new_memory();
-        let npoints = 256;
-        let ndims = 8;
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|i| ((i * 17) % 251) as f32)
-            .collect();
-        write_bin(
-            MatrixView::try_from(data.as_slice(), npoints, ndims).unwrap(),
-            &mut storage.create_for_write("/data.fbin").unwrap(),
-        )
-        .unwrap();
-
-        let params = DiskIndexBuildParameters::new_with_algorithm(
-            MemoryBudget::try_from_gb(1.0).unwrap(),
-            QuantizationType::FP,
-            NumPQChunks::new_with(ndims, ndims).unwrap(),
-            BuildAlgorithm::PiPNN(diskann_pipnn::PiPNNConfig {
-                c_max: 512,
-                c_min: 64,
-                p_samp: 0.01,
-                fanout: vec![10, 3],
-                k: 2,
-                replicas: 1,
-                l_max: 72,
-                num_hash_planes: 14,
-                final_prune: true,
-            }),
-        );
-        let graph_config = config::Builder::new_with(
-            32,
-            config::MaxDegree::default_slack(),
-            50,
-            Metric::L2.into(),
-            |_| {},
-        )
-        .build()
-        .unwrap();
-        let index_config =
-            IndexConfiguration::new(Metric::L2, ndims, npoints, ONE, 1, graph_config)
-                .with_pseudo_rng_from_seed(42);
-        let writer =
-            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
-
-        let mut builder = DiskIndexBuilder::<AdHoc<f32>, _>::new_with_chunking_config(
-            &storage,
-            params,
-            index_config,
-            writer,
-            ChunkingConfig::default(),
-            Box::new(RejectCheckpointManager),
-        )
-        .unwrap();
-
-        builder.build().unwrap();
-        assert!(storage.exists(&get_disk_index_file("/index")));
     }
 }
 

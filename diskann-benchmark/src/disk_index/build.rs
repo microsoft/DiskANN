@@ -84,6 +84,7 @@ where
         params.l_build,
         metric.into(),
         |b| {
+            b.alpha(params.alpha);
             b.saturate_after_prune(true);
         },
     )
@@ -93,12 +94,23 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, &data_path)?;
 
-    let build_parameters = DiskIndexBuildParameters::new_with_algorithm(
-        MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
-        params.quantization_type,
-        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
-        params.build_algorithm.clone(),
-    );
+    let search_pq_chunks = NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?;
+    let build_parameters = match &params.build_algorithm {
+        diskann_disk::BuildAlgorithm::Vamana => DiskIndexBuildParameters::new(
+            MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
+            params.quantization_type.ok_or_else(|| {
+                anyhow::anyhow!("quantization_type is required for Vamana builds")
+            })?,
+            search_pq_chunks,
+        ),
+        #[cfg(feature = "pipnn")]
+        diskann_disk::BuildAlgorithm::PiPNN(config) => DiskIndexBuildParameters::new_pipnn(
+            MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
+            search_pq_chunks,
+            config.clone(),
+        ),
+        _ => anyhow::bail!("unsupported disk graph-build algorithm"),
+    };
 
     let index_configuration = IndexConfiguration::new(
         metric,

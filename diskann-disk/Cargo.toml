@@ -85,6 +85,7 @@ proptest.workspace = true
 default = []
 perf_test = ["dep:opentelemetry"]
 pipnn = ["dep:diskann-pipnn"]
+virtual_storage = ["diskann-providers/virtual_storage"]
 experimental_diversity_search = [
     "diskann/experimental_diversity_search",
     "diskann-providers/experimental_diversity_search",

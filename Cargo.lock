@@ -658,6 +658,7 @@ dependencies = [
  "diskann-bftree",
  "diskann-disk",
  "diskann-label-filter",
+ "diskann-pipnn",
  "diskann-providers",
  "diskann-quantization",
  "diskann-tools",
@@ -667,6 +668,7 @@ dependencies = [
  "half",
  "indicatif",
  "itertools 0.13.0",
+ "mimalloc",
  "opentelemetry",
  "opentelemetry_sdk",
  "rand",
@@ -780,6 +782,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -845,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-pipnn"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -861,7 +864,6 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
  "tracing",
  "tracing-subscriber",
 ]
@@ -992,6 +994,7 @@ dependencies = [
  "iai-callgrind",
  "rand",
  "rand_distr",
+ "rayon",
 ]
 
 [[package]]
@@ -1960,6 +1963,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2011,6 +2023,15 @@ name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
+]
 
 [[package]]
 name = "miniz_oxide"

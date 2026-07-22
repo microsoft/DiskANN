@@ -8,8 +8,8 @@ use std::io::{BufReader, BufWriter, Seek, SeekFrom, Write};
 use super::{StorageReadProvider, StorageWriteProvider};
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{
-    utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
+    utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::io::Metadata;
 

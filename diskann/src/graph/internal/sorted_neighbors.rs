@@ -41,11 +41,6 @@ where
         neighbors.truncate(max);
         Self(&*neighbors)
     }
-
-    pub(in crate::graph) fn from_sorted(neighbors: &'a mut Vec<Neighbor<I>>, max: usize) -> Self {
-        neighbors.truncate(max);
-        Self(&*neighbors)
-    }
 }
 
 impl<I> Deref for SortedNeighbors<'_, I>

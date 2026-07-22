@@ -14,6 +14,9 @@ mod result;
 
 pub mod app;
 pub mod files;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub mod fixture;
 pub mod input;
 pub mod output;
 pub mod registry;

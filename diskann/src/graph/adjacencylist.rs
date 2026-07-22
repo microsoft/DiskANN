@@ -39,6 +39,14 @@ impl<I> AdjacencyList<I> {
         self.edges.capacity()
     }
 
+    /// Reserve capacity for at least `additional` more elements.
+    pub(crate) fn try_reserve(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
+        self.edges.try_reserve(additional)
+    }
+
     /// Return the last `count` items in the list. This can be useful when combined with
     /// [`Self::insert`] to obtain the newly added edges.
     pub fn last(&self, count: usize) -> Option<&[I]> {

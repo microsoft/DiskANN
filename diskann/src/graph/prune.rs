@@ -66,15 +66,6 @@ where
         }
     }
 
-    /// Convert `self` into a context without reordering an already sorted candidate pool.
-    pub fn as_sorted_context(&mut self, max_candidates: usize) -> Context<'_, I> {
-        Context {
-            pool: SortedNeighbors::from_sorted(&mut self.pool, max_candidates),
-            states: &mut self.states,
-            neighbors: &mut self.neighbors,
-        }
-    }
-
     /// Candidate buffer used by callers before pruning.
     pub fn candidates_mut(&mut self) -> &mut Vec<Neighbor<I>> {
         &mut self.pool
@@ -150,6 +141,8 @@ pub enum RobustPruneError<E = std::convert::Infallible> {
     InvalidAlpha(f32),
     #[error("robust prune supports at most {max} candidates, got {actual}")]
     TooManyCandidates { actual: usize, max: usize },
+    #[error("failed to reserve robust-prune workspace: {0}")]
+    Allocation(#[source] std::collections::TryReserveError),
     #[error("distance computation failed: {0}")]
     Distance(E),
 }
@@ -194,6 +187,21 @@ where
         neighbors.clear();
         return Ok(());
     }
+
+    states
+        .try_reserve(pool.len().saturating_sub(states.len()))
+        .map_err(RobustPruneError::Allocation)?;
+    cache
+        .try_reserve(pool.len().saturating_sub(cache.len()))
+        .map_err(RobustPruneError::Allocation)?;
+    neighbors
+        .try_reserve(
+            policy
+                .degree
+                .min(pool.len())
+                .saturating_sub(neighbors.len()),
+        )
+        .map_err(RobustPruneError::Allocation)?;
 
     states.clear();
     states.resize(pool.len(), State::default());
@@ -415,7 +423,7 @@ mod tests {
         scratch
             .candidates_mut()
             .extend([Neighbor::new(1_u32, 1.0), Neighbor::new(2_u32, 2.0)]);
-        let mut context = scratch.as_sorted_context(2);
+        let mut context = scratch.as_context(2);
         let mut cache = Vec::new();
 
         let error = robust_prune(
@@ -434,7 +442,7 @@ mod tests {
     #[test]
     fn robust_prune_rejects_invalid_alpha() {
         let mut scratch = Scratch::<u32>::new();
-        let mut context = scratch.as_sorted_context(0);
+        let mut context = scratch.as_context(0);
         let mut cache = Vec::<(f32, Option<u32>)>::new();
 
         let error = robust_prune(
@@ -448,5 +456,24 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, RobustPruneError::InvalidAlpha(value) if value.is_nan()));
+    }
+
+    #[test]
+    fn robust_prune_does_not_allocate_output_for_an_empty_pool() {
+        let mut scratch = Scratch::<u32>::new();
+        let mut context = scratch.as_context(0);
+        let mut cache = Vec::<(f32, Option<u32>)>::new();
+
+        robust_prune(
+            &mut context,
+            Policy::new(usize::MAX, 1.2, PruneKind::TriangleInequality, false),
+            &mut cache,
+            Some,
+            |_, _| Ok::<_, std::convert::Infallible>(0.0),
+            |_| false,
+        )
+        .unwrap();
+
+        assert!(scratch.neighbors().is_empty());
     }
 }

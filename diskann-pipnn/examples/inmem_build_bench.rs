@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 //! In-memory PiPNN build benchmark for BigANN 10M.
 //!
 //! Skips disk index / PQ / search — times the pure in-memory PiPNN build call,
@@ -5,7 +10,7 @@
 //!
 //! Usage:
 //!   cargo run --release -p diskann-pipnn --example inmem_build_bench -- \
-//!     <path-to-fp16.bin> [npoints]
+//!     <path-to-fp16.bin> [npoints] [skip-hash-prune]
 
 use std::env;
 use std::fs::File;
@@ -48,13 +53,7 @@ fn read_rss_kb() -> u64 {
     let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
     for line in s.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            return rest
-                .trim()
-                .split_whitespace()
-                .next()
-                .unwrap()
-                .parse()
-                .unwrap_or(0);
+            return rest.split_whitespace().next().unwrap().parse().unwrap_or(0);
         }
     }
     0
@@ -69,6 +68,7 @@ fn main() {
         .cloned()
         .unwrap_or_else(|| "datasets/bigann_10m_fp16.bin".to_string());
     let limit_points = args.get(2).and_then(|s| s.parse::<usize>().ok());
+    let skip_hash_prune = args.get(3).is_some_and(|arg| arg == "skip-hash-prune");
 
     let (data, npoints, ndims) = read_fp16_dataset(&path, limit_points);
 
@@ -83,6 +83,7 @@ fn main() {
         replicas: 1,
         l_max: 72,
         final_prune: true,
+        skip_hash_prune,
     };
     let ctx = PiPNNBuildContext::new(
         config.clone(),
@@ -101,12 +102,12 @@ fn main() {
     let dt = t0.elapsed();
 
     let rss_post = read_rss_kb();
+    let avg_degree = graph.iter().map(Vec::len).sum::<usize>() as f64 / graph.len() as f64;
     println!(
         "BUILD_WALL={:.3}s  RSS_post={} MB  npoints={}  avg_degree={:.2}",
         dt.as_secs_f64(),
         rss_post / 1024,
-        graph.adjacency.len(),
-        graph.avg_degree()
+        graph.len(),
+        avg_degree
     );
-    println!("stats: {:?}", graph.build_stats);
 }

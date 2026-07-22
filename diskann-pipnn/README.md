@@ -2,12 +2,13 @@
 
 `diskann-pipnn` implements Pick-in-Partitions Nearest Neighbors graph construction. It
 partitions vectors with randomized ball carving, builds local k-NN edges, merges them
-with HashPrune, and optionally runs DiskANN's shared Vamana RobustPrune implementation.
+with HashPrune or exact deduplication, and optionally runs DiskANN's shared Vamana
+RobustPrune implementation.
 
 ## Responsibility boundary
 
 The crate's public build boundary is `builder::build_typed`. It receives a dense matrix
-and produces adjacency lists plus build statistics. Every row is an ordinary graph node
+and produces adjacency lists. Every row is an ordinary graph node
 to the PiPNN core; the core does not select medoids, create frozen points, search the
 graph, or serialize it.
 
@@ -40,16 +41,25 @@ Enable `pipnn` and choose PiPNN with the standard benchmark runner's
     "k": 2,
     "replicas": 1,
     "l_max": 72,
-    "final_prune": true
+    "final_prune": true,
+    "skip_hash_prune": false
   }
 }
 ```
 
-Final-prune `alpha` comes from the enclosing graph configuration, alongside the
-graph degree and distance metric.
+Final-prune `alpha` comes from the enclosing graph configuration, alongside
+`max_degree`, `l_build`, and the distance metric. The same graph parameters are
+used if a disk build falls back to Vamana.
 
-For a disk build, set `quantization_type` to `"FP"`. Run an input derived from the
-existing `diskann-benchmark/example/graph-index.json` or `disk-index.json`:
+Set `skip_hash_prune` to `true` to accumulate exact-deduplicated leaf candidates
+directly and pass them to the same shared RobustPrune kernel. This mode requires
+`final_prune: true`; `num_hash_planes` and `l_max` may then be zero.
+
+For a disk build, `build_ram_limit_gb` is required. The wrapper estimates the
+one-shot PiPNN peak from the dataset shape/type and PiPNN configuration; if it
+exceeds the limit, the existing full-precision Vamana path is selected. Omit the
+unsupported PiPNN build `quantization_type`. Run an input derived from the existing
+`diskann-benchmark/example/graph-index.json` or `disk-index.json`:
 
 ```bash
 cargo run --release -p diskann-benchmark --features disk-index,pipnn -- \
@@ -64,7 +74,7 @@ RSS; its own `RSS_post` value is only the resident set after the build.
 
 ```bash
 cargo build --release -p diskann-pipnn --example inmem_build_bench
-/usr/bin/time -v target/release/examples/inmem_build_bench DATA.fbin [NPOINTS]
+/usr/bin/time -v target/release/examples/inmem_build_bench DATA.fbin [NPOINTS] [skip-hash-prune]
 ```
 
 ## Tests

@@ -7,7 +7,7 @@
 //!
 //! Storage is AoSoA hot/cold split:
 //! - `hot: Vec<HotSlot>` — one 16-byte slot per point (mutex + len + farthest).
-//!   Hot path early-reject and lock-acquire only touch this slab (~160 MB at 10M points).
+//!   Early rejection and lock acquisition only touch this slab.
 //! - Three cold slabs (`cold_hashes`, `cold_distances`, `cold_neighbors`), each a
 //!   single `MmapSlab` of `npoints * scan_lanes` elements. Splitting hashes /
 //!   distances / neighbors into three contiguous arrays lets `find_hash` walk
@@ -17,46 +17,52 @@
 //! when the kernel actually backs THP.
 //!
 //! `l_max` is dynamic user input; the cold slab stride (`scan_lanes`) and the
-//! `find_hash_simd` scan width both scale with it at runtime. The only fixed
+//! hash scan width both scale with it at runtime. The only fixed
 //! bound is `MAX_RESERVOIR_LEN = 255`, the structural limit of the `u8`
 //! `HotSlot.len` / `farthest_idx` fields; a larger `l_max` is rejected at
-//! construction time. `find_hash_simd` scans `scan_lanes / 32` AVX-512 chunks
-//! with a u128 mask accumulator.
+//! construction time.
 
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
+use std::cell::{RefCell, UnsafeCell};
 
 use crate::rayon_util::ParIterInstalled;
-use diskann::utils::VectorRepr;
+use bytemuck::Pod;
+use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
-use diskann_vector::lsh::LshSketches;
+use diskann_vector::lsh::{LshSketchError, LshSketches};
 use rayon::prelude::*;
 
 /// Owned slab allocated via direct `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`. The
 /// kernel backs the range with its zero-page until first write, so we get
-/// true lazy faulting for the AoSoA cold slabs — mimalloc's `eager_commit`
-/// would otherwise pre-fault every page during construction (the +1.46 s
-/// LSH-init tax measured pre-fix).
+/// true lazy faulting for the AoSoA cold slabs rather than eagerly committing
+/// the full reservoir allocation.
 #[cfg(target_os = "linux")]
-struct MmapSlab<T> {
+struct MmapSlab<T: Pod> {
     ptr: *mut T,
     len: usize,
 }
 
 #[cfg(target_os = "linux")]
-unsafe impl<T: Send> Send for MmapSlab<T> {}
+// SAFETY: the allocation contains only `Pod` values and ownership transfers
+// with the slab; mutation is synchronized by HashPrune's per-row locks.
+unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(target_os = "linux")]
-unsafe impl<T: Sync> Sync for MmapSlab<T> {}
+// SAFETY: shared access exposes only immutable pointers; HashPrune synchronizes
+// every mutation to a row.
+unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(target_os = "linux")]
-impl<T> MmapSlab<T> {
-    fn new_zeroed(len: usize) -> Self {
+impl<T: Pod> MmapSlab<T> {
+    fn new_zeroed(len: usize) -> ANNResult<Self> {
         if len == 0 {
-            return Self {
+            return Ok(Self {
                 ptr: std::ptr::NonNull::<T>::dangling().as_ptr(),
                 len: 0,
-            };
+            });
         }
-        let bytes = len * std::mem::size_of::<T>();
+        let bytes = len
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| crate::config_error(format!("slab size {len} overflows usize")))?;
         // SAFETY: MAP_ANONYMOUS gives a zero-backed VA region; PROT_RW makes
         // it readable/writable. Pages allocate on first write only.
         unsafe {
@@ -68,16 +74,14 @@ impl<T> MmapSlab<T> {
                 -1,
                 0,
             );
-            assert_ne!(
-                ptr,
-                libc::MAP_FAILED,
-                "MmapSlab mmap failed for {} bytes",
-                bytes
-            );
-            Self {
+            if ptr == libc::MAP_FAILED {
+                return Err(ANNError::from(std::io::Error::last_os_error())
+                    .context(format!("mmap failed for {bytes} HashPrune slab bytes")));
+            }
+            Ok(Self {
                 ptr: ptr as *mut T,
                 len,
-            }
+            })
         }
     }
 
@@ -93,7 +97,7 @@ impl<T> MmapSlab<T> {
 }
 
 #[cfg(target_os = "linux")]
-impl<T> Drop for MmapSlab<T> {
+impl<T: Pod> Drop for MmapSlab<T> {
     fn drop(&mut self) {
         if self.len > 0 {
             // SAFETY: ptr was returned by mmap with this byte count.
@@ -105,7 +109,7 @@ impl<T> Drop for MmapSlab<T> {
 }
 
 #[cfg(target_os = "linux")]
-impl<T> std::ops::Deref for MmapSlab<T> {
+impl<T: Pod> std::ops::Deref for MmapSlab<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
         // SAFETY: ptr+len describe a valid initialized slice (zero-init).
@@ -140,26 +144,31 @@ mod winmem {
 }
 
 #[cfg(windows)]
-struct MmapSlab<T> {
+struct MmapSlab<T: Pod> {
     ptr: *mut T,
     len: usize,
 }
 
 #[cfg(windows)]
-unsafe impl<T: Send> Send for MmapSlab<T> {}
+// SAFETY: see the Linux implementation; Windows provides the same zeroed,
+// process-owned allocation semantics.
+unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(windows)]
-unsafe impl<T: Sync> Sync for MmapSlab<T> {}
+// SAFETY: shared mutation is synchronized by HashPrune's per-row locks.
+unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(windows)]
-impl<T> MmapSlab<T> {
-    fn new_zeroed(len: usize) -> Self {
+impl<T: Pod> MmapSlab<T> {
+    fn new_zeroed(len: usize) -> ANNResult<Self> {
         if len == 0 {
-            return Self {
+            return Ok(Self {
                 ptr: std::ptr::NonNull::<T>::dangling().as_ptr(),
                 len: 0,
-            };
+            });
         }
-        let bytes = len * std::mem::size_of::<T>();
+        let bytes = len
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| crate::config_error(format!("slab size {len} overflows usize")))?;
         // SAFETY: MEM_RESERVE|MEM_COMMIT + PAGE_READWRITE returns a zero-backed
         // RW region; physical pages fault in on first write only. Windows
         // zero-fills committed pages, matching mmap's MAP_ANONYMOUS contract.
@@ -170,15 +179,17 @@ impl<T> MmapSlab<T> {
                 winmem::MEM_RESERVE | winmem::MEM_COMMIT,
                 winmem::PAGE_READWRITE,
             );
-            assert!(
-                !ptr.is_null(),
-                "MmapSlab VirtualAlloc failed for {} bytes",
-                bytes
-            );
-            Self {
+            if ptr.is_null() {
+                return Err(
+                    ANNError::from(std::io::Error::last_os_error()).context(format!(
+                        "VirtualAlloc failed for {bytes} HashPrune slab bytes"
+                    )),
+                );
+            }
+            Ok(Self {
                 ptr: ptr as *mut T,
                 len,
-            }
+            })
         }
     }
 
@@ -195,7 +206,7 @@ impl<T> MmapSlab<T> {
 }
 
 #[cfg(windows)]
-impl<T> Drop for MmapSlab<T> {
+impl<T: Pod> Drop for MmapSlab<T> {
     fn drop(&mut self) {
         if self.len > 0 {
             // SAFETY: ptr came from VirtualAlloc; MEM_RELEASE requires dwSize=0.
@@ -207,7 +218,7 @@ impl<T> Drop for MmapSlab<T> {
 }
 
 #[cfg(windows)]
-impl<T> std::ops::Deref for MmapSlab<T> {
+impl<T: Pod> std::ops::Deref for MmapSlab<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
         // SAFETY: ptr+len describe a valid initialized slice (zero-init).
@@ -218,12 +229,18 @@ impl<T> std::ops::Deref for MmapSlab<T> {
 /// Fallback slab for platforms that are neither Linux nor Windows: regular Vec.
 /// Eager-fault behavior tracks the host allocator.
 #[cfg(not(any(target_os = "linux", windows)))]
-struct MmapSlab<T>(Vec<T>);
+struct MmapSlab<T: Pod>(Vec<T>);
 
 #[cfg(not(any(target_os = "linux", windows)))]
-impl<T: Copy + Default> MmapSlab<T> {
-    fn new_zeroed(len: usize) -> Self {
-        Self(vec![T::default(); len])
+impl<T: Pod + Default> MmapSlab<T> {
+    fn new_zeroed(len: usize) -> ANNResult<Self> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(len)
+            .map_err(ANNError::opaque)
+            .map_err(|error| error.context(format!("reserving {len} HashPrune slab elements")))?;
+        values.resize_with(len, T::default);
+        Ok(Self(values))
     }
     #[inline]
     fn as_ptr(&self) -> *const T {
@@ -236,7 +253,7 @@ impl<T: Copy + Default> MmapSlab<T> {
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-impl<T> std::ops::Deref for MmapSlab<T> {
+impl<T: Pod> std::ops::Deref for MmapSlab<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
         &self.0
@@ -258,18 +275,26 @@ fn sketches_from_data<T: VectorRepr + Send + Sync>(
     ndims: usize,
     num_planes: usize,
     seed: u64,
-) -> LshSketches {
-    LshSketches::new(npoints, ndims, num_planes, seed, |i, out| {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out).unwrap_or_else(|e| {
-            panic!("VectorRepr::as_f32_into failed during LSH sketches: {}", e)
-        });
+) -> ANNResult<LshSketches> {
+    LshSketches::try_new(npoints, ndims, num_planes, seed, |i, out| {
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out)
+    })
+    .map_err(|error| match error {
+        LshSketchError::InvalidPlaneCount { actual, max } => {
+            crate::config_error(format!("num_hash_planes ({actual}) must be in 1..={max}"))
+        }
+        LshSketchError::ShapeOverflow { rows, columns } => ANNError::log_index_error(format!(
+            "LSH matrix shape {rows} x {columns} overflows usize"
+        )),
+        LshSketchError::Allocation(error) => ANNError::opaque(error),
+        LshSketchError::Fill(error) => error.into(),
     })
 }
 
 // ─── HotSlot: 16-byte per-point mutex + cached fields ─────────────────────────
 
 #[repr(C, align(16))]
-pub(crate) struct HotSlot {
+struct HotSlot {
     lock: parking_lot::RawMutex,
     len: u8,
     farthest_idx: u8,
@@ -277,6 +302,24 @@ pub(crate) struct HotSlot {
     farthest_dist: u16,
     _pad1: [u8; 10],
 }
+
+#[repr(transparent)]
+struct LockedHotSlot(UnsafeCell<HotSlot>);
+
+impl LockedHotSlot {
+    fn new() -> Self {
+        Self(UnsafeCell::new(HotSlot::new_empty()))
+    }
+
+    fn get(&self) -> *mut HotSlot {
+        self.0.get()
+    }
+}
+
+// SAFETY: every mutable access to the contained HotSlot is guarded by its
+// embedded RawMutex. Read-only extraction happens only after HashPrune is
+// consumed, when no mutation can remain.
+unsafe impl Sync for LockedHotSlot {}
 
 impl HotSlot {
     const fn new_empty() -> Self {
@@ -307,7 +350,7 @@ const _: () = assert!(std::mem::size_of::<HotSlot>() == 16);
 // established by the caller via `HotSlot.lock`.
 
 #[derive(Clone, Copy)]
-pub(crate) struct ColdSlotPtrs {
+struct ColdSlotPtrs {
     hashes: *mut u16,
     distances: *mut u16,
     neighbors: *mut u32,
@@ -321,48 +364,38 @@ fn round_up_to_32(n: usize) -> usize {
 
 // ─── find_hash SIMD: 32-way u16 compare ───────────────────────────────────────
 
-/// Runtime SIMD dispatch for the hashes scan. Each tier-specific kernel is
-/// emitted unconditionally via `#[target_feature]`, independent of the
-/// build-time `target-cpu` baseline (the workspace pins x86-64-v3 = AVX-2 by
-/// default, which used to cfg-out the AVX-512 path entirely and silently
-/// disable it at deployment time even when the CPU supported it).
-///
-/// SAFETY: `hashes` must point at `scan_lanes` valid `u16` slots. `len` must
-/// be the number of meaningful entries (<= scan_lanes and <= 128).
-#[inline(always)]
-unsafe fn find_hash_simd(
-    hashes: *const u16,
-    scan_lanes: usize,
-    len: u8,
-    target: u16,
-) -> Option<usize> {
-    if len == 0 {
-        return None;
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        match crate::cpu_dispatch::tier() {
-            crate::cpu_dispatch::SimdTier::Avx512 => {
-                return find_hash_avx512(hashes, scan_lanes, len, target);
-            }
-            crate::cpu_dispatch::SimdTier::Avx2 => {
-                return find_hash_avx2(hashes, scan_lanes, len, target);
-            }
-            crate::cpu_dispatch::SimdTier::Scalar => {}
-        }
-    }
-    find_hash_scalar(hashes, len as usize, target)
+type FindHash = unsafe fn(*const u16, usize, u8, u16) -> Option<usize>;
+type RelativeHash = unsafe fn(*const f32, *const f32, usize) -> u16;
+
+thread_local! {
+    static LEAF_SKETCHES: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
-/// SAFETY: caller guarantees AVX-512F + AVX-512BW at runtime (tier()==Avx512
-/// requires both — see `cpu_dispatch::detect_tier`). The 16-bit lane compare
-/// `vpcmpeqw` lives in AVX-512BW; production deployment targets (Skylake-X
-/// and later, Zen 4) ship both. The function-level `#[target_feature]`
-/// emits the AVX-512 instructions even if the build's `target-cpu` baseline
-/// does not include AVX-512.
+fn select_find_hash() -> FindHash {
+    match crate::cpu_dispatch::u16_width() {
+        #[cfg(target_arch = "x86_64")]
+        crate::cpu_dispatch::VectorWidth::Wide => find_hash_wide,
+        #[cfg(target_arch = "x86_64")]
+        crate::cpu_dispatch::VectorWidth::Narrow => find_hash_narrow,
+        _ => find_hash_scalar,
+    }
+}
+
+fn select_relative_hash() -> RelativeHash {
+    match crate::cpu_dispatch::f32_width() {
+        #[cfg(target_arch = "x86_64")]
+        crate::cpu_dispatch::VectorWidth::Wide => relative_hash_local_wide,
+        #[cfg(target_arch = "x86_64")]
+        crate::cpu_dispatch::VectorWidth::Narrow => relative_hash_local_narrow,
+        _ => relative_hash_local_scalar,
+    }
+}
+
+/// SAFETY: caller guarantees AVX-512F + AVX-512BW at runtime and `hashes`
+/// spans `scan_lanes` elements.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
-unsafe fn find_hash_avx512(
+unsafe fn find_hash_wide(
     hashes: *const u16,
     scan_lanes: usize,
     len: u8,
@@ -374,30 +407,24 @@ unsafe fn find_hash_avx512(
     // Scan only the chunks that cover valid entries (len), not the full
     // scan_lanes capacity. At avg_deg ~60 (l_max 128) this halves the scan.
     let chunks = len.div_ceil(32).min(scan_lanes / 32);
-    let mut combined: u128 = 0;
     for chunk in 0..chunks {
         let v = _mm512_loadu_si512(hashes.add(chunk * 32) as *const __m512i);
-        let m = _mm512_cmpeq_epi16_mask(v, t) as u128;
-        combined |= m << (chunk * 32);
+        let mask = _mm512_cmpeq_epi16_mask(v, t);
+        if mask != 0 {
+            let lane = chunk * 32 + mask.trailing_zeros() as usize;
+            if lane < len {
+                return Some(lane);
+            }
+        }
     }
-    let len_mask: u128 = if len >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << len) - 1
-    };
-    let valid = combined & len_mask;
-    if valid != 0 {
-        Some(valid.trailing_zeros() as usize)
-    } else {
-        None
-    }
+    None
 }
 
 /// SAFETY: caller guarantees AVX2 at runtime. AVX2 is the workspace baseline
 /// (`x86-64-v3`) so this path covers every supported deployment.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn find_hash_avx2(
+unsafe fn find_hash_narrow(
     hashes: *const u16,
     scan_lanes: usize,
     len: u8,
@@ -424,13 +451,13 @@ unsafe fn find_hash_avx2(
 
 /// SAFETY: `hashes` must point at `len` valid `u16` slots.
 #[inline(always)]
-unsafe fn find_hash_scalar(hashes: *const u16, len: usize, target: u16) -> Option<usize> {
-    for i in 0..len {
-        if *hashes.add(i) == target {
-            return Some(i);
-        }
-    }
-    None
+unsafe fn find_hash_scalar(
+    hashes: *const u16,
+    _scan_lanes: usize,
+    len: u8,
+    target: u16,
+) -> Option<usize> {
+    (0..len as usize).find(|&i| *hashes.add(i) == target)
 }
 
 // ─── relative_hash_local: AoSoA-friendly per-pair sketch comparison ───────────
@@ -439,27 +466,10 @@ unsafe fn find_hash_scalar(hashes: *const u16, len: usize, target: u16) -> Optio
 // `sign(dst[j] - src[j])` for j in 0..m. Used as the in-leaf LSH bucket for HP
 // insertion (the "local sketch" cache hits L1).
 //
-// Runtime SIMD dispatch via `cpu_dispatch::tier()` — the previous
-// implementation cfg-gated the AVX-512 path on compile-time `target_feature =
-// "avx512f"`, which was DEAD CODE in shipped binaries because the workspace
-// pins x86-64-v3 (AVX-2). Switching to runtime dispatch via `#[target_feature]
-// unsafe fn` emits every tier in the binary regardless of build target.
+// The implementation is selected once when HashPrune is constructed.
 
 /// SAFETY: `src` / `dst` must point at `m` valid `f32` slots, `m <= 16`.
-#[inline]
-unsafe fn relative_hash_local(src: *const f32, dst: *const f32, m: usize) -> u16 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        match crate::cpu_dispatch::tier() {
-            crate::cpu_dispatch::SimdTier::Avx512 => {
-                return relative_hash_local_avx512(src, dst, m);
-            }
-            crate::cpu_dispatch::SimdTier::Avx2 => {
-                return relative_hash_local_avx2(src, dst, m);
-            }
-            crate::cpu_dispatch::SimdTier::Scalar => {}
-        }
-    }
+unsafe fn relative_hash_local_scalar(src: *const f32, dst: *const f32, m: usize) -> u16 {
     let mut h: u16 = 0;
     for j in 0..m {
         let diff = *dst.add(j) - *src.add(j);
@@ -476,7 +486,7 @@ unsafe fn relative_hash_local(src: *const f32, dst: *const f32, m: usize) -> u16
 /// SAFETY: caller guarantees AVX2 at runtime. `m <= 16` enforced upstream.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn relative_hash_local_avx2(src: *const f32, dst: *const f32, m: usize) -> u16 {
+unsafe fn relative_hash_local_narrow(src: *const f32, dst: *const f32, m: usize) -> u16 {
     use std::arch::x86_64::*;
     let mut h: u16 = 0;
     let mut j = 0usize;
@@ -499,7 +509,7 @@ unsafe fn relative_hash_local_avx2(src: *const f32, dst: *const f32, m: usize) -
 /// SAFETY: caller guarantees AVX-512F at runtime. `m <= 16` enforced upstream.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-unsafe fn relative_hash_local_avx512(src: *const f32, dst: *const f32, m: usize) -> u16 {
+unsafe fn relative_hash_local_wide(src: *const f32, dst: *const f32, m: usize) -> u16 {
     use std::arch::x86_64::*;
     let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
     let dst_v = _mm512_maskz_loadu_ps(kmask, dst);
@@ -570,6 +580,7 @@ unsafe fn insert_locked(
     neighbor: u32,
     distance: f32,
     l_max: u8,
+    find_hash: FindHash,
 ) -> bool {
     let dist_key = ordered_key(distance);
 
@@ -577,7 +588,7 @@ unsafe fn insert_locked(
         return false;
     }
 
-    if let Some(idx) = find_hash_simd(cold.hashes, cold.scan_lanes, hot.len, hash) {
+    if let Some(idx) = find_hash(cold.hashes, cold.scan_lanes, hot.len, hash) {
         if dist_key < *cold.distances.add(idx) {
             let was_farthest = idx == hot.farthest_idx as usize;
             *cold.neighbors.add(idx) = neighbor;
@@ -615,9 +626,8 @@ unsafe fn insert_locked(
 }
 
 /// Collect the reservoir's entries sorted by distance, truncated to `cap`.
-/// A thread-local scratch `Vec` (reused across calls, sized to the reservoir's
-/// runtime fill) replaces two heap allocs per call — at 10M points this saves
-/// 20M short-lived allocations on the extract path, with no fixed-size cap.
+/// A thread-local scratch `Vec`, sized to the reservoir's runtime fill and
+/// reused across calls, avoids per-row allocation during extraction.
 ///
 /// SAFETY: caller holds the slot lock; `distances` and `neighbors` are valid
 /// for `hot.len` elements.
@@ -650,10 +660,9 @@ unsafe fn collect_sorted_neighbors(
 }
 
 /// Collect the reservoir's neighbor ids, truncated to `cap`, WITHOUT sorting.
-/// The final-prune path recomputes fresh full-precision distances and re-sorts
-/// by them, so the reservoir's stored order (and its bf16 distances) are
-/// irrelevant here — reading only `neighbors` lets the caller drop the hashes
-/// and distances slabs before extraction.
+/// Reservoir order is intentionally not preserved. Reading only `neighbors`
+/// lets the caller drop the hashes and distances slabs before extraction; any
+/// ordering required by a later graph-finalization policy belongs to that caller.
 ///
 /// SAFETY: caller holds the slot lock (or owns the reservoir); `neighbors` is
 /// valid for `hot.len` elements.
@@ -670,7 +679,7 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
 // ─── HashPrune ────────────────────────────────────────────────────────────────
 
 pub(crate) struct HashPrune {
-    hot: Vec<HotSlot>,
+    hot: Vec<LockedHotSlot>,
     /// AoSoA hashes slab: `npoints * scan_lanes` u16.
     cold_hashes: MmapSlab<u16>,
     /// AoSoA distances slab (bf16 in u16): `npoints * scan_lanes`.
@@ -681,14 +690,17 @@ pub(crate) struct HashPrune {
     /// multiple of 32 so the AVX-512 / AVX-2 find_hash scan stays aligned.
     scan_lanes: usize,
     sketches: LshSketches,
-    max_degree: usize,
     l_max: usize,
+    find_hash: FindHash,
+    relative_hash: RelativeHash,
 }
 
 // SAFETY: HotSlot has interior mutability via RawMutex. The cold slabs are
 // plain bit-pattern arrays; each per-point slot is guarded by HotSlot[i].lock.
 // Disjoint-index parallel access is safe.
 unsafe impl Send for HashPrune {}
+// SAFETY: the same per-row lock protects all mutation through shared
+// references, and immutable sketches are safe to share.
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
@@ -698,38 +710,30 @@ impl HashPrune {
         ndims: usize,
         num_planes: usize,
         l_max: usize,
-        max_degree: usize,
         seed: u64,
-    ) -> Self {
+    ) -> ANNResult<Self> {
+        if !(1..=MAX_RESERVOIR_LEN).contains(&l_max) {
+            return Err(crate::config_error(format!(
+                "HashPrune l_max ({l_max}) must be in 1..={MAX_RESERVOIR_LEN}"
+            )));
+        }
+
         let t0 = std::time::Instant::now();
-        let sketches = sketches_from_data(data, npoints, ndims, num_planes, seed);
+        let sketches = sketches_from_data(data, npoints, ndims, num_planes, seed)?;
         tracing::debug!(
             elapsed_secs = t0.elapsed().as_secs_f64(),
             "sketch computation"
         );
-        Self::from_sketches(sketches, npoints, l_max, max_degree)
-    }
-
-    pub(crate) fn from_sketches(
-        sketches: LshSketches,
-        npoints: usize,
-        l_max: usize,
-        max_degree: usize,
-    ) -> Self {
-        assert!(
-            l_max <= MAX_RESERVOIR_LEN,
-            "HashPrune requires l_max ≤ {}, got {}",
-            MAX_RESERVOIR_LEN,
-            l_max
-        );
-
         let t1 = std::time::Instant::now();
         let scan_lanes = round_up_to_32(l_max).max(32);
 
-        // Hot slab: one HotSlot per point, contiguous. 160 MB at 10M.
-        let mut hot: Vec<HotSlot> = Vec::with_capacity(npoints);
+        // Hot slab: one HotSlot per point, contiguous.
+        let mut hot: Vec<LockedHotSlot> = Vec::new();
+        hot.try_reserve_exact(npoints)
+            .map_err(ANNError::opaque)
+            .map_err(|error| error.context(format!("reserving {npoints} HashPrune rows")))?;
         for _ in 0..npoints {
-            hot.push(HotSlot::new_empty());
+            hot.push(LockedHotSlot::new());
         }
 
         // Three cold slabs, each `npoints * scan_lanes` elements, allocated
@@ -737,12 +741,14 @@ impl HashPrune {
         // until first write). At scan_lanes = 64 the per-point cold cost is
         // 64 * 8 = 512 B; at scan_lanes = 128 it is 1024 B. Reservoirs that
         // never fill past the avg fill don't touch the high pages.
-        let total = npoints
-            .checked_mul(scan_lanes)
-            .expect("HashPrune slab size overflowed usize");
-        let cold_hashes = MmapSlab::<u16>::new_zeroed(total);
-        let cold_distances = MmapSlab::<u16>::new_zeroed(total);
-        let cold_neighbors = MmapSlab::<u32>::new_zeroed(total);
+        let total = npoints.checked_mul(scan_lanes).ok_or_else(|| {
+            crate::config_error(format!(
+                "HashPrune slab shape {npoints} x {scan_lanes} overflows usize"
+            ))
+        })?;
+        let cold_hashes = MmapSlab::<u16>::new_zeroed(total)?;
+        let cold_distances = MmapSlab::<u16>::new_zeroed(total)?;
+        let cold_neighbors = MmapSlab::<u32>::new_zeroed(total)?;
 
         // Hint hugepages on slabs > 2 MB so DTLB pressure scales with 2 MB
         // pages instead of 4 KB. Non-fatal on failure; no-op on kernels
@@ -752,7 +758,7 @@ impl HashPrune {
         // silently fall back — not worth it for a DTLB hint.
         #[cfg(target_os = "linux")]
         {
-            let hot_bytes = hot.len() * std::mem::size_of::<HotSlot>();
+            let hot_bytes = hot.len() * std::mem::size_of::<LockedHotSlot>();
             // SAFETY: each slab backs a contiguous allocation of the indicated
             // byte length. madvise is non-fatal on failure.
             unsafe {
@@ -784,16 +790,17 @@ impl HashPrune {
             "reservoir allocation"
         );
 
-        Self {
+        Ok(Self {
             hot,
             cold_hashes,
             cold_distances,
             cold_neighbors,
             scan_lanes,
             sketches,
-            max_degree,
             l_max,
-        }
+            find_hash: select_find_hash(),
+            relative_hash: select_relative_hash(),
+        })
     }
 
     /// Locks the per-slot mutex at `idx`, runs `f` with mutable access to the
@@ -809,11 +816,11 @@ impl HashPrune {
                 unsafe { (*self.hot_ptr).lock.unlock() };
             }
         }
-        debug_assert!(idx < self.hot.len());
+        assert!(idx < self.hot.len(), "HashPrune row index out of bounds");
         // SAFETY: idx bounds-checked above, so `idx * scan_lanes + scan_lanes`
         // is within each cold slab's capacity. UnlockOnDrop unlocks on panic.
         unsafe {
-            let hot_ptr = (self.hot.as_ptr() as *mut HotSlot).add(idx);
+            let hot_ptr = self.hot[idx].get();
             let off = idx * self.scan_lanes;
             let cold = ColdSlotPtrs {
                 hashes: (self.cold_hashes.as_ptr() as *mut u16).add(off),
@@ -827,47 +834,68 @@ impl HashPrune {
         }
     }
 
-    pub(crate) fn add_edges_grouped_local_sketches(
+    /// Merge one leaf's CSR edge list into the global reservoirs.
+    ///
+    /// Sketch layout and gathering are HashPrune implementation details; the
+    /// caller only lends a reusable buffer to avoid per-leaf allocation.
+    pub(crate) fn add_leaf_edges(
         &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-        local_sketches: &[f32],
+        point_ids: &[u32],
+        edge_offsets: &[u32],
+        edges: &[(u32, f32)],
     ) {
-        if group_data.is_empty() {
+        if edges.is_empty() {
             return;
         }
-        let n = local_indices.len();
+        LEAF_SKETCHES.with(|scratch| {
+            self.add_leaf_edges_with_scratch(
+                point_ids,
+                edge_offsets,
+                edges,
+                &mut scratch.borrow_mut(),
+            );
+        });
+    }
+
+    fn add_leaf_edges_with_scratch(
+        &self,
+        point_ids: &[u32],
+        edge_offsets: &[u32],
+        edges: &[(u32, f32)],
+        sketch_scratch: &mut Vec<f32>,
+    ) {
+        let n = point_ids.len();
         let m = self.sketches.num_planes();
         let l_max = self.l_max as u8;
-        debug_assert!(group_starts.len() >= n + 1);
-        debug_assert!(local_sketches.len() >= n * m);
+        debug_assert_eq!(edge_offsets.len(), n + 1);
+        let sketch_len = n * m;
+        sketch_scratch.resize(sketch_len, 0.0);
+        self.gather_sketches(point_ids, &mut sketch_scratch[..sketch_len]);
 
         for local_src in 0..n {
-            let start = group_starts[local_src] as usize;
-            let end = group_starts[local_src + 1] as usize;
+            let start = edge_offsets[local_src] as usize;
+            let end = edge_offsets[local_src + 1] as usize;
             if start == end {
                 continue;
             }
-            let global_src = local_indices[local_src] as usize;
+            let global_src = point_ids[local_src] as usize;
 
-            // Prefetch NEXT non-empty source's hot+cold slots (cf. Phase 3
-            // prefetch on prior AoS layout — same idea, narrower targets).
+            // Prefetch the next non-empty source's hot and cold slots.
             #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
             {
                 use std::arch::x86_64::*;
                 if local_src + 1 < n {
                     let mut nxt = local_src + 1;
-                    while nxt < n && group_starts[nxt] == group_starts[nxt + 1] {
+                    while nxt < n && edge_offsets[nxt] == edge_offsets[nxt + 1] {
                         nxt += 1;
                     }
                     if nxt < n {
-                        let nxt_global = local_indices[nxt] as usize;
+                        let nxt_global = point_ids[nxt] as usize;
                         let off = nxt_global * self.scan_lanes;
                         // SAFETY: nxt_global < npoints; off + scan_lanes
                         // bounded by slab capacity. Prefetch is non-fatal.
                         unsafe {
-                            let hot_p = self.hot.as_ptr().add(nxt_global) as *const i8;
+                            let hot_p = self.hot[nxt_global].get().cast::<i8>();
                             _mm_prefetch::<{ _MM_HINT_T0 }>(hot_p);
                             // hashes array covers `scan_lanes` u16 = scan_lanes*2 bytes;
                             // prefetch in 64-byte cache-line strides.
@@ -883,24 +911,27 @@ impl HashPrune {
                 }
             }
 
-            let src_sketch = &local_sketches[local_src * m..(local_src + 1) * m];
+            let src_sketch = &sketch_scratch[local_src * m..(local_src + 1) * m];
             self.with_locked(global_src, |hot, cold| {
-                for &(dst_local, dist) in &group_data[start..end] {
-                    let global_dst = local_indices[dst_local as usize];
+                for &(dst_local, dist) in &edges[start..end] {
+                    let global_dst = point_ids[dst_local as usize];
                     let dst_sketch =
-                        &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
+                        &sketch_scratch[dst_local as usize * m..(dst_local as usize + 1) * m];
                     debug_assert!(m <= 16, "num_planes <= 16 enforced by validate");
                     // SAFETY: m <= 16, sketches are m-elt slices.
-                    let hash =
-                        unsafe { relative_hash_local(src_sketch.as_ptr(), dst_sketch.as_ptr(), m) };
+                    let hash = unsafe {
+                        (self.relative_hash)(src_sketch.as_ptr(), dst_sketch.as_ptr(), m)
+                    };
                     // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
-                    unsafe { insert_locked(hot, cold, hash, global_dst, dist, l_max) };
+                    unsafe {
+                        insert_locked(hot, cold, hash, global_dst, dist, l_max, self.find_hash)
+                    };
                 }
             });
         }
     }
 
-    pub(crate) fn gather_sketches_into(&self, indices: &[u32], out: &mut [f32]) {
+    fn gather_sketches(&self, indices: &[u32], out: &mut [f32]) {
         let m = self.sketches.num_planes();
         let src = self.sketches.sketches();
         debug_assert_eq!(out.len(), indices.len() * m);
@@ -910,18 +941,8 @@ impl HashPrune {
         }
     }
 
-    pub(crate) fn num_planes(&self) -> usize {
-        self.sketches.num_planes()
-    }
-
-    /// Consume self and parallel-extract one per-point row from the cold slabs.
-    /// `cap` truncates each reservoir; `project` maps the sorted
-    /// `(neighbor, dist_f32)` pairs into the caller's output type.
-    fn extract_into<R, F>(self, cap: usize, project: F) -> Vec<Vec<R>>
-    where
-        R: Send,
-        F: Fn((u32, f32)) -> R + Sync,
-    {
+    /// Extract the nearest `max_degree` candidates retained by HashPrune.
+    pub(crate) fn into_nearest_lists(self, max_degree: usize) -> Vec<Vec<u32>> {
         let scan_lanes = self.scan_lanes;
         drop(self.sketches);
         let HashPrune {
@@ -936,31 +957,27 @@ impl HashPrune {
             .into_par_iter()
             .map(|i| {
                 let off = i * scan_lanes;
-                // SAFETY: i < hot.len() == npoints; off + scan_lanes within slab.
+                // SAFETY: extraction owns every row, so no mutation remains.
+                let hot = unsafe { &*hot[i].get() };
+                // SAFETY: i < hot.len() == npoints, so off + scan_lanes is
+                // within both cold slabs.
                 let nbrs = unsafe {
                     collect_sorted_neighbors(
-                        &hot[i],
+                        hot,
                         cold_distances.as_ptr().wrapping_add(off),
                         cold_neighbors.as_ptr().wrapping_add(off),
-                        cap,
+                        max_degree,
                     )
                 };
-                nbrs.into_iter().map(&project).collect()
+                nbrs.into_iter().map(|(id, _)| id).collect()
             })
             .collect_installed()
     }
 
-    pub(crate) fn extract_graph(self) -> Vec<Vec<u32>> {
-        let cap = self.max_degree;
-        self.extract_into(cap, |(id, _)| id)
-    }
-
-    /// Extract each point's reservoir as ids only (`Vec<Vec<u32>>`), for the
-    /// final-prune path. Drops the hashes and distances slabs (2/3 of the
-    /// reservoir) BEFORE materializing the copy, so only the neighbors slab
-    /// overlaps it — and emits bare `u32` ids since final-prune recomputes
-    /// distances and ignores both the stored distance and the reservoir order.
-    pub(crate) fn extract_graph_ids(self) -> Vec<Vec<u32>> {
+    /// Extract each point's full reservoir as candidate IDs. Drops the hashes
+    /// and distances slabs (2/3 of the reservoir) before materializing the copy,
+    /// so only the neighbors slab overlaps it.
+    pub(crate) fn into_candidate_lists(self) -> Vec<Vec<u32>> {
         let cap = self.l_max;
         let scan_lanes = self.scan_lanes;
         drop(self.sketches);
@@ -979,369 +996,16 @@ impl HashPrune {
         (0..hot.len())
             .into_par_iter()
             .map(|i| {
-                let neighbors =
-                    (cold_neighbors.as_ptr() as *const u32).wrapping_add(i * scan_lanes);
+                let neighbors = cold_neighbors.as_ptr().wrapping_add(i * scan_lanes);
+                // SAFETY: extraction owns every row; no mutation remains.
+                let hot = unsafe { &*hot[i].get() };
                 // SAFETY: i < hot.len() == npoints; the row spans scan_lanes
-                // slots, hot[i].len <= l_max <= scan_lanes are valid u32.
-                unsafe { collect_neighbor_ids(&hot[i], neighbors, cap) }
+                // slots and hot.len <= l_max <= scan_lanes.
+                unsafe { collect_neighbor_ids(hot, neighbors, cap) }
             })
             .collect_installed()
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Reservoir {
-        hot: HotSlot,
-        hashes: Vec<u16>,
-        distances: Vec<u16>,
-        neighbors: Vec<u32>,
-        scan_lanes: usize,
-        l_max: u8,
-    }
-
-    impl Reservoir {
-        fn new(l_max: usize) -> Self {
-            assert!(l_max <= MAX_RESERVOIR_LEN);
-            let scan_lanes = round_up_to_32(l_max).max(32);
-            Self {
-                hot: HotSlot::new_empty(),
-                hashes: vec![0; scan_lanes],
-                distances: vec![0; scan_lanes],
-                neighbors: vec![0; scan_lanes],
-                scan_lanes,
-                l_max: l_max as u8,
-            }
-        }
-
-        fn cold(&self) -> ColdSlotPtrs {
-            ColdSlotPtrs {
-                hashes: self.hashes.as_ptr() as *mut u16,
-                distances: self.distances.as_ptr() as *mut u16,
-                neighbors: self.neighbors.as_ptr() as *mut u32,
-                scan_lanes: self.scan_lanes,
-            }
-        }
-
-        fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
-            let cold = self.cold();
-            // SAFETY: the test owns the reservoir and holds its only mutable reference.
-            unsafe { insert_locked(&mut self.hot, cold, hash, neighbor, distance, self.l_max) }
-        }
-
-        fn neighbors(&self) -> Vec<(u32, f32)> {
-            let cold = self.cold();
-            // SAFETY: the test owns the reservoir; all cold slabs span scan_lanes entries.
-            unsafe {
-                collect_sorted_neighbors(&self.hot, cold.distances, cold.neighbors, usize::MAX)
-            }
-        }
-
-        fn len(&self) -> usize {
-            self.hot.len as usize
-        }
-
-        fn is_empty(&self) -> bool {
-            self.hot.len == 0
-        }
-    }
-
-    fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
-        let hash = hp.sketches.relative_hash(src, dst);
-        let l_max = hp.l_max as u8;
-        hp.with_locked(src, |hot, cold| {
-            // SAFETY: with_locked guards the row and supplies valid cold-slab pointers.
-            unsafe { insert_locked(hot, cold, hash, dst as u32, distance, l_max) };
-        });
-    }
-
-    #[test]
-    fn test_relative_hash_local_avx2_matches_scalar_semantics() {
-        #[cfg(target_arch = "x86_64")]
-        {
-            if !is_x86_feature_detected!("avx2") {
-                return;
-            }
-
-            let src = [
-                1.0, -2.0, 0.0, 7.5, -0.0, 3.25, -9.0, 4.0, 8.0, -1.5, 2.0, 0.0, 6.0, -3.0, 5.5,
-                -7.25,
-            ];
-            let dst = [
-                1.0, -3.0, 0.5, 7.0, 0.0, 3.25, -8.0, -4.0, 9.0, -1.5, -2.0, -0.0, 5.0, -2.0, 5.5,
-                -8.0,
-            ];
-
-            for m in 0..=16 {
-                let mut expected = 0u16;
-                for j in 0..m {
-                    let diff: f32 = dst[j] - src[j];
-                    expected |= ((!diff.is_sign_negative()) as u16) << j;
-                }
-
-                let actual = unsafe { relative_hash_local_avx2(src.as_ptr(), dst.as_ptr(), m) };
-                assert_eq!(actual, expected, "m={m}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_reservoir_basic() {
-        let mut reservoir = Reservoir::new(3);
-        assert!(reservoir.is_empty());
-
-        assert!(reservoir.insert(0, 1, 1.0));
-        assert!(reservoir.insert(1, 2, 2.0));
-        assert!(reservoir.insert(2, 3, 3.0));
-        assert_eq!(reservoir.len(), 3);
-
-        assert!(reservoir.insert(3, 4, 0.5));
-        assert_eq!(reservoir.len(), 3);
-
-        let neighbors = reservoir.neighbors();
-        assert!(!neighbors.iter().any(|(id, _)| *id == 3));
-        assert!(neighbors.iter().any(|(id, _)| *id == 4));
-    }
-
-    #[test]
-    fn test_reservoir_same_hash_keeps_closer() {
-        let mut reservoir = Reservoir::new(10);
-
-        assert!(reservoir.insert(0, 1, 2.0));
-        assert_eq!(reservoir.len(), 1);
-
-        assert!(reservoir.insert(0, 2, 1.0));
-        assert_eq!(reservoir.len(), 1);
-
-        let neighbors = reservoir.neighbors();
-        assert_eq!(neighbors[0].0, 2);
-        assert_eq!(neighbors[0].1, 1.0);
-
-        assert!(!reservoir.insert(0, 3, 5.0));
-        assert_eq!(reservoir.len(), 1);
-    }
-
-    #[test]
-    fn test_lsh_sketches() {
-        let data = vec![1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0];
-        let sketches = sketches_from_data(&data, 4, 2, 4, 42);
-
-        let h00 = sketches.relative_hash(0, 0);
-        assert_eq!(h00, (1u16 << 4) - 1);
-
-        let h01 = sketches.relative_hash(0, 1);
-        let h02 = sketches.relative_hash(0, 2);
-        let _ = (h01, h02);
-    }
-
-    #[test]
-    fn test_hash_prune_end_to_end() {
-        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-
-        let hp = HashPrune::new(&data, 4, 2, 4, 10, 3, 42);
-
-        add_edge(&hp, 0, 1, 1.0);
-        add_edge(&hp, 0, 2, 1.0);
-        add_edge(&hp, 0, 3, 1.414);
-        add_edge(&hp, 1, 0, 1.0);
-        add_edge(&hp, 1, 3, 1.0);
-        add_edge(&hp, 2, 0, 1.0);
-        add_edge(&hp, 2, 3, 1.0);
-        add_edge(&hp, 3, 1, 1.0);
-        add_edge(&hp, 3, 2, 1.0);
-
-        let graph = hp.extract_graph();
-        assert_eq!(graph.len(), 4);
-
-        for (i, neighbors) in graph.iter().enumerate() {
-            assert!(!neighbors.is_empty(), "point {} has no neighbors", i);
-        }
-    }
-
-    #[test]
-    fn test_reservoir_lazy_allocation() {
-        let mut res = Reservoir::new(5);
-        assert!(res.is_empty());
-        assert!(res.insert(0, 1, 1.0));
-        assert_eq!(res.len(), 1);
-    }
-
-    #[test]
-    fn test_reservoir_insert_then_evict_cycle() {
-        let mut res = Reservoir::new(3);
-        res.insert(0, 10, 3.0);
-        res.insert(1, 11, 2.0);
-        res.insert(2, 12, 1.0);
-        assert_eq!(res.len(), 3);
-        assert!(res.insert(3, 13, 0.5));
-        assert_eq!(res.len(), 3);
-        let neighbors = res.neighbors();
-        assert!(neighbors.iter().all(|&(_, d)| d <= 2.0));
-    }
-
-    #[test]
-    fn test_reservoir_all_same_hash() {
-        let mut res = Reservoir::new(5);
-        res.insert(0, 1, 3.0);
-        res.insert(0, 2, 2.0);
-        res.insert(0, 3, 1.0);
-        assert_eq!(res.len(), 1);
-        let neighbors = res.neighbors();
-        assert_eq!(neighbors[0].0, 3);
-        assert_eq!(neighbors[0].1, 1.0);
-    }
-
-    #[test]
-    fn test_reservoir_all_same_distance() {
-        let mut res = Reservoir::new(5);
-        res.insert(0, 1, 1.0);
-        res.insert(1, 2, 1.0);
-        res.insert(2, 3, 1.0);
-        assert_eq!(res.len(), 3);
-    }
-
-    #[test]
-    fn test_hash_prune_parallel_safety() {
-        use rayon::prelude::*;
-        let data = vec![0.0f32; 100 * 4];
-        let hp = HashPrune::new(&data, 100, 4, 4, 10, 5, 42);
-        (0..50).into_par_iter().for_each_installed(|i| {
-            add_edge(&hp, i, (i + 1) % 100, 1.0);
-            add_edge(&hp, (i + 1) % 100, i, 1.0);
-        });
-        let graph = hp.extract_graph();
-        assert_eq!(graph.len(), 100);
-    }
-
-    #[test]
-    fn test_hash_prune_high_degree_limit() {
-        let data = vec![0.0f32; 10 * 2];
-        let hp = HashPrune::new(&data, 10, 2, 4, 10, 1, 42);
-        for i in 0..10 {
-            for j in 0..10 {
-                if i != j {
-                    add_edge(&hp, i, j, (i as f32 - j as f32).abs());
-                }
-            }
-        }
-        let graph = hp.extract_graph();
-        for neighbors in &graph {
-            assert!(
-                neighbors.len() <= 1,
-                "max_degree=1 should limit to 1 neighbor"
-            );
-        }
-    }
-
-    #[test]
-    fn test_hash_prune_extract_sorted() {
-        let data = vec![0.0f32; 4 * 2];
-        let hp = HashPrune::new(&data, 4, 2, 4, 10, 3, 42);
-        add_edge(&hp, 0, 1, 3.0);
-        add_edge(&hp, 0, 2, 1.0);
-        add_edge(&hp, 0, 3, 2.0);
-        let graph = hp.extract_graph();
-        assert!(!graph[0].is_empty());
-    }
-
-    #[test]
-    fn test_lsh_sketches_different_seeds_give_different_hashes() {
-        let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
-        let s1 = sketches_from_data(&data, 32, 4, 12, 42);
-        let s2 = sketches_from_data(&data, 32, 4, 12, 99);
-        let any_diff =
-            (0..32).any(|p| (p + 1..32).any(|c| s1.relative_hash(p, c) != s2.relative_hash(p, c)));
-        assert!(
-            any_diff,
-            "different seeds should give at least one different pair hash"
-        );
-    }
-
-    #[test]
-    fn test_relative_hash_is_asymmetric() {
-        let data = vec![1.0f32, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let sketches = sketches_from_data(&data, 3, 2, 4, 42);
-        let h01 = sketches.relative_hash(0, 1);
-        let h10 = sketches.relative_hash(1, 0);
-        assert_ne!(
-            h01, h10,
-            "relative_hash must be asymmetric for distinct points"
-        );
-    }
-
-    #[test]
-    fn test_extract_graph_ids_returns_full_reservoir() {
-        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
-        add_edge(&hp, 0, 1, 1.0);
-        add_edge(&hp, 0, 2, 1.0);
-        add_edge(&hp, 0, 3, 1.414);
-        add_edge(&hp, 1, 0, 1.0);
-        add_edge(&hp, 2, 0, 1.0);
-        add_edge(&hp, 3, 0, 1.414);
-
-        let full = hp.extract_graph_ids();
-        assert_eq!(full.len(), 4);
-        assert!(!full[0].is_empty(), "node 0 should have neighbors");
-        // ids-only, unsorted: every id is one of node 0's inserted neighbors
-        // {1,2,3} with no duplicates (the LSH bucket may keep-closer-collapse a
-        // colliding pair on this tiny 4-plane sketch, so we don't assert all 3).
-        let mut n0 = full[0].clone();
-        n0.sort_unstable();
-        let deduped = {
-            let mut d = n0.clone();
-            d.dedup();
-            d
-        };
-        assert_eq!(n0, deduped, "no duplicate ids in a reservoir row");
-        assert!(
-            n0.iter().all(|&id| (1..=3).contains(&id)),
-            "node 0 ids must be a subset of its inserted neighbors {{1,2,3}}, got {:?}",
-            n0
-        );
-    }
-
-    #[test]
-    fn test_extract_graph_truncates_to_max_degree() {
-        let data = vec![0.0f32; 4 * 2];
-        let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
-        add_edge(&hp, 0, 1, 1.0);
-        add_edge(&hp, 0, 2, 2.0);
-        add_edge(&hp, 0, 3, 3.0);
-
-        let graph = hp.extract_graph();
-        assert!(
-            graph[0].len() <= 2,
-            "extract_graph should truncate to max_degree"
-        );
-    }
-
-    #[test]
-    fn test_reservoir_farthest_cache_after_eviction() {
-        let mut res = Reservoir::new(3);
-        res.insert(0, 10, 5.0);
-        res.insert(1, 11, 4.0);
-        res.insert(2, 12, 3.0);
-        assert!(res.insert(3, 13, 2.0));
-        assert!(res.insert(4, 14, 1.0));
-        let neighbors = res.neighbors();
-        assert_eq!(neighbors.len(), 3);
-        for &(_, d) in &neighbors {
-            assert!(d <= 3.1, "expected dist <= 3.0, got {}", d);
-        }
-    }
-
-    #[test]
-    fn test_reservoir_farthest_insert_before_farthest_idx() {
-        let mut res = Reservoir::new(4);
-        res.insert(5, 1, 1.0);
-        res.insert(10, 2, 3.0);
-        res.insert(15, 3, 2.0);
-        res.insert(3, 4, 0.5);
-        let neighbors = res.neighbors();
-        assert_eq!(neighbors.len(), 4);
-        assert_eq!(neighbors[0].0, 4);
-    }
-}
+mod tests;

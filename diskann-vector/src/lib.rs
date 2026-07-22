@@ -33,6 +33,7 @@ mod unaligned;
 pub use unaligned::{AsUnaligned, UnalignedSlice};
 
 pub mod bf16;
+
 pub mod contains;
 pub mod conversion;
 pub mod distance;

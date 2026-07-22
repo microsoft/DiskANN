@@ -6,13 +6,8 @@
 //! Random-hyperplane LSH (Locality-Sensitive Hashing) for `f32` vectors.
 //!
 //! Computes `Sketch(v) = [v · H_i for i in 0..num_planes]` where `H_i` are
-//! random unit-Gaussian hyperplanes. Two related hashes are exposed:
-//!
-//! - [`LshSketches::sign_hash`] — sign bits of a vector's own sketch, giving
-//!   each point a static `u16` bucket.
-//! - [`LshSketches::relative_hash`] — sign bits of `(Sketch(c) - Sketch(p))`,
-//!   which is the relative-bucket hash PiPNN's HashPrune uses to deduplicate
-//!   candidate neighbors across overlapping partitions.
+//! random unit-Gaussian hyperplanes. Callers use these sketches to derive
+//! application-specific hashes.
 //!
 //! Sketches are computed in parallel via rayon, with caller-provided per-point
 //! `f32` conversion (so f16, u8, etc. don't need a full upfront f32 copy).
@@ -26,12 +21,53 @@ use std::cell::RefCell;
 /// Maximum number of hyperplanes (the hash output is `u16`).
 pub const MAX_PLANES: usize = 16;
 
+/// Failure while constructing LSH sketches.
+#[derive(Debug)]
+pub enum LshSketchError<E> {
+    /// The relative hash must use between one and 16 bits.
+    InvalidPlaneCount { actual: usize, max: usize },
+    /// A matrix shape overflowed `usize`.
+    ShapeOverflow { rows: usize, columns: usize },
+    /// A sketch buffer could not be allocated.
+    Allocation(std::collections::TryReserveError),
+    /// The caller could not materialize a point in `f32`.
+    Fill(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for LshSketchError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPlaneCount { actual, max } => {
+                write!(f, "num_planes ({actual}) must be in 1..={max}")
+            }
+            Self::ShapeOverflow { rows, columns } => {
+                write!(f, "LSH matrix shape {rows} x {columns} overflows usize")
+            }
+            Self::Allocation(error) => write!(f, "LSH allocation failed: {error}"),
+            Self::Fill(error) => write!(f, "point conversion failed: {error}"),
+        }
+    }
+}
+
+impl<E> std::error::Error for LshSketchError<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidPlaneCount { .. } => None,
+            Self::ShapeOverflow { .. } => None,
+            Self::Allocation(error) => Some(error),
+            Self::Fill(error) => Some(error),
+        }
+    }
+}
+
 /// Precomputed LSH sketches for `npoints` vectors.
 pub struct LshSketches {
     num_planes: usize,
     /// Row-major `npoints × num_planes`: `sketches[i*m + j] = dot(point_i, plane_j)`.
     sketches: Vec<f32>,
-    npoints: usize,
 }
 
 impl LshSketches {
@@ -45,38 +81,71 @@ impl LshSketches {
     /// Caller MUST be inside a `rayon::ThreadPool::install(...)` scope —
     /// parallel work runs on the current pool.
     ///
-    /// Panics if `num_planes > MAX_PLANES`.
-    pub fn new<F>(npoints: usize, ndims: usize, num_planes: usize, seed: u64, fill_point: F) -> Self
+    /// Returns [`LshSketchError::InvalidPlaneCount`] unless `num_planes` fits
+    /// the non-empty 16-bit relative-hash representation.
+    pub fn try_new<F, E>(
+        npoints: usize,
+        ndims: usize,
+        num_planes: usize,
+        seed: u64,
+        fill_point: F,
+    ) -> Result<Self, LshSketchError<E>>
     where
-        F: Fn(usize, &mut [f32]) + Send + Sync,
+        F: Fn(usize, &mut [f32]) -> Result<(), E> + Send + Sync,
+        E: Send,
     {
-        assert!(
-            num_planes <= MAX_PLANES,
-            "LshSketches: num_planes ({}) exceeds MAX_PLANES ({})",
-            num_planes,
-            MAX_PLANES
-        );
+        if !(1..=MAX_PLANES).contains(&num_planes) {
+            return Err(LshSketchError::InvalidPlaneCount {
+                actual: num_planes,
+                max: MAX_PLANES,
+            });
+        }
+
+        let hyperplane_len =
+            num_planes
+                .checked_mul(ndims)
+                .ok_or(LshSketchError::ShapeOverflow {
+                    rows: num_planes,
+                    columns: ndims,
+                })?;
+        let sketch_len = npoints
+            .checked_mul(num_planes)
+            .ok_or(LshSketchError::ShapeOverflow {
+                rows: npoints,
+                columns: num_planes,
+            })?;
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         // Random unit-Gaussian hyperplanes, row-major `num_planes × ndims`.
-        let hyperplanes: Vec<f32> = (0..num_planes * ndims)
-            .map(|_| StandardNormal.sample(&mut rng))
-            .collect();
+        let mut hyperplanes: Vec<f32> = Vec::new();
+        hyperplanes
+            .try_reserve_exact(hyperplane_len)
+            .map_err(LshSketchError::Allocation)?;
+        hyperplanes.resize_with(hyperplane_len, || StandardNormal.sample(&mut rng));
 
-        let mut sketches = vec![0.0f32; npoints * num_planes];
+        let mut sketches = Vec::new();
+        sketches
+            .try_reserve_exact(sketch_len)
+            .map_err(LshSketchError::Allocation)?;
+        sketches.resize(sketch_len, 0.0f32);
 
         #[allow(clippy::disallowed_methods)] // see module docstring; caller is in pool.install().
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
-            .for_each(|(i, sketch_row)| {
+            .try_for_each(|(i, sketch_row)| {
                 thread_local! {
                     static SKETCH_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
                 }
                 SKETCH_BUF.with(|cell| {
                     let mut buf = cell.borrow_mut();
+                    if buf.len() < ndims {
+                        let additional = ndims - buf.len();
+                        buf.try_reserve(additional)
+                            .map_err(LshSketchError::Allocation)?;
+                    }
                     buf.resize(ndims, 0.0);
-                    fill_point(i, &mut buf[..ndims]);
+                    fill_point(i, &mut buf[..ndims]).map_err(LshSketchError::Fill)?;
                     for j in 0..num_planes {
                         let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
                         let mut dot = 0.0f32;
@@ -89,20 +158,14 @@ impl LshSketches {
                         }
                         sketch_row[j] = dot;
                     }
-                });
-            });
+                    Ok(())
+                })
+            })?;
 
-        Self {
+        Ok(Self {
             num_planes,
             sketches,
-            npoints,
-        }
-    }
-
-    /// Number of points indexed.
-    #[inline]
-    pub fn npoints(&self) -> usize {
-        self.npoints
+        })
     }
 
     /// Number of hyperplanes (also the number of bits in the hash).
@@ -118,45 +181,6 @@ impl LshSketches {
     pub fn sketches(&self) -> &[f32] {
         &self.sketches
     }
-
-    /// Hash candidate `c` relative to anchor `p`.
-    ///
-    /// `h_p(c) = concat(sign(Sketch(c)[j] - Sketch(p)[j]) for j in 0..num_planes)`.
-    /// Asymmetric: `h_p(c) != h_c(p)` for distinct points.
-    #[inline(always)]
-    pub fn relative_hash(&self, p: usize, c: usize) -> u16 {
-        debug_assert!(p < self.npoints);
-        debug_assert!(c < self.npoints);
-
-        let m = self.num_planes;
-        let p_sketch = &self.sketches[p * m..(p + 1) * m];
-        let c_sketch = &self.sketches[c * m..(c + 1) * m];
-
-        let mut hash: u16 = 0;
-        for (j, (&p_val, &c_val)) in p_sketch.iter().zip(c_sketch.iter()).enumerate() {
-            if c_val - p_val >= 0.0 {
-                hash |= 1u16 << j;
-            }
-        }
-        hash
-    }
-
-    /// Static sign hash of point `p`'s own sketch (independent of any anchor).
-    #[inline(always)]
-    pub fn sign_hash(&self, p: usize) -> u16 {
-        debug_assert!(p < self.npoints);
-
-        let m = self.num_planes;
-        let p_sketch = &self.sketches[p * m..(p + 1) * m];
-
-        let mut hash: u16 = 0;
-        for (j, &v) in p_sketch.iter().enumerate() {
-            if v >= 0.0 {
-                hash |= 1u16 << j;
-            }
-        }
-        hash
-    }
 }
 
 #[cfg(test)]
@@ -171,55 +195,86 @@ mod tests {
     }
 
     #[test]
-    fn relative_hash_is_asymmetric() {
+    fn computes_expected_sketch_shape() {
         let pool = build_pool(2);
         let data: Vec<f32> = vec![1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let sk = pool.install(|| {
-            LshSketches::new(3, 2, 4, 42, |i, out| {
-                out.copy_from_slice(&data[i * 2..(i + 1) * 2])
+        let sk = pool
+            .install(|| {
+                LshSketches::try_new(3, 2, 4, 42, |i, out| {
+                    out.copy_from_slice(&data[i * 2..(i + 1) * 2]);
+                    Ok::<_, std::convert::Infallible>(())
+                })
             })
-        });
-        let h01 = sk.relative_hash(0, 1);
-        let h10 = sk.relative_hash(1, 0);
-        assert_ne!(h01, h10);
-    }
-
-    #[test]
-    fn sign_hash_independent_of_anchor() {
-        let pool = build_pool(2);
-        let data: Vec<f32> = vec![1.0, 1.0, -1.0, -1.0];
-        let sk = pool.install(|| {
-            LshSketches::new(2, 2, 4, 42, |i, out| {
-                out.copy_from_slice(&data[i * 2..(i + 1) * 2])
-            })
-        });
-        // Two opposite points should hash to bitwise-inverted (or just different) signs.
-        assert_ne!(sk.sign_hash(0), sk.sign_hash(1));
+            .unwrap();
+        assert_eq!(sk.num_planes(), 4);
+        assert_eq!(sk.sketches().len(), 12);
     }
 
     #[test]
     fn different_seeds_change_hashes() {
         let pool = build_pool(2);
         let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
-        let sk1 = pool.install(|| {
-            LshSketches::new(32, 4, 12, 42, |i, out| {
-                out.copy_from_slice(&data[i * 4..(i + 1) * 4])
+        let build = |seed| {
+            pool.install(|| {
+                LshSketches::try_new(32, 4, 12, seed, |i, out| {
+                    out.copy_from_slice(&data[i * 4..(i + 1) * 4]);
+                    Ok::<_, std::convert::Infallible>(())
+                })
             })
-        });
-        let sk2 = pool.install(|| {
-            LshSketches::new(32, 4, 12, 99, |i, out| {
-                out.copy_from_slice(&data[i * 4..(i + 1) * 4])
-            })
-        });
-        let any_diff = (0..32)
-            .any(|p| (p + 1..32).any(|c| sk1.relative_hash(p, c) != sk2.relative_hash(p, c)));
-        assert!(any_diff);
+            .unwrap()
+        };
+        let sk1 = build(42);
+        let sk2 = build(99);
+        assert_ne!(sk1.sketches(), sk2.sketches());
     }
 
     #[test]
-    #[should_panic(expected = "num_planes")]
-    fn rejects_too_many_planes() {
+    fn try_new_propagates_fill_errors() {
+        #[derive(Debug, PartialEq)]
+        struct FillError;
+
         let pool = build_pool(1);
-        pool.install(|| LshSketches::new(1, 2, 17, 42, |_, _| {}));
+        let error = match pool.install(|| LshSketches::try_new(1, 2, 4, 42, |_, _| Err(FillError)))
+        {
+            Ok(_) => panic!("fill error should be propagated"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, LshSketchError::Fill(FillError)));
+    }
+
+    #[test]
+    fn try_new_reports_too_many_planes() {
+        let pool = build_pool(1);
+        let error = match pool.install(|| {
+            LshSketches::try_new(1, 2, 17, 42, |_, _| Ok::<_, std::convert::Infallible>(()))
+        }) {
+            Ok(_) => panic!("too many planes should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            LshSketchError::InvalidPlaneCount {
+                actual: 17,
+                max: 16
+            }
+        ));
+    }
+
+    #[test]
+    fn try_new_rejects_zero_planes() {
+        let pool = build_pool(1);
+        let error = match pool.install(|| {
+            LshSketches::try_new(1, 2, 0, 42, |_, _| Ok::<_, std::convert::Infallible>(()))
+        }) {
+            Ok(_) => panic!("zero planes should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            LshSketchError::InvalidPlaneCount { actual: 0, max: 16 }
+        ));
     }
 }

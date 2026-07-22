@@ -207,33 +207,6 @@ where
         writeln!(output, "{}", input)?;
         let (index, build_stats) = match &input.source {
             IndexSource::Build(build) => {
-                #[cfg(feature = "pipnn")]
-                let (index, build_stats) = match build.build_algorithm() {
-                    diskann_disk::BuildAlgorithm::PiPNN(config) => {
-                        build::run_pipnn_build::<T>(build, config, output)?
-                    }
-                    _ => run_build(
-                        build,
-                        common::FullPrecision,
-                        None,
-                        output,
-                        |data| {
-                            let index = diskann_async::new_index::<T, _>(
-                                build.try_as_config()?.build()?,
-                                build.inmem_parameters(data.nrows(), data.ncols()),
-                                common::NoDeletes,
-                            )?;
-                            build::set_start_points(
-                                index.provider(),
-                                data.as_view(),
-                                *build.start_point_strategy(),
-                            )?;
-                            Ok(index)
-                        },
-                        single_or_multi_insert,
-                    )?,
-                };
-                #[cfg(not(feature = "pipnn"))]
                 let (index, build_stats) = run_build(
                     build,
                     common::FullPrecision,
@@ -252,7 +225,14 @@ where
                         )?;
                         Ok(index)
                     },
-                    single_or_multi_insert,
+                    |index, strategy, data, input, output| {
+                        #[cfg(feature = "pipnn")]
+                        if let diskann_disk::BuildAlgorithm::PiPNN(config) = input.build_algorithm()
+                        {
+                            return build::pipnn_build(index, data, input, config);
+                        }
+                        single_or_multi_insert(index, strategy, data, input, output)
+                    },
                 )?;
 
                 // save the index if requested

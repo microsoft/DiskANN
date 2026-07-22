@@ -13,9 +13,9 @@ use std::collections::HashSet;
 use diskann::graph;
 use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 #[cfg(feature = "disk-index")]
-use diskann_disk::BuildAlgorithm;
-#[cfg(feature = "disk-index")]
 use diskann_disk::search::search_mode::SearchMode;
+#[cfg(feature = "disk-index")]
+use diskann_disk::BuildAlgorithm;
 #[cfg(feature = "disk-index")]
 use diskann_disk::QuantizationType;
 use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
@@ -66,16 +66,25 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) dim: usize,
     pub(crate) max_degree: usize,
     pub(crate) l_build: usize,
+    #[serde(default = "default_alpha")]
+    pub(crate) alpha: f32,
     pub(crate) num_threads: usize,
+    /// Graph-build RAM limit. PiPNN falls back to Vamana when its estimated
+    /// one-shot peak exceeds this value.
     pub(crate) build_ram_limit_gb: f64,
     pub(crate) num_pq_chunks: NonZeroUsize,
     #[cfg(feature = "disk-index")]
-    pub(crate) quantization_type: QuantizationType,
+    #[serde(default)]
+    pub(crate) quantization_type: Option<QuantizationType>,
     /// Build algorithm: "Vamana" (default) or "PiPNN" with config params.
     #[cfg(feature = "disk-index")]
     #[serde(default)]
     pub(crate) build_algorithm: BuildAlgorithm,
     pub(crate) save_path: String,
+}
+
+fn default_alpha() -> f32 {
+    diskann::graph::config::defaults::ALPHA
 }
 
 #[cfg(feature = "disk-index")]
@@ -236,10 +245,23 @@ impl DiskIndexBuild {
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
         }
-        if self.build_ram_limit_gb <= 0.0 {
+        if !self.alpha.is_finite() || self.alpha < 1.0 {
+            anyhow::bail!("alpha must be finite and at least 1.0");
+        }
+        if !self.build_ram_limit_gb.is_finite() || self.build_ram_limit_gb <= 0.0 {
             anyhow::bail!("build_ram_limit_gb must be strictly positive");
         }
-
+        #[cfg(feature = "disk-index")]
+        match &self.build_algorithm {
+            BuildAlgorithm::Vamana if self.quantization_type.is_none() => {
+                anyhow::bail!("quantization_type is required for Vamana builds");
+            }
+            #[cfg(feature = "pipnn")]
+            BuildAlgorithm::PiPNN(_) if self.quantization_type.is_some() => {
+                anyhow::bail!("PiPNN graph construction is full precision; omit quantization_type");
+            }
+            _ => {}
+        }
         // Relative save path with respect to output directory is not supported.
         if checker.output_directory().is_some() {
             anyhow::bail!("relative save_path with respect to output_directory is not supported");
@@ -344,11 +366,12 @@ impl Example for DiskIndexOperation {
             dim: 128,
             max_degree: 32,
             l_build: 50,
+            alpha: default_alpha(),
             num_threads: 8,
             build_ram_limit_gb: 16.0,
             num_pq_chunks: NonZeroUsize::new(16).unwrap(),
             #[cfg(feature = "disk-index")]
-            quantization_type: QuantizationType::PQ { num_chunks: 16 },
+            quantization_type: Some(QuantizationType::PQ { num_chunks: 16 }),
             #[cfg(feature = "disk-index")]
             build_algorithm: BuildAlgorithm::default(),
             save_path: "sample_index_l50_r32".to_string(),
@@ -430,27 +453,30 @@ impl DiskIndexBuild {
         write_field!(f, "Dim", self.dim)?;
         write_field!(f, "Max Degree", self.max_degree)?;
         write_field!(f, "L Build", self.l_build)?;
+        write_field!(f, "Alpha", self.alpha)?;
         write_field!(f, "Build Threads", self.num_threads)?;
         write_field!(f, "Build RAM Limit GB", self.build_ram_limit_gb)?;
         write_field!(f, "PQ Chunks", self.num_pq_chunks)?;
         #[cfg(feature = "disk-index")]
-        match &self.quantization_type {
-            QuantizationType::FP => write_field!(f, "Quantization", "full precision")?,
-            QuantizationType::PQ { num_chunks } => {
-                write_field!(f, "Quantization", format!("pq, chunks {num_chunks}"))?
-            }
-            QuantizationType::SQ {
-                nbits,
-                standard_deviation,
-            } => {
-                if let Some(sd) = standard_deviation {
-                    write_field!(
-                        f,
-                        "Quantization",
-                        format!("sq, nbits {nbits}, stdev {}", sd.into_inner())
-                    )?
-                } else {
-                    write_field!(f, "Quantization", format!("sq, nbits {nbits}"))?
+        if let Some(quantization_type) = &self.quantization_type {
+            match quantization_type {
+                QuantizationType::FP => write_field!(f, "Quantization", "full precision")?,
+                QuantizationType::PQ { num_chunks } => {
+                    write_field!(f, "Quantization", format!("pq, chunks {num_chunks}"))?
+                }
+                QuantizationType::SQ {
+                    nbits,
+                    standard_deviation,
+                } => {
+                    if let Some(sd) = standard_deviation {
+                        write_field!(
+                            f,
+                            "Quantization",
+                            format!("sq, nbits {nbits}, stdev {}", sd.into_inner())
+                        )?
+                    } else {
+                        write_field!(f, "Quantization", format!("sq, nbits {nbits}"))?
+                    }
                 }
             }
         }

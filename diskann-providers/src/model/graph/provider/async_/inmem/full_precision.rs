@@ -29,8 +29,8 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::M
 use crate::model::graph::provider::async_::{
     FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
     common::{
-        CreateVectorStore, FlatVectorAccess, FullPrecision, NoDeletes, NoStore, Panics,
-        PrefetchCacheLineLevel, SetElementHelper,
+        CreateVectorStore, FullPrecision, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
+        SetElementHelper,
     },
     inmem::DefaultProvider,
     postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -98,15 +98,6 @@ where
     /// Set the element at the given index.
     fn set_element(&self, id: &u32, element: &[T]) -> Result<(), ANNError> {
         unsafe { self.set_vector_sync(id.into_usize(), element) }
-    }
-}
-
-impl<T> FlatVectorAccess<T> for FullPrecisionStore<T>
-where
-    T: VectorRepr,
-{
-    unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
-        unsafe { FastMemoryVectorProviderAsync::<T>::flat_prefix(self, first_n) }
     }
 }
 

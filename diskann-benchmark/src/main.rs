@@ -742,10 +742,11 @@ mod tests {
     fn pipnn_cached_cli_fixtures() {
         let registry = registry().unwrap();
         for name in ["inmemory", "disk"] {
-            diskann_benchmark_runner::app::fixture::run(
+            diskann_benchmark_runner::fixture::run(
                 &project_directory().join("tests/pipnn").join(name),
                 &registry,
-            );
+            )
+            .unwrap();
         }
     }
 

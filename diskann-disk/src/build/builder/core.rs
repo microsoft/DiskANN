@@ -90,6 +90,15 @@ where
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
     pub(crate) fn create_disk_layout(&mut self) -> ANNResult<()> {
+        #[cfg(feature = "pipnn")]
+        if self.disk_build_param.pipnn_config().is_some() {
+            self.index_writer
+                .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
+            self.index_writer
+                .index_build_cleanup(self.storage_provider)?;
+            return Ok(());
+        }
+
         self.checkpoint_record_manager.execute_stage(
             WorkStage::WriteDiskLayout,
             WorkStage::End,

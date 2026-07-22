@@ -7,19 +7,19 @@
 //!
 //! The workspace clippy config bans direct `ParallelIterator::for_each` /
 //! `::collect` calls to force routing through a `RayonThreadPool::install`.
-//! PiPNN already runs entirely inside `pool.install(...)` (set up by
-//! `build_internal`), so the par-iter calls inside it already execute on
-//! the right pool — the lint just can't see that.
+//! PiPNN always runs inside the build-owned pool installed by `build_typed`,
+//! so the par-iter calls inside it already execute on that pool. The lint
+//! cannot observe the outer installation.
 //!
 //! These wrappers preserve the workspace convention (one `#[allow]` in a
 //! single helper module rather than scattered across hot paths) without
 //! requiring callers to pass a `&ThreadPool`. Use these from any function
-//! reachable from `build_internal`.
+//! reachable from `build_typed`.
 
 use rayon::iter::{FromParallelIterator, ParallelIterator};
 
 #[allow(clippy::disallowed_methods)]
-pub trait ParIterInstalled: ParallelIterator + Sized {
+pub(crate) trait ParIterInstalled: ParallelIterator + Sized {
     /// `for_each` — caller asserts execution is already inside `pool.install`.
     #[inline]
     fn for_each_installed<OP>(self, op: OP)

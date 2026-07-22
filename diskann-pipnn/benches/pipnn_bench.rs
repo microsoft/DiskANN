@@ -24,27 +24,6 @@ fn random_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
 // GEMM benchmarks
 // ==================
 
-fn bench_sgemm_aat(c: &mut Criterion) {
-    let mut group = c.benchmark_group("gemm/sgemm_aat");
-
-    for &(m, k) in &[(256, 128), (512, 128), (1024, 128), (512, 384)] {
-        let a = random_data(m, k, 42);
-        let mut result = vec![0.0f32; m * m];
-
-        group.throughput(Throughput::Elements((m * m) as u64));
-        group.bench_with_input(
-            BenchmarkId::new("m_x_k", format!("{}x{}", m, k)),
-            &(m, k),
-            |b, &(m, k)| {
-                b.iter(|| {
-                    gemm::sgemm_aat(&a, m, k, &mut result);
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
 fn bench_sgemm_abt(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemm/sgemm_abt");
 
@@ -59,7 +38,7 @@ fn bench_sgemm_abt(c: &mut Criterion) {
             &(m, n, k),
             |b_iter, &(m, n, k)| {
                 b_iter.iter(|| {
-                    gemm::sgemm_abt(&a, m, k, &b, n, &mut result);
+                    gemm::sgemm_abt(&a, m, k, &b, n, &mut result).unwrap();
                 });
             },
         );
@@ -111,7 +90,7 @@ fn bench_full_build(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(gemm_benches, bench_sgemm_aat, bench_sgemm_abt,);
+criterion_group!(gemm_benches, bench_sgemm_abt,);
 
 criterion_group!(build_benches, bench_full_build,);
 

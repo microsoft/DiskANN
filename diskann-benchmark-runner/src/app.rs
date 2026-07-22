@@ -484,179 +484,12 @@ impl App {
     }
 }
 
-/// Cached CLI-fixture support shared by benchmark applications.
-///
-/// A fixture directory contains `stdin.txt`, `stdout.txt`, and optional JSON files.
-/// Set `DISKANN_TEST=overwrite` to regenerate expected output.
-#[cfg(any(test, feature = "test-fixtures"))]
-#[doc(hidden)]
-pub mod fixture {
-    use std::{
-        ffi::OsString,
-        io::Write,
-        path::{Path, PathBuf},
-    };
-
-    use super::App;
-    use crate::{output, ux, Registry};
-
-    const ENV: &str = "DISKANN_TEST";
-    const STDIN: &str = "stdin.txt";
-    const STDOUT: &str = "stdout.txt";
-    const INPUT_FILE: &str = "input.json";
-    const OUTPUT_FILE: &str = "output.json";
-    const TOLERANCES_FILE: &str = "tolerances.json";
-    const REGRESSION_INPUT_FILE: &str = "regression_input.json";
-    const CHECK_OUTPUT_FILE: &str = "checks.json";
-    const FEATURES_FILE: &str = "features.txt";
-    const GENERATED_OUTPUTS: [&str; 2] = [OUTPUT_FILE, CHECK_OUTPUT_FILE];
-    const WORKSPACE: &str = "$WORKSPACE";
-
-    fn read(path: &Path) -> String {
-        ux::normalize(
-            std::fs::read_to_string(path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display())),
-        )
-    }
-
-    fn overwrite() -> bool {
-        match std::env::var(ENV) {
-            Ok(value) if value == "overwrite" => true,
-            Ok(value) => panic!("unknown {ENV} value {value:?}; expected \"overwrite\""),
-            Err(std::env::VarError::NotPresent) => false,
-            Err(error) => panic!("failed to read {ENV}: {error}"),
-        }
-    }
-
-    fn resolve(value: &str, input: &Path, dir: &Path, tempdir: &Path) -> PathBuf {
-        match value {
-            "$INPUT" => input.into(),
-            "$OUTPUT" => tempdir.join(OUTPUT_FILE),
-            "$SETUP_OUTPUT" => tempdir.join("setup-output.json"),
-            "$TOLERANCES" => dir.join(TOLERANCES_FILE),
-            "$REGRESSION_INPUT" => dir.join(REGRESSION_INPUT_FILE),
-            "$CHECK_OUTPUT" => tempdir.join(CHECK_OUTPUT_FILE),
-            _ => value.into(),
-        }
-    }
-
-    fn parse_apps(dir: &Path, input: &Path, tempdir: &Path) -> Vec<App> {
-        let apps: Vec<_> = read(&dir.join(STDIN))
-            .lines()
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(|line| {
-                let args = line
-                    .split_whitespace()
-                    .map(|value| OsString::from(resolve(value, input, dir, tempdir)));
-                App::try_parse_from(std::iter::once(OsString::from("test-app")).chain(args))
-                    .unwrap()
-            })
-            .collect();
-        assert!(
-            !apps.is_empty(),
-            "{}/stdin.txt has no command",
-            dir.display()
-        );
-        apps
-    }
-
-    fn materialize_input(dir: &Path, tempdir: &Path) -> PathBuf {
-        let input = dir.join(INPUT_FILE);
-        if !input.is_file() {
-            return input;
-        }
-
-        let source = read(&input);
-        if !source.contains(WORKSPACE) && !source.contains("$TEMPDIR") {
-            return input;
-        }
-
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .display()
-            .to_string()
-            .replace('\\', "/");
-        let tempdir_text = tempdir.display().to_string().replace('\\', "/");
-        let rendered = source
-            .replace("$TEMPDIR", &tempdir_text)
-            .replace(WORKSPACE, &workspace);
-        let materialized = tempdir.join(INPUT_FILE);
-        std::fs::write(&materialized, rendered).unwrap();
-        materialized
-    }
-
-    /// Read the optional feature list attached to a fixture.
-    pub fn features(dir: &Path) -> Vec<String> {
-        match std::fs::read_to_string(dir.join(FEATURES_FILE)) {
-            Ok(contents) => contents
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => panic!("failed to read fixture features: {error}"),
-        }
-    }
-
-    /// Run a cached CLI fixture with the supplied production registry.
-    pub fn run(dir: &Path, registry: &Registry) {
-        let tempdir = tempfile::tempdir().unwrap();
-        let input = materialize_input(dir, tempdir.path());
-        let apps = parse_apps(dir, &input, tempdir.path());
-        let mut buffer = output::Memory::new();
-
-        for (index, app) in apps.iter().enumerate() {
-            let last = index + 1 == apps.len();
-            let mut sink = output::Sink::new();
-            let mut target: &mut dyn crate::Output = if last { &mut buffer } else { &mut sink };
-            if let Err(error) = app.run(registry, target) {
-                if last {
-                    write!(target, "{error:?}").unwrap();
-                } else {
-                    panic!("fixture setup command failed: {error:?}");
-                }
-            }
-        }
-
-        let actual = ux::scrub_path(
-            ux::normalize(ux::strip_backtrace(
-                String::from_utf8(buffer.into_inner()).unwrap(),
-            )),
-            tempdir.path(),
-            "$TEMPDIR",
-        );
-        let expected_path = dir.join(STDOUT);
-        if overwrite() {
-            std::fs::write(&expected_path, &actual).unwrap();
-        } else {
-            assert_eq!(actual, read(&expected_path));
-        }
-
-        for filename in GENERATED_OUTPUTS {
-            let generated = tempdir.path().join(filename);
-            let expected = dir.join(filename);
-            match (overwrite(), generated.is_file(), expected.is_file()) {
-                (true, true, _) => {
-                    std::fs::copy(generated, expected).unwrap();
-                }
-                (true, false, true) => std::fs::remove_file(expected).unwrap(),
-                (false, true, true) => assert_eq!(read(&generated), read(&expected)),
-                (false, true, false) => panic!("{filename} was generated unexpectedly"),
-                (false, false, true) => panic!("{filename} was not generated"),
-                _ => {}
-            }
-        }
-    }
-}
-
 ///////////
 // Tests //
 ///////////
 
 /// The integration tests below look inside the `tests` directory for folders and use
-/// [`fixture`] for execution.
+/// [`crate::fixture`] for execution.
 ///
 /// ## Input Files
 ///
@@ -702,14 +535,14 @@ pub mod fixture {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::{app::fixture, registry, test::TestConfig};
+    use crate::{fixture, registry, test::TestConfig};
 
     fn run_specific_test(test_dir: &Path) {
         println!("running test in {:?}", test_dir);
         let mut registry = registry::Registry::new();
-        let config = TestConfig::with_features(fixture::features(test_dir));
+        let config = TestConfig::with_features(fixture::features(test_dir).unwrap());
         crate::test::register_benchmarks(&mut registry, &config).unwrap();
-        fixture::run(test_dir, &registry);
+        fixture::run(test_dir, &registry).unwrap();
     }
 
     fn run_all_tests_in(dir: &str) {

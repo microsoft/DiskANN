@@ -6,7 +6,7 @@
 use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{graph::AdjacencyList, provider::HasId, ANNError, ANNResult};
+use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
 use diskann_vector::contains::ContainsSimd;
 use tracing::trace;
 

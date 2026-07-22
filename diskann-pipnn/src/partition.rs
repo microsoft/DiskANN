@@ -8,9 +8,9 @@
 //! Recursively partitions the dataset into overlapping clusters using an iterative
 //! work-queue approach. All oversized clusters at each level are processed in parallel.
 
-use crate::rayon_util::ParIterInstalled;
-use crate::{PiPNNError, PiPNNResult};
-use diskann::utils::VectorRepr;
+use crate::{rayon_util::ParIterInstalled, PiPNNConfig};
+use diskann::{utils::VectorRepr, ANNError, ANNResult};
+use diskann_vector::{distance::Metric, Half};
 use rand::prelude::IndexedRandom;
 use rand::SeedableRng;
 use rayon::prelude::*;
@@ -18,7 +18,7 @@ use rayon::prelude::*;
 /// Maximum supported `fanout` value: hard upper bound on the size of the
 /// stack-allocated top-k tracker [`assign_to_leaders`] uses on its hot path.
 /// Enforced by [`crate::PiPNNConfig::validate`].
-pub const MAX_FANOUT: usize = 16;
+pub(crate) const MAX_FANOUT: usize = 16;
 
 /// A leaf partition containing indices into the original dataset.
 ///
@@ -29,114 +29,21 @@ pub(crate) struct Leaf {
     pub indices: Vec<u32>,
 }
 
-/// Configuration for RBC partitioning.
-///
-/// Fields are private; construct via [`PartitionConfig::new`], which enforces
-/// the partition-layer invariants on `fanout` and `leader_cap`.
-#[derive(Debug, Clone)]
-pub(crate) struct PartitionConfig {
-    pub(crate) c_max: usize,
-    pub(crate) c_min: usize,
-    pub(crate) p_samp: f64,
-    pub(crate) fanout: Vec<usize>,
-    pub(crate) metric: diskann_vector::distance::Metric,
-    pub(crate) leader_cap: usize,
-}
-
 /// Max iterations of the partition loop before remaining oversized clusters
 /// are accepted as leaves. Guards against pathological hub geometries.
 const MAX_PARTITION_ITER: usize = 30;
 
 /// Per-partition-level leader hardcap (paper recommendation). Static — there is
 /// no runtime override.
-pub(crate) const LEADER_CAP: usize = 1000;
+const LEADER_CAP: usize = 1000;
 
-impl PartitionConfig {
-    /// Construct a validated [`PartitionConfig`]. Returns an error if any
-    /// partition-layer invariant is violated (see [`Self::validate_params`]).
-    pub(crate) fn new(
-        c_max: usize,
-        c_min: usize,
-        p_samp: f64,
-        fanout: Vec<usize>,
-        metric: diskann_vector::distance::Metric,
-        leader_cap: usize,
-    ) -> PiPNNResult<Self> {
-        Self::validate_params(c_max, c_min, p_samp, &fanout, leader_cap)?;
-        Ok(Self {
-            c_max,
-            c_min,
-            p_samp,
-            fanout,
-            metric,
-            leader_cap,
-        })
-    }
-
-    /// Validate raw partition parameters without constructing.
-    ///
-    /// Owns the full set of partition-layer rules so that upstream config
-    /// validators (e.g. [`crate::PiPNNConfig::validate`]) can fail-fast on bad
-    /// inputs by calling this directly, while [`Self::new`] enforces the same
-    /// rules at construction time.
-    pub(crate) fn validate_params(
-        c_max: usize,
-        c_min: usize,
-        p_samp: f64,
-        fanout: &[usize],
-        leader_cap: usize,
-    ) -> PiPNNResult<()> {
-        if c_max == 0 {
-            return Err(PiPNNError::Config("c_max must be > 0".into()));
-        }
-        if c_min == 0 {
-            return Err(PiPNNError::Config("c_min must be > 0".into()));
-        }
-        if c_min > c_max {
-            return Err(PiPNNError::Config(format!(
-                "c_min ({}) must be <= c_max ({})",
-                c_min, c_max
-            )));
-        }
-        if !p_samp.is_finite() {
-            return Err(PiPNNError::Config("p_samp must be finite".into()));
-        }
-        if p_samp <= 0.0 || p_samp > 1.0 {
-            return Err(PiPNNError::Config(format!(
-                "p_samp ({}) must be in (0.0, 1.0]",
-                p_samp
-            )));
-        }
-        if fanout.is_empty() {
-            return Err(PiPNNError::Config("fanout must not be empty".into()));
-        }
-        if fanout.contains(&0) {
-            return Err(PiPNNError::Config("all fanout values must be > 0".into()));
-        }
-        if let Some(&over) = fanout.iter().find(|&&f| f > MAX_FANOUT) {
-            return Err(PiPNNError::Config(format!(
-                "fanout value {} exceeds MAX_FANOUT ({})",
-                over, MAX_FANOUT
-            )));
-        }
-        if leader_cap < 2 {
-            return Err(PiPNNError::Config(format!(
-                "leader_cap ({}) must be >= 2",
-                leader_cap
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Compute the number of leaders to sample, capped by leader_cap.
+/// Compute the number of leaders to sample.
 #[inline]
-fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
+fn sample_num_leaders(n: usize, p_samp: f64) -> usize {
     ((n as f64 * p_samp).ceil() as usize)
-        .clamp(2, leader_cap)
+        .clamp(2, LEADER_CAP)
         .min(n)
 }
-
 
 /// A cluster that needs further partitioning.
 struct WorkItem {
@@ -154,18 +61,19 @@ pub(crate) fn partition<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
     npoints: usize,
-    config: &PartitionConfig,
+    config: &PiPNNConfig,
+    metric: Metric,
     seed: u64,
-) -> Vec<Leaf> {
+) -> ANNResult<Vec<Leaf>> {
     let initial_indices: Vec<u32> = (0..npoints as u32).collect();
 
     if npoints <= config.c_max {
-        return vec![Leaf {
+        return Ok(vec![Leaf {
             indices: initial_indices,
-        }];
+        }]);
     }
 
-    let nl0 = sample_num_leaders(npoints, config.p_samp, config.leader_cap);
+    let nl0 = sample_num_leaders(npoints, config.p_samp);
     tracing::info!(npoints, leaders = nl0, ndims, "Partition start");
 
     let mut leaves: Vec<Leaf> = Vec::new();
@@ -208,10 +116,11 @@ pub(crate) fn partition<T: VectorRepr + Send + Sync>(
             break;
         }
 
-        let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
+        let results: ANNResult<Vec<(Vec<WorkItem>, Vec<Leaf>)>> = work
             .into_par_iter()
-            .map(|item| partition_one_level(data, ndims, config, item))
+            .map(|item| partition_one_level(data, ndims, config, metric, item))
             .collect_installed();
+        let results = results?;
 
         let total_work: usize = results.iter().map(|(w, _)| w.len()).sum();
         let total_leaves: usize = results.iter().map(|(_, l)| l.len()).sum();
@@ -224,30 +133,26 @@ pub(crate) fn partition<T: VectorRepr + Send + Sync>(
         work = next_work;
     }
 
-    // Global merge of sub-c_min leaves across all work items / levels.
-    // Eliminates the bug where per-call `merge_small` would leave one
-    // < c_min remainder per partition_one_level call (10s of thousands of
-    // tiny leaves at deep BFS levels in the prior implementation).
-    global_merge_small(leaves, config.c_min, config.c_max)
+    // Merge sub-c_min leaves once across all work items and levels.
+    Ok(global_merge_small(leaves, config.c_min, config.c_max))
 }
 
 /// Process one cluster: assign to leaders, emit oversized clusters as new work
 /// items and the rest (including under-c_min) as leaves. Cross-work-item small
-/// leaves are then combined by a single global `global_merge_small` pass at
-/// the end of `partition()` — replaces the per-call `merge_small` which left
-/// one < c_min remainder per work item (58K+ tiny leaves at deep levels).
+/// leaves are combined by one `global_merge_small` pass at the end.
 fn partition_one_level<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
-    config: &PartitionConfig,
+    config: &PiPNNConfig,
+    metric: Metric,
     item: WorkItem,
-) -> (Vec<WorkItem>, Vec<Leaf>) {
+) -> ANNResult<(Vec<WorkItem>, Vec<Leaf>)> {
     let n = item.indices.len();
     debug_assert!(n > config.c_max);
 
     // When recursion depth exceeds fanout.len(), collapse to a fanout of 1.
     let fanout = config.fanout.get(item.level).copied().unwrap_or(1).min(n);
-    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
+    let num_leaders = sample_num_leaders(n, config.p_samp);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
     let seed = item
@@ -265,18 +170,14 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
 
     // Assign each point to its `fanout` nearest leaders → per-leader clusters.
     let t_assign = std::time::Instant::now();
-    let clusters = assign_to_leaders(
-        data,
-        ndims,
-        &item.indices,
-        &leaders,
-        fanout,
-        config.metric,
-    );
+    let clusters = assign_to_leaders(data, ndims, &item.indices, &leaders, fanout, metric)?;
     let assign_us = t_assign.elapsed().as_micros() as u64;
 
     let n_oversized: usize = clusters.iter().filter(|c| c.len() > config.c_max).count();
-    let n_finished: usize = clusters.iter().filter(|c| !c.is_empty() && c.len() <= config.c_max).count();
+    let n_finished: usize = clusters
+        .iter()
+        .filter(|c| !c.is_empty() && c.len() <= config.c_max)
+        .count();
     tracing::debug!(
         level = item.level,
         n = n,
@@ -305,7 +206,7 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
             });
         }
     }
-    (next_work, finished_leaves)
+    Ok((next_work, finished_leaves))
 }
 
 // ─── Thread-local stripe buffers ─────────────────────────────────────────────
@@ -336,118 +237,138 @@ thread_local! {
 /// partition phase finishes, so they don't sum into the leaf-build /
 /// HP-extract peak RSS). Mirror of [`crate::leaf_build::release_thread_buffers`].
 pub(crate) fn release_thread_buffers() {
-    STRIPE_BUFS.with(|cell| {
-        let mut bufs = cell.borrow_mut();
-        bufs.p_data = Vec::new();
-        bufs.dots = Vec::new();
-    });
+    STRIPE_BUFS.with(|cell| *cell.borrow_mut() = StripeBuffers::new());
 }
 
-/// SIMD batch fp16 → fp32 gather. When `T` is `half::f16` (size 2, align 2),
-/// runtime-cast `&[T]` to `&[u16]` and use AVX-512 `vcvtph2ps` to convert
-/// 16 lanes per instruction. Faster than the generic `T::as_f32_into` path
-/// for fp16 input.
-///
-/// SAFETY: only enters the SIMD path when `size_of::<T>() == 2` and
-/// `align_of::<T>() == 2` — matches `half::f16`'s `repr(transparent) u16`
-/// layout. Falls back to the generic trait for other `T`.
-///
-/// Dispatch: runtime-checked via [`cpu_dispatch::tier`]. The SIMD bodies are
-/// `#[target_feature(enable = "...")]` `unsafe fn` so they generate the same
-/// codegen as the previous compile-time `#[cfg(target_feature)]` paths
-/// without requiring `target-cpu=native`. Hot-path call sites in
-/// `assign_to_leaders` hoist the tier check to a fn pointer once per
-/// closure invocation.
-#[inline]
-pub(crate) fn gather_f16_to_f32_simd<T: VectorRepr>(
-    src: &[T], gi: usize, ndims: usize, dst: &mut [f32],
-) {
-    debug_assert!(dst.len() >= ndims);
-    #[cfg(target_arch = "x86_64")]
-    {
-        if std::mem::size_of::<T>() == 2 && std::mem::align_of::<T>() == 2 {
-            use crate::cpu_dispatch::{tier, SimdTier};
-            let src_ptr = src.as_ptr() as *const u16;
-            match tier() {
-                SimdTier::Avx512 => {
-                    // SAFETY: tier()==Avx512 implies AVX-512F at runtime, so
-                    // the `#[target_feature]` precondition holds.
-                    unsafe { gather_f16_avx512(src_ptr, gi, ndims, dst.as_mut_ptr()) };
-                    return;
-                }
-                SimdTier::Avx2 => {
-                    // SAFETY: tier()==Avx2 implies AVX2 + F16C at runtime.
-                    unsafe { gather_f16_avx2_f16c(src_ptr, gi, ndims, dst.as_mut_ptr()) };
-                    return;
-                }
-                SimdTier::Scalar => {}
-            }
+/// Gather selected rows into a contiguous full-precision matrix. The exact
+/// half type gets a chunk-level SIMD path; every other representation uses
+/// its checked conversion implementation.
+pub(crate) fn gather_rows<T: VectorRepr + 'static>(
+    data: &[T],
+    indices: &[u32],
+    ndims: usize,
+    dst: &mut [f32],
+) -> ANNResult<()> {
+    let expected_len = indices
+        .len()
+        .checked_mul(ndims)
+        .ok_or_else(|| crate::config_error("gather output shape overflows usize"))?;
+    if dst.len() != expected_len {
+        return Err(crate::config_error(format!(
+            "gather output length mismatch: expected {expected_len}, got {}",
+            dst.len()
+        )));
+    }
+    for &index in indices {
+        let end = (index as usize + 1)
+            .checked_mul(ndims)
+            .ok_or_else(|| crate::config_error("row offset overflow during gather"))?;
+        if end > data.len() {
+            return Err(crate::config_error(format!(
+                "row index {index} is outside a {}-element matrix with {ndims} columns",
+                data.len()
+            )));
         }
     }
-    let src_row = &src[gi * ndims..(gi + 1) * ndims];
-    T::as_f32_into(src_row, &mut dst[..ndims]).unwrap_or_else(|e| panic!("VectorRepr::as_f32_into failed during partition: {}", e));
+
+    #[cfg(target_arch = "x86_64")]
+    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Half>() {
+        let src = data.as_ptr().cast::<u16>();
+        let width = crate::cpu_dispatch::half_width();
+        match width {
+            // SAFETY: feature selection checked AVX-512F; row bounds and the
+            // destination length were validated above.
+            crate::cpu_dispatch::VectorWidth::Wide => unsafe {
+                gather_half_rows_wide(src, indices, ndims, dst.as_mut_ptr())
+            },
+            // SAFETY: feature selection checked AVX2 + F16C and the same
+            // bounds validation applies.
+            crate::cpu_dispatch::VectorWidth::Narrow => unsafe {
+                gather_half_rows_narrow(src, indices, ndims, dst.as_mut_ptr())
+            },
+            crate::cpu_dispatch::VectorWidth::Scalar => {}
+        }
+        if !matches!(width, crate::cpu_dispatch::VectorWidth::Scalar) {
+            return Ok(());
+        }
+    }
+
+    for (&index, out) in indices.iter().zip(dst.chunks_exact_mut(ndims)) {
+        let start = index as usize * ndims;
+        T::as_f32_into(&data[start..start + ndims], out).map_err(Into::<ANNError>::into)?;
+    }
+    Ok(())
 }
 
 /// AVX-512 + F16C `vcvtph2ps` 16-lane fp16→fp32 row gather.
 ///
-/// SAFETY: caller must guarantee AVX-512F is available at runtime (matched
-/// by [`crate::cpu_dispatch::tier`] == `Avx512`). `src_ptr` must point to
-/// at least `(gi + 1) * ndims` `u16` elements, and `dst_ptr` must be writable
-/// for at least `ndims` `f32` elements.
+/// SAFETY: caller has checked AVX-512F and every input row bound; `dst_ptr`
+/// spans `indices.len() * ndims` writable `f32` values.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-unsafe fn gather_f16_avx512(src_ptr: *const u16, gi: usize, ndims: usize, dst_ptr: *mut f32) {
+unsafe fn gather_half_rows_wide(
+    src_ptr: *const u16,
+    indices: &[u32],
+    ndims: usize,
+    dst_ptr: *mut f32,
+) {
     use std::arch::x86_64::*;
     // SAFETY: f16 is repr(transparent) u16; the raw slice aliases the
     // same bytes. ndims-sized rows of f16 at `gi * ndims` stay in
     // bounds by `src.len() >= (gi + 1) * ndims` which the caller
     // enforces via `data[gi * ndims..(gi+1) * ndims]` slicing.
-    let row_ptr = src_ptr.add(gi * ndims);
-    let chunks = ndims / 16;
-    let tail = ndims - chunks * 16;
-    for c in 0..chunks {
-        let h = _mm256_loadu_si256(row_ptr.add(c * 16) as *const __m256i);
-        let f = _mm512_cvtph_ps(h);
-        _mm512_storeu_ps(dst_ptr.add(c * 16), f);
-    }
-    if tail > 0 {
-        let kmask: u16 = (1u16 << tail) - 1;
-        let h = _mm256_maskz_loadu_epi16(kmask, row_ptr.add(chunks * 16) as *const i16);
-        let f = _mm512_cvtph_ps(h);
-        _mm512_mask_storeu_ps(dst_ptr.add(chunks * 16), kmask, f);
+    for (row, &index) in indices.iter().enumerate() {
+        let row_ptr = src_ptr.add(index as usize * ndims);
+        let out = dst_ptr.add(row * ndims);
+        let chunks = ndims / 16;
+        let tail = ndims - chunks * 16;
+        for c in 0..chunks {
+            let h = _mm256_loadu_si256(row_ptr.add(c * 16) as *const __m256i);
+            _mm512_storeu_ps(out.add(c * 16), _mm512_cvtph_ps(h));
+        }
+        if tail > 0 {
+            let mut hbuf = [0u16; 16];
+            std::ptr::copy_nonoverlapping(row_ptr.add(chunks * 16), hbuf.as_mut_ptr(), tail);
+            let h = _mm256_loadu_si256(hbuf.as_ptr() as *const __m256i);
+            let mut fbuf = [0f32; 16];
+            _mm512_storeu_ps(fbuf.as_mut_ptr(), _mm512_cvtph_ps(h));
+            std::ptr::copy_nonoverlapping(fbuf.as_ptr(), out.add(chunks * 16), tail);
+        }
     }
 }
 
 /// AVX2 + F16C 8-lane fp16→fp32 row gather. F16C is independent of AVX-512
 /// and ships with every Ivy Bridge+ / AMD Bulldozer+ CPU.
 ///
-/// SAFETY: caller must guarantee AVX2 + F16C are available at runtime
-/// (matched by [`crate::cpu_dispatch::tier`] == `Avx2`). `src_ptr` must
-/// point to at least `(gi + 1) * ndims` `u16` elements, and `dst_ptr` must
-/// be writable for at least `ndims` `f32` elements.
+/// SAFETY: caller has checked AVX2 + F16C and every input row bound;
+/// `dst_ptr` spans `indices.len() * ndims` writable `f32` values.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,f16c")]
-unsafe fn gather_f16_avx2_f16c(src_ptr: *const u16, gi: usize, ndims: usize, dst_ptr: *mut f32) {
+unsafe fn gather_half_rows_narrow(
+    src_ptr: *const u16,
+    indices: &[u32],
+    ndims: usize,
+    dst_ptr: *mut f32,
+) {
     use std::arch::x86_64::*;
     // SAFETY: see AVX-512 helper; same alias + bounds invariants.
-    let row_ptr = src_ptr.add(gi * ndims);
-    let chunks = ndims / 8;
-    let tail = ndims - chunks * 8;
-    for c in 0..chunks {
-        let h = _mm_loadu_si128(row_ptr.add(c * 8) as *const __m128i);
-        let f = _mm256_cvtph_ps(h);
-        _mm256_storeu_ps(dst_ptr.add(c * 8), f);
-    }
-    if tail > 0 {
-        // AVX2 has no masked 16-bit load; copy tail through a tiny
-        // stack buffer (zero-padded) so the SIMD convert is safe.
-        let mut hbuf = [0u16; 8];
-        std::ptr::copy_nonoverlapping(row_ptr.add(chunks * 8), hbuf.as_mut_ptr(), tail);
-        let h = _mm_loadu_si128(hbuf.as_ptr() as *const __m128i);
-        let f = _mm256_cvtph_ps(h);
-        let mut fbuf = [0f32; 8];
-        _mm256_storeu_ps(fbuf.as_mut_ptr(), f);
-        std::ptr::copy_nonoverlapping(fbuf.as_ptr(), dst_ptr.add(chunks * 8), tail);
+    for (row, &index) in indices.iter().enumerate() {
+        let row_ptr = src_ptr.add(index as usize * ndims);
+        let out = dst_ptr.add(row * ndims);
+        let chunks = ndims / 8;
+        let tail = ndims - chunks * 8;
+        for c in 0..chunks {
+            let h = _mm_loadu_si128(row_ptr.add(c * 8) as *const __m128i);
+            _mm256_storeu_ps(out.add(c * 8), _mm256_cvtph_ps(h));
+        }
+        if tail > 0 {
+            let mut hbuf = [0u16; 8];
+            std::ptr::copy_nonoverlapping(row_ptr.add(chunks * 8), hbuf.as_mut_ptr(), tail);
+            let h = _mm_loadu_si128(hbuf.as_ptr() as *const __m128i);
+            let mut fbuf = [0f32; 8];
+            _mm256_storeu_ps(fbuf.as_mut_ptr(), _mm256_cvtph_ps(h));
+            std::ptr::copy_nonoverlapping(fbuf.as_ptr(), out.add(chunks * 8), tail);
+        }
     }
 }
 
@@ -457,31 +378,69 @@ fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> 
     out
 }
 
-/// Inner kernel shared by the `_into` and owning forms. Three arch paths:
-/// AVX-512 (16-wide FMA), AVX2 (8-wide FMA), scalar fallback.
-///
-/// Dispatch is runtime-checked once per call via [`cpu_dispatch::tier`]; the
-/// per-tier bodies are `#[target_feature(enable = "...")] unsafe fn` so
-/// their SIMD codegen matches the prior compile-time `#[cfg]` paths without
-/// requiring `target-cpu=native`. The match cost is amortized across `np`
-/// FMA chains by the caller (called twice per partition pass).
+/// Detect the CPU's private L2 cache size, falling back to 512 KiB.
+fn l2_size_bytes() -> usize {
+    use std::sync::OnceLock;
+    static L2_SIZE: OnceLock<usize> = OnceLock::new();
+    *L2_SIZE.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        if let Ok(value) = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cache/index2/size")
+        {
+            let value = value.trim();
+            let parsed = value
+                .strip_suffix('K')
+                .and_then(|n| n.parse::<usize>().ok().map(|n| n * 1024))
+                .or_else(|| {
+                    value
+                        .strip_suffix('M')
+                        .and_then(|n| n.parse::<usize>().ok().map(|n| n * 1024 * 1024))
+                })
+                .or_else(|| value.parse().ok());
+            if let Some(bytes) = parsed {
+                return bytes;
+            }
+        }
+        512 * 1024
+    })
+}
+
+/// Choose a power-of-two row batch whose dot-product tile fits in private L2.
+fn assignment_batch_rows(leaders: usize, l2_bytes: usize) -> usize {
+    let max_rows = (l2_bytes / (leaders.max(1) * std::mem::size_of::<f32>())).max(32);
+    let rows = if max_rows.is_power_of_two() {
+        max_rows
+    } else {
+        max_rows.next_power_of_two() / 2
+    };
+    rows.clamp(32, 1024)
+}
+
+fn assignments_fit_l2(points: usize, leaders: usize, l2_bytes: usize) -> bool {
+    (points as u64)
+        .saturating_mul(leaders as u64)
+        .saturating_mul(std::mem::size_of::<f32>() as u64)
+        < l2_bytes as u64 / 2
+}
+
+/// Inner kernel shared by the `_into` and owning forms. Feature selection
+/// happens once for the whole batch.
 #[inline(always)]
 fn compute_p_norm_sq_into_impl(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
     #[cfg(target_arch = "x86_64")]
     {
-        use crate::cpu_dispatch::{tier, SimdTier};
-        match tier() {
-            SimdTier::Avx512 => {
-                // SAFETY: tier()==Avx512 implies AVX-512F at runtime.
-                unsafe { compute_p_norm_sq_avx512(p_data, np, ndims, out) };
+        use crate::cpu_dispatch::{fma_width, VectorWidth};
+        match fma_width() {
+            VectorWidth::Wide => {
+                // SAFETY: fma_width()==Wide implies AVX-512F at runtime.
+                unsafe { compute_p_norm_sq_wide(p_data, np, ndims, out) };
                 return;
             }
-            SimdTier::Avx2 => {
-                // SAFETY: tier()==Avx2 implies AVX2 + FMA at runtime.
-                unsafe { compute_p_norm_sq_avx2_fma(p_data, np, ndims, out) };
+            VectorWidth::Narrow => {
+                // SAFETY: fma_width()==Narrow implies AVX2 + FMA at runtime.
+                unsafe { compute_p_norm_sq_narrow(p_data, np, ndims, out) };
                 return;
             }
-            SimdTier::Scalar => {}
+            VectorWidth::Scalar => {}
         }
     }
     // Pure-Rust fallback. LLVM auto-vectorizes on whatever the base
@@ -498,7 +457,7 @@ fn compute_p_norm_sq_into_impl(p_data: &[f32], np: usize, ndims: usize, out: &mu
 /// `p_data.len() >= np * ndims` and `out.len() >= np`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-unsafe fn compute_p_norm_sq_avx512(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
+unsafe fn compute_p_norm_sq_wide(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
     use std::arch::x86_64::*;
     let chunks = ndims / 16;
     let tail = ndims - chunks * 16;
@@ -527,7 +486,7 @@ unsafe fn compute_p_norm_sq_avx512(p_data: &[f32], np: usize, ndims: usize, out:
 /// `p_data.len() >= np * ndims` and `out.len() >= np`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn compute_p_norm_sq_avx2_fma(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
+unsafe fn compute_p_norm_sq_narrow(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
     use std::arch::x86_64::*;
     let chunks = ndims / 8;
     let tail = ndims - chunks * 8;
@@ -580,7 +539,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
     leaders: &[u32],
     fanout: usize,
     metric: diskann_vector::distance::Metric,
-) -> Vec<Vec<u32>> {
+) -> ANNResult<Vec<Vec<u32>>> {
     let np = points.len();
     let nl = leaders.len();
     let num_assign = fanout.min(nl);
@@ -589,10 +548,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
 
     // Extract leader data into contiguous f32 array.
     let mut l_data = vec![0.0f32; nl * ndims];
-    for (i, &idx) in leaders.iter().enumerate() {
-        let src = &data[idx as usize * ndims..(idx as usize + 1) * ndims];
-        T::as_f32_into(src, &mut l_data[i * ndims..(i + 1) * ndims]).unwrap_or_else(|e| panic!("VectorRepr::as_f32_into failed during partition: {}", e));
-    }
+    gather_rows(data, leaders, ndims, &mut l_data)?;
 
     // Precompute leader norms for L2/Cosine.
     let l_norms: Vec<f32> = match metric {
@@ -610,18 +566,13 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
     // Flat assignments.
     let mut assignments = vec![0u32; np * num_assign];
 
-    // Single-layer chunking with runtime MB sized to the detected L2 cache.
-    // Matches v2's `assign_to_leaders_v2` structure: par_chunks_mut at MB
-    // granularity, no inner mini-batch loop. The empirical ablation showed
-    // the old stripe+inner-MB structure is equivalent at the same closure
-    // body size — keeping the simpler single-layer form to avoid the dead
-    // codegen bloat that previously bound v1 to its specific chunk grain.
-    let l2 = crate::partition_inner::l2_size_bytes();
-    let mb = crate::partition_inner::compute_mb(nl, l2);
+    // Use one chunking layer sized from the detected private L2 cache.
+    let l2 = l2_size_bytes();
+    let mb = assignment_batch_rows(nl, l2);
 
-    // Skip-MB path: whole problem comfortably fits L2 → one sequential GEMM.
-    if crate::partition_inner::should_skip_mb(np, nl, l2) {
-        STRIPE_BUFS.with(|cell| {
+    // If the whole assignment tile fits L2, use one sequential GEMM.
+    if assignments_fit_l2(np, nl, l2) {
+        STRIPE_BUFS.with(|cell| -> ANNResult<()> {
             let mut bufs = cell.borrow_mut();
             if bufs.p_data.len() < np * ndims {
                 bufs.p_data.resize(np * ndims, 0.0);
@@ -629,14 +580,15 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             if bufs.dots.len() < np * nl {
                 bufs.dots.resize(np * nl, 0.0);
             }
-            let StripeBuffers { ref mut p_data, ref mut dots } = *bufs;
+            let StripeBuffers {
+                ref mut p_data,
+                ref mut dots,
+            } = *bufs;
             let p_slice = &mut p_data[..np * ndims];
             let dots_slice = &mut dots[..np * nl];
-            for (i, &idx) in points.iter().enumerate() {
-                gather_f16_to_f32_simd(data, idx as usize, ndims,
-                    &mut p_slice[i * ndims..(i + 1) * ndims]);
-            }
-            diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice);
+            gather_rows(data, points, ndims, p_slice)?;
+            diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice)
+                .map_err(ANNError::opaque)?;
             // ||p||² is a per-point constant, so it shifts every leader's L2
             // distance by the same amount and can't change the top-k ranking;
             // CosineNormalized/InnerProduct ignore it too. Only Cosine (which
@@ -646,24 +598,25 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             } else {
                 Vec::new()
             };
-            for i in 0..np {
-                let dot_row = &dots_slice[i * nl..(i + 1) * nl];
-                let out = &mut assignments[i * num_assign..(i + 1) * num_assign];
-                crate::partition_inner::process_row(
-                    dot_row, p_norm_sq.get(i).copied().unwrap_or(0.0), &l_norms, metric, num_assign, out,
-                );
-            }
-        });
+            crate::partition_inner::process_rows(
+                dots_slice,
+                &p_norm_sq,
+                &l_norms,
+                metric,
+                num_assign,
+                &mut assignments,
+            );
+            Ok(())
+        })?;
     } else {
-        // Chunked path: par_chunks_mut at MB granularity, one GEMM per chunk,
-        // top-k per row via process_row. STRIPE_BUFS provides per-thread
-        // p_data / dots reuse across many chunks.
+        // Otherwise run one GEMM and top-k pass per chunk. STRIPE_BUFS reuses
+        // p_data and dots across chunks on each worker.
         let chunk_size = mb * num_assign;
         assignments
             .par_chunks_mut(chunk_size)
             .enumerate()
-            .for_each_installed(|(idx, assign_chunk)| {
-                STRIPE_BUFS.with(|cell| {
+            .map(|(idx, assign_chunk)| {
+                STRIPE_BUFS.with(|cell| -> ANNResult<()> {
                     let mut bufs = cell.borrow_mut();
                     let row_start = idx * mb;
                     let chunk_rows = (row_start + mb).min(np) - row_start;
@@ -673,32 +626,40 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                     if bufs.dots.len() < chunk_rows * nl {
                         bufs.dots.resize(mb * nl, 0.0);
                     }
-                    let StripeBuffers { ref mut p_data, ref mut dots } = *bufs;
+                    let StripeBuffers {
+                        ref mut p_data,
+                        ref mut dots,
+                    } = *bufs;
                     let p_slice = &mut p_data[..chunk_rows * ndims];
                     let dots_slice = &mut dots[..chunk_rows * nl];
-                    for (i, &gi) in points[row_start..row_start + chunk_rows].iter().enumerate() {
-                        gather_f16_to_f32_simd(data, gi as usize, ndims,
-                            &mut p_slice[i * ndims..(i + 1) * ndims]);
-                    }
-                    diskann_linalg::sgemm_abt(p_slice, chunk_rows, ndims, &l_data, nl, dots_slice);
-                    // Only Cosine needs ‖p‖ (see skip-MB path); L2's constant
+                    gather_rows(
+                        data,
+                        &points[row_start..row_start + chunk_rows],
+                        ndims,
+                        p_slice,
+                    )?;
+                    diskann_linalg::sgemm_abt(p_slice, chunk_rows, ndims, &l_data, nl, dots_slice)
+                        .map_err(ANNError::opaque)?;
+                    // Only Cosine needs ‖p‖; L2's constant
                     // ‖p‖² offset can't reorder the top-k.
                     let p_norm_sq = if matches!(metric, Metric::Cosine) {
                         compute_p_norm_sq_batch(p_slice, chunk_rows, ndims)
                     } else {
                         Vec::new()
                     };
-                    for i in 0..chunk_rows {
-                        let dot_row = &dots_slice[i * nl..(i + 1) * nl];
-                        let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
-                        crate::partition_inner::process_row(
-                            dot_row, p_norm_sq.get(i).copied().unwrap_or(0.0), &l_norms, metric, num_assign, out,
-                        );
-                    }
-                });
-            });
+                    crate::partition_inner::process_rows(
+                        dots_slice,
+                        &p_norm_sq,
+                        &l_norms,
+                        metric,
+                        num_assign,
+                        assign_chunk,
+                    );
+                    Ok(())
+                })
+            })
+            .collect_installed::<ANNResult<()>>()?;
     }
-
 
     // Aggregate into per-leader clusters using global point IDs. For large
     // np, the serial scatter (np × num_assign pushes into per-leader Vecs)
@@ -727,10 +688,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             })
             .collect_installed();
 
-        // `assignments` is dead once `partials` holds the scattered IDs — free
-        // it before building `clusters` so the two full-payload copies
-        // (partials + clusters) don't also coexist with the np×num_assign
-        // assignment array (~400 MB at 10M points × fanout 10).
+        // `assignments` is dead once `partials` holds the scattered IDs. Free
+        // it before allocating the final clusters to reduce phase overlap.
         drop(assignments);
 
         // Sum per-leader sizes once so each final Vec is allocated with
@@ -753,7 +712,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 out
             })
             .collect_installed();
-        clusters
+        Ok(clusters)
     } else {
         let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
         for (i, pt) in points.iter().enumerate() {
@@ -762,7 +721,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 clusters[leader_local as usize].push(*pt);
             }
         }
-        clusters
+        Ok(clusters)
     }
 }
 
@@ -812,98 +771,4 @@ fn global_merge_small(leaves: Vec<Leaf>, c_min: usize, c_max: usize) -> Vec<Leaf
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_partition_basic() {
-        let npoints = 1000;
-        let ndims = 8;
-        let data: Vec<f32> = {
-            use rand::{Rng, SeedableRng};
-            let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-            (0..npoints * ndims).map(|_| rng.random::<f32>()).collect()
-        };
-        let config = PartitionConfig {
-            c_max: 64,
-            c_min: 16,
-            p_samp: 0.1,
-            fanout: vec![4, 2],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let leaves = partition(&data, ndims, npoints, &config, 123);
-
-        // All points should appear at least once (overlapping partitions).
-        let mut seen = vec![false; npoints];
-        for leaf in &leaves {
-            assert!(leaf.indices.len() <= config.c_max, "leaf too large");
-            for &idx in &leaf.indices {
-                seen[idx as usize] = true;
-            }
-        }
-        assert!(seen.iter().all(|&s| s), "some points missing");
-    }
-
-    #[test]
-    fn test_partition_small_dataset() {
-        let npoints = 50;
-        let ndims = 4;
-        let data: Vec<f32> = vec![1.0; npoints * ndims];
-        let config = PartitionConfig {
-            c_max: 64,
-            c_min: 8,
-            p_samp: 0.1,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let leaves = partition(&data, ndims, npoints, &config, 0);
-        assert_eq!(leaves.len(), 1);
-        assert_eq!(leaves[0].indices.len(), npoints);
-    }
-
-    // Baseline partition rules (c_max > 0, c_min <= c_max, p_samp range,
-    // fanout non-empty / non-zero) are covered via PiPNNConfig::validate
-    // delegate path in `builder::tests::test_config_validate`. Only the
-    // partition-specific rules introduced alongside `validate_params` are
-    // tested here.
-
-    #[test]
-    fn validate_params_rejects_fanout_above_max() {
-        let err = PartitionConfig::validate_params(1024, 256, 0.05, &[MAX_FANOUT + 1], 1000)
-            .expect_err("fanout > MAX_FANOUT must reject");
-        assert!(format!("{err}").contains("MAX_FANOUT"));
-        // Boundary: exactly MAX_FANOUT is accepted.
-        PartitionConfig::validate_params(1024, 256, 0.05, &[MAX_FANOUT], 1000)
-            .expect("fanout == MAX_FANOUT must accept");
-    }
-
-    #[test]
-    fn validate_params_rejects_leader_cap_below_two() {
-        for bad in [0usize, 1] {
-            let err = PartitionConfig::validate_params(1024, 256, 0.05, &[10, 3], bad)
-                .expect_err(&format!("leader_cap={bad} must reject"));
-            assert!(format!("{err}").contains("leader_cap"));
-        }
-        // Boundary: exactly 2 is accepted (matches sample_num_leaders clamp floor).
-        PartitionConfig::validate_params(1024, 256, 0.05, &[10, 3], 2)
-            .expect("leader_cap == 2 must accept");
-    }
-
-    #[test]
-    fn new_propagates_validate_params_error() {
-        // Contract test for the public constructor: external callers (e.g.
-        // benches) hit `new` rather than going through PiPNNConfig::validate.
-        let err = PartitionConfig::new(
-            1024,
-            256,
-            0.05,
-            vec![MAX_FANOUT + 1],
-            diskann_vector::distance::Metric::L2,
-            1000,
-        )
-        .expect_err("PartitionConfig::new must propagate validate_params errors");
-        assert!(format!("{err}").contains("MAX_FANOUT"));
-    }
-}
+mod tests;

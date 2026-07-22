@@ -103,7 +103,7 @@ impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
     ///
     /// # Safety
     /// Torn-read caveat: no concurrent writes to the read region.
-    pub unsafe fn flat_prefix(&self, first_n: usize) -> &[Data::VectorDataType] {
+    pub unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
         unsafe { self.vectors.flat_prefix(first_n) }
     }
 

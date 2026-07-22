@@ -5,13 +5,6 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-#[cfg(feature = "pipnn")]
-use std::{
-    fs::File,
-    io::{BufReader, Read},
-    time::Instant,
-};
-
 use diskann::{
     error::DiskANNError::StartPointComputeError,
     graph::{DiskANNIndex, StartPointStrategy},
@@ -32,8 +25,6 @@ use diskann_providers::{
 use diskann_providers::{
     index::diskann_async, model::graph::provider::async_::common::SetElementHelper,
 };
-#[cfg(feature = "pipnn")]
-use diskann_utils::io::Metadata;
 use diskann_utils::{
     future::AsyncFriendly,
     views::{Matrix, MatrixView},
@@ -122,16 +113,26 @@ where
 }
 
 #[cfg(feature = "pipnn")]
-pub(crate) fn run_pipnn_build<T>(
+pub(crate) fn pipnn_build<T>(
+    index: diskann_async::MemoryIndex<T>,
+    data: Arc<Matrix<T>>,
     input: &IndexBuild,
     config: &diskann_pipnn::PiPNNConfig,
-    mut output: &mut dyn Output,
-) -> anyhow::Result<(diskann_async::MemoryIndex<T>, BuildStats)>
+) -> anyhow::Result<BuildStats>
 where
-    T: diskann::graph::SampleableForStart + diskann::utils::VectorRepr + AsyncFriendly,
+    T: diskann::utils::VectorRepr,
 {
     use anyhow::Context;
-    use std::io::Write;
+
+    let npoints = data.nrows();
+    let dimensions = data.ncols();
+    let row_bytes = dimensions
+        .checked_mul(std::mem::size_of::<T>())
+        .context("dataset row size overflow")?;
+    anyhow::ensure!(
+        row_bytes.is_multiple_of(64),
+        "PiPNN in-memory build requires densely packed provider rows; got {row_bytes} bytes"
+    );
 
     let max_degree = NonZeroUsize::new(input.max_degree() as usize)
         .context("max_degree must be non-zero for PiPNN build")?;
@@ -143,85 +144,42 @@ where
         input.num_threads(),
     )?;
 
-    let file = File::open(&**input.data())
-        .with_context(|| format!("failed to open dataset {}", input.data().display()))?;
-    let file_len = file.metadata()?.len();
-    let mut reader = BufReader::new(file);
-    let (npoints, ndims) = Metadata::read(&mut reader)?.into_dims();
-    let row_bytes = ndims
-        .checked_mul(std::mem::size_of::<T>())
-        .context("dataset row size overflow")?;
-    let expected = npoints
-        .checked_mul(row_bytes)
-        .context("dataset size overflow")? as u64;
-    anyhow::ensure!(
-        file_len.saturating_sub(8) >= expected,
-        "dataset {} is shorter than its {npoints} x {ndims} header",
-        input.data().display(),
-    );
-    anyhow::ensure!(
-        row_bytes.is_multiple_of(64),
-        "PiPNN in-memory build requires densely packed provider rows; got {row_bytes} bytes",
-    );
-
-    let index = diskann_async::new_index::<T, _>(
-        input.try_as_config()?.build()?,
-        input.inmem_parameters(npoints, ndims),
-        diskann_providers::model::graph::provider::async_::common::NoDeletes,
-    )?;
-    let t_load = Instant::now();
-    let mut row = vec![T::default(); ndims];
-    for id in 0..npoints {
-        reader.read_exact(bytemuck::must_cast_slice_mut(&mut row))?;
-        index
-            .data_provider
-            .base_vectors
-            .set_element(&(id as u32), &row)?;
+    let started = std::time::Instant::now();
+    for (id, vector) in data.row_iter().enumerate() {
+        let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
+        index.data_provider.base_vectors.set_element(&id, vector)?;
     }
-    let load_secs = t_load.elapsed().as_secs_f64();
+    drop(data);
 
-    let t_start = Instant::now();
-    let data = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
-    let data = MatrixView::try_from(data, npoints, ndims).map_err(|error| error.as_static())?;
-    set_start_points(index.provider(), data, *input.start_point_strategy())?;
-    let start_secs = t_start.elapsed().as_secs_f64();
-
-    let total_points = npoints + input.start_point_strategy().count();
-    let data = unsafe { index.data_provider.base_vectors.flat_prefix(total_points) };
-    let graph = diskann_pipnn::builder::build_typed(data, total_points, ndims, &context)?;
-    let diskann_pipnn::builder::PiPNNBuildOutput {
-        adjacency,
-        build_stats,
-    } = graph;
-    let build_secs = build_stats.total_secs;
-
-    let t_transfer = Instant::now();
+    let total_points = npoints
+        .checked_add(input.start_point_strategy().count())
+        .context("PiPNN point count overflow")?;
+    // SAFETY: all real and start-point rows were populated above or by
+    // set_start_points, the row-size check guarantees dense packing, and no
+    // writes race this build.
+    let build_data = unsafe { index.data_provider.base_vectors.flat_prefix(total_points) };
+    let adjacency =
+        diskann_pipnn::builder::build_typed(build_data, total_points, dimensions, &context)?;
     for (id, neighbors) in adjacency.into_iter().enumerate() {
         index
             .provider()
             .neighbors()
             .set_neighbors_sync(id, &neighbors)?;
     }
-    let transfer_secs = t_transfer.elapsed().as_secs_f64();
-    let total_secs = load_secs + start_secs + build_secs + transfer_secs;
 
-    writeln!(output, "{}", build_stats)?;
-    writeln!(
-        output,
-        "PiPNN load={load_secs:.3}s start={start_secs:.3}s transfer={transfer_secs:.3}s total={total_secs:.3}s"
-    )?;
-
-    let total_time = MicroSeconds::from(std::time::Duration::from_secs_f64(total_secs));
-    let per_vector = MicroSeconds::from(std::time::Duration::from_secs_f64(
-        total_secs / npoints as f64,
-    ));
-    let stats = BuildStats {
+    let total_time = MicroSeconds::from(started.elapsed());
+    let per_vector = MicroSeconds::new(
+        total_time
+            .as_micros()
+            .checked_div(u64::try_from(npoints)?)
+            .context("PiPNN build received an empty dataset")?,
+    );
+    Ok(BuildStats {
         kind: BuildKind::PiPNN,
         total_time,
         vectors_inserted: npoints,
         insert_latencies: percentiles::compute_percentiles(&mut [per_vector])?,
-    };
-    Ok((index, stats))
+    })
 }
 
 #[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]

@@ -3,9 +3,9 @@ name = "diskann-pipnn"
 version.workspace = true
 description = "PiPNN (Pick-in-Partitions Nearest Neighbors) index builder for DiskANN"
 authors.workspace = true
-documentation.workspace = true
+repository.workspace = true
 license.workspace = true
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
 diskann = { workspace = true }
@@ -15,17 +15,16 @@ rand = { workspace = true }
 rand_distr = { workspace = true }
 diskann-linalg = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
 libc = "0.2"
+bytemuck = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
 half = { workspace = true }
-bytemuck = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 tracing-subscriber = { workspace = true }
 

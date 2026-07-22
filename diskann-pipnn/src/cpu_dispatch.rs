@@ -3,65 +3,101 @@
  * Licensed under the MIT license.
  */
 
-//! Runtime CPU feature dispatch for PiPNN SIMD kernels.
+//! Cached CPU capabilities used by PiPNN's private SIMD kernels.
 //!
-//! Single source of truth for the SIMD tier the current process should use.
-//! The detected tier is cached behind a `OnceLock`, so subsequent calls
-//! amount to a relaxed atomic load plus a branch — cheap enough to hoist
-//! into any outer loop, but the convention in this crate is to call
-//! `tier()` ONCE at the outermost practical level and `match` on the
-//! returned enum.
+//! Callers ask for the vector width required by a kernel family instead of
+//! matching ISA names themselves. This keeps feature detection in one place
+//! while allowing each family to request only the features it actually uses.
 
 use std::sync::OnceLock;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SimdTier {
-    Avx512,
-    Avx2,
+pub(crate) enum VectorWidth {
+    Wide,
+    Narrow,
     Scalar,
 }
 
-static TIER: OnceLock<SimdTier> = OnceLock::new();
+#[derive(Copy, Clone, Debug)]
+struct CpuFeatures {
+    avx512f: bool,
+    avx512bw: bool,
+    avx2: bool,
+    fma: bool,
+    f16c: bool,
+}
 
-#[inline]
-pub(crate) fn tier() -> SimdTier {
-    *TIER.get_or_init(|| {
-        let detected = detect_tier();
-        // First-call log lets perf benchmarks confirm which SIMD path actually
-        // ran on the test machine. Subsequent calls hit the OnceLock fast path
-        // and do not log.
+static FEATURES: OnceLock<CpuFeatures> = OnceLock::new();
+
+fn features() -> CpuFeatures {
+    *FEATURES.get_or_init(|| {
         #[cfg(target_arch = "x86_64")]
-        tracing::info!(
-            tier = ?detected,
-            avx512f = std::is_x86_feature_detected!("avx512f"),
-            avx2 = std::is_x86_feature_detected!("avx2"),
-            fma = std::is_x86_feature_detected!("fma"),
-            f16c = std::is_x86_feature_detected!("f16c"),
-            "pipnn cpu_dispatch: SIMD tier selected"
-        );
+        let detected = CpuFeatures {
+            avx512f: std::is_x86_feature_detected!("avx512f"),
+            avx512bw: std::is_x86_feature_detected!("avx512bw"),
+            avx2: std::is_x86_feature_detected!("avx2"),
+            fma: std::is_x86_feature_detected!("fma"),
+            f16c: std::is_x86_feature_detected!("f16c"),
+        };
+
         #[cfg(not(target_arch = "x86_64"))]
-        tracing::info!(tier = ?detected, "pipnn cpu_dispatch: SIMD tier selected (non-x86_64)");
+        let detected = CpuFeatures {
+            avx512f: false,
+            avx512bw: false,
+            avx2: false,
+            fma: false,
+            f16c: false,
+        };
+
+        tracing::info!(?detected, "PiPNN CPU features detected");
         detected
     })
 }
 
-fn detect_tier() -> SimdTier {
-    #[cfg(target_arch = "x86_64")]
-    {
-        // AVX-512 tier requires both F (foundation) AND BW (byte/word ops) so
-        // every SIMD kernel in the crate can rely on `vpcmpeqw` (16-bit lane
-        // compare, used by hash_prune::find_hash). F-without-BW only shipped on
-        // Knights Landing / Knights Mill (Xeon Phi 72xx), which is not a
-        // deployment target. Skylake-X and later, plus AMD Zen 4, ship both.
-        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
-            return SimdTier::Avx512;
-        }
-        if std::is_x86_feature_detected!("avx2")
-            && std::is_x86_feature_detected!("fma")
-            && std::is_x86_feature_detected!("f16c")
-        {
-            return SimdTier::Avx2;
-        }
+/// Width for kernels that use only packed `f32` arithmetic.
+pub(crate) fn f32_width() -> VectorWidth {
+    let features = features();
+    if features.avx512f {
+        VectorWidth::Wide
+    } else if features.avx2 {
+        VectorWidth::Narrow
+    } else {
+        VectorWidth::Scalar
     }
-    SimdTier::Scalar
+}
+
+/// Width for packed `f32` kernels that require fused multiply-add.
+pub(crate) fn fma_width() -> VectorWidth {
+    let features = features();
+    if features.avx512f {
+        VectorWidth::Wide
+    } else if features.avx2 && features.fma {
+        VectorWidth::Narrow
+    } else {
+        VectorWidth::Scalar
+    }
+}
+
+/// Width for half-to-f32 conversion kernels.
+pub(crate) fn half_width() -> VectorWidth {
+    let features = features();
+    if features.avx512f {
+        VectorWidth::Wide
+    } else if features.avx2 && features.f16c {
+        VectorWidth::Narrow
+    } else {
+        VectorWidth::Scalar
+    }
+}
+
+/// Width for packed 16-bit integer kernels.
+pub(crate) fn u16_width() -> VectorWidth {
+    let features = features();
+    if features.avx512f && features.avx512bw {
+        VectorWidth::Wide
+    } else if features.avx2 {
+        VectorWidth::Narrow
+    } else {
+        VectorWidth::Scalar
+    }
 }

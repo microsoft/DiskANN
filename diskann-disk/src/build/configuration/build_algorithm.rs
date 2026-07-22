@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 /// - [`Vamana`](BuildAlgorithm::Vamana): the default incremental insert + prune
 ///   builder. Graph-wide tuning knobs such as `l_build` and `alpha` live on the
 ///   outer index configuration.
-/// - [`PiPNN`](BuildAlgorithm::PiPNN): partition-based batch builder
+/// - [`PiPNN`](BuildAlgorithm::PiPNN): one-shot partition-based batch builder
 ///   (arXiv:2602.21247). Carries a [`diskann_pipnn::PiPNNConfig`] with its
-///   algorithm-specific partition and candidate-generation knobs.
+///   algorithm-specific partition and candidate-generation knobs. PiPNN is
+///   one-shot; the disk wrapper selects Vamana instead when the estimated peak
+///   would exceed its build-memory limit.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "algorithm")]
 #[non_exhaustive]
@@ -80,6 +82,7 @@ mod tests {
                 l_max: 256,
                 num_hash_planes: 12,
                 final_prune: false,
+                skip_hash_prune: false,
             }
         }
 
