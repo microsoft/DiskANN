@@ -7,7 +7,7 @@ use diskann::{ANNError, ANNResult};
 
 /// Creates a new multi-threaded tokio runtime with the specified number of worker threads.
 /// If `num_threads` is 0, it defaults to the number of logical CPUs.
-pub fn create_runtime(num_threads: usize) -> ANNResult<tokio::runtime::Runtime> {
+pub(super) fn create_runtime(num_threads: usize) -> ANNResult<tokio::runtime::Runtime> {
     let mut builder = tokio::runtime::Builder::new_multi_thread();
 
     if num_threads != 0 {

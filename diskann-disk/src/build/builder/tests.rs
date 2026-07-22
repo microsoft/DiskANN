@@ -505,9 +505,11 @@ pub(crate) mod disk_index_builder_tests {
 
         let test_node_per_block = graph_header.metadata().num_nodes_per_block;
         let test_max_node_length = graph_header.metadata().node_len;
+        let test_block_size = graph_header.block_size() as usize;
 
         let truth_node_per_block = truth_graph_header.metadata().num_nodes_per_block;
         let truth_max_node_length = truth_graph_header.metadata().node_len;
+        let truth_block_size = truth_graph_header.block_size() as usize;
 
         assert_eq!(
             graph_header.metadata().num_pts,
@@ -527,14 +529,14 @@ pub(crate) mod disk_index_builder_tests {
                 idx,
                 test_max_node_length as usize,
                 test_node_per_block as usize,
-                DEFAULT_DISK_SECTOR_LEN,
+                test_block_size,
             );
 
             let truth_node_id_offset = node_data_offset(
                 idx,
                 truth_max_node_length as usize,
                 truth_node_per_block as usize,
-                DEFAULT_DISK_SECTOR_LEN,
+                truth_block_size,
             );
 
             // Assert that the vector data is the same between the test and truth graphs for this node.
