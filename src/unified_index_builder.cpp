@@ -62,19 +62,29 @@ template <typename T> void build_impl(const UnifiedBuildContext &ctx)
     // -----------------------------------------------------------------------
     // 1) Build Vamana graph in memory via Index<T>.
     // -----------------------------------------------------------------------
-    auto write_params = std::make_shared<IndexWriteParameters>(
-        IndexWriteParametersBuilder(ctx.L, ctx.R)
-            .with_alpha(ctx.alpha)
-            .with_num_threads(ctx.num_threads)
-            .build());
+    // For a filtered build, mirror the legacy DANNBuilderV2 filtered setup
+    // (ConstructIndexConfigBuilder): drive graph construction from the filtered
+    // greedy search (filter_list_size = L) with the unfiltered candidate pass
+    // disabled (search_list_size = 0). Otherwise search_for_point_and_prune runs
+    // an extra unfiltered greedy search (Lindex = L > 0) whose candidates are
+    // merged in, producing a denser, differently-connected graph than the v2
+    // mem/SSD indexes built from the same data and R/L.
+    const bool filtered = !ctx.label_file.empty();
+    IndexWriteParametersBuilder write_params_builder(/*search_list_size=*/filtered ? 0u : ctx.L, ctx.R);
+    write_params_builder.with_alpha(ctx.alpha).with_num_threads(ctx.num_threads);
+    if (filtered)
+    {
+        write_params_builder.with_filter_list_size(ctx.L);
+    }
+    auto write_params = std::make_shared<IndexWriteParameters>(write_params_builder.build());
 
     Index<T, uint32_t, uint32_t> idx(ctx.metric, dim, npts, write_params, /*search_params=*/nullptr,
                                       /*num_frozen_pts=*/0, /*dynamic=*/false, /*enable_tags=*/false,
                                       /*concurrent_consolidate=*/false, /*pq_dist_build=*/false,
                                       /*num_pq_chunks=*/0, /*use_opq=*/false,
-                                      /*filtered_index=*/!ctx.label_file.empty());
+                                      /*filtered_index=*/filtered);
 
-    if (!ctx.label_file.empty())
+    if (filtered)
     {
         IndexFilterParams filter_params = IndexFilterParamsBuilder()
                                               .with_label_file(ctx.label_file)

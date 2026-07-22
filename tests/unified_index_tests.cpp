@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -1392,6 +1393,22 @@ struct ScopedFilteredLegacySsdFiles
     }
 };
 
+// Total out-edge count of a saved unified index, computed from its offset table.
+// Each node record is [coords: aligned_dim*elem][neighbors: degree*4], so
+// degree(i) = (offset[i+1] - offset[i] - aligned_dim*elem) / sizeof(uint32_t).
+inline uint64_t total_out_edges(const std::string &unified_path)
+{
+    UnifiedIndexReader r(unified_path);
+    const auto &h = r.header();
+    const std::vector<uint64_t> ot = r.load_offset_table();
+    const uint64_t elem = (h.data_type == DataTypeTag::Float) ? sizeof(float) : sizeof(uint8_t);
+    const uint64_t coord_bytes = h.aligned_dim * elem;
+    uint64_t total = 0;
+    for (uint64_t i = 0; i < h.npts; ++i)
+        total += (ot[i + 1] - ot[i] - coord_bytes) / sizeof(uint32_t);
+    return total;
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(unified_parity_tests)
@@ -1806,6 +1823,92 @@ BOOST_AUTO_TEST_CASE(memory_filtered_parity_legacy_vs_unified)
     // medoids (a deliberate recall-oriented choice). So results are highly
     // similar but not required to be bit-identical.
     BOOST_CHECK_GE(avg_overlap, 0.90);
+}
+
+// Regression guard for the filtered unified builder's Vamana parameters. A
+// filtered build must construct the graph from the FILTERED greedy search only
+// -- search_list_size = 0, filter_list_size = L -- mirroring the legacy
+// DANNBuilderV2 filtered setup (ConstructIndexConfigBuilder). If the builder
+// instead leaves search_list_size = L (as it did before this fix),
+// search_for_point_and_prune ALSO runs an unfiltered candidate pass (Lindex > 0,
+// index.cpp) and merges those candidates, yielding a different (denser) graph.
+// The static filtered build's only nondeterminism is rand() (filtered medoid
+// selection), so srand() a fixed seed and build single-threaded to compare the
+// builder's graph byte-for-byte against explicit-parameter references.
+BOOST_AUTO_TEST_CASE(builder_filtered_uses_filtered_only_candidate_pool)
+{
+    const uint32_t npts = 4000, dim = 32, vocab = 8, R = 48, L = 100;
+    const unsigned kSeed = 12345;
+
+    ScopedFile data_sf(tmp_path("fbuild_data"));
+    write_float_bin_parity(data_sf.path, npts, dim, /*seed=*/909);
+    const auto label_sets = gen_label_sets(npts, vocab, /*seed=*/91);
+    ScopedFile labels_sf(tmp_path("fbuild_labels"));
+    write_label_file(labels_sf.path, label_sets);
+
+    // Build a filtered index directly from Index<float> with a chosen
+    // search_list_size (Lindex); filter_list_size is always L.
+    auto build_direct = [&](uint32_t search_list_size, const std::string &out) {
+        std::srand(kSeed);
+        auto wp = std::make_shared<IndexWriteParameters>(IndexWriteParametersBuilder(search_list_size, R)
+                                                             .with_alpha(1.2f)
+                                                             .with_num_threads(1)
+                                                             .with_filter_list_size(L)
+                                                             .build());
+        Index<float, uint32_t, uint32_t> idx(diskann::Metric::L2, dim, npts, wp, nullptr,
+                                             /*num_frozen_pts=*/0, /*dynamic=*/false, /*enable_tags=*/false,
+                                             /*concurrent_consolidate=*/false, /*pq_dist_build=*/false,
+                                             /*num_pq_chunks=*/0, /*use_opq=*/false, /*filtered_index=*/true);
+        IndexFilterParams fp = IndexFilterParamsBuilder()
+                                   .with_label_file(labels_sf.path)
+                                   .with_save_path_prefix(out + ".legacy_tmp")
+                                   .build();
+        idx.build(data_sf.path, npts, fp);
+        idx.save_unified(out.c_str());
+    };
+
+    // (a) unified_index_builder (post-fix: search_list_size = 0 internally).
+    ScopedFile builder_out(tmp_path("fbuild_unified"));
+    ScopedFilteredLegacyFiles builder_tmp(builder_out.path + ".legacy_tmp");
+    {
+        std::srand(kSeed);
+        UnifiedBuildContext ctx;
+        ctx.data_file_path = data_sf.path;
+        ctx.output_path = builder_out.path;
+        ctx.data_type = DataTypeTag::Float;
+        ctx.metric = diskann::Metric::L2;
+        ctx.R = R;
+        ctx.L = L;
+        ctx.alpha = 1.2f;
+        ctx.num_threads = 1;
+        ctx.pq_dim = 0; // memory unified file: graph only, no PQ
+        ctx.label_file = labels_sf.path;
+        unified_index_builder().build(ctx);
+    }
+
+    // (b) reference with the intended filtered-only params (search_list_size = 0).
+    ScopedFile ref0_out(tmp_path("fbuild_ref0"));
+    ScopedFilteredLegacyFiles ref0_tmp(ref0_out.path + ".legacy_tmp");
+    build_direct(/*search_list_size=*/0, ref0_out.path);
+
+    // (c) reference WITH the unfiltered candidate pass (search_list_size = L).
+    ScopedFile refL_out(tmp_path("fbuild_refL"));
+    ScopedFilteredLegacyFiles refL_tmp(refL_out.path + ".legacy_tmp");
+    build_direct(/*search_list_size=*/L, refL_out.path);
+
+    const uint64_t e_builder = total_out_edges(builder_out.path);
+    const uint64_t e_ref0 = total_out_edges(ref0_out.path);
+    const uint64_t e_refL = total_out_edges(refL_out.path);
+    BOOST_TEST_MESSAGE("filtered build edges: builder = " << e_builder << ", ref(search_list_size=0) = " << e_ref0
+                                                          << ", ref(search_list_size=L) = " << e_refL);
+
+    // The builder must use filtered-only candidate exploration: its graph is
+    // identical to the search_list_size=0 reference.
+    BOOST_CHECK_EQUAL(e_builder, e_ref0);
+    // The unfiltered candidate pass (search_list_size=L) yields a strictly denser
+    // graph, so the two parameter settings must not coincide -- otherwise the
+    // equality check above could not distinguish a regression.
+    BOOST_CHECK_LT(e_ref0, e_refL);
 }
 
 BOOST_AUTO_TEST_CASE(ssd_filtered_parity_legacy_vs_unified)
