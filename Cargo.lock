@@ -994,7 +994,6 @@ dependencies = [
  "iai-callgrind",
  "rand",
  "rand_distr",
- "rayon",
 ]
 
 [[package]]

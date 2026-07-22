@@ -12,12 +12,14 @@
 //! 3. Merging overlapping leaf edges with either HashPrune or exact deduplication
 //! 4. Optionally applying DiskANN's shared Vamana RobustPrune kernel
 
+mod bf16;
 pub mod builder;
 pub(crate) mod cpu_dispatch;
 pub(crate) mod direct_candidates;
 pub(crate) mod graph_prune;
 pub(crate) mod hash_prune;
 pub(crate) mod leaf_build;
+mod lsh;
 pub(crate) mod partition;
 pub(crate) mod partition_inner;
 pub(crate) mod rayon_util;

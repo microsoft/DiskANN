@@ -25,11 +25,11 @@
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
 use std::cell::{RefCell, UnsafeCell};
 
+use crate::bf16::{bf16_to_f32, f32_to_bf16};
+use crate::lsh::{LshSketchError, LshSketches};
 use crate::rayon_util::ParIterInstalled;
 use bytemuck::Pod;
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
-use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
-use diskann_vector::lsh::{LshSketchError, LshSketches};
 use rayon::prelude::*;
 
 /// Owned slab allocated via direct `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`. The

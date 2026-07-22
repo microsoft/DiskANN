@@ -15,9 +15,6 @@ license.workspace = true
 cfg-if.workspace = true
 half.workspace = true
 diskann-wide.workspace = true
-rand.workspace = true
-rand_distr.workspace = true
-rayon.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
