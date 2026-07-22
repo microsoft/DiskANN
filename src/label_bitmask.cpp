@@ -1,5 +1,9 @@
 #include "label_bitmask.h"
 
+#ifdef _WINDOWS
+#include <immintrin.h>
+#endif
+
 namespace diskann
 {
 
@@ -42,6 +46,42 @@ bool simple_bitmask::test_mask_val(const simple_bitmask_val& bitmask_val) const
 
 bool simple_bitmask::test_full_mask_val(const simple_bitmask_full_val& bitmask_full_val) const
 {
+#if defined(_WINDOWS) && defined(USE_AVX2)
+    // AVX2 branchless bitmask intersection test.
+    // Eliminates per-word branches that cause misprediction overhead.
+    // Handles up to 4 uint64 words (256 bits) in a single SIMD operation.
+    const std::uint64_t* query = bitmask_full_val._mask;
+    const std::uint64_t* node = _bitsets;
+
+    if (_bitmask_size <= 4)
+    {
+        // Fast path: load up to 256 bits, AND, test if any bit set.
+        // _mm256_testz_si256 returns 1 if (a & b) == 0, so we negate.
+        __m256i q = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(query));
+        __m256i n = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(node));
+        return !_mm256_testz_si256(q, n);
+    }
+    else
+    {
+        // Large bitmask: process 4 words (256 bits) at a time
+        size_t i = 0;
+        for (; i + 4 <= _bitmask_size; i += 4)
+        {
+            __m256i q = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(query + i));
+            __m256i n = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(node + i));
+            if (!_mm256_testz_si256(q, n))
+                return true;
+        }
+        // Tail: remaining words (0-3)
+        for (; i < _bitmask_size; i++)
+        {
+            if ((query[i] & node[i]) != 0)
+                return true;
+        }
+        return false;
+    }
+#else
+    // Scalar fallback for non-AVX2 builds
     for (size_t i = 0; i < _bitmask_size; i++)
     {
         if ((bitmask_full_val._mask[i] & _bitsets[i]) != 0)
@@ -49,8 +89,8 @@ bool simple_bitmask::test_full_mask_val(const simple_bitmask_full_val& bitmask_f
             return true;
         }
     }
-
     return false;
+#endif
 }
 
 bool simple_bitmask::test_full_mask_contain(const simple_bitmask& bitmask_full_val) const
