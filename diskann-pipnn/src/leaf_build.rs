@@ -125,7 +125,7 @@ thread_local! {
 /// After leaf building is complete, these buffers pin pages in glibc's
 /// per-thread arenas, preventing `malloc_trim` from returning freed
 /// reservoir memory to the OS. Calling this from each rayon thread
-/// helps glibc reclaim arena pages (best-effort: depends on rayon work-stealing touching all workers).
+/// helps glibc reclaim arena pages.
 pub(crate) fn release_thread_buffers() {
     LEAF_BUFFERS.with(|cell| cell.borrow_mut().clear());
 }

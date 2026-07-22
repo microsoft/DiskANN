@@ -145,11 +145,7 @@ fn build_in_pool<T: VectorRepr + Send + Sync>(
 
     // Release partition scratch before leaf building so the two phases do not
     // contribute to peak RSS at the same time.
-    (0..rayon::current_num_threads())
-        .into_par_iter()
-        .for_each_installed(|_| {
-            crate::partition::release_thread_buffers();
-        });
+    let _ = rayon::broadcast(|_| crate::partition::release_thread_buffers());
 
     // Build all leaves (from every replica) in parallel, streaming edges to the
     // configured candidate accumulator. This is the one leaf-build + merge pass.
@@ -212,11 +208,7 @@ fn build_in_pool<T: VectorRepr + Send + Sync>(
     );
 
     // Release thread-local leaf buffers so their arena pages can be reclaimed.
-    (0..rayon::current_num_threads())
-        .into_par_iter()
-        .for_each_installed(|_| {
-            leaf_build::release_thread_buffers();
-        });
+    let _ = rayon::broadcast(|_| leaf_build::release_thread_buffers());
 
     let finalize_started = Instant::now();
     let adjacency = match (direct_candidates, hash_prune, config.final_prune) {
