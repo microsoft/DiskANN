@@ -49,7 +49,7 @@ mod kernels;
 mod max_sim;
 mod projected_eigen;
 
-mod temp;
+pub mod temp;
 
 pub use factory::{MaxSimElement, build_max_sim};
 pub use fallback::QueryMatRef;
