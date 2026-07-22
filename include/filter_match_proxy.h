@@ -1,6 +1,7 @@
 #pragma once
 #include "label_bitmask.h"
 #include "integer_label_vector.h"
+#include <xmmintrin.h>  // _mm_prefetch
 
 namespace diskann
 {
@@ -9,6 +10,7 @@ namespace diskann
     {
     public:
         virtual bool contain_filtered_label(uint32_t id) = 0;
+        virtual void prefetch_bitmask(uint32_t id) = 0;
     };
 
     template <typename LabelT>
@@ -21,6 +23,7 @@ namespace diskann
             LabelT unv_label);
 
         virtual bool contain_filtered_label(uint32_t id) override;
+        virtual void prefetch_bitmask(uint32_t id) override;
 
     private:
         simple_bitmask_buf& _bitmask_filters;
@@ -37,6 +40,7 @@ namespace diskann
             LabelT unv_label);
 
         virtual bool contain_filtered_label(uint32_t id) override;
+        virtual void prefetch_bitmask(uint32_t id) override;
 
     private:
         integer_label_vector& _label_vector;
@@ -56,6 +60,7 @@ public:
         bool use_integer_labels);
 
     virtual bool contain_filtered_label(uint32_t id) override;
+    virtual void prefetch_bitmask(uint32_t id) override;
 
 private:
     bitmask_filter_match<LabelT> _bitmask_filter_match;

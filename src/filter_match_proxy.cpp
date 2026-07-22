@@ -15,7 +15,9 @@ bitmask_filter_match<LabelT>::bitmask_filter_match(
     // _bitmask_size == 0 means no filter is set
     if (_bitmask_filters._bitmask_size > 0)
     {
-        query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
+        // Pad to at least 4 words (32 bytes) for safe AVX2 256-bit loads
+        size_t padded_size = std::max(_bitmask_filters._bitmask_size, (std::uint64_t)4);
+        query_bitmask_buf.resize(padded_size, 0);
         _bitmask_full_val._mask = query_bitmask_buf.data();
 
         for (const auto& filter_label : filter_labels)
@@ -39,6 +41,16 @@ bool bitmask_filter_match<LabelT>::contain_filtered_label(uint32_t id)
 }
 
 template <typename LabelT>
+void bitmask_filter_match<LabelT>::prefetch_bitmask(uint32_t id)
+{
+    // Prefetch the bitmask for id to L1 cache to hide DRAM latency
+    if (_bitmask_filters._bitmask_size > 0)
+    {
+        _mm_prefetch(reinterpret_cast<const char*>(_bitmask_filters.get_bitmask(id)), _MM_HINT_T0);
+    }
+}
+
+template <typename LabelT>
 integer_label_filter_match<LabelT>::integer_label_filter_match(
     integer_label_vector& label_vector,
     const std::vector<LabelT>& filter_labels,
@@ -53,8 +65,15 @@ template <typename LabelT>
 bool integer_label_filter_match<LabelT>::contain_filtered_label(uint32_t id)
 {
     // if unv isn't set, it will be default value 0, and there will be no match
-    return _label_vector.check_label_exists(id, _filter_labels) 
+    return _label_vector.check_label_exists(id, _filter_labels)
         || _label_vector.check_label_exists(id, _unv_label);
+}
+
+template <typename LabelT>
+void integer_label_filter_match<LabelT>::prefetch_bitmask(uint32_t id)
+{
+    // No-op for integer labels (no bitmask to prefetch)
+    (void)id;
 }
 
 template <typename LabelT>
@@ -80,6 +99,15 @@ bool label_filter_match_holder<LabelT>::contain_filtered_label(uint32_t id)
     else
     {
         return _bitmask_filter_match.contain_filtered_label(id);
+    }
+}
+
+template <typename LabelT>
+void label_filter_match_holder<LabelT>::prefetch_bitmask(uint32_t id)
+{
+    if (!_use_integer_labels)
+    {
+        _bitmask_filter_match.prefetch_bitmask(id);
     }
 }
 
