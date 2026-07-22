@@ -147,6 +147,7 @@ macro_rules! default_impl {
                 Ok(data.convert_f32())
             }
 
+            #[inline(always)]
             fn as_f32_into(src: &[Self], dst: &mut [f32]) -> Result<(), Self::Error> {
                 if dst.len() != src.len() {
                     return Err(NativeTypeLengthError{src: src.len(), dst: dst.len()});

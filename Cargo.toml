@@ -24,6 +24,8 @@ members = [
     "diskann-record",
     "diskann-tools",
     "vectorset",
+    # PiPNN
+    "diskann-pipnn",
     "diskann-bftree",
 ]
 
@@ -60,6 +62,8 @@ diskann = { path = "diskann", version = "0.55.0" }
 diskann-providers = { path = "diskann-providers", default-features = false, version = "0.55.0" }
 diskann-disk = { path = "diskann-disk", version = "0.55.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.55.0" }
+# PiPNN
+diskann-pipnn = { path = "diskann-pipnn", version = "0.55.0" }
 # Infra
 diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.55.0" }
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.55.0" }

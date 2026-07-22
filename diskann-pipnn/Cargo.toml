@@ -1,0 +1,36 @@
+[package]
+name = "diskann-pipnn"
+version.workspace = true
+description = "PiPNN (Pick-in-Partitions Nearest Neighbors) index builder for DiskANN"
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+diskann = { workspace = true }
+diskann-vector = { workspace = true }
+rayon = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+diskann-linalg = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+parking_lot = "0.12"
+libc = "0.2"
+bytemuck = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
+serde_json = { workspace = true }
+half = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "pipnn_bench"
+harness = false

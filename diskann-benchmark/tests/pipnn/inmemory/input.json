@@ -1,0 +1,43 @@
+{
+  "search_directories": ["$WORKSPACE/diskann-benchmark/tests/pipnn/data"],
+  "jobs": [
+    {
+      "type": "graph-index-build",
+      "content": {
+        "source": {
+          "index-source": "Build",
+          "data_type": "float32",
+          "data": "data.fbin",
+          "distance": "squared_l2",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 1,
+          "start_point_strategy": "medoid",
+          "build_algorithm": {
+            "algorithm": "PiPNN",
+            "num_hash_planes": 14,
+            "c_max": 512,
+            "c_min": 64,
+            "p_samp": 0.01,
+            "fanout": [10, 3],
+            "k": 2,
+            "replicas": 1,
+            "l_max": 72,
+            "final_prune": true,
+            "skip_hash_prune": true
+          }
+        },
+        "search_phase": {
+          "search-type": "topk",
+          "queries": "queries.fbin",
+          "groundtruth": "groundtruth.bin",
+          "reps": 1,
+          "num_threads": [1],
+          "runs": [{"search_n": 20, "search_l": [20], "recall_k": 10}]
+        }
+      }
+    }
+  ]
+}

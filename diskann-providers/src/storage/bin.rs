@@ -85,7 +85,7 @@ pub(crate) trait SetAdjacencyList {
 ///
 /// Furthermore, these are meant for data structures that use the identity mapping between
 /// internal and external IDs.
-pub(crate) trait GetAdjacencyList {
+pub trait GetAdjacencyList {
     /// The element type of output slices.
     type Element;
 
@@ -326,12 +326,7 @@ where
 /// After the header, each adjacency list in stored densely, consisting of a `u32` encoding
 /// the length `L` of the adjacency list followed by `L` u32-values containing the
 /// out-neighbors of this node. These adjacency lists are stored in-order.
-pub(crate) fn save_graph<S, P>(
-    graph: &S,
-    provider: &P,
-    start_point: u32,
-    path: &str,
-) -> ANNResult<usize>
+pub fn save_graph<S, P>(graph: &S, provider: &P, start_point: u32, path: &str) -> ANNResult<usize>
 where
     S: GetAdjacencyList<Element = u32>,
     P: StorageWriteProvider,

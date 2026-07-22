@@ -261,6 +261,45 @@ pub fn random_distance_preserving_matrix<T: Rng + ?Sized>(dim: usize, rng: &mut 
     random_distance_preserving_matrix_impl(dim, rng)
 }
 
+/// `C = A · Aᵀ` writing only the LOWER triangle of the `m × m` output.
+/// Upper triangle is left untouched. Caller is expected to symmetrize C
+/// (or read only the lower triangle).
+///
+/// Uses faer's `triangular::matmul` and leaves parallelism to the caller.
+#[inline]
+pub fn sgemm_aat_lower(a: &[f32], m: usize, k: usize, c: &mut [f32]) -> Result<(), SgemmError> {
+    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::A,
+        rows: m,
+        cols: k,
+    })?;
+    if a.len() != expected_a_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::A,
+            expected_rows: m,
+            expected_cols: k,
+            actual_len: a.len(),
+        });
+    }
+
+    let expected_c_len = m.checked_mul(m).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::C,
+        rows: m,
+        cols: m,
+    })?;
+    if c.len() != expected_c_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::C,
+            expected_rows: m,
+            expected_cols: m,
+            actual_len: c.len(),
+        });
+    }
+
+    crate::faer::sgemm_aat_lower_impl(m, k, a, c);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use approx::{assert_abs_diff_eq, assert_relative_eq};

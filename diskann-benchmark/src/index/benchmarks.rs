@@ -218,6 +218,13 @@ where
                             build.inmem_parameters(data.nrows(), data.ncols()),
                             common::NoDeletes,
                         )?;
+                        #[cfg(feature = "pipnn")]
+                        if matches!(
+                            build.build_algorithm(),
+                            diskann_disk::BuildAlgorithm::PiPNN(_)
+                        ) {
+                            return Ok(index);
+                        }
                         build::set_start_points(
                             index.provider(),
                             data.as_view(),
@@ -225,7 +232,14 @@ where
                         )?;
                         Ok(index)
                     },
-                    single_or_multi_insert,
+                    |index, strategy, data, input, output| {
+                        #[cfg(feature = "pipnn")]
+                        if let diskann_disk::BuildAlgorithm::PiPNN(config) = input.build_algorithm()
+                        {
+                            return build::pipnn_build(index, data, input, config);
+                        }
+                        single_or_multi_insert(index, strategy, data, input, output)
+                    },
                 )?;
 
                 // save the index if requested

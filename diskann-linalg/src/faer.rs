@@ -53,6 +53,35 @@ pub(super) fn sgemm_impl(
     faer::linalg::matmul::matmul(c, beta, a, b, alpha, Par::Seq)
 }
 
+/// Compute `C = A · Aᵀ` writing only the LOWER triangle (including diagonal)
+/// of the `m × m` output. Upper-triangle entries are left UNCHANGED — the
+/// caller is expected to either symmetrize C afterwards or read only the
+/// lower triangle.
+///
+/// Saves ~50% FLOPs vs the full `sgemm_aat`: faer's `triangular::matmul`
+/// with `dst_structure = TriangularLower` skips the upper-triangle FMA work
+/// at the microkernel-dispatch layer (private-gemm-x86 honours `DstKind::Lower`
+/// rather than masking stores).
+pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, a: &[f32], c: &mut [f32]) {
+    use faer::linalg::matmul::triangular::{matmul as tri_matmul, BlockStructure};
+
+    let a_mat = faer::mat::MatRef::from_row_major_slice(a, m, k);
+    let at_mat = faer::mat::MatRef::from_row_major_slice(a, m, k).transpose();
+    let c_mat = faer::mat::MatMut::from_row_major_slice_mut(c, m, m);
+
+    tri_matmul(
+        c_mat,
+        BlockStructure::TriangularLower,
+        faer::Accum::Replace,
+        a_mat,
+        BlockStructure::Rectangular,
+        at_mat,
+        BlockStructure::Rectangular,
+        1.0_f32,
+        Par::Seq,
+    );
+}
+
 /// See the documentation for `svd_into`.
 ///
 /// The implementation may assume the the specified invariants hold for the sizes of the

@@ -21,6 +21,10 @@ use diskann_providers::{
     model::{configuration::IndexConfiguration, graph::provider::async_::inmem::SetStartPoints},
     storage::{AsyncIndexMetadata, LoadWith, SaveWith},
 };
+#[cfg(feature = "pipnn")]
+use diskann_providers::{
+    index::diskann_async, model::graph::provider::async_::common::SetElementHelper,
+};
 use diskann_utils::{
     future::AsyncFriendly,
     views::{Matrix, MatrixView},
@@ -108,6 +112,101 @@ where
     }
 }
 
+#[cfg(feature = "pipnn")]
+pub(crate) fn pipnn_build<T>(
+    index: diskann_async::MemoryIndex<T>,
+    data: Arc<Matrix<T>>,
+    input: &IndexBuild,
+    config: &diskann_pipnn::PiPNNConfig,
+) -> anyhow::Result<BuildStats>
+where
+    T: diskann::graph::SampleableForStart + diskann::utils::VectorRepr,
+{
+    use anyhow::Context;
+
+    let npoints = data.nrows();
+    let dimensions = data.ncols();
+    let row_bytes = dimensions
+        .checked_mul(std::mem::size_of::<T>())
+        .context("dataset row size overflow")?;
+    anyhow::ensure!(
+        row_bytes.is_multiple_of(64),
+        "PiPNN in-memory build requires densely packed provider rows; got {row_bytes} bytes"
+    );
+
+    let max_degree = NonZeroUsize::new(input.max_degree() as usize)
+        .context("max_degree must be non-zero for PiPNN build")?;
+    let context = diskann_pipnn::PiPNNBuildContext::new(
+        config.clone(),
+        max_degree,
+        input.alpha(),
+        input.distance().into(),
+        input.num_threads(),
+    )?;
+
+    let started = std::time::Instant::now();
+    for (id, vector) in data.row_iter().enumerate() {
+        let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
+        index.data_provider.base_vectors.set_element(&id, vector)?;
+    }
+    drop(data);
+
+    // SAFETY: all real rows were populated above, the row-size check guarantees
+    // dense packing, and no writes race this build. The provider's trailing
+    // search-start rows are deliberately excluded from PiPNN core input.
+    let build_data = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
+    let adjacency = diskann_pipnn::builder::build_typed(build_data, npoints, dimensions, &context)?;
+
+    let build_data =
+        MatrixView::try_from(build_data, npoints, dimensions).map_err(|error| error.as_static())?;
+    let start_points = StartPointStrategy::Medoid
+        .compute(build_data)
+        .map_err(|error| {
+            ANNError::new(
+                diskann::ANNErrorKind::DiskANN(StartPointComputeError),
+                error,
+            )
+        })?;
+    let start_vector = start_points.row(0);
+    let start_bytes: &[u8] = bytemuck::cast_slice(start_vector);
+    let real_start_id = build_data
+        .row_iter()
+        .position(|row| bytemuck::cast_slice::<T, u8>(row) == start_bytes)
+        .context("PiPNN medoid is not a dataset vector")?;
+
+    for (id, neighbors) in adjacency.iter().enumerate() {
+        index
+            .provider()
+            .neighbors()
+            .set_neighbors_sync(id, neighbors)?;
+    }
+    index.provider().set_start_points(start_points.row_iter())?;
+    let start_id = index
+        .provider()
+        .starting_points()?
+        .into_iter()
+        .next()
+        .context("PiPNN provider has no search start slot")?;
+    index
+        .provider()
+        .neighbors()
+        .set_neighbors_sync(start_id as usize, &adjacency[real_start_id])?;
+
+    let total_time = MicroSeconds::from(started.elapsed());
+    let per_vector = MicroSeconds::new(
+        total_time
+            .as_micros()
+            .checked_div(u64::try_from(npoints)?)
+            .context("PiPNN build received an empty dataset")?,
+    );
+    Ok(BuildStats {
+        kind: BuildKind::PiPNN,
+        total_time,
+        vectors_inserted: npoints,
+        insert_latencies: percentiles::compute_percentiles(&mut [per_vector])?,
+    })
+}
+
 #[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]
 pub(crate) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
@@ -156,6 +255,8 @@ where
 pub(crate) enum BuildKind {
     SingleInsert,
     MultiInsert,
+    #[cfg(feature = "pipnn")]
+    PiPNN,
 }
 
 impl std::fmt::Display for BuildKind {
@@ -163,6 +264,8 @@ impl std::fmt::Display for BuildKind {
         match self {
             Self::SingleInsert => write!(f, "single insert"),
             Self::MultiInsert => write!(f, "multi insert"),
+            #[cfg(feature = "pipnn")]
+            Self::PiPNN => write!(f, "PiPNN"),
         }
     }
 }
