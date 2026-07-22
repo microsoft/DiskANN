@@ -37,8 +37,8 @@ use diskann_providers::{
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::{
-    matrix::Matrix,
     object_pool::{ObjectPool, PoolOption, TryAsPooled},
+    views::Matrix,
 };
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};

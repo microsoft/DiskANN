@@ -81,13 +81,13 @@ use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use diskann_utils::{
     Reborrow, ReborrowMut,
-    matrix::{MatrixView, MatrixViewMut},
     strided::StridedView,
+    views::{MatrixView, MatrixViewMut},
 };
 
-use super::matrix::{
-    Defaulted, LayoutError, Mat, MatMut, MatRef, NewMut, NewOwned, NewRef, Overflow, Repr, ReprMut,
-    ReprOwned, SliceError,
+use super::views::{
+    LayoutError, Mat, MatMut, MatRef, NewDefault, NewMut, NewOwned, NewRef, Overflow, Repr,
+    ReprMut, ReprOwned, SliceError,
 };
 use crate::bits::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 use crate::utils;
@@ -578,15 +578,26 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprOwned
 // ════════════════════════════════════════════════════════════════════
 
 // SAFETY: The returned `Mat` contains a `Box` with exactly `self.storage_len()` elements.
-//
-// No generic `NewOwned<T>` value-fill: `Defaulted` is foreign (diskann-utils), so a value-fill
-// impl would overlap with this under intercrate coherence. These matrices are only default-init'd.
-unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<Defaulted>
+unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewOwned<T>
     for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Error = crate::error::Infallible;
 
-    fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
+    fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
+        let b: Box<[T]> = vec![value; self.storage_len()].into_boxed_slice();
+
+        // SAFETY: By construction, `b.len() == self.storage_len()`.
+        Ok(unsafe { self.box_to_mat(b) })
+    }
+}
+
+// SAFETY: The returned `Mat` contains a `Box` with exactly `self.storage_len()` elements.
+unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewDefault
+    for BlockTransposedRepr<T, GROUP, PACK>
+{
+    type Error = crate::error::Infallible;
+
+    fn new_default(self) -> Result<Mat<Self>, Self::Error> {
         let b: Box<[T]> = vec![T::default(); self.storage_len()].into_boxed_slice();
 
         // SAFETY: By construction, `b.len() == self.storage_len()`.
@@ -1110,7 +1121,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
         let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)
             .expect("dimensions should not overflow");
         Self {
-            data: Mat::from_repr(repr, Defaulted).expect("infallible"),
+            data: Mat::from_default(repr).expect("infallible"),
         }
     }
 
@@ -1118,7 +1129,7 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     pub fn try_new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
         let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)?;
         Ok(Self {
-            data: Mat::from_repr(repr, Defaulted).expect("infallible"),
+            data: Mat::from_default(repr).expect("infallible"),
         })
     }
 
@@ -1228,7 +1239,7 @@ mod tests {
     //!     parameters to `test_full_api` (`Send`/`Sync`, panic paths,
     //!     non-unit strides, concurrent mutation, etc.).
 
-    use diskann_utils::{lazy_format, matrix::Matrix};
+    use diskann_utils::{lazy_format, views::Matrix};
 
     use super::*;
     use crate::utils::div_round_up;

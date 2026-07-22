@@ -9,7 +9,7 @@ use diskann::{ANNResult, graph, utils::async_tools};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_utils::{
     future::{AsyncFriendly, boxit},
-    matrix::{self, Matrix},
+    views::{self, Matrix},
 };
 
 use crate::{
@@ -517,7 +517,7 @@ where
     T: Search,
 {
     let mut lengths = Vec::with_capacity(range.len());
-    let mut ids = Matrix::new(matrix::Init(T::Id::default), range.len(), num_ids.into());
+    let mut ids = Matrix::new(views::Init(T::Id::default), range.len(), num_ids.into());
 
     let mut latencies = Vec::<MicroSeconds>::with_capacity(range.len());
     let mut outputs = Vec::<T::Output>::with_capacity(range.len());

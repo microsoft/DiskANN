@@ -20,7 +20,7 @@ pub mod sampling;
 
 pub mod strided;
 
-pub mod matrix;
+pub mod views;
 
 mod lazystring;
 pub use lazystring::LazyString;

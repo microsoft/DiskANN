@@ -19,7 +19,7 @@ use diskann_providers::model::graph::provider::async_::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    matrix::{Matrix, MatrixView},
+    views::{Matrix, MatrixView},
 };
 
 use super::{

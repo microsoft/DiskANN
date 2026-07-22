@@ -10,7 +10,7 @@ use std::io::Read;
 
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::{io::Metadata, matrix::Matrix};
+use diskann_utils::{io::Metadata, views::Matrix};
 
 /// Read metadata of data file.
 pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(

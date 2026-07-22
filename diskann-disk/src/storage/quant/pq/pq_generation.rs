@@ -16,7 +16,7 @@ use diskann_providers::{
     utils::{BridgeErr, RayonThreadPoolRef},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
-use diskann_utils::matrix::{MatrixView, MatrixViewMut};
+use diskann_utils::views::{MatrixView, MatrixViewMut};
 use diskann_vector::distance::Metric;
 use tracing::info;
 
@@ -119,7 +119,7 @@ where
                 context.storage_provider,
             )?;
 
-        let mut full_pivot_data_mat = diskann_utils::matrix::MatrixViewMut::try_from(
+        let mut full_pivot_data_mat = diskann_utils::views::MatrixViewMut::try_from(
             full_pivot_data.as_mut_slice(),
             context.num_centers,
             full_dim,
@@ -174,8 +174,8 @@ mod pq_generation_tests {
     use diskann_providers::utils::{create_thread_pool_for_test, RayonThreadPoolRef};
     use diskann_utils::{
         io::{read_bin, write_bin},
-        matrix::{MatrixView, MatrixViewMut},
         test_data_root,
+        views::{MatrixView, MatrixViewMut},
     };
     use diskann_vector::distance::Metric;
     use rstest::rstest;

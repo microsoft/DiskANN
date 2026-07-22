@@ -725,7 +725,7 @@ mod tests {
         alloc::GlobalAllocator,
         spherical::{SphericalQuantizer, SupportedMetric},
     };
-    use diskann_utils::matrix::{Matrix, MatrixView};
+    use diskann_utils::views::{Matrix, MatrixView};
     use diskann_vector::{
         DistanceFunction, PreprocessedDistanceFunction, PureDistanceFunction,
         distance::{InnerProduct, Metric, SquaredL2},
@@ -769,7 +769,7 @@ mod tests {
 
     fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> Matrix<f32> {
         Matrix::new(
-            diskann_utils::matrix::Init(|| StandardNormal {}.sample(rng)),
+            diskann_utils::views::Init(|| StandardNormal {}.sample(rng)),
             nrows,
             ncols,
         )

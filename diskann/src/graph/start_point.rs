@@ -8,8 +8,8 @@ use std::{fmt::Display, num::NonZeroUsize};
 use thiserror::Error;
 
 use diskann_utils::{
-    matrix::{Matrix, MatrixView},
     sampling::WithApproximateNorm,
+    views::{Matrix, MatrixView},
 };
 
 /// 'StartPointStrategy' is an enum that represents the different strategies to select

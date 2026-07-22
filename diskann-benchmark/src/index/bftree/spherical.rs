@@ -23,7 +23,7 @@ use diskann_quantization::{
         SphericalQuantizer,
     },
 };
-use diskann_utils::matrix::Matrix;
+use diskann_utils::views::Matrix;
 use rand::SeedableRng;
 
 use crate::{

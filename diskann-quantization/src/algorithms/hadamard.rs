@@ -383,7 +383,7 @@ mod tests {
     };
 
     use super::*;
-    use diskann_utils::matrix::{self, Matrix, MatrixView};
+    use diskann_utils::views::{self, Matrix, MatrixView};
 
     /// Retrieve the 8x8 hadamard matrix as a `Matrix`.
     fn get_hadamard_8() -> Matrix<f32> {
@@ -443,7 +443,7 @@ mod tests {
     fn test_micro_kernel_64() {
         let mut src = {
             let mut rng = StdRng::seed_from_u64(0xde1936d651285fc8);
-            let init = matrix::Init(|| StandardUniform {}.sample(&mut rng));
+            let init = views::Init(|| StandardUniform {}.sample(&mut rng));
             Matrix::new(init, 64, 1)
         };
 
@@ -476,7 +476,7 @@ mod tests {
     fn test_hadamard_transform(dim: usize, seed: u64) {
         let src = {
             let mut rng = StdRng::seed_from_u64(seed);
-            let init = matrix::Init(|| StandardUniform {}.sample(&mut rng));
+            let init = views::Init(|| StandardUniform {}.sample(&mut rng));
             Matrix::new(init, dim, 1)
         };
 

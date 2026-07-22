@@ -62,7 +62,7 @@
 //!     scalar::{self, train, CompensatedVector, CompensatedIP, CompensatedSquaredL2},
 //!     num::Positive,
 //! };
-//! use diskann_utils::{Reborrow, ReborrowMut, matrix::Matrix};
+//! use diskann_utils::{Reborrow, ReborrowMut, views::Matrix};
 //! use rand::{rngs::StdRng, SeedableRng, distr::Distribution};
 //! use rand_distr::StandardNormal;
 //! use diskann_vector::{PureDistanceFunction, DistanceFunction, distance};

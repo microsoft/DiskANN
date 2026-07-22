@@ -53,11 +53,11 @@
 
 pub mod block_transposed;
 pub mod distance;
-pub(crate) use diskann_utils::matrix;
+pub(crate) use diskann_utils::views;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
-pub use diskann_utils::matrix::{
-    Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
+pub use diskann_utils::views::{
+    LayoutError, Mat, MatMut, MatRef, NewCloned, NewDefault, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, RowMajor, SliceError,
 };
 pub use distance::{

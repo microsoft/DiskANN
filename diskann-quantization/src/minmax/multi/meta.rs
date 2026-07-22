@@ -10,8 +10,8 @@ use super::super::vectors::DataMutRef;
 use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::minmax::{self, Data};
-use crate::multi_vector::matrix::{
-    Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
+use crate::multi_vector::views::{
+    NewDefault, NewMut, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
 use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, RowMajor};
 use crate::scalar::InputContainsNaN;
@@ -165,12 +165,12 @@ where
 // SAFETY: `ptr` points to a properly sized slice that is compatible with the drop
 // logic in `Self as ReprOwned`. Box guarantees that the initial construction
 // will be non-null.
-unsafe impl<const NBITS: usize> NewOwned<Defaulted> for MinMaxMeta<NBITS>
+unsafe impl<const NBITS: usize> NewDefault for MinMaxMeta<NBITS>
 where
     Unsigned: Representation<NBITS>,
 {
     type Error = crate::error::Infallible;
-    fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
+    fn new_default(self) -> Result<Mat<Self>, Self::Error> {
         let b: Box<[u8]> = vec![0u8; self.bytes()].into_boxed_slice();
 
         let ptr = utils::box_into_nonnull(b).cast::<u8>();
@@ -372,7 +372,7 @@ mod tests {
     mod construction {
         use super::*;
 
-        /// Tests NewOwned (Mat::from_repr with Defaulted) for various dimensions and sizes.
+        /// Tests NewDefault (Mat::from_default) for various dimensions and sizes.
         fn test_new_owned<const NBITS: usize>()
         where
             Unsigned: Representation<NBITS>,
@@ -381,7 +381,7 @@ mod tests {
                 for &num_vectors in TEST_NVECS {
                     let meta = MinMaxMeta::<NBITS>::new(num_vectors, dim);
                     let mat: Mat<MinMaxMeta<NBITS>> =
-                        Mat::from_repr(meta, Defaulted).expect("NewOwned should succeed");
+                        Mat::from_default(meta).expect("NewOwned should succeed");
 
                     // Verify num_vectors and intrinsic_dim
                     assert_eq!(mat.num_vectors(), num_vectors);
@@ -536,7 +536,7 @@ mod tests {
                             .expect("input view creation");
 
                     let mut multi_mat: Mat<MinMaxMeta<NBITS>> =
-                        Mat::from_repr(MinMaxMeta::new(num_vectors, dim), Defaulted)
+                        Mat::from_default(MinMaxMeta::new(num_vectors, dim))
                             .expect("output mat creation");
 
                     quantizer
@@ -592,7 +592,7 @@ mod tests {
                     .expect("input view");
 
             let mut mat: Mat<MinMaxMeta<NBITS>> =
-                Mat::from_repr(MinMaxMeta::new(num_vectors, dim), Defaulted).expect("mat creation");
+                Mat::from_default(MinMaxMeta::new(num_vectors, dim)).expect("mat creation");
 
             quantizer
                 .compress_into(input_view, mat.reborrow_mut())
@@ -632,7 +632,7 @@ mod tests {
 
             // Output has 2 vectors (mismatch)
             let mut mat: Mat<MinMaxMeta<NBITS>> =
-                Mat::from_repr(MinMaxMeta::new(2, dim), Defaulted).expect("mat creation");
+                Mat::from_default(MinMaxMeta::new(2, dim)).expect("mat creation");
 
             let _ = quantizer.compress_into(input_view, mat.reborrow_mut());
         }
@@ -650,7 +650,7 @@ mod tests {
 
             // Output correctly has dim=4
             let mut mat: Mat<MinMaxMeta<NBITS>> =
-                Mat::from_repr(MinMaxMeta::new(2, 4), Defaulted).expect("mat creation");
+                Mat::from_default(MinMaxMeta::new(2, 4)).expect("mat creation");
 
             let _ = quantizer.compress_into(input_view, mat.reborrow_mut());
         }

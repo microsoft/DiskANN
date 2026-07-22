@@ -9,8 +9,8 @@ use std::{
 };
 
 use diskann_utils::{
-    matrix::{Matrix, MatrixView},
     strided::StridedView,
+    views::{Matrix, MatrixView},
 };
 use thiserror::Error;
 
@@ -364,7 +364,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::matrix::{self, Matrix};
+    use diskann_utils::views::{self, Matrix};
 
     use super::*;
 
@@ -380,7 +380,7 @@ mod tests {
     fn test_rows() {
         let mut i = 0usize;
         let mat = Matrix::new(
-            matrix::Init(|| {
+            views::Init(|| {
                 let v = i;
                 i += 1;
                 v

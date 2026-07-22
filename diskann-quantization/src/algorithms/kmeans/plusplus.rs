@@ -6,8 +6,8 @@
 use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
-    matrix::{MatrixView, MatrixViewMut},
     strided::StridedView,
+    views::{MatrixView, MatrixViewMut},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 use rand::{
@@ -521,7 +521,7 @@ pub fn kmeans_plusplus_into(
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, matrix::Matrix};
+    use diskann_utils::{lazy_format, views::Matrix};
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 

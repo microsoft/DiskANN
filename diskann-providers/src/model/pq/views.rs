@@ -4,7 +4,7 @@
  */
 
 use diskann::ANNError;
-use diskann_utils::matrix;
+use diskann_utils::views;
 
 use crate::utils::Bridge;
 
@@ -41,9 +41,9 @@ impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
 }
 
 // Compatibility with ANNError.
-impl From<Bridge<matrix::TryFromError>> for ANNError {
+impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
     #[track_caller]
-    fn from(value: Bridge<matrix::TryFromError>) -> Self {
+    fn from(value: Bridge<views::TryFromError<T>>) -> Self {
         ANNError::log_pq_error(value.into_inner())
     }
 }
@@ -106,7 +106,7 @@ mod tests {
         let data = vec![0; ncols * nrows];
 
         test_error(|| {
-            matrix::MatrixView::try_from(&data, nrows, ncols + 1)
+            views::MatrixView::try_from(&data, nrows, ncols + 1)
                 .bridge_err()
                 .unwrap_err()
         });

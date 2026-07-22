@@ -53,7 +53,7 @@
 
 use std::fmt;
 
-use diskann_utils::matrix::MatrixViewMut;
+use diskann_utils::views::MatrixViewMut;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
 /// Parameters for Determinant-Diversity post-processor with validation.
@@ -481,7 +481,7 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 mod tests {
     use super::*;
     use diskann_quantization::num::Positive;
-    use diskann_utils::matrix::Matrix;
+    use diskann_utils::views::Matrix;
 
     #[test]
     fn test_valid_params() {

@@ -12,7 +12,7 @@ use diskann_quantization::{
         iface::{self, Opaque, OpaqueMut, Quantizer},
     },
 };
-use diskann_utils::matrix::MatrixView;
+use diskann_utils::views::MatrixView;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -357,7 +357,7 @@ impl DynQueryComputer for MinMax8BitQueryComputer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::matrix::Matrix;
+    use diskann_utils::views::Matrix;
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
     use crate::quantization::{GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit};

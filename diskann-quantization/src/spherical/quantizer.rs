@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, matrix::MatrixView};
+use diskann_utils::{ReborrowMut, views::MatrixView};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
@@ -1220,7 +1220,7 @@ mod tests {
 
     use diskann_utils::{
         ReborrowMut, lazy_format,
-        matrix::{self, Matrix},
+        views::{self, Matrix},
     };
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
@@ -2388,7 +2388,7 @@ mod tests {
     #[test]
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
-        let data = Matrix::<f32>::new(matrix::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
+        let data = Matrix::<f32>::new(views::Init(|| StandardNormal {}.sample(&mut rng)), 16, 12);
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::matrix::MatrixView;
+use crate::views::MatrixView;
 use diskann_vector::{conversion::CastFromSlice, distance::SquaredL2, PureDistanceFunction};
 use half::f16;
 
@@ -161,7 +161,7 @@ impl ComputeMedoid for i8 {
 
 #[cfg(test)]
 mod tests {
-    use crate::matrix::{Init, Matrix};
+    use crate::views::{Init, Matrix};
     use rand::{
         distr::{Distribution, StandardUniform},
         rngs::StdRng,

@@ -9,11 +9,11 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::matrix::{DenseData, MutDenseData};
+use crate::views::{DenseData, MatMut, MatRef, MutDenseData, RowMajor};
 
 /// A row-major strided matrix.
 ///
-/// This is a generalization of the dense [`Matrix`](crate::matrix::Matrix) type as it does not mandate a dense
+/// This is a generalization of the dense [`Matrix`](crate::views::Matrix) type as it does not mandate a dense
 /// layout in memory.
 ///
 /// ```text
@@ -497,11 +497,11 @@ where
     }
 }
 
-impl<'a, T> From<crate::matrix::MatRef<'a, crate::matrix::RowMajor<T>>> for StridedBase<&'a [T]> {
-    fn from(m: crate::matrix::MatRef<'a, crate::matrix::RowMajor<T>>) -> Self {
+impl<'a, T> From<MatRef<'a, RowMajor<T>>> for StridedBase<&'a [T]> {
+    fn from(m: MatRef<'a, RowMajor<T>>) -> Self {
         let (nrows, ncols) = (m.nrows(), m.ncols());
         Self {
-            data: m.as_slice(),
+            data: m.into(),
             nrows,
             ncols,
             cstride: ncols,
@@ -509,17 +509,11 @@ impl<'a, T> From<crate::matrix::MatRef<'a, crate::matrix::RowMajor<T>>> for Stri
     }
 }
 
-impl<'a, T> From<crate::matrix::MatMut<'a, crate::matrix::RowMajor<T>>>
-    for StridedBase<&'a mut [T]>
-{
-    fn from(mut m: crate::matrix::MatMut<'a, crate::matrix::RowMajor<T>>) -> Self {
+impl<'a, T> From<MatMut<'a, RowMajor<T>>> for StridedBase<&'a mut [T]> {
+    fn from(m: MatMut<'a, RowMajor<T>>) -> Self {
         let (nrows, ncols) = (m.nrows(), m.ncols());
-        let ptr = m.as_mut_slice().as_mut_ptr();
-        // SAFETY: `m` owns an exclusive `&'a mut` borrow of `nrows * ncols` contiguous `T`;
-        // consuming `m` (a non-owning view with no `Drop`) transfers that borrow here.
-        let data: &'a mut [T] = unsafe { std::slice::from_raw_parts_mut(ptr, nrows * ncols) };
         Self {
-            data,
+            data: m.into(),
             nrows,
             ncols,
             cstride: ncols,
@@ -530,7 +524,7 @@ impl<'a, T> From<crate::matrix::MatMut<'a, crate::matrix::RowMajor<T>>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::matrix;
+    use crate::views;
 
     #[test]
     fn test_linear_length() {
@@ -601,7 +595,7 @@ mod tests {
     }
 
     // Test that the contents of `dut` match those in the dense 2d matrix.
-    fn test_indexing(dut: StridedView<'_, usize>, expected: matrix::MatrixView<'_, usize>) {
+    fn test_indexing(dut: StridedView<'_, usize>, expected: views::MatrixView<'_, usize>) {
         assert_eq!(dut.nrows(), expected.nrows());
         assert_eq!(dut.ncols(), expected.ncols());
 
@@ -641,10 +635,10 @@ mod tests {
     // 2*ncols 2*ncols+1 2*ncols+2 ... 3*ncols-1
     // ...
     // ```
-    fn create_test_matrix(nrows: usize, ncols: usize) -> matrix::Matrix<usize> {
+    fn create_test_matrix(nrows: usize, ncols: usize) -> views::Matrix<usize> {
         let mut i = 0;
-        matrix::Matrix::new(
-            matrix::Init(|| {
+        views::Matrix::new(
+            views::Init(|| {
                 let v = i;
                 i += 1;
                 v
@@ -679,7 +673,7 @@ mod tests {
         assert_eq!(v.as_ptr(), ptr, "base pointer was not preserved");
 
         // Create the expected matrix.
-        let mut expected = matrix::Matrix::new(0, 5, 2);
+        let mut expected = views::Matrix::new(0, 5, 2);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 expected[(row, col)] = m[(row, col)];
@@ -689,7 +683,7 @@ mod tests {
 
         // Create a strided view over the last two columns.
         let v = StridedView::try_from(&(m.as_slice()[1..]), m.nrows(), 2, m.ncols()).unwrap();
-        let mut expected = matrix::Matrix::new(0, 5, 2);
+        let mut expected = views::Matrix::new(0, 5, 2);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 expected[(row, col)] = m[(row, col + 1)];
@@ -705,7 +699,7 @@ mod tests {
 
         // Initialize using 2d indexing.
         {
-            let mut dst = matrix::Matrix::<usize>::new(0, 5, 10);
+            let mut dst = views::Matrix::<usize>::new(0, 5, 10);
 
             let ptr = dst.as_ptr();
 
@@ -735,7 +729,7 @@ mod tests {
 
         // Initialize using row-wise indexing.
         {
-            let mut dst = matrix::Matrix::<usize>::new(0, 5, 10);
+            let mut dst = views::Matrix::<usize>::new(0, 5, 10);
 
             let ptr = dst.as_ptr();
 
@@ -763,7 +757,7 @@ mod tests {
 
         // Initialize using row-iterator indexing.
         {
-            let mut dst = matrix::Matrix::<usize>::new(0, 5, 10);
+            let mut dst = views::Matrix::<usize>::new(0, 5, 10);
 
             let offset = 2;
             // SAFETY: The underlying allocation is valid for much more than 2 elements.
@@ -844,7 +838,7 @@ mod tests {
     #[test]
     fn test_try_shrink_from() {
         // Exact is okay.
-        let m = matrix::Matrix::<usize>::new(0, 10, 10);
+        let m = views::Matrix::<usize>::new(0, 10, 10);
         let nrows = m.nrows();
         let ncols = m.ncols();
         let s = StridedView::try_shrink_from(m.as_slice(), nrows, ncols, ncols).unwrap();
@@ -868,14 +862,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "cstride must be greater than or equal to ncols")]
     fn test_try_shink_from_panics() {
-        let m = matrix::Matrix::<usize>::new(0, 4, 4);
+        let m = views::Matrix::<usize>::new(0, 4, 4);
         let _ = StridedView::try_shrink_from(m.as_slice(), 2, 2, 1);
     }
 
     #[test]
     fn test_try_shrink_from_mut() {
         // Exact is okay.
-        let mut m = matrix::Matrix::<usize>::new(0, 10, 10);
+        let mut m = views::Matrix::<usize>::new(0, 10, 10);
 
         let nrows = m.nrows();
         let ncols = m.ncols();
@@ -903,14 +897,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "cstride must be greater than or equal to ncols")]
     fn test_try_shink_from_mut_panics() {
-        let mut m = matrix::Matrix::<usize>::new(0, 4, 4);
+        let mut m = views::Matrix::<usize>::new(0, 4, 4);
         let _ = MutStridedView::try_shrink_from_mut(m.as_mut_slice(), 2, 2, 1);
     }
 
     #[test]
     fn test_try_from() {
         // Exact is okay.
-        let m = matrix::Matrix::<usize>::new(0, 10, 10);
+        let m = views::Matrix::<usize>::new(0, 10, 10);
         let nrows = m.nrows();
         let ncols = m.ncols();
         let s = StridedView::try_from(m.as_slice(), nrows, ncols, ncols).unwrap();
@@ -939,14 +933,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "cstride must be greater than or equal to ncols")]
     fn test_try_frompanics() {
-        let mut m = matrix::Matrix::<usize>::new(0, 4, 4);
+        let mut m = views::Matrix::<usize>::new(0, 4, 4);
         let _ = MutStridedView::try_from(m.as_mut_slice(), 2, 2, 1);
     }
 
     #[test]
     #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
     fn test_get_row_panics() {
-        let m = matrix::Matrix::<usize>::new(0, 3, 7);
+        let m = views::Matrix::<usize>::new(0, 3, 7);
         let v: StridedView<_> = m.as_view().into();
         v.row(3);
     }
@@ -954,7 +948,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
     fn test_get_row_mut_panics() {
-        let mut m = matrix::Matrix::<usize>::new(0, 3, 7);
+        let mut m = views::Matrix::<usize>::new(0, 3, 7);
         let mut v: MutStridedView<_> = m.as_mut_view().into();
         v.row_mut(3);
     }
@@ -962,7 +956,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
     fn test_index_panics_row() {
-        let m = matrix::Matrix::<usize>::new(0, 3, 7);
+        let m = views::Matrix::<usize>::new(0, 3, 7);
         let v: StridedView<_> = m.as_view().into();
         let _ = v[(3, 2)];
     }
@@ -970,7 +964,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
     fn test_index_panics_col() {
-        let m = matrix::Matrix::<usize>::new(0, 3, 7);
+        let m = views::Matrix::<usize>::new(0, 3, 7);
         let v: StridedView<_> = m.as_view().into();
         let _ = v[(2, 7)];
     }
@@ -978,7 +972,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
     fn test_index_mut_panics_row() {
-        let mut m = matrix::Matrix::<usize>::new(0, 3, 7);
+        let mut m = views::Matrix::<usize>::new(0, 3, 7);
         let mut v: MutStridedView<_> = m.as_mut_view().into();
         v[(3, 2)] = 1;
     }
@@ -986,7 +980,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
     fn test_index_mut_panics_col() {
-        let mut m = matrix::Matrix::<usize>::new(0, 3, 7);
+        let mut m = views::Matrix::<usize>::new(0, 3, 7);
         let mut v: MutStridedView<_> = m.as_mut_view().into();
         v[(2, 7)] = 1;
     }

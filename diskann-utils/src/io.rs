@@ -16,7 +16,7 @@ use std::io::{Read, Seek, Write};
 use diskann_wide::{LoHi, SplitJoin};
 use thiserror::Error;
 
-use crate::matrix::{Matrix, MatrixView};
+use crate::views::{Matrix, MatrixView};
 
 /// Read a matrix of `T` from the DiskANN binary format (see [module docs](self)).
 ///
@@ -209,7 +209,7 @@ pub enum SaveBinError {
 mod tests {
     use std::io::Cursor;
 
-    use crate::matrix::Init;
+    use crate::views::Init;
 
     use super::*;
 

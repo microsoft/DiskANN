@@ -75,7 +75,7 @@ mod imp {
         model::graph::provider::async_::{common, inmem},
     };
     use diskann_quantization::alloc::GlobalAllocator;
-    use diskann_utils::matrix::Matrix;
+    use diskann_utils::views::Matrix;
     use rand::SeedableRng;
     use serde::Serialize;
     use std::{io::Write, sync::Arc};

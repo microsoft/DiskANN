@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::matrix::{Matrix, MatrixView};
+use crate::views::{Matrix, MatrixView};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 /// Return multiple rows sampled using Latin Hypercube Sampling in `data` that aproximetely uniformly distributed.
@@ -67,7 +67,7 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 mod tests {
     use std::fmt::Display;
 
-    use crate::matrix::{Init, Matrix};
+    use crate::views::{Init, Matrix};
     use diskann_vector::conversion::CastFromSlice;
     use half::f16;
     use rand::{

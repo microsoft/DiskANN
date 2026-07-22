@@ -588,10 +588,17 @@ where
     }
 }
 
-impl From<diskann_utils::matrix::TryFromError> for ANNError {
+impl From<diskann_utils::views::TryFromErrorLight> for ANNError {
     #[track_caller]
-    fn from(err: diskann_utils::matrix::TryFromError) -> Self {
+    fn from(err: diskann_utils::views::TryFromErrorLight) -> Self {
         ANNError::new(ANNErrorKind::DimensionMismatchError, err)
+    }
+}
+
+impl<T: diskann_utils::views::DenseData> From<diskann_utils::views::TryFromError<T>> for ANNError {
+    #[track_caller]
+    fn from(err: diskann_utils::views::TryFromError<T>) -> Self {
+        Self::from(err.as_static())
     }
 }
 
@@ -1534,7 +1541,7 @@ Caused by:
     #[test]
     fn from_try_from_error() {
         let data: &[f32] = &[1.0, 2.0, 3.0];
-        let err = diskann_utils::matrix::MatrixView::try_from(data, 2, 2).unwrap_err();
+        let err = diskann_utils::views::MatrixView::try_from(data, 2, 2).unwrap_err();
         let ann_err = ANNError::from(err);
         assert_eq!(ann_err.kind(), ANNErrorKind::DimensionMismatchError);
     }

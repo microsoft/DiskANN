@@ -10,7 +10,7 @@ use diskann::{
     graph::{self, ext::labeled, glue, search::AdaptiveL},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, matrix::Matrix};
+use diskann_utils::{future::AsyncFriendly, views::Matrix};
 
 use crate::search::{self, Search, graph::Strategy};
 

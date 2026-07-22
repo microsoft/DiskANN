@@ -11,7 +11,7 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
-use diskann_utils::{future::AsyncFriendly, matrix::Matrix};
+use diskann_utils::{future::AsyncFriendly, views::Matrix};
 
 use crate::{
     recall,

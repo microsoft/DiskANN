@@ -24,7 +24,7 @@ use diskann_benchmark_runner::{
     utils::{datatype::AsDataType, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Registry,
 };
-use diskann_utils::{future::SendFuture, matrix::Matrix};
+use diskann_utils::{future::SendFuture, views::Matrix};
 use diskann_vector::{distance::Metric, PreprocessedDistanceFunction};
 use half::f16;
 use serde::Serialize;

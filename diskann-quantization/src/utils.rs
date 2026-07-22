@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 
 use thiserror::Error;
 
-use diskann_utils::matrix::MatrixView;
+use diskann_utils::views::MatrixView;
 
 /// Specify featres and config flags that will be propagated to `docsrs` config.
 macro_rules! features {
@@ -41,7 +41,7 @@ pub(crate) fn as_nonnull_mut<T>(slice: &mut [T]) -> NonNull<T> {
 ///
 /// This is the owned-allocation counterpart of [`as_nonnull`]: it consumes the
 /// box, preventing its destructor from running, and hands back a non-null
-/// pointer suitable for storing inside a [`Mat`](super::multi_vector::matrix::Mat).
+/// pointer suitable for storing inside a [`Mat`](super::multi_vector::views::Mat).
 ///
 /// To reclaim the memory later, reconstruct the `Box` via
 /// `Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len))`.
@@ -205,7 +205,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::matrix::Matrix;
+    use diskann_utils::views::Matrix;
     use diskann_vector::{Norm, norm::FastL2Norm};
     use rand::{SeedableRng, rngs::StdRng};
 

@@ -31,7 +31,7 @@ use diskann_providers::{
     utils::{create_thread_pool, ParallelIteratorInPool},
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
-use diskann_utils::matrix::Matrix;
+use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
 
 use crate::{

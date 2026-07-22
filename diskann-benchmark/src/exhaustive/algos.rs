@@ -33,7 +33,7 @@ where
 
 #[derive(Debug, Clone)]
 pub(super) struct LinearSearch {
-    pub(super) ids: diskann_utils::matrix::Matrix<u32>,
+    pub(super) ids: diskann_utils::views::Matrix<u32>,
     pub(super) preprocess: Vec<MicroSeconds>,
     pub(super) search: Vec<MicroSeconds>,
     pub(super) total: MicroSeconds,
@@ -41,7 +41,7 @@ pub(super) struct LinearSearch {
 
 pub(super) fn linear_search<Q, C>(
     store: &Q,
-    queries: diskann_utils::matrix::MatrixView<f32>,
+    queries: diskann_utils::views::MatrixView<f32>,
     builder: &C,
     results_per_query: usize,
     progress: &indicatif::ProgressBar,
@@ -51,7 +51,7 @@ where
     C: CreateQuantComputer<Q> + Sync,
 {
     let mut output =
-        diskann_utils::matrix::Matrix::<u32>::new(u32::MAX, queries.nrows(), results_per_query);
+        diskann_utils::views::Matrix::<u32>::new(u32::MAX, queries.nrows(), results_per_query);
 
     struct Times {
         preprocess: MicroSeconds,

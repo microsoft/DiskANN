@@ -5,7 +5,7 @@
 
 use std::{ops::Range, path::Path, sync::Arc};
 
-use diskann_utils::matrix::{Matrix, MatrixView};
+use diskann_utils::views::{Matrix, MatrixView};
 
 use crate::{recall, streaming};
 

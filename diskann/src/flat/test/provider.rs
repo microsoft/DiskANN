@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-use diskann_utils::{future::SendFuture, matrix::Matrix};
+use diskann_utils::{future::SendFuture, views::Matrix};
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 

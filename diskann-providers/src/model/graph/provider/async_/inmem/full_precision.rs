@@ -23,7 +23,7 @@ use diskann::{
 };
 
 use diskann_utils::future::AsyncFriendly;
-use diskann_utils::matrix::Matrix;
+use diskann_utils::views::Matrix;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{

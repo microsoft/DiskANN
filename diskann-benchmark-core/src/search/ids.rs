@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::matrix::{self, Matrix};
+use diskann_utils::views::{self, Matrix};
 
 use crate::recall;
 
@@ -231,7 +231,7 @@ where
                 len,
                 num_ids,
             } => {
-                let mut dst = Matrix::new(matrix::Init(|| I::default()), len, num_ids);
+                let mut dst = Matrix::new(views::Init(|| I::default()), len, num_ids);
                 let mut lengths = Vec::with_capacity(len);
 
                 let mut output_row = 0;

@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use diskann_utils::matrix::Matrix;
+use diskann_utils::views::Matrix;
 use rand::{
     distr::{Distribution, Uniform},
     rngs::StdRng,

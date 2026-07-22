@@ -8,8 +8,8 @@ use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDSumTree
 use super::common::square_norm;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 use diskann_utils::{
-    matrix::{Matrix, MatrixView, MatrixViewMut},
     strided::StridedView,
+    views::{Matrix, MatrixView, MatrixViewMut},
 };
 
 ////////////////////////////////
@@ -464,7 +464,7 @@ pub fn lloyds(
 mod tests {
     #[cfg(not(miri))]
     use diskann_utils::lazy_format;
-    use diskann_utils::matrix::Matrix;
+    use diskann_utils::views::Matrix;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
     #[cfg(not(miri))]

@@ -11,7 +11,7 @@ use diskann::{
 };
 use diskann_utils::{
     io::{Metadata, read_bin, write_bin},
-    matrix::{Matrix, MatrixView},
+    views::{Matrix, MatrixView},
 };
 use rand::Rng;
 use tracing::info;
@@ -523,7 +523,7 @@ mod pq_storage_tests {
     #[test]
     fn write_read_roundtrip_with_legacy_centroid() {
         use crate::model::pq::accum_row_inplace;
-        use diskann_utils::matrix::MatrixViewMut;
+        use diskann_utils::views::MatrixViewMut;
 
         let storage_provider = VirtualStorageProvider::new_memory();
         let pivot_path = "/roundtrip_legacy_centroid_pivots.bin";

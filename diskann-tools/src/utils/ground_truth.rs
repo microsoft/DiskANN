@@ -20,7 +20,7 @@ use diskann_providers::utils::{
 };
 use diskann_utils::{
     io::{read_bin, Metadata},
-    matrix::Matrix,
+    views::Matrix,
 };
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;

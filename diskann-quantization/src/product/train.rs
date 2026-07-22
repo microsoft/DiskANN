@@ -4,8 +4,8 @@
  */
 
 use diskann_utils::{
-    matrix::{self, Matrix},
     strided::StridedView,
+    views::{self, Matrix},
 };
 #[cfg(feature = "rayon")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -77,7 +77,7 @@ pub trait TrainQuantizer {
 
     fn train<R, C>(
         &self,
-        data: matrix::MatrixView<f32>,
+        data: views::MatrixView<f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -108,7 +108,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
     /// * `NaN` or infinities are observed during the training process.
     fn train<R, C>(
         &self,
-        data: matrix::MatrixView<f32>,
+        data: views::MatrixView<f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -123,7 +123,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
         #[inline(never)]
         fn train(
             trainer: &LightPQTrainingParameters,
-            data: matrix::MatrixView<f32>,
+            data: views::MatrixView<f32>,
             schema: crate::views::ChunkOffsetsView<'_>,
             parallelism: Parallelism,
             rng_builder: &(dyn BoxedRngBuilder<usize> + Sync),

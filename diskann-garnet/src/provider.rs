@@ -24,10 +24,10 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_quantization::alloc::{AllocatorError, Poly};
-use diskann_utils::matrix::Matrix;
+use diskann_utils::views::Matrix;
 use diskann_utils::{
-    matrix::MatrixView,
     object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
+    views::MatrixView,
 };
 use diskann_vector::{
     DistanceFunction, PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric,

@@ -20,7 +20,7 @@
 //!     minmax::{MinMaxMeta, MinMaxQuantizer},
 //!     multi_vector::{
 //!         distance::{Chamfer, MaxSim, QueryMatRef},
-//!         Defaulted, Mat, MatRef, RowMajor,
+//!         Mat, MatRef, RowMajor,
 //!     },
 //!     num::Positive,
 //!     CompressInto,
@@ -60,9 +60,9 @@
 //!
 //! // Create owned matrices for quantized output using Mat::from_repr
 //! let mut query_out: Mat<MinMaxMeta<NBITS>> =
-//!     Mat::from_repr(MinMaxMeta::new(num_query_vectors, dim), Defaulted).unwrap();
+//!     Mat::from_default(MinMaxMeta::new(num_query_vectors, dim)).unwrap();
 //! let mut doc_out: Mat<MinMaxMeta<NBITS>> =
-//!     Mat::from_repr(MinMaxMeta::new(num_doc_vectors, dim), Defaulted).unwrap();
+//!     Mat::from_default(MinMaxMeta::new(num_doc_vectors, dim)).unwrap();
 //!
 //! // Quantize both multi-vectors
 //! quantizer.compress_into(query_input, query_out.reborrow_mut()).unwrap();
