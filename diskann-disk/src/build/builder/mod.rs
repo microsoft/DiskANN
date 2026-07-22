@@ -5,11 +5,14 @@
 
 //! Disk index builders and related functionality.
 pub mod build;
-mod merged_index;
-pub mod quantizer;
 
-pub mod inmem_builder;
-pub mod tokio;
+mod inmem_builder;
+mod merged_index;
+mod quantizer;
+mod tokio;
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::disk_index_builder_tests::{IndexBuildFixture, TestParams};
