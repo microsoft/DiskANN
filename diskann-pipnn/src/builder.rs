@@ -151,53 +151,18 @@ fn build_in_pool<T: VectorRepr + Send + Sync>(
     // configured candidate accumulator. This is the one leaf-build + merge pass.
     let t2 = Instant::now();
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let total_edges = AtomicUsize::new(0);
-
-    // Leaves processed in parallel via par_chunks. Each chunk shares one
-    // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
-    // overhead across multiple leaves. Chunk size scales with leaf count
-    // and rayon pool size so every thread gets ~4 work-stealing units.
-    let nthreads = rayon::current_num_threads().max(1);
-    let leaf_batch = (leaves.len() / (nthreads * 4)).clamp(1, 256);
     let direct_candidates = config
         .skip_hash_prune
         .then(|| DirectCandidates::new(npoints))
         .transpose()?;
-    leaves
-        .par_chunks(leaf_batch)
-        .map(|chunk| -> ANNResult<()> {
-            leaf_build::LEAF_BUFFERS.with(|cell| {
-                let mut bufs = cell.borrow_mut();
-                for leaf in chunk {
-                    let group_edges = leaf_build::build_leaf_into(
-                        data,
-                        ndims,
-                        &leaf.indices,
-                        config.k,
-                        metric,
-                        &mut bufs,
-                    )?;
-                    total_edges.fetch_add(group_edges, Ordering::Relaxed);
-
-                    let (edge_offsets, edges) = bufs.edges(group_edges);
-                    if let Some(hash_prune) = &hash_prune {
-                        hash_prune.add_leaf_edges(&leaf.indices, edge_offsets, edges);
-                    } else if let Some(candidates) = &direct_candidates {
-                        candidates.add_leaf_edges(&leaf.indices, edge_offsets, edges);
-                    }
-                }
-                Ok(())
-            })
-        })
-        .collect_installed::<ANNResult<()>>()?;
-    // `leaves` is dropped right after the build to free the accumulated index
-    // Vecs (~n·overlap u32) before extraction. (It is fully live *during* the
-    // build — every leaf is an input — so incremental freeing can't lower the
-    // leaf-build peak; the reduction target there is the reservoir slab, below.)
-    drop(leaves);
-
-    let total_edges_count = total_edges.load(Ordering::Relaxed);
+    let total_edges_count = build_leaves(
+        data,
+        ndims,
+        leaves,
+        ctx,
+        hash_prune.as_ref(),
+        direct_candidates.as_ref(),
+    )?;
     leaf_build_secs += t2.elapsed().as_secs_f64();
 
     tracing::info!(
@@ -269,6 +234,52 @@ fn build_in_pool<T: VectorRepr + Send + Sync>(
     );
 
     Ok(adjacency)
+}
+
+fn build_leaves<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    ndims: usize,
+    leaves: Vec<crate::partition::Leaf>,
+    ctx: &PiPNNBuildContext,
+    hash_prune: Option<&HashPrune>,
+    direct_candidates: Option<&DirectCandidates>,
+) -> ANNResult<usize> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let total_edges = AtomicUsize::new(0);
+    // Each chunk shares one thread-local buffer set, amortizing TLS + RefCell +
+    // Vec allocation overhead across multiple leaves. Every worker gets about
+    // four work-stealing units.
+    let threads = rayon::current_num_threads().max(1);
+    let batch = (leaves.len() / (threads * 4)).clamp(1, 256);
+    leaves
+        .par_chunks(batch)
+        .map(|chunk| -> ANNResult<()> {
+            leaf_build::LEAF_BUFFERS.with(|cell| {
+                let mut buffers = cell.borrow_mut();
+                for leaf in chunk {
+                    let edges = leaf_build::build_leaf_into(
+                        data,
+                        ndims,
+                        &leaf.indices,
+                        ctx.config.k,
+                        ctx.metric,
+                        &mut buffers,
+                    )?;
+                    total_edges.fetch_add(edges, Ordering::Relaxed);
+
+                    let (offsets, edges) = buffers.edges(edges);
+                    if let Some(hash_prune) = hash_prune {
+                        hash_prune.add_leaf_edges(&leaf.indices, offsets, edges);
+                    } else if let Some(candidates) = direct_candidates {
+                        candidates.add_leaf_edges(&leaf.indices, offsets, edges);
+                    }
+                }
+                Ok(())
+            })
+        })
+        .collect_installed::<ANNResult<()>>()?;
+    Ok(total_edges.load(Ordering::Relaxed))
 }
 
 #[cfg(test)]
