@@ -68,15 +68,41 @@ pub struct Range {
     range_slack: f32,
 }
 
+/// Builder for [`Range`] search parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct RangeBuilder {
+    max_returned: Option<usize>,
+    starting_l: usize,
+    beam_width: Option<usize>,
+    radius: f32,
+    inner_radius: Option<f32>,
+    initial_slack: f32,
+    range_slack: f32,
+}
+
 impl Range {
     /// Create range search with default slack values.
     pub fn new(starting_l: usize, radius: f32) -> Result<Self, RangeSearchError> {
-        Self::with_options(None, starting_l, None, radius, None, 1.0, 1.0)
+        Self::builder(starting_l, radius).build()
     }
 
-    /// Create range search with full options.
+    /// Create a builder for range search parameters.
+    ///
+    /// The builder starts with the same defaults as [`Self::new`].
+    pub fn builder(starting_l: usize, radius: f32) -> RangeBuilder {
+        RangeBuilder {
+            max_returned: None,
+            starting_l,
+            beam_width: None,
+            radius,
+            inner_radius: None,
+            initial_slack: 1.0,
+            range_slack: 1.0,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub fn with_options(
+    fn validate_and_create(
         max_returned: Option<usize>,
         starting_l: usize,
         beam_width: Option<usize>,
@@ -161,6 +187,51 @@ impl Range {
     #[inline]
     pub fn range_slack(&self) -> f32 {
         self.range_slack
+    }
+}
+
+impl RangeBuilder {
+    /// Set maximum results to return (`None` means unlimited).
+    pub fn max_returned(mut self, value: Option<usize>) -> Self {
+        self.max_returned = value;
+        self
+    }
+
+    /// Set the beam width.
+    pub fn beam_width(mut self, value: Option<usize>) -> Self {
+        self.beam_width = value;
+        self
+    }
+
+    /// Set the inner radius.
+    pub fn inner_radius(mut self, value: Option<f32>) -> Self {
+        self.inner_radius = value;
+        self
+    }
+
+    /// Set the initial-search slack factor.
+    pub fn initial_slack(mut self, value: f32) -> Self {
+        self.initial_slack = value;
+        self
+    }
+
+    /// Set the range-search slack factor.
+    pub fn range_slack(mut self, value: f32) -> Self {
+        self.range_slack = value;
+        self
+    }
+
+    /// Build validated [`Range`] parameters.
+    pub fn build(self) -> Result<Range, RangeSearchError> {
+        Range::validate_and_create(
+            self.max_returned,
+            self.starting_l,
+            self.beam_width,
+            self.radius,
+            self.inner_radius,
+            self.initial_slack,
+            self.range_slack,
+        )
     }
 }
 
@@ -276,13 +347,13 @@ where
 
 /// A [`SearchOutputBuffer`] wrapper that filters results by distance before
 /// forwarding them to an inner buffer.
-struct DistanceFiltered<'a, F, B: ?Sized> {
+pub(crate) struct DistanceFiltered<'a, F, B: ?Sized> {
     predicate: F,
     inner: &'a mut B,
 }
 
 impl<'a, F, B: ?Sized> DistanceFiltered<'a, F, B> {
-    fn new(inner: &'a mut B, predicate: F) -> Self {
+    pub(crate) fn new(inner: &'a mut B, predicate: F) -> Self {
         Self { predicate, inner }
     }
 }
@@ -399,6 +470,49 @@ mod tests {
     use crate::neighbor::Neighbor;
 
     #[test]
+    fn range_builder_defaults_match_new() {
+        let from_new = Range::new(100, 0.5).unwrap();
+        let from_builder = Range::builder(100, 0.5).build().unwrap();
+
+        assert_eq!(from_builder.max_returned(), from_new.max_returned());
+        assert_eq!(from_builder.starting_l(), from_new.starting_l());
+        assert_eq!(from_builder.beam_width(), from_new.beam_width());
+        assert_eq!(from_builder.radius(), from_new.radius());
+        assert_eq!(from_builder.inner_radius(), from_new.inner_radius());
+        assert_eq!(from_builder.initial_slack(), from_new.initial_slack());
+        assert_eq!(from_builder.range_slack(), from_new.range_slack());
+    }
+
+    #[test]
+    fn range_builder_custom_options_match_expected_values() {
+        let built = Range::builder(100, 0.8)
+            .max_returned(Some(10))
+            .beam_width(Some(8))
+            .inner_radius(Some(0.3))
+            .initial_slack(0.9)
+            .range_slack(1.2)
+            .build()
+            .unwrap();
+
+        assert_eq!(built.max_returned(), Some(10));
+        assert_eq!(built.starting_l(), 100);
+        assert_eq!(built.beam_width(), Some(8));
+        assert_eq!(built.radius(), 0.8);
+        assert_eq!(built.inner_radius(), Some(0.3));
+        assert_eq!(built.initial_slack(), 0.9);
+        assert_eq!(built.range_slack(), 1.2);
+    }
+
+    #[test]
+    fn range_builder_validation_error() {
+        let err = Range::builder(100, 0.5)
+            .beam_width(Some(0))
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, RangeSearchError::BeamWidthZero));
+    }
+
+    #[test]
     fn test_range_search_validation() {
         // Valid
         assert!(Range::new(100, 0.5).is_ok());
@@ -407,14 +521,23 @@ mod tests {
         assert!(Range::new(0, 0.5).is_err());
 
         // Invalid slack values
-        assert!(Range::with_options(None, 100, None, 0.5, None, 1.5, 1.0).is_err());
-        assert!(Range::with_options(None, 100, None, 0.5, None, 1.0, 0.5).is_err());
+        assert!(Range::builder(100, 0.5).initial_slack(1.5).build().is_err());
+        assert!(Range::builder(100, 0.5).range_slack(0.5).build().is_err());
 
         // Invalid inner radius > radius
-        assert!(Range::with_options(None, 100, None, 0.5, Some(1.0), 1.0, 1.0).is_err());
+        assert!(
+            Range::builder(100, 0.5)
+                .inner_radius(Some(1.0))
+                .build()
+                .is_err()
+        );
 
-        // Invalid max_results < initial_l_search
-        assert!(Range::with_options(Some(50), 100, None, 0.5, None, 1.0, 1.0).is_err());
+        assert!(
+            Range::builder(100, 0.5)
+                .max_returned(Some(1.0))
+                .build()
+                .is_err()
+        );
     }
 
     #[test]

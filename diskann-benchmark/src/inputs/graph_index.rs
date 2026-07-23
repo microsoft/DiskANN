@@ -81,15 +81,13 @@ impl GraphRangeSearch {
         self.initial_search_l
             .iter()
             .map(|&l| {
-                Range::with_options(
-                    self.max_returned,
-                    l,
-                    self.beam_width,
-                    self.radius,
-                    self.inner_radius,
-                    self.initial_search_slack,
-                    self.range_search_slack,
-                )
+                Range::builder(l, self.radius)
+                    .max_returned(self.max_returned)
+                    .beam_width(self.beam_width)
+                    .inner_radius(self.inner_radius)
+                    .initial_slack(self.initial_search_slack)
+                    .range_slack(self.range_search_slack)
+                    .build()
             })
             .collect()
     }
@@ -166,6 +164,33 @@ pub(crate) struct RangeSearchPhase {
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphRangeSearch>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct FilteredRangeSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: InputFile,
+    pub(crate) data_labels: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    // Enable sweeping threads
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphRangeSearch>,
+}
+
+impl FilteredRangeSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+
+        Ok(())
+    }
 }
 
 impl RangeSearchPhase {
@@ -406,6 +431,7 @@ impl Example for TopkDeterminantDiversityPhase {
 pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
     Range(RangeSearchPhase),
+    FilteredRange(FilteredRangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultihopFilterSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
@@ -434,6 +460,7 @@ impl SearchPhase {
         match self {
             Self::Topk(_) => SearchPhaseKind::Topk,
             Self::Range(_) => SearchPhaseKind::Range,
+            Self::FilteredRange(_) => SearchPhaseKind::FilteredRange,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
@@ -456,6 +483,18 @@ impl SearchPhase {
             Self::Range(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(
                 SearchPhaseKind::Range,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_filtered_range(
+        &self,
+    ) -> Result<&FilteredRangeSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::FilteredRange(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::FilteredRange,
                 self.kind(),
             )),
         }
@@ -513,6 +552,7 @@ impl SearchPhase {
         match self {
             SearchPhase::Topk(phase) => phase.validate(checker),
             SearchPhase::Range(phase) => phase.validate(checker),
+            SearchPhase::FilteredRange(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
@@ -525,6 +565,7 @@ impl SearchPhase {
 pub(crate) enum SearchPhaseKind {
     Topk,
     Range,
+    FilteredRange,
     TopkBetaFilter,
     TopkMultihopFilter,
     TopkInlineFilter,
@@ -536,6 +577,7 @@ impl SearchPhaseKind {
         match self {
             Self::Topk => "topk",
             Self::Range => "range",
+            Self::FilteredRange => "filtered-range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
             Self::TopkInlineFilter => "topk-inline-filter",

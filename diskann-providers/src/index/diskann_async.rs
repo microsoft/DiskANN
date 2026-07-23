@@ -1549,16 +1549,10 @@ pub(crate) mod tests {
                 // Test with an inner radius
 
                 assert!(inner_radius <= radius);
-                let range_search = Range::with_options(
-                    None,
-                    starting_l_value,
-                    None,
-                    radius,
-                    Some(inner_radius),
-                    1.0,
-                    1.0,
-                )
-                .unwrap();
+                let range_search = Range::builder(starting_l_value, radius)
+                    .inner_radius(Some(inner_radius))
+                    .build()
+                    .unwrap();
                 let mut results: Vec<Neighbor<u32>> = Vec::new();
                 let _ = index
                     .search(range_search, &FullPrecision, ctx, query, &mut results)

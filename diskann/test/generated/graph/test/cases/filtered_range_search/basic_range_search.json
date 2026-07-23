@@ -1,9 +1,9 @@
 {
-  "file": "diskann/src/graph/test/cases/range_search.rs",
-  "test": "graph/test/cases/range_search/basic_range_search",
+  "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
+  "test": "graph/test/cases/filtered_range_search/basic_range_search",
   "payload": {
-    "comparisons": 54,
-    "description": "Basic range search test to validate that the range /\n     search returns results within the specified radius and that there are /\n     no duplicate results.",
+    "comparisons": 53,
+    "description": "Basic range search test with an always-true filter. Validates /\n     that the filtered range search returns correct results without any duplicates.",
     "grid_size": 5,
     "hops": 33,
     "inner_radius": null,
@@ -21,7 +21,7 @@
         3.0
       ],
       [
-        123,
+        99,
         6.0
       ],
       [
@@ -29,11 +29,11 @@
         6.0
       ],
       [
-        99,
+        123,
         6.0
       ],
       [
-        94,
+        98,
         9.0
       ],
       [
@@ -41,11 +41,11 @@
         9.0
       ],
       [
-        98,
+        94,
         9.0
       ],
       [
-        74,
+        122,
         11.0
       ],
       [
@@ -53,7 +53,7 @@
         11.0
       ],
       [
-        122,
+        74,
         11.0
       ],
       [

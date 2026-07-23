@@ -42,6 +42,7 @@ use crate::{
     provider::DataProvider,
 };
 
+mod filtered_range_search;
 mod inline_filter_search;
 mod knn_search;
 pub(crate) mod multihop_filter_search;
@@ -63,6 +64,7 @@ pub(crate) mod scratch;
 /// See the specific search types for detailed documentation:
 /// - [`Knn`] - Standard k-nearest neighbor search
 /// - [`Range`] - Range-based search within a distance radius
+/// - [`FilteredRange`] - Filtered range search
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
 /// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
@@ -112,6 +114,7 @@ where
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
+pub use filtered_range_search::FilteredRange;
 pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_filter_search::MultihopFilterSearch;

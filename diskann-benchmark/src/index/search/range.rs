@@ -5,6 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use diskann::graph::search::Range as RangeParameters;
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
 use crate::{index::result::RangeSearchResults, inputs::graph_index::GraphRangeSearch};
@@ -30,18 +31,18 @@ impl<'a> RangeSearchSteps<'a> {
     }
 }
 
-type Run = core_search::Run<diskann::graph::search::Range>;
-
 pub(crate) trait Range<I> {
+    type Parameters: Clone;
+
     fn search_all(
         &self,
-        parameters: Vec<Run>,
+        parameters: Vec<core_search::Run<Self::Parameters>>,
         groundtruth: &dyn benchmark_core::recall::Rows<I>,
     ) -> anyhow::Result<Vec<RangeSearchResults>>;
 }
 
 pub(crate) fn run<I>(
-    runner: &dyn Range<I>,
+    runner: &dyn Range<I, Parameters = RangeParameters>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: RangeSearchSteps<'_>,
 ) -> anyhow::Result<Vec<RangeSearchResults>> {
@@ -69,7 +70,6 @@ pub(crate) fn run<I>(
 
     Ok(all)
 }
-
 ///////////
 // Impls //
 ///////////
@@ -79,13 +79,15 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::Range<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::search::Range,
+        Parameters = RangeParameters,
         Output = core_search::graph::range::Metrics,
     >,
 {
+    type Parameters = RangeParameters;
+
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::search::Range>>,
+        parameters: Vec<core_search::Run<Self::Parameters>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
     ) -> anyhow::Result<Vec<RangeSearchResults>> {
         let results = core_search::search_all(
@@ -95,5 +97,35 @@ where
         )?;
 
         Ok(results.into_iter().map(RangeSearchResults::new).collect())
+    }
+}
+
+impl<DP, T, S> Range<DP::InternalId>
+    for Arc<core_search::graph::filtered_range::FilteredRange<DP, T, S>>
+where
+    DP: diskann::provider::DataProvider,
+    core_search::graph::filtered_range::FilteredRange<DP, T, S>: core_search::Search<
+        Id = DP::InternalId,
+        Parameters = RangeParameters,
+        Output = core_search::graph::filtered_range::Metrics,
+    >,
+{
+    type Parameters = RangeParameters;
+
+    fn search_all(
+        &self,
+        parameters: Vec<core_search::Run<Self::Parameters>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
+    ) -> anyhow::Result<Vec<RangeSearchResults>> {
+        let results = core_search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            core_search::graph::filtered_range::Aggregator::new(groundtruth),
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(RangeSearchResults::new_filtered)
+            .collect())
     }
 }

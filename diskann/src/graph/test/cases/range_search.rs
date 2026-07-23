@@ -16,6 +16,7 @@ use diskann_vector::distance::Metric;
 use crate::{
     graph::{
         self, DiskANNIndex,
+        index::SearchStats,
         search::Range,
         test::{provider as test_provider, synthetic::Grid},
     },
@@ -28,11 +29,71 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct RangeSearchBaseline {
+    /// A description of what to expect, what trends to observe, and anything else
+    /// a reviewer may need to either understand why this test is checked in or to validate
+    /// any changes that occur in the checked-in file.
+    pub(super) description: String,
+    pub(super) grid_size: usize,
+    pub(super) query: Vec<f32>,
+    pub(super) radius: f32,
+    pub(super) inner_radius: Option<f32>,
+    pub(super) starting_l: usize,
+    pub(super) results: Vec<(u32, f32)>,
+    pub(super) comparisons: usize,
+    pub(super) hops: usize,
+    pub(super) result_count: usize,
+    pub(super) range_search_second_round: bool,
+}
+
+impl RangeSearchBaseline {
+    pub(super) fn new(
+        range: &Range,
+        results: &[Neighbor<u32>],
+        stats: SearchStats,
+        grid_size: usize,
+        description: impl Into<String>,
+        query: Vec<f32>,
+    ) -> Self {
+        Self {
+            description: description.into(),
+            grid_size,
+            query,
+            radius: range.radius(),
+            inner_radius: range.inner_radius(),
+            starting_l: range.starting_l(),
+            results: results.iter().map(|n| (n.id, n.distance)).collect(),
+            comparisons: stats.cmps as usize,
+            hops: stats.hops as usize,
+            result_count: stats.result_count as usize,
+            range_search_second_round: stats.range_search_second_round,
+        }
+    }
+}
+
+verbose_eq!(RangeSearchBaseline {
+    description,
+    grid_size,
+    query,
+    radius,
+    inner_radius,
+    starting_l,
+    results,
+    comparisons,
+    hops,
+    result_count,
+    range_search_second_round,
+});
+
 fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/range_search")
 }
 
-fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provider::Provider>> {
+pub(super) fn setup_grid_index(
+    grid_size: usize,
+    dims: Grid,
+) -> Arc<DiskANNIndex<test_provider::Provider>> {
     let provider = test_provider::Provider::grid(dims, grid_size).unwrap();
 
     let index_config = graph::config::Builder::new(
@@ -47,7 +108,7 @@ fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provi
     Arc::new(DiskANNIndex::new(index_config, provider, None))
 }
 
-fn setup_grid_index_and_default_query(
+pub(super) fn setup_grid_index_and_default_query(
     grid_size: usize,
     dims: Grid,
 ) -> (Arc<DiskANNIndex<test_provider::Provider>>, Vec<f32>) {
@@ -56,41 +117,18 @@ fn setup_grid_index_and_default_query(
     (index, query)
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RangeSearchBaseline {
-    grid_size: usize,
-    query: Vec<f32>,
-    radius: f32,
-    inner_radius: Option<f32>,
-    starting_l: usize,
-    results: Vec<(u32, f32)>,
-    comparisons: usize,
-    hops: usize,
-    result_count: usize,
-    range_search_second_round: bool,
-}
-
-verbose_eq!(RangeSearchBaseline {
-    grid_size,
-    query,
-    radius,
-    inner_radius,
-    starting_l,
-    results,
-    comparisons,
-    hops,
-    result_count,
-    range_search_second_round,
-});
-
-fn assert_no_duplicates(results: &[Neighbor<u32>]) {
+pub(super) fn assert_no_duplicates(results: &[Neighbor<u32>]) {
     let mut seen = std::collections::HashSet::new();
     for n in results {
         assert!(seen.insert(n.id), "duplicate result id {}", n.id);
     }
 }
 
-fn assert_range_invariants(results: &[Neighbor<u32>], radius: f32, inner_radius: Option<f32>) {
+pub(super) fn assert_range_invariants(
+    results: &[Neighbor<u32>],
+    radius: f32,
+    inner_radius: Option<f32>,
+) {
     for n in results {
         assert!(
             n.distance <= radius,
@@ -113,6 +151,10 @@ fn assert_range_invariants(results: &[Neighbor<u32>], radius: f32, inner_radius:
 
 #[test]
 fn basic_range_search() {
+    let description = "Basic range search test to validate that the range /
+     search returns results within the specified radius and that there are /
+     no duplicate results.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -137,6 +179,7 @@ fn basic_range_search() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -158,6 +201,9 @@ fn basic_range_search() {
 
 #[test]
 fn inner_radius_filtering() {
+    let description = "Inner radius filtering test to validate that the \
+    range search correctly excludes neighbors within the inner radius.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -169,8 +215,10 @@ fn inner_radius_filtering() {
     let inner_radius = 6.0; // exclude closest neighbors
     let starting_l = 32;
 
-    let range_search =
-        Range::with_options(None, starting_l, None, radius, Some(inner_radius), 1.0, 1.0).unwrap();
+    let range_search = Range::builder(starting_l, radius)
+        .inner_radius(Some(inner_radius))
+        .build()
+        .unwrap();
     let mut results: Vec<Neighbor<u32>> = Vec::new();
 
     let stats = rt
@@ -184,6 +232,7 @@ fn inner_radius_filtering() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -205,6 +254,10 @@ fn inner_radius_filtering() {
 
 #[test]
 fn two_round_search() {
+    let description = "Two round search test to validate that a /
+    low starting L with a large radius triggers a second round /
+    of range search.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -229,6 +282,7 @@ fn two_round_search() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,

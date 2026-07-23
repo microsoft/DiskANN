@@ -159,16 +159,16 @@ where
 }
 
 #[derive(Debug)]
-struct Ret<I>
+pub(crate) struct Ret<I>
 where
     I: Eq,
 {
-    cmps: u32,
-    hops: u32,
-    matched_results: Vec<Neighbor<I>>,
+    pub(crate) cmps: u32,
+    pub(crate) hops: u32,
+    pub(crate) matched_results: Vec<Neighbor<I>>,
 }
 
-async fn inline_filter_search_internal<I, A, SR>(
+pub(crate) async fn inline_filter_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,

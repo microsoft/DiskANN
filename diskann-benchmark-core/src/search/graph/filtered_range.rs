@@ -7,7 +7,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, ext::labeled, glue},
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
@@ -18,31 +18,32 @@ use crate::{
     search::{self, Search, graph::Strategy},
 };
 
-/// A built-in helper for benchmarking the range search method
-/// [`graph::DiskANNIndex::range_search`].
+/// A built-in helper for benchmarking the filtered range search method
+/// [`graph::DiskANNIndex::search`].
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
-/// [`search::search_all`] and provides some basic additional metrics for
-/// the latter. Result aggregation for [`search::search_all`] is provided
-/// by the [`Aggregator`] type.
+/// [`search::search_all`] and provides some basic additional metrics for the
+/// latter. Result aggregation for [`search::search_all`] is provided by the
+/// [`Aggregator`] type.
 ///
 /// The provided implementation of [`Search`] accepts
 /// [`graph::search::Range`] and returns [`Metrics`] as additional output.
 #[derive(Debug)]
-pub struct Range<DP, T, S>
+pub struct FilteredRange<DP, T, S>
 where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
+    labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
 }
 
-impl<DP, T, S> Range<DP, T, S>
+impl<DP, T, S> FilteredRange<DP, T, S>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`Range`] searcher.
+    /// Construct a new [`FilteredRange`] searcher.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -57,30 +58,43 @@ where
         index: Arc<graph::DiskANNIndex<DP>>,
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
+        labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
-        Ok(Arc::new(Self {
-            index,
-            queries,
-            strategy,
-        }))
+        if labels.len() != queries.nrows() {
+            Err(anyhow::anyhow!(
+                "Number of label providers ({}) must be equal to the number of queries ({})",
+                labels.len(),
+                queries.nrows()
+            ))
+        } else {
+            Ok(Arc::new(Self {
+                index,
+                queries,
+                strategy,
+                labels,
+            }))
+        }
     }
 }
 
-/// Placeholder for range search metrics.
-///
-/// This struct currently does not contain any fields, but may be augmented
-/// in the future. The use of `#[non_exhaustive]` prevents breaking changes.
+/// Placeholder for filtered range search metrics.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Metrics {}
 
-impl<DP, T, S> Search for Range<DP, T, S>
+impl<DP, T, S> Search for FilteredRange<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
-    graph::search::Range: for<'a> graph::Search<'a, DP, S, &'a [T]>,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [T],
+            DP::ExternalId,
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -105,12 +119,21 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let range_search = *parameters;
+        let filtered_range_search =
+            graph::search::FilteredRange::builder(parameters.starting_l(), parameters.radius())
+                .max_returned(parameters.max_returned())
+                .beam_width(parameters.beam_width())
+                .inner_radius(parameters.inner_radius())
+                .initial_slack(parameters.initial_slack())
+                .range_slack(parameters.range_slack())
+                .build_filtered()?;
+        let strategy =
+            labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
         let _ = self
             .index
             .search(
-                range_search,
-                self.strategy.get(index)?,
+                filtered_range_search,
+                &strategy,
                 &context,
                 self.queries.row(index),
                 buffer,
@@ -121,56 +144,27 @@ where
     }
 }
 
-/// An [`search::Aggregate`]d summary of multiple [`Range`] search runs
-/// returned by the provided [`Aggregator`].
-///
-/// This struct is marked as non-exhaustive to allow for future additions.
+/// An [`search::Aggregate`]d summary of multiple [`FilteredRange`] search runs returned by
+/// the provided [`Aggregator`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Summary {
-    /// The [`search::Setup`] used for the batch of runs.
     pub setup: search::Setup,
-
-    /// The [`graph::search::Range`] used for the batch of runs.
     pub parameters: graph::search::Range,
-
-    /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
-
-    /// The average latency for individual queries.
-    ///
-    /// This contains one entry per repetition in the batch.
     pub mean_latencies: Vec<f64>,
-
-    /// The 90th percentile latency for individual queries.
-    ///
-    /// This contains one entry per repetition in the batch.
     pub p90_latencies: Vec<MicroSeconds>,
-
-    /// The 99th percentile latency for individual queries.
-    ///
-    /// This contains one entry per repetition in the batch.
     pub p99_latencies: Vec<MicroSeconds>,
-
-    /// The average precision metrics for the batch of runs.
-    ///
-    /// This implementation assumes that search is deterministic and only
-    /// uses the first repetition's results to compute the average precision.
     pub average_precision: recall::AveragePrecisionMetrics,
 }
 
-/// A [`search::Aggregate`] for collecting the results of multiple [`Range`] search runs.
-///
-/// In addition to collecting latencies and other metrics, this aggregator computes
-/// [`crate::recall::AveragePrecisionMetrics`] using a provided groundtruth.
-///
-/// The aggregated results are available as a [`Summary`].
+/// A [`search::Aggregate`] for collecting the results of multiple [`FilteredRange`] search
+/// runs.
 pub struct Aggregator<'a, I> {
     groundtruth: &'a dyn crate::recall::Rows<I>,
 }
 
 impl<'a, I> Aggregator<'a, I> {
-    /// Construct a new [`Aggregator`] using `groundtruth` for average precision computation.
     pub fn new(groundtruth: &'a dyn crate::recall::Rows<I>) -> Self {
         Self { groundtruth }
     }
@@ -188,7 +182,6 @@ where
         run: search::Run<graph::search::Range>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
-        // Compute the recall using just the first result.
         let average_precision = match results.first() {
             Some(first) => {
                 crate::recall::average_precision(first.ids().as_rows(), self.groundtruth)?
@@ -237,10 +230,19 @@ where
 mod tests {
     use super::*;
 
-    use diskann::graph::test::provider;
+    use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
+
+    #[derive(Debug)]
+    struct NoOdds;
+
+    impl labeled::QueryLabelProvider<u32> for NoOdds {
+        fn is_match(&self, id: u32) -> bool {
+            id.is_multiple_of(2)
+        }
+    }
 
     #[test]
-    fn test_range() {
+    fn test_filtered_range() {
         let index = search::graph::test_grid_provider();
 
         let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
@@ -251,18 +253,22 @@ mod tests {
         queries.row_mut(4).copy_from_slice(&[0.0, 0.0, 0.0, 4.0]);
 
         let queries = Arc::new(queries);
+        let labels: Arc<[_]> = (0..queries.nrows())
+            .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
+            .collect();
 
-        let range = Range::new(
+        let filtered_range = FilteredRange::new(
             index,
             queries.clone(),
             Strategy::broadcast(provider::Strategy::new()),
+            labels,
         )
         .unwrap();
 
         // Test the standard search interface.
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
-            range.clone(),
+            filtered_range.clone(),
             graph::search::Range::builder(10, 2.0)
                 .initial_slack(0.8)
                 .range_slack(1.2)
@@ -275,7 +281,14 @@ mod tests {
 
         assert_eq!(results.len(), queries.nrows());
         let rows = results.ids().as_rows();
-        assert_eq!(*rows.row(0).first().unwrap(), 0);
+
+        // Check that only even IDs are returned.
+        for r in 0..rows.nrows() {
+            for &id in rows.row(r) {
+                assert_eq!(id % 2, 0, "Found odd ID {} in row {}", id, r);
+            }
+        }
+
         const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
         let setup = search::Setup {
             threads: TWO,
@@ -303,7 +316,7 @@ mod tests {
             ),
         ];
 
-        let all = search::search_all(range, parameters, Aggregator::new(rows)).unwrap();
+        let all = search::search_all(filtered_range, parameters, Aggregator::new(rows)).unwrap();
 
         assert_eq!(all.len(), 2);
         for summary in all {
@@ -323,16 +336,43 @@ mod tests {
     }
 
     #[test]
-    fn test_range_error() {
+    fn test_filtered_range_error() {
         let index = search::graph::test_grid_provider();
-
         let queries = Arc::new(Matrix::new(0.0f32, 2, index.provider().dim()));
+
+        let labels: Arc<[_]> = (0..queries.nrows() + 1)
+            .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
+            .collect();
+
         let strategy = provider::Strategy::new();
 
-        let err = Range::new(index, queries.clone(), Strategy::collection([strategy])).unwrap_err();
+        // Error for a mismatch between strategies and queries.
+        let err = FilteredRange::new(
+            index.clone(),
+            queries.clone(),
+            Strategy::collection([strategy.clone()]),
+            labels.clone(),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("1 strategy was provided when 2 were expected"),
+            "failed with {msg}"
+        );
+
+        // Error for a mismatch between label providers and queries.
+        let err = FilteredRange::new(
+            index,
+            queries.clone(),
+            Strategy::broadcast(strategy),
+            labels,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "Number of label providers (3) must be equal to the number of queries (2)"
+            ),
             "failed with {msg}"
         );
     }

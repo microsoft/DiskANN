@@ -1,0 +1,38 @@
+{
+  "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
+  "test": "graph/test/cases/filtered_range_search/divisible_by_four_filter_no_second_round_from_max_results",
+  "payload": {
+    "comparisons": 31,
+    "description": "A test of the divisible-by-4 filter with `max_results` /\n    set to starting_l / 4. The second round of search should not be triggered /\n    since the correct number of results should be discovered.",
+    "grid_size": 5,
+    "hops": 17,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 50.0,
+    "range_search_second_round": false,
+    "result_count": 4,
+    "results": [
+      [
+        124,
+        3.0
+      ],
+      [
+        68,
+        17.0
+      ],
+      [
+        88,
+        17.0
+      ],
+      [
+        92,
+        17.0
+      ]
+    ],
+    "starting_l": 16
+  }
+}
