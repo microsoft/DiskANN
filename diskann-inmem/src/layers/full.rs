@@ -25,7 +25,7 @@ use crate::{Hidden, layers, num::Bytes};
 
 /// A useful trait bound for types compatible with [`Full`].
 ///
-/// This encompases *everything* required for `Full: layers::Insert` and can be used as
+/// This encompasses *everything* required for `Full: layers::Insert` and can be used as
 /// a single bound.
 pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     #[doc(hidden)]

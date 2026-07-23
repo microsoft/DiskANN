@@ -24,7 +24,7 @@
 //!
 //! * Failed insert rollback: again, this needs some upstream changes to full support.
 //!
-//! * Quantization + reranking: Ths current version of this index targets just a single
+//! * Quantization + reranking: The current version of this index targets just a single
 //!   data-store and is planned to be addressed in the near future.
 //!
 //! * Lack of save/load support: The index is currently ephemeral, but there are plans to

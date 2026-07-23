@@ -17,10 +17,10 @@
 //! ## Writing
 //!
 //! [`Store::acquire`] is used to find and claim an unused internal [`Slot`]. A [`Slot`]
-//! provides write access to its coresponding data which is published when the [`Slot`] is
+//! provides write access to its corresponding data which is published when the [`Slot`] is
 //! dropped.
 //!
-//! The index of the slot chosen may be obtained via [`Slot::slot`].k
+//! The index of the slot chosen may be obtained via [`Slot::slot`].
 //!
 //! ## Deleting
 //!
@@ -208,7 +208,7 @@ impl Store {
         )]
         let padded_bytes = unpadded
             .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
-            .expect("unreachabel because `init` cannot exceed `isize::MAX` bytes");
+            .expect("unreachable because `init` cannot exceed `isize::MAX` bytes");
 
         let too_many_entries = || StoreError::too_many_entries(entries, init.nrows());
 
@@ -475,7 +475,7 @@ impl Store {
     /// # Safety
     ///
     /// Caller asserts that `tag` was obtained from `self.tags[slot]`. This is meant as
-    /// a perfomance optimization where `tag` is first queried for potential availability.
+    /// a performance optimization where `tag` is first queried for potential availability.
     unsafe fn try_acquire<'a>(&'a self, tag: &'a AtomicTag, slot: u32) -> Option<Slot<'a>> {
         match tag.compare_exchange(
             Tag::AVAILABLE,

@@ -347,7 +347,7 @@ impl Lock<'_> {
         Ok(())
     }
 
-    /// Write the contents of `neighbors` into `self` without validating lenghts.
+    /// Write the contents of `neighbors` into `self` without validating lengths.
     ///
     /// # Safety
     ///

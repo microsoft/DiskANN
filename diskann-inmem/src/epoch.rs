@@ -770,7 +770,7 @@ mod tests {
         let gen_b = retire_at(200);
         assert_eq!(gen_b, gen_a + 1);
 
-        // 2st advance after A: must NOT drain item 100.
+        // 2nd advance after A: must NOT drain item 100.
         {
             let drain = registry.try_advance().unwrap();
             assert!(
