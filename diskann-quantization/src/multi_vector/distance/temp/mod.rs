@@ -3,9 +3,16 @@
  * Licensed under the MIT license.
  */
 
+//! Gist: Currently, this file just implements the kernel for operations on an `A-Tile` and
+//! a `B-Tile`. A more end-to-end solution will also need to iterate over tiles and construct
+//! this tile iteration so that A-Tiles fit within the L2 cache and B-Tiles fit within the L1
+//! cache.
+//!
+//!
+
 use std::marker::PhantomData;
 
-use diskann_wide::{SIMDMulAdd, SIMDVector, arch::x86_64::V3};
+use diskann_wide::{ARCH, SIMDMulAdd, SIMDMinMax, SIMDVector, arch::x86_64::V3};
 
 use crate::{
     alloc::{AllocatorCore, Poly},
@@ -16,34 +23,27 @@ use crate::{
 pub fn test_function(
     a: BlockTransposedRef<'_, f32, 16>,
     b: MatRef<'_, Standard<f32>>,
-    acc: &mut DotAcc<16, 4, crate::alloc::GlobalAllocator>,
+    acc: &mut DotAcc<16, 4, crate::alloc::ScopedAllocator<'_>>,
+    buf: &mut [f32],
 ) {
     assert_eq!(a.ncols(), b.vector_dim());
+    assert_eq!(buf.len(), a.nrows());
 
-    do_loop::<
+    let mut callback = |acc: &mut DotAcc<_, _, _>, index: APanelIndex| {
+        let lower = 16 * index.value();
+        let upper = (lower + 16).min(a.nrows());
+        let count = upper - lower;
+
+        buf[lower..upper].copy_from_slice(&acc.max_sim(ARCH, b.num_vectors())[..count]);
+    };
+
+    tile_loop::<
         V3,
         Dot,
         BlockTransposedRef<'_, f32, 16>,
         MatRef<'_, Standard<f32>>,
-        DotAcc<16, 4, crate::alloc::GlobalAllocator>,
-    >(diskann_wide::ARCH, Dot, a, b, acc, a.ncols())
-}
-
-///////////
-// Tiled //
-///////////
-
-pub(crate) trait Tile<'a, Bound = &'a Self> {
-    type Item: Copy;
-}
-
-pub(crate) trait Tiled: for<'a> Tile<'a> {
-    fn next(&mut self) -> Option<<Self as Tile<'_>>::Item>;
-}
-
-pub(crate) trait AsTiled<'a> {
-    type Tiled: Tiled;
-    fn as_tiled(&'a mut self) -> Self::Tiled;
+        DotAcc<16, 4, crate::alloc::ScopedAllocator<'_>>,
+    >(ARCH, Dot, a, b, acc, a.ncols(), &mut callback)
 }
 
 ///////////////
@@ -128,6 +128,31 @@ pub(crate) trait ColumnPaneled {
     fn column_paneled(&self, k: usize) -> Self::Iter;
 }
 
+/// Perform the following logical dimensional partition:
+/// ```text
+/// +-----------------+      +-----------------+      +---------+
+/// | a00 a01 a02 a03 |      | a04 a05 a06 a07 |      | a08 a09 |
+/// | a10 a11 a12 a13 |----->| a14 a15 a16 a17 |----->| a18 a19 |
+/// | a20 a21 a22 a23 |      | a25 a25 a26 a27 |      | a29 a29 |
+/// | a31 a31 a32 a33 |      | a34 a35 a36 a37 |      | a38 a39 |
+/// +-----------------+      +-----------------+      +---------+
+///                                                        |
+///          +---------------------------------------------+
+///          V
+/// +-----------------+      +-----------------+      +---------+
+/// | a40 a41 a42 a43 |      | a44 a45 a46 a47 |      | a48 a49 |
+/// | a50 a51 a52 a53 |----->| a54 a55 a56 a57 |----->| a58 a59 |
+/// | a60 a61 a62 a63 |      | a64 a65 a66 a67 |      | a68 a69 |
+/// | a70 a71 a72 a73 |      | a74 a75 a76 a77 |      | a78 a79 |
+/// +-----------------+      +-----------------+      +---------+
+///                                                        |
+///          +---------------------------------------------+
+///          V
+/// +-----------------+      +-----------------+      +---------+
+/// | a80 a81 a82 a83 |----->| a84 a85 a86 a87 |----->| a88 a89 |
+/// | a90 a91 a92 a93 |      | a94 a95 a96 a97 |      | a98 a99 |
+/// +-----------------+      +-----------------+      +---------+
+/// ```
 pub(crate) trait RowPaneled {
     type Panel: Copy;
 
@@ -163,6 +188,23 @@ pub(crate) trait Kernel<Arch, A, B, Acc> {
 // Loop //
 //////////
 
+// ///////////
+// // Tiled //
+// ///////////
+//
+// pub(crate) trait Tile<'a, Bound = &'a Self> {
+//     type Item: Copy;
+// }
+//
+// pub(crate) trait Tiled: for<'a> Tile<'a> {
+//     fn next(&mut self) -> Option<<Self as Tile<'_>>::Item>;
+// }
+//
+// pub(crate) trait AsTiled<'a> {
+//     type Tiled: Tiled;
+//     fn as_tiled(&'a mut self) -> Self::Tiled;
+// }
+//
 // fn do_the_thing<Arch, K, A, B, Acc>(
 //     arch: Arch,
 //     kernel: K,
@@ -222,12 +264,34 @@ pub(crate) trait Kernel<Arch, A, B, Acc> {
 // {
 //     #[inline(always)]
 //     fn loop_nest(self, arch: Arch, kernel: K, a: A, b: B, acc: &mut Acc) {
-//         do_loop(arch, kernel, a, b, acc, self.fracture)
+//         tile_loop(arch, kernel, a, b, acc, self.fracture)
 //     }
 // }
 
+/// The `apanel` within the greater tile.
+///
+/// This is a number beginning at zero that increments by one for every item yielded
+/// from [`RowPaneled::Iter`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct APanelIndex(usize);
+
+impl APanelIndex {
+    /// The base for of the "A" multi-vector.
+    pub(crate) fn value(&self) -> usize {
+        self.0
+    }
+}
+
 #[inline(always)]
-fn do_loop<Arch, K, A, B, Acc>(arch: Arch, kernel: K, a: A, b: B, acc: &mut Acc, sz: usize)
+fn tile_loop<Arch, K, A, B, Acc>(
+    arch: Arch,
+    kernel: K,
+    a: A,
+    b: B,
+    acc: &mut Acc,
+    sz: usize,
+    finish: &mut dyn FnMut(&mut Acc, APanelIndex),
+)
 where
     A: RowPaneled,
     B: ColumnPaneled,
@@ -241,34 +305,38 @@ where
 {
     let mut a = a.row_paneled(sz);
 
+    let mut i = 0;
     for mut a_blocks in a.by_ref() {
         let mut b = b.column_paneled(sz);
         if let (Some(a_block), Some(b_cols)) = (a_blocks.next(), b.next()) {
-            do_kernel::<true, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
+            run_kernel::<true, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
         }
 
         for (a_block, b_cols) in std::iter::zip(a_blocks, b) {
-            do_kernel::<false, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
+            run_kernel::<false, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
         }
 
-        // post process on `acc`
+        finish(acc, APanelIndex(i));
+        i += 1;
     }
 
     if let Some(mut a_blocks) = a.tail() {
         let mut b = b.column_paneled(sz);
 
         if let (Some(a_block), Some(b_cols)) = (a_blocks.next(), b.next()) {
-            do_kernel::<true, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
+            run_kernel::<true, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
         }
 
         for (a_block, b_cols) in std::iter::zip(a_blocks, b) {
-            do_kernel::<false, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
+            run_kernel::<false, _, _, _, _, _>(arch, kernel, a_block, b_cols, acc);
         }
+
+        finish(acc, APanelIndex(i));
     }
 }
 
 #[inline(always)]
-fn do_kernel<'a, const OVERWRITE: bool, Arch, K, A, B, Acc>(
+fn run_kernel<'a, const OVERWRITE: bool, Arch, K, A, B, Acc>(
     arch: Arch,
     kernel: K,
     a: A,
@@ -323,6 +391,10 @@ impl<'a, const N: usize> RowPaneled for BlockTransposedRef<'a, f32, N, 1> {
 }
 
 /// An iterator over blocks within an overall transpose.
+///
+/// # Safety Invariants
+///
+/// The region of memory in `[ptr, end)` must always be valid.
 #[derive(Debug)]
 pub(crate) struct BlockTransposeIter<'a, const N: usize> {
     /// The base of the region of memory.
@@ -416,6 +488,11 @@ impl<'a, const N: usize> BlockTransposeRowIter<'a, N> {
         // SAFETY: We maintain the invariant that `self.end >= self.ptr`.
         (unsafe { self.end.offset_from_unsigned(self.ptr) }) / N
     }
+
+    /// Return the number of rows contained within each yielded [`BlockTransposePanel`].
+    fn nrows(&self) -> usize {
+        N
+    }
 }
 
 impl<'a, const N: usize> Iterator for BlockTransposeRowIter<'a, N> {
@@ -482,6 +559,24 @@ pub(crate) struct BlockTransposePanel<'a, const N: usize> {
     _lifetime: PhantomData<&'a ()>,
 }
 
+impl<const N: usize> BlockTransposePanel<'_, N> {
+    fn get(&self, row: usize, col: usize) -> Option<f32> {
+        if row < N && col < self.nsubcols {
+            Some(unsafe { self.ptr.add(col * N + row).read() })
+        } else {
+            None
+        }
+    }
+
+    fn nrows(&self) -> usize {
+        N
+    }
+
+    fn ncols(&self) -> usize {
+        self.nsubcols
+    }
+}
+
 //////////////
 // RowMajor //
 //////////////
@@ -529,7 +624,7 @@ impl<'a, const N: usize> Iterator for RowMajorIter<'a, N> {
             let iter = RowMajorColumnIter {
                 ptr,
                 remaining_rows: self.nrows,
-                nsubcols: self.nsubcols,
+                nsubcols: cols,
                 rowstride: self.ncols,
                 _lifetime: PhantomData,
             };
@@ -568,6 +663,20 @@ pub(crate) struct RowMajorColumnIter<'a, const N: usize> {
     _lifetime: PhantomData<&'a ()>,
 }
 
+impl<const N: usize> RowMajorColumnIter<'_, N> {
+    /// Return the number of columns spanned by this iterator.
+    ///
+    /// Note that this may just be a subset of the columns in the parent matrix.
+    fn panel_cols(&self) -> usize {
+        self.nsubcols
+    }
+
+    /// Return the number of rows contained in each full panel.
+    fn panel_rows(&self) -> usize {
+        N
+    }
+}
+
 impl<'a, const N: usize> Iterator for RowMajorColumnIter<'a, N> {
     type Item = RowMajorPanel<'a, N, Static<N>>;
 
@@ -581,7 +690,13 @@ impl<'a, const N: usize> Iterator for RowMajorColumnIter<'a, N> {
                 _lifetime: PhantomData,
             };
 
-            self.ptr = unsafe { self.ptr.add(N * self.rowstride) };
+            // Because the base pointer for the column iterator is potentially offset from
+            // the base of the allocation, we can run into issues with `ptr::add` when the
+            // number of rows is evenly divisible by `N`.
+            //
+            // Since the validity of the iterator is tracked via `self.remaining_rows`, we
+            // use `wrapping_add` here.
+            self.ptr = self.ptr.wrapping_add(N * self.rowstride);
             self.remaining_rows -= N;
 
             Some(panel)
@@ -630,6 +745,31 @@ where
     _lifetime: PhantomData<&'a ()>,
 }
 
+impl<const N: usize, L> RowMajorPanel<'_, N, L>
+where
+    L: Length,
+{
+    fn rowstride(&self) -> usize {
+        self.rowstride
+    }
+
+    fn nrows(&self) -> usize {
+        self.nrows.value()
+    }
+
+    fn ncols(&self) -> usize {
+        self.nsubcols
+    }
+
+    fn get(&self, row: usize, col: usize) -> Option<f32> {
+        if row < self.nrows.value() && col < self.nsubcols {
+            Some(unsafe { self.ptr.add(self.rowstride * row + col).read() })
+        } else {
+            None
+        }
+    }
+}
+
 //////////////////
 // Accumulators //
 //////////////////
@@ -641,6 +781,28 @@ where
 {
     data: Poly<[f32], A>,
     rows: usize,
+}
+
+impl<const BROWS: usize, A> DotAcc<16, BROWS, A>
+where
+    A: AllocatorCore,
+{
+    fn max_sim(&self, arch: V3, maxrows: usize) -> [f32; 16] {
+        assert!(maxrows <= self.rows);
+        let (chunks, []) = self.data.as_chunks::<16>() else {
+            panic!("invalid!");
+        };
+
+        diskann_wide::alias!(f32s = <V3>::f32x16);
+        let mut acc = f32s::splat(arch, f32::NEG_INFINITY);
+
+        for c in chunks.iter().take(maxrows) {
+            let this = f32s::from_array(arch, *c);
+            acc = acc.max_simd(this);
+        }
+
+        (f32s::default(arch) - acc).to_array()
+    }
 }
 
 impl<'a, const AROWS: usize, const BROWS: usize, A> AsTailIterator<'a> for DotAcc<AROWS, BROWS, A>
@@ -686,7 +848,7 @@ impl<'a, const AROWS: usize, const BROWS: usize> Iterator for DotAccIter<'a, ARO
                 _lifetime: PhantomData,
             };
 
-            self.ptr = unsafe { self.ptr.add(BROWS) };
+            self.ptr = unsafe { self.ptr.add(BROWS * AROWS) };
             self.remaining_rows -= BROWS;
 
             Some(block)
@@ -734,10 +896,10 @@ impl Kernel<V3, NoTail, RowMajorPanel<'_, 4, Static<4>>, DotAccBlock<'_, 16, 4, 
     #[inline(always)]
     fn op<const OVERWRITE: bool>(
         &self,
-        arch: V3,
-        a: NoTail,
-        b: RowMajorPanel<'_, 4, Static<4>>,
-        accumulator: DotAccBlock<'_, 16, 4, Static<4>>,
+        _arch: V3,
+        _a: NoTail,
+        _b: RowMajorPanel<'_, 4, Static<4>>,
+        _accumulator: DotAccBlock<'_, 16, 4, Static<4>>,
     ) {
     }
 }
@@ -746,10 +908,10 @@ impl Kernel<V3, NoTail, RowMajorPanel<'_, 4, Dynamic>, DotAccBlock<'_, 16, 4, Dy
     #[inline(always)]
     fn op<const OVERWRITE: bool>(
         &self,
-        arch: V3,
-        a: NoTail,
-        b: RowMajorPanel<'_, 4, Dynamic>,
-        accumulator: DotAccBlock<'_, 16, 4, Dynamic>,
+        _arch: V3,
+        _a: NoTail,
+        _b: RowMajorPanel<'_, 4, Dynamic>,
+        _accumulator: DotAccBlock<'_, 16, 4, Dynamic>,
     ) {
     }
 }
@@ -770,8 +932,17 @@ impl
         b: RowMajorPanel<'_, 4, Static<4>>,
         accumulator: DotAccBlock<'_, 16, 4, Static<4>>,
     ) {
-        assert_eq!(a.nsubcols, b.nsubcols);
-        unsafe { microkernel::<OVERWRITE, 4>(arch, a.ptr, b.ptr, a.nsubcols, accumulator.ptr) };
+        debug_assert_eq!(a.nsubcols, b.nsubcols);
+        unsafe {
+            microkernel::<OVERWRITE, 4>(
+                arch,
+                a.ptr,
+                b.ptr,
+                b.rowstride(),
+                a.nsubcols,
+                accumulator.ptr,
+            )
+        };
     }
 }
 
@@ -791,20 +962,47 @@ impl
         b: RowMajorPanel<'_, 4, Dynamic>,
         accumulator: DotAccBlock<'_, 16, 4, Dynamic>,
     ) {
-        assert_eq!(a.nsubcols, b.nsubcols);
-        assert_eq!(b.nrows.value(), accumulator.active_rows.value());
+        if cfg!(debug_assertions) {
+            assert_eq!(a.nsubcols, b.nsubcols);
+            assert_eq!(b.nrows.value(), accumulator.active_rows.value());
+            assert!(b.nrows.value() < 4);
+        }
 
-        match b.nrows.value() {
+        let subcols = a.nsubcols.min(b.nsubcols);
+        let nrows = b.nrows.value().min(accumulator.active_rows.value());
+
+        match nrows {
+            0 => {}
             1 => unsafe {
-                microkernel::<OVERWRITE, 1>(arch, a.ptr, b.ptr, a.nsubcols, accumulator.ptr)
+                microkernel::<OVERWRITE, 1>(
+                    arch,
+                    a.ptr,
+                    b.ptr,
+                    b.rowstride(),
+                    subcols,
+                    accumulator.ptr,
+                )
             },
             2 => unsafe {
-                microkernel::<OVERWRITE, 2>(arch, a.ptr, b.ptr, a.nsubcols, accumulator.ptr)
+                microkernel::<OVERWRITE, 2>(
+                    arch,
+                    a.ptr,
+                    b.ptr,
+                    b.rowstride(),
+                    subcols,
+                    accumulator.ptr,
+                )
             },
-            3 => unsafe {
-                microkernel::<OVERWRITE, 3>(arch, a.ptr, b.ptr, a.nsubcols, accumulator.ptr)
+            _ => unsafe {
+                microkernel::<OVERWRITE, 3>(
+                    arch,
+                    a.ptr,
+                    b.ptr,
+                    b.rowstride(),
+                    subcols,
+                    accumulator.ptr,
+                )
             },
-            _ => unreachable!("invalid value"),
         }
     }
 }
@@ -814,6 +1012,7 @@ unsafe fn microkernel<const OVERWRITE: bool, const UNROLL: usize>(
     arch: V3,
     a: *const f32,
     b: *const f32,
+    b_row_stride: usize,
     k: usize,
     buf: *mut f32,
 ) {
@@ -821,7 +1020,7 @@ unsafe fn microkernel<const OVERWRITE: bool, const UNROLL: usize>(
 
     let mut p0 = [f32s::default(arch); UNROLL];
     let mut p1 = [f32s::default(arch); UNROLL];
-    let offsets: [usize; UNROLL] = core::array::from_fn(|i| k * i);
+    let offsets: [usize; UNROLL] = core::array::from_fn(|i| b_row_stride * i);
 
     let a_stride = 2 * f32s::LANES;
     let a_stride_half = f32s::LANES;
@@ -840,7 +1039,6 @@ unsafe fn microkernel<const OVERWRITE: bool, const UNROLL: usize>(
     }
 
     const BUF_STRIDE: usize = 16;
-
     for j in 0..UNROLL {
         if const { OVERWRITE } {
             unsafe {
@@ -862,3 +1060,185 @@ unsafe fn microkernel<const OVERWRITE: bool, const UNROLL: usize>(
 ///////////
 // Tests //
 ///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann_utils::views::{Init, Matrix};
+
+    use crate::multi_vector::{BlockTransposed, Mat};
+
+    //----------------//
+    // BlockTranspose //
+    //----------------//
+
+    fn test_row_paneled_inner(nrows: usize, ncols: usize) {
+        let raw = {
+            let mut i = 0;
+            Matrix::<f32>::new(
+                Init(|| {
+                    let j = i;
+                    i += 1;
+                    j as f32
+                }),
+                nrows,
+                ncols,
+            )
+        };
+
+        let block_transpose = BlockTransposed::<f32, 16>::from_matrix_view(raw.as_view());
+
+        let ks = [
+            1,
+            ncols.div_ceil(3),
+            ncols.div_ceil(2),
+            ncols.saturating_sub(1),
+            ncols,
+        ];
+        for k in ks {
+            if k == 0 {
+                continue;
+            }
+
+            let mut itr = block_transpose.as_view().row_paneled(k);
+
+            let mut base_row = 0;
+            for mut row_k_iter in itr.by_ref() {
+                let mut base_col = 0;
+                for panel in row_k_iter.by_ref() {
+                    let subcols = panel.ncols();
+                    assert!(subcols <= k);
+                    assert_eq!(panel.nrows(), 16);
+
+                    for c in 0..panel.ncols() {
+                        for r in 0..panel.nrows() {
+                            // Make sure the data access is vaild.
+                            let got = panel.get(r, c).unwrap();
+
+                            // Don't index out-of-bounds
+                            if base_row + r >= nrows {
+                                break;
+                            }
+
+                            let expected = raw[(base_row + r, base_col + c)];
+                            assert_eq!(got, expected);
+                        }
+                    }
+
+                    base_col += subcols;
+                }
+
+                assert_eq!(base_col, ncols);
+
+                base_row += row_k_iter.nrows();
+            }
+
+            assert!(itr.tail().is_none());
+            assert_eq!(base_row, nrows.next_multiple_of(16));
+        }
+    }
+
+    #[test]
+    fn test_row_paneled() {
+        for nrows in [1, 2, 4, 8, 10, 16, 20, 32, 40] {
+            for ncols in [1, 2, 4, 7, 10] {
+                test_row_paneled_inner(nrows, ncols);
+            }
+        }
+    }
+
+    //----------//
+    // RowMajor //
+    //----------//
+
+    fn test_row_major_iter_inner(nrows: usize, ncols: usize) {
+        println!("nrows = {nrows}, ncols = {ncols}");
+        let mat = {
+            let mut i = 0;
+            Mat::from_fn(Standard::<f32>::new(nrows, ncols).unwrap(), || {
+                let j = i;
+                i += 1;
+                j as f32
+            })
+        };
+
+        let ks = [
+            1,
+            ncols.div_ceil(3),
+            ncols.div_ceil(2),
+            ncols.saturating_sub(1),
+            ncols,
+        ];
+
+        for k in ks {
+            if k == 0 {
+                continue;
+            }
+
+            let itr = mat.as_view().column_paneled(k);
+
+            let mut base_col = 0;
+            for mut col_k_iter in itr {
+                let panel_rows = col_k_iter.panel_rows();
+                let panel_cols = col_k_iter.panel_cols();
+
+                let expected_cols = if base_col + k > ncols {
+                    ncols - base_col
+                } else {
+                    k
+                };
+
+                assert_eq!(panel_cols, expected_cols);
+
+                let mut base_row = 0;
+                for panel in col_k_iter.by_ref() {
+                    assert_eq!(panel.ncols(), expected_cols);
+                    for r in 0..panel.nrows() {
+                        for c in 0..panel.ncols() {
+                            let got = panel.get(r, c).unwrap();
+                            let expected = mat.get_row(base_row + r).unwrap()[base_col + c];
+                            assert_eq!(got, expected);
+                        }
+                    }
+
+                    base_row += panel.nrows();
+                }
+
+                let remainder_expected = !nrows.is_multiple_of(panel_rows);
+
+                match (remainder_expected, col_k_iter.tail()) {
+                    (true, Some(panel)) => {
+                        assert_eq!(panel.ncols(), expected_cols);
+                        for r in 0..panel.nrows() {
+                            for c in 0..panel.ncols() {
+                                let got = panel.get(r, c).unwrap();
+                                let expected = mat.get_row(base_row + r).unwrap()[base_col + c];
+                                assert_eq!(got, expected);
+                            }
+                        }
+
+                        base_row += panel.nrows();
+                    }
+                    (false, None) => {}
+                    (true, None) => panic!("No remainder was yielded when one was expected"),
+                    (false, Some(_)) => panic!("A remainder was yielded when none was expected"),
+                }
+
+                assert_eq!(base_row, nrows);
+                base_col += panel_cols;
+            }
+
+            assert_eq!(base_col, ncols);
+        }
+    }
+
+    #[test]
+    fn test_row_major_paneled() {
+        for nrows in [1, 2, 4, 8, 10, 16, 20, 32, 40] {
+            for ncols in [1, 2, 4, 7, 10] {
+                test_row_major_iter_inner(nrows, ncols);
+            }
+        }
+    }
+}
