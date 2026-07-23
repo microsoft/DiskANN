@@ -607,11 +607,8 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> NewCloned
 {
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
         let repr = *v.repr();
-        // SAFETY: `v` points to an allocation described by `repr`, which contains
-        // exactly `storage_len` initialized elements.
-        let data =
-            unsafe { std::slice::from_raw_parts(v.as_raw_ptr().cast::<T>(), repr.storage_len()) };
-        let b = data.to_vec().into_boxed_slice();
+        let data = BlockTransposedRef::new(v).as_slice();
+        let b: Box<[T]> = data.into();
 
         // SAFETY: `b` was copied from the complete backing allocation and therefore
         // has exactly `repr.storage_len()` elements.
@@ -717,6 +714,10 @@ pub struct BlockTransposedMut<'a, T: Copy, const GROUP: usize, const PACK: usize
 // ── BlockTransposedRef (core read implementations) ───────────────
 
 impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, T, GROUP, PACK> {
+    fn new(data: MatRef<'a, BlockTransposedRepr<T, GROUP, PACK>>) -> Self {
+        Self { data }
+    }
+
     /// Returns the number of logical rows.
     #[inline]
     pub fn nrows(&self) -> usize {
@@ -1033,9 +1034,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
 impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
     /// Borrow as an immutable [`BlockTransposedRef`].
     pub fn as_view(&self) -> BlockTransposedRef<'_, T, GROUP, PACK> {
-        BlockTransposedRef {
-            data: self.data.as_view(),
-        }
+        BlockTransposedRef::new(self.data.as_view())
     }
 
     /// Borrow as a mutable [`BlockTransposedMut`].
