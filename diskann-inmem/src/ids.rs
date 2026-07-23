@@ -17,7 +17,7 @@ const SHARD_SIZE: usize = 1024;
 
 /// Bidirectional mapping between an external id `I` and a dense internal `u32` id.
 #[derive(Debug)]
-pub(crate) struct Sharded<I>
+pub(crate) struct IdMap<I>
 where
     I: Hash + Eq,
 {
@@ -30,7 +30,7 @@ where
     capacity: usize,
 }
 
-impl<I> Sharded<I>
+impl<I> IdMap<I>
 where
     I: Hash + Eq,
 {
@@ -176,7 +176,7 @@ pub(crate) enum InsertError {
 
 crate::opaque!(InsertError);
 
-/// A handle to a valid entry in a [`Sharded`].
+/// A handle to a valid entry in a [`IdMap`].
 ///
 /// This can be used to guarantee the presence of an entry prior to deletion to support
 /// atomic deletes.
@@ -222,14 +222,14 @@ mod tests {
             SHARD_SIZE + 1,
             3 * SHARD_SIZE,
         ] {
-            let map = Sharded::<u32>::new(capacity);
+            let map = IdMap::<u32>::new(capacity);
             assert_eq!(map.capacity(), capacity);
         }
     }
 
     #[test]
     fn insert_round_trips() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         assert!(map.insert(100, 3).is_ok());
 
         assert_eq!(map.to_internal(&100), Some(3));
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_out_of_bounds_internal() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         assert!(matches!(map.insert(0, 16), Err(InsertError::OutOfBounds)));
         assert!(matches!(
             map.insert(0, u32::MAX),
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_duplicate_external_and_preserves_state() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         map.insert(7, 5).unwrap();
 
         assert!(matches!(map.insert(7, 6), Err(InsertError::ExternalExists)));
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn insert_rejects_duplicate_internal_and_preserves_state() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         map.insert(7, 5).unwrap();
 
         assert!(matches!(map.insert(8, 5), Err(InsertError::InternalExists)));
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn to_external_handles_bounds_and_empty_slots() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         // In-bounds but unmapped slot.
         assert_eq!(map.to_external(5), None);
         // Out-of-bounds slot.
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn mappings_span_shard_boundaries() {
         let capacity = 3 * SHARD_SIZE;
-        let map = Sharded::<u32>::new(capacity);
+        let map = IdMap::<u32>::new(capacity);
 
         // Ids straddling every internal shard boundary.
         let ids: [u32; 6] = [
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn lookup_supports_borrowed_query() {
-        let map = Sharded::<String>::new(16);
+        let map = IdMap::<String>::new(16);
         map.insert("alpha".to_string(), 1).unwrap();
 
         // Borrowed `&str` lookups against `String` keys.
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn occupied_entry_exposes_mapping() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         map.insert(42, 9).unwrap();
 
         let entry = map.occupied_entry(42).expect("entry should exist");
@@ -339,13 +339,13 @@ mod tests {
 
     #[test]
     fn occupied_entry_absent_for_unmapped() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         assert!(map.occupied_entry(42).is_none());
     }
 
     #[test]
     fn entry_delete_clears_both_directions() {
-        let map = Sharded::<u32>::new(16);
+        let map = IdMap::<u32>::new(16);
         map.insert(42, 9).unwrap();
 
         // Just creating and dropping an `occupied_entry` does not clear it.

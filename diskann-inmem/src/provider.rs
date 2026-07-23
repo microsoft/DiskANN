@@ -51,9 +51,9 @@ use thiserror::Error;
 
 use crate::{
     counters::{Counters, LocalCounters},
+    ids::IdMap,
     layers::{self, QueryDistance},
     num::Bytes,
-    sharded::Sharded,
     store::{self, Store},
 };
 
@@ -77,7 +77,7 @@ where
     // Data representation.
     layer: L,
     // ID translation.
-    mapping: Sharded<M>,
+    mapping: IdMap<M>,
     // Construction `Config`.
     config: Config,
 
@@ -119,7 +119,7 @@ where
         let store = Store::new(store_config, data.as_view())
             .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
 
-        let mapping = Sharded::new(config.capacity());
+        let mapping = IdMap::new(config.capacity());
 
         Ok(Self {
             store,

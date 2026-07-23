@@ -13,8 +13,8 @@ mod buffer;
 mod counters;
 mod epoch;
 mod freelist;
+mod ids;
 mod neighbors;
-mod sharded;
 mod tag;
 
 mod store;
