@@ -606,13 +606,11 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> NewCloned
     for BlockTransposedRepr<T, GROUP, PACK>
 {
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
-        let repr = *v.repr();
-        let data = BlockTransposedRef::new(v).as_slice();
-        let b: Box<[T]> = data.into();
+        let b: Box<[T]> = BlockTransposedRef::new(v).as_slice().into();
 
         // SAFETY: `b` was copied from the complete backing allocation and therefore
-        // has exactly `repr.storage_len()` elements.
-        unsafe { repr.box_to_mat(b) }
+        // has exactly `v.repr().storage_len()` elements.
+        unsafe { v.repr().box_to_mat(b) }
     }
 }
 
