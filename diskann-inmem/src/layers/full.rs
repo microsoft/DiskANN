@@ -275,8 +275,8 @@ impl<T> std::ops::Deref for Calf<'_, T> {
     }
 }
 
-/// A fused query distance based on [`PureDistanceFunction`] to enable inlining of the final
-/// distance function (`D`).
+/// A fused query distance based on [`diskann_vector::PureDistanceFunction`] to enable
+/// inlining of the final distance function (`D`).
 ///
 /// The type of the embedded query (`T`) is distinct from the expected data-set (`U`) to
 /// allow `f16` queries to be pre-converted to `f32`, saving on-the-fly conversion that

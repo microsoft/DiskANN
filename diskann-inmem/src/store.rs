@@ -648,7 +648,13 @@ impl<'a> Reader<'a> {
     ///
     /// This guarantee only holds while `self` is alive. Construction of a new [`Reader`]
     /// requires a separate check.
-    #[cfg(test)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "this is non-trivial method that likely be used in the future"
+        )
+    )]
     pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
         if !self.is_in_bounds(i) {
             return None;

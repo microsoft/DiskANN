@@ -54,8 +54,8 @@
 //! Note that the [`Freelist`] does not attempt to be authoritative on the list of slots IDs
 //! that are used and unused. Its job is mainly to improve performance.
 //!
-//! An authoritative collection of [`AtomicTag`](super::AtomicTag)s must be used to correctly
-//! manage slots.
+//! An authoritative collection (e.g. [`AtomicTag`](crate::tag::AtomicTag)s must be used to
+//! correctly manage slots.
 
 use std::{
     num::NonZeroU32,

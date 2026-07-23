@@ -56,7 +56,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// # Allowed Transitions
 ///
 /// The following protocol must be used when working with [`AtomicTag`]ged data and a
-/// [`Registry`](super::Registry).
+/// [`Registry`](crate::epoch::Registry).
 ///
 /// * [`Tag::AVAILABLE`] -> [`Tag::OWNED`]: Use a CAS to ensure unique ownership. Once in
 ///   the owned state, unsynchronized writes can be made to associated data.
