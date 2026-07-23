@@ -409,12 +409,13 @@ fn retirer(shared: &Shared, seed: u64) {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut iteration: u64 = 0;
 
+    let mut ops = Local::new(&shared.ops);
     let mut retires_ok = Local::new(&shared.retires_ok);
     let mut retires_fail = Local::new(&shared.retires_fail);
     let mut reclaims = Local::new(&shared.reclaims);
 
     while !should_stop(shared) {
-        shared.ops.fetch_add(1, Relaxed);
+        ops.add(1);
         iteration += 1;
 
         // Flow control: keep a steady readable population.
