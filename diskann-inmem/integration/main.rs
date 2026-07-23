@@ -97,7 +97,7 @@ mod tests {
         if let serde_json::Value::Object(obj) = raw {
             let value = obj
                 .get_mut(key)
-                .expect("key \"search-directories\" should exist");
+                .expect("key \"search_directories\" should exist");
             if let serde_json::Value::Array(directories) = value {
                 for value in directories.iter_mut() {
                     if let serde_json::Value::String(dir) = value {

@@ -298,6 +298,11 @@ impl<'a> Local<'a> {
 
     fn add(&mut self, by: u64) {
         self.counter += by;
+
+        if self.counter >= 2048 {
+            self.parent.fetch_add(self.counter, Relaxed);
+            self.counter = 0;
+        }
     }
 }
 

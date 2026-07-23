@@ -277,12 +277,12 @@ impl Store {
     pub(crate) fn try_drain(&self) -> Option<usize> {
         #[expect(clippy::panic, reason = "we cannot proceed if we observe this")]
         fn release(tag: &AtomicTag, kind: &'static str) {
-            // Relaxed ordering is sufficient as all readers/writers are synchronized on
-            // the central generation.
+            // Use `Release` ordering to ensure that the store to the mirror cannot get moved
+            // after the store to the authoritative list.
             if let Err(got) = tag.compare_exchange(
                 Tag::RETIRING,
                 Tag::AVAILABLE,
-                Ordering::Relaxed,
+                Ordering::Release,
                 Ordering::Relaxed,
             ) {
                 panic!(
