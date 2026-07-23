@@ -212,8 +212,25 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     return Err(GarnetProviderError::InvalidQuantizer);
                 }
 
-                let quantizer = Box::new(quantization::MinMax8Bit::new(dim, metric_type)?)
-                    as Box<dyn GarnetQuantizer>;
+                let quantizer = if let Some(quant_state) =
+                    callbacks.read_varsize_iid::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
+                {
+                    quantization::MinMax8Bit::new_from_bytes(metric_type, &quant_state)?
+                } else {
+                    let quantizer = quantization::MinMax8Bit::new(dim, metric_type)?;
+
+                    if !callbacks.write_iid(
+                        &context.term(Term::Metadata),
+                        QUANT_STATE_KEY,
+                        &quantizer.serialize()?,
+                    ) {
+                        return Err(GarnetError::Write.into());
+                    }
+
+                    quantizer
+                };
+
+                let quantizer = Box::new(quantizer) as Box<dyn GarnetQuantizer>;
                 let canonical_bytes = quantizer.bytes();
 
                 // NOTE: Q8 needs no training, so it always starts with backfill
@@ -2095,5 +2112,71 @@ mod tests {
         // Should be some full reads for reranking, but most reads should be
         // quantized
         assert!(store.full_reads() < store.quant_reads());
+    }
+
+    /// Test that restarts during phase three quant bootstrap work.
+    /// Phase three starts once backfill is complete and lasts for the remaining
+    /// life of the index.
+    #[test]
+    fn restart_q8() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::Q8, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+
+        let mut rng = rand::rng();
+
+        let mut first_insert = true;
+        for id in 0..10 {
+            let v = [rng.random(), rng.random()];
+
+            if first_insert {
+                provider.maybe_set_start_point(&ctx, &v).unwrap();
+                first_insert = false;
+            }
+
+            DynIndex::insert(
+                &index,
+                &ctx,
+                &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
+                bytemuck::cast_slice::<f32, u8>(&v),
+            )
+            .unwrap();
+        }
+
+        // Drop and re-create the index, keeping the same backing store
+        let index = create_2d_f32_index(VectorQuantType::Q8, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+
+        // There should be saved quant state.
+        assert!(
+            provider
+                .callbacks
+                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            "quant state missing"
+        );
+
+        // Vectors should serialize identically
+
+        let quantizer = provider.quantizer.as_ref().expect("missing quantizer");
+        let mut fv = vec![0f32; 2];
+        let mut orig_qv = vec![0u8; quantizer.bytes()];
+        let mut qv = vec![0u8; quantizer.bytes()];
+
+        assert!(provider.callbacks.read_single_iid(
+            &ctx.term(Term::Vector),
+            1,
+            bytemuck::cast_slice_mut::<f32, u8>(&mut fv),
+        ));
+
+        quantizer.compress(&fv, &mut qv).unwrap();
+
+        assert!(
+            provider
+                .callbacks
+                .read_single_iid(&ctx.term(Term::Quantized), 1, &mut orig_qv)
+        );
+
+        assert_eq!(orig_qv, qv, "quant vectors mismatched");
     }
 }

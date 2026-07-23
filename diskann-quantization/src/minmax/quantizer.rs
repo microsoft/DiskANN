@@ -3,6 +3,9 @@
  * Licensed under the MIT license.
  */
 
+#[cfg(feature = "flatbuffers")]
+use thiserror::Error;
+
 use super::vectors::{DataMutRef, FullQueryMut, MinMaxCompensation, MinMaxIP, MinMaxL2Squared};
 use core::f32;
 
@@ -15,6 +18,20 @@ use crate::{
     num::Positive,
     scalar::{InputContainsNaN, bit_scale},
 };
+#[cfg(feature = "flatbuffers")]
+use crate::{
+    algorithms::transforms::TransformError,
+    alloc::{Allocator, AllocatorError, Poly},
+    flatbuffers as fb,
+};
+
+/// The base number of bytes to allocate when attempting to serialize a quantizer.
+#[cfg(all(not(test), feature = "flatbuffers"))]
+const DEFAULT_SERIALIZED_BYTES: usize = 1024;
+
+// When testing, use a small value so we trigger the reallocation logic.
+#[cfg(all(test, feature = "flatbuffers"))]
+const DEFAULT_SERIALIZED_BYTES: usize = 1;
 
 /// Recall that from the module-level documentation, MinMaxQuantizer, quantizes X
 /// into `n` bit vectors as follows  -
@@ -207,6 +224,90 @@ impl MinMaxQuantizer {
             })
         }
     }
+
+    /// Attempt to deserialize a FlatBuffer `fb::minmax::Quantizer` (as produced by [`MinMaxQuantizer::serialize`]) into [`MinMaxQuantizer`].
+    #[cfg(feature = "flatbuffers")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "flatbuffers")))]
+    pub fn try_deserialize(data: &[u8]) -> Result<Self, DeserializationError> {
+        // Check that this is one of the known identifiers.
+        if !fb::minmax::quantizer_buffer_has_identifier(data) {
+            return Err(DeserializationError::InvalidIdentifier);
+        }
+
+        let root = fb::minmax::root_as_quantizer(data)?;
+
+        Ok(Self::new(
+            Transform::try_unpack(GlobalAllocator, root.transform())?,
+            Positive::new(root.grid_scale())
+                .map_err(|_| DeserializationError::GridScaleNotPositive)?,
+        ))
+    }
+
+    #[cfg(feature = "flatbuffers")]
+    pub fn serialize<A>(&self, allocator: A) -> Result<Poly<[u8], A>, AllocatorError>
+    where
+        A: Allocator + std::panic::UnwindSafe,
+    {
+        use flatbuffers::FlatBufferBuilder;
+
+        let mut buf = FlatBufferBuilder::new_in(Poly::broadcast(
+            0u8,
+            DEFAULT_SERIALIZED_BYTES,
+            allocator.clone(),
+        )?);
+
+        let transform = &self.transform;
+
+        let (root, mut buf) = match std::panic::catch_unwind(move || {
+            let offset = transform.pack(&mut buf);
+
+            let root = fb::minmax::Quantizer::create(
+                &mut buf,
+                &fb::minmax::QuantizerArgs {
+                    transform: Some(offset),
+                    grid_scale: self.grid_scale.into_inner(),
+                },
+            );
+            (root, buf)
+        }) {
+            Ok(ret) => ret,
+            Err(err) => match err.downcast_ref::<String>() {
+                Some(msg) => {
+                    if msg.contains("AllocatorError") {
+                        return Err(AllocatorError);
+                    } else {
+                        std::panic::resume_unwind(err);
+                    }
+                }
+                None => std::panic::resume_unwind(err),
+            },
+        };
+
+        // Finish serializing and then copy out the finished data into a newly allocated buffer.
+        fb::minmax::finish_quantizer_buffer(&mut buf, root);
+        Poly::from_iter(buf.finished_data().iter().copied(), allocator)
+    }
+}
+
+////////////////
+// Flatbuffer //
+////////////////
+
+#[cfg(feature = "flatbuffers")]
+#[cfg_attr(docsrs, doc(cfg(feature = "flatbuffers")))]
+#[derive(Debug, Clone, Error)]
+#[non_exhaustive]
+pub enum DeserializationError {
+    #[error("unhandled file identifier in flatbuffer")]
+    InvalidIdentifier,
+    #[error(transparent)]
+    InvalidFlatBuffer(#[from] flatbuffers::InvalidFlatbuffer),
+    #[error(transparent)]
+    AllocatorError(#[from] AllocatorError),
+    #[error(transparent)]
+    TransformError(#[from] TransformError),
+    #[error("grid-scale is missing or is not positive")]
+    GridScaleNotPositive,
 }
 
 /////////////////
@@ -669,5 +770,165 @@ mod minmax_quantizer_tests {
 
         // This should panic due to assertion in compress_into
         let _ = quantizer.compress_into(&wrong_vector, encoded.reborrow_mut());
+    }
+
+    #[cfg(feature = "flatbuffers")]
+    mod serialization {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        use super::*;
+        use crate::{
+            algorithms::{TransformKind, transforms::TargetDim},
+            alloc::{AllocatorCore, AllocatorError},
+        };
+
+        /// Build a quantizer backed by a random `DoubleHadamard` transform so that
+        /// serialization has to round-trip non-trivial transform state (the random
+        /// sign flips), not just the scalar grid-scale.
+        fn make_hadamard_quantizer(dim: usize, grid_scale: f32, seed: u64) -> MinMaxQuantizer {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let transform = Transform::new(
+                TransformKind::DoubleHadamard {
+                    target_dim: TargetDim::Same,
+                },
+                NonZeroUsize::new(dim).unwrap(),
+                Some(&mut rng),
+                GlobalAllocator,
+            )
+            .unwrap();
+
+            MinMaxQuantizer::new(transform, Positive::new(grid_scale).unwrap())
+        }
+
+        /// Compress `vector` into a freshly allocated canonical byte buffer.
+        fn compress_canonical<const NBITS: usize>(
+            quantizer: &MinMaxQuantizer,
+            vector: &[f32],
+        ) -> Vec<u8>
+        where
+            Unsigned: Representation<NBITS>,
+            MinMaxQuantizer:
+                for<'a, 'b> CompressInto<&'a [f32], DataMutRef<'b, NBITS>, Output = L2Loss>,
+        {
+            let dim = quantizer.output_dim();
+            let mut bytes = vec![0u8; Data::<NBITS>::canonical_bytes(dim)];
+            let data = DataMutRef::<NBITS>::from_canonical_front_mut(&mut bytes, dim).unwrap();
+            quantizer.compress_into(vector, data).unwrap();
+            bytes
+        }
+
+        fn test_roundtrip_inner<const NBITS: usize>(seed: u64)
+        where
+            Unsigned: Representation<NBITS>,
+            MinMaxQuantizer:
+                for<'a, 'b> CompressInto<&'a [f32], DataMutRef<'b, NBITS>, Output = L2Loss>,
+        {
+            let dim = 16;
+            let quantizer = make_hadamard_quantizer(dim, 0.9, seed);
+
+            let serialized = quantizer.serialize(GlobalAllocator).unwrap();
+            let deserialized = MinMaxQuantizer::try_deserialize(&serialized).unwrap();
+
+            // Structural properties survive.
+            assert_eq!(deserialized.dim(), quantizer.dim());
+            assert_eq!(deserialized.output_dim(), quantizer.output_dim());
+
+            // The random transform and grid-scale survive exactly: identical inputs must
+            // produce byte-identical compressed output after a round-trip.
+            let distribution = Uniform::new_inclusive::<f32, f32>(-1.0, 1.0).unwrap();
+            let mut rng = StdRng::seed_from_u64(seed ^ 0x9e37_79b9_7f4a_7c15);
+            for _ in 0..8 {
+                let vector: Vec<f32> = (&distribution).sample_iter(&mut rng).take(dim).collect();
+                assert_eq!(
+                    compress_canonical::<NBITS>(&quantizer, &vector),
+                    compress_canonical::<NBITS>(&deserialized, &vector),
+                    "compressed output differs after serialization round-trip",
+                );
+            }
+        }
+
+        macro_rules! roundtrip_test {
+            ($name:ident, $nbits:literal, $seed:literal) => {
+                #[test]
+                fn $name() {
+                    test_roundtrip_inner::<$nbits>($seed);
+                }
+            };
+        }
+        roundtrip_test!(serialize_roundtrip_1bit, 1, 0x1b3f_8c21_6d90_a54e);
+        roundtrip_test!(serialize_roundtrip_2bit, 2, 0x77c2_e0a4_35bd_1f08);
+        roundtrip_test!(serialize_roundtrip_4bit, 4, 0x0a9d_4471_c8e2_9b6f);
+        roundtrip_test!(serialize_roundtrip_8bit, 8, 0xd4e1_5aa9_3f7c_2210);
+
+        /// Deserializing a buffer without the expected file identifier is rejected
+        /// (rather than panicking or silently misparsing).
+        #[test]
+        fn deserialize_rejects_invalid_identifier() {
+            // A zero-filled buffer long enough to hold an identifier slot has the wrong
+            // identifier and must be rejected.
+            assert!(matches!(
+                MinMaxQuantizer::try_deserialize(&[0u8; 32]),
+                Err(DeserializationError::InvalidIdentifier),
+            ));
+
+            // Corrupting the file identifier of an otherwise-valid buffer is also rejected.
+            let quantizer = make_hadamard_quantizer(16, 1.0, 0x51ed_9c33);
+            let mut serialized = quantizer.serialize(GlobalAllocator).unwrap().to_vec();
+            // The file identifier occupies bytes 4..8 of a (non size-prefixed) flatbuffer.
+            serialized[4] ^= 0xff;
+            assert!(matches!(
+                MinMaxQuantizer::try_deserialize(&serialized),
+                Err(DeserializationError::InvalidIdentifier),
+            ));
+        }
+
+        /// An allocator that succeeds on its first allocation but fails on every
+        /// subsequent one, used to exercise the reallocation path in `serialize`.
+        #[derive(Debug, Clone)]
+        struct FlakyAllocator {
+            have_allocated: Arc<AtomicBool>,
+        }
+
+        impl FlakyAllocator {
+            fn new(have_allocated: Arc<AtomicBool>) -> Self {
+                Self { have_allocated }
+            }
+        }
+
+        // SAFETY: This wraps `GlobalAllocator` and only changes when allocation fails.
+        unsafe impl AllocatorCore for FlakyAllocator {
+            fn allocate(
+                &self,
+                layout: std::alloc::Layout,
+            ) -> Result<std::ptr::NonNull<[u8]>, AllocatorError> {
+                if self.have_allocated.swap(true, Ordering::Relaxed) {
+                    Err(AllocatorError)
+                } else {
+                    GlobalAllocator.allocate(layout)
+                }
+            }
+
+            unsafe fn deallocate(&self, ptr: std::ptr::NonNull<[u8]>, layout: std::alloc::Layout) {
+                // SAFETY: Inherited from caller.
+                unsafe { GlobalAllocator.deallocate(ptr, layout) }
+            }
+        }
+
+        /// Serialization must surface an [`AllocatorError`] instead of panicking when the
+        /// buffer needs to grow but reallocation fails. Under `cfg(test)` the initial
+        /// buffer is intentionally tiny, so growth (and thus the second allocation) always
+        /// happens.
+        #[test]
+        fn serialize_allocation_failure_does_not_panic() {
+            let quantizer = make_hadamard_quantizer(16, 1.0, 0x7a11_36bd);
+            let have_allocated = Arc::new(AtomicBool::new(false));
+            let _: AllocatorError = quantizer
+                .serialize(FlakyAllocator::new(have_allocated.clone()))
+                .unwrap_err();
+            assert!(have_allocated.load(Ordering::Relaxed));
+        }
     }
 }
