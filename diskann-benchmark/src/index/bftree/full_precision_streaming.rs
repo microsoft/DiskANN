@@ -224,13 +224,15 @@ where
     }
 }
 
+type BfTreeStreamingPayload<T> = (
+    bigann::WithData<T, u32, Managed<T, StreamStats>>,
+    BfTreeFPIndex<T>,
+);
+
 fn bftree_streaming<T>(
     input: &BfTreeDynamicRun,
     max_points: usize,
-) -> anyhow::Result<(
-    bigann::WithData<T, u32, Managed<T, StreamStats>>,
-    BfTreeFPIndex<T>,
-)>
+) -> anyhow::Result<BfTreeStreamingPayload<T>>
 where
     T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
