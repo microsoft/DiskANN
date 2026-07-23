@@ -46,13 +46,16 @@
 //! as indices into some external storage); this is not a general-purpose deferred-drop EBR
 //! system.
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::{
+    num::NonZeroUsize,
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 use crossbeam_queue::SegQueue;
 use diskann::utils::IntoUsize;
 use parking_lot::{Mutex, MutexGuard};
 
-const CAPACITY: usize = 256;
+const DEFAULT_GUARD_SLOTS: NonZeroUsize = NonZeroUsize::new(256).unwrap();
 
 /// A registry of epoch-based [`Guard`]s. See the [module-level docs](self).
 #[derive(Debug)]
@@ -112,17 +115,25 @@ fn last_queue(epoch: u64) -> usize {
 }
 
 impl Registry {
+    /// Return the default number of guard slots.
+    pub(crate) const fn default_guard_slots() -> NonZeroUsize {
+        DEFAULT_GUARD_SLOTS
+    }
+
     /// Construct a new [`Registry`] with the default number of guard slots (256).
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
-        Self::with_capacity(CAPACITY)
+        Self::with_capacity(DEFAULT_GUARD_SLOTS)
     }
 
     /// Construct a new [`Registry`] with `capacity` guard slots.
     ///
     /// This is the number of [`Guard`]s that can be registered concurrently.
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: NonZeroUsize) -> Self {
         Self {
-            guards: (0..capacity).map(|_| AtomicU64::new(0)).collect(),
+            guards: std::iter::repeat_with(|| AtomicU64::new(0))
+                .take(capacity.get())
+                .collect(),
             hint: AtomicUsize::new(0),
             epoch: AtomicU64::new(1),
             retiring: Box::new(core::array::from_fn(|_| SegQueue::new())),
@@ -483,7 +494,7 @@ mod tests {
             .post_guard_check(|| seq.wait_for(0))
             .with_post_fence(|| thread_a_loop_count += 1);
 
-        let registry = Registry::with_capacity(2);
+        let registry = Registry::with_capacity(NonZeroUsize::new(2).unwrap());
         std::thread::scope(|s| {
             // Thread A
             s.spawn(|| {
@@ -527,7 +538,7 @@ mod tests {
             .with_post_cas(|| seq.wait_for(1))
             .with_pre_fence(|| loop_count += 1);
 
-        let registry = Registry::with_capacity(2);
+        let registry = Registry::with_capacity(NonZeroUsize::new(2).unwrap());
 
         std::thread::scope(|s| {
             let handle = s.spawn(|| {
@@ -611,7 +622,7 @@ mod tests {
     // dropping an existing guard frees up its slot for a subsequent registration.
     #[test]
     fn test_slot_exhaustion() {
-        let registry = Registry::with_capacity(2);
+        let registry = Registry::with_capacity(NonZeroUsize::new(2).unwrap());
 
         let g0 = registry.guard().unwrap();
         let g1 = registry.guard().unwrap();
@@ -641,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_slot_wrap_around() {
-        let registry = Registry::with_capacity(4);
+        let registry = Registry::with_capacity(NonZeroUsize::new(4).unwrap());
 
         let (g2, g3) = {
             let _g0 = registry.guard().unwrap();
@@ -693,7 +704,7 @@ mod tests {
     // early `try_lock` that avoids a redundant slot scan.
     #[test]
     fn test_concurrent_try_advance() {
-        let registry = Registry::with_capacity(2);
+        let registry = Registry::with_capacity(NonZeroUsize::new(2).unwrap());
 
         // No outstanding registrations, so `can_advance` would succeed for any caller.
         let drain = registry
@@ -732,7 +743,7 @@ mod tests {
     // `(G - 1) % 3` (one cycle older), so it must NOT contain items from `G`.
     #[test]
     fn test_drain_rotation() {
-        let registry = Registry::with_capacity(1);
+        let registry = Registry::with_capacity(NonZeroUsize::new(1).unwrap());
 
         // Helper: register, retire one item, drop. Returns the generation we retired at.
         let retire_at = |id: u32| {

@@ -9,6 +9,8 @@
         "retirers": 2,
         "capacity": 4096,
         "entry_bytes": 128,
+        "epoch_guard_slots": 64,
+        "freelist_recycle_capacity": 512,
         "low_watermark": 1024,
         "duration_secs": 10,
         "max_ops": 50000000,

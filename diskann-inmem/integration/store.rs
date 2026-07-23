@@ -35,7 +35,7 @@ use diskann_benchmark_runner::{
 use rand::{Rng, SeedableRng, distr::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
-use diskann_inmem::integration::store::Store;
+use diskann_inmem::integration::store::{Config, Store};
 
 /// Maximum number of concurrent reader guards supported by the epoch registry.
 const GUARD_CAPACITY: usize = 256;
@@ -68,6 +68,10 @@ pub struct StoreStressInput {
     capacity: usize,
     /// Bytes per entry. Must be a non-zero multiple of 8 (the stamp lane width).
     entry_bytes: usize,
+    /// The number of epoch guard slots.
+    epoch_guard_slots: usize,
+    /// The capacity of the freelist recycle queue capacity.
+    freelist_recycle_capacity: usize,
     /// Retirers only retire while the live published population exceeds this watermark.
     low_watermark: usize,
     /// Wall-clock cap for the run, in seconds. Zero means unbounded (rely on `max_ops`).
@@ -135,6 +139,8 @@ impl Input for StoreStressInput {
             retirers: 2,
             capacity: 4096,
             entry_bytes: 128,
+            epoch_guard_slots: 256,
+            freelist_recycle_capacity: 1024,
             low_watermark: 1024,
             duration_secs: 5,
             max_ops: 50_000_000,
@@ -151,6 +157,8 @@ impl std::fmt::Display for StoreStressInput {
         kv.push("retirers", &self.retirers);
         kv.push("capacity", &self.capacity);
         kv.push("entry_bytes", &self.entry_bytes);
+        kv.push("epoch_guard_slots", &self.epoch_guard_slots);
+        kv.push("freelist_recycle_capacity", &self.freelist_recycle_capacity);
         kv.push("low_watermark", &self.low_watermark);
         kv.push("duration_secs", &self.duration_secs);
         kv.push("max_ops", &self.max_ops);
@@ -483,7 +491,14 @@ impl Benchmark for StoreStress {
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<StoreStressStats> {
-        let store = Store::new(input.capacity, input.entry_bytes);
+        let config = Config {
+            capacity: input.capacity,
+            entry_bytes: input.entry_bytes,
+            epoch_guard_slots: input.epoch_guard_slots,
+            freelist_recycle_capacity: input.freelist_recycle_capacity,
+        };
+
+        let store = Store::new(config);
         let writable = store.writable();
         let slots = store.slots();
         let start = Instant::now();

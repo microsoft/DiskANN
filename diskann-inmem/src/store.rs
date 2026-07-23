@@ -70,6 +70,64 @@ use crate::{
     tag::{AtomicTag, Tag},
 };
 
+/// Configuration for the concurrenct store.
+#[derive(Debug)]
+pub(crate) struct Config {
+    /// The number of non-frozen slots to create space for.
+    entries: usize,
+
+    /// The size of each slot.
+    bytes: Bytes,
+
+    /// The maximum number of neighbors in each adjacency list.
+    max_neighbors: usize,
+
+    /// The number of epoch guard slots.
+    ///
+    /// Increasing this number will increase the number of threads that can work concurrently
+    /// on the index at the cost of longer scan times for epoch advancement.
+    epoch_guard_slots: NonZeroUsize,
+
+    /// The capacity of the fast free list.
+    freelist_recycle_capacity: NonZeroU32,
+}
+
+impl Config {
+    /// Create a new `Config` capable of holding `entries` non-frozen points each of size
+    /// `bytes`. All adjacency lists will have a maximum capacity of `max_neighbors`.
+    pub(crate) fn new(entries: usize, bytes: Bytes, max_neighbors: usize) -> Self {
+        const DEFAULT_FREELIST_RECYCLE_CAPACITY: NonZeroU32 = NonZeroU32::new(1024).unwrap();
+        Self {
+            entries,
+            bytes,
+            max_neighbors,
+            epoch_guard_slots: Registry::default_guard_slots(),
+            freelist_recycle_capacity: DEFAULT_FREELIST_RECYCLE_CAPACITY,
+        }
+    }
+
+    /// Overwrite the number of epoch guard slots.
+    ///
+    /// Increasing this number will increase the number of threads that can work concurrently
+    /// on the index at the cost of longer scan times for epoch advancement.
+    pub(crate) fn epoch_guard_slots(&mut self, epoch_guard_slots: NonZeroUsize) -> &mut Self {
+        self.epoch_guard_slots = epoch_guard_slots;
+        self
+    }
+
+    /// Overwrite the capacity of the freelist recycle queue.
+    ///
+    /// Increasing the capacity of the queue will allow more recycled IDs to be retrieved
+    /// without triggering a scan, but will cost more memory.
+    pub(crate) fn freelist_recycle_capacity(
+        &mut self,
+        freelist_recycle_capacity: NonZeroU32,
+    ) -> &mut Self {
+        self.freelist_recycle_capacity = freelist_recycle_capacity;
+        self
+    }
+}
+
 /// A concurrent data and graph store.
 #[derive(Debug)]
 pub(crate) struct Store {
@@ -108,14 +166,23 @@ const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const RETRY_LIMIT: usize = 20;
 
 impl Store {
-    /// Create a new [`Store`] capable of holding [`entries`] non-frozen slots each of
-    /// length `bytes`.
+    /// Create a new [`Store`]. The entries within `init` will be used as frozen points
+    /// within the store and must be compatible the the number of bytes in `config`.
     pub(crate) fn new(
-        entries: usize,
-        bytes: Bytes,
-        max_neighbors: usize,
+        config: Config,
+        // entries: usize,
+        // bytes: Bytes,
+        // max_neighbors: usize,
         init: MatrixView<'_, u8>,
     ) -> Result<Self, StoreError> {
+        let Config {
+            entries,
+            bytes,
+            max_neighbors,
+            epoch_guard_slots,
+            freelist_recycle_capacity,
+        } = config;
+
         if init.ncols() != bytes.value() {
             return Err(StoreError::mismatched_frozen_point_dim(init.ncols(), bytes));
         }
@@ -158,8 +225,6 @@ impl Store {
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_neighbors))?;
 
-        const FREELIST_SIZE: NonZeroU32 = NonZeroU32::new(1024).unwrap();
-
         let me = Self {
             buffer: Buffer::new(total.into_usize(), padded_bytes, Align::_128)?,
             unpadded,
@@ -170,8 +235,8 @@ impl Store {
 
             // NOTE: The `Freelist` is initialized to `entries` and not `total` because
             // we do not want it to release frozen IDs.
-            freelist: Freelist::new(entries, FREELIST_SIZE),
-            registry: Registry::new(),
+            freelist: Freelist::new(entries, freelist_recycle_capacity),
+            registry: Registry::with_capacity(epoch_guard_slots),
             neighbors: Neighbors::new(total, max_neighbors)?,
         };
 
@@ -738,7 +803,11 @@ mod tests {
             base = base.wrapping_add(1);
         }
 
-        Store::new(entries, Bytes::new(entry_bytes), 0, data.as_view())
+        let mut config = Config::new(entries, Bytes::new(entry_bytes), 0);
+        config.epoch_guard_slots(NonZeroUsize::new(10).unwrap());
+        config.freelist_recycle_capacity(NonZeroU32::new(16).unwrap());
+
+        Store::new(config, data.as_view())
     }
 
     //------------------------//
@@ -749,7 +818,7 @@ mod tests {
     fn new_rejects_mismatched_frozen_dim() {
         // Frozen point has 8 columns but the store is asked for 16-byte entries.
         let data = Matrix::new(0u8, 1, 8);
-        let err = Store::new(4, Bytes::new(16), 0, data.as_view()).unwrap_err();
+        let err = Store::new(Config::new(4, Bytes::new(16), 0), data.as_view()).unwrap_err();
         assert!(matches!(
             err.0,
             StoreErrorInner::MismatchedFrozenPointDim { dim: 8, .. }
@@ -766,15 +835,22 @@ mod tests {
     fn new_rejects_total_slot_overflow() {
         // `entries` alone fits in u32, but `entries + frozen` overflows it.
         let data = Matrix::new(0u8, 1, 8);
-        let err = Store::new(u32::MAX as usize, Bytes::new(8), 0, data.as_view()).unwrap_err();
+        let err = Store::new(
+            Config::new(u32::MAX as usize, Bytes::new(8), 0),
+            data.as_view(),
+        )
+        .unwrap_err();
         assert!(matches!(err.0, StoreErrorInner::TooManyEntries { .. }));
     }
 
     #[test]
     fn new_rejects_too_many_neighbors() {
         let data = Matrix::new(0u8, 1, 8);
-        let err =
-            Store::new(4, Bytes::new(8), u32::MAX.into_usize() + 1, data.as_view()).unwrap_err();
+        let err = Store::new(
+            Config::new(4, Bytes::new(8), u32::MAX.into_usize() + 1),
+            data.as_view(),
+        )
+        .unwrap_err();
         assert!(matches!(err.0, StoreErrorInner::TooManyNeighbors { .. }));
     }
 

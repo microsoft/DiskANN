@@ -8,9 +8,19 @@
     reason = "integration test tools are not production code"
 )]
 
+use std::num::{NonZeroU32, NonZeroUsize};
+
 use diskann_utils::views::Matrix;
 
 use crate::{num::Bytes, store};
+
+#[derive(Debug)]
+pub struct Config {
+    pub capacity: usize,
+    pub entry_bytes: usize,
+    pub epoch_guard_slots: usize,
+    pub freelist_recycle_capacity: usize,
+}
 
 #[derive(Debug)]
 pub struct Store {
@@ -18,7 +28,8 @@ pub struct Store {
 }
 
 impl Store {
-    /// Construct a store with `capacity` writable slots, each holding `entry_bytes` bytes.
+    /// Construct a store with `config.capacity` writable slots, each holding
+    /// `config.entry_bytes` bytes.
     ///
     /// A single zeroed frozen point is created internally to satisfy the underlying
     /// store's requirement of at least one frozen entry; it occupies the highest slot
@@ -26,12 +37,31 @@ impl Store {
     ///
     /// # Panics
     ///
-    /// Panics if the underlying store could not be constructed (e.g. `capacity` plus the
-    /// frozen point exceeds `u32::MAX`).
-    pub fn new(capacity: usize, entry_bytes: usize) -> Self {
-        let data = Matrix::new(0u8, 1, entry_bytes);
-        let store = store::Store::new(capacity, Bytes::new(entry_bytes), 0, data.as_view())
-            .expect("failed to construct store");
+    /// Panics if the underlying store could not be constructed (e.g. `config.capacity` plus
+    /// the frozen point exceeds `u32::MAX`) or if other configuration parameters such as
+    /// the number of epoch guard slots are invalid (e.g. zero).
+    pub fn new(config: Config) -> Self {
+        let mut store_config =
+            store::Config::new(config.capacity, Bytes::new(config.entry_bytes), 0);
+
+        store_config
+            .epoch_guard_slots(
+                NonZeroUsize::new(config.epoch_guard_slots)
+                    .expect("`epoch_guard_slots` must be non-zero"),
+            )
+            .freelist_recycle_capacity(
+                NonZeroU32::new(
+                    config
+                        .freelist_recycle_capacity
+                        .try_into()
+                        .expect("`freelist_recycle_capacity` must fit within 32-bits"),
+                )
+                .expect("`freelist_recycle_capacity` must be non-zero"),
+            );
+
+        let data = Matrix::new(0u8, 1, config.entry_bytes);
+        let store =
+            store::Store::new(store_config, data.as_view()).expect("failed to construct store");
         Self { store }
     }
 

@@ -30,7 +30,10 @@
 //! * Lack of save/load support: The index is currently ephemeral, but there are plans to
 //!   address this gap.
 
-use std::{hash::Hash, num::NonZeroUsize};
+use std::{
+    hash::Hash,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
@@ -103,13 +106,18 @@ where
             layers::Set::set(&layer, point, row)?;
         }
 
-        let store = Store::new(
-            config.capacity(),
-            bytes,
-            config.max_degree(),
-            data.as_view(),
-        )
-        .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
+        let mut store_config = store::Config::new(config.capacity(), bytes, config.max_degree());
+
+        if let Some(slots) = config.epoch_guard_slots {
+            store_config.epoch_guard_slots(slots);
+        }
+
+        if let Some(capacity) = config.freelist_recycle_capacity {
+            store_config.freelist_recycle_capacity(capacity);
+        }
+
+        let store = Store::new(store_config, data.as_view())
+            .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
 
         let mapping = Sharded::new(config.capacity());
 
@@ -153,6 +161,8 @@ pub struct Config {
     capacity: usize,
     max_degree: usize,
     prefetch_lookahead: Option<NonZeroUsize>,
+    epoch_guard_slots: Option<NonZeroUsize>,
+    freelist_recycle_capacity: Option<NonZeroU32>,
 }
 
 impl Config {
@@ -167,6 +177,8 @@ impl Config {
             capacity,
             max_degree,
             prefetch_lookahead: Some(Self::DEFAULT_PREFETCH_LOOKAHEAD),
+            epoch_guard_slots: None,
+            freelist_recycle_capacity: None,
         }
     }
 
@@ -183,8 +195,24 @@ impl Config {
     /// Configure the prefetch lookahead.
     ///
     /// This is used during beam expansion to prefetch data into CPU caches.
-    pub fn prefetch_lookahead(&mut self, prefetch_lookahead: Option<NonZeroUsize>) {
+    pub fn set_prefetch_lookahead(&mut self, prefetch_lookahead: Option<NonZeroUsize>) {
         self.prefetch_lookahead = prefetch_lookahead;
+    }
+
+    /// Configure the number of epoch guard slots.
+    ///
+    /// Increasing this number will increase the number of threads that can work concurrently
+    /// on the index at the cost of longer scan times for epoch advancement.
+    pub fn set_epoch_guard_slots(&mut self, slots: Option<NonZeroUsize>) {
+        self.epoch_guard_slots = slots;
+    }
+
+    /// Configure the capacity of the freelist recycle queue.
+    ///
+    /// Increasing the capacity of the queue will allow more recycled IDs to be retrieved
+    /// without triggering a scan, but will cost more memory.
+    pub fn set_freelist_recycle_capacity(&mut self, capacity: Option<NonZeroU32>) {
+        self.freelist_recycle_capacity = capacity;
     }
 }
 
