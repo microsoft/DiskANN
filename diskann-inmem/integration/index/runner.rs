@@ -205,7 +205,7 @@ impl Data {
 
         let groundtruth = {
             let mut io = std::fs::File::open(&*self.groundtruth)
-                .with_context(|| format!("could not open {}", self.queries.display()))?;
+                .with_context(|| format!("could not open {}", self.groundtruth.display()))?;
 
             let raw = diskann_utils::io::read_bin::<u32>(&mut io)?;
             raw.map(|&x| u64::from(x))
