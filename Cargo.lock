@@ -470,6 +470,7 @@ dependencies = [
  "diskann-benchmark-runner",
  "diskann-bftree",
  "diskann-disk",
+ "diskann-inmem",
  "diskann-label-filter",
  "diskann-providers",
  "diskann-quantization",
@@ -614,6 +615,30 @@ dependencies = [
  "diskann-vector",
  "foldhash",
  "rand",
+ "thiserror 2.0.17",
+ "tokio",
+]
+
+[[package]]
+name = "diskann-inmem"
+version = "0.55.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "crossbeam-queue",
+ "dashmap",
+ "diskann",
+ "diskann-benchmark-core",
+ "diskann-benchmark-runner",
+ "diskann-utils",
+ "diskann-vector",
+ "diskann-wide",
+ "half",
+ "parking_lot",
+ "rand",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
 ]
