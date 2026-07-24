@@ -728,18 +728,22 @@ impl<T: VectorRepr> GarnetProvider<T> {
         guard[0..neighbors.len()].copy_from_slice(neighbors);
         guard[self.max_degree] = neighbors.len() as u32;
 
-        if !self
-            .callbacks
-            .write_iid(&context.term(Term::Neighbors), iid, &guard)
-        {
-            return Err(GarnetProviderError::Garnet(GarnetError::Write));
+        // NOTE: We use `rmw_iid` here instead of `write_iid` to guarantee cache coherence.
+        if !self.callbacks.rmw_iid(
+            &context.term(Term::Neighbors),
+            iid,
+            (self.max_degree + 1) * mem::size_of::<u32>(),
+            |data: &mut [u32]| {
+                data.copy_from_slice(&guard);
+                if iid == 0 {
+                    self.neighbor_cache.insert(iid, neighbors.to_vec());
+                }
+            },
+        ) {
+            return Err(GarnetError::Write.into());
         }
 
         guard.finish(0);
-
-        if iid == 0 {
-            self.neighbor_cache.insert(iid, neighbors.to_vec());
-        }
 
         Ok(())
     }
@@ -780,7 +784,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 }
             },
         ) {
-            return Err(GarnetProviderError::Garnet(GarnetError::Write));
+            return Err(GarnetError::Write.into());
         }
 
         Ok(())

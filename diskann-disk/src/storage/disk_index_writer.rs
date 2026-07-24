@@ -538,32 +538,12 @@ impl DiskIndexWriter {
         get_disk_index_file(&self.index_path_prefix)
     }
 
-    pub fn get_pq_pivot_file(&self) -> String {
-        get_pq_pivot_file(&self.index_path_prefix)
-    }
-
-    pub fn get_compressed_pq_pivot_file(&self) -> String {
-        get_compressed_pq_file(&self.index_path_prefix)
-    }
-
-    pub fn get_disk_index_pq_pivot_file(&self) -> String {
-        get_disk_index_pq_pivot_file(&self.index_path_prefix)
-    }
-
-    pub fn get_disk_index_compressed_pq_file(&self) -> String {
-        get_disk_index_compressed_pq_file(&self.index_path_prefix)
-    }
-
     pub fn get_index_path_prefix(&self) -> String {
         self.index_path_prefix.clone()
     }
 
     pub fn get_dataset_file(&self) -> String {
         self.dataset_file.clone()
-    }
-
-    pub fn get_associated_data_file(&self) -> Option<String> {
-        self.associated_data_file.clone()
     }
 
     pub fn get_mem_index_file(&self) -> String {
@@ -582,16 +562,8 @@ impl DiskIndexWriter {
         format!("{}_subshard-{}.bin", prefix, shard)
     }
 
-    pub fn get_merged_index_subshard_prefix(prefix: &str, shard: usize) -> String {
-        format!("{}_subshard-{}", prefix, shard)
-    }
-
     pub fn get_merged_index_subshard_mem_index_file(prefix: &str, shard: usize) -> String {
         format!("{}_subshard-{}_mem.index", prefix, shard)
-    }
-
-    pub fn get_merged_index_subshard_mem_dataset_file(subshard_mem_index_prefix: &str) -> String {
-        get_mem_index_data_file(subshard_mem_index_prefix)
     }
 }
 
@@ -790,34 +762,11 @@ mod disk_index_storage_test {
     struct ExpectedWriter {
         dataset_file: String,
         index_path_prefix: String,
-        pq_pivot_file: String,
-        compressed_pq_file: String,
-        disk_index_pq_pivot_file: String,
-        disk_index_compressed_pq_file: String,
-        associated_data_file: Option<String>,
     }
 
     fn assert_writer_eq_expected(writer: &DiskIndexWriter, expected: &ExpectedWriter) {
         assert_eq!(writer.dataset_file(), &expected.dataset_file);
         assert_eq!(writer.index_path_prefix(), &expected.index_path_prefix);
-
-        assert_eq!(writer.get_pq_pivot_file(), expected.pq_pivot_file);
-        assert_eq!(
-            writer.get_compressed_pq_pivot_file(),
-            expected.compressed_pq_file
-        );
-        assert_eq!(
-            writer.get_disk_index_pq_pivot_file(),
-            expected.disk_index_pq_pivot_file
-        );
-        assert_eq!(
-            writer.get_disk_index_compressed_pq_file(),
-            expected.disk_index_compressed_pq_file
-        );
-        assert_eq!(
-            writer.get_associated_data_file(),
-            expected.associated_data_file
-        );
     }
 
     #[test]
@@ -835,11 +784,6 @@ mod disk_index_storage_test {
         let expected = ExpectedWriter {
             dataset_file: dataset_file_name.to_string(),
             index_path_prefix: index_path_prefix.to_string(),
-            pq_pivot_file: get_pq_pivot_file(index_path_prefix),
-            compressed_pq_file: get_compressed_pq_file(index_path_prefix),
-            disk_index_pq_pivot_file: get_disk_index_pq_pivot_file(index_path_prefix),
-            disk_index_compressed_pq_file: get_disk_index_compressed_pq_file(index_path_prefix),
-            associated_data_file: Some(associated_data_file.to_string()),
         };
         assert_writer_eq_expected(&writer, &expected);
     }
@@ -894,31 +838,12 @@ mod disk_index_storage_test {
     }
 
     #[test]
-    fn test_get_merged_index_subshard_prefix() {
-        let prefix = "test_prefix";
-        let shard = 5;
-        assert_eq!(
-            DiskIndexWriter::get_merged_index_subshard_prefix(prefix, shard),
-            "test_prefix_subshard-5"
-        );
-    }
-
-    #[test]
     fn test_get_merged_index_subshard_mem_index_file() {
         let prefix = "test_prefix";
         let shard = 5;
         assert_eq!(
             DiskIndexWriter::get_merged_index_subshard_mem_index_file(prefix, shard),
             "test_prefix_subshard-5_mem.index"
-        );
-    }
-
-    #[test]
-    fn test_get_merged_index_subshard_mem_dataset_file() {
-        let prefix = "test_prefix";
-        assert_eq!(
-            DiskIndexWriter::get_merged_index_subshard_mem_dataset_file(prefix),
-            "test_prefix.data"
         );
     }
 

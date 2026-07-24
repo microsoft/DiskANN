@@ -5,12 +5,6 @@
 
 use diskann_benchmark_runner::Registry;
 
-// Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!(
-    "spherical-quantization",
-    inputs::graph_index::SphericalQuantBuild
-);
-
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     const NAME: &str = "graph-index-spherical-quantization";
 
@@ -52,9 +46,12 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         )?;
     }
 
-    // Stub implementation
     #[cfg(not(feature = "spherical-quantization"))]
-    imp::register(NAME, registry)?;
+    registry.register_partially_gated::<crate::inputs::graph_index::SphericalQuantBuild>(
+        NAME,
+        diskann_benchmark_runner::Features::new("spherical-quantization"),
+        "Spherical quantized (RabitQ) graph build and search",
+    )?;
 
     Ok(())
 }
