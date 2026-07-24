@@ -52,8 +52,6 @@ use crate::{
 
 type BfTreeSQProvider = BfTreeProvider<f32, QuantVectorProvider>;
 type BfTreeSQIndex = Arc<DiskANNIndex<BfTreeSQProvider>>;
-type BfTreeSQStreamer = bigann::WithData<f32, u32, Managed<f32, StreamStats>>;
-type BfTreeSQStreamingResult = anyhow::Result<(BfTreeSQStreamer, BfTreeSQIndex)>;
 
 fn new_quantizer<const NBITS: usize>(
     quantizer: SphericalQuantizer,
