@@ -23,8 +23,8 @@ pub use start_point::{SampleableForStart, StartPointStrategy};
 mod misc;
 pub use misc::{ConsolidateKind, InplaceDeleteMethod};
 
-#[cfg(feature = "experimental_diversity_search")]
-pub use misc::DiverseSearchParams;
+// #[cfg(feature = "experimental_diversity_search")]
+// pub use misc::DiverseSearchParams;
 
 pub mod glue;
 pub mod search;

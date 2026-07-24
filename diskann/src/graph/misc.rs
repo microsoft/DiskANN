@@ -2,15 +2,6 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-#[cfg(feature = "experimental_diversity_search")]
-mod imports {
-    pub(super) use crate::{ANNError, ANNErrorKind};
-    pub(super) use std::num::NonZeroUsize;
-    pub(super) use thiserror::Error;
-}
-
-#[cfg(feature = "experimental_diversity_search")]
-use imports::*;
 
 // enum used to return the status of the vector that `consolidate_vector`
 // was called on: Deleted if the vector was already deleted, and Complete
@@ -38,62 +29,6 @@ pub enum InplaceDeleteMethod {
     VisitedAndTopK { k_value: usize, l_value: usize },
     TwoHopAndOneHop,
     OneHop,
-}
-
-/// Error type for [`DiverseSearchParams`] parameter validation.
-#[cfg(feature = "experimental_diversity_search")]
-#[derive(Debug, Error)]
-pub enum DiverseSearchError {
-    #[error("original k_value cannot be zero")]
-    OriginalKZero,
-    #[error("diverse k_value cannot be zero")]
-    DiverseKZero,
-}
-
-#[cfg(feature = "experimental_diversity_search")]
-impl From<DiverseSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: DiverseSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
-
-// Parameters for diverse search
-#[cfg(feature = "experimental_diversity_search")]
-#[derive(Clone, Debug)]
-pub struct DiverseSearchParams<P>
-where
-    P: crate::neighbor::AttributeValueProvider,
-{
-    pub diverse_attribute_id: usize,
-    pub diverse_results_k: NonZeroUsize,
-    pub original_k_value: NonZeroUsize,
-    pub attribute_provider: std::sync::Arc<P>,
-}
-
-#[cfg(feature = "experimental_diversity_search")]
-impl<P> DiverseSearchParams<P>
-where
-    P: crate::neighbor::AttributeValueProvider,
-{
-    pub fn new(
-        diverse_attribute_id: usize,
-        diverse_results_k: usize,
-        original_k_value: usize,
-        attribute_provider: std::sync::Arc<P>,
-    ) -> Result<Self, DiverseSearchError> {
-        let diverse_results_k =
-            NonZeroUsize::new(diverse_results_k).ok_or(DiverseSearchError::DiverseKZero)?;
-        let original_k_value =
-            NonZeroUsize::new(original_k_value).ok_or(DiverseSearchError::OriginalKZero)?;
-
-        Ok(Self {
-            diverse_attribute_id,
-            diverse_results_k,
-            original_k_value,
-            attribute_provider,
-        })
-    }
 }
 
 ///////////

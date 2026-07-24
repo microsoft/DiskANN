@@ -118,7 +118,7 @@ fn run(
 ) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
     rt.block_on(async {
-        let multihop = MultihopFilterSearch::new(Knn::new_default(k, l).unwrap());
+        let multihop = MultihopFilterSearch::new(Knn::new_default(l).unwrap());
         let mut neighbors = Vec::<Neighbor<u32>>::new();
 
         let stats = index
@@ -162,7 +162,7 @@ fn accept_all_finds_all_nodes() {
         3,
     );
 
-    let (stats, results) = run(&index, &[1.5], 3, 10, &AcceptAll);
+    let (stats, results) = run(&index, &[1.5], 10, &AcceptAll);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
     assert!(ids.contains(&0), "node 0 should be found");
@@ -203,7 +203,7 @@ fn reject_triggers_two_hop_expansion() {
     );
 
     let filter = EvenFilter;
-    let (stats, results) = run(&index, &[2.0], 5, 20, &filter);
+    let (stats, results) = run(&index, &[2.0], 20, &filter);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
 
@@ -251,7 +251,7 @@ fn reject_all_yields_nothing() {
         2,
     );
 
-    let (_stats, results) = run(&index, &[0.5], 5, 10, &RejectAll);
+    let (_stats, results) = run(&index, &[0.5], 10, &RejectAll);
 
     // Nothing should be present in the result, not even the start point since it does not
     // satisfy the predicate.

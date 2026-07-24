@@ -391,7 +391,7 @@ fn inline_search_returns_only_final_level_matches() {
     let filter = LevelLabelProvider::new();
     let k = 8;
     let l = 32;
-    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), adaptive_l);
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), None);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -497,11 +497,11 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
-    let k = 1;
     let l = 1;
     let adaptive_l = AdaptiveL::new(1, 16.0).unwrap();
-    let inline = InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), Some(adaptive_l));
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), Some(adaptive_l));
 
+    let k = 1;
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
     let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
@@ -624,11 +624,11 @@ fn inline_search_reaches_matches_through_non_matching_nodes() {
 
     let filter = EvenFilter;
 
-    let k = 5;
     let l = 20;
     let search_params = Knn::new_default(l).unwrap();
     let inline = InlineFilterSearch::new(search_params, None);
 
+    let k = 5;
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
     let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
@@ -645,8 +645,8 @@ fn inline_search_reaches_matches_through_non_matching_nodes() {
 
     let result_count = stats.result_count as usize;
     let baseline = InlineBaseline {
-        query: vec![2.0f32],
         k,
+        query: vec![2.0f32],
         l,
         result_count,
         results: ids[..result_count]

@@ -7,13 +7,14 @@
 
 use diskann_utils::future::SendFuture;
 use hashbrown::HashSet;
+use std::num::NonZeroUsize;
+use thiserror::Error;
 
 use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNResult,
+    ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        DiverseSearchParams,
         glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
@@ -21,6 +22,58 @@ use crate::{
     neighbor::{AttributeValueProvider, DiverseNeighborQueue, NeighborQueue},
     provider::DataProvider,
 };
+
+/// Error type for [`DiverseSearchParams`] parameter validation.
+#[derive(Debug, Error)]
+pub enum DiverseSearchError {
+    #[error("total k_value cannot be zero")]
+    TotalKZero,
+    #[error("diverse k_value cannot be zero")]
+    DiverseKZero,
+}
+
+impl From<DiverseSearchError> for ANNError {
+    #[track_caller]
+    fn from(err: DiverseSearchError) -> Self {
+        Self::new(ANNErrorKind::IndexError, err)
+    }
+}
+
+// Parameters for diverse search
+#[derive(Clone, Debug)]
+pub struct DiverseSearchParams<P>
+where
+    P: crate::neighbor::AttributeValueProvider,
+{
+    pub diverse_attribute_id: usize,
+    pub diverse_results_k: NonZeroUsize,
+    pub total_k_value: NonZeroUsize,
+    pub attribute_provider: std::sync::Arc<P>,
+}
+
+impl<P> DiverseSearchParams<P>
+where
+    P: crate::neighbor::AttributeValueProvider,
+{
+    pub fn new(
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
+        total_k_value: usize,
+        attribute_provider: std::sync::Arc<P>,
+    ) -> Result<Self, DiverseSearchError> {
+        let diverse_results_k =
+            NonZeroUsize::new(diverse_results_k).ok_or(DiverseSearchError::DiverseKZero)?;
+        let total_k_value =
+            NonZeroUsize::new(total_k_value).ok_or(DiverseSearchError::TotalKZero)?;
+
+        Ok(Self {
+            diverse_attribute_id,
+            diverse_results_k,
+            total_k_value,
+            attribute_provider,
+        })
+    }
+}
 
 /// Parameters for diversity-aware search.
 ///
@@ -72,7 +125,7 @@ where
         let attribute_provider = self.diverse_params.attribute_provider.clone();
         let diverse_queue = DiverseNeighborQueue::new(
             self.inner.l_value().get(),
-            self.diverse_params.original_k_value,
+            self.diverse_params.total_k_value,
             self.diverse_params.diverse_results_k.get(),
             attribute_provider,
         );

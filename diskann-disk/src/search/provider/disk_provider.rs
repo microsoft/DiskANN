@@ -1058,6 +1058,13 @@ where
         let mut associated_data =
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
+        if search_list_size < return_list_size {
+            return Err(ANNError::message(
+                diskann::ANNErrorKind::IndexError,
+                "search list size must be at least as large as the number of results requested",
+            ));
+        }
+
         let stats = self.search_internal(
             query,
             return_list_size as usize,
@@ -1114,13 +1121,6 @@ where
         let timer = Instant::now();
         let l = search_list_size as usize;
 
-            if search_list_size < k_value as u32 {
-                return Err(ANNError::message(
-                    diskann::ANNErrorKind::IndexError,
-                    "search list size must be at least as large as the number of results requested",
-                ));
-            }
-
         let io_tracker = IOTracker::default();
 
         // * `FlatScan`     — `flat_search` filters the scan iterator at
@@ -1150,7 +1150,7 @@ where
                         .as_deref()
                         .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
                 );
-                let knn_search = Knn::new(k, l, beam_width)?;
+                let knn_search = Knn::new(l, beam_width)?;
                 self.runtime.block_on(self.index.search(
                     knn_search,
                     &strategy,
@@ -1164,7 +1164,7 @@ where
                 // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
                 // its counters reachable from this scope.
                 let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
-                let knn_search = Knn::new(k, l, beam_width)?;
+                let knn_search = Knn::new(l, beam_width)?;
                 self.runtime.block_on(self.filter_search(
                     strategy,
                     query,
@@ -1182,7 +1182,7 @@ where
                     .as_deref()
                     .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
                 let strategy = self.search_strategy(&io_tracker, postprocess_config);
-                let knn_search = Knn::new(k, l, beam_width)?;
+                let knn_search = Knn::new(l, beam_width)?;
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
@@ -1950,7 +1950,7 @@ mod disk_provider_tests {
     #[cfg(feature = "experimental_diversity_search")]
     #[test]
     fn test_disk_search_diversity_search() {
-        use diskann::graph::DiverseSearchParams;
+        use diskann::graph::search::DiverseSearchParams;
         use diskann::neighbor::AttributeValueProvider;
         use std::collections::HashMap;
 
@@ -2071,8 +2071,7 @@ mod disk_provider_tests {
         );
         let io_tracker2 = IOTracker::default();
         let strategy2 = search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll);
-        let search_params2 =
-            Knn::new(search_list_size as usize, None).unwrap();
+        let search_params2 = Knn::new(search_list_size as usize, None).unwrap();
 
         let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
         let stats = search_engine
