@@ -22,12 +22,14 @@ use anyhow::Context;
 use clap::Parser;
 use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
 use diskann::utils::VectorRepr;
-use diskann_benchmark_core::streaming::executors::bigann::{FindGroundtruth, RunBook, Stage};
+use diskann_benchmark_core::streaming::executors::bigann::{FindGroundtruth, RunBook};
+use diskann_benchmark_core::streaming::{self, Executor};
 use diskann_providers::storage::{FileStorageProvider, StorageReadProvider};
 use diskann_tools::utils::{
     init_subscriber, write_ground_truth, CMDResult, CMDToolError, DataType,
 };
 use diskann_utils::io::read_bin;
+use diskann_utils::views::Matrix;
 use diskann_vector::{distance::Metric, DistanceFunction};
 use rayon::prelude::*;
 
@@ -100,7 +102,7 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
         args.runbook_file,
         args.dataset_name
     );
-    let runbook = RunBook::load(
+    let mut runbook = RunBook::load(
         Path::new(&args.runbook_file),
         &args.dataset_name,
         &mut finder,
@@ -110,179 +112,193 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
     })?;
 
     tracing::info!("Runbook has {} stages", runbook.len());
-
-    // Boolean active-vector mask indexed by base offset.
-    let mut active: Vec<bool> = vec![false; n_base];
-    // For each active dataset offset, the external ID that should appear in the groundtruth.
-    // For plain inserts external_id == dataset_offset; for Replace they diverge.
-    let mut ext_id: Vec<u32> = vec![0u32; n_base];
-    // Reverse map: external_id -> dataset_offset, needed to resolve Delete/Replace removals.
-    let mut ext_to_offset: HashMap<u32, usize> = HashMap::new();
-
     let distance_fn = V::distance(args.distance_function, Some(dataset.ncols()));
 
-    for (stage_idx, stage) in runbook.stages().iter().enumerate() {
-        match stage {
-            Stage::Insert {
-                dataset_offsets_and_ids,
-            } => {
-                for id in dataset_offsets_and_ids.clone() {
-                    if id < n_base {
-                        active[id] = true;
-                        ext_id[id] = id as u32;
-                        ext_to_offset.insert(id as u32, id);
-                    }
-                }
-                tracing::info!(
-                    "Stage {}: insert {}..{} ({} active)",
-                    stage_idx,
-                    dataset_offsets_and_ids.start,
-                    dataset_offsets_and_ids.end,
-                    active.iter().filter(|&&b| b).count(),
-                );
-            }
-            Stage::Delete { ids } => {
-                for eid in ids.clone() {
-                    if let Some(&offset) = ext_to_offset.get(&(eid as u32)) {
-                        active[offset] = false;
-                        ext_to_offset.remove(&(eid as u32));
-                    }
-                }
-                tracing::info!(
-                    "Stage {}: delete {}..{} ({} active)",
-                    stage_idx,
-                    ids.start,
-                    ids.end,
-                    active.iter().filter(|&&b| b).count(),
-                );
-            }
-            Stage::Replace {
-                dataset_offsets,
-                ids,
-            } => {
-                // Remove old vectors by external ID.
-                for eid in ids.clone() {
-                    if let Some(&offset) = ext_to_offset.get(&(eid as u32)) {
-                        active[offset] = false;
-                        ext_to_offset.remove(&(eid as u32));
-                    }
-                }
-                // Insert new vectors: they inherit the external IDs from `ids`.
-                for (offset, eid) in dataset_offsets.clone().zip(ids.clone()) {
-                    if offset < n_base {
-                        active[offset] = true;
-                        ext_id[offset] = eid as u32;
-                        ext_to_offset.insert(eid as u32, offset);
-                    }
-                }
-                tracing::info!(
-                    "Stage {}: replace ids {}..{} with offsets {}..{} ({} active)",
-                    stage_idx,
-                    ids.start,
-                    ids.end,
-                    dataset_offsets.start,
-                    dataset_offsets.end,
-                    active.iter().filter(|&&b| b).count(),
-                );
-            }
-            Stage::Search {
-                groundtruth: output_path,
-            } => {
-                let timer = Instant::now();
-                let n_active = active.iter().filter(|&&b| b).count();
+    let mut stream = GroundtruthStream {
+        storage: &storage,
+        dataset: &dataset,
+        queries: &queries,
+        distance_fn,
+        n_base,
+        n_queries,
+        recall_at,
+        active: vec![false; n_base],
+        ext_id: vec![0u32; n_base],
+        ext_to_offset: HashMap::new(),
+    };
 
-                tracing::info!(
-                    "Stage {}: computing top-{} groundtruth for {} active vectors against {} queries",
-                    stage_idx, recall_at, n_active, n_queries,
-                );
-
-                let active_ids: Vec<usize> = active
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, &on)| if on { Some(i) } else { None })
-                    .collect();
-
-                // Compute KNN in parallel over queries.
-                // Use ext_id[offset] as the neighbor ID so that groundtruth IDs
-                // match external IDs (which differ from dataset offsets after Replace).
-
-                // Using the global threadpool is fine here
-                #[allow(clippy::disallowed_methods)]
-                let results: Vec<NeighborPriorityQueue<u32>> = (0..n_queries)
-                    .into_par_iter()
-                    .map(|qi| {
-                        let query = queries.row(qi);
-                        let mut pq = NeighborPriorityQueue::new(recall_at);
-                        for &offset in &active_ids {
-                            let dist = distance_fn.evaluate_similarity(dataset.row(offset), query);
-                            pq.insert(Neighbor {
-                                id: ext_id[offset],
-                                distance: dist,
-                            });
-                        }
-                        pq
-                    })
-                    .collect();
-
-                // Fail if any query gets fewer than K results (active set smaller than K).
-                let under_k: Vec<usize> = results
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(qi, pq)| {
-                        if pq.size() < recall_at {
-                            Some(qi)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !under_k.is_empty() {
-                    let preview: Vec<usize> = under_k.iter().copied().take(20).collect();
-                    let suffix = if under_k.len() > preview.len() {
-                        format!(" (showing first {} query indices)", preview.len())
-                    } else {
-                        String::new()
-                    };
-                    return Err(CMDToolError {
-                        details: format!(
-                            "Stage {}: {} / {} queries have fewer than {} results (active set = {}). Query indices: {:?}{}",
-                            stage_idx,
-                            under_k.len(),
-                            n_queries,
-                            recall_at,
-                            n_active,
-                            preview,
-                            suffix,
-                        ),
-                    });
-                }
-
-                write_ground_truth::<()>(
-                    &storage,
-                    output_path.to_str().ok_or_else(|| CMDToolError {
-                        details: format!("Non-UTF8 output path: {}", output_path.display()),
-                    })?,
-                    n_queries,
-                    recall_at,
-                    results,
-                    None,
-                )
-                .map_err(|e| CMDToolError {
-                    details: e.to_string(),
-                })?;
-
-                tracing::info!(
-                    "Stage {}: groundtruth written to {} in {:?}",
-                    stage_idx,
-                    output_path.display(),
-                    timer.elapsed(),
-                );
-            }
-        }
-    }
+    runbook
+        .run_with(&mut stream, |_| Ok(()))
+        .map_err(|e| CMDToolError {
+            details: e.to_string(),
+        })?;
 
     tracing::info!("Done.");
     Ok(())
+}
+
+struct GroundtruthStream<'a, V: VectorRepr + Send + Sync> {
+    storage: &'a FileStorageProvider,
+    dataset: &'a Matrix<V>,
+    queries: &'a Matrix<V>,
+    distance_fn: V::Distance,
+    n_base: usize,
+    n_queries: usize,
+    recall_at: usize,
+    active: Vec<bool>,
+    ext_id: Vec<u32>,
+    ext_to_offset: HashMap<u32, usize>,
+}
+
+impl<'a, V> streaming::Stream<diskann_benchmark_core::streaming::executors::bigann::Args>
+    for GroundtruthStream<'a, V>
+where
+    V: VectorRepr + Send + Sync,
+{
+    type Output = ();
+
+    fn search(
+        &mut self,
+        args: diskann_benchmark_core::streaming::executors::bigann::Search<'_>,
+    ) -> anyhow::Result<Self::Output> {
+        let timer = Instant::now();
+        let n_active = self.active.iter().filter(|&&b| b).count();
+
+        tracing::info!(
+            "Computing top-{} groundtruth for {} active vectors against {} queries",
+            self.recall_at,
+            n_active,
+            self.n_queries,
+        );
+
+        let active_ids: Vec<usize> = self
+            .active
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &on)| if on { Some(i) } else { None })
+            .collect();
+
+        // it's generally find to use the global threadpool in diskann-tools
+        #[allow(clippy::disallowed_methods)]
+        let results: Vec<NeighborPriorityQueue<u32>> = (0..self.n_queries)
+            .into_par_iter()
+            .map(|qi| {
+                let query = self.queries.row(qi);
+                let mut pq = NeighborPriorityQueue::new(self.recall_at);
+                for &offset in &active_ids {
+                    let dist = self
+                        .distance_fn
+                        .evaluate_similarity(self.dataset.row(offset), query);
+                    pq.insert(Neighbor {
+                        id: self.ext_id[offset],
+                        distance: dist,
+                    });
+                }
+                pq
+            })
+            .collect();
+
+        let under_k: Vec<usize> = results
+            .iter()
+            .enumerate()
+            .filter_map(|(qi, pq)| (pq.size() < self.recall_at).then_some(qi))
+            .collect();
+        if !under_k.is_empty() {
+            let preview: Vec<usize> = under_k.iter().copied().take(20).collect();
+            let suffix = if under_k.len() > preview.len() {
+                format!(" (showing first {} query indices)", preview.len())
+            } else {
+                String::new()
+            };
+            return Err(anyhow::anyhow!(
+                "{}: {} / {} queries have fewer than {} results (active set = {}). Query indices: {:?}{}",
+                args.groundtruth.display(),
+                under_k.len(),
+                self.n_queries,
+                self.recall_at,
+                n_active,
+                preview,
+                suffix,
+            ));
+        }
+
+        write_ground_truth::<()>(
+            self.storage,
+            args.groundtruth.to_str().ok_or_else(|| {
+                anyhow::anyhow!("Non-UTF8 groundtruth path: {}", args.groundtruth.display())
+            })?,
+            self.n_queries,
+            self.recall_at,
+            results,
+            None,
+        )
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        tracing::info!(
+            "Groundtruth written to {} in {:?}",
+            args.groundtruth.display(),
+            timer.elapsed(),
+        );
+
+        Ok(())
+    }
+
+    fn insert(
+        &mut self,
+        args: diskann_benchmark_core::streaming::executors::bigann::Insert,
+    ) -> anyhow::Result<Self::Output> {
+        for id in args.offsets.clone() {
+            if id < self.n_base {
+                self.active[id] = true;
+                self.ext_id[id] = id as u32;
+                self.ext_to_offset.insert(id as u32, id);
+            }
+        }
+        Ok(())
+    }
+
+    fn replace(
+        &mut self,
+        args: diskann_benchmark_core::streaming::executors::bigann::Replace,
+    ) -> anyhow::Result<Self::Output> {
+        for eid in args.ids.clone() {
+            if let Some(&offset) = self.ext_to_offset.get(&(eid as u32)) {
+                self.active[offset] = false;
+                self.ext_to_offset.remove(&(eid as u32));
+            }
+        }
+
+        for (offset, eid) in args.offsets.clone().zip(args.ids.clone()) {
+            if offset < self.n_base {
+                self.active[offset] = true;
+                self.ext_id[offset] = eid as u32;
+                self.ext_to_offset.insert(eid as u32, offset);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn delete(
+        &mut self,
+        args: diskann_benchmark_core::streaming::executors::bigann::Delete,
+    ) -> anyhow::Result<Self::Output> {
+        for eid in args.ids.clone() {
+            if let Some(&offset) = self.ext_to_offset.get(&(eid as u32)) {
+                self.active[offset] = false;
+                self.ext_to_offset.remove(&(eid as u32));
+            }
+        }
+        Ok(())
+    }
+
+    fn maintain(&mut self, _args: ()) -> anyhow::Result<Self::Output> {
+        Ok(())
+    }
+
+    fn needs_maintenance(&mut self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Parser)]
