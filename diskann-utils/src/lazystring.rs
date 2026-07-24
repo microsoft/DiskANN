@@ -3,10 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::fmt::{Display, Error, Formatter};
+use std::fmt::{Display, Result, Formatter};
 
 /// A macro that behaves like `format!` but constructs a [`LazyString`] to defer string
-/// formatting if [`Display`] is unused.
+/// formatting until the result is actually displayed. If the [`LazyString`] is never
+/// displayed, this construct has minimal overhead.
 ///
 /// ```rust
 /// use diskann_utils::lazy_format;
@@ -43,7 +44,7 @@ use std::fmt::{Display, Error, Formatter};
 /// }
 ///
 /// let f = Formatted::default();
-/// let lazy = lazy_format!("Was this formatted: {}", f);
+/// let lazy = lazy_format!("Was this formatted: {f}");
 ///
 /// assert!(!f.was_formatted(), "string formatting should be deferred");
 /// assert_eq!(lazy.to_string(), "Was this formatted: not yet");
@@ -66,11 +67,11 @@ macro_rules! lazy_format {
 /// See [`lazy_format`] for usage.
 pub struct LazyString<F>(F)
 where
-    F: Fn(&mut Formatter<'_>) -> Result<(), Error>;
+    F: Fn(&mut Formatter<'_>) -> Result;
 
 impl<F> LazyString<F>
 where
-    F: Fn(&mut Formatter<'_>) -> Result<(), Error>,
+    F: Fn(&mut Formatter<'_>) -> Result,
 {
     /// Construct a new `LazyString` around the provided lambda.
     pub fn new(f: F) -> Self {
@@ -80,13 +81,17 @@ where
 
 impl<F> Display for LazyString<F>
 where
-    F: Fn(&mut Formatter<'_>) -> Result<(), Error>,
+    F: Fn(&mut Formatter<'_>) -> Result,
 {
     #[inline]
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         (self.0)(f)
     }
 }
+
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod test {
