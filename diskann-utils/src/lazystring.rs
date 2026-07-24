@@ -5,18 +5,65 @@
 
 use std::fmt::{Display, Error, Formatter};
 
-/// A struct used to lazily defer creation of custom async logging messages until we know
-/// that the message is actually needed.
+/// A macro that behaves like `format!` but constructs a [`LazyString`] to defer string
+/// formatting if [`Display`] is unused.
 ///
-/// # Context
+/// ```rust
+/// use diskann_utils::lazy_format;
 ///
-/// Logging in the async context explicitly requires passing of a context pointer to enable
-/// CDB to determine the source of error message. To that end, a custom logging function is
-/// used.
+/// let a: f32 = 10.5;
+/// let b: usize = 20;
 ///
-/// The `LazyString` captures a lambda that constructs the logging message and implements
-/// `std::fmt::Display`, allowing string formatting to only be performed once we know a
-/// message needs to be logged.
+/// let lazy_string = lazy_format!("This is a test. A = {}, B = {}", a, b);
+/// assert_eq!(lazy_string.to_string(), "This is a test. A = 10.5, B = 20");
+///
+/// // Formatting of captured members is deferred until the created `LazyString` is formatted.
+/// #[derive(Default)]
+/// struct Formatted(std::cell::Cell<bool>);
+///
+/// impl Formatted {
+///     fn was_formatted(&self) -> bool {
+///         self.0.get()
+///     }
+///
+///     fn mark_as_formatted(&self) {
+///         self.0.set(true)
+///     }
+/// }
+///
+/// impl std::fmt::Display for Formatted {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         if self.was_formatted() {
+///             f.write_str("yes")
+///         } else {
+///             self.mark_as_formatted();
+///             f.write_str("not yet")
+///         }
+///     }
+/// }
+///
+/// let f = Formatted::default();
+/// let lazy = lazy_format!("Was this formatted: {}", f);
+///
+/// assert!(!f.was_formatted(), "string formatting should be deferred");
+/// assert_eq!(lazy.to_string(), "Was this formatted: not yet");
+///
+/// assert!(f.was_formatted());
+/// assert_eq!(lazy.to_string(), "Was this formatted: yes");
+/// ```
+#[macro_export]
+macro_rules! lazy_format {
+    ($($arg:tt)*) => {
+        $crate::LazyString::new(|f: &mut std::fmt::Formatter<'_>| {
+            write!(f, $($arg)*)
+        })
+    }
+}
+
+/// A struct used to lazily defer string formatting until needed. This is used to implement
+/// [`lazy_format`]: a lazy version of the standard `format!` macro.
+///
+/// See [`lazy_format`] for usage.
 pub struct LazyString<F>(F)
 where
     F: Fn(&mut Formatter<'_>) -> Result<(), Error>;
@@ -38,31 +85,6 @@ where
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         (self.0)(f)
-    }
-}
-
-/// A macro that behaves like `format!` but constructs a `diskann::utils::LazyString`
-/// to enable deferred evaluation of the error message.
-///
-/// Invoking this macro has the following equivalence:
-/// ```ignore
-/// let a: f32 = 10.5;
-/// let b: usize = 20;
-/// // Macro form
-/// let lazy_from_macro = lazy_format("This is a test. A = {}, B = {}", a, b);
-///
-/// // Direct form
-/// let lazy_direct = crate::utils::LazyString::new(|f: &mut std::fmt::Formatter<'_>| {
-///     write!(f, "ihis is a test. A = {}, B = {}", a, b)
-/// });
-/// ```
-#[macro_export]
-macro_rules! lazy_format {
-    ($($arg:tt)*) => {
-        // Must be a full path and only available inside `DiskANN`.
-        $crate::LazyString::new(|f: &mut std::fmt::Formatter<'_>| {
-            write!(f, $($arg)*)
-        })
     }
 }
 
