@@ -14,7 +14,8 @@ use diskann_benchmark_runner::{
     },
     Checker, Input,
 };
-use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Overflow, RowMajor};
+use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, RowMajor};
+use diskann_utils::views::Init;
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -76,17 +77,19 @@ impl<T: Copy> Data<T>
 where
     StandardUniform: Distribution<T>,
 {
-    pub(super) fn new(run: &Run) -> Result<Self, Overflow> {
+    pub(super) fn new(run: &Run) -> Self {
         let mut rng = StdRng::seed_from_u64(0x12345);
-        let queries = Mat::from_fn(
-            RowMajor::new(run.num_query_vectors.get(), run.dim.get())?,
-            || StandardUniform.sample(&mut rng),
+        let queries = Mat::new(
+            Init(|| StandardUniform.sample(&mut rng)),
+            run.num_query_vectors.get(),
+            run.dim.get(),
         );
-        let docs = Mat::from_fn(
-            RowMajor::new(run.num_doc_vectors.get(), run.dim.get())?,
-            || StandardUniform.sample(&mut rng),
+        let docs = Mat::new(
+            Init(|| StandardUniform.sample(&mut rng)),
+            run.num_doc_vectors.get(),
+            run.dim.get(),
         );
-        Ok(Self { queries, docs })
+        Self { queries, docs }
     }
 }
 

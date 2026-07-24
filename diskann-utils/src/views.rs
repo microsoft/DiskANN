@@ -797,7 +797,7 @@ macro_rules! delegate_read {
 impl<T> Mat<RowMajor<T>> {
     /// Construct a [`Mat`] by filling each element in row-major order from `gen`.
     pub fn new<U: Generator<T>>(mut gen: U, nrows: usize, ncols: usize) -> Self {
-        let repr = RowMajor::new(nrows, ncols).expect("dimension overflow");
+        let repr = RowMajor::new(nrows, ncols).unwrap_or_else(|e| panic!("{e}"));
         let b: Box<[T]> = (0..repr.num_elements()).map(|_| gen.generate()).collect();
         // SAFETY: `b` has length `repr.num_elements()` by construction.
         unsafe { repr.box_to_mat(b) }

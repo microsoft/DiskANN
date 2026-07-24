@@ -66,7 +66,7 @@ where
         writeln!(output, "{}", input)?;
         let mut results = Vec::with_capacity(input.runs.len());
         for run in input.runs.iter() {
-            let data = Data::<T>::new(run)?;
+            let data = Data::<T>::new(run);
             let kernel = build_max_sim::<T, _>(input.isa.into(), data.queries.as_view(), BoxErase)?;
             results.push(run_with_kernel(run, data.docs.as_view(), &*kernel));
         }

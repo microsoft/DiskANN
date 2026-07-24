@@ -58,7 +58,7 @@
 //!     RowMajor::new(num_doc_vectors, dim).unwrap(), &doc_data
 //! ).unwrap();
 //!
-//! // Create owned matrices for quantized output using Mat::from_repr
+//! // Create owned matrices for the quantized output
 //! let mut query_out: Mat<MinMaxMeta<NBITS>> =
 //!     Mat::from_default(MinMaxMeta::new(num_query_vectors, dim)).unwrap();
 //! let mut doc_out: Mat<MinMaxMeta<NBITS>> =
