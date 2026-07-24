@@ -61,6 +61,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::cmp::assert_eq_verbose;
 
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
@@ -73,38 +74,38 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_sorted_neighbors() {
-    //     let reference = [
-    //         Neighbor::new(1, 0.1),
-    //         Neighbor::new(2, 0.2),
-    //         Neighbor::new(3, 0.3),
-    //         Neighbor::new(4, 0.4),
-    //         Neighbor::new(5, 0.5),
-    //         Neighbor::new(6, 0.6),
-    //         Neighbor::new(7, 0.7),
-    //         Neighbor::new(8, 0.8),
-    //         Neighbor::new(9, 0.9),
-    //         Neighbor::new(10, 1.0),
-    //     ];
+    #[test]
+    fn test_sorted_neighbors() {
+        let reference = [
+            Neighbor::new(1, 0.1),
+            Neighbor::new(2, 0.2),
+            Neighbor::new(3, 0.3),
+            Neighbor::new(4, 0.4),
+            Neighbor::new(5, 0.5),
+            Neighbor::new(6, 0.6),
+            Neighbor::new(7, 0.7),
+            Neighbor::new(8, 0.8),
+            Neighbor::new(9, 0.9),
+            Neighbor::new(10, 1.0),
+        ];
 
-    //     let mut rng = StdRng::seed_from_u64(0xd6152fb91c744f54);
+        let mut rng = StdRng::seed_from_u64(0xd6152fb91c744f54);
 
-    //     let ntrials = 10;
-    //     for max in 0..reference.len() + 2 {
-    //         for _ in 0..ntrials {
-    //             let mut shuffled = reference.to_vec();
-    //             shuffled.shuffle(&mut rng);
+        let ntrials = 10;
+        for max in 0..reference.len() + 2 {
+            for _ in 0..ntrials {
+                let mut shuffled = reference.to_vec();
+                shuffled.shuffle(&mut rng);
 
-    //             let sorted = SortedNeighbors::new(&mut shuffled, max);
+                let sorted = SortedNeighbors::new(&mut shuffled, max);
 
-    //             let expected_len = reference.len().min(max);
-    //             assert_eq!(sorted.len(), expected_len);
-    //             assert_eq!(&sorted[..expected_len], &reference[..expected_len],);
+                let expected_len = reference.len().min(max);
+                assert_eq!(sorted.len(), expected_len);
+                assert_eq_verbose!(&sorted[..expected_len], &reference[..expected_len]);
 
-    //             // Changes are visible on the taken vector.
-    //             assert_eq!(shuffled.len(), expected_len)
-    //         }
-    //     }
-    // }
+                // Changes are visible on the taken vector.
+                assert_eq!(shuffled.len(), expected_len)
+            }
+        }
+    }
 }

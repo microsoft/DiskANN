@@ -8,7 +8,7 @@
 //! Use [`KnnOracleRun::run`] to drive `knn_search` under a chosen [`OracleProcessor`]
 //! and pair the result with the oracle's expected post-processed output.
 
-use std::{cmp::Ordering, convert::Infallible, num::NonZeroUsize};
+use std::{convert::Infallible, num::NonZeroUsize};
 
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
