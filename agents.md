@@ -1,6 +1,6 @@
 # DiskANN Repository - Agent Onboarding Guide
 
-**Last Updated**: 2026-02-11 (based on v0.45.0, Rust 1.92)
+**Last Updated**: 2026-07-14 (based on v0.45.0, Rust 1.95)
 
 This guide helps coding agents understand how to work efficiently with the DiskANN repository.
 

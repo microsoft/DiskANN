@@ -179,6 +179,9 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
 
     #[inline]
     /// Gets the index for the sector that contains the node with the given vertex_id
+    // The `else` branch is not a divide-by-zero guard: for the multiple-sectors-per-node
+    // layout it computes a genuinely different index, so `checked_div` does not model this.
+    #[allow(clippy::manual_checked_ops)]
     pub fn node_sector_index(&self, vertex_id: u32) -> u64 {
         1 + if self.num_nodes_per_sector > 0 {
             vertex_id as u64 / self.num_nodes_per_sector

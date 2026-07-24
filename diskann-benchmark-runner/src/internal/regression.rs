@@ -229,7 +229,7 @@ impl<'a> Checks<'a> {
         // We can now package everything together!
         debug_assert_eq!(input_to_parsed.len(), inputs.jobs().len());
 
-        let checks = std::iter::zip(inputs.into_inner(), input_to_parsed.into_iter())
+        let checks = std::iter::zip(inputs.into_inner(), input_to_parsed)
             .map(|(input, index)| {
                 // This index should always be inbounds.
                 let inner = &parsed.inner[index];
