@@ -17,7 +17,7 @@ env:
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,multi-vector,bftree"
 
 defaults:
   run:
