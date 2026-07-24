@@ -86,8 +86,8 @@ use diskann_utils::{
 };
 
 use super::matrix::{
-    Defaulted, LayoutError, Mat, MatMut, MatRef, NewMut, NewOwned, NewRef, Overflow, Repr, ReprMut,
-    ReprOwned, SliceError,
+    Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
+    Repr, ReprMut, ReprOwned, SliceError,
 };
 use crate::bits::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 use crate::utils;
@@ -602,6 +602,18 @@ unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<D
     }
 }
 
+impl<T: Copy, const GROUP: usize, const PACK: usize> NewCloned
+    for BlockTransposedRepr<T, GROUP, PACK>
+{
+    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
+        let b: Box<[T]> = BlockTransposedRef::new(v).as_slice().into();
+
+        // SAFETY: `b` was copied from the complete backing allocation and therefore
+        // has exactly `v.repr().storage_len()` elements.
+        unsafe { v.repr().box_to_mat(b) }
+    }
+}
+
 // SAFETY: This checks slice length against storage_len.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewRef<T>
     for BlockTransposedRepr<T, GROUP, PACK>
@@ -677,7 +689,7 @@ macro_rules! delegate_to_ref {
 ///
 /// - [`Row`] — a `Copy` handle supporting `Index<usize>` and `.iter()`.
 /// - [`RowMut`] — a mutable handle supporting `IndexMut<usize>`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockTransposed<T: Copy, const GROUP: usize, const PACK: usize = 1> {
     data: Mat<BlockTransposedRepr<T, GROUP, PACK>>,
 }
@@ -700,6 +712,10 @@ pub struct BlockTransposedMut<'a, T: Copy, const GROUP: usize, const PACK: usize
 // ── BlockTransposedRef (core read implementations) ───────────────
 
 impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, T, GROUP, PACK> {
+    fn new(data: MatRef<'a, BlockTransposedRepr<T, GROUP, PACK>>) -> Self {
+        Self { data }
+    }
+
     /// Returns the number of logical rows.
     #[inline]
     pub fn nrows(&self) -> usize {
@@ -1016,9 +1032,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
 impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
     /// Borrow as an immutable [`BlockTransposedRef`].
     pub fn as_view(&self) -> BlockTransposedRef<'_, T, GROUP, PACK> {
-        BlockTransposedRef {
-            data: self.data.as_view(),
-        }
+        BlockTransposedRef::new(self.data.as_view())
     }
 
     /// Borrow as a mutable [`BlockTransposedMut`].
@@ -1254,6 +1268,34 @@ mod tests {
     }
     fn gen_u8(i: usize) -> u8 {
         ((i % 255) + 1) as u8
+    }
+
+    #[test]
+    fn clone_has_independent_backing_allocation() {
+        let mut data = Matrix::new(0, 5, 3);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, value)| *value = (i + 1) as i32);
+        let mut original = BlockTransposed::<i32, 4, 2>::from_matrix_view(data.as_view());
+        let column_padding = linear_index::<4, 2>(0, 3, original.ncols());
+        let row_padding = linear_index::<4, 2>(5, 0, original.ncols());
+        let row_and_column_padding = linear_index::<4, 2>(5, 3, original.ncols());
+        original.as_mut_slice()[column_padding] = -10;
+        original.as_mut_slice()[row_padding] = -11;
+        original.as_mut_slice()[row_and_column_padding] = -12;
+
+        let mut cloned = original.clone();
+
+        assert_eq!(cloned.as_slice(), original.as_slice());
+        assert_eq!(cloned.as_slice()[column_padding], -10);
+        assert_eq!(cloned.as_slice()[row_padding], -11);
+        assert_eq!(cloned.as_slice()[row_and_column_padding], -12);
+        assert_ne!(cloned.as_ptr(), original.as_ptr());
+
+        cloned.get_row_mut(0).unwrap()[0] = -1;
+        assert_eq!(original[(0, 0)], 1);
+        assert_eq!(cloned[(0, 0)], -1);
     }
 
     // ── Unified parameterized test ──────────────────────────────────
