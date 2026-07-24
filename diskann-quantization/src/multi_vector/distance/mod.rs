@@ -12,21 +12,21 @@
 //! ```
 //! use diskann_quantization::multi_vector::{
 //!     distance::{Chamfer, MaxSim, QueryMatRef},
-//!     MatRef, Standard,
+//!     MatRef, RowMajor,
 //! };
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 //!
 //! // Query: 2 vectors of dim 3 (wrapped as QueryMatRef)
 //! let query_data = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
-//! let query: QueryMatRef<_> = MatRef::new(
-//!     Standard::new(2, 3).unwrap(),
+//! let query: QueryMatRef<_> = MatRef::from_repr(
+//!     RowMajor::new(2, 3).unwrap(),
 //!     &query_data,
 //! ).unwrap().into();
 //!
 //! // Doc: 2 vectors of dim 3
 //! let doc_data = [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0];
-//! let doc = MatRef::new(
-//!     Standard::new(2, 3).unwrap(),
+//! let doc = MatRef::from_repr(
+//!     RowMajor::new(2, 3).unwrap(),
 //!     &doc_data,
 //! ).unwrap();
 //!

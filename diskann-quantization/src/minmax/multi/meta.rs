@@ -10,10 +10,10 @@ use super::super::vectors::DataMutRef;
 use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::minmax::{self, Data};
-use crate::multi_vector::matrix::{
-    Defaulted, NewMut, NewOwned, NewRef, Repr, ReprMut, ReprOwned, SliceError,
+use crate::multi_vector::views::{
+    NewDefault, NewMut, NewRef, Repr, ReprMut, ReprOwned, SliceError,
 };
-use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
+use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, RowMajor};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
 
@@ -165,13 +165,13 @@ where
 // SAFETY: `ptr` points to a properly sized slice that is compatible with the drop
 // logic in `Self as ReprOwned`. Box guarantees that the initial construction
 // will be non-null.
-unsafe impl<const NBITS: usize> NewOwned<Defaulted> for MinMaxMeta<NBITS>
+unsafe impl<const NBITS: usize> NewDefault for MinMaxMeta<NBITS>
 where
     Unsigned: Representation<NBITS>,
 {
     type Error = crate::error::Infallible;
-    fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[u8]> = (0..self.bytes()).map(|_| u8::default()).collect();
+    fn new_default(self) -> Result<Mat<Self>, Self::Error> {
+        let b: Box<[u8]> = vec![0u8; self.bytes()].into_boxed_slice();
 
         let ptr = utils::box_into_nonnull(b).cast::<u8>();
 
@@ -231,7 +231,7 @@ where
 //////////////////
 
 impl<'a, 'b, const NBITS: usize, T>
-    CompressInto<MatRef<'a, Standard<T>>, MatMut<'b, MinMaxMeta<NBITS>>> for MinMaxQuantizer
+    CompressInto<MatRef<'a, RowMajor<T>>, MatMut<'b, MinMaxMeta<NBITS>>> for MinMaxQuantizer
 where
     T: Copy + Into<f32>,
     Unsigned: Representation<NBITS>,
@@ -257,7 +257,7 @@ where
     /// * The output intrinsic dimension doesn't match `self.output_dim()`.
     fn compress_into(
         &self,
-        from: MatRef<'a, Standard<T>>,
+        from: MatRef<'a, RowMajor<T>>,
         mut to: MatMut<'b, MinMaxMeta<NBITS>>,
     ) -> Result<(), Self::Error> {
         assert_eq!(
@@ -372,7 +372,7 @@ mod tests {
     mod construction {
         use super::*;
 
-        /// Tests NewOwned (Mat::new with Defaulted) for various dimensions and sizes.
+        /// Tests NewDefault (Mat::from_default) for various dimensions and sizes.
         fn test_new_owned<const NBITS: usize>()
         where
             Unsigned: Representation<NBITS>,
@@ -381,7 +381,7 @@ mod tests {
                 for &num_vectors in TEST_NVECS {
                     let meta = MinMaxMeta::<NBITS>::new(num_vectors, dim);
                     let mat: Mat<MinMaxMeta<NBITS>> =
-                        Mat::new(meta, Defaulted).expect("NewOwned should succeed");
+                        Mat::from_default(meta).expect("NewOwned should succeed");
 
                     // Verify num_vectors and intrinsic_dim
                     assert_eq!(mat.num_vectors(), num_vectors);
@@ -412,7 +412,7 @@ mod tests {
 
         expand_to_bitrates!(new_owned, test_new_owned);
 
-        /// Tests NewRef (MatRef::new) for valid slices.
+        /// Tests NewRef (MatRef::from_repr) for valid slices.
         fn test_new_ref<const NBITS: usize>()
         where
             Unsigned: Representation<NBITS>,
@@ -425,7 +425,7 @@ mod tests {
 
                     // Valid slice
                     let data = vec![0u8; expected_bytes];
-                    let mat_ref = MatRef::new(meta, &data);
+                    let mat_ref = MatRef::from_repr(meta, &data);
                     assert!(mat_ref.is_ok(), "NewRef should succeed for correct size");
                     let mat_ref = mat_ref.unwrap();
 
@@ -446,7 +446,7 @@ mod tests {
 
         expand_to_bitrates!(new_ref, test_new_ref);
 
-        /// Tests NewMut (MatMut::new) for valid slices.
+        /// Tests NewMut (MatMut::from_repr) for valid slices.
         fn test_new_mut<const NBITS: usize>()
         where
             Unsigned: Representation<NBITS>,
@@ -458,7 +458,7 @@ mod tests {
                     let expected_bytes = expected_row_bytes * num_vectors;
 
                     let mut data = vec![0u8; expected_bytes];
-                    let mat_mut = MatMut::new(meta, &mut data);
+                    let mat_mut = MatMut::from_repr(meta, &mut data);
                     assert!(mat_mut.is_ok(), "NewMut should succeed for correct size");
                     let mat_mut = mat_mut.unwrap();
 
@@ -488,7 +488,7 @@ mod tests {
 
             // Too short
             let short_data = vec![0u8; expected_bytes - 1];
-            let result = MatRef::new(meta, &short_data);
+            let result = MatRef::from_repr(meta, &short_data);
             assert!(
                 matches!(result, Err(SliceError::LengthMismatch { .. })),
                 "should fail for too-short slice"
@@ -496,7 +496,7 @@ mod tests {
 
             // Too long
             let long_data = vec![0u8; expected_bytes + 1];
-            let result = MatRef::new(meta, &long_data);
+            let result = MatRef::from_repr(meta, &long_data);
             assert!(
                 matches!(result, Err(SliceError::LengthMismatch { .. })),
                 "should fail for too-long slice"
@@ -504,7 +504,7 @@ mod tests {
 
             // Mutable version - too short
             let mut short_mut = vec![0u8; expected_bytes - 1];
-            let result = MatMut::new(meta, &mut short_mut);
+            let result = MatMut::from_repr(meta, &mut short_mut);
             assert!(
                 matches!(result, Err(SliceError::LengthMismatch { .. })),
                 "MatMut should fail for too-short slice"
@@ -532,11 +532,11 @@ mod tests {
 
                     // Multi-vector compression
                     let input_view =
-                        MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data)
+                        MatRef::from_repr(RowMajor::new(num_vectors, dim).unwrap(), &input_data)
                             .expect("input view creation");
 
                     let mut multi_mat: Mat<MinMaxMeta<NBITS>> =
-                        Mat::new(MinMaxMeta::new(num_vectors, dim), Defaulted)
+                        Mat::from_default(MinMaxMeta::new(num_vectors, dim))
                             .expect("output mat creation");
 
                     quantizer
@@ -587,11 +587,12 @@ mod tests {
             let quantizer = make_quantizer(dim);
             let input_data = generate_test_data(num_vectors, dim);
 
-            let input_view = MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data)
-                .expect("input view");
+            let input_view =
+                MatRef::from_repr(RowMajor::new(num_vectors, dim).unwrap(), &input_data)
+                    .expect("input view");
 
             let mut mat: Mat<MinMaxMeta<NBITS>> =
-                Mat::new(MinMaxMeta::new(num_vectors, dim), Defaulted).expect("mat creation");
+                Mat::from_default(MinMaxMeta::new(num_vectors, dim)).expect("mat creation");
 
             quantizer
                 .compress_into(input_view, mat.reborrow_mut())
@@ -627,11 +628,11 @@ mod tests {
             // Input has 3 vectors
             let input_data = generate_test_data(3, dim);
             let input_view =
-                MatRef::new(Standard::new(3, dim).unwrap(), &input_data).expect("input view");
+                MatRef::from_repr(RowMajor::new(3, dim).unwrap(), &input_data).expect("input view");
 
             // Output has 2 vectors (mismatch)
             let mut mat: Mat<MinMaxMeta<NBITS>> =
-                Mat::new(MinMaxMeta::new(2, dim), Defaulted).expect("mat creation");
+                Mat::from_default(MinMaxMeta::new(2, dim)).expect("mat creation");
 
             let _ = quantizer.compress_into(input_view, mat.reborrow_mut());
         }
@@ -645,11 +646,11 @@ mod tests {
             // Input has dim=8 (mismatch)
             let input_data = generate_test_data(2, 8);
             let input_view =
-                MatRef::new(Standard::new(2, 8).unwrap(), &input_data).expect("input view");
+                MatRef::from_repr(RowMajor::new(2, 8).unwrap(), &input_data).expect("input view");
 
             // Output correctly has dim=4
             let mut mat: Mat<MinMaxMeta<NBITS>> =
-                Mat::new(MinMaxMeta::new(2, 4), Defaulted).expect("mat creation");
+                Mat::from_default(MinMaxMeta::new(2, 4)).expect("mat creation");
 
             let _ = quantizer.compress_into(input_view, mat.reborrow_mut());
         }
@@ -665,13 +666,13 @@ mod tests {
             // Input correctly has dim=4
             let input_data = generate_test_data(2, 4);
             let input_view =
-                MatRef::new(Standard::new(2, 4).unwrap(), &input_data).expect("input view");
+                MatRef::from_repr(RowMajor::new(2, 4).unwrap(), &input_data).expect("input view");
 
             // Output has intrinsic_dim=8 (mismatch)
             let row_bytes = Data::<NBITS>::canonical_bytes(8);
             let mut output_data = vec![0u8; 2 * row_bytes];
-            let output_view =
-                MatMut::new(MinMaxMeta::<NBITS>::new(2, 8), &mut output_data).expect("output view");
+            let output_view = MatMut::from_repr(MinMaxMeta::<NBITS>::new(2, 8), &mut output_data)
+                .expect("output view");
 
             let _ = quantizer.compress_into(input_view, output_view);
         }

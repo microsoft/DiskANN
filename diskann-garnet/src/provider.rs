@@ -499,7 +499,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             Ok(v) => v,
             Err(_) => return false,
         };
-        let view = match MatrixView::try_from(&*converted, view.nrows(), view.ncols()) {
+        let view = match MatrixView::try_from(&converted, view.nrows(), view.ncols()) {
             Ok(v) => v,
             Err(_) => return false,
         };

@@ -53,7 +53,7 @@
 
 use std::fmt;
 
-use diskann_utils::views::MutMatrixView;
+use diskann_utils::views::MatrixViewMut;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
 /// Parameters for Determinant-Diversity post-processor with validation.
@@ -199,7 +199,7 @@ struct DistanceRange {
 /// An empty candidate set, a `k` of zero, or zero-dimensional vectors yield an
 /// empty result.
 pub fn determinant_diversity(
-    candidates: MutMatrixView<'_, f32>,
+    candidates: MatrixViewMut<'_, f32>,
     distances: &[f32],
     query: &[f32],
     k: usize,
@@ -338,7 +338,7 @@ pub fn determinant_diversity(
 /// O(n * k * dim) -- for each of k pivots we touch all n residual rows of
 /// length `dim`. Memory is O(n * dim) for the contiguous residual matrix.
 fn greedy_orthogonal_select(
-    mut candidates: MutMatrixView<'_, f32>,
+    mut candidates: MatrixViewMut<'_, f32>,
     distances: &[f32],
     k: usize,
     power: f32,

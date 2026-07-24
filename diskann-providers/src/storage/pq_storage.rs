@@ -523,7 +523,7 @@ mod pq_storage_tests {
     #[test]
     fn write_read_roundtrip_with_legacy_centroid() {
         use crate::model::pq::accum_row_inplace;
-        use diskann_utils::views::MutMatrixView;
+        use diskann_utils::views::MatrixViewMut;
 
         let storage_provider = VirtualStorageProvider::new_memory();
         let pivot_path = "/roundtrip_legacy_centroid_pivots.bin";
@@ -563,7 +563,7 @@ mod pq_storage_tests {
 
         // Fold the centroid into the pivots — this is what production callers do.
         let mut pivot_mat =
-            MutMatrixView::try_from(loaded_pivots.as_mut_slice(), num_centers, dim).unwrap();
+            MatrixViewMut::try_from(loaded_pivots.as_mut_slice(), num_centers, dim).unwrap();
         accum_row_inplace(pivot_mat.as_mut_view(), &loaded_centroid);
 
         // Each pivot row should have the centroid added element-wise.

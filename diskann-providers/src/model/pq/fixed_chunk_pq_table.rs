@@ -9,7 +9,7 @@ use diskann_quantization::{
     product::{self, BasicTable},
     views::ChunkOffsetsBase,
 };
-use diskann_utils::views::{self, MatrixBase, MatrixView};
+use diskann_utils::views::{self, Matrix, MatrixView};
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
 
@@ -133,7 +133,7 @@ impl FixedChunkPQTable {
     pub fn new(dim: usize, pq_table: Box<[f32]>, chunk_offsets: Box<[usize]>) -> ANNResult<Self> {
         let len = pq_table.len();
         let table = BasicTable::new(
-            MatrixBase::try_from(pq_table, len / dim, dim).bridge_err()?,
+            Matrix::try_from(pq_table, len / dim, dim).bridge_err()?,
             ChunkOffsetsBase::new(chunk_offsets).bridge_err()?,
         )
         .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;

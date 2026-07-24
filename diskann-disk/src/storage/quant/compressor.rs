@@ -4,7 +4,7 @@
  */
 
 use diskann::{utils::VectorRepr, ANNResult};
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::{MatrixView, MatrixViewMut};
 
 /// [`QuantCompressor`] defines the interface for quantizer with [`QuantDataGenerator`]
 ///
@@ -30,6 +30,6 @@ where
     type CompressorContext;
 
     fn new(context: &Self::CompressorContext) -> ANNResult<Self>;
-    fn compress(&self, vector: MatrixView<f32>, output: MutMatrixView<u8>) -> ANNResult<()>;
+    fn compress(&self, vector: MatrixView<f32>, output: MatrixViewMut<u8>) -> ANNResult<()>;
     fn compressed_bytes(&self) -> usize;
 }

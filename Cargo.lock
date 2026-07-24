@@ -766,6 +766,7 @@ dependencies = [
  "rayon",
  "rstest",
  "thiserror 2.0.17",
+ "trybuild",
 ]
 
 [[package]]

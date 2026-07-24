@@ -10,7 +10,7 @@ use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
 use super::max_sim::{Chamfer, MaxSim};
 use super::projected_eigen::ProjectedEigen;
-use crate::multi_vector::{MatRef, MaxSimError, Repr, Standard};
+use crate::multi_vector::{MatRef, MaxSimError, Repr, RowMajor};
 
 /////////////////
 // QueryMatRef //
@@ -25,11 +25,11 @@ use crate::multi_vector::{MatRef, MaxSimError, Repr, Standard};
 /// # Example
 ///
 /// ```
-/// use diskann_quantization::multi_vector::{MatRef, Standard};
+/// use diskann_quantization::multi_vector::{MatRef, RowMajor};
 /// use diskann_quantization::multi_vector::distance::QueryMatRef;
 ///
 /// let data = [1.0f32, 2.0, 3.0, 4.0];
-/// let view = MatRef::new(Standard::new(2, 2).unwrap(), &data).unwrap();
+/// let view = MatRef::from_repr(RowMajor::new(2, 2).unwrap(), &data).unwrap();
 /// let query: QueryMatRef<_> = view.into();
 /// ```
 #[derive(Debug, Clone, Copy)]
@@ -77,8 +77,8 @@ impl FallbackKernel {
     /// * `f` - Callback invoked with `(query_index, similarity)` for each query vector
     #[inline]
     pub(crate) fn max_sim_kernel<F, T: Copy>(
-        query: QueryMatRef<'_, Standard<T>>,
-        doc: MatRef<'_, Standard<T>>,
+        query: QueryMatRef<'_, RowMajor<T>>,
+        doc: MatRef<'_, RowMajor<T>>,
         mut f: F,
     ) where
         F: FnMut(usize, f32),
@@ -119,8 +119,8 @@ impl FallbackKernel {
     /// * `f` - Callback invoked with `(query_index, score)` for each query vector
     #[inline]
     pub(crate) fn projected_eigen_kernel<F, T: Copy>(
-        query: QueryMatRef<'_, Standard<T>>,
-        doc: MatRef<'_, Standard<T>>,
+        query: QueryMatRef<'_, RowMajor<T>>,
+        doc: MatRef<'_, RowMajor<T>>,
         mut f: F,
     ) where
         F: FnMut(usize, f32),
@@ -153,8 +153,8 @@ impl FallbackKernel {
 
 impl<T: Copy>
     DistanceFunctionMut<
-        QueryMatRef<'_, Standard<T>>,
-        MatRef<'_, Standard<T>>,
+        QueryMatRef<'_, RowMajor<T>>,
+        MatRef<'_, RowMajor<T>>,
         Result<(), MaxSimError>,
     > for MaxSim<'_>
 where
@@ -163,8 +163,8 @@ where
     #[inline(always)]
     fn evaluate(
         &mut self,
-        query: QueryMatRef<'_, Standard<T>>,
-        doc: MatRef<'_, Standard<T>>,
+        query: QueryMatRef<'_, RowMajor<T>>,
+        doc: MatRef<'_, RowMajor<T>>,
     ) -> Result<(), MaxSimError> {
         let size = self.size();
         let n_queries = query.num_vectors();
@@ -187,13 +187,13 @@ where
 // Chamfer //
 /////////////
 
-impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, f32>
+impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, RowMajor<T>>, MatRef<'_, RowMajor<T>>, f32>
     for Chamfer
 where
     InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
 {
     #[inline(always)]
-    fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
+    fn evaluate(query: QueryMatRef<'_, RowMajor<T>>, doc: MatRef<'_, RowMajor<T>>) -> f32 {
         let mut sum = 0.0f32;
 
         FallbackKernel::max_sim_kernel(query, doc, |_i, score| {
@@ -208,13 +208,13 @@ where
 // ProjectedEigen //
 /////////////////////
 
-impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, f32>
+impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, RowMajor<T>>, MatRef<'_, RowMajor<T>>, f32>
     for ProjectedEigen
 where
     InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
 {
     #[inline(always)]
-    fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
+    fn evaluate(query: QueryMatRef<'_, RowMajor<T>>, doc: MatRef<'_, RowMajor<T>>) -> f32 {
         let mut sum = 0.0f32;
 
         FallbackKernel::projected_eigen_kernel(query, doc, |_i, score| {
@@ -230,19 +230,19 @@ mod tests {
     use super::*;
 
     /// Helper to create a QueryMatRef from raw data
-    fn make_query(data: &[f32], nrows: usize, ncols: usize) -> QueryMatRef<'_, Standard<f32>> {
-        MatRef::new(Standard::new(nrows, ncols).unwrap(), data)
+    fn make_query(data: &[f32], nrows: usize, ncols: usize) -> QueryMatRef<'_, RowMajor<f32>> {
+        MatRef::from_repr(RowMajor::new(nrows, ncols).unwrap(), data)
             .unwrap()
             .into()
     }
 
     /// Helper to create a MatRef from raw data
-    fn make_doc(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, Standard<f32>> {
-        MatRef::new(Standard::new(nrows, ncols).unwrap(), data).unwrap()
+    fn make_doc(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, RowMajor<f32>> {
+        MatRef::from_repr(RowMajor::new(nrows, ncols).unwrap(), data).unwrap()
     }
 
     /// Naive implementation of max-sim for a single query vector against all doc vectors.
-    fn naive_max_sim_single(query_vec: &[f32], doc: &MatRef<'_, Standard<f32>>) -> f32 {
+    fn naive_max_sim_single(query_vec: &[f32], doc: &MatRef<'_, RowMajor<f32>>) -> f32 {
         doc.rows()
             .map(|d_vec| {
                 let ip: f32 = query_vec.iter().zip(d_vec.iter()).map(|(a, b)| a * b).sum();
@@ -253,7 +253,7 @@ mod tests {
 
     /// Naive implementation of projected-eigen for a single query vector
     /// against all doc vectors: `\sum_{j} -IP(q, d_{j})^2`.
-    fn naive_projected_eigen_single(query_vec: &[f32], doc: &MatRef<'_, Standard<f32>>) -> f32 {
+    fn naive_projected_eigen_single(query_vec: &[f32], doc: &MatRef<'_, RowMajor<f32>>) -> f32 {
         doc.rows()
             .map(|d_vec| {
                 let ip: f32 = query_vec.iter().zip(d_vec.iter()).map(|(a, b)| a * b).sum();
@@ -273,7 +273,7 @@ mod tests {
         #[test]
         fn from_mat_ref_and_deref() {
             let data = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-            let view = MatRef::new(Standard::new(2, 3).unwrap(), &data).unwrap();
+            let view = MatRef::from_repr(RowMajor::new(2, 3).unwrap(), &data).unwrap();
             let query: QueryMatRef<_> = view.into();
 
             // Deref access works

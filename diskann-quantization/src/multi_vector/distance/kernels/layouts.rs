@@ -45,7 +45,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Layout for BlockTransposed<
     type Element = T;
 }
 
-/// Dense row-major tile layout. Matches [`MatRef<Standard<T>>`](crate::multi_vector::MatRef).
+/// Dense row-major tile layout. Matches [`MatRef<RowMajor<T>>`](crate::multi_vector::MatRef).
 pub(super) struct RowMajor<T>(PhantomData<T>);
 
 impl<T> RowMajor<T> {
@@ -86,7 +86,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> DescribeLayout
     }
 }
 
-impl<T: Copy> DescribeLayout for crate::multi_vector::MatRef<'_, crate::multi_vector::Standard<T>> {
+impl<T: Copy> DescribeLayout for crate::multi_vector::MatRef<'_, crate::multi_vector::RowMajor<T>> {
     type Layout = RowMajor<T>;
 
     fn layout(&self) -> Self::Layout {

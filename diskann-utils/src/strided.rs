@@ -9,11 +9,11 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::views::{self, DenseData, MutDenseData};
+use crate::views::{DenseData, MatMut, MatRef, MutDenseData, RowMajor};
 
 /// A row-major strided matrix.
 ///
-/// This is a generalization of the `MatrixBase` class as it does not mandate a dense
+/// This is a generalization of the dense [`Matrix`](crate::views::Matrix) type as it does not mandate a dense
 /// layout in memory.
 ///
 /// ```text
@@ -75,7 +75,7 @@ pub struct TryFromErrorLight {
      data.as_slice().len(),
      linear_length(self.nrows, self.ncols, self.cstride)
 )]
-pub struct TryFromError<T: views::DenseData> {
+pub struct TryFromError<T: DenseData> {
     data: T,
     nrows: usize,
     ncols: usize,
@@ -94,7 +94,7 @@ impl<T: DenseData> fmt::Debug for TryFromError<T> {
     }
 }
 
-impl<T: views::DenseData> TryFromError<T> {
+impl<T: DenseData> TryFromError<T> {
     /// Consume the error and return the base data.
     pub fn into_inner(self) -> T {
         self.data
@@ -497,17 +497,23 @@ where
     }
 }
 
-impl<T, U> From<views::MatrixBase<T>> for StridedBase<U>
-where
-    T: DenseData,
-    U: DenseData,
-    T: Into<U>,
-{
-    fn from(matrix: views::MatrixBase<T>) -> Self {
-        let nrows = matrix.nrows();
-        let ncols = matrix.ncols();
+impl<'a, T> From<MatRef<'a, RowMajor<T>>> for StridedBase<&'a [T]> {
+    fn from(m: MatRef<'a, RowMajor<T>>) -> Self {
+        let (nrows, ncols) = (m.nrows(), m.ncols());
         Self {
-            data: matrix.into_inner().into(),
+            data: m.into(),
+            nrows,
+            ncols,
+            cstride: ncols,
+        }
+    }
+}
+
+impl<'a, T> From<MatMut<'a, RowMajor<T>>> for StridedBase<&'a mut [T]> {
+    fn from(m: MatMut<'a, RowMajor<T>>) -> Self {
+        let (nrows, ncols) = (m.nrows(), m.ncols());
+        Self {
+            data: m.into(),
             nrows,
             ncols,
             cstride: ncols,
@@ -518,6 +524,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::views;
 
     #[test]
     fn test_linear_length() {

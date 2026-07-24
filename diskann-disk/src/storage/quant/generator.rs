@@ -147,7 +147,7 @@ where
 
             // Wrap the data in `MatrixViews` so we do not need to manually construct view
             // in the compression loop.
-            let mut compressed_block = views::MutMatrixView::try_from(
+            let mut compressed_block = views::MatrixViewMut::try_from(
                 block_compressed_base,
                 cur_block_size,
                 compressed_size,
@@ -221,7 +221,7 @@ mod generator_tests {
         fn compress(
             &self,
             _vector: views::MatrixView<f32>,
-            mut output: views::MutMatrixView<u8>,
+            mut output: views::MatrixViewMut<u8>,
         ) -> ANNResult<()> {
             output
                 .row_iter_mut()

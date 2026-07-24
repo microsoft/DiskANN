@@ -20,7 +20,7 @@
 //!     minmax::{MinMaxMeta, MinMaxQuantizer},
 //!     multi_vector::{
 //!         distance::{Chamfer, MaxSim, QueryMatRef},
-//!         Defaulted, Mat, MatRef, Standard,
+//!         Mat, MatRef, RowMajor,
 //!     },
 //!     num::Positive,
 //!     CompressInto,
@@ -44,8 +44,8 @@
 //!     1.0, 0.0, 0.0, 0.0,  // query vector 0
 //!     0.0, 1.0, 0.0, 0.0,  // query vector 1
 //! ];
-//! let query_input = MatRef::new(
-//!     Standard::new(num_query_vectors, dim).unwrap(), &query_data
+//! let query_input = MatRef::from_repr(
+//!     RowMajor::new(num_query_vectors, dim).unwrap(), &query_data
 //! ).unwrap();
 //!
 //! // Full-precision document multi-vector (3 vectors × 4 dimensions)
@@ -54,15 +54,15 @@
 //!     1.0, 0.0, 0.0, 0.0,  // doc vector 1
 //!     0.0, 0.0, 1.0, 0.0,  // doc vector 2
 //! ];
-//! let doc_input = MatRef::new(
-//!     Standard::new(num_doc_vectors, dim).unwrap(), &doc_data
+//! let doc_input = MatRef::from_repr(
+//!     RowMajor::new(num_doc_vectors, dim).unwrap(), &doc_data
 //! ).unwrap();
 //!
-//! // Create owned matrices for quantized output using Mat::new
+//! // Create owned matrices for quantized output using Mat::from_repr
 //! let mut query_out: Mat<MinMaxMeta<NBITS>> =
-//!     Mat::new(MinMaxMeta::new(num_query_vectors, dim), Defaulted).unwrap();
+//!     Mat::from_default(MinMaxMeta::new(num_query_vectors, dim)).unwrap();
 //! let mut doc_out: Mat<MinMaxMeta<NBITS>> =
-//!     Mat::new(MinMaxMeta::new(num_doc_vectors, dim), Defaulted).unwrap();
+//!     Mat::from_default(MinMaxMeta::new(num_doc_vectors, dim)).unwrap();
 //!
 //! // Quantize both multi-vectors
 //! quantizer.compress_into(query_input, query_out.reborrow_mut()).unwrap();

@@ -18,8 +18,8 @@ pub mod io;
 pub mod object_pool;
 pub mod sampling;
 
-// Views
 pub mod strided;
+
 pub mod views;
 
 mod lazystring;

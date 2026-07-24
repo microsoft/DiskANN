@@ -16,7 +16,7 @@ use diskann_providers::{
     utils::{BridgeErr, RayonThreadPoolRef},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
-use diskann_utils::views::MatrixBase;
+use diskann_utils::views::{MatrixView, MatrixViewMut};
 use diskann_vector::distance::Metric;
 use tracing::info;
 
@@ -119,7 +119,7 @@ where
                 context.storage_provider,
             )?;
 
-        let mut full_pivot_data_mat = diskann_utils::views::MutMatrixView::try_from(
+        let mut full_pivot_data_mat = diskann_utils::views::MatrixViewMut::try_from(
             full_pivot_data.as_mut_slice(),
             context.num_centers,
             full_dim,
@@ -146,8 +146,8 @@ where
 
     fn compress(
         &self,
-        vector: MatrixBase<&[f32]>,
-        output: MatrixBase<&mut [u8]>,
+        vector: MatrixView<'_, f32>,
+        output: MatrixViewMut<'_, u8>,
     ) -> Result<(), diskann::ANNError> {
         self.table
             .compress_into(vector, output)
@@ -175,7 +175,7 @@ mod pq_generation_tests {
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,
-        views::{MatrixView, MutMatrixView},
+        views::{MatrixView, MatrixViewMut},
     };
     use diskann_vector::distance::Metric;
     use rstest::rstest;
@@ -329,7 +329,7 @@ mod pq_generation_tests {
         let mut compressed_mat = vec![0_u8; num_chunks * npts];
         let result = compressor.unwrap().compress(
             data_matrix.as_view(),
-            MutMatrixView::try_from(&mut compressed_mat, npts, num_chunks).unwrap(),
+            MatrixViewMut::try_from(&mut compressed_mat, npts, num_chunks).unwrap(),
         );
         assert!(result.is_ok());
 

@@ -106,7 +106,7 @@ mod tests {
         let data = vec![0; ncols * nrows];
 
         test_error(|| {
-            views::MatrixView::try_from(&*data, nrows, ncols + 1)
+            views::MatrixView::try_from(&data, nrows, ncols + 1)
                 .bridge_err()
                 .unwrap_err()
         });

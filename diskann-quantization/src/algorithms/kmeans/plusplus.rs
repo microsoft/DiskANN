@@ -7,7 +7,7 @@ use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
     strided::StridedView,
-    views::{MatrixView, MutMatrixView},
+    views::{MatrixView, MatrixViewMut},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 use rand::{
@@ -379,7 +379,7 @@ impl KMeansPlusPlusError {
 }
 
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
-    mut points: MutMatrixView<'_, f32>,
+    mut points: MatrixViewMut<'_, f32>,
     data: StridedView<'_, f32>,
     transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
@@ -498,7 +498,7 @@ where
 }
 
 pub fn kmeans_plusplus_into(
-    centers: MutMatrixView<'_, f32>,
+    centers: MatrixViewMut<'_, f32>,
     data: MatrixView<'_, f32>,
     rng: &mut dyn RngCore,
 ) -> Result<(), KMeansPlusPlusError> {
@@ -581,7 +581,7 @@ mod tests {
     /// ...
     /// K-1, K,   K+1, K+3 ... N+K-2
     /// ```
-    fn set_default_values(mut x: MutMatrixView<'_, f32>) {
+    fn set_default_values(mut x: MatrixViewMut<'_, f32>) {
         for (i, row) in x.row_iter_mut().enumerate() {
             for (j, r) in row.iter_mut().enumerate() {
                 *r = (i + j) as f32;
