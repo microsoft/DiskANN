@@ -20,11 +20,18 @@ namespace diskann
             const std::vector<LabelT>& filter_labels,
             LabelT unv_label);
 
+        // Ctor variant that owns its per-query scratch buffer internally.
+        // Used by the unified-index path (see unified_label_data_bitmask::make_match_proxy).
+        bitmask_filter_match(simple_bitmask_buf& bitmask_filters,
+            const std::vector<LabelT>& filter_labels,
+            LabelT unv_label);
+
         virtual bool contain_filtered_label(uint32_t id) override;
 
     private:
         simple_bitmask_buf& _bitmask_filters;
-        std::vector<std::uint64_t>& _query_bitmask_buf;
+        std::vector<std::uint64_t> _owned_query_bitmask_buf;  // populated only by the 3-arg ctor
+        std::vector<std::uint64_t>& _query_bitmask_buf;       // refs either external or _owned
         simple_bitmask_full_val _bitmask_full_val;
     };
 

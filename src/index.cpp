@@ -19,6 +19,7 @@
 #include "color_helper.h"
 #include "filter_match_proxy.h"
 #include "in_mem_reorder_data_store.h"
+#include "unified_index_io.h"
 
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
@@ -437,6 +438,134 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     }
 
     diskann::cout << "Time taken for save: " << timer.elapsed() / 1000000.0 << "s." << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::save_unified(const char *filename)
+{
+    static const std::vector<uint8_t> kEmpty;
+    save_unified(filename, kEmpty, kEmpty);
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::save_unified(const char *filename, const std::vector<uint8_t> &pq_pivots_bytes,
+                                          const std::vector<uint8_t> &pq_codes_bytes)
+{
+    diskann::Timer timer;
+
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
+    if (!_data_compacted)
+    {
+        compact_data();
+    }
+
+    if (_dynamic_index || _delete_set->size() > 0 || _enable_tags)
+    {
+        throw ANNException("save_unified does not support dynamic/tagged/deletion indices in v1", -1,
+                           __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    const uint64_t npts = static_cast<uint64_t>(_nd);
+    const uint64_t dim = static_cast<uint64_t>(_dim);
+    const uint64_t aligned_dim = static_cast<uint64_t>(_data_store->get_aligned_dim());
+    const uint32_t max_degree = _graph_store->get_max_observed_degree();
+
+    UnifiedIndexWriter writer(filename);
+    MetricTag metric_tag = MetricTag::L2;
+    if (_dist_metric == diskann::Metric::INNER_PRODUCT)
+        metric_tag = MetricTag::InnerProduct;
+    else if (_dist_metric == diskann::Metric::COSINE)
+        metric_tag = MetricTag::Cosine;
+
+    writer.begin(npts, dim, aligned_dim, max_degree, data_type_tag_of<T>(), metric_tag,
+                 static_cast<uint64_t>(_start));
+
+    writer.begin_graph_region();
+    std::vector<T> vec(dim);
+    for (uint32_t i = 0; i < npts; ++i)
+    {
+        _data_store->get_vector(i, vec.data());
+        const NeighborList nbrs = _graph_store->get_neighbours(i);
+        writer.write_node(vec.data(), nbrs.data(), static_cast<uint32_t>(nbrs.size()));
+    }
+    writer.end_graph_region();
+
+    if (_filtered_index && !_label_to_start_id.empty())
+    {
+        std::vector<uint32_t> medoid_list;
+        medoid_list.reserve(_label_to_start_id.size());
+        for (const auto &kv : _label_to_start_id)
+            medoid_list.push_back(kv.second);
+        writer.write_medoids(medoid_list.data(), medoid_list.size());
+    }
+    else
+    {
+        const uint32_t single_medoid = _start;
+        writer.write_medoids(&single_medoid, 1);
+    }
+
+    // Optional PQ region. Caller supplies both pivots and codes; empty buffers
+    // skip the PQ write entirely (no HAS_PQ flag).
+    if (!pq_pivots_bytes.empty() && !pq_codes_bytes.empty())
+    {
+        writer.write_pq(pq_pivots_bytes.data(), pq_pivots_bytes.size(), pq_codes_bytes.data(),
+                        pq_codes_bytes.size());
+    }
+
+    if (_filtered_index)
+    {
+        std::vector<uint8_t> dict_bytes;
+        {
+            std::vector<std::pair<LabelT, uint32_t>> label_to_medoid_list(_label_to_start_id.begin(),
+                                                                          _label_to_start_id.end());
+            std::unordered_map<LabelT, std::string> int_to_str;
+            for (const auto &kv : _label_map)
+                int_to_str.emplace(kv.second, kv.first);
+            for (const auto &lm : label_to_medoid_list)
+            {
+                const auto it = int_to_str.find(lm.first);
+                const std::string &s = (it != int_to_str.end()) ? it->second : std::string();
+                const uint32_t label_int = static_cast<uint32_t>(lm.first);
+                const uint32_t slen = static_cast<uint32_t>(s.size());
+                const size_t old = dict_bytes.size();
+                dict_bytes.resize(old + sizeof(uint32_t) + slen + sizeof(uint32_t) + sizeof(uint32_t));
+                uint8_t *p = dict_bytes.data() + old;
+                std::memcpy(p, &slen, sizeof(uint32_t));
+                p += sizeof(uint32_t);
+                std::memcpy(p, s.data(), slen);
+                p += slen;
+                std::memcpy(p, &label_int, sizeof(uint32_t));
+                p += sizeof(uint32_t);
+                std::memcpy(p, &lm.second, sizeof(uint32_t));
+            }
+        }
+
+        const uint64_t universal = _use_universal_label ? static_cast<uint64_t>(_universal_label) : 0;
+        const uint64_t total_labels = static_cast<uint64_t>(_label_map.size());
+
+        if (_use_integer_labels)
+        {
+            const auto &offsets = _label_vector.get_offset_vector();
+            const auto &data = _label_vector.get_data_vector();
+            std::vector<uint64_t> off_u64(offsets.begin(), offsets.end());
+            writer.write_labels_integer(total_labels, universal, dict_bytes.data(), dict_bytes.size(),
+                                        data.data(), data.size() * sizeof(uint32_t), off_u64.data());
+        }
+        else if (_bitmask_buf._buf.size() > 0)
+        {
+            const uint64_t bitmap_bytes = _bitmask_buf._buf.size() * sizeof(uint64_t);
+            writer.write_labels_bitmask(total_labels, universal, dict_bytes.data(), dict_bytes.size(),
+                                        _bitmask_buf._buf.data(), bitmap_bytes);
+        }
+    }
+
+    writer.finalize();
+
+    diskann::cout << "Time taken for save_unified: " << timer.elapsed() / 1000000.0 << "s." << std::endl;
 }
 
 #ifdef EXEC_ENV_OLS
@@ -2135,6 +2264,12 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
         std::string mem_labels_int_map_file = filter_params.save_path_prefix + "_labels_map.txt";
         convert_labels_string_to_int(filter_params.label_file, labels_file_to_use, mem_labels_int_map_file,
                                      filter_params.universal_label, unv_label_as_num);
+        // Populate the in-memory string->int label map. convert_labels_string_to_int
+        // only writes it to disk; without this _label_map stays empty until a
+        // load(), so a save_unified() called after build() (e.g. from
+        // unified_index_builder) would emit an empty label dictionary /
+        // total_labels == 0 and produce an unloadable filtered unified file.
+        _label_map = load_label_map(mem_labels_int_map_file);
         if (filter_params.universal_label != "")
         {
             if (unv_label_as_num != 0)

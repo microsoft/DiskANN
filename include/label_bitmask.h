@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "windows_customizations.h"
+
 namespace diskann
 {
 
@@ -45,6 +47,12 @@ struct simple_bitmask_buf
 
 };
 
+// simple_bitmask is an internal helper. It is intentionally NOT DISKANN_DLLEXPORT:
+// projects that compile label_bitmask.cpp directly (e.g. AdsSnr's ANNTestTool, which
+// defines neither _WINDLL nor DISKANN_STATIC_LIB) would otherwise define its members
+// in a dllimport context and hit C4273 'inconsistent dll linkage'. Its only client,
+// ColorInfoVector (include/color_info.h), is header-only, and every module that
+// odr-uses simple_bitmask also compiles label_bitmask.cpp, so no export is needed.
 class simple_bitmask
 {
 public:

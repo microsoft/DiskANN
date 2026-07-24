@@ -11,6 +11,7 @@
 #include "cosine_similarity.h"
 #include "color_helper.h"
 #include "filter_match_proxy.h"
+#include "unified_index_io.h"
 #include <limits>
 #include <filesystem>
 
@@ -142,7 +143,9 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
     std::vector<bool> retval(node_ids.size(), true);
 
     char *buf = nullptr;
-    auto num_sectors = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+    auto num_sectors = _nnodes_per_sector > 0
+                           ? 1
+                           : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
     alloc_aligned((void **)&buf, node_ids.size() * num_sectors * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
 
     // create read requests
@@ -186,9 +189,12 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
         if (nbr_buffers[i].second != nullptr)
         {
             uint32_t *node_nhood = offset_to_node_nhood(node_buf);
-            auto num_nbrs = *node_nhood;
+            uint32_t num_nbrs;
+            uint32_t *nbrs_src;
+            num_nbrs = *node_nhood;
+            nbrs_src = node_nhood + 1;
             nbr_buffers[i].first = num_nbrs;
-            memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
+            memcpy(nbr_buffers[i].second, nbrs_src, num_nbrs * sizeof(uint32_t));
         }
     }
 
@@ -1279,8 +1285,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     // sector scratch
     char *sector_scratch = query_scratch->sector_scratch;
     uint64_t &sector_scratch_idx = query_scratch->sector_idx;
+    // In unified mode nodes are not sector-padded, so an unaligned node can
+    // straddle one extra sector beyond DIV_ROUND_UP(node_len, SECTOR_LEN).
     const uint64_t num_sectors_per_node =
-        _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+        _nnodes_per_sector > 0 ? 1
+                               : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
 
     // query <-> PQ chunk centers distances
     _pq_table.preprocess_query(query_rotated); // center the query and rotate if
@@ -1427,8 +1436,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 fnhood.second = sector_scratch + num_sectors_per_node * sector_scratch_idx * defaults::SECTOR_LEN;
                 sector_scratch_idx++;
                 frontier_nhoods.push_back(fnhood);
-                frontier_read_reqs.emplace_back(get_node_sector((size_t)id) * defaults::SECTOR_LEN,
-                                                num_sectors_per_node * defaults::SECTOR_LEN, fnhood.second);
+                uint64_t read_offset = get_node_sector((size_t)id) * defaults::SECTOR_LEN;
+                uint64_t read_length = num_sectors_per_node * defaults::SECTOR_LEN;
+                frontier_read_reqs.emplace_back(read_offset, read_length, fnhood.second);
                 if (stats != nullptr)
                 {
                     stats->n_4k++;
@@ -1526,7 +1536,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 #endif
             char *node_disk_buf = offset_to_node(frontier_nhood.second, frontier_nhood.first);
             uint32_t *node_buf = offset_to_node_nhood(node_disk_buf);
-            uint64_t nnbrs = (uint64_t)(*node_buf);
+            uint64_t nnbrs;
+            uint32_t *node_nbrs;
+            nnbrs = (uint64_t)(*node_buf);
+            node_nbrs = (node_buf + 1);
             T *node_fp_coords = offset_to_node_coords(node_disk_buf);
             memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
             float cur_expanded_dist;
@@ -1542,7 +1555,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
             full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
-            uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
             compute_dists(node_nbrs, nnbrs, dist_scratch);

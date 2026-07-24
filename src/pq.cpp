@@ -168,6 +168,115 @@ uint32_t FixedChunkPQTable::get_num_chunks()
     return static_cast<uint32_t>(n_chunks);
 }
 
+void FixedChunkPQTable::load_pq_centroid_bin_from_memory(const uint8_t *blob, size_t blob_len, size_t num_chunks)
+{
+    // The pq_pivots.bin format is a "bin-with-offsets" container:
+    //   Outer bin at offset 0:        [int32 nr][int32 nc][size_t offsets[nr]]   (nr = 4 or 5)
+    //   Sub-bin at offsets[0] (pivots):     [int32 256][int32 dim][float[256*dim]]
+    //   Sub-bin at offsets[1] (centroid):   [int32 dim][int32 1  ][float[dim]]
+    //   (nr==5 only) offsets[2] is an old-format per-chunk dims sub-bin (ignored).
+    //   Sub-bin at offsets[chunk_offsets_index]: [int32 n_chunks+1][int32 1][uint32_t[n_chunks+1]]
+    //   chunk_offsets_index = 2 (new) or 3 (old, when nr==5).
+    //
+    // This mirrors the disk loader's parsing (FixedChunkPQTable::load_pq_centroid_bin
+    // above) but reads straight from `blob` with no IO. OPQ rotation matrix is
+    // NOT supported -- unified-format PQ is always standard PQ.
+
+    auto read_sub_bin_header = [&](size_t off, size_t &out_nr, size_t &out_nc, size_t &out_payload_off) {
+        if (off + 2 * sizeof(int32_t) > blob_len)
+            throw diskann::ANNException("PQ blob: truncated sub-bin header", -1, __FUNCSIG__, __FILE__, __LINE__);
+        int32_t nr_i32 = 0, nc_i32 = 0;
+        std::memcpy(&nr_i32, blob + off, sizeof(int32_t));
+        std::memcpy(&nc_i32, blob + off + sizeof(int32_t), sizeof(int32_t));
+        out_nr = static_cast<size_t>(nr_i32);
+        out_nc = static_cast<size_t>(nc_i32);
+        out_payload_off = off + 2 * sizeof(int32_t);
+    };
+
+    // --- Outer bin: size_t offset table. ---
+    size_t nr = 0, nc = 0, payload_off = 0;
+    read_sub_bin_header(/*off=*/0, nr, nc, payload_off);
+
+    if (nr != 4 && nr != 5)
+    {
+        throw diskann::ANNException("PQ blob: outer offsets have unexpected count " + std::to_string(nr) +
+                                        " (expecting 4 or 5)",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    const size_t outer_bytes = nr * nc * sizeof(size_t);
+    if (payload_off + outer_bytes > blob_len)
+        throw diskann::ANNException("PQ blob: truncated outer offsets", -1, __FUNCSIG__, __FILE__, __LINE__);
+
+    std::vector<size_t> file_offset_data(nr);
+    std::memcpy(file_offset_data.data(), blob + payload_off, outer_bytes);
+
+    const bool use_old_filetype = (nr == 5);
+
+    // --- Pivot table at offsets[0]. ---
+    read_sub_bin_header(file_offset_data[0], nr, nc, payload_off);
+    if (nr != NUM_PQ_CENTROIDS)
+    {
+        throw diskann::ANNException("PQ blob: pivots row count = " + std::to_string(nr) + " (expecting " +
+                                        std::to_string(NUM_PQ_CENTROIDS) + ")",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    this->ndims = nc;
+    const size_t pivots_bytes = nr * nc * sizeof(float);
+    if (payload_off + pivots_bytes > blob_len)
+        throw diskann::ANNException("PQ blob: truncated pivot table", -1, __FUNCSIG__, __FILE__, __LINE__);
+    if (tables != nullptr)
+        delete[] tables;
+    tables = new float[nr * nc];
+    std::memcpy(tables, blob + payload_off, pivots_bytes);
+
+    // --- Centroid at offsets[1]. ---
+    read_sub_bin_header(file_offset_data[1], nr, nc, payload_off);
+    if (nr != this->ndims || nc != 1)
+    {
+        throw diskann::ANNException("PQ blob: centroid shape mismatch", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    const size_t centroid_bytes = nr * nc * sizeof(float);
+    if (payload_off + centroid_bytes > blob_len)
+        throw diskann::ANNException("PQ blob: truncated centroid", -1, __FUNCSIG__, __FILE__, __LINE__);
+    if (centroid != nullptr)
+        delete[] centroid;
+    centroid = new float[nr * nc];
+    std::memcpy(centroid, blob + payload_off, centroid_bytes);
+
+    // --- Chunk offsets at offsets[2] (new) or [3] (old-filetype). ---
+    const int chunk_offsets_index = use_old_filetype ? 3 : 2;
+    read_sub_bin_header(file_offset_data[chunk_offsets_index], nr, nc, payload_off);
+    if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0))
+    {
+        throw diskann::ANNException("PQ blob: chunk-offsets shape mismatch (nr=" + std::to_string(nr) +
+                                        ", nc=" + std::to_string(nc) + ")",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    const size_t chunk_bytes = nr * nc * sizeof(uint32_t);
+    if (payload_off + chunk_bytes > blob_len)
+        throw diskann::ANNException("PQ blob: truncated chunk offsets", -1, __FUNCSIG__, __FILE__, __LINE__);
+    if (chunk_offsets != nullptr)
+        delete[] chunk_offsets;
+    chunk_offsets = new uint32_t[nr * nc];
+    std::memcpy(chunk_offsets, blob + payload_off, chunk_bytes);
+
+    this->n_chunks = nr - 1;
+    diskann::cout << "Loaded PQ Pivots from memory: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->ndims
+                  << ", #chunks: " << this->n_chunks << std::endl;
+
+    // Compute the transpose used by the distance hot path.
+    if (tables_tr != nullptr)
+        delete[] tables_tr;
+    tables_tr = new float[256 * this->ndims];
+    for (size_t i = 0; i < 256; i++)
+    {
+        for (size_t j = 0; j < this->ndims; j++)
+        {
+            tables_tr[j * 256 + i] = tables[i * this->ndims + j];
+        }
+    }
+}
+
 void FixedChunkPQTable::preprocess_query(float *query_vec)
 {
     for (uint32_t d = 0; d < ndims; d++)

@@ -45,6 +45,30 @@ bool integer_label_vector::initialize_from_file(const std::string& label_file, s
     return true;
 }
 
+bool integer_label_vector::initialize_from_buffers(const size_t *offsets, size_t num_points,
+                                                   const uint32_t *labels, size_t total_labels)
+{
+    _offset.assign(offsets, offsets + num_points + 1);
+    _data.assign(labels, labels + total_labels);
+    return true;
+}
+
+void integer_label_vector::resize_for_load(size_t num_points, size_t total_labels)
+{
+    _offset.resize(num_points + 1);
+    _data.resize(total_labels);
+}
+
+size_t *integer_label_vector::mutable_offset_data()
+{
+    return _offset.data();
+}
+
+uint32_t *integer_label_vector::mutable_label_data()
+{
+    return _data.data();
+}
+
 template <typename LabelT>
 bool integer_label_vector::add_labels(uint32_t point_id, std::vector<LabelT> &labels) {
     if (point_id >= _offset.size() - 1)
