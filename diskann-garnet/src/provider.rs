@@ -10,8 +10,9 @@ use diskann::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchAccessor, SearchPostProcess, SearchPostProcessStep, SearchStrategy,
+            self, Accept, Decision, DefaultPostProcessor, FilteredAccessor, InplaceDeleteStrategy,
+            InsertStrategy, PruneStrategy, SearchAccessor, SearchPostProcess,
+            SearchPostProcessStep, SearchStrategy,
         },
         workingset::{self, map::Entry},
     },
@@ -53,6 +54,13 @@ use crate::{
         self, DynDistanceComputer, DynQueryComputer, GarnetQuantizer, GarnetQuantizerError,
     },
 };
+
+/// Quantization state and table are stored under this key in Garnet under the metadata
+/// term.
+///
+/// The first byte is a boolean reflecting whether backfill is complete. The remaining
+/// bytes are the serialized quant table.
+const QUANT_STATE_KEY: u32 = u32::from_be_bytes(*b"_qnt");
 
 #[derive(Clone)]
 struct AdjList(AdjacencyList<u32>);
@@ -115,7 +123,9 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Metric to use for comparing distances
     metric_type: Metric,
     /// Maximum degree of the graph.
-    /// Note: Unlike DiskANN, this is the true maximum. Neighbors can never exceed this degree.
+    ///
+    /// Note: Unlike DiskANN, this is the true maximum. Neighbors can never
+    /// exceed this degree.
     max_degree: usize,
     /// Garnet storage engine callbacks
     callbacks: Callbacks,
@@ -129,8 +139,11 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     training_lock: Mutex<()>,
     /// Pool of pre-allocated buffers to use for neighbor lists
     id_buffer_pool: ObjectPool<AdjList>,
-    /// Pool of pre-allocated buffers to use for filtering IDs
+    /// Pool of pre-allocated buffers to use for IDs
     filtered_ids_pool: ObjectPool<Vec<u32>>,
+    /// Pool of pre-allocated buffers to use for filter decisions during
+    /// filtered search beam expansion
+    filtered_decisions_pool: ObjectPool<Vec<bool>>,
     /// Pool of pre-allocated buffers to use for quantizing vectors
     quant_buffer_pool: ObjectPool<Vec<u8>>,
     /// Small cache for the start points' neighbors
@@ -158,6 +171,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
             ObjectPool::new(Undef::new(max_degree + 1), parallelism, Some(parallelism));
         let filtered_ids_pool = ObjectPool::new(
             Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2),
+            parallelism,
+            Some(parallelism),
+        );
+        let filtered_decisions_pool = ObjectPool::new(
+            Undef::new(MAX_OCCLUSION_SIZE.get() as usize),
             parallelism,
             Some(parallelism),
         );
@@ -197,14 +215,45 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let quantizer = Box::new(quantization::MinMax8Bit::new(dim, metric_type)?)
                     as Box<dyn GarnetQuantizer>;
                 let canonical_bytes = quantizer.bytes();
-                // NOTE: Q8 needs no training, so it always starts with backfill complete.
+
+                // NOTE: Q8 needs no training, so it always starts with backfill
+                // complete. However, we still need to load the start point if
+                // it exists.
+
+                let mut qsv = Poly::broadcast(0u8, canonical_bytes, AlignToEight)?;
+                if callbacks.read_single_iid(&context.term(Term::Quantized), 0, &mut qsv) {
+                    start_point_quant_cache.insert(0, qsv);
+                }
+
                 (Some(quantizer), canonical_bytes, true)
             }
             VectorQuantType::Bin | VectorQuantType::XBinU8 | VectorQuantType::XBinI8 => {
                 let quantizer =
                     Box::new(quantization::Spherical1Bit::new(dim)) as Box<dyn GarnetQuantizer>;
                 let canonical_bytes = quantizer.bytes();
-                (Some(quantizer), canonical_bytes, false)
+                let mut all_quantized = false;
+
+                if let Some(total_quant_state) =
+                    callbacks.read_varsize_iid::<u8>(&context.term(Term::Metadata), QUANT_STATE_KEY)
+                {
+                    if total_quant_state.len() <= 1 {
+                        return Err(GarnetProviderError::InvalidQuantizer);
+                    }
+
+                    all_quantized = total_quant_state[0] != 0;
+
+                    quantizer.deserialize(&total_quant_state[1..])?;
+
+                    // Cache the saved start point, which should already exist if quantization is complete
+                    let mut qsv = Poly::broadcast(0u8, canonical_bytes, AlignToEight)?;
+                    if callbacks.read_single_iid(&context.term(Term::Quantized), 0, &mut qsv) {
+                        start_point_quant_cache.insert(0, qsv);
+                    } else if all_quantized {
+                        return Err(GarnetProviderError::StartPoint);
+                    }
+                }
+
+                (Some(quantizer), canonical_bytes, all_quantized)
             }
         };
         let quant_buffer_pool =
@@ -228,6 +277,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             training_lock: Mutex::new(()),
             id_buffer_pool,
             filtered_ids_pool,
+            filtered_decisions_pool,
             quant_buffer_pool,
             start_point_cache,
             start_point_quant_cache,
@@ -237,6 +287,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
         })
     }
 
+    /// Called during `VADD` to ensure a start point exists.
+    /// If there isn't a start point yet, the given point will be set as the start point; if there
+    /// is a start point already, we ensure the caches are populated.
     pub(crate) fn maybe_set_start_point(
         &self,
         context: &Context,
@@ -254,6 +307,21 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 .read_single_iid(&context.term(Term::Neighbors), 0, &mut neighbors)
             {
                 return Err(GarnetError::Read.into());
+            }
+
+            if self.is_quantized()
+                && let Some(quantizer) = self.quantizer()
+            {
+                let mut qpoint = vec![0u8; quantizer.bytes()];
+                if !self
+                    .callbacks
+                    .read_single_iid(&context.term(Term::Quantized), 0, &mut qpoint)
+                {
+                    return Err(GarnetError::Read.into());
+                }
+
+                self.start_point_quant_cache
+                    .insert(0, Poly::from_iter(qpoint.iter().copied(), AlignToEight)?);
             }
 
             self.start_point_cache.insert(0, v);
@@ -437,6 +505,23 @@ impl<T: VectorRepr> GarnetProvider<T> {
         };
         match quantizer.train(self.metric_type, view) {
             Ok(()) => {
+                let quant_state = if let Ok(s) = quantizer.serialize() {
+                    s
+                } else {
+                    return false;
+                };
+
+                let mut total_quant_state = vec![0u8; quant_state.len() + 1];
+                total_quant_state[1..].copy_from_slice(&quant_state);
+
+                if !self.callbacks.write_iid(
+                    &context.term(Term::Metadata),
+                    QUANT_STATE_KEY,
+                    &total_quant_state,
+                ) {
+                    return false;
+                }
+
                 self.fsm.enable_quantization();
                 true
             }
@@ -532,6 +617,20 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
             // Now that all vectors have quant vectors associated, unlock ID reuse.
             self.fsm.enable_reuse();
+
+            if !self.callbacks.rmw_iid::<_, u8>(
+                &context.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                1,
+                |data| {
+                    data[0] = 1;
+                },
+            ) {
+                // NOTE: This return is unrecoverable in the current design, as there is no way to
+                // signal that backfill failed.
+                return;
+            }
+
             // Signal to the index that it is now safe to operate in quantized mode.
             self.all_quantized.store(true, Ordering::Release);
         }
@@ -549,6 +648,16 @@ impl<T: VectorRepr> GarnetProvider<T> {
     /// Returns quantization status. If this is true, the index is operating fully quantized.
     pub(crate) fn is_quantized(&self) -> bool {
         self.quantizer.is_some() && self.all_quantized.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn quantization_needed(&self) -> bool {
+        if let Some(quantizer) = &self.quantizer {
+            !self.is_quantized()
+                && quantizer.is_trained()
+                && self.max_internal_id() as usize > quantizer.required_vectors()
+        } else {
+            false
+        }
     }
 
     pub(crate) fn get_full_vector(
@@ -619,18 +728,22 @@ impl<T: VectorRepr> GarnetProvider<T> {
         guard[0..neighbors.len()].copy_from_slice(neighbors);
         guard[self.max_degree] = neighbors.len() as u32;
 
-        if !self
-            .callbacks
-            .write_iid(&context.term(Term::Neighbors), iid, &guard)
-        {
-            return Err(GarnetProviderError::Garnet(GarnetError::Write));
+        // NOTE: We use `rmw_iid` here instead of `write_iid` to guarantee cache coherence.
+        if !self.callbacks.rmw_iid(
+            &context.term(Term::Neighbors),
+            iid,
+            (self.max_degree + 1) * mem::size_of::<u32>(),
+            |data: &mut [u32]| {
+                data.copy_from_slice(&guard);
+                if iid == 0 {
+                    self.neighbor_cache.insert(iid, neighbors.to_vec());
+                }
+            },
+        ) {
+            return Err(GarnetError::Write.into());
         }
 
         guard.finish(0);
-
-        if iid == 0 {
-            self.neighbor_cache.insert(iid, neighbors.to_vec());
-        }
 
         Ok(())
     }
@@ -671,7 +784,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 }
             },
         ) {
-            return Err(GarnetProviderError::Garnet(GarnetError::Write));
+            return Err(GarnetError::Write.into());
         }
 
         Ok(())
@@ -790,12 +903,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
             Err(e) => return future::ready(Err(e)),
         };
 
-        // Mark the ID free in the FSM.
-        if let Err(e) = self.fsm.mark_free(context, id) {
-            return future::ready(Err(e.into()));
-        };
-
-        // Delete all the data associated with the vector.
+        // Delete mappings, so vector will no longer be returned.
         let mut ok = true;
         ok &= self.callbacks.delete_iid(&context.term(Term::ExtMap), id);
         ok &= self.callbacks.delete_eid(&context.term(Term::IntMap), gid);
@@ -805,14 +913,23 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
             .callbacks
             .delete_eid(&context.term(Term::Attributes), gid);
 
-        // NOTE: Commented out until DiskANN fixes accessing neighbor data post-delete.
-        //ok &= self.callbacks.delete_iid(context.term(Term::Neighbors), id);
+        // TODO: inplace_delete needs access to neighbors. Delete these once that bug is fixed.
+        // See https://github.com/microsoft/DiskANN/issues/1153.
+        // ok &= self
+        //     .callbacks
+        //     .delete_iid(&context.term(Term::Neighbors), id);
+
         ok &= self.callbacks.delete_iid(&context.term(Term::Vector), id);
 
         // It is not an error to fail deleting quantized terms; they may not exist yet.
         let _: bool = self
             .callbacks
             .delete_iid(&context.term(Term::Quantized), id);
+
+        // Mark the ID free in the FSM.
+        if let Err(e) = self.fsm.mark_free(context, id) {
+            return future::ready(Err(e.into()));
+        };
 
         if !ok {
             return future::ready(Err(GarnetError::Delete.into()));
@@ -826,7 +943,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         _context: &Self::Context,
         _id: Self::InternalId,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        // This is a no-op since we just do hard deletes.
+        // This is a no-op since DiskANN never calls this anyway.
         future::ready(Ok(()))
     }
 
@@ -867,6 +984,7 @@ pub(crate) struct DynamicAccessor<'a, T: VectorRepr> {
     computer: GarnetQueryComputer,
     id_buffer: PooledRef<'a, AdjList>,
     filtered_ids: PooledRef<'a, Vec<u32>>,
+    filtered_decisions: PooledRef<'a, Vec<bool>>,
 }
 
 impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
@@ -884,6 +1002,9 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
         let filtered_ids = provider
             .filtered_ids_pool
             .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2)); // x2 to allow for the length prefixes for garnet
+        let filtered_decisions = provider
+            .filtered_decisions_pool
+            .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize));
 
         let computer = if quantized && let Some(quantizer) = provider.quantizer() {
             let from_f32 = T::as_f32(query).map_err(|e| {
@@ -907,6 +1028,7 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
             computer,
             id_buffer,
             filtered_ids,
+            filtered_decisions,
         })
     }
 
@@ -953,6 +1075,12 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
     where
         F: FnMut(Self::Id, f32) + Send,
     {
+        // If there are no start points, just return without doing anything.
+        // Searches on an empty index just return no results.
+        if !self.provider.start_points_exist() {
+            return future::ready(Ok(()));
+        }
+
         let result = match self.start_point_distance() {
             Ok(dist) => {
                 f(Self::START_ID, dist);
@@ -977,7 +1105,7 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
     {
         // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
         // borrow. We put it back at the end to save the allocation.
-        let mut id_buffer = std::mem::take(&mut **self.id_buffer);
+        let mut id_buffer = mem::take(&mut **self.id_buffer);
 
         for nl_id in ids {
             self.provider
@@ -1101,7 +1229,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
         for n in candidates {
             let id = match accessor.provider.to_external_id(accessor.context, n.id) {
                 Ok(id) => id,
-                Err(e) => return future::ready(Err(e)),
+                Err(_) => continue, // Can't read the mapping; skip.
             };
 
             if output.push(id, n.distance).is_full() {
@@ -1185,6 +1313,150 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         )
         .await
         .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)))
+    }
+}
+
+impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
+    fn start_point_distances<F>(&mut self, mut f: F) -> impl Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(glue::Decision<Self::Id>, f32) + Send,
+    {
+        if !self.provider.start_points_exist() {
+            return future::ready(Ok(()));
+        }
+
+        let result = match self.start_point_distance() {
+            Ok(dist) => {
+                f(glue::Decision::reject(Self::START_ID), dist);
+                Ok(())
+            }
+            Err(err) => Err(ANNError::from(err)),
+        };
+
+        future::ready(result)
+    }
+
+    fn expand_beam_filtered<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(glue::Decision<Self::Id>, f32) + Send,
+    {
+        // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
+        // borrow. We put it back at the end to save the allocation.
+        let mut id_buffer = mem::take(&mut **self.id_buffer);
+
+        for nl_id in ids {
+            self.provider
+                .get_neighbors(self.context, nl_id, &mut id_buffer);
+
+            self.filtered_ids.clear();
+            self.filtered_decisions.clear();
+
+            for id in id_buffer.iter().copied().filter(|id| pred.eval_mut(id)) {
+                if id == Self::START_ID {
+                    let dist = match self.start_point_distance() {
+                        Ok(dist) => dist,
+                        Err(err) => return future::ready(Err(ANNError::from(err))),
+                    };
+                    on_neighbors(Decision::reject(id), dist);
+                } else {
+                    let matches = self.provider.callbacks.matches_filter(self.context, id);
+
+                    self.filtered_ids.push(4);
+                    self.filtered_ids.push(id);
+
+                    self.filtered_decisions.push(matches);
+                }
+            }
+
+            let ctx = if self.quantized {
+                self.context.term(Term::Quantized)
+            } else {
+                self.context.term(Term::Vector)
+            };
+
+            if !self.filtered_ids.is_empty() {
+                self.provider
+                    .callbacks
+                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                        let dist = self.computer.evaluate_similarity(v);
+                        let decision = if self.filtered_decisions[i as usize] {
+                            Decision::accept(self.filtered_ids[i as usize * 2 + 1])
+                        } else {
+                            Decision::reject(self.filtered_ids[i as usize * 2 + 1])
+                        };
+                        on_neighbors(decision, dist);
+                    });
+            }
+        }
+
+        **self.id_buffer = id_buffer;
+        future::ready(Ok(()))
+    }
+
+    fn expand_beam_accept_only<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::Predicate<Self::Id> + glue::PredicateMut<Accept<Self::Id>> + Send + Sync,
+        F: FnMut(glue::Accept<Self::Id>, f32) + Send,
+    {
+        // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
+        // borrow. We put it back at the end to save the allocation.
+        let mut id_buffer = mem::take(&mut **self.id_buffer);
+
+        for nl_id in ids {
+            self.provider
+                .get_neighbors(self.context, nl_id, &mut id_buffer);
+            self.filtered_ids.clear();
+
+            for id in id_buffer.iter().copied() {
+                if id != Self::START_ID && pred.eval(&id) {
+                    let matches = self.provider.callbacks.matches_filter(self.context, id);
+
+                    if matches && pred.eval_mut(&Accept::new(id)) {
+                        self.filtered_ids.push(4);
+                        self.filtered_ids.push(id);
+                    }
+                }
+            }
+
+            let ctx = if self.quantized {
+                self.context.term(Term::Quantized)
+            } else {
+                self.context.term(Term::Vector)
+            };
+
+            if !self.filtered_ids.is_empty() {
+                self.provider
+                    .callbacks
+                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                        let dist = self.computer.evaluate_similarity(v);
+                        on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
+                    });
+            }
+        }
+
+        **self.id_buffer = id_buffer;
+        future::ready(Ok(()))
+    }
+
+    fn num_starting_points(&self) -> impl future::Future<Output = ANNResult<usize>> + Send {
+        if self.provider.start_points_exist() {
+            future::ready(Ok(1))
+        } else {
+            future::ready(Ok(0))
+        }
     }
 }
 
@@ -1495,19 +1767,31 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for DynamicQuantiza
 
 #[cfg(test)]
 mod tests {
-    use diskann::provider::{Delete, SetElement};
+    use std::mem;
+
+    use diskann::{
+        graph::{
+            config::{self, defaults::GRAPH_SLACK_FACTOR},
+            search,
+        },
+        provider::{Delete, SetElement},
+    };
+    use diskann_providers::index::wrapped_async::DiskANNIndex;
     use diskann_vector::distance::Metric;
+    use rand::Rng;
 
     use crate::{
-        VectorQuantType,
-        garnet::{Context, GarnetId},
-        provider::GarnetProvider,
+        SearchResults, VectorQuantType,
+        dyn_index::DynIndex,
+        garnet::{Context, GarnetId, Term},
+        provider::{GarnetProvider, QUANT_STATE_KEY},
+        quantization::{GarnetQuantizer, Spherical1Bit},
         test_utils::Store,
     };
 
     #[tokio::test]
     async fn simple_insert_delete() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
         let provider = GarnetProvider::<f32>::new(
             2,
@@ -1526,5 +1810,290 @@ mod tests {
 
         let res = provider.delete(&ctx, &id).await;
         assert!(res.is_ok());
+    }
+
+    fn create_2d_f32_index(
+        quant_type: VectorQuantType,
+        metric: Metric,
+        store: &Store,
+        ctx: &Context,
+    ) -> DiskANNIndex<GarnetProvider<f32>> {
+        let provider =
+            GarnetProvider::<f32>::new(2, quant_type, metric, 10, store.callbacks(), ctx).unwrap();
+
+        let config = config::Builder::new(
+            (10.0 / GRAPH_SLACK_FACTOR) as usize,
+            config::MaxDegree::Value(10),
+            10,
+            metric.into(),
+        )
+        .build()
+        .unwrap();
+
+        DiskANNIndex::new_with_current_thread_runtime(config, provider)
+    }
+
+    /// Test that restarts during phase one quant bootstrap work.
+    /// Phase one is all index activity before the index has the required
+    /// number of vectors to begin quantization.
+    #[test]
+    fn restart_during_quant_bootstrap_phase_one() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::Bin, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+        let required_vecs = Spherical1Bit::new(2).required_vectors();
+
+        let mut rng = rand::rng();
+
+        let mut last_inserted_id = 0;
+        let mut first_insert = true;
+        for id in 0..required_vecs as u32 / 2 {
+            let v = [rng.random(), rng.random()];
+
+            if first_insert {
+                provider.maybe_set_start_point(&ctx, &v).unwrap();
+                first_insert = false;
+            }
+
+            DynIndex::insert(
+                &index,
+                &ctx,
+                &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
+                bytemuck::cast_slice::<f32, u8>(&v),
+            )
+            .unwrap();
+            last_inserted_id = id;
+        }
+
+        assert!(!provider.is_quantized());
+        let max_id = provider.max_internal_id();
+        assert_eq!(max_id, last_inserted_id + 1);
+
+        // There should be no saved quant state.
+        assert!(
+            !provider
+                .callbacks
+                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            "quant state should not be stored yet"
+        );
+
+        // Quantization is not needed yet
+        assert!(!provider.quantization_needed());
+
+        let params = search::Knn::new(10, 10, None).unwrap();
+        let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
+        let mut output_dists = vec![0f32; 10];
+        let mut output = SearchResults::new(
+            output_ids.as_mut_ptr(),
+            output_ids.len(),
+            output_dists.as_mut_ptr(),
+            output_dists.len(),
+        );
+        let query = [0.0f32, 0.0f32];
+        let results = DynIndex::search_vector(
+            &index,
+            &ctx,
+            bytemuck::cast_slice::<f32, u8>(&query),
+            params,
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(results.result_count, 10);
+    }
+
+    /// Test that restarts during phase two quant bootstrap work.
+    /// Phase two starts when there are enough vectors to begin quantizing, and
+    /// lasts until quant vector backfill is complete.
+    #[test]
+    fn restart_during_quant_bootstrap_phase_two() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::Bin, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+        let required_vecs = Spherical1Bit::new(2).required_vectors();
+
+        let mut rng = rand::rng();
+
+        let mut last_inserted_id = 0;
+        let mut first_insert = true;
+        for id in 0..required_vecs as u32 + 100 {
+            let v = [rng.random(), rng.random()];
+
+            if first_insert {
+                provider.maybe_set_start_point(&ctx, &v).unwrap();
+                first_insert = false;
+            }
+
+            DynIndex::insert(
+                &index,
+                &ctx,
+                &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
+                bytemuck::cast_slice::<f32, u8>(&v),
+            )
+            .unwrap();
+            last_inserted_id = id;
+        }
+
+        // Train the quantizer
+        assert!(provider.train_quantizer(&ctx));
+
+        // is_quantized won't be true until backfill is complete
+        assert!(!provider.is_quantized());
+        let max_id = provider.max_internal_id();
+        assert_eq!(max_id, last_inserted_id + 1);
+
+        // There should be saved quant state.
+        assert!(
+            provider
+                .callbacks
+                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            "quant state missing"
+        );
+
+        let tqs = provider
+            .callbacks
+            .read_varsize_iid::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+            .unwrap();
+        assert!(tqs.len() > 1, "quant state too small");
+        assert_eq!(tqs[0], 0, "quant state should be pre-backfill");
+
+        // Drop and re-create the index, keeping the same backing store
+        let index = create_2d_f32_index(VectorQuantType::Bin, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+
+        assert!(!provider.is_quantized());
+        let max_id = provider.max_internal_id();
+        assert_eq!(max_id, last_inserted_id + 1);
+
+        // Quant should be needed now, since backfill has never run
+        assert!(provider.quantization_needed());
+
+        // Quant state should be deserialized and able to compress
+        let tv = [1.0f32, -1.0];
+        let mut tqv = vec![
+            0u8;
+            provider
+                .quantizer
+                .as_ref()
+                .expect("quantizer_missing")
+                .bytes()
+        ];
+        assert!(
+            provider
+                .quantizer
+                .as_ref()
+                .expect("quantizer missing")
+                .compress(&tv, &mut tqv)
+                .is_ok(),
+            "quant compression failed"
+        );
+    }
+
+    /// Test that restarts during phase three quant bootstrap work.
+    /// Phase three starts once backfill is complete and lasts for the remaining
+    /// life of the index.
+    #[test]
+    fn restart_during_quant_bootstrap_phase_three() {
+        let store = Store::new();
+        let ctx = Context::new(0);
+        let index = create_2d_f32_index(VectorQuantType::Bin, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+        let required_vecs = Spherical1Bit::new(2).required_vectors();
+
+        let mut rng = rand::rng();
+
+        let mut last_inserted_id = 0;
+        let mut first_insert = true;
+        for id in 0..required_vecs as u32 + 100 {
+            let v = [rng.random(), rng.random()];
+
+            if first_insert {
+                provider.maybe_set_start_point(&ctx, &v).unwrap();
+                first_insert = false;
+            }
+
+            DynIndex::insert(
+                &index,
+                &ctx,
+                &GarnetId::from(bytemuck::bytes_of::<u32>(&id)),
+                bytemuck::cast_slice::<f32, u8>(&v),
+            )
+            .unwrap();
+            last_inserted_id = id;
+        }
+
+        // Train the quantizer
+        assert!(provider.train_quantizer(&ctx));
+
+        // Run backfill
+        for job_id in 0..4 {
+            provider.backfill_quant_vectors(&ctx, job_id, 4);
+        }
+
+        // Drop and re-create the index, keeping the same backing store
+        let index = create_2d_f32_index(VectorQuantType::Bin, Metric::L2, &store, &ctx);
+        let provider = index.inner.provider();
+
+        // Index should think it is fully quantized
+        assert!(provider.is_quantized());
+
+        // Quantization should not be needed anymore
+        assert!(!provider.quantization_needed());
+
+        // There should be saved quant state.
+        assert!(
+            provider
+                .callbacks
+                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            "quant state missing"
+        );
+
+        // all quantized state should match index
+        let tqs = provider
+            .callbacks
+            .read_varsize_iid::<u8>(&ctx.term(Term::Metadata), QUANT_STATE_KEY)
+            .unwrap();
+        assert!(tqs.len() > 1, "quant state too small");
+        assert_eq!(tqs[0], 1, "quant state should be post-backfill");
+
+        // Every quant vector should be present in the store
+        for id in 0..last_inserted_id {
+            assert!(
+                provider
+                    .callbacks
+                    .exists_iid(&ctx.term(Term::Quantized), id)
+            );
+        }
+
+        // Searches should still work and use quantized vectors
+        let params = search::Knn::new(10, 10, None).unwrap();
+        let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
+        let mut output_dists = vec![0f32; 10];
+        let mut output = SearchResults::new(
+            output_ids.as_mut_ptr(),
+            output_ids.len(),
+            output_dists.as_mut_ptr(),
+            output_dists.len(),
+        );
+        let query = [0.0f32, 0.0f32];
+
+        store.clear_read_counts();
+
+        let results = DynIndex::search_vector(
+            &index,
+            &ctx,
+            bytemuck::cast_slice::<f32, u8>(&query),
+            params,
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(results.result_count, 10);
+
+        // Should be some full reads for reranking, but most reads should be
+        // quantized
+        assert!(store.full_reads() < store.quant_reads());
     }
 }

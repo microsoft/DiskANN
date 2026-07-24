@@ -191,7 +191,6 @@ mod tests {
     use std::{num::NonZeroUsize, sync::Arc};
 
     use crate::storage::VirtualStorageProvider;
-    use diskann::utils::vecid_from_usize;
     use diskann_vector::distance::Metric;
 
     use super::*;
@@ -205,18 +204,14 @@ mod tests {
             let vector = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
             let vector_provider_clone = Arc::clone(&vector_provider);
             handles.push(tokio::spawn(async move {
-                vector_provider_clone
-                    .set_vector_sync(vecid_from_usize(i).unwrap(), &vector)
-                    .unwrap()
+                vector_provider_clone.set_vector_sync(i, &vector).unwrap()
             }));
         }
         for handle in handles {
             handle.await.unwrap();
         }
         for i in 0..num_points {
-            let vector = vector_provider
-                .get_vector_sync(vecid_from_usize(i).unwrap())
-                .unwrap();
+            let vector = vector_provider.get_vector_sync(i).unwrap();
             assert_eq!(&*vector, &vec![(i as f32), (i + 1) as f32, (i + 2) as f32]);
         }
         assert_eq!(vector_provider.num_get_calls.get(), num_points);

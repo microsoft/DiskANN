@@ -18,10 +18,9 @@ use crate::model::{
 /// The discriminant type for PQ vector versions.
 type VersionId = u8;
 type VersionedPQVector = multi::VersionedPQVector<VersionId>;
-type TableType = Arc<FixedChunkPQTable>;
-type MultiTable = multi::MultiTable<TableType, VersionId>;
-type QueryComputer = multi::MultiQueryComputer<TableType, VersionId>;
-type DistanceComputer = multi::MultiDistanceComputer<TableType, VersionId>;
+type MultiTable<'a> = multi::MultiTable<'a, VersionId>;
+type QueryComputer<'a> = multi::MultiQueryComputer<'a, VersionId>;
+type DistanceComputer<'a> = multi::MultiDistanceComputer<'a, VersionId>;
 
 /// A provider that has two PQ schemas.
 pub struct TestMultiPQProviderAsync {
@@ -68,14 +67,14 @@ impl TestMultiPQProviderAsync {
         self.table_new.get_num_chunks()
     }
 
-    pub fn multi_table(&self) -> Result<MultiTable, multi::EqualVersionsError> {
+    pub fn multi_table(&self) -> Result<MultiTable<'_>, multi::EqualVersionsError> {
         match &self.table_old {
-            None => Ok(MultiTable::one(self.table_new.clone(), 1)),
-            Some(table_old) => MultiTable::two(self.table_new.clone(), table_old.clone(), 2, 1),
+            None => Ok(MultiTable::one(&self.table_new, 1)),
+            Some(table_old) => MultiTable::two(&self.table_new, table_old, 2, 1),
         }
     }
 
-    pub fn get_query_computer<T>(&self, query: &[T]) -> ANNResult<NoneToInfinity<QueryComputer>>
+    pub fn get_query_computer<T>(&self, query: &[T]) -> ANNResult<NoneToInfinity<QueryComputer<'_>>>
     where
         T: VectorRepr,
     {
@@ -89,7 +88,7 @@ impl TestMultiPQProviderAsync {
         )?))
     }
 
-    pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer>> {
+    pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer<'_>>> {
         let table = self.multi_table().map_err(|err| {
             ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;

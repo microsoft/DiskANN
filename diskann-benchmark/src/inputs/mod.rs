@@ -6,8 +6,10 @@
 pub(crate) mod disk;
 pub(crate) mod exhaustive;
 pub(crate) mod filters;
+pub(crate) mod flat;
 pub(crate) mod graph_index;
 pub(crate) mod multi_vector;
+pub(crate) mod post_processor;
 pub(crate) mod save_and_load;
 
 #[cfg(feature = "bftree")]

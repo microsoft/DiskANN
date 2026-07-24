@@ -38,8 +38,13 @@ impl InputFile {
         }
     }
 
+    /// Try to resolve `self` to an existing file.
+    ///
+    /// If `self` is absolute, this will verify that `self` exists. Otherwise, the search
+    /// directories in `checker` will be prepended to `self` and the first existing file
+    /// will be returned.
     pub fn resolve(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        let checked_path = checker.check_path(self);
+        let checked_path = checker.find_input_file(self);
         match checked_path {
             Ok(p) => {
                 self.path = p;

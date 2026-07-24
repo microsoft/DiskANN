@@ -4,7 +4,7 @@ use diskann::utils::VectorRepr;
 use diskann_quantization::{
     CompressInto,
     algorithms::{Transform, TransformKind, transforms::NewTransformError},
-    alloc::{GlobalAllocator, ScopedAllocator},
+    alloc::{GlobalAllocator, Poly, ScopedAllocator},
     minmax,
     num::POSITIVE_ONE_F32,
     spherical::{
@@ -34,6 +34,10 @@ pub(crate) enum GarnetQuantizerError {
     ZeroDim,
     #[error("Transform error: {0}")]
     BadTransform(#[from] NewTransformError),
+    #[error("Unsupported serialization/deserialization")]
+    UnsupportedSerialization,
+    #[error("Quantizer deserialization error: {0}")]
+    Deserialization(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 /// Quantizer trait that all diskann-garnet quantizers must implement
@@ -55,6 +59,10 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     fn distance_computer(&self) -> Result<GarnetDistanceComputer, GarnetQuantizerError>;
     /// Returns a query computer for comparing distances to a particular query
     fn query_computer(&self, query: &[f32]) -> Result<GarnetQueryComputer, GarnetQuantizerError>;
+    // Serialize the quantizer state.
+    fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError>;
+    // Deserialize the quantizer state.
+    fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError>;
 }
 
 /// Type-erased distance computer
@@ -172,6 +180,29 @@ impl GarnetQuantizer for Spherical1Bit {
             Err(GarnetQuantizerError::NoQuantizer)
         }
     }
+
+    fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
+        let guard = self.inner.read().unwrap();
+        if let Some(quantizer) = &*guard {
+            quantizer
+                .serialize(GlobalAllocator)
+                .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))
+        } else {
+            Err(GarnetQuantizerError::NoQuantizer)
+        }
+    }
+
+    fn deserialize(&self, state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        let mut guard = self.inner.write().unwrap();
+        if guard.is_some() {
+            Err(GarnetQuantizerError::UnsupportedSerialization)
+        } else {
+            let q = spherical::iface::Impl::<1>::try_deserialize(state, GlobalAllocator)
+                .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
+            *guard = Some(q);
+            Ok(())
+        }
+    }
 }
 
 impl DynDistanceComputer for iface::DistanceComputer {
@@ -273,6 +304,14 @@ impl GarnetQuantizer for MinMax8Bit {
         )?);
         Ok(computer)
     }
+
+    fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
+        Err(GarnetQuantizerError::UnsupportedSerialization)
+    }
+
+    fn deserialize(&self, _state: &[u8]) -> Result<(), GarnetQuantizerError> {
+        Err(GarnetQuantizerError::UnsupportedSerialization)
+    }
 }
 
 impl DynDistanceComputer for diskann_providers::common::FnPtr<diskann_providers::common::MinMax8> {
@@ -313,5 +352,97 @@ impl DynQueryComputer for MinMax8BitQueryComputer {
     fn evaluate_similarity(&self, a: &[u8]) -> f32 {
         let a = diskann_providers::common::MinMax8::from_bytes(a);
         self.0.evaluate_similarity(a)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diskann_utils::views::Matrix;
+    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+
+    use crate::quantization::{GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit};
+
+    #[test]
+    fn basic_spherical_1bit() {
+        let quantizer = Spherical1Bit::new(2);
+
+        assert_eq!(quantizer.required_vectors(), 1000);
+        assert_eq!(quantizer.bytes(), 1 + 6);
+        assert!(!quantizer.is_trained());
+
+        let test_v = [0.5f32, 0.5];
+        let mut test_q = vec![0u8; quantizer.bytes()];
+
+        assert!(matches!(
+            quantizer.compress(&test_v, &mut test_q),
+            Err(GarnetQuantizerError::NoQuantizer)
+        ));
+        assert!(matches!(
+            quantizer.distance_computer(),
+            Err(GarnetQuantizerError::NoQuantizer)
+        ));
+        assert!(matches!(
+            quantizer.query_computer(&test_v),
+            Err(GarnetQuantizerError::NoQuantizer)
+        ));
+
+        let mut test_data = Matrix::new(0.0f32, 1000, 2);
+        for i in 0..1000 {
+            test_data
+                .row_mut(i)
+                .copy_from_slice(&[(i + 1) as f32, (i + 1) as f32]);
+        }
+        quantizer.train(Metric::L2, test_data.as_view()).unwrap();
+
+        assert!(quantizer.is_trained());
+
+        quantizer.compress(&test_v, &mut test_q).unwrap();
+        assert!(!test_q.iter().all(|&b| b == 0));
+
+        let dist_comp = quantizer.distance_computer().unwrap();
+        let full_a = [0.0f32, 0.0];
+        let mut quant_a = vec![0u8; quantizer.bytes()];
+        quantizer.compress(&full_a, &mut quant_a).unwrap();
+
+        let d = dist_comp.evaluate_similarity(&quant_a, &test_q);
+        assert_ne!(d, 0.0);
+
+        let query_comp = quantizer.query_computer(&test_v).unwrap();
+        let d = query_comp.evaluate_similarity(&quant_a);
+        assert_ne!(d, 0.0);
+    }
+
+    #[test]
+    fn basic_minmax_8bit() {
+        let quantizer = MinMax8Bit::new(2, Metric::L2).unwrap();
+
+        assert_eq!(quantizer.required_vectors(), 0);
+        assert_eq!(quantizer.bytes(), 22);
+        // MinMax8Bit starts trained
+        assert!(quantizer.is_trained());
+
+        let test_v = [0.5f32, 0.5];
+        let mut test_q = vec![0u8; quantizer.bytes()];
+
+        let mut test_data = Matrix::new(0.0f32, 1, 2);
+        test_data.row_mut(0).copy_from_slice(&[1.0f32, 1.0]);
+
+        // Training is a no-op, but succeeds.
+        quantizer.train(Metric::L2, test_data.as_view()).unwrap();
+
+        quantizer.compress(&test_v, &mut test_q).unwrap();
+        assert!(!test_q.iter().all(|&b| b == 0));
+
+        let dist_comp = quantizer.distance_computer().unwrap();
+        let full_a = [0.0f32, 0.0];
+        let mut quant_a = vec![0u8; quantizer.bytes()];
+        quantizer.compress(&full_a, &mut quant_a).unwrap();
+
+        let d = dist_comp.evaluate_similarity(&quant_a, &test_q);
+        assert_ne!(d, 0.0);
+
+        let query_comp = quantizer.query_computer(&test_v).unwrap();
+        let d = query_comp.evaluate_similarity(&quant_a);
+        assert_ne!(d, 0.0);
     }
 }

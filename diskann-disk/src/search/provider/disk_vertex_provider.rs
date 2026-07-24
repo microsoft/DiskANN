@@ -12,8 +12,12 @@ use hashbrown::HashMap;
 
 use crate::{
     data_model::GraphHeader,
-    search::{provider::disk_sector_graph::DiskSectorGraph, traits::VertexProvider},
-    utils::aligned_file_reader::traits::AlignedFileReader,
+    search::{
+        provider::{
+            aligned_file_reader::traits::AlignedFileReader, disk_sector_graph::DiskSectorGraph,
+        },
+        traits::VertexProvider,
+    },
 };
 
 struct Offsets {
@@ -282,12 +286,12 @@ mod disk_vertex_provider_tests {
         disk_index_build_parameter::{
             DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
         },
+        search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         search::{
             provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
             traits::{VertexProvider, VertexProviderFactory},
         },
         storage::DiskIndexWriter,
-        utils::VirtualAlignedReaderFactory,
         QuantizationType,
     };
 

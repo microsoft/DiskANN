@@ -12,7 +12,7 @@ use opentelemetry::{
 };
 use tracing::info;
 
-use diskann_providers::utils::Timer;
+use super::Timer;
 
 /// Target for logging latency events.
 pub const LATENCY_LOG_TARGET: &str = "latency_event";

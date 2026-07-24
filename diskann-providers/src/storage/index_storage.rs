@@ -422,8 +422,8 @@ mod tests {
     }
 
     fn check_graphs_equal<Itr>(
-        left: &SimpleNeighborProviderAsync<u32>,
-        right: &SimpleNeighborProviderAsync<u32>,
+        left: &SimpleNeighborProviderAsync,
+        right: &SimpleNeighborProviderAsync,
         itr: Itr,
     ) where
         Itr: Iterator<Item = u32>,

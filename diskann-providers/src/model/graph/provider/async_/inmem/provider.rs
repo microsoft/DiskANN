@@ -232,7 +232,7 @@ pub struct DefaultProvider<U, V = NoStore, D = NoDeletes, Ctx = DefaultContext> 
     pub aux_vectors: V,
 
     // Provider that holds the graph structure as neighbors of vectors.
-    pub(crate) neighbor_provider: SimpleNeighborProviderAsync<u32>,
+    pub(crate) neighbor_provider: SimpleNeighborProviderAsync,
 
     /// The delete provider. If `D == NoDeletes`, then delete related operations are disabled.
     ///
@@ -332,7 +332,7 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
     }
 
     /// Return a reference to the neighbor provider.
-    pub fn neighbors(&self) -> &SimpleNeighborProviderAsync<u32> {
+    pub fn neighbors(&self) -> &SimpleNeighborProviderAsync {
         &self.neighbor_provider
     }
 
@@ -643,7 +643,7 @@ where
     }
 }
 
-impl NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
+impl NeighborAccessor for &SimpleNeighborProviderAsync {
     async fn get_neighbors(
         &mut self,
         id: Self::Id,
@@ -654,7 +654,7 @@ impl NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
     }
 }
 
-impl NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
+impl NeighborAccessorMut for &SimpleNeighborProviderAsync {
     async fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) -> ANNResult<()> {
         self.set_neighbors_sync(id.into_usize(), neighbors)?;
         Ok(())
@@ -673,7 +673,7 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type Accessor<'a> = &'a SimpleNeighborProviderAsync<u32>;
+    type Accessor<'a> = &'a SimpleNeighborProviderAsync;
     fn default_accessor(&self) -> Self::Accessor<'_> {
         self.neighbors()
     }

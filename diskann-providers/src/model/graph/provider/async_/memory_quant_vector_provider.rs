@@ -43,8 +43,8 @@ pub struct MemoryQuantVectorProviderAsync {
     vec_pool: Arc<ObjectPool<Vec<f32>>>,
 }
 
-type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
-type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
+type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
+type QueryComputer<'a> = pq::distance::QueryComputer<'a>;
 
 impl MemoryQuantVectorProviderAsync {
     pub fn new(dist_metric: Metric, max_vectors: usize, pq_chunk_table: FixedChunkPQTable) -> Self {
@@ -85,12 +85,12 @@ impl MemoryQuantVectorProviderAsync {
     }
 
     /// Create a query computer for the provided query vector.
-    pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer>
+    pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer<'_>>
     where
         T: VectorRepr,
     {
         QueryComputer::new(
-            self.pq_chunk_table.clone(),
+            &self.pq_chunk_table,
             self.metric,
             &T::as_f32(query).into_ann_result()?,
             Some(self.vec_pool.clone()),
@@ -98,8 +98,8 @@ impl MemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(&self) -> DistanceComputer {
-        DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
+    pub fn distance_computer(&self) -> DistanceComputer<'_> {
+        DistanceComputer::new(&self.pq_chunk_table, self.metric)
     }
 
     /// Return an immutable, reference counted guard over the data as position `i`.

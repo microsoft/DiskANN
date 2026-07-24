@@ -15,7 +15,7 @@ use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Chec
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::inmem::DefaultProviderParameters,
+        graph::provider::{async_::inmem::DefaultProviderParameters, DeterminantDiversityParams},
     },
     utils::load_metadata_from_file,
 };
@@ -354,6 +354,53 @@ impl Example for MultiInsert {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TopkDeterminantDiversityPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    pub(crate) power: f32,
+    pub(crate) eta: f32,
+}
+
+impl TopkDeterminantDiversityPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        DeterminantDiversityParams::new(self.power, self.eta)
+            .map_err(|e| anyhow::anyhow!("invalid determinant-diversity params: {e}"))?;
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        Ok(())
+    }
+}
+
+impl Example for TopkDeterminantDiversityPhase {
+    fn example() -> Self {
+        Self {
+            queries: InputFile::new("path/to/queries"),
+            groundtruth: InputFile::new("path/to/groundtruth"),
+            reps: NonZeroUsize::new(1).unwrap(),
+            num_threads: vec![NonZeroUsize::new(1).unwrap()],
+            runs: vec![GraphSearch {
+                search_n: 10,
+                search_l: vec![10, 20, 30, 40],
+                recall_k: 10,
+            }],
+            power: 1.0,
+            eta: 0.5,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
@@ -362,6 +409,7 @@ pub(crate) enum SearchPhase {
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultihopFilterSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
+    TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
 
 #[derive(Debug, Error)]
@@ -389,6 +437,7 @@ impl SearchPhase {
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
+            Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
     }
 
@@ -445,6 +494,18 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_determinant_diversity(
+        &self,
+    ) -> Result<&TopkDeterminantDiversityPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkDeterminantDiversity(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkDeterminantDiversity,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -455,6 +516,7 @@ impl SearchPhase {
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
     }
 }
@@ -466,6 +528,7 @@ pub(crate) enum SearchPhaseKind {
     TopkBetaFilter,
     TopkMultihopFilter,
     TopkInlineFilter,
+    TopkDeterminantDiversity,
 }
 
 impl SearchPhaseKind {
@@ -476,6 +539,7 @@ impl SearchPhaseKind {
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
             Self::TopkInlineFilter => "topk-inline-filter",
+            Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }
     }
 }
@@ -540,13 +604,13 @@ impl IndexLoad {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check if the file exists (allowing for relative paths with respect to the current
-        // directory.
+        // Check if the file exists (allowing for relative paths with respect to the search
+        // directories.
         //
         // This isn't a fully complete check since the index may be composed of multiple files,
         // but without encoding the type into the loader, it seems complicated to do better than this
         let path = std::path::Path::new(&self.load_path);
-        let p = checker.check_path(path);
+        let p = checker.find_input_file(path);
         match p {
             Ok(p) => {
                 self.load_path = p.to_string_lossy().to_string();
@@ -625,6 +689,16 @@ impl IndexBuild {
 
     pub(crate) fn exact_max_degree(&self) -> usize {
         (self.max_degree as f32 * 1.3) as usize
+    }
+
+    #[cfg(feature = "bftree")]
+    pub(crate) fn max_degree(&self) -> u32 {
+        self.max_degree as u32
+    }
+
+    #[cfg(feature = "bftree")]
+    pub(crate) fn graph_slack_factor(&self) -> f32 {
+        1.3
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
@@ -911,7 +985,9 @@ impl IndexPQOperation {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.index_operation.validate(checker)
+        self.index_operation.validate(checker)?;
+
+        Ok(())
     }
 }
 
@@ -995,7 +1071,9 @@ impl IndexSQOperation {
             ));
         }
 
-        self.index_operation.validate(checker)
+        self.index_operation.validate(checker)?;
+
+        Ok(())
     }
 }
 
@@ -1213,38 +1291,7 @@ impl DynamicRunbookParams {
             }
         }
 
-        // Resolve gt_directory using search directories, similar to InputFile
-        let mut resolved_gt_directory = None;
-        let gt_path = std::path::Path::new(&self.gt_directory);
-
-        // Check if the path is absolute or exists relative to current directory
-        if gt_path.is_dir() {
-            resolved_gt_directory = Some(gt_path.to_path_buf());
-        } else if gt_path.is_absolute() {
-            return Err(anyhow::anyhow!(
-                "Ground truth directory with absolute path \"{}\" either does not exist or is not a directory",
-                self.gt_directory
-            ));
-        } else {
-            // Search in the provided directories
-            for dir in checker.search_directories() {
-                let absolute = dir.join(gt_path);
-                if absolute.is_dir() {
-                    resolved_gt_directory = Some(absolute);
-                    break;
-                }
-            }
-        }
-
-        let final_gt_directory = resolved_gt_directory.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Could not find ground truth directory \"{}\" in the search directories: {:?}",
-                self.gt_directory,
-                checker.search_directories()
-            )
-        })?;
-
-        // Store the resolved path for later use
+        let final_gt_directory = checker.find_input_dir(self.gt_directory.as_ref())?;
         self.resolved_gt_directory = Some(final_gt_directory.clone());
 
         // Run pre-flight checks for the runbook.
@@ -1349,6 +1396,7 @@ impl DynamicIndexRun {
         self.build.validate(checker)?;
         self.runbook_params.validate(checker)?;
         self.search_phase.validate(checker)?;
+
         Ok(())
     }
 

@@ -14,7 +14,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{SearchPostProcess, SearchStrategy},
+        glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
@@ -96,7 +96,7 @@ impl<'a, DP, S, T, P> Search<'a, DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
     T: Copy + Send + Sync,
-    S: SearchStrategy<'a, DP, T>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;

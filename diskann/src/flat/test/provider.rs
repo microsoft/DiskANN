@@ -332,7 +332,6 @@ impl HasId for Visitor<'_> {
 
 impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
     type ElementRef<'a> = &'a [f32];
-    type Id = <Self as HasId>::Id;
     type Error = AccessError;
 
     fn distances_unordered<F>(
@@ -409,7 +408,6 @@ impl Strategy {
 
 impl SearchStrategy<Provider, &[f32]> for Strategy {
     type ElementRef<'a> = &'a [f32];
-    type Id = u32;
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
     type QueryComputerError = StrategyError;
     type Visitor<'a> = Visitor<'a>;

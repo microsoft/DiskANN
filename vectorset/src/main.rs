@@ -9,7 +9,9 @@ use azure_identity::AzureCliCredential;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use loader::DatasetLoader;
-use redis::{AsyncTypedCommands, Pipeline, ToRedisArgs, aio::MultiplexedConnection};
+use redis::{
+    AsyncTypedCommands, IntoConnectionInfo, Pipeline, ToRedisArgs, aio::MultiplexedConnection,
+};
 use serde::Deserialize;
 use std::{
     collections::HashSet,
@@ -355,14 +357,14 @@ async fn async_main(opts: Options) -> Result<()> {
 
     let mut infos = Vec::new();
     for addr in addrs.into_iter() {
-        let info = redis::ConnectionInfo {
-            addr,
-            redis: redis::RedisConnectionInfo {
-                username: config.username.clone(),
-                password: password.clone(),
-                ..Default::default()
-            },
-        };
+        let mut redis_info = redis::RedisConnectionInfo::default();
+        if let Some(username) = config.username.as_ref() {
+            redis_info = redis_info.set_username(username.clone());
+        }
+        if let Some(password) = password.as_ref() {
+            redis_info = redis_info.set_password(password.clone());
+        }
+        let info = addr.into_connection_info()?.set_redis_settings(redis_info);
         infos.push(info);
     }
 

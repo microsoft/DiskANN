@@ -7,4 +7,5 @@
 
 pub mod pq;
 pub mod provider;
+pub mod search_mode;
 pub mod traits;

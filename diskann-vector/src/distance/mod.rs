@@ -9,7 +9,7 @@ pub mod reference;
 pub mod simd;
 
 pub mod implementations;
-pub use implementations::{Cosine, CosineNormalized, FullL2, InnerProduct, SquaredL2};
+pub use implementations::{Cosine, CosineNormalized, FullL2, InnerProduct, Specialize, SquaredL2};
 
 pub mod distance_provider;
 pub use distance_provider::{Distance, DistanceProvider};

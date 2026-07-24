@@ -369,7 +369,7 @@ where
 
 pub struct PruneAccessor<'a, const NBITS: usize> {
     store: &'a SQStore<NBITS>,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     distance: DistanceComputer,
 }
 
@@ -380,7 +380,7 @@ where
 {
     fn new(
         store: &'a SQStore<NBITS>,
-        neighbors: &'a SimpleNeighborProviderAsync<u32>,
+        neighbors: &'a SimpleNeighborProviderAsync,
     ) -> ANNResult<Self> {
         let distance = store.distance_computer()?;
         Ok(Self {
@@ -410,7 +410,7 @@ where
     where
         Self: 'a;
     type Neighbors<'a>
-        = &'a SimpleNeighborProviderAsync<u32>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 
@@ -700,13 +700,17 @@ impl<'a, const NBITS: usize, V, D, Ctx, T>
 where
     T: VectorRepr,
     V: AsyncFriendly,
-    D: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'x> PreprocessedDistanceFunction<CVRef<'x, NBITS>, f32>,
     DistanceComputer: for<'x, 'y> DistanceFunction<CVRef<'x, NBITS>, CVRef<'y, NBITS>, f32>,
-    Quantized: SearchStrategy<'a, DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<
+            'a,
+            DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+            &'a [T],
+            SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>,
+        >,
 {
     type PruneStrategy = Self;
 

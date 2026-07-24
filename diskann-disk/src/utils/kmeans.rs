@@ -992,4 +992,71 @@ mod kmeans_test {
             k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),pool.as_ref()).unwrap();
         }
     }
+
+    #[test]
+    fn k_means_clustering_produces_valid_output() {
+        let dim = 2;
+        let num_points = 10;
+        let num_centers = 3;
+        let max_reps = 5;
+
+        let data: Vec<f32> = (1..=num_points * dim).map(|x| x as f32).collect();
+        let mut centers = vec![0.0; num_centers * dim];
+        let pool = create_thread_pool_for_test();
+
+        let (closest_docs, closest_center, residual) = k_means_clustering(
+            &data,
+            num_points,
+            dim,
+            &mut centers,
+            num_centers,
+            max_reps,
+            &mut create_rnd_in_tests(),
+            &mut false,
+            pool.as_ref(),
+        )
+        .unwrap();
+
+        // Check shapes
+        assert_eq!(closest_docs.len(), num_centers);
+        assert_eq!(closest_center.len(), num_points);
+        assert!(residual >= 0.0);
+
+        // Every point should be assigned to exactly one cluster
+        let total_assigned: usize = closest_docs.iter().map(|d| d.len()).sum();
+        assert_eq!(total_assigned, num_points);
+
+        // closest_center values should be in [0, num_centers)
+        for &cc in &closest_center {
+            assert!((cc as usize) < num_centers);
+        }
+    }
+
+    #[test]
+    fn k_means_clustering_returns_err_when_canceled() {
+        let dim = 2;
+        let num_points = 10;
+        let num_centers = 3;
+        let max_reps = 5;
+
+        let data: Vec<f32> = (1..=num_points * dim).map(|x| x as f32).collect();
+        let mut centers = vec![0.0; num_centers * dim];
+        let pool = create_thread_pool_for_test();
+
+        let err = k_means_clustering(
+            &data,
+            num_points,
+            dim,
+            &mut centers,
+            num_centers,
+            max_reps,
+            &mut create_rnd_in_tests(),
+            &mut true, // canceled
+            pool.as_ref(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ANNErrorKind::PQError);
+        assert!(err.to_string().contains("Cancellation requested by caller"));
+    }
 }

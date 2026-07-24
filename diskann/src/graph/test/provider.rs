@@ -1130,6 +1130,12 @@ impl<'a> Accessor<'a> {
         self.provider
     }
 
+    /// Return the number of `get_vector` calls made by this accessor (local, not yet
+    /// flushed to the provider).
+    pub fn get_vector_count(&self) -> usize {
+        self.get_vector.value()
+    }
+
     /// Creates an accessor with no flaky behavior (backward-compatible).
     pub fn new(provider: &'a Provider, query: &[f32]) -> Result<Self, DimMismatch> {
         Self::new_inner(provider, query, None)

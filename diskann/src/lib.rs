@@ -19,5 +19,10 @@ pub mod graph;
 // Top level exports.
 pub use error::ann_error::{ANNError, ANNErrorKind, ANNResult};
 
+/// Returns the version of the DiskANN crate.
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 #[cfg(test)]
 mod test;

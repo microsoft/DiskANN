@@ -22,10 +22,10 @@ env:
   CARGO_TERM_COLOR: always
   # The features we want to explicitly test. For example, the `flatbuffers-build` feature
   # of `diskann-quantization` requires additional setup and so must not be included by default.
-  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,multi-vector,bftree"
 
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
-  SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
+  SDE_VERSION: "sde-external-10.8.0-2026-03-15-lin"
 
 defaults:
   run:
@@ -71,6 +71,9 @@ jobs:
       - test-workspace
       - test-workspace-features
       - coverage
+      - vectorset-clippy
+      - vectorset-fmt
+      - vectorset-build
     if: ${{ always() && (cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
     steps:
       - name: Gate failure
@@ -152,7 +155,6 @@ jobs:
             --config "$RUST_CONFIG" \
             -- -Dwarnings
 
-
   clippy-no-default-features:
     name: clippy (no default features)
     runs-on: ubuntu-latest
@@ -187,7 +189,7 @@ jobs:
             cargo clippy --locked --package "$crate" \
               --no-default-features \
               --all-targets \
-              --profile ci \
+              --profile test \
               --no-deps \
               --config "$RUST_CONFIG" \
               -- -Dwarnings
@@ -215,7 +217,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build workspace
-        run: cargo build --workspace --locked --profile ci
+        run: cargo build --workspace --locked --profile test
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -236,6 +238,61 @@ jobs:
   #       env:
   #         RUSTDOCFLAGS: -Dwarnings
 
+  vectorset-fmt:
+    name: vectorset format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Check fmt
+      - name: "vectorset: cargo fmt --check"
+        run: |
+          cd vectorset
+          if ! cargo fmt --all --check; then
+            printf "Please run \`cargo fmt --all\` to fix rustfmt errors.\n" >&2
+            exit 1
+          fi
+
+  vectorset-clippy:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - windows-latest
+      fail-fast: false
+    name: vectorset-clippy (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "vectorset: clippy --all-targets"
+        run: |
+          cd vectorset
+          cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  vectorset-build:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - windows-latest
+      fail-fast: false
+    name: vectorset-build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: "vectorset: build debug & release"
+        run: |
+          cd vectorset
+          cargo build --locked
+          cargo build --locked --release
 
   # Test micro-architecture detection and dispatching.
   #
@@ -282,7 +339,7 @@ jobs:
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
           wget -qO intel-sde.tar.xz "$SDE_URL"
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
@@ -294,13 +351,12 @@ jobs:
       - name: "SDE Baseline Tests (Nehalem)"
         run: |
           set -euxo pipefail
-          cargo test --locked --profile ci \
+          cargo test --locked \
               --package diskann-wide \
               --package diskann-vector \
               --package diskann-quantization \
               -- --skip compile_tests \
                  --skip pivots::tests::run_test_happy_path
-
 
   # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
   #
@@ -343,7 +399,7 @@ jobs:
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
           wget -qO intel-sde.tar.xz "$SDE_URL"
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
@@ -355,7 +411,7 @@ jobs:
       - name: "SDE Tests (AVX-512)"
         run: |
           set -euxo pipefail
-          cargo test --locked --profile ci \
+          cargo test --locked \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
@@ -390,8 +446,8 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo nextest run --locked --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
@@ -422,11 +478,10 @@ jobs:
         run: |
           set -euxo pipefail
           cargo nextest run --locked --workspace \
-            --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -456,7 +511,7 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest --locked --cargo-profile ci \
+          cargo llvm-cov nextest --locked \
             --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
@@ -465,7 +520,7 @@ jobs:
         env:
           RUSTFLAGS: "--cfg=miri"
         run: |
-          cargo +nightly llvm-cov nextest --locked --cargo-profile ci \
+          cargo +nightly llvm-cov nextest --locked \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 

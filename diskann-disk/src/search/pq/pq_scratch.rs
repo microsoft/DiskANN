@@ -58,24 +58,22 @@ impl PQScratch {
         })
     }
 
-    /// Copy the first `dim` elements of `query` into `query_scratch`.
+    /// Copy `query` into `query_scratch`.
     ///
     /// `query` must already be in full-precision `f32` representation; quantized
     /// inputs (e.g. `MinMaxElement`) should be decoded via `VectorRepr::as_f32`
     /// at the caller boundary before invoking this method.
     ///
-    /// Accepts oversized `query` (only the first `dim` elements are used) for
-    /// backwards compatibility with callers that hold alignment-padded buffers.
-    /// Returns `DimensionMismatchError` if `query.len() < query_scratch.len()`.
+    /// Returns `DimensionMismatchError` if `query.len() != query_scratch.len()`.
     pub fn set(&mut self, query: &[f32]) -> ANNResult<()> {
         let dim = self.query_scratch.len();
-        if query.len() < dim {
+        if query.len() != dim {
             return Err(ANNError::log_dimension_mismatch_error(format!(
-                "PQScratch::set: expected query of length >= {dim}, got {}",
+                "PQScratch::set: expected query of length {dim}, got {}",
                 query.len()
             )));
         }
-        self.query_scratch.copy_from_slice(&query[..dim]);
+        self.query_scratch.copy_from_slice(query);
         Ok(())
     }
 
@@ -127,5 +125,29 @@ mod tests {
         (0..query.len()).for_each(|i| {
             assert_eq!(pq_scratch.query_scratch[i], query[i]);
         });
+    }
+
+    #[test]
+    fn test_pq_scratch_set_rejects_short_query() {
+        let dim = 16;
+        let mut pq_scratch = PQScratch::new(64, dim, 4, 256).unwrap();
+
+        // Query shorter than dim should fail
+        let short_query: Vec<f32> = (1..dim).map(|i| i as f32).collect(); // dim-1 elements
+        let err = pq_scratch.set(&short_query).unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+        assert!(err.to_string().contains("expected query of length"));
+    }
+
+    #[test]
+    fn test_pq_scratch_set_rejects_oversized_query() {
+        let dim = 8;
+        let mut pq_scratch = PQScratch::new(64, dim, 4, 256).unwrap();
+
+        // Query longer than dim should fail
+        let long_query: Vec<f32> = (1..=dim + 10).map(|i| i as f32).collect();
+        let err = pq_scratch.set(&long_query).unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+        assert!(err.to_string().contains("expected query of length"));
     }
 }
