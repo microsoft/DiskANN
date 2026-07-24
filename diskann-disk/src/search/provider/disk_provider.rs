@@ -1249,7 +1249,7 @@ mod disk_provider_tests {
 
     use super::*;
     use crate::{
-        build::builder::core::disk_index_builder_tests::{IndexBuildFixture, TestParams},
+        build::builder::{IndexBuildFixture, TestParams},
         search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         utils::QueryStatistics,
     };
