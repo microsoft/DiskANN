@@ -7,7 +7,8 @@
 //! recall against brute-force ground truth for both supported metrics.
 
 use diskann_graphivf::{
-    BuildParams, GraphIvfIndex, GraphParams, Half, Metric, SearchParams, VectorRepr,
+    AssignMethod, BuildParams, EmptyClusterPolicy, GraphIvfIndex, GraphParams, Half, Metric,
+    SearchParams, VectorRepr,
 };
 use diskann_utils::views::Matrix;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -89,6 +90,9 @@ fn build_params(metric: Metric) -> BuildParams {
         },
         num_threads: 2,
         seed: 42,
+        assign_method: AssignMethod::Exact,
+        empty_clusters: EmptyClusterPolicy::PreserveOld,
+        normalize_centroids: false,
     }
 }
 

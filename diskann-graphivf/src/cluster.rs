@@ -369,15 +369,19 @@ fn normalize_centroids(centroids: &mut Matrix<f32>, pool: &RayonThreadPool) {
     centroids
         .as_mut_slice()
         .par_chunks_mut(dim)
-        .for_each_in_pool(pool.as_ref(), |row| {
-            let norm = row.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                let inv = 1.0 / norm;
-                for x in row.iter_mut() {
-                    *x *= inv;
-                }
-            }
-        });
+        .for_each_in_pool(pool.as_ref(), normalize);
+}
+
+/// L2-normalize a single vector in place onto the unit sphere (a zero-norm
+/// vector is left untouched).
+pub(crate) fn normalize(v: &mut [f32]) {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        let inv = 1.0 / norm;
+        for x in v.iter_mut() {
+            *x *= inv;
+        }
+    }
 }
 
 /// Squared Euclidean distance between two equal-length vectors.

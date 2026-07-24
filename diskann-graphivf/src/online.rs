@@ -27,10 +27,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use diskann_providers::utils::{create_thread_pool, RayonThreadPool};
-use diskann_utils::{
-    io::write_bin,
-    views::{Matrix, MatrixView},
-};
+use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric as VectorMetric;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::runtime::Runtime;
@@ -39,7 +36,7 @@ use crate::{
     centroids::{self, MutableCentroidGraph},
     cluster::{self, sq_l2},
     index::{with_suffix, CENTROIDS_SUFFIX, LISTS_SUFFIX, META_SUFFIX},
-    params::{EmptyClusterPolicy, GraphParams, Metric},
+    params::{EmptyClusterPolicy, OnlineParams},
     storage::{self, Layout},
     GraphIvfError, Result,
 };
@@ -49,40 +46,6 @@ use diskann::{utils::VectorRepr, ANNError};
 /// Sentinel in [`OnlineClusterer::assignments`] for a point that has not been
 /// inserted yet.
 const UNASSIGNED: u32 = u32::MAX;
-
-/// Parameters for an [`OnlineClusterer`].
-#[derive(Debug, Clone, Copy)]
-pub struct OnlineParams {
-    /// Target number of live clusters. Splitting stops once this many clusters
-    /// exist; also sets the centroid-graph capacity (`2 * target_clusters`, to
-    /// cover every id soft-deletion leaves behind).
-    pub target_clusters: usize,
-    /// A cluster is split once it holds strictly more than this many points.
-    /// Must be `>= 2`.
-    pub split_threshold: usize,
-    /// Centroid-graph search-list size used to route each inserted point.
-    pub assign_l: usize,
-    /// Number of 2-means iterations used to split a cluster.
-    pub two_means_iters: usize,
-    /// Centroid-graph construction parameters.
-    pub graph: GraphParams,
-    /// Metric recorded in the flushed index metadata. Clustering and graph
-    /// navigation always use squared-L2 (as in a batch build); this only
-    /// controls how the *loaded* index scores at search time.
-    pub metric: Metric,
-    /// L2-normalize the two child centroids after a split (for unit-normalized
-    /// corpora).
-    pub normalize_centroids: bool,
-    /// Run a final refinement pass before flushing: replace every live centroid
-    /// with the mean of the points currently assigned to it (L2-normalized when
-    /// [`normalize_centroids`](Self::normalize_centroids) is set). This is
-    /// applied by [`OnlineClusterer::refine_centroids`], not automatically.
-    pub refine_centroids: bool,
-    /// Worker threads for the internal 2-means and graph construction.
-    pub num_threads: usize,
-    /// RNG seed for split seeding (reproducibility).
-    pub seed: u64,
-}
 
 /// How the initial centroid set an [`OnlineClusterer`] starts from is produced.
 ///
@@ -209,7 +172,10 @@ pub struct SplitEvent {
     pub cluster_size: usize,
     /// Number of live graph-neighbor clusters drawn into the reassignment.
     pub num_neighbors: usize,
-    /// Total points reassigned: the split cluster plus every neighbor cluster.
+    /// Points that actually changed cluster in this split's reassignment pass.
+    /// Every member of the split (retired) cluster is counted (each moves to a
+    /// child centroid); a pooled neighbor point is counted only if it landed on
+    /// a different centroid than it held before.
     pub num_reassigned: usize,
     /// Live centroid count immediately after the split (net `+1`).
     pub live_after: usize,
@@ -234,8 +200,9 @@ pub struct BuildTelemetry {
     pub total_inserts: u64,
     /// Total splits performed.
     pub total_splits: u64,
-    /// Total point-reassignments summed across all splits (a point moved by two
-    /// different splits counts twice).
+    /// Total points that actually changed cluster, summed across all splits (a
+    /// point moved by two different splits counts twice). Points re-examined by
+    /// a split but routed back to their existing centroid are not counted.
     pub total_reassigned: u64,
     /// Cumulative time routing inserts through the centroid graph, microseconds.
     pub routing_us: u64,
@@ -279,6 +246,226 @@ impl BuildTelemetry {
     }
 }
 
+/// Id-indexed store of centroid vectors with soft deletion.
+///
+/// A centroid id is permanent: [`alloc`](Self::alloc) hands out the next id and
+/// never reuses a retired one, so the table is sized to the whole id budget up
+/// front. A `None` slot is a retired (split) centroid; a `Some` slot is live.
+struct CentroidTable {
+    dim: usize,
+    /// Centroid vectors indexed by id; `None` marks a retired centroid.
+    vecs: Vec<Option<Box<[f32]>>>,
+    /// Number of live (non-retired) centroids.
+    live_count: usize,
+    /// Next unused centroid id.
+    next_id: u32,
+}
+
+impl CentroidTable {
+    /// Create a table with `capacity` id slots, seeding ids `0..initial.nrows()`
+    /// from `initial` and leaving the remaining slots free for [`alloc`].
+    ///
+    /// [`alloc`]: Self::alloc
+    fn new(initial: &Matrix<f32>, capacity: usize) -> Self {
+        let initial_k = initial.nrows();
+        let mut vecs: Vec<Option<Box<[f32]>>> = Vec::with_capacity(capacity);
+        for i in 0..initial_k {
+            vecs.push(Some(initial.row(i).to_vec().into_boxed_slice()));
+        }
+        for _ in initial_k..capacity {
+            vecs.push(None);
+        }
+        Self {
+            dim: initial.ncols(),
+            vecs,
+            live_count: initial_k,
+            next_id: initial_k as u32,
+        }
+    }
+
+    /// Total number of id slots (live + retired + free).
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.vecs.len()
+    }
+
+    /// Number of live (non-retired) centroids.
+    fn live_count(&self) -> usize {
+        self.live_count
+    }
+
+    /// Whether `id` is a live centroid.
+    fn is_live(&self, id: u32) -> bool {
+        self.vecs.get(id as usize).is_some_and(Option::is_some)
+    }
+
+    /// The vector of centroid `id`, or `None` if retired or out of range.
+    fn get(&self, id: u32) -> Option<&[f32]> {
+        self.vecs.get(id as usize).and_then(|s| s.as_deref())
+    }
+
+    /// Whether the id budget can accommodate `n` more [`alloc`](Self::alloc)s.
+    fn can_alloc(&self, n: usize) -> bool {
+        self.next_id as usize + n <= self.vecs.len()
+    }
+
+    /// Allocate the next id, storing `vec` as its centroid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the id budget (capacity) is exhausted.
+    fn alloc(&mut self, vec: Box<[f32]>) -> Result<u32> {
+        let id = self.next_id;
+        if (id as usize) >= self.vecs.len() {
+            return Err(GraphIvfError::invalid(
+                "centroid capacity exceeded; increase centroid_capacity",
+            ));
+        }
+        self.vecs[id as usize] = Some(vec);
+        self.next_id += 1;
+        self.live_count += 1;
+        Ok(id)
+    }
+
+    /// Retire centroid `id` (soft delete). Its slot stays occupied but empty; a
+    /// no-op if `id` is already retired.
+    fn retire(&mut self, id: u32) {
+        if self.vecs[id as usize].take().is_some() {
+            self.live_count -= 1;
+        }
+    }
+
+    /// Iterate over live centroids as `(id, vector)` pairs, in ascending id
+    /// order.
+    fn iter_live(&self) -> impl Iterator<Item = (u32, &[f32])> {
+        self.vecs
+            .iter()
+            .enumerate()
+            .filter_map(|(id, slot)| slot.as_deref().map(|v| (id as u32, v)))
+    }
+
+    /// Ids of the live centroids, in ascending order.
+    fn live_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.vecs
+            .iter()
+            .enumerate()
+            .filter_map(|(id, slot)| slot.as_ref().map(|_| id as u32))
+    }
+
+    /// Brute-force nearest live centroid to `point` by squared-L2, or `None` if
+    /// no live centroid exists.
+    fn nearest(&self, point: &[f32]) -> Option<u32> {
+        let mut best = None;
+        let mut best_d = f32::INFINITY;
+        for (id, v) in self.iter_live() {
+            let d = sq_l2(point, v);
+            if d < best_d {
+                best_d = d;
+                best = Some(id);
+            }
+        }
+        best
+    }
+
+    /// Nearest candidate centroid to `point` by squared-L2; retired candidates
+    /// are skipped. `cands` must be non-empty; if every candidate is retired the
+    /// first is returned.
+    fn nearest_among(&self, point: &[f32], cands: &[u32]) -> u32 {
+        let mut best = cands[0];
+        let mut best_d = f32::INFINITY;
+        for &cand in cands {
+            if let Some(v) = self.get(cand) {
+                let d = sq_l2(point, v);
+                if d < best_d {
+                    best_d = d;
+                    best = cand;
+                }
+            }
+        }
+        best
+    }
+
+    /// Densely pack the live centroids into a contiguous `k x dim` matrix and
+    /// return `(remap, matrix)`, where `remap[old_id]` is the new dense index of
+    /// a live centroid and [`UNASSIGNED`] for a retired id.
+    fn densify(&self) -> Result<(Vec<u32>, Matrix<f32>)> {
+        let live: Vec<usize> = (0..self.vecs.len())
+            .filter(|&c| self.vecs[c].is_some())
+            .collect();
+        let k = live.len();
+        let mut remap = vec![UNASSIGNED; self.vecs.len()];
+        let mut cbuf = vec![0.0f32; k * self.dim];
+        for (new, &old) in live.iter().enumerate() {
+            remap[old] = new as u32;
+            cbuf[new * self.dim..(new + 1) * self.dim]
+                .copy_from_slice(self.vecs[old].as_ref().expect("live"));
+        }
+        let mat = Matrix::try_from(cbuf.into_boxed_slice(), k, self.dim)
+            .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))?;
+        Ok((remap, mat))
+    }
+}
+
+/// The IVF point↔centroid mapping: the id-indexed inverted lists and the
+/// reverse per-point assignment, kept consistent through [`assign`](Self::assign).
+struct IvfPartition {
+    /// `lists[c]` holds the ids of points currently assigned to centroid `c`;
+    /// empty for retired ids.
+    lists: Vec<Vec<u32>>,
+    /// `assignments[pid]` is the centroid id of point `pid`, or [`UNASSIGNED`]
+    /// before it is inserted.
+    assignments: Vec<u32>,
+}
+
+impl IvfPartition {
+    /// Create a partition with `capacity` empty inverted lists over `num_points`
+    /// initially unassigned points.
+    fn new(capacity: usize, num_points: usize) -> Self {
+        Self {
+            lists: (0..capacity).map(|_| Vec::new()).collect(),
+            assignments: vec![UNASSIGNED; num_points],
+        }
+    }
+
+    /// Assign point `pid` to centroid `cid`, appending it to the inverted list
+    /// and updating the reverse map. Returns the previous assignment
+    /// ([`UNASSIGNED`] if the point was not yet assigned).
+    fn assign(&mut self, pid: u32, cid: u32) -> u32 {
+        let prev = self.assignments[pid as usize];
+        self.lists[cid as usize].push(pid);
+        self.assignments[pid as usize] = cid;
+        prev
+    }
+
+    /// The current assignment of point `pid`.
+    fn assignment(&self, pid: u32) -> u32 {
+        self.assignments[pid as usize]
+    }
+
+    /// The members (point ids) currently in centroid `cid`'s inverted list.
+    fn members(&self, cid: u32) -> &[u32] {
+        &self.lists[cid as usize]
+    }
+
+    /// Number of points in centroid `cid`'s inverted list.
+    fn list_len(&self, cid: u32) -> usize {
+        self.lists[cid as usize].len()
+    }
+
+    /// Remove and return centroid `cid`'s inverted list, leaving it empty. The
+    /// reverse assignments of those points are left untouched — the caller is
+    /// expected to reassign every returned point.
+    fn take_members(&mut self, cid: u32) -> Vec<u32> {
+        std::mem::take(&mut self.lists[cid as usize])
+    }
+
+    /// Restore centroid `cid`'s inverted list, rolling back a prior
+    /// [`take_members`](Self::take_members).
+    fn restore_members(&mut self, cid: u32, members: Vec<u32>) {
+        self.lists[cid as usize] = members;
+    }
+}
+
 /// An incremental graph-IVF clusterer driven by point insertion with
 /// split-and-reassign cluster maintenance.
 pub struct OnlineClusterer {
@@ -287,19 +474,10 @@ pub struct OnlineClusterer {
     dim: usize,
     params: OnlineParams,
 
-    /// Centroid vectors indexed by centroid id; `None` marks a soft-deleted
-    /// (split) centroid whose id is retired.
-    centroid_vecs: Vec<Option<Box<[f32]>>>,
-    /// Inverted lists: `lists[c]` holds the ids of points currently assigned to
-    /// centroid `c`. Empty for retired ids.
-    lists: Vec<Vec<u32>>,
-    /// Reverse map: `assignments[pid]` is the centroid id of point `pid`, or
-    /// [`UNASSIGNED`] before it is inserted.
-    assignments: Vec<u32>,
-    /// Number of live (non-retired) centroids.
-    live_count: usize,
-    /// Next unused centroid id.
-    next_id: u32,
+    /// Id-indexed centroid store with soft deletion (retirement on split).
+    table: CentroidTable,
+    /// The point↔centroid mapping (inverted lists plus the reverse map).
+    partition: IvfPartition,
 
     /// Mutable centroid graph (L2 navigation) used to route inserts.
     graph: MutableCentroidGraph,
@@ -316,8 +494,11 @@ pub struct OnlineClusterer {
     scratch_pool: Vec<u32>,
     /// Scratch reused by split reassignment: the candidate-centroid buffer.
     scratch_cands: Vec<u32>,
-    /// Scratch reused for reading centroid graph neighbors.
+    /// Scratch reused for the nearest-centroid search that selects reassignment
+    /// candidate clusters: the centroid-id buffer.
     scratch_neighbors: Vec<u32>,
+    /// Scratch reused for the nearest-centroid search: the distance buffer.
+    scratch_dist: Vec<f32>,
 }
 
 impl OnlineClusterer {
@@ -352,7 +533,7 @@ impl OnlineClusterer {
     ///
     /// # Errors
     ///
-    /// Returns an error if the shapes are inconsistent, `target_clusters` is
+    /// Returns an error if the shapes are inconsistent, `centroid_capacity` is
     /// smaller than the initial centroid count, or `split_threshold < 2`.
     ///
     /// [`with_seed`]: Self::with_seed
@@ -373,23 +554,25 @@ impl OnlineClusterer {
         if initial_k == 0 {
             return Err(GraphIvfError::invalid("need at least one initial centroid"));
         }
-        if params.target_clusters < initial_k {
+        if params.centroid_capacity < initial_k {
             return Err(GraphIvfError::invalid(format!(
-                "target_clusters ({}) is smaller than the initial centroid count ({initial_k})",
-                params.target_clusters
+                "centroid_capacity ({}) is smaller than the initial centroid count ({initial_k})",
+                params.centroid_capacity
             )));
         }
         if params.split_threshold < 2 {
             return Err(GraphIvfError::invalid("split_threshold must be >= 2"));
         }
+        if params.reassign_neighbors < 1 {
+            return Err(GraphIvfError::invalid("reassign_neighbors must be >= 1"));
+        }
         if params.num_threads == 0 {
             return Err(GraphIvfError::invalid("num_threads must be non-zero"));
         }
 
-        // Every split retires one id and allocates two, so the number of ids
-        // ever used is bounded by `2 * target_clusters`; size the graph and the
-        // id-indexed vectors to that.
-        let capacity = params.target_clusters.saturating_mul(2).max(initial_k);
+        // `centroid_capacity` is the total id budget (live + retired); size the
+        // graph and the id-indexed vectors to exactly that.
+        let capacity = params.centroid_capacity.max(initial_k);
 
         let init_mat = Matrix::try_from(
             initial.as_slice().to_vec().into_boxed_slice(),
@@ -405,16 +588,8 @@ impl OnlineClusterer {
             VectorMetric::L2,
         )?;
 
-        let mut centroid_vecs: Vec<Option<Box<[f32]>>> = Vec::with_capacity(capacity);
-        let mut lists: Vec<Vec<u32>> = Vec::with_capacity(capacity);
-        for i in 0..initial_k {
-            centroid_vecs.push(Some(initial.row(i).to_vec().into_boxed_slice()));
-            lists.push(Vec::new());
-        }
-        for _ in initial_k..capacity {
-            centroid_vecs.push(None);
-            lists.push(Vec::new());
-        }
+        let table = CentroidTable::new(&initial, capacity);
+        let partition = IvfPartition::new(capacity, num_points);
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -425,11 +600,8 @@ impl OnlineClusterer {
             points,
             dim,
             params,
-            centroid_vecs,
-            lists,
-            assignments: vec![UNASSIGNED; num_points],
-            live_count: initial_k,
-            next_id: initial_k as u32,
+            table,
+            partition,
             graph,
             runtime,
             pool,
@@ -438,12 +610,13 @@ impl OnlineClusterer {
             scratch_pool: Vec::new(),
             scratch_cands: Vec::new(),
             scratch_neighbors: Vec::new(),
+            scratch_dist: Vec::new(),
         })
     }
 
     /// Number of live clusters.
     pub fn num_clusters(&self) -> usize {
-        self.live_count
+        self.table.live_count()
     }
 
     /// Read-only access to the build telemetry accumulated so far (splits,
@@ -455,74 +628,19 @@ impl OnlineClusterer {
     /// Current size of every live cluster (points assigned to it), in no
     /// particular order. Useful for inspecting the final size distribution.
     pub fn cluster_sizes(&self) -> Vec<usize> {
-        self.centroid_vecs
-            .iter()
-            .enumerate()
-            .filter_map(|(cid, slot)| slot.as_ref().map(|_| self.lists[cid].len()))
+        self.table
+            .live_ids()
+            .map(|cid| self.partition.list_len(cid))
             .collect()
-    }
-
-    /// Final refinement pass: replace every live centroid with the mean of the
-    /// points currently assigned to it, L2-normalized when
-    /// [`OnlineParams::normalize_centroids`] is set.
-    ///
-    /// The streaming build routes and splits incrementally, so a centroid can
-    /// drift away from the exact mean of its *final* membership. Recomputing
-    /// each centroid as that mean — one batch Lloyd update at fixed assignments —
-    /// tightens the clustering (never increases the L2 residual for the current
-    /// partition) without moving any point to a different cluster. Empty
-    /// clusters are left unchanged.
-    ///
-    /// Only the centroid vectors change; the inverted lists (and thus the
-    /// flushed partition) are untouched. Call this after streaming and before
-    /// [`flush`](Self::flush).
-    pub fn refine_centroids(&mut self) {
-        let dim = self.dim;
-        let normalize = self.params.normalize_centroids;
-        let mut mean = vec![0.0f32; dim];
-        for cid in 0..self.centroid_vecs.len() {
-            if self.centroid_vecs[cid].is_none() {
-                continue;
-            }
-            let members = &self.lists[cid];
-            if members.is_empty() {
-                continue;
-            }
-            mean.iter_mut().for_each(|m| *m = 0.0);
-            for &pid in members {
-                let row = self.points.row(pid as usize);
-                for (m, &x) in mean.iter_mut().zip(row) {
-                    *m += x;
-                }
-            }
-            let inv = 1.0 / members.len() as f32;
-            for m in mean.iter_mut() {
-                *m *= inv;
-            }
-            if normalize {
-                let norm = mean.iter().map(|&x| x * x).sum::<f32>().sqrt();
-                if norm > 0.0 {
-                    let inv_norm = 1.0 / norm;
-                    for m in mean.iter_mut() {
-                        *m *= inv_norm;
-                    }
-                }
-            }
-            if let Some(cv) = self.centroid_vecs[cid].as_mut() {
-                cv.copy_from_slice(&mean);
-            }
-        }
     }
 
     /// Clustering residual: the sum of squared distances from every assigned
     /// point to its centroid. Lower is a tighter clustering.
     pub fn residual(&self) -> f64 {
         let mut sum = 0.0f64;
-        for (cid, slot) in self.centroid_vecs.iter().enumerate() {
-            if let Some(cv) = slot {
-                for &pid in &self.lists[cid] {
-                    sum += sq_l2(self.points.row(pid as usize), cv) as f64;
-                }
+        for (cid, cv) in self.table.iter_live() {
+            for &pid in self.partition.members(cid) {
+                sum += sq_l2(self.points.row(pid as usize), cv) as f64;
             }
         }
         sum
@@ -540,13 +658,17 @@ impl OnlineClusterer {
         let c = self.assign_nearest(pid)?;
         self.telemetry.routing_us += route_start.elapsed().as_micros() as u64;
 
-        self.lists[c as usize].push(pid);
-        self.assignments[p] = c;
+        self.partition.assign(pid, c);
         self.telemetry.total_inserts += 1;
 
-        if self.lists[c as usize].len() > self.params.split_threshold
-            && self.live_count < self.params.target_clusters
-        {
+        // Split when the cluster overflows, unless an explicit live-cluster cap
+        // is set and reached, or the id budget cannot fit two more children.
+        let under_cap = self
+            .params
+            .max_clusters
+            .is_none_or(|k| self.table.live_count() < k);
+        let id_budget_ok = self.table.can_alloc(2);
+        if self.partition.list_len(c) > self.params.split_threshold && under_cap && id_budget_ok {
             self.split(c)?;
         }
         Ok(())
@@ -578,21 +700,21 @@ impl OnlineClusterer {
                 return Ok(ids[0]);
             }
         }
-        self.nearest_live(pid)
+        self.table
+            .nearest(self.points.row(pid as usize))
             .ok_or_else(|| GraphIvfError::invalid("no live centroid available for assignment"))
     }
 
     /// Split cluster `c` into two child centroids via a local 2-means, then
-    /// reassign the points of `c` and of `c`'s graph-neighboring clusters among
-    /// the two children and the neighboring centroids.
+    /// reassign the points of `c` and of its `reassign_neighbors` nearest
+    /// centroid clusters among the two children and those neighboring centroids.
     fn split(&mut self, c: u32) -> Result<()> {
-        let cu = c as usize;
         let split_start = Instant::now();
 
         // Take C's members out; if too small to split, restore and bail.
-        let members = std::mem::take(&mut self.lists[cu]);
+        let members = self.partition.take_members(c);
         if members.len() < 2 {
-            self.lists[cu] = members;
+            self.partition.restore_members(c, members);
             return Ok(());
         }
         let cluster_size = members.len();
@@ -604,34 +726,54 @@ impl OnlineClusterer {
         let child1: Box<[f32]> = two.row(0).to_vec().into_boxed_slice();
         let child2: Box<[f32]> = two.row(1).to_vec().into_boxed_slice();
 
-        // 2. Live graph neighbors of c (before deleting it).
+        // 2. Candidate clusters: the `s` live centroids nearest to `c`, found by
+        //    searching `c`'s own centroid vector in the centroid graph. The
+        //    search runs before `c` is deleted and the children inserted, so it
+        //    sees the pre-split centroids; `c` itself (distance 0) is dropped
+        //    from the results below. `k = s + 1` reserves a slot for `c`.
+        let c_vec: Box<[f32]> = self
+            .table
+            .get(c)
+            .expect("splitting a live centroid")
+            .to_vec()
+            .into_boxed_slice();
+        let s = self.params.reassign_neighbors;
+        let k = s + 1;
+        let l = self.params.reassign_l.max(k);
         let mut neighbors = std::mem::take(&mut self.scratch_neighbors);
-        centroids::neighbors(&self.graph, c, &mut neighbors)?;
-        neighbors.retain(|&x| {
-            x != c
-                && (x as usize) < self.centroid_vecs.len()
-                && self.centroid_vecs[x as usize].is_some()
-        });
+        let mut dist = std::mem::take(&mut self.scratch_dist);
+        neighbors.clear();
+        neighbors.resize(k, 0);
+        dist.clear();
+        dist.resize(k, 0.0);
+        let found = centroids::search_mut(
+            &self.graph,
+            &self.runtime,
+            &c_vec,
+            l,
+            &mut neighbors,
+            &mut dist,
+        )?;
+        neighbors.truncate(found);
+        neighbors.retain(|&x| x != c && self.table.is_live(x));
+        neighbors.truncate(s);
         let num_neighbors = neighbors.len();
 
-        // 3. Allocate the two child ids and update the centroid table.
-        let id1 = self.alloc_id()?;
-        let id2 = self.alloc_id()?;
-        self.centroid_vecs[id1 as usize] = Some(child1);
-        self.centroid_vecs[id2 as usize] = Some(child2);
-        self.centroid_vecs[cu] = None; // retire c
+        // 3. Allocate the two child ids and retire the parent.
+        let id1 = self.table.alloc(child1)?;
+        let id2 = self.table.alloc(child2)?;
+        self.table.retire(c);
 
         // 4. Mutate the graph: delete c, insert the two children.
         centroids::delete_centroid(&self.graph, &self.runtime, c)?;
         {
-            let v1 = self.centroid_vecs[id1 as usize].as_ref().expect("just set");
+            let v1 = self.table.get(id1).expect("just set");
             centroids::insert_centroid(&self.graph, &self.runtime, id1, v1)?;
         }
         {
-            let v2 = self.centroid_vecs[id2 as usize].as_ref().expect("just set");
+            let v2 = self.table.get(id2).expect("just set");
             centroids::insert_centroid(&self.graph, &self.runtime, id2, v2)?;
         }
-        self.live_count += 1; // -1 (c) + 2 (children)
 
         // 5. Candidate centroids = neighbors ∪ {id1, id2}.
         let mut cands = std::mem::take(&mut self.scratch_cands);
@@ -645,26 +787,35 @@ impl OnlineClusterer {
         pool.clear();
         pool.extend_from_slice(&members);
         for &nc in &neighbors {
-            let taken = std::mem::take(&mut self.lists[nc as usize]);
+            let taken = self.partition.take_members(nc);
             pool.extend_from_slice(&taken);
         }
         // c's list is already empty (members were taken); keep it empty.
 
         // 7. Reassign every pooled point to its nearest candidate centroid and
-        //    rebuild the affected inverted lists.
+        //    rebuild the affected inverted lists. Only points that actually land
+        //    in a different cluster than before count as reassigned; a point
+        //    routed back to the same centroid it already held does not. (Every
+        //    member of the retired cluster `c` necessarily moves, since `c` is
+        //    not among the candidates.)
         let reassign_start = Instant::now();
+        let mut num_reassigned = 0usize;
         for &pid in &pool {
-            let best = self.nearest_among(pid, &cands);
-            self.lists[best as usize].push(pid);
-            self.assignments[pid as usize] = best;
+            let best = self
+                .table
+                .nearest_among(self.points.row(pid as usize), &cands);
+            let prev = self.partition.assign(pid, best);
+            if best != prev {
+                num_reassigned += 1;
+            }
         }
         let reassign_us = reassign_start.elapsed().as_micros() as u64;
-        let num_reassigned = pool.len();
 
         // Return the scratch buffers for reuse.
         self.scratch_pool = pool;
         self.scratch_cands = cands;
         self.scratch_neighbors = neighbors;
+        self.scratch_dist = dist;
 
         // Record the split in the build telemetry.
         let total_us = split_start.elapsed().as_micros() as u64;
@@ -677,7 +828,7 @@ impl OnlineClusterer {
             cluster_size,
             num_neighbors,
             num_reassigned,
-            live_after: self.live_count,
+            live_after: self.table.live_count(),
             two_means_us,
             reassign_us,
             total_us,
@@ -724,56 +875,6 @@ impl OnlineClusterer {
         Ok(centroids)
     }
 
-    /// Nearest candidate centroid to point `pid` by squared-L2 (candidates are
-    /// centroid ids; retired ids are skipped).
-    fn nearest_among(&self, pid: u32, cands: &[u32]) -> u32 {
-        let p = self.points.row(pid as usize);
-        let mut best = cands[0];
-        let mut best_d = f32::INFINITY;
-        for &cand in cands {
-            if let Some(cv) = &self.centroid_vecs[cand as usize] {
-                let d = sq_l2(p, cv);
-                if d < best_d {
-                    best_d = d;
-                    best = cand;
-                }
-            }
-        }
-        best
-    }
-
-    /// Brute-force nearest live centroid to point `pid` by squared-L2, scanning
-    /// every occupied centroid slot. Used only as a robustness fallback when the
-    /// centroid graph search returns no live result; returns `None` if no live
-    /// centroid exists.
-    fn nearest_live(&self, pid: u32) -> Option<u32> {
-        let p = self.points.row(pid as usize);
-        let mut best = None;
-        let mut best_d = f32::INFINITY;
-        for (id, slot) in self.centroid_vecs.iter().enumerate() {
-            if let Some(cv) = slot {
-                let d = sq_l2(p, cv);
-                if d < best_d {
-                    best_d = d;
-                    best = Some(id as u32);
-                }
-            }
-        }
-        best
-    }
-
-    /// Allocate the next centroid id, erroring if capacity is exhausted.
-    fn alloc_id(&mut self) -> Result<u32> {
-        let id = self.next_id;
-        if (id as usize) >= self.centroid_vecs.len() {
-            return Err(GraphIvfError::invalid(
-                "centroid capacity exceeded; increase target_clusters",
-            ));
-        }
-        self.next_id += 1;
-        Ok(id)
-    }
-
     /// Serialize the in-memory IVF mapping to `prefix` in the batch on-disk
     /// format (`.graphivf_centroids.fbin`, `.graphivf_lists`, `.graphivf_meta`),
     /// densely remapping live centroid ids to `0..num_clusters`.
@@ -794,7 +895,6 @@ impl OnlineClusterer {
     /// Returns an error if `stored`'s row count does not match the corpus, or if
     /// any corpus point has not been inserted yet.
     pub fn flush<T: VectorRepr>(&self, prefix: &Path, stored: MatrixView<'_, T>) -> Result<()> {
-        let dim = self.dim;
         let num_points = self.points.nrows();
         if stored.nrows() != num_points {
             return Err(GraphIvfError::invalid(format!(
@@ -804,24 +904,13 @@ impl OnlineClusterer {
         }
 
         // Dense remap of live centroid ids to a contiguous 0..k range.
-        let live: Vec<usize> = (0..self.centroid_vecs.len())
-            .filter(|&c| self.centroid_vecs[c].is_some())
-            .collect();
-        let k = live.len();
-        let mut remap = vec![UNASSIGNED; self.centroid_vecs.len()];
-        let mut cbuf = vec![0.0f32; k * dim];
-        for (new, &old) in live.iter().enumerate() {
-            remap[old] = new as u32;
-            cbuf[new * dim..(new + 1) * dim]
-                .copy_from_slice(self.centroid_vecs[old].as_ref().expect("live"));
-        }
-        let centroids_mat = Matrix::try_from(cbuf.into_boxed_slice(), k, dim)
-            .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))?;
+        let (remap, centroids_mat) = self.table.densify()?;
+        let k = centroids_mat.nrows();
 
         // Dense per-point assignments.
         let mut dense = vec![0u32; num_points];
         for (pid, slot) in dense.iter_mut().enumerate() {
-            let c = self.assignments[pid];
+            let c = self.partition.assignment(pid as u32);
             if c == UNASSIGNED {
                 return Err(GraphIvfError::invalid(
                     "cannot flush: some points have not been inserted",
@@ -832,9 +921,7 @@ impl OnlineClusterer {
 
         // Write centroids (always f32).
         let centroids_path = with_suffix(prefix, CENTROIDS_SUFFIX);
-        let mut centroids_file = std::fs::File::create(&centroids_path)?;
-        write_bin(centroids_mat.as_view(), &mut centroids_file)
-            .map_err(|e| GraphIvfError::malformed(e.to_string()))?;
+        storage::write_centroids(&centroids_path, centroids_mat.as_view())?;
 
         // Write inverted lists from the stored representation and the metadata.
         let stored_dim = stored.ncols();
@@ -857,7 +944,7 @@ impl OnlineClusterer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GraphIvfIndex, SearchParams};
+    use crate::{GraphIvfIndex, GraphParams, Metric, SearchParams};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     fn mat(data: Vec<f32>, nrows: usize, ncols: usize) -> Matrix<f32> {
@@ -866,14 +953,16 @@ mod tests {
 
     fn params(target: usize, threshold: usize) -> OnlineParams {
         OnlineParams {
-            target_clusters: target,
+            max_clusters: Some(target),
+            centroid_capacity: target.saturating_mul(2).max(1),
             split_threshold: threshold,
             assign_l: 32,
+            reassign_neighbors: 8,
+            reassign_l: 32,
             two_means_iters: 10,
             graph: GraphParams::default(),
             metric: Metric::L2,
             normalize_centroids: false,
-            refine_centroids: false,
             num_threads: 2,
             seed: 0,
         }
@@ -916,7 +1005,10 @@ mod tests {
     }
 
     fn live_centroids(c: &OnlineClusterer) -> Vec<Box<[f32]>> {
-        c.centroid_vecs.iter().filter_map(|s| s.clone()).collect()
+        c.table
+            .iter_live()
+            .map(|(_, v)| v.to_vec().into_boxed_slice())
+            .collect()
     }
 
     // ----- centroid-graph mutable ops -----
@@ -948,11 +1040,6 @@ mod tests {
         centroids::insert_centroid(&graph, &rt, 4, &[9.5, 9.5]).unwrap();
         centroids::search_mut(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
         assert_eq!(ids[0], 4);
-
-        // Neighbors are readable and non-empty for a connected node.
-        let mut nbrs = Vec::new();
-        centroids::neighbors(&graph, 0, &mut nbrs).unwrap();
-        assert!(!nbrs.is_empty());
     }
 
     // ----- clusterer invariants -----
@@ -960,26 +1047,32 @@ mod tests {
     /// Every inserted point is accounted for exactly once in a live cluster.
     fn assert_invariants(c: &OnlineClusterer, inserted: usize) {
         // live_count matches the centroid table.
-        let live = c.centroid_vecs.iter().filter(|s| s.is_some()).count();
-        assert_eq!(live, c.live_count);
-        assert!(c.live_count <= c.params.target_clusters);
+        let live = c.table.iter_live().count();
+        assert_eq!(live, c.table.live_count());
+        if let Some(k) = c.params.max_clusters {
+            assert!(c.table.live_count() <= k);
+        }
+        assert!(c.table.live_count() <= c.table.capacity());
 
         // Sum of live list lengths == inserted count; retired ids hold nothing.
         let mut total = 0usize;
-        for (cid, slot) in c.centroid_vecs.iter().enumerate() {
-            if slot.is_none() {
-                assert!(c.lists[cid].is_empty(), "retired centroid has points");
+        for cid in 0..c.table.capacity() as u32 {
+            if c.table.is_live(cid) {
+                total += c.partition.list_len(cid);
             } else {
-                total += c.lists[cid].len();
+                assert!(
+                    c.partition.members(cid).is_empty(),
+                    "retired centroid has points"
+                );
             }
         }
         assert_eq!(total, inserted);
 
         // Every assigned point points to a live centroid.
         for pid in 0..inserted {
-            let a = c.assignments[pid];
+            let a = c.partition.assignment(pid as u32);
             assert_ne!(a, UNASSIGNED);
-            assert!(c.centroid_vecs[a as usize].is_some());
+            assert!(c.table.is_live(a));
         }
     }
 
@@ -1081,6 +1174,37 @@ mod tests {
     }
 
     #[test]
+    fn uncapped_splits_until_threshold_equilibrium() {
+        // `max_clusters: None` removes the live-cluster ceiling: splitting is
+        // driven purely by the threshold and continues for every point, so the
+        // count grows well past any small fixed target and mean cluster size
+        // settles near the split threshold.
+        let mut rng = StdRng::seed_from_u64(11);
+        let (nn, dim) = (800usize, 6usize);
+        let mut v = vec![0.0f32; nn * dim];
+        for x in v.iter_mut() {
+            *x = rng.random_range(-1.0..1.0);
+        }
+        let points = mat(v, nn, dim);
+        let initial = mat(points.row(0).to_vec(), 1, dim);
+
+        let mut p = params(1, 20);
+        p.max_clusters = None; // uncapped: threshold-driven only
+        p.centroid_capacity = 4 * nn; // generous id budget, never binds
+
+        let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+        for pid in 0..nn as u32 {
+            c.insert(pid).unwrap();
+        }
+        assert_invariants(&c, nn);
+
+        // Far more than the single seed centroid; roughly `~ 2 * nn / threshold`.
+        assert!(c.num_clusters() > 10, "got {}", c.num_clusters());
+        let mean = nn as f64 / c.num_clusters() as f64;
+        assert!(mean <= 21.0, "mean cluster size {mean} exceeds threshold");
+    }
+
+    #[test]
     fn telemetry_records_splits_and_reassignments() {
         // A split-heavy run records one telemetry event per split, with a
         // monotonic insert-index timeline and sane counters.
@@ -1113,7 +1237,7 @@ mod tests {
             assert!(e.insert_index >= 1 && e.insert_index <= n as u64);
             prev = e.insert_index;
             assert!(e.cluster_size >= 2);
-            assert!(e.num_reassigned >= e.cluster_size); // pool includes C
+            assert!(e.num_reassigned >= e.cluster_size); // all of C always moves
             reassigned_sum += e.num_reassigned as u64;
         }
         assert_eq!(reassigned_sum, t.total_reassigned);
@@ -1179,9 +1303,10 @@ mod tests {
     #[test]
     fn rejects_bad_params() {
         let (points, _) = two_blobs(10, 4);
-        // target < initial
+        // centroid_capacity < initial (params maps target -> capacity = 2*target,
+        // so target 1 gives capacity 2 < the 3 initial centroids).
         let initial = mat(vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0], 3, 2);
-        assert!(OnlineClusterer::new(points.clone(), initial, params(2, 10)).is_err());
+        assert!(OnlineClusterer::new(points.clone(), initial, params(1, 10)).is_err());
         // threshold < 2
         let initial = mat(vec![0.0, 0.0], 1, 2);
         assert!(OnlineClusterer::new(points, initial, params(4, 1)).is_err());
@@ -1231,8 +1356,8 @@ mod tests {
         };
         let c = OnlineClusterer::with_seed(points.clone(), seed, params(8, 10_000)).unwrap();
         assert_eq!(c.num_clusters(), 3);
-        for cv in c.centroid_vecs.iter().flatten() {
-            let is_corpus_point = (0..points.nrows()).any(|r| points.row(r) == cv.as_ref());
+        for (_, cv) in c.table.iter_live() {
+            let is_corpus_point = (0..points.nrows()).any(|r| points.row(r) == cv);
             assert!(is_corpus_point, "unrefined centroid must be a corpus point");
         }
     }

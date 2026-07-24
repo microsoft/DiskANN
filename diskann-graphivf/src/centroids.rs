@@ -16,7 +16,7 @@ use diskann::{
         search::Knn,
         search_output_buffer::{IdDistance, SearchOutputBuffer},
         strategy::FullPrecision,
-        AdjacencyList,
+        Config,
     },
     provider::{DefaultContext, Delete},
     utils::ONE,
@@ -37,8 +37,57 @@ use tokio::runtime::Runtime;
 
 use crate::{params::GraphParams, GraphIvfError, Result};
 
-/// Build an in-memory full-precision graph over `centroids` (row `i` is centroid
-/// `i`, returned as internal/external id `i`).
+/// Construct the graph [`Config`] and provider parameters shared by the
+/// immutable ([`build`]) and mutable ([`build_mutable`]) centroid graphs.
+///
+/// `dim` is the centroid dimension and `capacity` the number of id slots to
+/// reserve — equal to the centroid count for an immutable graph, larger for a
+/// mutable one that must accommodate later insertions.
+fn centroid_graph_config(
+    graph: &GraphParams,
+    dim: usize,
+    capacity: usize,
+    metric: VectorMetric,
+) -> Result<(Config, DefaultProviderParameters)> {
+    let config = Builder::new_with(
+        graph.degree,
+        MaxDegree::slack(graph.slack),
+        graph.l_build,
+        metric.into(),
+        |b| {
+            b.alpha(graph.alpha);
+        },
+    )
+    .build()
+    .map_err(ANNError::from)?;
+
+    let params = DefaultProviderParameters {
+        max_points: capacity,
+        frozen_points: ONE,
+        dim,
+        metric,
+        prefetch_lookahead: None,
+        prefetch_cache_line_level: None,
+        max_degree: config.max_degree_u32().get(),
+    };
+    Ok((config, params))
+}
+
+/// Deterministically pick a centroid to use as the graph's frozen start point.
+///
+/// The mean of all centroids is a poor start point under inner product: it has
+/// the smallest norm, so no centroid selects it as an IP-nearest neighbor and it
+/// ends up with zero out-edges, causing navigation to dead-end. A real centroid
+/// is always well connected. The RNG is seeded deterministically for
+/// reproducibility.
+fn start_point_index(num_clusters: usize) -> usize {
+    let mut rng = StdRng::seed_from_u64(num_clusters as u64);
+    rng.random_range(0..num_clusters)
+}
+
+/// Build an immutable in-memory full-precision graph over `centroids` (row `i`
+/// is centroid `i`, returned as internal/external id `i`), sized exactly to its
+/// centroids.
 ///
 /// `metric` is the distance used for graph construction and navigation. Build-
 /// time callers (centroid assignment) pass [`VectorMetric::L2`]; the search-time
@@ -54,52 +103,20 @@ pub(crate) fn build(
     metric: VectorMetric,
 ) -> Result<MemoryIndex<f32>> {
     let num_clusters = centroids.nrows();
-    let dim = centroids.ncols();
-
-    let config = Builder::new_with(
-        graph.degree,
-        MaxDegree::slack(graph.slack),
-        graph.l_build,
-        metric.into(),
-        |b| {
-            b.alpha(graph.alpha);
-        },
-    )
-    .build()
-    .map_err(ANNError::from)?;
-
-    let params = DefaultProviderParameters {
-        max_points: num_clusters,
-        frozen_points: ONE,
-        dim,
-        metric,
-        prefetch_lookahead: None,
-        prefetch_cache_line_level: None,
-        max_degree: config.max_degree_u32().get(),
-    };
-
+    let (config, params) = centroid_graph_config(graph, centroids.ncols(), num_clusters, metric)?;
     let index = new_index::<f32, _>(config, params, NoDeletes)?;
 
-    // Pick a random centroid as the graph's start point. The mean of all
-    // centroids is a poor start point under inner product: it has the smallest
-    // norm, so no centroid selects it as an IP-nearest neighbor and it ends up
-    // with zero out-edges, causing navigation to dead-end. A real centroid is
-    // always well connected. The RNG is seeded deterministically for
-    // reproducibility.
-    let mut rng = StdRng::seed_from_u64(num_clusters as u64);
-    let start = rng.random_range(0..num_clusters);
+    let start = start_point_index(num_clusters);
     index
         .provider()
         .set_start_points(std::iter::once(centroids.row(start)))?;
 
     let ids: Arc<[u32]> = (0..num_clusters as u32).collect();
     let batch = Arc::new(centroids);
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(num_threads)
         .build()
         .map_err(ANNError::from)?;
-
     runtime.block_on(index.multi_insert::<_, Matrix<f32>>(
         FullPrecision,
         &DefaultContext,
@@ -164,52 +181,25 @@ pub(crate) fn build_mutable(
     metric: VectorMetric,
 ) -> Result<MutableCentroidGraph> {
     let num_clusters = centroids.nrows();
-    let dim = centroids.ncols();
     if capacity < num_clusters {
         return Err(GraphIvfError::invalid(format!(
             "graph capacity ({capacity}) is smaller than the initial centroid count ({num_clusters})"
         )));
     }
-
-    let config = Builder::new_with(
-        graph.degree,
-        MaxDegree::slack(graph.slack),
-        graph.l_build,
-        metric.into(),
-        |b| {
-            b.alpha(graph.alpha);
-        },
-    )
-    .build()
-    .map_err(ANNError::from)?;
-
-    let params = DefaultProviderParameters {
-        max_points: capacity,
-        frozen_points: ONE,
-        dim,
-        metric,
-        prefetch_lookahead: None,
-        prefetch_cache_line_level: None,
-        max_degree: config.max_degree_u32().get(),
-    };
-
+    let (config, params) = centroid_graph_config(graph, centroids.ncols(), capacity, metric)?;
     let index = new_index::<f32, _>(config, params, TableBasedDeletes)?;
 
-    // Use a real centroid as the frozen start point (see `build` for rationale).
-    let mut rng = StdRng::seed_from_u64(num_clusters as u64);
-    let start = rng.random_range(0..num_clusters);
+    let start = start_point_index(num_clusters);
     index
         .provider()
         .set_start_points(std::iter::once(centroids.row(start)))?;
 
     let ids: Arc<[u32]> = (0..num_clusters as u32).collect();
     let batch = Arc::new(centroids);
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(num_threads)
         .build()
         .map_err(ANNError::from)?;
-
     runtime.block_on(index.multi_insert::<_, Matrix<f32>>(
         FullPrecision,
         &DefaultContext,
@@ -242,19 +232,6 @@ pub(crate) fn delete_centroid(
     id: u32,
 ) -> Result<()> {
     runtime.block_on(index.provider().delete(&DefaultContext, &id))?;
-    Ok(())
-}
-
-/// Overwrite `out` with the current graph neighbors (out-edges) of centroid
-/// `id`. Neighbors may include soft-deleted centroids; callers filter those out.
-pub(crate) fn neighbors(index: &MutableCentroidGraph, id: u32, out: &mut Vec<u32>) -> Result<()> {
-    let mut adj: AdjacencyList<u32> = AdjacencyList::new();
-    index
-        .provider()
-        .neighbors()
-        .get_neighbors_sync(id as usize, &mut adj)?;
-    out.clear();
-    out.extend_from_slice(&adj);
     Ok(())
 }
 

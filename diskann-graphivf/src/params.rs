@@ -5,6 +5,8 @@
 
 //! Tunable parameters for building and searching a graph-IVF index.
 
+use diskann_vector::distance::Metric as VectorMetric;
+
 /// Distance metric.
 ///
 /// `L2` and `Cosine` reduce everything to squared-L2 (`Cosine` additionally
@@ -45,6 +47,21 @@ impl Metric {
     /// Whether vectors must be L2-normalized for this metric.
     pub(crate) fn normalizes(self) -> bool {
         matches!(self, Metric::Cosine)
+    }
+
+    /// The [`diskann_vector`] distance used at **search** time — both for
+    /// scoring candidates and for navigating the centroid graph.
+    ///
+    /// `InnerProduct` scores by (negated) inner product so queries reach the
+    /// maximum-inner-product neighbors; `L2` and `Cosine` score by squared-L2
+    /// (`Cosine` vectors are normalized at build and query time, making L2 order
+    /// equivalent to cosine). Clustering and the build-time centroid graph
+    /// always use squared-L2 regardless of this value.
+    pub(crate) fn search_metric(self) -> VectorMetric {
+        match self {
+            Metric::InnerProduct => VectorMetric::InnerProduct,
+            Metric::L2 | Metric::Cosine => VectorMetric::L2,
+        }
     }
 }
 
@@ -180,6 +197,60 @@ impl BuildParams {
         const KMEANSPP_MAX: usize = 1 << 23;
         self.sample_size.min(num_points).min(KMEANSPP_MAX)
     }
+}
+
+/// Parameters for an online (incremental) [`OnlineClusterer`] build.
+///
+/// [`OnlineClusterer`]: crate::OnlineClusterer
+#[derive(Debug, Clone, Copy)]
+pub struct OnlineParams {
+    /// Optional cap on the number of live clusters. `Some(k)` stops splitting
+    /// once `k` live clusters exist, reproducing a fixed target granularity.
+    /// `None` lets the partition grow driven solely by `split_threshold`:
+    /// splitting continues for every inserted point and the final cluster count
+    /// emerges from the data and threshold. This is independent of
+    /// [`centroid_capacity`](Self::centroid_capacity), the hard resource bound.
+    pub max_clusters: Option<usize>,
+    /// Total centroid id slots the internal mutable centroid graph (and the
+    /// id-indexed side tables) pre-allocate. Every split permanently retires the
+    /// parent id and allocates two children, so the ids consumed over a build is
+    /// `initial + 2 * splits`; size this to roughly `2 *` the expected final
+    /// live-cluster count. Splitting stops when the slots are exhausted,
+    /// whatever [`max_clusters`](Self::max_clusters) says.
+    pub centroid_capacity: usize,
+    /// A cluster is split once it holds strictly more than this many points.
+    /// Must be `>= 2`.
+    pub split_threshold: usize,
+    /// Centroid-graph search-list size used to route each inserted point.
+    pub assign_l: usize,
+    /// Number of nearest centroid clusters (besides the two children) drawn in
+    /// as reassignment candidates when a cluster is split. Must be `>= 1`.
+    ///
+    /// This replaces the earlier policy of using the split centroid's direct
+    /// centroid-graph out-edges: the candidates are instead the `s` nearest live
+    /// centroids to the split centroid, found by searching the centroid graph.
+    pub reassign_neighbors: usize,
+    /// Centroid-graph search-list size for the nearest-centroid search that
+    /// selects the [`reassign_neighbors`](Self::reassign_neighbors) candidate
+    /// clusters. Larger values make the selection more accurate at higher cost;
+    /// it is clamped up to `reassign_neighbors + 1` internally. A good default
+    /// is `max(reassign_neighbors, assign_l)`.
+    pub reassign_l: usize,
+    /// Number of 2-means iterations used to split a cluster.
+    pub two_means_iters: usize,
+    /// Centroid-graph construction parameters.
+    pub graph: GraphParams,
+    /// Metric recorded in the flushed index metadata. Clustering and graph
+    /// navigation always use squared-L2 (as in a batch build); this only
+    /// controls how the *loaded* index scores at search time.
+    pub metric: Metric,
+    /// L2-normalize the two child centroids after a split (for unit-normalized
+    /// corpora).
+    pub normalize_centroids: bool,
+    /// Worker threads for the internal 2-means and graph construction.
+    pub num_threads: usize,
+    /// RNG seed for split seeding (reproducibility).
+    pub seed: u64,
 }
 
 /// Parameters controlling a single search.

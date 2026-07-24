@@ -28,6 +28,7 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use diskann::utils::VectorRepr;
+use diskann_utils::io::write_bin;
 use diskann_utils::views::MatrixView;
 
 use crate::{
@@ -252,6 +253,16 @@ pub(crate) fn write_lists_stored<T: VectorRepr>(
     writer.flush()?;
 
     Ok((counts, offsets))
+}
+
+/// Write the centroid matrix (always `f32`) to `path` in the `.fbin` format.
+///
+/// Shared by the batch build and the online-clusterer flush so both persist
+/// centroids identically.
+pub(crate) fn write_centroids(path: &Path, centroids: MatrixView<'_, f32>) -> Result<()> {
+    let mut file = File::create(path)?;
+    write_bin(centroids, &mut file).map_err(|e| GraphIvfError::malformed(e.to_string()))?;
+    Ok(())
 }
 
 /// Serialize the index metadata to `path`.

@@ -28,7 +28,7 @@ use diskann_providers::{
 };
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 use diskann_utils::{
-    io::{read_bin, write_bin},
+    io::read_bin,
     views::{Matrix, MatrixView},
 };
 use diskann_vector::{distance::Metric as VMetric, PreprocessedDistanceFunction};
@@ -291,8 +291,6 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             centroids_mat,
             params,
             prefix,
-            num_points,
-            dim,
             &pool,
             &mut profile,
         )?;
@@ -309,28 +307,25 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
     /// When `stored` is `Some`, those already-`T` rows are copied verbatim into
     /// the inverted lists (the corpus was supplied pre-compressed) and the
     /// stored vector width is `stored.ncols()`; otherwise each `work` row is
-    /// encoded element-wise to `T` and the stored width is `dim`.
-    #[allow(clippy::too_many_arguments)]
+    /// encoded element-wise to `T` and the stored width is `work.ncols()`.
     fn finalize_build(
         work: MatrixView<'_, f32>,
         stored: Option<MatrixView<'_, T>>,
         centroids_mat: Matrix<f32>,
         params: &BuildParams,
         prefix: &Path,
-        num_points: usize,
-        dim: usize,
         pool: &RayonThreadPool,
         profile: &mut BuildProfile,
     ) -> Result<Self> {
+        let num_points = work.nrows();
+        let dim = work.ncols();
         // Stored vector width: the canonical `T` width for pre-compressed
         // corpora, otherwise the logical dimension of `work`.
         let stored_dim = stored.map(|m| m.ncols()).unwrap_or(dim);
         // Persist centroids so the graph can be rebuilt on load.
         let write_centroids_start = Instant::now();
         let centroids_path = with_suffix(prefix, CENTROIDS_SUFFIX);
-        let mut centroids_file = File::create(&centroids_path)?;
-        write_bin(centroids_mat.as_view(), &mut centroids_file)
-            .map_err(|e| GraphIvfError::malformed(e.to_string()))?;
+        storage::write_centroids(&centroids_path, centroids_mat.as_view())?;
         profile.write_centroids = write_centroids_start.elapsed();
 
         // 2. Build the in-memory graph over the centroids. This graph is used
@@ -420,7 +415,7 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         // hybrid `InnerProduct` index navigates the centroids by inner product
         // (the f32 IP distance is negated, so the graph still finds the
         // maximum-IP centroids); `L2`/`Cosine` navigate by squared-L2.
-        let graph_metric = search_graph_metric(metric);
+        let graph_metric = metric.search_metric();
         let centroids = centroids::build(centroids_mat, &layout.graph, num_threads, graph_metric)?;
 
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
@@ -496,7 +491,7 @@ impl<'a, T: VectorRepr> Corpus<'a, T> {
                 let dim = data.ncols();
                 let mut buf = data.as_slice().to_vec();
                 for row in buf.chunks_mut(dim) {
-                    normalize(row);
+                    cluster::normalize(row);
                 }
                 let owned = Matrix::try_from(buf.into_boxed_slice(), data.nrows(), dim)
                     .map_err(|_| GraphIvfError::invalid("normalized matrix shape mismatch"))?;
@@ -535,7 +530,7 @@ impl<'a, T: VectorRepr> Corpus<'a, T> {
                 }
                 if params.metric.normalizes() {
                     for row in buf.chunks_mut(dim) {
-                        normalize(row);
+                        cluster::normalize(row);
                     }
                 }
                 let work = Matrix::try_from(buf.into_boxed_slice(), num_points, dim)
@@ -714,11 +709,7 @@ impl<T: VectorRepr> Searcher<T> {
         //   returns the *negated* inner product, so — like L2 — smaller is
         //   better and the top-k selection sorts ascending.
         let preprocess_start = Instant::now();
-        let score_metric = match self.metric {
-            Metric::InnerProduct => VMetric::InnerProduct,
-            Metric::L2 | Metric::Cosine => VMetric::L2,
-        };
-        let scorer = T::query_distance(query, score_metric);
+        let scorer = T::query_distance(query, self.metric.search_metric());
 
         // The centroid graph is full-precision `f32`, so decode the query to
         // `f32` once for the centroid KNN (a no-op when `T == f32`).
@@ -831,23 +822,6 @@ impl<T: VectorRepr> Searcher<T> {
     }
 }
 
-/// Distance metric used to build and navigate the *search-time* centroid graph
-/// for an index with the given [`Metric`].
-///
-/// `InnerProduct` navigates by inner product so queries reach the centroids
-/// that maximize it; `L2` and `Cosine` navigate by squared-L2 (`Cosine`
-/// vectors are already normalized, making L2 order equivalent to cosine).
-fn search_graph_metric(metric: Metric) -> VMetric {
-    match metric {
-        // An inner-product index navigates the centroid graph by inner product
-        // so queries reach the centroids that maximize it. `L2` and `Cosine`
-        // navigate by squared-L2 (`Cosine` vectors are already normalized,
-        // making L2 order equivalent to cosine).
-        Metric::InnerProduct => VMetric::InnerProduct,
-        Metric::L2 | Metric::Cosine => VMetric::L2,
-    }
-}
-
 /// Assign each corpus point to its nearest centroid via graph search.
 ///
 /// Parallelized across chunks of points; each worker drives the (in-memory)
@@ -887,17 +861,6 @@ fn assign(
         })?;
 
     Ok(assignments)
-}
-
-/// L2-normalize a vector in place (no-op for a zero vector).
-fn normalize(v: &mut [f32]) {
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        let inv = 1.0 / norm;
-        for x in v.iter_mut() {
-            *x *= inv;
-        }
-    }
 }
 
 /// Append `suffix` to a path prefix, e.g. `/a/idx` + `.graphivf_meta`.
