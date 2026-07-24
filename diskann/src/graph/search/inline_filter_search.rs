@@ -18,7 +18,7 @@ use crate::{
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::DataProvider,
     utils::VectorId,
 };
@@ -223,7 +223,7 @@ where
                 break;
             };
             search_record.record(closest_node, scratch.hops, scratch.cmps);
-            scratch.beam_nodes.push(closest_node.id);
+            scratch.beam_nodes.push(*closest_node.id());
         }
 
         // Exit if no nodes to process
@@ -276,11 +276,7 @@ where
         }
     }
 
-    matched_results.sort_unstable_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    matched_results.sort_unstable_by(neighbor::ord::fast_distance);
 
     Ok(Ret {
         cmps: scratch.cmps,

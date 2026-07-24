@@ -1227,12 +1227,12 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
     {
         let initial = output.current_len();
         for n in candidates {
-            let id = match accessor.provider.to_external_id(accessor.context, n.id) {
+            let id = match accessor.provider.to_external_id(accessor.context, *n.id()) {
                 Ok(id) => id,
                 Err(_) => continue, // Can't read the mapping; skip.
             };
 
-            if output.push(id, n.distance).is_full() {
+            if output.push(id, n.distance()).is_full() {
                 break;
             }
         }
@@ -1284,15 +1284,15 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         // Filter before computing the full precision distances.
         let mut reranked: Vec<(u32, f32)> = candidates
             .filter_map(|n| {
-                if !provider.vector_iid_exists(accessor.context, n.id) {
+                if !provider.vector_iid_exists(accessor.context, *n.id()) {
                     None
                 } else if provider.callbacks.read_single_iid(
                     &accessor.context.term(Term::Vector),
-                    n.id,
+                    *n.id(),
                     &mut v,
                 ) {
                     Some((
-                        n.id,
+                        *n.id(),
                         f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(&v)),
                     ))
                 } else {

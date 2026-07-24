@@ -134,7 +134,7 @@ where
     let mut candidates = Vec::with_capacity(page_size);
     for n in best.iter() {
         total += 1;
-        if !start_points.contains(&n.id) {
+        if !start_points.contains(n.id()) {
             candidates.push(n);
             if candidates.len() >= page_size {
                 break;

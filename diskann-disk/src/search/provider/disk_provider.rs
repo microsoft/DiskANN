@@ -360,11 +360,11 @@ where
             };
             match self.filter {
                 PostprocessStrategy::AcceptAll => candidates
-                    .map(|n| n.id)
+                    .map(|n| *n.id())
                     .filter_map(&mut process)
                     .collect::<Result<Vec<_>, _>>()?,
                 PostprocessStrategy::Apply(f) => candidates
-                    .map(|n| n.id)
+                    .map(|n| *n.id())
                     .filter(|id| f(id))
                     .filter_map(&mut process)
                     .collect::<Result<Vec<_>, _>>()?,
@@ -419,9 +419,9 @@ where
         let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
 
         let candidate_ids: Vec<u32> = match self.filter {
-            PostprocessStrategy::AcceptAll => candidates.map(|candidate| candidate.id).collect(),
+            PostprocessStrategy::AcceptAll => candidates.map(|candidate| *candidate.id()).collect(),
             PostprocessStrategy::Apply(f) => candidates
-                .map(|candidate| candidate.id)
+                .map(|candidate| *candidate.id())
                 .filter(|id| f(id))
                 .collect(),
         };
@@ -1805,7 +1805,7 @@ mod disk_provider_tests {
         let ids = search_record
             .visited
             .iter()
-            .map(|n| n.id)
+            .map(|n| *n.id())
             .collect::<Vec<_>>();
 
         const EXPECTED_NODES: [u32; 18] = [
@@ -2503,7 +2503,7 @@ mod disk_provider_tests {
         let visited_ids = search_record
             .visited
             .iter()
-            .map(|n| n.id)
+            .map(|n| *n.id())
             .collect::<Vec<_>>();
 
         let query_stats = strategy.io_tracker;

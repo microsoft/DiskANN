@@ -165,7 +165,7 @@ fn accept_all_finds_all_nodes() {
 
     let (stats, results) = run(&index, &[1.5], 3, 10, &AcceptAll);
 
-    let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+    let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
     assert!(ids.contains(&0), "node 0 should be found");
     assert!(ids.contains(&1), "node 1 should be found");
     assert!(ids.contains(&2), "node 2 should be found");
@@ -206,7 +206,7 @@ fn reject_triggers_two_hop_expansion() {
     let filter = EvenFilter;
     let (stats, results) = run(&index, &[2.0], 5, 20, &filter);
 
-    let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+    let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
 
     // Even nodes reachable only via two-hop through odd nodes.
     assert!(
@@ -221,13 +221,13 @@ fn reject_triggers_two_hop_expansion() {
 
     // All results in the best set should be even (matching).
     for n in &results {
-        if n.id == start_id {
+        if *n.id() == start_id {
             continue;
         }
         assert!(
-            n.id.is_multiple_of(2),
+            n.id().is_multiple_of(2),
             "non-matching node {} should not be in best set",
-            n.id
+            n.id()
         );
     }
 

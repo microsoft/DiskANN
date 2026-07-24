@@ -86,7 +86,7 @@ where
     }
 
     pub fn ids(&self) -> impl ExactSizeIterator<Item = T> + Clone + Send + Sync {
-        self.visited.iter().map(|n| n.id.clone())
+        self.visited.iter().map(|n| n.id().clone())
     }
 }
 
@@ -134,7 +134,7 @@ where
 
     pub fn push(&mut self, neighbor: Neighbor<T>, hops: u32) {
         self.hops.push(hops);
-        if self.groundtruth.contains(&neighbor.id) {
+        if self.groundtruth.contains(neighbor.id()) {
             self.running_recall += 1;
         }
         self.recall.push(self.running_recall);

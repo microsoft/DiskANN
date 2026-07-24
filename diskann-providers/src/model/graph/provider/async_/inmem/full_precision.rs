@@ -381,13 +381,13 @@ where
         // Filter before computing the full precision distances.
         let mut reranked: Vec<(u32, f32)> = candidates
             .filter_map(|n| {
-                if checker.deletion_check(n.id) {
+                if checker.deletion_check(*n.id()) {
                     None
                 } else {
                     Some((
-                        n.id,
+                        *n.id(),
                         f.evaluate_similarity(query, unsafe {
-                            full.get_vector_sync(n.id.into_usize())
+                            full.get_vector_sync(n.id().into_usize())
                         }),
                     ))
                 }
@@ -445,9 +445,9 @@ where
         for (i, candidate) in candidates.into_iter().enumerate() {
             // SAFETY: We accept potential unsynchronized concurrent mutation, matching the
             // pattern used by `Rerank` above.
-            let vector = unsafe { store.get_vector_sync(candidate.id.into_usize()) };
-            ids.push(candidate.id);
-            distances.push(candidate.distance);
+            let vector = unsafe { store.get_vector_sync(candidate.id().into_usize()) };
+            ids.push(*candidate.id());
+            distances.push(candidate.distance());
             vectors.row_mut(i).copy_from_slice(vector);
         }
 

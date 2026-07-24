@@ -80,9 +80,9 @@ fn assert_no_duplicates_across_pages(pages: &[Vec<Neighbor<u32>>]) {
     for (page_idx, page) in pages.iter().enumerate() {
         for n in page {
             assert!(
-                seen.insert(n.id),
+                seen.insert(*n.id()),
                 "duplicate id {} found on page {}",
-                n.id,
+                n.id(),
                 page_idx
             );
         }
@@ -94,13 +94,13 @@ fn assert_non_decreasing_distances(pages: &[Vec<Neighbor<u32>>]) {
     for (page_idx, page) in pages.iter().enumerate() {
         for window in page.windows(2) {
             assert!(
-                window[0].distance <= window[1].distance,
+                window[0].distance() <= window[1].distance(),
                 "page {}: distances not non-decreasing: id {} dist {} followed by id {} dist {}",
                 page_idx,
-                window[0].id,
-                window[0].distance,
-                window[1].id,
-                window[1].distance,
+                window[0].id(),
+                window[0].distance(),
+                window[1].id(),
+                window[1].distance(),
             );
         }
     }
@@ -135,7 +135,7 @@ fn build_baseline(
         page_size,
         pages: pages
             .iter()
-            .map(|p| p.iter().map(|n| (n.id, n.distance)).collect())
+            .map(|p| p.iter().map(|n| n.as_tuple()).collect())
             .collect(),
         total_results: pages.iter().map(|p| p.len()).sum(),
     }

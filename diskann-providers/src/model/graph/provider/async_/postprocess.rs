@@ -56,10 +56,10 @@ where
     {
         let checker = accessor.as_deletion_check();
         let count = output.extend(candidates.filter_map(|n| {
-            if checker.deletion_check(n.id) {
+            if checker.deletion_check(*n.id()) {
                 None
             } else {
-                Some((n.id, n.distance))
+                Some(n.as_tuple())
             }
         }));
         std::future::ready(Ok(count))

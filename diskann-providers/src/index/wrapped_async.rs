@@ -836,16 +836,17 @@ mod tests {
 
                 for neighbor in v {
                     assert_ne!(
-                        neighbor.id,
+                        *neighbor.id(),
                         u32::MAX,
                         "paged search should not return start point",
                     );
                     assert_eq!(
-                        neighbor.id, i,
+                        *neighbor.id(),
+                        i,
                         "monotonicity should at least hold for the 1d grid"
                     );
                     assert_eq!(
-                        neighbor.distance,
+                        neighbor.distance(),
                         (i as f32) * (i as f32),
                         "distance was computed incorrectly!",
                     );

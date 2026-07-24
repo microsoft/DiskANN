@@ -139,7 +139,9 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             if self.size == self.capacity {
                 self.reserve(1.max(self.capacity >> 1)); // 1.5x capacity
             }
-        } else if self.size == self.capacity && self.get_unchecked(self.size - 1) < nbr {
+        } else if self.size == self.capacity
+            && self.get_unchecked(self.size - 1).distance() < nbr.distance()
+        {
             return;
         }
 
