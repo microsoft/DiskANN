@@ -2958,7 +2958,7 @@ pub(crate) mod tests {
         let mut result_output_buffer =
             diskann::graph::IdDistance::new(&mut indices, &mut distances);
 
-        let diverse_params = diskann::graph::DiverseSearchParams::new(
+        let diverse_params = diskann::graph::search::DiverseSearchParams::new(
             0, // diverse_attribute_id
             diverse_results_k,
             return_list_size,
@@ -2972,7 +2972,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let diverse_search =
+            diskann::graph::search::Diverse::new(search_params, diverse_params).unwrap();
 
         let result = index
             .search(

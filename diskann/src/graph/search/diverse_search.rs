@@ -39,6 +39,23 @@ impl From<DiverseSearchError> for ANNError {
     }
 }
 
+/// Error type for [`Diverse`] parameter validation.
+#[derive(Debug, Error)]
+pub enum DiverseError {
+    #[error("l_value ({l_value}) must be greater than or equal to total_k_value ({total_k_value})")]
+    LValueTooSmall {
+        l_value: usize,
+        total_k_value: usize,
+    },
+}
+
+impl From<DiverseError> for ANNError {
+    #[track_caller]
+    fn from(err: DiverseError) -> Self {
+        Self::new(ANNErrorKind::IndexError, err)
+    }
+}
+
 // Parameters for diverse search
 #[derive(Clone, Debug)]
 pub struct DiverseSearchParams<P>
@@ -94,11 +111,21 @@ where
     P: AttributeValueProvider,
 {
     /// Create new diverse search parameters.
-    pub fn new(inner: Knn, diverse_params: DiverseSearchParams<P>) -> Self {
-        Self {
+    pub fn new(inner: Knn, diverse_params: DiverseSearchParams<P>) -> Result<Self, DiverseError> {
+        let l_value = inner.l_value().get();
+        let total_k_value = diverse_params.total_k_value.get();
+
+        if l_value < total_k_value {
+            return Err(DiverseError::LValueTooSmall {
+                l_value,
+                total_k_value,
+            });
+        }
+
+        Ok(Self {
             inner,
             diverse_params,
-        }
+        })
     }
 
     /// Returns a reference to the inner k-NN search parameters.

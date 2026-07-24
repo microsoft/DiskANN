@@ -2032,7 +2032,8 @@ mod disk_provider_tests {
 
         let search_params = Knn::new(20, None).unwrap();
 
-        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let diverse_search =
+            diskann::graph::search::Diverse::new(search_params, diverse_params).unwrap();
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -2073,7 +2074,8 @@ mod disk_provider_tests {
         let strategy2 = search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll);
         let search_params2 = Knn::new(search_list_size as usize, None).unwrap();
 
-        let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
+        let diverse_search2 =
+            diskann::graph::search::Diverse::new(search_params2, diverse_params).unwrap();
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(

@@ -6,7 +6,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
-use diskann_benchmark_core::{recall::GroundTruthMode, search::graph::KnnWrapper};
+use diskann_benchmark_core::{recall::GroundTruthMode, search::graph::KnnParams};
 
 use crate::{index::result::SearchResults, inputs::graph_index::GraphSearch};
 
@@ -53,7 +53,7 @@ pub(crate) fn run<I>(
                 .search_l
                 .iter()
                 .map(|search_l| {
-                    let search_params = KnnWrapper::new(run.search_n, *search_l).unwrap();
+                    let search_params = KnnParams::new(run.search_n, *search_l).unwrap();
 
                     core_search::Run::new(search_params, setup.clone())
                 })
@@ -72,7 +72,7 @@ pub(crate) fn run<I>(
     Ok(all)
 }
 
-type Run = core_search::Run<KnnWrapper>;
+type Run = core_search::Run<KnnParams>;
 pub(crate) trait Knn<I> {
     fn search_all(
         &self,
@@ -93,13 +93,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::KNN<DP, T, S, PP>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = KnnWrapper,
+        Parameters = KnnParams,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<KnnWrapper>>,
+        parameters: Vec<core_search::Run<KnnParams>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
@@ -125,13 +125,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::MultiHop<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = KnnWrapper,
+        Parameters = KnnParams,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<KnnWrapper>>,
+        parameters: Vec<core_search::Run<KnnParams>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
@@ -157,13 +157,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::InlineFilterSearch<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = KnnWrapper,
+        Parameters = KnnParams,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<KnnWrapper>>,
+        parameters: Vec<core_search::Run<KnnParams>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,

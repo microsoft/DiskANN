@@ -31,7 +31,7 @@ use crate::{
 /// the latter. Result aggregation for [`search::search_all`] is provided
 /// by the [`Aggregator`] type.
 ///
-/// The provided implementation of [`Search`] accepts [`KnnWrapper`]
+/// The provided implementation of [`Search`] accepts [`KnnParams`]
 /// and returns [`Metrics`] as additional output.
 ///
 /// # Type Parameters
@@ -195,7 +195,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = KnnWrapper;
+    type Parameters = KnnParams;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -216,7 +216,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let knn_search = *parameters;
+        let knn_search = parameters.knn;
         let strategy = self.strategy.get(index)?;
         let processor = self.post_processor.as_post_processor(strategy);
 
@@ -240,7 +240,7 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum KnnWrapperError {
+pub enum KnnParamsError {
     #[error("k_value cannot be zero")]
     KZero,
     #[error("l_value ({l_value}) must be at least k_value ({k_value})")]
@@ -249,33 +249,33 @@ pub enum KnnWrapperError {
     InvalidKnnParameters,
 }
 
-impl From<KnnWrapperError> for ANNError {
+impl From<KnnParamsError> for ANNError {
     #[track_caller]
-    fn from(err: KnnWrapperError) -> Self {
+    fn from(err: KnnParamsError) -> Self {
         ANNError::opaque(err)
     }
 }
 
 /// A wrapper for the [`graph::search::Knn`] struct that also includes the `k` value.
 #[derive(Debug, Copy, Clone)]
-pub struct KnnWrapper {
+pub struct KnnParams {
     k_value: NonZeroUsize,
     pub knn: graph::search::Knn,
 }
 
-impl KnnWrapper {
-    /// Construct a new [`KnnWrapper`].
-    pub fn new(k_value: usize, l_value: usize) -> Result<Self, KnnWrapperError> {
-        let k_value = NonZeroUsize::new(k_value).ok_or(KnnWrapperError::KZero)?;
+impl KnnParams {
+    /// Construct a new [`KnnParams`].
+    pub fn new(k_value: usize, l_value: usize) -> Result<Self, KnnParamsError> {
+        let k_value = NonZeroUsize::new(k_value).ok_or(KnnParamsError::KZero)?;
         if l_value < k_value.get() {
-            return Err(KnnWrapperError::LLessThanK {
+            return Err(KnnParamsError::LLessThanK {
                 l_value,
                 k_value: k_value.get(),
             });
         }
 
         let knn = graph::search::Knn::new(l_value, None)
-            .map_err(|_| KnnWrapperError::InvalidKnnParameters)?;
+            .map_err(|_| KnnParamsError::InvalidKnnParameters)?;
         Ok(Self { k_value, knn })
     }
 
@@ -295,7 +295,7 @@ pub struct Summary {
     pub setup: search::Setup,
 
     /// The [`Search::Parameters`] used for the batch of runs.
-    pub parameters: KnnWrapper,
+    pub parameters: KnnParams,
 
     /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
@@ -363,7 +363,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<KnnWrapper, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<KnnParams, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -371,7 +371,7 @@ where
 
     fn aggregate(
         &mut self,
-        run: search::Run<KnnWrapper>,
+        run: search::Run<KnnParams>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         // Compute the recall using just the first result.
@@ -468,7 +468,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             knn.clone(),
-            KnnWrapper::new(nearest_neighbors, 10).unwrap(),
+            KnnParams::new(nearest_neighbors, 10).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -492,11 +492,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                KnnWrapper::new(nearest_neighbors, 10).unwrap(),
+                KnnParams::new(nearest_neighbors, 10).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                KnnWrapper::new(nearest_neighbors, 15).unwrap(),
+                KnnParams::new(nearest_neighbors, 15).unwrap(),
                 setup.clone(),
             ),
         ];
