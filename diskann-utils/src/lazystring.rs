@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::fmt::{Display, Result, Formatter};
+use std::fmt::{Display, Formatter, Result};
 
 /// A macro that behaves like `format!` but constructs a [`LazyString`] to defer string
 /// formatting until the result is actually displayed. If the [`LazyString`] is never
@@ -62,9 +62,9 @@ macro_rules! lazy_format {
 }
 
 /// A struct used to lazily defer string formatting until needed. This is used to implement
-/// [`lazy_format`]: a lazy version of the standard `format!` macro.
+/// [`lazy_format!`]: a lazy version of the standard `format!` macro.
 ///
-/// See [`lazy_format`] for usage.
+/// See [`lazy_format!`] for usage.
 pub struct LazyString<F>(F)
 where
     F: Fn(&mut Formatter<'_>) -> Result;
@@ -74,6 +74,7 @@ where
     F: Fn(&mut Formatter<'_>) -> Result,
 {
     /// Construct a new `LazyString` around the provided lambda.
+    #[doc(hidden)]
     pub fn new(f: F) -> Self {
         Self(f)
     }
