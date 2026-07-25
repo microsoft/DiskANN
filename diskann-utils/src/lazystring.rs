@@ -121,19 +121,8 @@ where
 {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        struct AsDisplay<'a, T>(&'a T);
-
-        impl<T> Debug for AsDisplay<'_, T>
-        where
-            T: Display,
-        {
-            fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-                write!(f, "{}", self.0)
-            }
-        }
-
         f.debug_tuple("LazyString")
-            .field(&AsDisplay(&self))
+            .field(&format_args!("{self}"))
             .finish()
     }
 }
@@ -166,6 +155,9 @@ mod test {
         assert_eq!(lazy.to_string(), "Lazy Message: x = 10.5, y = 20");
 
         // Verify that `Debug` at least runs.
-        let _ = format!("{:?}", lazy);
+        assert_eq!(
+            format!("{:?}", lazy),
+            "LazyString(Lazy Message: x = 10.5, y = 20)",
+        );
     }
 }
