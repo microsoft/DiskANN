@@ -76,12 +76,12 @@ use std::fmt::{Debug, Display, Formatter, Result};
 macro_rules! lazy_format {
     (move, $($arg:tt)*) => {
         $crate::LazyString::new(move |f: &mut std::fmt::Formatter<'_>| {
-            write!(f, $($arg)*)
+            ::core::write!(f, $($arg)*)
         })
     };
     ($($arg:tt)*) => {
         $crate::LazyString::new(|f: &mut std::fmt::Formatter<'_>| {
-            write!(f, $($arg)*)
+            ::core::write!(f, $($arg)*)
         })
     };
 }
