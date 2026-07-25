@@ -59,7 +59,7 @@ use std::fmt::{Debug, Display, Formatter, Result};
 /// and thus has a lifetime constrained to its arguments.
 ///
 /// If a lazily formatted `'static` compliant variation is needed, the "move" variant
-/// can be used:
+/// can be used (assuming all captured arguments are `'static`):
 ///
 /// ```rust
 /// use diskann_utils::lazy_format;
