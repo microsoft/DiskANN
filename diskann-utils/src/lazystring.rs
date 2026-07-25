@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::fmt::{Display, Formatter, Result};
+use std::fmt::{Debug, Display, Formatter, Result};
 
 /// A macro that behaves like `format!` but constructs a [`LazyString`] to defer string
 /// formatting until the result is actually displayed. If the [`LazyString`] is never
@@ -52,13 +52,38 @@ use std::fmt::{Display, Formatter, Result};
 /// assert!(f.was_formatted());
 /// assert_eq!(lazy.to_string(), "Was this formatted: yes");
 /// ```
+///
+/// # Creating lazily formatted `'static` error messages
+///
+/// The default [`LazyString`] created by this macro borrows from its formatted arguments
+/// and thus has a lifetime constrained to its arguments.
+///
+/// If a lazily formatted `'static` compliant variation is needed, the "move" variant
+/// can be used:
+///
+/// ```rust
+/// use diskann_utils::lazy_format;
+///
+/// fn assert_static<T: 'static>(_: &T) {}
+///
+/// let x = 10;
+///
+/// let lazy = lazy_format!(move, "x = {x}");
+/// assert_static(&lazy);
+/// assert_eq!(lazy.to_string(), "x = 10");
+/// ```
 #[macro_export]
 macro_rules! lazy_format {
+    (move, $($arg:tt)*) => {
+        $crate::LazyString::new(move |f: &mut std::fmt::Formatter<'_>| {
+            write!(f, $($arg)*)
+        })
+    };
     ($($arg:tt)*) => {
         $crate::LazyString::new(|f: &mut std::fmt::Formatter<'_>| {
             write!(f, $($arg)*)
         })
-    }
+    };
 }
 
 /// A struct used to lazily defer string formatting until needed. This is used to implement
@@ -90,6 +115,29 @@ where
     }
 }
 
+impl<F> Debug for LazyString<F>
+where
+    F: Fn(&mut Formatter<'_>) -> Result,
+{
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        struct AsDisplay<'a, T>(&'a T);
+
+        impl<T> Debug for AsDisplay<'_, T>
+        where
+            T: Display,
+        {
+            fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        f.debug_tuple("LazyString")
+            .field(&AsDisplay(&self))
+            .finish()
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -97,6 +145,8 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+
+    fn assert_static<T: 'static>(_: &T) {}
 
     #[test]
     fn test_lazy_string() {
@@ -110,5 +160,12 @@ mod test {
 
         let lazy = lazy_format!("Lazy Message: x = {x}, y = {y}");
         assert_eq!(lazy.to_string(), "Lazy Message: x = 10.5, y = 20");
+
+        let lazy = lazy_format!(move, "Lazy Message: x = {}, y = {y}", x);
+        assert_static(&lazy);
+        assert_eq!(lazy.to_string(), "Lazy Message: x = 10.5, y = 20");
+
+        // Verify that `Debug` at least runs.
+        let _ = format!("{:?}", lazy);
     }
 }
