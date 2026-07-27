@@ -3,48 +3,20 @@
  * Licensed under the MIT license.
  */
 
-use diskann::ANNError;
+use diskann::{ANNError, convert_error};
 use diskann_utils::views;
 
 use crate::utils::Bridge;
 
-// Compatibility with ANNError.
-impl From<Bridge<diskann_quantization::views::ChunkOffsetError>> for ANNError {
-    #[track_caller]
-    fn from(value: Bridge<diskann_quantization::views::ChunkOffsetError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
-    }
-}
+convert_error!(Bridge<diskann_quantization::views::ChunkOffsetError>);
+convert_error!(Bridge<diskann_quantization::views::PartitionError>);
+convert_error!(Bridge<diskann_quantization::views::PartitionIntoError>);
+convert_error!(Bridge<diskann_quantization::views::ChunkViewError>);
 
-// Compatibility with ANNError.
-impl From<Bridge<diskann_quantization::views::PartitionError>> for ANNError {
-    #[track_caller]
-    fn from(value: Bridge<diskann_quantization::views::PartitionError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
-    }
-}
-
-// Compatibility with ANNError.
-impl From<Bridge<diskann_quantization::views::PartitionIntoError>> for ANNError {
-    #[track_caller]
-    fn from(value: Bridge<diskann_quantization::views::PartitionIntoError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
-    }
-}
-
-// Compatibility with ANNError.
-impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
-    #[track_caller]
-    fn from(value: Bridge<diskann_quantization::views::ChunkViewError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
-    }
-}
-
-// Compatibility with ANNError.
 impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<views::TryFromError<T>>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
+        ANNError::new(value.into_inner().as_static())
     }
 }
 
@@ -54,8 +26,6 @@ impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
 
 #[cfg(test)]
 mod tests {
-    use diskann::ANNErrorKind;
-
     use super::*;
     use crate::utils::BridgeErr;
 
@@ -69,7 +39,6 @@ mod tests {
         let message = format!("{}", err);
 
         let ann = ANNError::from(err);
-        assert_eq!(ann.kind(), ANNErrorKind::PQError);
         let formatted = ann.to_string();
         assert!(formatted.contains(&message));
     }

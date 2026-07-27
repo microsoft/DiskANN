@@ -135,6 +135,14 @@ impl ANNError {
         }
     }
 
+    #[must_use]
+    pub fn is<E>(&self) -> bool
+    where
+        E: Display + Debug + Send + Sync + 'static,
+    {
+        self.error.is::<E>()
+    }
+
     /// Attempt to downcast the error object to a concrete type.
     pub fn downcast<E>(self) -> Result<E, Self>
     where
