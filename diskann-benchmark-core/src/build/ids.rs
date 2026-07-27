@@ -7,8 +7,8 @@
 
 use std::marker::PhantomData;
 
-use diskann::{ANNError, ANNErrorKind, ANNResult};
-use diskann_utils::future::AsyncFriendly;
+use diskann::{ANNError, ANNResult};
+use diskann_utils::{lazy_format, future::AsyncFriendly};
 
 /// Convert an implicit data index to an external ID.
 ///
@@ -77,7 +77,7 @@ where
     T: TryFrom<usize, Error: std::error::Error + AsyncFriendly> + AsyncFriendly,
 {
     fn to_id(&self, i: usize) -> ANNResult<T> {
-        T::try_from(i).map_err(ANNError::opaque)
+        T::try_from(i).map_err(ANNError::new)
     }
 }
 
@@ -115,11 +115,12 @@ where
 {
     fn to_id(&self, i: usize) -> ANNResult<T> {
         self.0.get(i).cloned().ok_or_else(|| {
+            let len = self.0.len();
             ANNError::message(
-                ANNErrorKind::Opaque,
-                format!(
+                lazy_format!(
+                    move,
                     "tried to index a slice of length {} at index {}",
-                    self.0.len(),
+                    len,
                     i
                 ),
             )
@@ -167,11 +168,12 @@ macro_rules! impl_range {
         impl ToId<$T> for Range<$T> {
             fn to_id(&self, i: usize) -> ANNResult<$T> {
                 self.0.clone().nth(i).ok_or_else(|| {
+                    let len = self.0.len();
                     ANNError::message(
-                        ANNErrorKind::Opaque,
-                        format!(
+                        lazy_format!(
+                            move,
                             "tried to index a range of length {} at index {}",
-                            self.0.len(),
+                            len,
                             i
                         ),
                     )

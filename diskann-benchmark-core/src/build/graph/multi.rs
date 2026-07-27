@@ -6,7 +6,7 @@
 use std::{ops::Range, sync::Arc};
 
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     graph::{self, glue},
     provider,
 };
@@ -96,7 +96,6 @@ where
                 }
 
                 ANNError::message(
-                    ANNErrorKind::Opaque,
                     OutOfBounds {
                         max: self.data.nrows(),
                         start: range.start,
