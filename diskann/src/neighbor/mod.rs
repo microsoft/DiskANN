@@ -326,14 +326,14 @@ mod neighbor_test {
         // The following tests the behavior of NAN.
         //
         // This **must not** be taken as a guarantee of stability for this behavior.
-        let nan = Neighbor::new(3, 3.0);
+        let nan = Neighbor::new(3, f32::NAN);
 
-        assert!(ord::fast_distance(&n1, &nan).is_lt());
-        assert!(ord::fast_distance(&nan, &n1).is_gt());
+        assert!(ord::fast_distance(&n1, &nan).is_eq());
+        assert!(ord::fast_distance(&nan, &n1).is_eq());
         assert!(ord::fast_distance(&nan, &nan).is_eq());
 
-        assert!(ord::reverse(ord::fast_distance)(&n1, &nan).is_gt());
-        assert!(ord::reverse(ord::fast_distance)(&nan, &n1).is_lt());
+        assert!(ord::reverse(ord::fast_distance)(&n1, &nan).is_eq());
+        assert!(ord::reverse(ord::fast_distance)(&nan, &n1).is_eq());
         assert!(ord::reverse(ord::fast_distance)(&nan, &nan).is_eq());
     }
 
