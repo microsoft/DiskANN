@@ -44,7 +44,10 @@ impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
 impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<views::TryFromError<T>>) -> Self {
-        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner().as_static())
+        ANNError::new(
+            diskann::ANNErrorKind::PQError,
+            value.into_inner().as_static(),
+        )
     }
 }
 

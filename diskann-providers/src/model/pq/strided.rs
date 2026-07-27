@@ -12,7 +12,10 @@ use crate::utils::Bridge;
 impl<T: views::DenseData> From<Bridge<strided::TryFromError<T>>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<strided::TryFromError<T>>) -> Self {
-        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner().as_static())
+        ANNError::new(
+            diskann::ANNErrorKind::PQError,
+            value.into_inner().as_static(),
+        )
     }
 }
 
