@@ -25,6 +25,20 @@ use diskann::{ANNError, ANNResult};
 /// target `u64` covers every representable `usize`, so its conversions never
 /// fail.
 pub trait BfTreeId: VectorId {
+    /// Compile-time proof that this id type's `usize` index conversions are
+    /// lossless on the target platform.
+    ///
+    /// [`as_index`](BfTreeId::as_index) and the bf-tree stores round-trip an id
+    /// through `usize`, which is only lossless when `usize` is at least as wide
+    /// as the id type. `u32` fits every supported target; `u64` overrides this to
+    /// assert a 64-bit `usize`, since on a 32-bit target a `u64` id above
+    /// `u32::MAX` would silently truncate. Because associated consts are only
+    /// evaluated when monomorphized, referencing this in a generic id path (see
+    /// [`validate_id_capacity`]) turns the truncation into a compile error *only*
+    /// for `u64` providers on 32-bit targets, leaving the default `u32` path
+    /// (even on 32-bit) unaffected.
+    const INDEX_CONVERSION_LOSSLESS: () = ();
+
     /// Build an id from a zero-based index, truncating on overflow.
     ///
     /// Only call this for indices already known to fit (e.g. ids drawn from
@@ -69,6 +83,12 @@ impl BfTreeId for u32 {
 }
 
 impl BfTreeId for u64 {
+    const INDEX_CONVERSION_LOSSLESS: () = assert!(
+        usize::BITS >= u64::BITS,
+        "u64 bf-tree vertex ids require a 64-bit target: on a 32-bit `usize`, ids above \
+         u32::MAX would truncate when converted to a store index"
+    );
+
     #[inline(always)]
     fn from_index(index: usize) -> Self {
         index as u64
@@ -142,6 +162,13 @@ impl<I: BfTreeId> ExactSizeIterator for IdRange<I> {
 /// enforces that guarantee up front (at construction and load) so the truncating
 /// conversion can never silently wrap a real id.
 pub(crate) fn validate_id_capacity<I: BfTreeId>(total: usize) -> ANNResult<()> {
+    // Force evaluation of the id type's compile-time index-conversion guard. This
+    // is a no-op for `u32`, but fails to compile a `u64` provider on a 32-bit
+    // target (where `as_index` would truncate). It lives here because this
+    // generic function is monomorphized for every id type a provider is built
+    // with, so the check is scoped to actual `u64` usage.
+    let () = I::INDEX_CONVERSION_LOSSLESS;
+
     if let Some(last) = total.checked_sub(1) {
         if I::try_from_index(last).is_none() {
             return Err(ANNError::message(format!(

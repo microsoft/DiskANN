@@ -2259,6 +2259,114 @@ mod tests {
         assert_eq!(*neighbors[0].id(), 3u64);
     }
 
+    /// End-to-end insert + search where the vertex ids themselves live in the
+    /// `u64` range beyond `u32::MAX`.
+    ///
+    /// The other `u64` tests exercise the `u64` id *type* but only ever use id
+    /// *values* in `0..N`, which still fit in a `u32`; they would pass even if
+    /// the provider silently truncated keys to 32 bits. Because the provider
+    /// mints ids densely from `0..max_points + num_start_points` and stores them
+    /// in sparse bf-trees (construction is `O(num_start_points)`, not
+    /// `O(max_points)`), we can set `max_points` above `u32::MAX` and insert a
+    /// handful of points at real u64-range ids without a billion-scale dataset.
+    /// A truncating key path would alias these ids down into the `u32` range and
+    /// corrupt the graph, so a correct nearest-neighbor result here proves the
+    /// full data/quant/neighbor/search stack keys on the complete 8-byte id.
+    #[tokio::test]
+    async fn test_quantized_index_search_u64_high_ids() {
+        let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
+        let dim = 5;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
+        let metric = Metric::L2;
+
+        // Base id above u32::MAX so every inserted vertex id (and the start
+        // point at `max_points`) sits in the u64-only range. `max_points` stays
+        // sparse, so this does not allocate ~4.3B slots.
+        let base: u64 = (u32::MAX as u64) + 1;
+        let num_points: u64 = 15;
+
+        let provider: BfTreeProvider<f32, QuantVectorProvider, u64> = BfTreeProvider::new(
+            BfTreeProviderParameters {
+                max_points: base as usize + num_points as usize + 1,
+                num_start_points: NonZeroUsize::new(1).unwrap(),
+                dim,
+                metric,
+                max_degree: physical_max_degree,
+                vector_provider_config: Config::default(),
+                quant_vector_provider_config: Config::default(),
+                neighbor_list_provider_config: Config::default(),
+                graph_params: None,
+                use_snapshot: false,
+            },
+            start_point.as_view(),
+            create_test_quantizer(5),
+        )
+        .unwrap();
+
+        // Every start point id must be beyond the u32 range for this test to
+        // mean anything.
+        for id in provider.starting_points().unwrap() {
+            assert!(
+                id > u32::MAX as u64,
+                "start point id {id} should be in the u64-only range"
+            );
+        }
+
+        let index_config = graph::config::Builder::new_with(
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
+            10,
+            metric.into(),
+            |_| {},
+        )
+        .build()
+        .unwrap();
+
+        let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+        let ctx = &DefaultContext;
+
+        // Insert point k (vector `[k; 5]`) at id `base + k`, so the id carries
+        // its high bits while the vector value stays comparable to the query.
+        for k in 0u64..num_points {
+            let id = base + k;
+            let point = vec![k as f32; 5];
+            index
+                .insert(&Quantized, ctx, &id, point.as_slice())
+                .await
+                .unwrap();
+        }
+
+        let query = vec![3.0; 5];
+        let params = Knn::new(10, None).unwrap();
+
+        let mut neighbors = vec![Neighbor::<u64>::default(); 5];
+        let res = index
+            .search(
+                params,
+                &Quantized,
+                &DefaultContext,
+                query.as_slice(),
+                &mut BackInserter::new(neighbors.as_mut_slice()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            res.result_count, 5,
+            "there are 15 points and we're asking for 5, we expect 5"
+        );
+        // The nearest neighbor to `[3.0; 5]` is the point with value 3, stored at
+        // id `base + 3`. Getting the full u64 id back (not a truncated variant)
+        // confirms the id survives the round trip through the whole stack.
+        assert_eq!(*neighbors[0].id(), base + 3);
+        assert!(
+            *neighbors[0].id() > u32::MAX as u64,
+            "returned id {} must be in the u64-only range",
+            neighbors[0].id()
+        );
+    }
+
     #[tokio::test]
     async fn test_quantized_index_multi_insert_search() {
         let index = create_quant_index();
@@ -2434,6 +2542,211 @@ mod tests {
             5, k
         );
         assert_eq!(*neighbors[0].id(), 3);
+    }
+
+    /// Recall-parity validation for `u64` ids using a realistically-shaped
+    /// (but self-contained) dataset.
+    ///
+    /// Real ANN datasets ship dense `0..N` ids that all fit in a `u32`, so
+    /// nothing naturally exercises id values above `u32::MAX`, and building a
+    /// billion-scale dataset in a unit test is infeasible. Instead we *transpose*
+    /// a modest random dataset's ids up into the u64-only range by an order-
+    /// preserving offset (`row -> base + row`, `base = u32::MAX + 1`). Because the
+    /// offset is a bijection that preserves id ordering, it changes only the key
+    /// *values*, not the graph the algorithm builds: a correct 8-byte key path
+    /// must return the exact same neighbors (by row) as the `u32` identity-mapped
+    /// baseline. A path that truncated keys to 32 bits would alias the offset ids
+    /// back down, corrupt the graph, and diverge from the baseline.
+    ///
+    /// The test therefore asserts three things:
+    /// 1. every id returned by the `u64` run is above `u32::MAX` (the transpose
+    ///    actually happened),
+    /// 2. the `u64` and `u32` runs return identical neighbor sets per query
+    ///    (recall parity — the key width is transparent to results), and
+    /// 3. both runs achieve a sane recall floor against brute-force ground truth
+    ///    (so the parity is between two *working* indexes, not two broken ones).
+    #[tokio::test]
+    async fn test_u64_id_recall_parity_on_transposed_dataset() {
+        const N: usize = 1500;
+        const DIM: usize = 16;
+        const NUM_QUERIES: usize = 30;
+        const K: usize = 10;
+        const L: usize = 64;
+
+        // Deterministic splitmix64 generator so the dataset (and thus recall) is
+        // reproducible across runs and platforms without a dependency on `rand`.
+        struct SplitMix64(u64);
+        impl SplitMix64 {
+            fn next_u64(&mut self) -> u64 {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^ (z >> 31)
+            }
+            fn next_f32(&mut self) -> f32 {
+                // Top 24 bits give a uniform value in [0, 1).
+                (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+            }
+        }
+
+        let mut rng = SplitMix64(0x0DDB_1A5E_5EED_1234);
+        let gen_vec = |rng: &mut SplitMix64| (0..DIM).map(|_| rng.next_f32()).collect::<Vec<f32>>();
+
+        let data: Vec<Vec<f32>> = (0..N).map(|_| gen_vec(&mut rng)).collect();
+        let queries: Vec<Vec<f32>> = (0..NUM_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+
+        // Exact brute-force top-K ground truth (row indices), ties broken by row.
+        let l2 = |a: &[f32], b: &[f32]| -> f32 {
+            a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>()
+        };
+        let ground_truth: Vec<Vec<usize>> = queries
+            .iter()
+            .map(|q| {
+                let mut scored: Vec<(f32, usize)> = data
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (l2(q, v), i))
+                    .collect();
+                scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+                scored.into_iter().take(K).map(|(_, i)| i).collect()
+            })
+            .collect();
+
+        // Build a full-precision bf-tree index over id type `I`, insert every row
+        // at `id_of(row)`, and return the per-query neighbor ids.
+        async fn build_and_search<I, F>(
+            data: &[Vec<f32>],
+            queries: &[Vec<f32>],
+            max_points: usize,
+            id_of: F,
+        ) -> Vec<Vec<I>>
+        where
+            I: BfTreeId,
+            F: Fn(usize) -> I,
+        {
+            let logical_max_degree = 32usize;
+            let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
+            let metric = Metric::L2;
+            let start_point = Matrix::new(Init(|| 0.0f32), 1, DIM);
+
+            let provider: BfTreeProvider<f32, NoStore, I> = BfTreeProvider::new(
+                BfTreeProviderParameters {
+                    max_points,
+                    num_start_points: NonZeroUsize::new(1).unwrap(),
+                    dim: DIM,
+                    metric,
+                    max_degree: physical_max_degree,
+                    vector_provider_config: Config::default(),
+                    quant_vector_provider_config: Config::default(),
+                    neighbor_list_provider_config: Config::default(),
+                    graph_params: None,
+                    use_snapshot: false,
+                },
+                start_point.as_view(),
+                NoStore,
+            )
+            .unwrap();
+
+            let index_config = graph::config::Builder::new_with(
+                logical_max_degree,
+                graph::config::MaxDegree::new(physical_max_degree as usize),
+                L,
+                metric.into(),
+                |_| {},
+            )
+            .build()
+            .unwrap();
+
+            let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+            let ctx = &DefaultContext;
+
+            for (row, vector) in data.iter().enumerate() {
+                index
+                    .insert(&FullPrecision, ctx, &id_of(row), vector.as_slice())
+                    .await
+                    .unwrap();
+            }
+
+            let mut results = Vec::with_capacity(queries.len());
+            for query in queries {
+                let params = Knn::new(L, None).unwrap();
+                let mut neighbors = vec![Neighbor::<I>::default(); K];
+                let res = index
+                    .search(
+                        params,
+                        &FullPrecision,
+                        ctx,
+                        query.as_slice(),
+                        &mut BackInserter::new(neighbors.as_mut_slice()),
+                    )
+                    .await
+                    .unwrap();
+                results.push(
+                    neighbors[..res.result_count as usize]
+                        .iter()
+                        .map(|n| *n.id())
+                        .collect(),
+                );
+            }
+            results
+        }
+
+        // Baseline: identity mapping, dense u32 ids in 0..N.
+        let u32_results = build_and_search::<u32, _>(&data, &queries, N, |row| row as u32).await;
+
+        // Transposed: u64 ids shifted entirely above the u32 range.
+        let base: u64 = (u32::MAX as u64) + 1;
+        let u64_results =
+            build_and_search::<u64, _>(&data, &queries, base as usize + N, |row| base + row as u64)
+                .await;
+
+        let mut recall_hits_u32 = 0usize;
+        let mut recall_hits_u64 = 0usize;
+        let total = NUM_QUERIES * K;
+
+        for qi in 0..NUM_QUERIES {
+            // Map both id spaces back to row indices.
+            let mut rows_u32: Vec<usize> = u32_results[qi].iter().map(|&id| id as usize).collect();
+            let mut rows_u64: Vec<usize> = Vec::with_capacity(u64_results[qi].len());
+            for &id in &u64_results[qi] {
+                assert!(
+                    id > u32::MAX as u64,
+                    "query {qi}: transposed id {id} must live in the u64-only range"
+                );
+                rows_u64.push((id - base) as usize);
+            }
+
+            // Recall parity: the key width must be transparent to the results.
+            let mut sorted_u32 = rows_u32.clone();
+            let mut sorted_u64 = rows_u64.clone();
+            sorted_u32.sort_unstable();
+            sorted_u64.sort_unstable();
+            assert_eq!(
+                sorted_u32, sorted_u64,
+                "query {qi}: u64-transposed run returned a different neighbor set than the u32 baseline"
+            );
+
+            // Recall against brute-force ground truth for both runs.
+            let gt: std::collections::HashSet<usize> = ground_truth[qi].iter().copied().collect();
+            rows_u32.retain(|r| gt.contains(r));
+            rows_u64.retain(|r| gt.contains(r));
+            recall_hits_u32 += rows_u32.len();
+            recall_hits_u64 += rows_u64.len();
+        }
+
+        let recall_u32 = recall_hits_u32 as f64 / total as f64;
+        let recall_u64 = recall_hits_u64 as f64 / total as f64;
+
+        assert_eq!(
+            recall_hits_u32, recall_hits_u64,
+            "recall must be identical between the u32 baseline and the u64-transposed run"
+        );
+        assert!(
+            recall_u64 > 0.8,
+            "recall floor not met (u32={recall_u32:.4}, u64={recall_u64:.4}); \
+             parity is only meaningful between two working indexes"
+        );
     }
 
     #[tokio::test]
