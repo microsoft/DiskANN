@@ -203,6 +203,29 @@ Results at **L=150, k=150, single thread** (recall is identical because traversa
 - **Cost scales with expression complexity and traversal size:** the AND/OR combo (S4) and selective geo filters (S6-S8, more hops through non-matching regions -> more `is_match` calls) are the most expensive; broad single-term filters (S1, S5) are cheapest.
 - This is the production-relevant number: a real system evaluates the filter at query time (per node), not from a precomputed whole-corpus answer.
 
+## 8.1 CSR optimization of the live per-node filter
+
+The live cost in section 8 is dominated by the roaring representation. `is_match` does a `HashMap<u32, RoaringTreemap>` probe into the 10M-entry index (random access + heap pointer-chase) plus, per equality terminal, a `RoaringTreemap::contains` (`BTreeMap` lookup → `RoaringBitmap` container binary-search). A criterion microbenchmark isolating just `is_match` (1M docs, 50k random probes) shows this is **14-20x slower** than a flat **CSR** layout that stores each node's sorted attribute-ids contiguously (`offsets: Vec<u32>` + `values: Vec<u32>`) and answers each terminal with a `binary_search` over the node's one contiguous row:
+
+| predicate | roaring treemap | flat CSR | posting bitmap/attr |
+|---|---:|---:|---:|
+| 1 term | 277 ns | 13.6 ns (20.4x) | 8.8 ns |
+| AND-2 | 298 ns | 20.7 ns (14.4x) | 23.6 ns |
+| (a AND b) OR (c AND d) | 596 ns | 36.0 ns (16.6x) | 74.2 ns |
+
+(microbench: `cargo bench -p diskann-label-filter --bench main -- live_filter`; posting = one doc-id bitmap per attribute, wins only for a single broad term but degrades with term count since each terminal is a separate random bitmap probe.)
+
+A CSR-backed provider (`InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr`) was added and exposed as the benchmark search type `topk-multihop-live-filter-csr`. It reuses the same `AttributeEncoder`/`EncodedFilterExpr`, so predicate semantics and errors are identical. End-to-end (same index, k=150, L=150, single thread, 1000 queries) it is a drop-in replacement — **identical traversal** (same avg cmps/hops) and **identical recall** — differing only in how `is_match` is computed:
+
+| Case | impl | recall | mean | p90 | p99 | QPS |
+|---|---|---:|---:|---:|---:|---:|
+| S1 (66.4%) | live (roaring) | 0.9710 | 18.4 ms | 39.6 | 85.1 | 54 |
+| S1 | **live-csr** | 0.9710 | **5.5 ms** | 11.8 | 22.4 | 183 |
+| S4 (10.0%) | live (roaring) | 0.9534 | 76.7 ms | 142.1 | 197.7 | 13 |
+| S4 | **live-csr** | 0.9534 | **17.4 ms** | 31.8 | 43.7 | 57 |
+
+CSR gives a **3.4x (S1) - 4.4x (S4)** end-to-end latency/QPS improvement at equal recall, closing ~82-85% of the live-vs-precomputed-bitmap gap from section 8 while still evaluating the predicate live per node. The end-to-end factor is smaller than the ~15-20x on `is_match` alone because the ~13k vector-distance comparisons per query are unchanged and now dominate the remaining latency.
+
 ## 9. Artifacts (`Q:\test6\filtered_test2\bench\full\`)
 
 - Labels: `data_labels_set.jsonl` (596 labels, general), `data_labels_min.jsonl` (11, fast)
@@ -212,6 +235,7 @@ Results at **L=150, k=150, single thread** (recall is identical because traversa
 - Outputs: `out_setmin.json`, `out_beta_setmin.json`, `out_livefilter.json` (+ `out_live_S8.json`, `out_live_S9.json`)
 - Encoders: `gen_setmembership.py` (full), `gen_setmin.py` (minimal)
 - Live-filter code: `diskann-label-filter/src/live_filter.rs` (InlineAttributeIndex / FrozenAttributeIndex + QueryLabelProvider); benchmark search-type `topk-multihop-live-filter`
+- CSR live-filter code (section 8.1): `InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr` in the same module; benchmark search-type `topk-multihop-live-filter-csr`; is_match microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
 - Index (reused): `idxsave_full`(+`.data`)
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
