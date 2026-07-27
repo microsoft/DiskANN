@@ -447,6 +447,8 @@ mod tests {
 
     use thiserror::Error;
 
+    use crate::ANNErrorKind;
+
     use super::*;
 
     // Check that the layout of Ranked "Always Escalate" types `T` is the same as the layout
@@ -457,7 +459,7 @@ mod tests {
 
     impl From<AlwaysEscalate> for ANNError {
         fn from(value: AlwaysEscalate) -> ANNError {
-            ANNError::log_index_error(value)
+            ANNError::new(ANNErrorKind::IndexError, value)
         }
     }
 
@@ -560,7 +562,7 @@ mod tests {
     impl From<Disarmed<'_>> for ANNError {
         #[track_caller]
         fn from(value: Disarmed<'_>) -> ANNError {
-            ANNError::log_index_error(&value)
+            ANNError::from_display(ANNErrorKind::IndexError, value.to_string())
         }
     }
 
@@ -842,7 +844,7 @@ mod tests {
         // We can't actually construct an Infallible value to test this directly since it's unconstructable
         // But we can verify the From implementation exists by checking the type constraint
         fn _test_infallible_into_ann_error(_: Infallible) -> ANNError {
-            ANNError::log_index_error("This should never be called")
+            ANNError::from_display(ANNErrorKind::IndexError, "This should never be called")
         }
     }
 }

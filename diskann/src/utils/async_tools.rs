@@ -14,7 +14,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::ANNError;
+use crate::{ANNError, ANNErrorKind};
 
 ////////////
 // Around //
@@ -372,7 +372,7 @@ pub struct PartitionError {
 
 impl From<PartitionError> for ANNError {
     fn from(err: PartitionError) -> Self {
-        Self::log_async_error(err)
+        Self::new(ANNErrorKind::AsyncError, err)
     }
 }
 

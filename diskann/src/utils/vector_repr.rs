@@ -13,7 +13,7 @@ use diskann_vector::{
 use half::f16;
 use thiserror::Error;
 
-use crate::{ANNError, internal::convert_f32::ConvertF32};
+use crate::{ANNError, ANNErrorKind, internal::convert_f32::ConvertF32};
 
 /// This is the data type for values stored in the graph. This type should implement the
 /// following traits:
@@ -112,10 +112,7 @@ pub struct NativeTypeLengthError {
 
 impl From<NativeTypeLengthError> for ANNError {
     fn from(err: NativeTypeLengthError) -> ANNError {
-        ANNError::log_index_error(format!(
-            "Unable to set full-precision vector of length {} into slice of length {}",
-            err.src, err.dst
-        ))
+        ANNError::new(ANNErrorKind::IndexError, err)
     }
 }
 

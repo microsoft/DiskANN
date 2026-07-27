@@ -14,6 +14,28 @@ use std::{
 
 use crate::always_escalate;
 
+/// Error wrapper for values that should be carried by `ANNError` through their
+/// `Display` implementation.
+#[derive(Debug)]
+pub struct DisplayError<D>(D);
+
+impl<D> DisplayError<D> {
+    pub fn new(display: D) -> Self {
+        Self(display)
+    }
+}
+
+impl<D> Display for DisplayError<D>
+where
+    D: Display,
+{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        Display::fmt(&self.0, formatter)
+    }
+}
+
+impl<D> std::error::Error for DisplayError<D> where D: Display + Debug + Send + Sync + 'static {}
+
 /// Convenience alias for a `Result<T, ANNError>`.
 pub type ANNResult<T> = Result<T, ANNError>;
 
@@ -188,6 +210,20 @@ impl ANNError {
             kind,
             error: anyhow::Error::msg(Located::new(display)),
         }
+    }
+
+    /// Construct a new `ANNError` from a display value.
+    ///
+    /// Prefer a concrete error type with [`ANNError::new`] when the callsite can describe
+    /// a precise failure. This helper is useful when adapting existing display-only error
+    /// paths away from the legacy `log_*` constructors.
+    #[track_caller]
+    #[inline(never)]
+    pub fn from_display<D>(kind: ANNErrorKind, display: D) -> Self
+    where
+        D: Display + Debug + Send + Sync + 'static,
+    {
+        Self::new(kind, DisplayError::new(display))
     }
 
     /// Attempt to downcast the error object to a concrete type.
@@ -524,7 +560,7 @@ impl From<std::convert::Infallible> for ANNError {
 impl From<io::Error> for ANNError {
     #[track_caller]
     fn from(err: io::Error) -> Self {
-        ANNError::log_io_error(err)
+        ANNError::new(ANNErrorKind::IOError, err)
     }
 }
 
@@ -535,7 +571,7 @@ where
 {
     #[track_caller]
     fn from(err: mpsc::SendError<T>) -> Self {
-        ANNError::log_io_send_error(err)
+        ANNError::new(ANNErrorKind::IOSendError, err)
     }
 }
 
@@ -543,7 +579,7 @@ where
 impl From<LayoutError> for ANNError {
     #[track_caller]
     fn from(err: LayoutError) -> Self {
-        ANNError::log_mem_alloc_layout_error(err)
+        ANNError::new(ANNErrorKind::MemoryAllocLayoutError, err)
     }
 }
 
@@ -551,7 +587,7 @@ impl From<LayoutError> for ANNError {
 impl From<TryFromIntError> for ANNError {
     #[track_caller]
     fn from(err: TryFromIntError) -> Self {
-        ANNError::log_try_from_int_error(err)
+        ANNError::new(ANNErrorKind::TryFromIntError, err)
     }
 }
 
@@ -559,7 +595,7 @@ impl From<TryFromIntError> for ANNError {
 impl From<TryFromSliceError> for ANNError {
     #[track_caller]
     fn from(err: TryFromSliceError) -> Self {
-        ANNError::log_try_from_slice_error(err)
+        ANNError::new(ANNErrorKind::TryFromSliceError, err)
     }
 }
 
