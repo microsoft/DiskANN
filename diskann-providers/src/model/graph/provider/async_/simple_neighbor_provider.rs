@@ -26,6 +26,25 @@ pub struct SimpleNeighborProviderAsync {
 }
 
 impl SimpleNeighborProviderAsync {
+    /// The number of `u32` slots reserved per adjacency list, including the leading length slot.
+    fn row_width(max_degree: u32, graph_slack_factor: f32) -> usize {
+        (max_degree as f32 * graph_slack_factor) as usize + 1
+    }
+
+    /// The number of heap bytes [`Self::new`] will allocate for these arguments.
+    pub fn estimate_bytes(
+        max_points: usize,
+        num_start_points: usize,
+        max_degree: u32,
+        graph_slack_factor: f32,
+    ) -> usize {
+        let size = max_points + num_start_points;
+        AlignedMemoryVectorStore::<u32>::estimate_bytes(
+            size,
+            Self::row_width(max_degree, graph_slack_factor),
+        ) + size * std::mem::size_of::<RwLock<()>>()
+    }
+
     pub fn new(
         max_points: usize,
         num_start_points: usize,
@@ -35,7 +54,7 @@ impl SimpleNeighborProviderAsync {
         let size = max_points + num_start_points;
         let graph = AlignedMemoryVectorStore::with_capacity(
             size,
-            (max_degree as f32 * graph_slack_factor) as usize + 1,
+            Self::row_width(max_degree, graph_slack_factor),
         );
         let locks = (0..size).map(|_| RwLock::new(())).collect::<Vec<_>>();
 

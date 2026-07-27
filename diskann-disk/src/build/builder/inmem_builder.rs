@@ -27,7 +27,8 @@ use diskann_providers::{
     model::graph::provider::async_::{
         common::{FullPrecision, NoDeletes, NoStore, Quantized, SetElementHelper, VectorStore},
         inmem::{
-            DefaultProvider, DefaultProviderParameters, FullPrecisionProvider, SetStartPoints,
+            CreateFullPrecision, DefaultProvider, DefaultProviderParameters, FullPrecisionProvider,
+            SetStartPoints,
         },
     },
     model::IndexConfiguration,
@@ -300,6 +301,48 @@ where
     }
 }
 
+fn provider_parameters(config: &IndexConfiguration) -> DefaultProviderParameters {
+    DefaultProviderParameters {
+        max_points: config.max_points,
+        frozen_points: ONE,
+        metric: config.dist_metric,
+        dim: config.dim,
+        max_degree: config.config.max_degree_u32().get(),
+        prefetch_lookahead: config.prefetch_lookahead.map(|x| x.get()),
+        prefetch_cache_line_level: config.prefetch_cache_line_level,
+    }
+}
+
+/// Headroom for allocations the per-store estimates do not model.
+const OVERHEAD_FACTOR: f64 = 1.1f64;
+
+/// Estimate the RAM an in-memory build of `config` will consume, in bytes.
+///
+/// Dispatches over the same precursor combinations [`new_inmem_index_builder`] constructs.
+pub(super) fn estimate_build_index_ram_usage<T>(
+    config: &IndexConfiguration,
+    build_quantizer: &BuildQuantizer,
+) -> f64
+where
+    T: VectorRepr,
+{
+    let params = provider_parameters(config);
+    let full_precision =
+        CreateFullPrecision::<T>::new(params.dim, params.prefetch_cache_line_level);
+
+    let bytes = match build_quantizer {
+        BuildQuantizer::NoQuant(no_store) => {
+            params.estimated_bytes(&full_precision, no_store, &NoDeletes)
+        }
+        BuildQuantizer::Scalar1Bit(quantizer) => {
+            params.estimated_bytes(&NoStore, quantizer, &NoDeletes)
+        }
+        BuildQuantizer::PQ(table) => params.estimated_bytes(&NoStore, table, &NoDeletes),
+    };
+
+    OVERHEAD_FACTOR * bytes as f64
+}
+
 pub(super) async fn build_inmem_index<T, StorageProvider>(
     config: IndexConfiguration,
     quantizer: &BuildQuantizer,
@@ -324,15 +367,7 @@ where
     }));
 
     let index_config = config.config.clone();
-    let provider_parameters = DefaultProviderParameters {
-        max_points: config.max_points,
-        frozen_points: ONE,
-        metric: config.dist_metric,
-        dim: config.dim,
-        max_degree: index_config.max_degree_u32().get(),
-        prefetch_lookahead: config.prefetch_lookahead.map(|x| x.get()),
-        prefetch_cache_line_level: config.prefetch_cache_line_level,
-    };
+    let provider_parameters = provider_parameters(&config);
     let index = new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer)?;
     let medoid_id =
         set_start_point_to_medoid::<T, _>(&index, data_path, config.random_seed, storage_provider)?;
@@ -475,4 +510,82 @@ async fn run_final_prune<T: VectorRepr>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod ram_estimation_tests {
+    use diskann_providers::model::graph::provider::async_::inmem::WithBits;
+    use diskann_providers::model::FixedChunkPQTable;
+    use diskann_quantization::scalar::ScalarQuantizer;
+    use diskann_vector::distance::Metric;
+    use rstest::rstest;
+
+    use super::*;
+
+    const DIM: usize = 128;
+    const NUM_CHUNKS: usize = 16;
+
+    fn config(max_points: usize, max_degree: u32) -> IndexConfiguration {
+        let graph_config = diskann::graph::config::Builder::new(
+            max_degree as usize,
+            diskann::graph::config::MaxDegree::new(max_degree as usize),
+            100,
+            Metric::L2.into(),
+        )
+        .build()
+        .unwrap();
+
+        IndexConfiguration::new(Metric::L2, DIM, max_points, ONE, 1, graph_config)
+    }
+
+    fn pq_quantizer() -> BuildQuantizer {
+        let pq_table = vec![0.0f32; 256 * DIM].into_boxed_slice();
+        let chunk_offsets = (0..=NUM_CHUNKS)
+            .map(|chunk| chunk * (DIM / NUM_CHUNKS))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        BuildQuantizer::PQ(FixedChunkPQTable::new(DIM, pq_table, chunk_offsets).unwrap())
+    }
+
+    fn sq_quantizer() -> BuildQuantizer {
+        BuildQuantizer::Scalar1Bit(WithBits::<1>::new(ScalarQuantizer::new(
+            1.0,
+            vec![0.0f32; DIM],
+            None,
+        )))
+    }
+
+    /// Regression test pinning the estimate for each quantization mode.
+    ///
+    /// The expected values are recorded, not recomputed: recomputing them would just be a second
+    /// copy of the formula. Scalar and product coincide because at these parameters both compress
+    /// a vector into the same 64-byte aligned row.
+    #[rstest]
+    #[case::full_precision(BuildQuantizer::NoQuant(NoStore), 859_285.0)]
+    #[case::scalar_1bit(sq_quantizer(), 365_995.0)]
+    #[case::product(pq_quantizer(), 365_995.0)]
+    fn estimate_matches_recorded_value(
+        #[case] build_quantizer: BuildQuantizer,
+        #[case] expected: f64,
+    ) {
+        let actual =
+            estimate_build_index_ram_usage::<f32>(&config(1000, 50), &build_quantizer).round();
+        assert_eq!(actual, expected);
+    }
+
+    /// The estimate must respond to the inputs the build strategy varies.
+    #[rstest]
+    #[case::full_precision(BuildQuantizer::NoQuant(NoStore))]
+    #[case::scalar_1bit(sq_quantizer())]
+    #[case::product(pq_quantizer())]
+    fn estimate_grows_with_points_and_degree(#[case] build_quantizer: BuildQuantizer) {
+        let baseline = estimate_build_index_ram_usage::<f32>(&config(1000, 50), &build_quantizer);
+
+        assert!(
+            estimate_build_index_ram_usage::<f32>(&config(2000, 50), &build_quantizer) > baseline
+        );
+        assert!(
+            estimate_build_index_ram_usage::<f32>(&config(1000, 100), &build_quantizer) > baseline
+        );
+    }
 }

@@ -4,7 +4,7 @@
  */
 
 //! Disk index builder implementation.
-use std::{marker::PhantomData, mem};
+use std::marker::PhantomData;
 
 use crate::data_model::GraphDataType;
 use diskann::{utils::VectorRepr, ANNResult};
@@ -18,8 +18,8 @@ use tracing::info;
 
 use crate::{
     build::builder::{
-        inmem_builder::build_inmem_index,
-        merged_index::{estimate_build_index_ram_usage, MergedVamanaIndexBuilder},
+        inmem_builder::{build_inmem_index, estimate_build_index_ram_usage},
+        merged_index::MergedVamanaIndexBuilder,
         quantizer::BuildQuantizer,
         tokio::create_runtime,
     },
@@ -29,7 +29,7 @@ use crate::{
         DiskIndexWriter,
     },
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
-    DiskIndexBuildParameters, QuantizationType,
+    DiskIndexBuildParameters,
 };
 
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
@@ -162,7 +162,7 @@ where
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
-            self.disk_build_param.build_quantization(),
+            &self.build_quantizer,
         ) {
             IndexBuildStrategy::Merged => {
                 MergedVamanaIndexBuilder::<Data, _>::new(
@@ -198,22 +198,19 @@ where
     }
 }
 
-pub(crate) enum IndexBuildStrategy {
+enum IndexBuildStrategy {
     OneShot,
     Merged,
 }
 
-pub(crate) fn determine_build_strategy<Data: GraphDataType>(
+fn determine_build_strategy<Data: GraphDataType>(
     index_configuration: &IndexConfiguration,
     index_build_ram_limit_in_bytes: f64,
-    build_quantization_type: &QuantizationType,
+    build_quantizer: &BuildQuantizer,
 ) -> IndexBuildStrategy {
-    let estimated_index_ram_in_bytes = estimate_build_index_ram_usage(
-        index_configuration.max_points as u64,
-        index_configuration.dim as u64,
-        mem::size_of::<Data::VectorDataType>() as u64,
-        index_configuration.config.max_degree().get() as u64,
-        build_quantization_type,
+    let estimated_index_ram_in_bytes = estimate_build_index_ram_usage::<Data::VectorDataType>(
+        index_configuration,
+        build_quantizer,
     );
 
     info!(

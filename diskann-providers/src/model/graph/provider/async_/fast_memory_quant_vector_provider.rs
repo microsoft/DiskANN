@@ -59,6 +59,12 @@ type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
 type QueryComputer<'a> = pq::distance::QueryComputer<'a>;
 
 impl FastMemoryQuantVectorProviderAsync {
+    /// The number of heap bytes [`Self::new`] will allocate for these arguments, excluding the PQ
+    /// pivot table and the distance-table pool.
+    pub fn estimate_bytes(max_vectors: usize, num_chunks: usize) -> usize {
+        AlignedMemoryVectorStore::<u8>::estimate_bytes(max_vectors, num_chunks)
+    }
+
     pub fn new(dist_metric: Metric, max_vectors: usize, pq_chunk_table: FixedChunkPQTable) -> Self {
         let dim = pq_chunk_table.get_num_chunks();
         let quant_vectors = AlignedMemoryVectorStore::with_capacity(max_vectors, dim);

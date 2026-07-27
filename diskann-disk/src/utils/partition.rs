@@ -623,14 +623,11 @@ mod partition_test {
             &mut diskann_providers::utils::create_rnd_in_tests(),
             pool.as_ref(),
             |num_points, dim| {
-                // Simple RAM estimation for test - capture datasize and graph_degree from context
-                use diskann_providers::model::GRAPH_SLACK_FACTOR;
-
+                // A deliberately crude stand-in for the production estimator: this test only
+                // exercises how `partition_with_ram_budget` reacts to the callback.
                 let datasize = std::mem::size_of::<f32>() as u64;
                 let graph_degree = max_degree as u64;
-                let dataset_size = (num_points * dim.next_multiple_of(8u64) * datasize) as f64;
-                let graph_size = (num_points * graph_degree * 4) as f64 * GRAPH_SLACK_FACTOR;
-                1.1 * (dataset_size + graph_size)
+                (num_points * (dim * datasize + graph_degree * 4)) as f64
             },
         )?;
 

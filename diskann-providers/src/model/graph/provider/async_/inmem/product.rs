@@ -28,7 +28,8 @@ use crate::model::{
         FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
         SimpleNeighborProviderAsync,
         common::{
-            CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper, VectorStore,
+            CreateVectorStore, EstimateBytes, Hybrid, NoStore, Panics, Quantized, SetElementHelper,
+            VectorStore,
         },
         distances,
         inmem::{
@@ -61,6 +62,12 @@ impl VectorStore for DefaultQuant {
 
     fn count_for_get_vector(&self) -> usize {
         self.num_get_calls.get()
+    }
+}
+
+impl EstimateBytes for FixedChunkPQTable {
+    fn estimated_bytes(&self, total_points: usize) -> usize {
+        DefaultQuant::estimate_bytes(total_points, self.get_num_chunks())
     }
 }
 

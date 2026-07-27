@@ -100,8 +100,17 @@ unsafe impl<T: bytemuck::Pod + Sync> Sync for AlignedMemoryVectorStore<T> {}
 // SAFETY: It's not really, but the `bytemuck::Pod` bound helps mitigate the fallout.
 unsafe impl<T: bytemuck::Pod + Send> Send for AlignedMemoryVectorStore<T> {}
 
+/// The allocation shape of an [`AlignedMemoryVectorStore`], derived once and shared by
+/// [`AlignedMemoryVectorStore::with_capacity`] and [`AlignedMemoryVectorStore::estimate_bytes`].
+struct AlignedLayout {
+    /// Per-vector element count after padding each vector to a 64 byte boundary.
+    padded_vector_dim: usize,
+
+    element_count: usize,
+}
+
 impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
-    pub fn with_capacity(max_vectors: usize, dim: usize) -> Self {
+    fn layout(max_vectors: usize, dim: usize) -> AlignedLayout {
         let elem_size = mem::size_of::<T>();
         assert!(64 % elem_size == 0);
         let vector_size = elem_size * dim;
@@ -122,9 +131,25 @@ impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
         // correct alignment. This means we need some extra elements at the end to compensate.
         let last_elems: usize = 64 / elem_size - 1;
 
-        let count = max_vectors * padded_vector_dim + last_elems;
+        AlignedLayout {
+            padded_vector_dim,
+            element_count: max_vectors * padded_vector_dim + last_elems,
+        }
+    }
+
+    /// The number of heap bytes [`Self::with_capacity`] will allocate for these arguments.
+    pub fn estimate_bytes(max_vectors: usize, dim: usize) -> usize {
+        Self::layout(max_vectors, dim).element_count * mem::size_of::<T>()
+    }
+
+    pub fn with_capacity(max_vectors: usize, dim: usize) -> Self {
+        let AlignedLayout {
+            padded_vector_dim,
+            element_count,
+        } = Self::layout(max_vectors, dim);
+
         let mut store: UnsafeCell<Vec<T>> =
-            UnsafeCell::new(vec![<T as bytemuck::Zeroable>::zeroed(); count]);
+            UnsafeCell::new(vec![<T as bytemuck::Zeroable>::zeroed(); element_count]);
 
         let start_index = store.get_mut().as_ptr().align_offset(64);
 
@@ -458,6 +483,27 @@ impl Default for TestCallCount {
     }
 }
 
+/// Estimate the heap footprint a precursor's store will occupy once created.
+///
+/// Implementations must derive their result from the same sizing helpers the corresponding
+/// constructor uses; re-deriving the arithmetic here reintroduces the drift this trait exists to
+/// prevent. Allocations growing with `total_points` are counted, fixed overheads are not.
+pub trait EstimateBytes {
+    fn estimated_bytes(&self, total_points: usize) -> usize;
+}
+
+impl EstimateBytes for NoStore {
+    fn estimated_bytes(&self, _total_points: usize) -> usize {
+        0
+    }
+}
+
+impl EstimateBytes for NoDeletes {
+    fn estimated_bytes(&self, _total_points: usize) -> usize {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
@@ -488,5 +534,42 @@ mod tests {
                 msg
             );
         }
+    }
+
+    /// `estimate_bytes` must describe the allocation `with_capacity` actually makes, including
+    /// the alignment slack at the end of the buffer.
+    #[rstest::rstest]
+    #[case::exactly_one_cache_line(16)]
+    #[case::unaligned(17)]
+    #[case::sub_cache_line(3)]
+    #[case::zero_vectors_still_reserves_slack(0)]
+    fn estimate_bytes_matches_allocation(#[case] dim: usize) {
+        for max_vectors in [0usize, 1, 7, 1000] {
+            let store = AlignedMemoryVectorStore::<f32>::with_capacity(max_vectors, dim);
+
+            // SAFETY: no other reference to the store exists in this test.
+            let allocated = unsafe { &*store.store.get() }.len() * mem::size_of::<f32>();
+
+            assert_eq!(
+                AlignedMemoryVectorStore::<f32>::estimate_bytes(max_vectors, dim),
+                allocated,
+                "dim={dim}, max_vectors={max_vectors}"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_pads_vectors_to_cache_line() {
+        // 16 f32 elements are exactly one cache line, so no padding is added.
+        assert_eq!(
+            AlignedMemoryVectorStore::<f32>::layout(4, 16).padded_vector_dim,
+            16
+        );
+
+        // 17 elements spill into a second cache line and are padded up to it.
+        assert_eq!(
+            AlignedMemoryVectorStore::<f32>::layout(4, 17).padded_vector_dim,
+            32
+        );
     }
 }

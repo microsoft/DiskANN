@@ -2,16 +2,13 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use std::{
-    marker::PhantomData,
-    mem::{self, size_of},
-};
+use std::{marker::PhantomData, mem, mem::size_of};
 
 use crate::data_model::GraphDataType;
 use diskann::{utils::VectorRepr, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
+    model::{IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE},
     utils::{
         load_metadata_from_file, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
         READ_WRITE_BLOCK_SIZE,
@@ -22,43 +19,18 @@ use rand::seq::SliceRandom;
 use tracing::info;
 
 use crate::{
-    build::builder::{inmem_builder::build_inmem_index, quantizer::BuildQuantizer},
+    build::builder::{
+        inmem_builder::{build_inmem_index, estimate_build_index_ram_usage},
+        quantizer::BuildQuantizer,
+    },
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
     utils::partition_with_ram_budget,
-    DiskIndexBuildParameters, QuantizationType,
+    DiskIndexBuildParameters,
 };
-
-/// Overhead factor for RAM estimation during index build (10% buffer).
-const OVERHEAD_FACTOR: f64 = 1.1f64;
 
 /// Number of nearest shards each vector is assigned to during partitioning.
 const PARTITION_ASSIGNMENTS_PER_VECTOR: usize = 2;
-
-/// Estimate RAM usage in bytes for building an index.
-#[inline]
-pub(super) fn estimate_build_index_ram_usage(
-    num_points: u64,
-    dim: u64,
-    datasize: u64,
-    graph_degree: u64,
-    build_quantization_type: &QuantizationType,
-) -> f64 {
-    let graph_size =
-        (num_points * graph_degree * mem::size_of::<u32>() as u64) as f64 * GRAPH_SLACK_FACTOR;
-
-    let single_vec_size = match *build_quantization_type {
-        QuantizationType::FP => dim.next_multiple_of(8u64) * datasize,
-        // We can skip PQ pivots data as it is very small(~3MB) for even large datasets like OAI-3072.
-        QuantizationType::PQ { num_chunks } => num_chunks as u64,
-        // `+ std::mem::size_of::<f32>()` for f32 compensation metadata for the scalar quantizer.
-        QuantizationType::SQ { nbits, .. } => {
-            (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
-        }
-    };
-
-    OVERHEAD_FACTOR * (graph_size + (single_vec_size * num_points) as f64)
-}
 
 /// Builds a merged Vamana index from overlapping dataset shards.
 pub(super) struct MergedVamanaIndexBuilder<'a, Data, StorageProvider>
@@ -109,8 +81,7 @@ where
         let output_vamana = self.index_writer.get_mem_index_file();
         let max_degree = self.index_configuration.config.pruned_degree_u32().get();
 
-        let num_parts =
-            self.partition_data(&dataset_file, &merged_index_prefix, max_degree, pool)?;
+        let num_parts = self.partition_data(&dataset_file, &merged_index_prefix, pool)?;
         logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::PartitionData);
 
         for shard_id in 0..num_parts {
@@ -125,26 +96,27 @@ where
         Ok(())
     }
 
-    fn create_shard_index_config(&self, shard_base_file: &str) -> ANNResult<IndexConfiguration> {
+    /// The index configuration each shard is built with, before its point count is known.
+    fn shard_index_config(&self) -> ANNResult<IndexConfiguration> {
         let base_config = self.index_configuration;
-        let storage_provider = self.storage_provider;
 
-        let search_list_size = base_config.config.l_build().get();
-        let pruned_degree = base_config.config.pruned_degree().get();
-
-        let low_degree_params = diskann::graph::config::Builder::new(
-            2 * pruned_degree / 3,
+        let mut index_config = (*base_config).clone();
+        index_config.config = diskann::graph::config::Builder::new(
+            2 * base_config.config.pruned_degree().get() / 3,
             diskann::graph::config::MaxDegree::default_slack(),
-            search_list_size,
+            base_config.config.l_build().get(),
             base_config.dist_metric.into(),
         )
         .build()?;
 
-        let metadata = load_metadata_from_file(storage_provider, shard_base_file)?;
+        Ok(index_config)
+    }
 
-        let mut index_config = (*base_config).clone();
+    fn create_shard_index_config(&self, shard_base_file: &str) -> ANNResult<IndexConfiguration> {
+        let metadata = load_metadata_from_file(self.storage_provider, shard_base_file)?;
+
+        let mut index_config = self.shard_index_config()?;
         index_config.max_points = metadata.npoints();
-        index_config.config = low_degree_params;
 
         Ok(index_config)
     }
@@ -425,11 +397,13 @@ where
         &mut self,
         dataset_file: &str,
         merged_index_prefix: &str,
-        max_degree: u32,
         pool: RayonThreadPoolRef<'_>,
     ) -> ANNResult<usize> {
         let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / self.index_configuration.max_points as f64;
         let ram_budget_in_bytes = self.disk_build_param.build_memory_limit().in_bytes() as f64;
+
+        let shard_config = self.shard_index_config()?;
+        let build_quantizer = self.build_quantizer;
 
         partition_with_ram_budget::<Data::VectorDataType, _, _>(
             dataset_file,
@@ -442,15 +416,10 @@ where
             &mut self.rng,
             pool,
             |num_points, dim| {
-                let datasize = std::mem::size_of::<Data::VectorDataType>() as u64;
-                let graph_degree = 2 * max_degree / 3;
-                estimate_build_index_ram_usage(
-                    num_points,
-                    dim,
-                    datasize,
-                    graph_degree as u64,
-                    self.disk_build_param.build_quantization(),
-                )
+                let mut config = shard_config.clone();
+                config.max_points = num_points as usize;
+                config.dim = dim as usize;
+                estimate_build_index_ram_usage::<Data::VectorDataType>(&config, build_quantizer)
             },
         )
     }

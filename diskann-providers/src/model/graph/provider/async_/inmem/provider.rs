@@ -22,8 +22,8 @@ use crate::{
     model::graph::provider::async_::{
         SimpleNeighborProviderAsync, StartPoints, TableDeleteProviderAsync,
         common::{
-            CreateDeleteProvider, CreateVectorStore, NoDeletes, NoStore, PrefetchCacheLineLevel,
-            SetElementHelper, VectorStore,
+            CreateDeleteProvider, CreateVectorStore, EstimateBytes, NoDeletes, NoStore,
+            PrefetchCacheLineLevel, SetElementHelper, VectorStore,
         },
     },
     storage::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith},
@@ -274,6 +274,13 @@ pub struct DefaultProviderParameters {
     pub max_degree: u32,
 }
 
+/// Start points occupy a single trailing block in the neighbor provider.
+const NEIGHBOR_START_POINTS: usize = 1;
+
+/// `max_degree` in [`DefaultProviderParameters`] is already the true maximum degree, so the
+/// neighbor provider applies no further slack.
+const NEIGHBOR_SLACK_FACTOR: f32 = 1.0;
+
 impl DefaultProviderParameters {
     pub fn simple(max_points: usize, dim: usize, metric: Metric, max_degree: u32) -> Self {
         Self {
@@ -286,6 +293,31 @@ impl DefaultProviderParameters {
             max_degree,
         }
     }
+
+    /// Estimate the heap footprint [`DefaultProvider::new_empty`] would allocate for these
+    /// parameters and precursors, without allocating anything.
+    pub fn estimated_bytes<CU, CV, CD>(
+        &self,
+        base_precursor: &CU,
+        aux_precursor: &CV,
+        delete_precursor: &CD,
+    ) -> usize
+    where
+        CU: EstimateBytes,
+        CV: EstimateBytes,
+        CD: EstimateBytes,
+    {
+        let npts = self.max_points + self.frozen_points.get();
+        base_precursor.estimated_bytes(npts)
+            + aux_precursor.estimated_bytes(npts)
+            + delete_precursor.estimated_bytes(npts)
+            + SimpleNeighborProviderAsync::estimate_bytes(
+                npts,
+                NEIGHBOR_START_POINTS,
+                self.max_degree,
+                NEIGHBOR_SLACK_FACTOR,
+            )
+    }
 }
 
 impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
@@ -297,7 +329,6 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
     /// * `base_precursor`: A precursor type for the base layer.
     /// * `aux_precursor`: A precursor type for the auxiliary layer.
     /// * `delete_precursor`: A precursor type for the delete layer.
-    /// * `neighbor_precursor`: A precursor type for the neighbor layer.
     pub fn new_empty<CU, CV, CD>(
         params: DefaultProviderParameters,
         base_precursor: CU,
@@ -313,7 +344,12 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
         Ok(Self {
             base_vectors: base_precursor.create(npts, params.metric, params.prefetch_lookahead),
             aux_vectors: aux_precursor.create(npts, params.metric, params.prefetch_lookahead),
-            neighbor_provider: SimpleNeighborProviderAsync::new(npts, 1, params.max_degree, 1.0),
+            neighbor_provider: SimpleNeighborProviderAsync::new(
+                npts,
+                NEIGHBOR_START_POINTS,
+                params.max_degree,
+                NEIGHBOR_SLACK_FACTOR,
+            ),
             deleted: delete_precursor.create(npts),
             metric: params.metric,
             start_points: StartPoints::new(params.max_points as u32, params.frozen_points)?,

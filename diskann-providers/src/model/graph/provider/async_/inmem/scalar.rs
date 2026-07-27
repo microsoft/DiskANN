@@ -40,8 +40,8 @@ use crate::{
     model::graph::provider::async_::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
-            AlignedMemoryVectorStore, CreateVectorStore, NoStore, Quantized, SetElementHelper,
-            TestCallCount, VectorStore,
+            AlignedMemoryVectorStore, CreateVectorStore, EstimateBytes, NoStore, Quantized,
+            SetElementHelper, TestCallCount, VectorStore,
         },
         inmem::{FullPrecisionProvider, FullPrecisionStore},
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -100,6 +100,15 @@ impl<const NBITS: usize> SQStore<NBITS>
 where
     Unsigned: Representation<NBITS>,
 {
+    /// The number of heap bytes [`Self::new`] will allocate for these arguments, excluding the
+    /// trained quantizer.
+    pub fn estimate_bytes(num_vectors: usize, dim: usize) -> usize {
+        AlignedMemoryVectorStore::<u8>::estimate_bytes(
+            num_vectors,
+            CVRef::<NBITS>::canonical_bytes(dim),
+        )
+    }
+
     pub(super) fn new(
         quantizer: ScalarQuantizer,
         num_vectors: usize,
@@ -334,6 +343,15 @@ where
         prefetch_lookahead: Option<usize>,
     ) -> Self::Target {
         SQStore::new(self.quantizer, max_points, metric, prefetch_lookahead)
+    }
+}
+
+impl<const NBITS: usize> EstimateBytes for WithBits<NBITS>
+where
+    Unsigned: Representation<NBITS>,
+{
+    fn estimated_bytes(&self, total_points: usize) -> usize {
+        SQStore::<NBITS>::estimate_bytes(total_points, self.quantizer.dim())
     }
 }
 

@@ -58,6 +58,11 @@ pub struct FastMemoryVectorProviderAsync<T: VectorRepr> {
 }
 
 impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
+    /// The number of heap bytes [`Self::new`] will allocate for these arguments.
+    pub fn estimate_bytes(max_vectors: usize, dim: usize) -> usize {
+        AlignedMemoryVectorStore::<T>::estimate_bytes(max_vectors, dim)
+    }
+
     pub fn new(
         max_vectors: usize,
         dim: usize,

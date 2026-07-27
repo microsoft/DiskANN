@@ -29,8 +29,8 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::M
 use crate::model::graph::provider::async_::{
     FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
     common::{
-        CreateVectorStore, FullPrecision, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
-        SetElementHelper,
+        CreateVectorStore, EstimateBytes, FullPrecision, NoDeletes, NoStore, Panics,
+        PrefetchCacheLineLevel, SetElementHelper,
     },
     inmem::DefaultProvider,
     postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -84,6 +84,15 @@ where
             self.prefetch_cache_line_level,
             prefetch_lookahead,
         )
+    }
+}
+
+impl<T> EstimateBytes for CreateFullPrecision<T>
+where
+    T: VectorRepr,
+{
+    fn estimated_bytes(&self, total_points: usize) -> usize {
+        FullPrecisionStore::<T>::estimate_bytes(total_points, self.dim)
     }
 }
 
