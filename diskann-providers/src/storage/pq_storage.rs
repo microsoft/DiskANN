@@ -194,7 +194,7 @@ impl PQStorage {
     {
         let parts = self.load_pivot_file_parts(
             &self.pivot_data_path,
-            (*num_pq_chunks != 0).then_some(*num_pq_chunks),
+            Some(*num_pq_chunks),
             Some(*num_centers),
             Some(*dim),
             storage_provider,
@@ -567,7 +567,7 @@ mod pq_storage_tests {
     }
 
     #[test]
-    fn load_pivot_data_infers_chunk_count_when_zero() {
+    fn load_pq_pivots_infers_chunk_count_when_zero() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let pivot_path = "/infer_chunk_count_pivots.bin";
 
@@ -588,11 +588,11 @@ mod pq_storage_tests {
             )
             .unwrap();
 
-        let (_, _, loaded_offsets) = pq_storage
-            .load_existing_pivot_data(&0, &num_centers, &dim, &storage_provider)
+        let table = pq_storage
+            .load_pq_pivots_bin(pivot_path, 0, &storage_provider)
             .unwrap();
 
-        assert_eq!(loaded_offsets, chunk_offsets);
+        assert_eq!(table.view_pivots().as_slice(), pivots);
     }
 
     #[test]
