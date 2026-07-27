@@ -72,18 +72,22 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
     });
 
     if is_any_vector_zero_length {
-        return Err(ANNError::log_index_error(format_args!(
-            "Vector length cannot be zero"
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            "Vector length cannot be zero",
+        ));
     }
 
     // compute sum of vector lengths and check that it's equal to total_results
     let sum_vec_lengths: usize = vec_lengths.iter().map(|&x| x as usize).sum();
     if sum_vec_lengths != total_results {
-        return Err(ANNError::log_index_error(format_args!(
-            "Sum of vector lengths ({}) does not match total_results ({})",
-            sum_vec_lengths, total_results
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "Sum of vector lengths ({}) does not match total_results ({})",
+                sum_vec_lengths, total_results
+            ),
+        ));
     }
 
     let mut all_vectors: Vec<Matrix<T>> = Vec::with_capacity(num_points);

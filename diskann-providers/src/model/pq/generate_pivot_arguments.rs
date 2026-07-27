@@ -62,7 +62,7 @@ pub enum GeneratePivotArgumentsError {
 impl From<GeneratePivotArgumentsError> for ANNError {
     #[track_caller]
     fn from(value: GeneratePivotArgumentsError) -> Self {
-        ANNError::log_pq_error(value)
+        ANNError::from_display(diskann::ANNErrorKind::PQError, value)
     }
 }
 

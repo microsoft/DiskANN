@@ -28,7 +28,12 @@ impl PQData {
             pq_pivot_table.view_pivots(),
             pq_pivot_table.view_offsets().to_owned(),
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(|err| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
+                diskann_quantization::error::format(&err),
+            )
+        })?;
 
         Ok(Self {
             pq_pivot_table,
@@ -64,7 +69,10 @@ impl PQData {
     // Get compressed vector with the given vector id from the pq_compressed_data.
     pub fn get_compressed_vector(&self, vector_id: usize) -> ANNResult<&[u8]> {
         self.pq_compressed_data.get_row(vector_id).ok_or_else(|| {
-            ANNError::log_index_error("Vector id is out of boundary in the compressed dataset.")
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "Vector id is out of boundary in the compressed dataset.",
+            )
         })
     }
 }

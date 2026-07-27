@@ -108,10 +108,15 @@ where
         None
     };
 
-    let dim = NonZeroUsize::new(parameters.dim())
-        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
-    let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
-        .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
+    let dim = NonZeroUsize::new(parameters.dim()).ok_or_else(|| {
+        ANNError::from_display(diskann::ANNErrorKind::PQError, "dim must be non-zero")
+    })?;
+    let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks()).ok_or_else(|| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
+            "num_pq_chunks must be non-zero",
+        )
+    })?;
     let chunk_offsets = ChunkOffsets::partition(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -129,7 +134,12 @@ where
                 &random_provider,
                 &diskann_quantization::cancel::DontCancel,
             )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?
+            .map_err(|err| {
+                ANNError::from_display(
+                    diskann::ANNErrorKind::PQError,
+                    diskann_quantization::error::format(&err),
+                )
+            })?
             .flatten();
         Ok(result)
     })?;
@@ -170,19 +180,22 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if full_pivot_data.len() != parameters.num_centers() * parameters.dim() {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "Error: full_pivot_data size is not num_centers * dim.",
         ));
     }
 
     if offsets.len() != parameters.num_pq_chunks() + 1 {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "Error: invalid offsets buffer input size.",
         ));
     }
 
     if *cancellation_token {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "Error: Cancellation requested by caller.",
         ));
     }
@@ -194,8 +207,9 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
         .collect::<Vec<f32>>();
 
     // Calculate the chunk offsets, filling the caller-owned buffer.
-    let dim = NonZeroUsize::new(parameters.dim())
-        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+    let dim = NonZeroUsize::new(parameters.dim()).ok_or_else(|| {
+        ANNError::from_display(diskann::ANNErrorKind::PQError, "dim must be non-zero")
+    })?;
     let chunk_offsets_view = ChunkOffsetsView::partition_into(dim, offsets).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -233,7 +247,12 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
                 &rng_builder,
                 &cancelation,
             )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?
+            .map_err(|err| {
+                ANNError::from_display(
+                    diskann::ANNErrorKind::PQError,
+                    diskann_quantization::error::format(&err),
+                )
+            })?
             .flatten();
         Ok(result)
     })?;
@@ -346,7 +365,8 @@ where
     let full_dim: usize;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "ERROR: PQ k-means pivot file not found.",
         ));
     } else {
@@ -395,7 +415,12 @@ where
             .bridge_err()?
             .to_owned(),
     )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+    .map_err(|err| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
+            diskann_quantization::error::format(&err),
+        )
+    })?;
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
@@ -439,7 +464,10 @@ where
             .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
             .try_for_each_in_pool(pool, |(src, dst)| {
                 table.compress_into(src, dst).map_err(|err| {
-                    ANNError::log_pq_error(diskann_quantization::error::format(&err))
+                    ANNError::from_display(
+                        diskann::ANNErrorKind::PQError,
+                        diskann_quantization::error::format(&err),
+                    )
                 })
             })?;
 
@@ -505,16 +533,24 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
         MatrixView::try_from(pivot_data, num_pivots, dim).bridge_err()?,
         diskann_quantization::views::ChunkOffsetsView::new(offsets).bridge_err()?,
     )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+    .map_err(|err| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
+            diskann_quantization::error::format(&err),
+        )
+    })?;
 
     let data = vector_data
         .iter()
         .map(|x| (*x).into())
         .collect::<Vec<f32>>();
 
-    table
-        .compress_into(data.as_slice(), pq_out)
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))
+    table.compress_into(data.as_slice(), pq_out).map_err(|err| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
+            diskann_quantization::error::format(&err),
+        )
+    })
 }
 
 /// Legacy compatibility function for providing an batch data generation.
@@ -542,12 +578,14 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
     let dim = parameters.dim();
 
     if vector_data.len() != num_train * dim {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "Error: Vector data length has the incorrect size!",
         ));
     }
     if pq_out.len() != num_train * num_pq_chunks {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "Error: Invalid PQ buffer input size.",
         ));
     }

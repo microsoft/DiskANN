@@ -711,7 +711,7 @@ impl From<RQError> for ANNError {
     #[cold]
     #[track_caller]
     fn from(err: RQError) -> Self {
-        ANNError::log_sq_error(err)
+        ANNError::new(diskann::ANNErrorKind::SQError, err)
     }
 }
 

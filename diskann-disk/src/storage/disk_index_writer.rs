@@ -99,10 +99,10 @@ impl DiskIndexWriter {
         block_size: usize,
     ) -> ANNResult<Self> {
         if block_size < GraphMetadata::get_size() {
-            return Err(ANNError::log_index_config_error(
-                "index_block_size".to_string(),
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexConfigError,
                 format!(
-                    "block_size should be greater than the size of GraphMetadata: {}",
+                    "index_block_size is invalid, err = block_size should be greater than the size of GraphMetadata: {}",
                     GraphMetadata::get_size()
                 ),
             ));
@@ -138,7 +138,10 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             num_nbrs = vamana_reader.read_u32::<LittleEndian>()?;
         } else {
-            return Err(ANNError::log_index_error("invalid index reader"));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "invalid index reader",
+            ));
         }
 
         Ok(num_nbrs)
@@ -154,7 +157,10 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             vamana_reader.read_exact(nbrs_buf)?;
         } else {
-            return Err(ANNError::log_index_error("invalid index reader"));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "invalid index reader",
+            ));
         }
 
         Ok(())
@@ -193,7 +199,10 @@ impl DiskIndexWriter {
             return Ok(());
         }
 
-        Err(ANNError::log_index_error("invalid index reader"))
+        Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            "invalid index reader",
+        ))
     }
 
     fn open_associated_data_reader<StorageProvider>(
@@ -218,7 +227,7 @@ impl DiskIndexWriter {
                 let length = associated_data_reader.read_u32()? as usize;
 
                 if state.num_pts != associated_data_num_pts {
-                    return Err(ANNError::log_index_error(format_args!(
+                    return Err(ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
                         "Number of points in dataset file ({}) does not match number of points in associated data file ({}).",
                         state.num_pts, associated_data_num_pts
                     )));

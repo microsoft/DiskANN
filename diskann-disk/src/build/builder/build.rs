@@ -226,7 +226,12 @@ where
     // use either user-specified number of threads or default to available parallelism
     let num_tasks = NonZeroUsize::new(config.num_threads)
         .or_else(|| std::thread::available_parallelism().ok())
-        .ok_or_else(|| ANNError::log_index_error("Failed to determine number of threads"))?;
+        .ok_or_else(|| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "Failed to determine number of threads",
+            )
+        })?;
 
     // Associated data will only be used in the write_disk_layout function which only requires the none-partitioned associated data stream.
     let dataset_iter = Arc::new(Mutex::new({
@@ -292,8 +297,12 @@ async fn log_build_stats<T: VectorRepr>(index: &Arc<dyn InmemIndexBuilder<T>>) -
 /// The async index uses `u32` internal ids, so positions in the dataset must not exceed
 /// `u32::MAX`.
 fn u32_try_from(value: usize) -> ANNResult<u32> {
-    u32::try_from(value)
-        .map_err(|_| ANNError::log_index_error(format_args!("id {value} exceeds u32::MAX")))
+    u32::try_from(value).map_err(|_| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!("id {value} exceeds u32::MAX"),
+        )
+    })
 }
 
 fn set_start_point_to_medoid<T, StorageReader>(
@@ -338,7 +347,10 @@ where
             for _ in partition {
                 let vector_data = {
                     let mut guard = iterator_clone.lock().map_err(|_| {
-                        ANNError::log_index_error("Poisoned mutex during construction")
+                        ANNError::from_display(
+                            diskann::ANNErrorKind::IndexError,
+                            "Poisoned mutex during construction",
+                        )
                     })?;
                     guard.next()
                 };
@@ -357,7 +369,12 @@ where
 
     // Wait for all tasks to complete.
     while let Some(res) = tasks.join_next().await {
-        res.map_err(|_| ANNError::log_index_error("A spawned insert task failed"))??;
+        res.map_err(|_| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "A spawned insert task failed",
+            )
+        })??;
     }
 
     info!("Linked all points. Num points: #{}", total_points);
@@ -382,7 +399,12 @@ async fn run_final_prune<T: VectorRepr>(
 
     // Wait for all final prune tasks to complete
     while let Some(res) = tasks.join_next().await {
-        res.map_err(|_| ANNError::log_index_error("A spawned final prune task failed"))??;
+        res.map_err(|_| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "A spawned final prune task failed",
+            )
+        })??;
     }
 
     Ok(())

@@ -156,7 +156,7 @@ impl SimpleNeighborProviderAsync {
                 //
                 // Work backwards from this value to determine the internal `max_points`.
                 let max_points = num_points.checked_sub(num_start_points).ok_or_else(|| {
-                    ANNError::log_index_error(format_args!(
+                    ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
                         "expected {} start points but the on-disk dataset only has {} total points",
                         num_start_points, num_points,
                     ))

@@ -33,7 +33,8 @@ impl StartPoints {
             end: match valid_points.checked_add(frozen_points.get() as u32) {
                 Some(end) => end,
                 None => {
-                    return Err(ANNError::log_index_error(
+                    return Err(ANNError::from_display(
+                        diskann::ANNErrorKind::IndexError,
                         "Sum of valid points and frozen points exceeds u32::MAX",
                     ));
                 }
@@ -277,7 +278,7 @@ impl std::error::Error for Panics {}
 impl From<Panics> for ANNError {
     #[cold]
     fn from(_: Panics) -> ANNError {
-        ANNError::log_async_error("unreachable")
+        ANNError::from_display(diskann::ANNErrorKind::AsyncError, "unreachable")
     }
 }
 

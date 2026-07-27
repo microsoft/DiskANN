@@ -42,7 +42,7 @@ impl LinuxAlignedFileReader {
         let file = match open_result {
             Ok(file_handle) => file_handle,
             Err(err) => {
-                return Err(ANNError::log_io_error(err));
+                return Err(ANNError::new(diskann::ANNErrorKind::IOError, err));
             }
         };
 
@@ -80,7 +80,7 @@ impl LinuxAlignedFileReader {
         unsafe {
             ring.submission()
                 .push(&read)
-                .map_err(ANNError::log_push_error)?
+                .map_err(|err| ANNError::new(diskann::ANNErrorKind::PushError, err))?
         };
         Ok(())
     }
@@ -117,9 +117,10 @@ impl AlignedFileReader for LinuxAlignedFileReader {
             // Flush the completion queue.
             for cqe in ring.completion() {
                 if cqe.result() < 0 {
-                    return Err(ANNError::log_io_error(std::io::Error::from_raw_os_error(
-                        cqe.result(),
-                    )));
+                    return Err(ANNError::new(
+                        diskann::ANNErrorKind::IOError,
+                        std::io::Error::from_raw_os_error(cqe.result()),
+                    ));
                 }
             }
         }

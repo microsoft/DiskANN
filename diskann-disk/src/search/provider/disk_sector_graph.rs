@@ -78,7 +78,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
                 AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
-            .map_err(ANNError::log_index_error)?,
+            .map_err(|err| ANNError::new(diskann::ANNErrorKind::IndexError, err))?,
             cur_sector_idx: 0,
             num_nodes_per_sector,
             node_len,
@@ -97,7 +97,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
                 AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
-            .map_err(ANNError::log_index_error)?;
+            .map_err(|err| ANNError::new(diskann::ANNErrorKind::IndexError, err))?;
         }
         Ok(())
     }
@@ -112,7 +112,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     pub fn read_graph(&mut self, sectors_to_fetch: &[u64]) -> ANNResult<()> {
         let cur_sector_idx_usize: usize = self.cur_sector_idx.try_into()?;
         if sectors_to_fetch.len() > self.max_n_batch_sector_read - cur_sector_idx_usize {
-            return Err(ANNError::log_index_error(format_args!(
+            return Err(ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
                 "Trying to read too many sectors. number of sectors to read: {}, max number of sectors can read: {}",
                 sectors_to_fetch.len(),
                 self.max_n_batch_sector_read - cur_sector_idx_usize,
@@ -121,10 +121,13 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
 
         let len_per_node = self.num_sectors_per_node * self.block_size;
         if len_per_node == 0 {
-            return Err(ANNError::log_index_error(format_args!(
-                "len_per_node is 0 (num_sectors_per_node={}, block_size={})",
-                self.num_sectors_per_node, self.block_size,
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                format!(
+                    "len_per_node is 0 (num_sectors_per_node={}, block_size={})",
+                    self.num_sectors_per_node, self.block_size,
+                ),
+            ));
         }
         let range = cur_sector_idx_usize * len_per_node
             ..(cur_sector_idx_usize + sectors_to_fetch.len()) * len_per_node;

@@ -34,7 +34,7 @@ pub enum GraphHeaderError {
 impl From<GraphHeaderError> for ANNError {
     #[track_caller]
     fn from(value: GraphHeaderError) -> Self {
-        ANNError::log_index_error(value)
+        ANNError::from_display(diskann::ANNErrorKind::IndexError, value)
     }
 }
 
@@ -124,10 +124,9 @@ impl<'a> TryFrom<&'a [u8]> for GraphHeader {
     /// | GraphMetadata (80 bytes) | BlockSize (8 bytes) | GraphLayoutVersion (8 bytes) |
     fn try_from(value: &'a [u8]) -> ANNResult<Self> {
         if value.len() < Self::get_size() {
-            Err(ANNError::log_parse_slice_error(
-                "&[u8]".to_string(),
-                "GraphHeader".to_string(),
-                "The given bytes are not long enough to create a valid graph header.".to_string(),
+            Err(ANNError::from_display(
+                diskann::ANNErrorKind::ParseSliceError,
+                "source: &[u8] target: GraphHeader error: The given bytes are not long enough to create a valid graph header.",
             ))
         } else {
             // Parse metadata.

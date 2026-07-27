@@ -138,7 +138,8 @@ pub fn run_lloyds(
 
     for i in 0..max_reps {
         if *cancellation_token {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
                 "Error: Cancellation requested by caller.",
             ));
         }
@@ -178,18 +179,24 @@ fn select_random_pivots(
     rng: &mut impl Rng,
 ) -> ANNResult<()> {
     if num_points < num_centers {
-        return Err(ANNError::log_kmeans_error(format!(
-            "Number of points {} is less than number of centers {}",
-            num_points, num_centers
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::KMeansError,
+            format!(
+                "Number of points {} is less than number of centers {}",
+                num_points, num_centers
+            ),
+        ));
     }
     if pivot_data.len() != num_centers * dim {
-        return Err(ANNError::log_kmeans_error(format!(
-            "Pivot data buffer should be of size num_centers * dim = {} * {} = {}",
-            num_centers,
-            dim,
-            num_centers * dim
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::KMeansError,
+            format!(
+                "Pivot data buffer should be of size num_centers * dim = {} * {} = {}",
+                num_centers,
+                dim,
+                num_centers * dim
+            ),
+        ));
     }
 
     let mut picked = HashSet::new();
@@ -238,23 +245,30 @@ pub fn k_meanspp_selecting_pivots(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if num_points > (1 << 23) {
-        return Err(ANNError::log_kmeans_error(format!(
-            "Number of points {} is greater than 8388608, and k-means++ can not process this.
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::KMeansError,
+            format!(
+                "Number of points {} is greater than 8388608, and k-means++ can not process this.
             Try selecting_random_pivots instead.",
-            num_points
-        )));
+                num_points
+            ),
+        ));
     }
     if pivot_data.len() != num_centers * dim {
-        return Err(ANNError::log_kmeans_error(format!(
-            "Pivot data buffer should be of size num_centers * dim = {} * {} = {}",
-            num_centers,
-            dim,
-            num_centers * dim
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::KMeansError,
+            format!(
+                "Pivot data buffer should be of size num_centers * dim = {} * {} = {}",
+                num_centers,
+                dim,
+                num_centers * dim
+            ),
+        ));
     }
 
     if *cancellation_token {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::PQError,
             "Error: Cancellation requested by caller.",
         ));
     }
@@ -263,8 +277,12 @@ pub fn k_meanspp_selecting_pivots(
     let mut picked = HashSet::with_capacity(num_centers);
 
     let real_distribution = StandardUniform;
-    let int_distribution = Uniform::new(0, num_points)
-        .map_err(|_| ANNError::log_kmeans_error("cannot cluster an empty dataset".into()))?;
+    let int_distribution = Uniform::new(0, num_points).map_err(|_| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::KMeansError,
+            "cannot cluster an empty dataset",
+        )
+    })?;
 
     // Randomly select a node as the first pivot.
     let init_id = int_distribution.sample(rng);
@@ -291,7 +309,8 @@ pub fn k_meanspp_selecting_pivots(
     // At the end of the loop we should have num_centers pivots.
     for _ in 1..num_centers {
         if *cancellation_token {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
                 "Error: Cancellation requested by caller.",
             ));
         }
@@ -329,7 +348,7 @@ pub fn k_meanspp_selecting_pivots(
                     || (dart_val <= prefix_sum && *pivot_dist != 0.0f32))
             {
                 if picked.contains(&i) {
-                    return Err(ANNError::log_kmeans_error(
+                    return Err(ANNError::from_display(diskann::ANNErrorKind::KMeansError,
                         "A pivot was sampled again, the condition on dart_val range should not have happened".to_string(),
                     ));
                 }
@@ -341,7 +360,8 @@ pub fn k_meanspp_selecting_pivots(
             prefix_sum += *pivot_dist as f64;
         }
         if prefix_sum > sum {
-            return Err(ANNError::log_kmeans_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::KMeansError,
                 "Prefix sum should not be greater than sum.
             If the for loop above ran to conclusion without break,
             prefix_sum should be equal to sum"
@@ -351,7 +371,8 @@ pub fn k_meanspp_selecting_pivots(
         // We should have picked a pivot in this loop.
         // If not, there is a corner condition we might have missed and we should fix this function.
         if picked_pivot_id == num_points {
-            return Err(ANNError::log_kmeans_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::KMeansError,
                 "Did not pick a pivot in this loop".to_string(),
             ));
         }

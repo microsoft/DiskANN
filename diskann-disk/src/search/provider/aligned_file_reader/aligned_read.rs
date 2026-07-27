@@ -69,9 +69,10 @@ impl<'a, T, A: Alignment> AlignedRead<'a, T, A> {
         if val.is_multiple_of(align) {
             Ok(())
         } else {
-            Err(ANNError::log_disk_io_request_alignment_error(format!(
-                "{kind} {val} not aligned to {align}",
-            )))
+            Err(ANNError::from_display(
+                diskann::ANNErrorKind::DiskIOAlignmentError,
+                format!("{kind} {val} not aligned to {align}",),
+            ))
         }
     }
 

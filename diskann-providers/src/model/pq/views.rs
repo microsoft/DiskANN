@@ -12,7 +12,7 @@ use crate::utils::Bridge;
 impl From<Bridge<diskann_quantization::views::ChunkOffsetError>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<diskann_quantization::views::ChunkOffsetError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
+        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner())
     }
 }
 
@@ -20,7 +20,7 @@ impl From<Bridge<diskann_quantization::views::ChunkOffsetError>> for ANNError {
 impl From<Bridge<diskann_quantization::views::PartitionError>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<diskann_quantization::views::PartitionError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
+        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner())
     }
 }
 
@@ -28,7 +28,7 @@ impl From<Bridge<diskann_quantization::views::PartitionError>> for ANNError {
 impl From<Bridge<diskann_quantization::views::PartitionIntoError>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<diskann_quantization::views::PartitionIntoError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
+        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner())
     }
 }
 
@@ -36,7 +36,7 @@ impl From<Bridge<diskann_quantization::views::PartitionIntoError>> for ANNError 
 impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<diskann_quantization::views::ChunkViewError>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
+        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner())
     }
 }
 
@@ -44,7 +44,7 @@ impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
 impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<views::TryFromError<T>>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
+        ANNError::new(diskann::ANNErrorKind::PQError, value.into_inner().as_static())
     }
 }
 

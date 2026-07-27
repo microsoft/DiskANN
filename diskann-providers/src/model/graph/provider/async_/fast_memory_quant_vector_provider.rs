@@ -161,7 +161,8 @@ impl FastMemoryQuantVectorProviderAsync {
         T: VectorRepr,
     {
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector id is out of boundary in the dataset.",
             ));
         }
@@ -169,7 +170,8 @@ impl FastMemoryQuantVectorProviderAsync {
         let vf32: &[f32] = &T::as_f32(v).into_ann_result()?;
 
         if vf32.len() != self.full_dim() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector f32 dimension is not equal to the expected dimension.",
             ));
         }
@@ -208,12 +210,14 @@ impl FastMemoryQuantVectorProviderAsync {
     /// 2. Be okay with racey data.
     pub(crate) unsafe fn set_quant_vector(&self, i: usize, v: &[u8]) -> ANNResult<()> {
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector id is out of boundary in the dataset.",
             ));
         }
         if v.len() != self.pq_chunks() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }

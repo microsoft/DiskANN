@@ -109,7 +109,8 @@ impl MemoryQuantVectorProviderAsync {
         self.num_get_calls.increment();
         match self.quant_vectors.get(i) {
             Some(vector) => Ok(vector.load()),
-            None => Err(ANNError::log_index_error(
+            None => Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector id is out of boundary in the dataset.",
             )),
         }
@@ -129,7 +130,8 @@ impl MemoryQuantVectorProviderAsync {
     {
         let v_f32 = T::as_f32(v).map_err(|x| x.into())?;
         if v_f32.len() != self.full_dim() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector f32 dimension is not equal to the expected dimension.",
             ));
         }
@@ -151,7 +153,8 @@ impl MemoryQuantVectorProviderAsync {
         let slot = match self.quant_vectors.get(i) {
             Some(slot) => slot,
             None => {
-                return Err(ANNError::log_index_error(
+                return Err(ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
                     "Vector id is out of boundary in the dataset.",
                 ));
             }

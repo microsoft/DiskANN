@@ -38,7 +38,7 @@ impl WindowsAlignedFileReader {
         match unsafe { FileHandle::new(fname) } {
             Ok(file_handle) => io_context.file_handle = file_handle,
             Err(err) => {
-                return Err(ANNError::log_io_error(err));
+                return Err(ANNError::new(diskann::ANNErrorKind::IOError, err));
             }
         }
 
@@ -46,7 +46,7 @@ impl WindowsAlignedFileReader {
         match IOCompletionPort::new(&io_context.file_handle, None, 0, 0) {
             Ok(io_completion_port) => io_context.io_completion_port = io_completion_port,
             Err(err) => {
-                return Err(ANNError::log_io_error(err));
+                return Err(ANNError::new(diskann::ANNErrorKind::IOError, err));
             }
         }
 
@@ -82,7 +82,7 @@ impl AlignedFileReader for WindowsAlignedFileReader {
                 } {
                     Ok(_) => {}
                     Err(error) => {
-                        return Err(ANNError::log_io_error(error));
+                        return Err(ANNError::new(diskann::ANNErrorKind::IOError, error));
                     }
                 }
             }
@@ -108,7 +108,7 @@ impl AlignedFileReader for WindowsAlignedFileReader {
                         thread::sleep(ASYNC_IO_COMPLETION_CHECK_INTERVAL);
                     }
                     // An error ocurred.
-                    Err(error) => return Err(ANNError::log_io_error(error)),
+                    Err(error) => return Err(ANNError::new(diskann::ANNErrorKind::IOError, error)),
                 }
             }
         }

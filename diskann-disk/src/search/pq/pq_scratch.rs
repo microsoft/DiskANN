@@ -42,12 +42,12 @@ impl PQScratch {
     ) -> ANNResult<Self> {
         let aligned_pq_coord_scratch =
             Poly::broadcast(0u8, graph_degree * num_pq_chunks, AlignedAllocator::A128)
-                .map_err(ANNError::log_index_error)?;
+                .map_err(|err| ANNError::new(diskann::ANNErrorKind::IndexError, err))?;
         let aligned_pqtable_dist_scratch =
             Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128)
-                .map_err(ANNError::log_index_error)?;
+                .map_err(|err| ANNError::new(diskann::ANNErrorKind::IndexError, err))?;
         let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
-            .map_err(ANNError::log_index_error)?;
+            .map_err(|err| ANNError::new(diskann::ANNErrorKind::IndexError, err))?;
         let query_scratch = vec![0.0f32; dim];
 
         Ok(Self {
@@ -68,10 +68,13 @@ impl PQScratch {
     pub fn set(&mut self, query: &[f32]) -> ANNResult<()> {
         let dim = self.query_scratch.len();
         if query.len() != dim {
-            return Err(ANNError::log_dimension_mismatch_error(format!(
-                "PQScratch::set: expected query of length {dim}, got {}",
-                query.len()
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::DimensionMismatchError,
+                format!(
+                    "PQScratch::set: expected query of length {dim}, got {}",
+                    query.len()
+                ),
+            ));
         }
         self.query_scratch.copy_from_slice(query);
         Ok(())

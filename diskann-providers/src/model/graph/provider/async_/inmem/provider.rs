@@ -402,11 +402,14 @@ where
     {
         let start_points = self.start_points.range();
         if itr.len() != start_points.len() {
-            return Err(ANNError::log_async_index_error(format!(
-                "expected `itr` to contain `{}` items, instead it has {}",
-                start_points.len(),
-                itr.len(),
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::AsyncIndexError,
+                format!(
+                    "expected `itr` to contain `{}` items, instead it has {}",
+                    start_points.len(),
+                    itr.len(),
+                ),
+            ));
         }
 
         for (i, v) in std::iter::zip(start_points, itr) {
@@ -504,11 +507,14 @@ where
         let valid_points = npts
             .checked_sub(ctx.num_frozen_points.get())
             .ok_or_else(|| {
-                ANNError::log_index_error(format_args!(
-                    "Expected {} start points but the stored index only has {} total points",
-                    ctx.num_frozen_points.get(),
-                    base_vectors.total(),
-                ))
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!(
+                        "Expected {} start points but the stored index only has {} total points",
+                        ctx.num_frozen_points.get(),
+                        base_vectors.total(),
+                    ),
+                )
             })?;
         let start_points = StartPoints::new(valid_points as u32, ctx.num_frozen_points)?;
         Ok(Self {

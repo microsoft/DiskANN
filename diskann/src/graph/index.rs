@@ -1401,7 +1401,7 @@ where
                         #[error("Spawning a task failed in inplace-delete: {0}")]
                         struct LocalError(tokio::task::JoinError);
 
-                        ANNError::log_async_error(LocalError(err))
+                        ANNError::from_display(crate::ANNErrorKind::AsyncError, LocalError(err))
                     });
                     edge_collection.push(res);
                 }
@@ -1458,7 +1458,10 @@ where
                         loop {
                             let result = {
                                 let mut guard = edges_clone.lock().map_err(|_| {
-                                    ANNError::log_async_error("Poisoned mutex during construction")
+                                    ANNError::from_display(
+                                        crate::ANNErrorKind::AsyncError,
+                                        "Poisoned mutex during construction",
+                                    )
                                 })?;
                                 guard.next()
                             };

@@ -343,11 +343,14 @@ where
     {
         // Early validation before allocating resources
         if start_points.nrows() != params.num_start_points.get() {
-            return Err(ANNError::log_async_index_error(format!(
-                "start_points matrix has {} rows, but params.num_start_points is {}",
-                start_points.nrows(),
-                params.num_start_points.get(),
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::AsyncIndexError,
+                format!(
+                    "start_points matrix has {} rows, but params.num_start_points is {}",
+                    start_points.nrows(),
+                    params.num_start_points.get(),
+                ),
+            ));
         }
 
         let provider = Self::new_empty(params.clone(), quant_precursor)?;
@@ -732,11 +735,14 @@ where
     fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
         let start_point_ids = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
-            return Err(ANNError::log_async_index_error(format!(
-                "expected start_points to contain `{}` rows, instead it has {}",
-                start_point_ids.len(),
-                start_points.nrows(),
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::AsyncIndexError,
+                format!(
+                    "expected start_points to contain `{}` rows, instead it has {}",
+                    start_point_ids.len(),
+                    start_points.nrows(),
+                ),
+            ));
         }
 
         let mut scratch = self.neighbor_provider.scratch(&self.locks);
@@ -763,11 +769,14 @@ where
     fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
         let start_point_ids = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
-            return Err(ANNError::log_async_index_error(format!(
-                "expected start_points to contain `{}` rows, instead it has {}",
-                start_point_ids.len(),
-                start_points.nrows(),
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::AsyncIndexError,
+                format!(
+                    "expected start_points to contain `{}` rows, instead it has {}",
+                    start_point_ids.len(),
+                    start_points.nrows(),
+                ),
+            ));
         }
 
         let mut scratch = self.neighbor_provider.scratch(&self.locks);
@@ -1691,7 +1700,8 @@ fn save_bftree(
     use_snapshot: bool,
 ) -> ANNResult<()> {
     if !use_snapshot {
-        return Err(ANNError::log_index_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
             "cannot snapshot a BfTree that was not configured with use_snapshot(true)",
         ));
     }
@@ -1725,8 +1735,12 @@ where
     {
         let saved_params = SavedParams {
             max_points: self.max_points(),
-            frozen_points: NonZeroUsize::new(self.num_start_points())
-                .ok_or_else(|| ANNError::log_index_error("num_start_points is zero"))?,
+            frozen_points: NonZeroUsize::new(self.num_start_points()).ok_or_else(|| {
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    "num_start_points is zero",
+                )
+            })?,
             dim: self.dim(),
             metric: self.metric().as_str().to_string(),
             max_degree: self.max_degree(),
@@ -1756,7 +1770,10 @@ where
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
             let params_json = serde_json::to_string(&saved_params).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to serialize params: {}", e))
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!("Failed to serialize params: {}", e),
+                )
             })?;
             let mut params_writer = storage.create_for_write(&params_filename)?;
             params_writer.write_all(params_json.as_bytes())?;
@@ -1793,12 +1810,19 @@ where
             let mut params_json = String::new();
             params_reader.read_to_string(&mut params_json)?;
             serde_json::from_str(&params_json).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to deserialize params: {}", e))
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!("Failed to deserialize params: {}", e),
+                )
             })?
         };
 
-        let metric = Metric::from_str(&saved_params.metric)
-            .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
+        let metric = Metric::from_str(&saved_params.metric).map_err(|e| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                format!("Failed to parse metric: {}", e),
+            )
+        })?;
 
         let vector_index = load_bftree(
             BfTreePaths::vectors_bftree(&saved_params.prefix),
@@ -1845,8 +1869,12 @@ where
     {
         let saved_params = SavedParams {
             max_points: self.max_points(),
-            frozen_points: NonZeroUsize::new(self.num_start_points())
-                .ok_or_else(|| ANNError::log_index_error("num_start_points is zero"))?,
+            frozen_points: NonZeroUsize::new(self.num_start_points()).ok_or_else(|| {
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    "num_start_points is zero",
+                )
+            })?,
             dim: self.dim(),
             metric: self.metric().as_str().to_string(),
             max_degree: self.max_degree(),
@@ -1887,7 +1915,10 @@ where
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
             let params_json = serde_json::to_string(&saved_params).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to serialize params: {}", e))
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!("Failed to serialize params: {}", e),
+                )
             })?;
             let mut params_writer = storage.create_for_write(&params_filename)?;
             params_writer.write_all(params_json.as_bytes())?;
@@ -1914,7 +1945,9 @@ where
             .quant_vectors
             .quantizer
             .serialize(GlobalAllocator)
-            .map_err(|e| ANNError::log_index_error(format!("{e}")))?;
+            .map_err(|e| {
+                ANNError::from_display(diskann::ANNErrorKind::IndexError, format!("{e}"))
+            })?;
         let mut writer = storage.create_for_write(&filename)?;
         writer.write_all(&serialized)?;
 
@@ -1938,16 +1971,26 @@ where
             let mut params_json = String::new();
             params_reader.read_to_string(&mut params_json)?;
             serde_json::from_str(&params_json).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to deserialize params: {}", e))
+                ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!("Failed to deserialize params: {}", e),
+                )
             })?
         };
 
         let _quant_params = saved_params.quant_params.ok_or_else(|| {
-            ANNError::log_index_error("Missing quant_params in saved params for quantized provider")
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                "Missing quant_params in saved params for quantized provider",
+            )
         })?;
 
-        let metric = Metric::from_str(&saved_params.metric)
-            .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
+        let metric = Metric::from_str(&saved_params.metric).map_err(|e| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                format!("Failed to parse metric: {}", e),
+            )
+        })?;
 
         let vector_index = load_bftree(
             BfTreePaths::vectors_bftree(&saved_params.prefix),
@@ -1973,8 +2016,10 @@ where
         let mut reader = storage.open_reader(&filename)?;
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
-        let quantizer: Poly<dyn Quantizer> = try_deserialize(&bytes, GlobalAllocator)
-            .map_err(|e| ANNError::log_index_error(format!("{e}")))?;
+        let quantizer: Poly<dyn Quantizer> =
+            try_deserialize(&bytes, GlobalAllocator).map_err(|e| {
+                ANNError::from_display(diskann::ANNErrorKind::IndexError, format!("{e}"))
+            })?;
 
         let quant_vector_index = load_bftree(
             BfTreePaths::quant_bftree(&saved_params.prefix),

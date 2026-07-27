@@ -4,7 +4,7 @@
  */
 use std::{io::Read, mem::size_of, num::NonZeroUsize};
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNError, ANNErrorKind, ANNResult};
 use diskann_providers::storage::StorageReadProvider;
 
 pub fn get_graph_num_frozen_points(
@@ -22,9 +22,9 @@ pub fn get_graph_num_frozen_points(
     let file_frozen_pts = usize::from_le_bytes(usize_buffer);
 
     NonZeroUsize::new(file_frozen_pts).ok_or_else(|| {
-        ANNError::log_index_config_error(
-            "num_frozen_pts".to_string(),
-            "num_frozen_pts is zero in saved file".to_string(),
+        ANNError::from_display(
+            ANNErrorKind::IndexConfigError,
+            "num_frozen_pts is invalid, err = num_frozen_pts is zero in saved file",
         )
     })
 }

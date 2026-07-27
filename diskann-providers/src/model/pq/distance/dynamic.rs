@@ -69,10 +69,13 @@ impl<'a> QueryComputer<'a> {
     ) -> ANNResult<Self> {
         let dim = table.get_dim();
         if query.len() != dim {
-            return Err(ANNError::log_dimension_mismatch_error(format!(
-                "QueryComputer::new: expected query of length {dim}, got {}",
-                query.len()
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::DimensionMismatchError,
+                format!(
+                    "QueryComputer::new: expected query of length {dim}, got {}",
+                    query.len()
+                ),
+            ));
         }
         let result = match metric {
             Metric::L2 => Self::L2(TableL2::new(table, query, pool)?),

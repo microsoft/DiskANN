@@ -91,7 +91,8 @@ where
         associated_data: Data::AssociatedDataType,
     ) -> ANNResult<()> {
         if self.dimension != vector.len() {
-            return ANNResult::Err(ANNError::log_index_error(
+            return ANNResult::Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector dimension does not match the dimension set in cache.",
             ));
         }
@@ -103,7 +104,8 @@ where
         }
 
         if self.mapping.len() >= self.capacity {
-            return ANNResult::Err(ANNError::log_index_error(
+            return ANNResult::Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Cache is full, cannot insert more nodes",
             ));
         }

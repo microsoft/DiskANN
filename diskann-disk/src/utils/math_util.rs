@@ -83,26 +83,33 @@ pub fn compute_vecs_l2sq(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if dim == 0 {
-        return Err(ANNError::log_index_error(format_args!(
-            "dim must be non-zero"
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            "dim must be non-zero",
+        ));
     }
 
     let expected_data_len = vecs_l2sq.len().checked_mul(dim).ok_or_else(|| {
-        ANNError::log_index_error(format_args!(
-            "vecs_l2sq.len() * dim overflowed: vecs_l2sq.len() ({}) * dim ({})",
-            vecs_l2sq.len(),
-            dim
-        ))
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "vecs_l2sq.len() * dim overflowed: vecs_l2sq.len() ({}) * dim ({})",
+                vecs_l2sq.len(),
+                dim
+            ),
+        )
     })?;
 
     if data.len() != expected_data_len {
-        return Err(ANNError::log_index_error(format_args!(
-            "data.len() ({}) should be vecs_l2sq.len() ({}) * dim ({})",
-            data.len(),
-            vecs_l2sq.len(),
-            dim
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "data.len() ({}) should be vecs_l2sq.len() ({}) * dim ({})",
+                data.len(),
+                vecs_l2sq.len(),
+                dim
+            ),
+        ));
     }
 
     if dim < 5 {
@@ -144,10 +151,13 @@ pub fn compute_closest_centers_in_block(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if k > num_centers {
-        return Err(ANNError::log_index_error(format_args!(
-            "k ({}) should be equal or less than num_centers ({})",
-            k, num_centers
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "k ({}) should be equal or less than num_centers ({})",
+                k, num_centers
+            ),
+        ));
     }
 
     let ones_a: Vec<f32> = vec![1.0; num_centers];
@@ -260,70 +270,94 @@ pub fn compute_closest_centers(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if k > num_centers {
-        return Err(ANNError::log_index_error(format_args!(
-            "k ({}) should be equal or less than num_centers ({})",
-            k, num_centers
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "k ({}) should be equal or less than num_centers ({})",
+                k, num_centers
+            ),
+        ));
     }
 
     // Validate data slice length
     let expected_data_len = num_points.checked_mul(dim).ok_or_else(|| {
-        ANNError::log_index_error(format_args!(
-            "num_points * dim overflowed: num_points ({}) * dim ({})",
-            num_points, dim
-        ))
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "num_points * dim overflowed: num_points ({}) * dim ({})",
+                num_points, dim
+            ),
+        )
     })?;
 
     if data.len() != expected_data_len {
-        return Err(ANNError::log_index_error(format_args!(
-            "data.len() ({}) should equal num_points ({}) * dim ({})",
-            data.len(),
-            num_points,
-            dim
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "data.len() ({}) should equal num_points ({}) * dim ({})",
+                data.len(),
+                num_points,
+                dim
+            ),
+        ));
     }
 
     // Validate pivot_data slice length
     let expected_pivot_len = num_centers.checked_mul(dim).ok_or_else(|| {
-        ANNError::log_index_error(format_args!(
-            "num_centers * dim overflowed: num_centers ({}) * dim ({})",
-            num_centers, dim
-        ))
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "num_centers * dim overflowed: num_centers ({}) * dim ({})",
+                num_centers, dim
+            ),
+        )
     })?;
 
     if pivot_data.len() != expected_pivot_len {
-        return Err(ANNError::log_index_error(format_args!(
-            "pivot_data.len() ({}) should equal num_centers ({}) * dim ({})",
-            pivot_data.len(),
-            num_centers,
-            dim
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "pivot_data.len() ({}) should equal num_centers ({}) * dim ({})",
+                pivot_data.len(),
+                num_centers,
+                dim
+            ),
+        ));
     }
 
     let expected_closest_centers_len = num_points.checked_mul(k).ok_or_else(|| {
-        ANNError::log_index_error(format_args!(
-            "num_points * k overflowed: num_points ({}) * k ({})",
-            num_points, k
-        ))
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "num_points * k overflowed: num_points ({}) * k ({})",
+                num_points, k
+            ),
+        )
     })?;
 
     if closest_centers_ivf.len() != expected_closest_centers_len {
-        return Err(ANNError::log_index_error(format_args!(
-            "closest_centers_ivf.len() ({}) should equal num_points ({}) * k ({})",
-            closest_centers_ivf.len(),
-            num_points,
-            k
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "closest_centers_ivf.len() ({}) should equal num_points ({}) * k ({})",
+                closest_centers_ivf.len(),
+                num_points,
+                k
+            ),
+        ));
     }
 
     let mut owned_pts_norms_squared;
     let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
         if pts_norms.len() != num_points {
-            return Err(ANNError::log_index_error(format_args!(
-                "pts_norms_squared.len() ({}) should equal num_points ({})",
-                pts_norms.len(),
-                num_points
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
+                format!(
+                    "pts_norms_squared.len() ({}) should equal num_points ({})",
+                    pts_norms.len(),
+                    num_points
+                ),
+            ));
         }
         pts_norms
     } else {

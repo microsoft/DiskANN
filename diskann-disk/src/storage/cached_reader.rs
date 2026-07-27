@@ -76,7 +76,7 @@ where
             // case 2: cache contains some data
             let cached_bytes = self.cache_size - self.cur_off;
             if n_bytes - cached_bytes > self.size - self.reader.stream_position()? {
-                return Err(ANNError::log_index_error(format_args!(
+                return Err(ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
                     "Reading beyond end of file, n_bytes: {} cached_bytes: {} fsize: {} current pos: {}",
                     n_bytes,
                     cached_bytes,

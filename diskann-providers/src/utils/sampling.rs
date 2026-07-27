@@ -146,10 +146,13 @@ where
         let expected_size = 8 + (npts as u64 * dim as u64 * std::mem::size_of::<T>() as u64);
         let actual_size = storage_provider.get_length(data_file)?;
         if actual_size != expected_size {
-            return Err(ANNError::log_invalid_file_format(format!(
-                "Vector file '{}' has invalid format: size {} bytes doesn't match expected size of {} bytes based on header ({} vectors of dimension {})",
-                data_file, actual_size, expected_size, npts, dim
-            )));
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::InvalidFileFormatError,
+                format!(
+                    "Vector file '{}' has invalid format: size {} bytes doesn't match expected size of {} bytes based on header ({} vectors of dimension {})",
+                    data_file, actual_size, expected_size, npts, dim
+                ),
+            ));
         }
 
         Ok(Self {
@@ -179,11 +182,14 @@ where
         for idx in indices {
             // Check if the index is within bounds
             if idx >= self.npts {
-                return Err(ANNError::log_index_error(format!(
-                    "Vector index {} is out of bounds (max: {})",
-                    idx,
-                    self.npts - 1
-                )));
+                return Err(ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!(
+                        "Vector index {} is out of bounds (max: {})",
+                        idx,
+                        self.npts - 1
+                    ),
+                ));
             }
             let offset = (idx as i64 - self.cur_pos as i64) * vector_len as i64;
             if offset != 0 {
@@ -270,7 +276,8 @@ pub fn gen_random_slice<T: VectorRepr, StorageProvider: StorageReadProvider>(
 
         Ok((sampled_vectors, sampled_count, full_dim))
     } else {
-        Err(ANNError::log_index_error(
+        Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
             "Could not read vectors to sample from.",
         ))
     }

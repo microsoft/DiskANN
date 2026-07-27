@@ -109,10 +109,9 @@ impl<'a> TryFrom<&'a [u8]> for GraphMetadata {
     /// ...| vamana_frozen_loc (8 bytes) | append_reorder_data (8 bytes) | disk_index_file_size (8 bytes) | associated_data_length (8 bytes) |
     fn try_from(value: &'a [u8]) -> ANNResult<Self> {
         if value.len() < Self::get_size() {
-            return Err(ANNError::log_parse_slice_error(
-                "&[u8]".to_string(),
-                "GraphMetadata".to_string(),
-                "The given bytes are not long enough to create a valid graph metadata.".to_string(),
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::ParseSliceError,
+                "source: &[u8] target: GraphMetadata error: The given bytes are not long enough to create a valid graph metadata.",
             ));
         }
 

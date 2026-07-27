@@ -7,7 +7,7 @@
 //! Parameters for disk index construction.
 use std::num::NonZeroUsize;
 
-use diskann::ANNError;
+use diskann::{ANNError, ANNErrorKind};
 use thiserror::Error;
 
 use super::QuantizationType;
@@ -28,7 +28,10 @@ pub struct InvalidMemBudget;
 
 impl From<InvalidMemBudget> for ANNError {
     fn from(value: InvalidMemBudget) -> Self {
-        ANNError::log_index_config_error("MemoryBudget".to_string(), format!("{value:?}"))
+        ANNError::from_display(
+            ANNErrorKind::IndexConfigError,
+            format!("MemoryBudget is invalid, err = {value:?}"),
+        )
     }
 }
 
@@ -71,7 +74,10 @@ pub enum PQChunksError {
 
 impl From<PQChunksError> for ANNError {
     fn from(value: PQChunksError) -> Self {
-        ANNError::log_index_config_error("NumPQChunks".to_string(), format!("{value:?}"))
+        ANNError::from_display(
+            ANNErrorKind::IndexConfigError,
+            format!("NumPQChunks is invalid, err = {value:?}"),
+        )
     }
 }
 

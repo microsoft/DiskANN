@@ -122,7 +122,8 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
                 if read_size > 0 {
                     // A retrieved neighbor list should be exactly dim length
                     if read_size as usize != self.dim * std::mem::size_of::<I>() {
-                        return Err(ANNError::log_index_error(
+                        return Err(ANNError::from_display(
+                            diskann::ANNErrorKind::IndexError,
                             "Retrieved neighbor list is not expected length = max degree + 1",
                         ));
                     }
@@ -135,7 +136,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
 
                     // The specified list length must be smaller than the retrieved data length
                     if count > self.max_degree() {
-                        return Err(ANNError::log_index_error(
+                        return Err(ANNError::from_display(diskann::ANNErrorKind::IndexError,
                             "Size of retrieved neighbor list is shorter than the stored neighbor count",
                         ));
                     }
@@ -144,12 +145,14 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
                 }
             }
             bf_tree::LeafReadResult::Deleted => {
-                return Err(ANNError::log_index_error(
+                return Err(ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
                     "The bf-tree entry for the vector is marked as deleted",
                 ));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(ANNError::log_index_error(
+                return Err(ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
                     "The bf-tree entry for the vector key is marked as invalid",
                 ));
             }
@@ -196,7 +199,8 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         self.num_get_calls.increment();
 
         if buf.len() < self.dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "The provided buffer is not long enough",
             ));
         }
@@ -227,7 +231,8 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     ///  - Buffer length (in `I` cells) is smaller than `max_degree() + 1`
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [I]) -> ANNResult<()> {
         if neighbors.len() > self.dim - 1 {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "The provided neighbor list is longer than the max degree",
             ));
         };

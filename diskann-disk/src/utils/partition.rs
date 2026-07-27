@@ -254,7 +254,8 @@ where
     let num_points = dataset_reader.read_u32()?;
     let base_dim = dataset_reader.read_u32()?;
     if base_dim != dim as u32 {
-        return Err(ANNError::log_index_error(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
             "dimensions dont match for train set and base set",
         ));
     }

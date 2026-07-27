@@ -80,9 +80,9 @@ where
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.vector_buf
                 [local_offset.idx * self.dim..(local_offset.idx * self.dim) + self.dim]),
-            None => Err(ANNError::log_get_vertex_data_error(
-                vertex_id.to_string(),
-                "Vector".to_string(),
+            None => Err(ANNError::from_display(
+                diskann::ANNErrorKind::GetVertexDataError,
+                format!("vertex_id: {vertex_id} data_type: Vector"),
             )),
         }
     }
@@ -93,9 +93,9 @@ where
     ) -> ANNResult<&[Data::VectorIdType]> {
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.cached_adjacency_list[local_offset.vec_idx]),
-            None => Err(ANNError::log_get_vertex_data_error(
-                vertex_id.to_string(),
-                "AdjacencyList".to_string(),
+            None => Err(ANNError::from_display(
+                diskann::ANNErrorKind::GetVertexDataError,
+                format!("vertex_id: {vertex_id} data_type: AdjacencyList"),
             )),
         }
     }
@@ -106,9 +106,9 @@ where
     ) -> ANNResult<&Data::AssociatedDataType> {
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.cached_associated_data[local_offset.vec_idx]),
-            None => Err(ANNError::log_get_vertex_data_error(
-                vertex_id.to_string(),
-                "AssociatedData".to_string(),
+            None => Err(ANNError::from_display(
+                diskann::ANNErrorKind::GetVertexDataError,
+                format!("vertex_id: {vertex_id} data_type: AssociatedData"),
             )),
         }
     }
@@ -171,9 +171,9 @@ where
             &neighbor_and_data_buf[data_end - self.associated_data_size..data_end],
         )
         .map_err(|err| {
-            ANNError::log_serde_error(
-                "Error deserializing associated data from bytes".to_string(),
-                *err,
+            ANNError::from_display(
+                diskann::ANNErrorKind::SerdeError,
+                format!("Operation: Error deserializing associated data from bytes Error: {err}"),
             )
         })?;
         self.cached_associated_data.push(associated_data);

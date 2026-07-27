@@ -11,7 +11,9 @@ pub fn create_thread_pool(num_threads: usize) -> ANNResult<RayonThreadPool> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build()
-        .map_err(|err| ANNError::log_thread_pool_error(err.to_string()))?;
+        .map_err(|err| {
+            ANNError::from_display(diskann::ANNErrorKind::ThreadPoolError, err.to_string())
+        })?;
     Ok(RayonThreadPool(pool))
 }
 
@@ -37,7 +39,9 @@ pub fn create_thread_pool_for_test() -> RayonThreadPool {
 pub fn create_thread_pool_for_bench() -> RayonThreadPool {
     let pool = rayon::ThreadPoolBuilder::new()
         .build()
-        .map_err(|err| ANNError::log_thread_pool_error(err.to_string()))
+        .map_err(|err| {
+            ANNError::from_display(diskann::ANNErrorKind::ThreadPoolError, err.to_string())
+        })
         .unwrap();
     RayonThreadPool(pool)
 }

@@ -883,7 +883,7 @@ pub enum SQError {
 impl From<SQError> for ANNError {
     #[cold]
     fn from(err: SQError) -> Self {
-        ANNError::log_sq_error(err)
+        ANNError::new(diskann::ANNErrorKind::SQError, err)
     }
 }
 

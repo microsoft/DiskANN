@@ -54,10 +54,10 @@ pub enum MMConvertError {
 
 impl From<MMConvertError> for ANNError {
     fn from(value: MMConvertError) -> Self {
-        ANNError::log_index_error(format_args!(
-            "Unable to convert MinMaxElement slice, error : {:?}",
-            value
-        ))
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!("Unable to convert MinMaxElement slice, error : {:?}", value),
+        )
     }
 }
 

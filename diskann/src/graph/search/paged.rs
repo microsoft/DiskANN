@@ -56,12 +56,14 @@ where
     ) -> impl SendFuture<ANNResult<Vec<Neighbor<DP::InternalId>>>> {
         async move {
             if k > self.search_param_l {
-                return ANNResult::Err(ANNError::log_paged_search_error(
+                return ANNResult::Err(ANNError::from_display(
+                    crate::ANNErrorKind::PagedSearchError,
                     "k should be less than or equal to search_param_l".to_string(),
                 ));
             }
             if k == 0 {
-                return ANNResult::Err(ANNError::log_paged_search_error(
+                return ANNResult::Err(ANNError::from_display(
+                    crate::ANNErrorKind::PagedSearchError,
                     "k should be greater than 0".to_string(),
                 ));
             }

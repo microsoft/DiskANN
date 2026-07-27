@@ -86,9 +86,9 @@ impl BuildQuantizer {
                 standard_deviation,
             } => {
                 if nbits != 1 {
-                    return Err(ANNError::log_index_config_error(
-                        "build_quantization_type".to_string(),
-                        "SQ quantization is only supported for 1 bit".to_string(),
+                    return Err(ANNError::from_display(
+                        diskann::ANNErrorKind::IndexConfigError,
+                        "build_quantization_type is invalid, err = SQ quantization is only supported for 1 bit",
                     ));
                 }
                 let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(

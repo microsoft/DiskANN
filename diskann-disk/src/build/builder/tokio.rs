@@ -15,7 +15,10 @@ pub fn create_runtime(num_threads: usize) -> ANNResult<tokio::runtime::Runtime> 
     }
 
     builder.build().map_err(|err| {
-        ANNError::log_index_error(format!("Failed to initialize tokio runtime: {}", err))
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!("Failed to initialize tokio runtime: {}", err),
+        )
     })
 }
 

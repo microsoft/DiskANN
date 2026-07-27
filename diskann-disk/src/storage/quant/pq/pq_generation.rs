@@ -59,7 +59,8 @@ where
     fn new(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
         // validate that the number of chunks is correct.
         if context.num_chunks > context.dim {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
                 "Error: number of chunks more than dimension.",
             ));
         }
@@ -134,7 +135,12 @@ where
                 .bridge_err()?
                 .to_owned(),
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(|err| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
+                diskann_quantization::error::format(&err),
+            )
+        })?;
 
         Ok(Self {
             table,
@@ -149,9 +155,12 @@ where
         vector: MatrixBase<&[f32]>,
         output: MatrixBase<&mut [u8]>,
     ) -> Result<(), diskann::ANNError> {
-        self.table
-            .compress_into(vector, output)
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))
+        self.table.compress_into(vector, output).map_err(|err| {
+            ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
+                diskann_quantization::error::format(&err),
+            )
+        })
     }
 
     fn compressed_bytes(&self) -> usize {

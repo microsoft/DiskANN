@@ -102,7 +102,7 @@ impl QuantVectorProvider {
                 GlobalAllocator,
                 ScopedAllocator::global(),
             )
-            .map_err(|e| ANNError::log_sq_error(e))?;
+            .map_err(|e| ANNError::new(diskann::ANNErrorKind::SQError, e))?;
         Ok(QuantQueryComputer(inner))
     }
 
@@ -110,7 +110,7 @@ impl QuantVectorProvider {
     pub fn distance_computer(&self) -> ANNResult<DistanceComputer> {
         self.quantizer
             .distance_computer(GlobalAllocator)
-            .map_err(|e| ANNError::log_sq_error(e))
+            .map_err(|e| ANNError::new(diskann::ANNErrorKind::SQError, e))
     }
 
     pub(crate) fn get_vector_into(&self, i: usize, buffer: &mut [u8]) -> Result<(), AccessError> {
@@ -133,7 +133,7 @@ impl QuantVectorProvider {
         match self.quant_vector_index.read(bytemuck::bytes_of(&i), buffer) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 if read_size as usize != expected {
-                    return Err(AccessError::Error(ANNError::log_index_error(format!(
+                    return Err(AccessError::Error(ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
                         "The bf-tree entry for vector id {} is marked as found but has size {} instead of the expected size {}",
                         i, read_size, expected,
                     ))));
@@ -146,10 +146,10 @@ impl QuantVectorProvider {
                 }));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(AccessError::Error(ANNError::log_index_error(format!(
-                    "The bf-tree entry for vector id {} is marked as invalid",
-                    i,
-                ))));
+                return Err(AccessError::Error(ANNError::from_display(
+                    diskann::ANNErrorKind::IndexError,
+                    format!("The bf-tree entry for vector id {} is marked as invalid", i,),
+                )));
             }
             bf_tree::LeafReadResult::NotFound => {
                 return Err(AccessError::Transient(VectorUnavailable {
@@ -183,7 +183,8 @@ impl QuantVectorProvider {
         let vf32: &[f32] = &T::as_f32(v).into_ann_result()?;
 
         if vf32.len() != self.full_dim() {
-            return Err(ANNError::log_dimension_mismatch_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::DimensionMismatchError,
                 "Vector f32 dimension is not equal to the expected dimension.".to_string(),
             ));
         }
@@ -199,7 +200,7 @@ impl QuantVectorProvider {
                 OpaqueMut::new(quant_vector),
                 ScopedAllocator::global(),
             )
-            .map_err(|e| ANNError::log_sq_error(e))?;
+            .map_err(|e| ANNError::new(diskann::ANNErrorKind::SQError, e))?;
 
         bftree_insert(&self.quant_vector_index, key, quant_vector)?;
 
@@ -214,7 +215,8 @@ impl QuantVectorProvider {
     #[cfg(test)]
     pub(crate) fn set_quant_vector(&self, i: usize, v: &[u8]) -> ANNResult<()> {
         if v.len() != self.quantizer.bytes() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::IndexError,
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }

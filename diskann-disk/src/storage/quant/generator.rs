@@ -78,12 +78,14 @@ where
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
         let (num_points, dim) = metadata.into_dims();
         if max_block_size == 0 {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
                 "Data compression chunk vector count must be greater than zero",
             ));
         }
         if num_points == 0 {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::from_display(
+                diskann::ANNErrorKind::PQError,
                 "Cannot generate compressed data for an empty dataset",
             ));
         }

@@ -221,19 +221,25 @@ pub fn calculate_filtered_search_recall(
     k_recall: u32,
 ) -> ANNResult<f64> {
     if k_recall == 0 {
-        return Err(ANNError::log_index_error(format_args!(
-            "k_recall value must be greater than 0, but got {}",
-            k_recall
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "k_recall value must be greater than 0, but got {}",
+                k_recall
+            ),
+        ));
     }
 
     if groundtruth.len() != num_queries || our_results.len() != num_queries {
-        return Err(ANNError::log_index_error(format_args!(
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
             "groundtruth length ({}) or our_results length ({}) does not match num_queries ({})",
             groundtruth.len(),
             our_results.len(),
             num_queries
-        )));
+        ),
+        ));
     }
 
     let mut total_recall = 0.0;
@@ -257,7 +263,7 @@ pub fn calculate_filtered_search_recall(
                 let gt_dist_vec = gt_dist[i].as_slice();
 
                 if gt_dist_vec.len() != groundtruth[i].len() {
-                    return Err(ANNError::log_index_error(format_args!(
+                    return Err(ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
                         "Ground truth distance for query ({}) vector length ({}) is not equal to groundtruth len ({})",
                         i,
                         gt_dist_vec.len(),
@@ -314,7 +320,7 @@ pub fn load_truthset(
     let truthset_type : i32 = match actual_file_size {
         x if x == expected_file_size_with_dists => 1,
         x if x == expected_file_size_just_ids => 2,
-        _ => return Err(ANNError::log_index_error(format_args!(
+        _ => return Err(ANNError::from_display(diskann::ANNErrorKind::IndexError, format!(
             "Error. File size mismatch. File should have bin format, with npts followed by ngt followed by npts*ngt ids and optionally followed by npts*ngt distance values; actual size: {}, expected: {} or {}",
             actual_file_size,
             expected_file_size_with_dists,

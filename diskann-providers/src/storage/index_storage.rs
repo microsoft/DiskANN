@@ -197,16 +197,21 @@ fn get_and_validate_single_starting_point<U, V, D>(
 
     let num_starting_points = start_ids.len();
     if num_starting_points > 1 {
-        return Err(ANNError::log_index_error(format_args!(
-            "ERROR: Save index does not support multiple starting points. Found {} starting points.",
-            num_starting_points
-        )));
+        return Err(ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            format!(
+                "ERROR: Save index does not support multiple starting points. Found {} starting points.",
+                num_starting_points
+            ),
+        ));
     }
 
-    start_ids
-        .first()
-        .cloned()
-        .ok_or_else(|| ANNError::log_index_error("ERROR: No starting points found"))
+    start_ids.first().cloned().ok_or_else(|| {
+        ANNError::from_display(
+            diskann::ANNErrorKind::IndexError,
+            "ERROR: No starting points found",
+        )
+    })
 }
 ///////////
 // Tests //
