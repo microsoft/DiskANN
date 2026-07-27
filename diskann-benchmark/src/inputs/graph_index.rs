@@ -315,6 +315,7 @@ pub(crate) enum SearchPhase {
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
     TopkMultihopLiveFilter(MultiHopSearchPhase),
+    TopkMultihopLiveFilterCsr(MultiHopSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -342,6 +343,7 @@ impl SearchPhase {
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
             Self::TopkMultihopLiveFilter(_) => SearchPhaseKind::TopkMultihopLiveFilter,
+            Self::TopkMultihopLiveFilterCsr(_) => SearchPhaseKind::TopkMultihopLiveFilterCsr,
         }
     }
 
@@ -398,6 +400,18 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_multihop_live_filter_csr(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopLiveFilterCsr(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopLiveFilterCsr,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -408,6 +422,7 @@ impl SearchPhase {
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopLiveFilterCsr(phase) => phase.validate(checker),
         }
     }
 }
@@ -419,6 +434,7 @@ pub(crate) enum SearchPhaseKind {
     TopkBetaFilter,
     TopkMultihopFilter,
     TopkMultihopLiveFilter,
+    TopkMultihopLiveFilterCsr,
 }
 
 impl SearchPhaseKind {
@@ -429,6 +445,7 @@ impl SearchPhaseKind {
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
             Self::TopkMultihopLiveFilter => "topk-multihop-live-filter",
+            Self::TopkMultihopLiveFilterCsr => "topk-multihop-live-filter-csr",
         }
     }
 }

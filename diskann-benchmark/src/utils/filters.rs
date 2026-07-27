@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use diskann_label_filter::attribute::Attribute;
 use diskann_label_filter::{
-    read_and_parse_queries, read_baselabels, FrozenAttributeIndex, InlineAttributeIndex,
+    read_and_parse_queries, read_baselabels, FrozenAttributeIndex, FrozenAttributeIndexCsr,
+    InlineAttributeIndex, InlineAttributeIndexCsr,
 };
 
 pub struct QueryBitmapEvaluator {
@@ -154,6 +155,53 @@ pub(crate) fn build_inline_attribute_index(
 /// during search.
 pub(crate) fn make_live_providers(
     index: &FrozenAttributeIndex,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    let mut providers = Vec::with_capacity(parsed.len());
+    for (_query_id, ast) in parsed {
+        providers.push(
+            index
+                .make_provider(&ast)
+                .map_err(|e| anyhow::anyhow!("failed to build live provider: {e:?}"))?,
+        );
+    }
+    Ok(providers)
+}
+
+/// Build an in-memory flat CSR attribute index from a jsonl label file (one document per line).
+///
+/// Identical inputs and integer encoding to [`build_inline_attribute_index`], but stores each
+/// document's attribute ids in a contiguous CSR layout (`offsets` + sorted `values`) instead of a
+/// roaring treemap, so the per-node live match reads a single contiguous row.
+pub(crate) fn build_inline_attribute_index_csr(
+    data_labels: &InputFile,
+) -> anyhow::Result<Arc<FrozenAttributeIndexCsr>> {
+    let docs = read_baselabels(data_labels.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to read base labels: {e}"))?;
+    let mut index = InlineAttributeIndexCsr::new();
+    let mut attrs: Vec<Attribute> = Vec::new();
+    for doc in &docs {
+        attrs.clear();
+        if let Some(obj) = doc.label.as_object() {
+            for (field, value) in obj {
+                attrs.push(Attribute::from_json_value(field, value).map_err(|e| {
+                    anyhow::anyhow!("attribute conversion failed for field '{field}': {e:?}")
+                })?);
+            }
+        }
+        index
+            .insert_document(doc.doc_id as u32, &attrs)
+            .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
+    }
+    Ok(Arc::new(index.freeze()))
+}
+
+/// Parse per-query predicates and build one live CSR [`QueryLabelProvider`] per query, all sharing
+/// the same CSR attribute `index`. Mirrors [`make_live_providers`].
+pub(crate) fn make_live_providers_csr(
+    index: &FrozenAttributeIndexCsr,
     query_predicates: &InputFile,
 ) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
     let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())

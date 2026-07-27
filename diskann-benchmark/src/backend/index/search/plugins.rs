@@ -195,3 +195,16 @@ impl TopkMultihopLiveFilter {
         SearchPhaseKind::TopkMultihopLiveFilter
     }
 }
+
+/// A multi-hop live-filter plugin backed by a flat CSR attribute index (contiguous
+/// `offsets`/`values` arrays) instead of the roaring `HashMap<u32, RoaringTreemap>`, so each
+/// per-node match reads one contiguous row rather than chasing heap-allocated roaring sets.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterCsr;
+
+impl TopkMultihopLiveFilterCsr {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterCsr`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterCsr
+    }
+}
