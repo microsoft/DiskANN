@@ -62,9 +62,11 @@ fn bench_array_query(c: &mut Criterion) {
         "scores": [85, 90, 95, 100]
     });
 
+    // `$in` was removed from the parser; use exact-array `$eq` to keep this a valid,
+    // matching compound predicate over array-valued fields.
     let filter = json!({"$and": [
-        {"tags": {"$in": ["c", "f", "g"]}},
-        {"scores": {"$in": [85, 100]}}
+        {"tags": {"$eq": ["a", "b", "c", "d", "e"]}},
+        {"scores": {"$eq": [85, 90, 95, 100]}}
     ]});
 
     let mut group = c.benchmark_group("array_query");
@@ -101,8 +103,8 @@ fn bench_complex_query(c: &mut Criterion) {
             {"c": {"$lt": 2}},
             {"c": {"$gte": 3}}
         ]},
-        {"arr": {"$in": [2,3]}},
-        {"tags": {"$in": ["b", "x"]}},
+        {"arr": {"$eq": [1, 2, 3]}},
+        {"tags": {"$eq": ["a", "b", "c"]}},
         {"flt": {"$lte": 3.5}},
         {"int": {"$gte": 5}},
         {"str": {"$eq": "abc"}}
