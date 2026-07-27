@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use diskann::{graph::glue, provider::HasId, ANNError, ANNErrorKind, ANNResult};
+use diskann::{graph::glue, provider::HasId, ANNError, ANNResult};
 use roaring::RoaringTreemap;
 
 use crate::traits::attribute_accessor::AttributeAccessor;
@@ -66,7 +66,6 @@ where
             .visit_labels_of_point(id, |_, opt_set| match opt_set {
                 Some(set) => Ok(f(&mut self.computer, set)),
                 None => Err(ANNError::message(
-                    ANNErrorKind::IndexError,
                     "No labels were found for vector",
                 )),
             }) {

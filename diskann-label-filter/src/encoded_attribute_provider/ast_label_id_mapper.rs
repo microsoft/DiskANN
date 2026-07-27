@@ -4,7 +4,7 @@
  */
 
 use crate::{parser::ast::ASTVisitor, ASTExpr, CompareOp};
-use diskann::{ANNError, ANNErrorKind, ANNResult};
+use diskann::{ANNError, ANNResult};
 use std::sync::{Arc, RwLock};
 
 use crate::{
@@ -40,7 +40,6 @@ impl ASTLabelIdMapper {
         match encoder.get(attribute) {
             Some(attribute_id) => Ok(ASTIdExpr::Terminal(attribute_id)),
             None => Err(ANNError::message(
-                ANNErrorKind::Opaque,
                 format!(
                     "{}+{} present in the query does not exist in the dataset.",
                     field, op
@@ -93,7 +92,7 @@ impl ASTVisitor for ASTLabelIdMapper {
             CompareOp::Eq(value) => match Attribute::from_json_value(field, value) {
                 Ok(v) => Some(v),
                 Err(json_e) => {
-                    return Err(ANNError::new(ANNErrorKind::Opaque, json_e));
+                    return Err(ANNError::new(json_e));
                 }
             },
             CompareOp::Ne(_value) => {
@@ -128,7 +127,6 @@ impl ASTVisitor for ASTLabelIdMapper {
             }
         } else {
             Err(ANNError::message(
-                ANNErrorKind::Opaque,
                 format!(
                     "CompareOp {} is not supported in the mapped filter search scenario.",
                     op
@@ -147,7 +145,6 @@ mod tests {
         parser::ast::ASTVisitor,
         ASTExpr, CompareOp,
     };
-    use diskann::ANNErrorKind;
     use serde_json::Value;
     use std::sync::{Arc, RwLock};
 
@@ -228,7 +225,6 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
         assert!(error.to_string().contains("does not exist in the dataset"));
     }
 
@@ -246,7 +242,6 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
         assert!(error.to_string().contains("does not exist in the dataset"));
     }
 
@@ -484,7 +479,6 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
         assert!(error.to_string().contains("does not exist in the dataset"));
     }
 
@@ -508,7 +502,6 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
         assert!(error.to_string().contains("does not exist in the dataset"));
     }
 
