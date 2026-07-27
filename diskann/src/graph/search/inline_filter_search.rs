@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
@@ -31,12 +31,7 @@ pub enum AdaptiveLSearchError {
     SampleCountZero,
 }
 
-impl From<AdaptiveLSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: AdaptiveLSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
+convert_error!(AdaptiveLSearchError);
 
 /// Adaptive L for inline filtered search.
 #[derive(Debug, Clone)]

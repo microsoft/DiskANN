@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::Search;
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
@@ -36,12 +36,7 @@ pub enum KnnSearchError {
     LZero,
 }
 
-impl From<KnnSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: KnnSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
+convert_error!(KnnSearchError);
 
 /// Standard k-NN (k-nearest neighbor) graph-based search parameters.
 ///

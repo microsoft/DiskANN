@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{Search, scratch::SearchScratch};
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{self, SearchAccessor, SearchStrategy},
@@ -40,12 +40,7 @@ pub enum RangeSearchError {
     MaxReturnedLessThanInitialL,
 }
 
-impl From<RangeSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: RangeSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
+convert_error!(RangeSearchError);
 
 /// Parameters for range-based search.
 ///
