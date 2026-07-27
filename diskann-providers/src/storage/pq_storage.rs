@@ -324,15 +324,15 @@ impl PQStorage {
             )));
         }
 
-        if let Some(dim) = expected_dim {
-            if pivots.ncols() != dim {
-                return Err(ANNError::log_pq_error(format_args!(
-                    "Error reading pq_pivots file {}. file_dim = {} but expecting {} dimensions.",
-                    pq_pivots,
-                    pivots.ncols(),
-                    dim
-                )));
-            }
+        if let Some(dim) = expected_dim
+            && pivots.ncols() != dim
+        {
+            return Err(ANNError::log_pq_error(format_args!(
+                "Error reading pq_pivots file {}. file_dim = {} but expecting {} dimensions.",
+                pq_pivots,
+                pivots.ncols(),
+                dim
+            )));
         }
 
         let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
