@@ -29,6 +29,19 @@ type FullPivotDataType = Vec<f32>;
 type CentroidType = Vec<f32>;
 type ChunkOffsetsType = Vec<usize>;
 
+#[derive(Debug)]
+struct PivotFileParts {
+    pivots: Matrix<f32>,
+    centroid: Matrix<f32>,
+    chunk_offsets: Matrix<usize>,
+}
+
+impl PivotFileParts {
+    fn dim(&self) -> usize {
+        self.pivots.ncols()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PQStorage {
     /// Pivot table path
@@ -179,63 +192,18 @@ impl PQStorage {
     where
         Storage: StorageReadProvider,
     {
-        // Load file offset data. File layout: offset table(4*1) -> pivot data(num_centers*dim) -> centroid(dim*1) -> chunk offsets(num_chunks+1*1)
-        let reader = &mut storage_provider.open_reader(&self.pivot_data_path)?;
-
-        let offsets = read_bin_from::<u64>(reader, 0)?;
-        if offsets.nrows() != 4 {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file {}. Offsets don't contain correct \
-                 metadata, # offsets = {}, but expecting 4.",
-                &self.pivot_data_path,
-                offsets.nrows()
-            )));
-        }
-        let file_offset_data = offsets.map(|x| x.into_usize());
-
-        info!(" Offset data: {:?}", file_offset_data.as_slice());
-
-        let pivots = read_bin_from::<f32>(reader, file_offset_data[(0, 0)])?;
-        if pivots.nrows() != *num_centers || pivots.ncols() != *dim {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file {}. file_num_centers = {}, \
-                 file_dim = {} but expecting {} centers in {} dimensions.",
-                &self.pivot_data_path,
-                pivots.nrows(),
-                pivots.ncols(),
-                num_centers,
-                dim
-            )));
-        }
-
-        let centroid_m = read_bin_from::<f32>(reader, file_offset_data[(1, 0)])?;
-        if centroid_m.nrows() != *dim || centroid_m.ncols() != 1 {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file {}. file_dim = {}, \
-                 file_cols = {} but expecting {} entries in 1 dimension.",
-                &self.pivot_data_path,
-                centroid_m.nrows(),
-                centroid_m.ncols(),
-                dim
-            )));
-        }
-
-        let chunk_offsets_m = read_bin_from::<u32>(reader, file_offset_data[(2, 0)])?;
-        if chunk_offsets_m.nrows() != *num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file at chunk offsets; \
-                file has nr={}, nc={} but expecting nr={} and nc=1.",
-                chunk_offsets_m.nrows(),
-                chunk_offsets_m.ncols(),
-                num_pq_chunks + 1
-            )));
-        }
-        let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
+        let parts = self.load_pivot_file_parts(
+            &self.pivot_data_path,
+            Some(*num_pq_chunks),
+            Some(*num_centers),
+            Some(*dim),
+            storage_provider,
+        )?;
 
         Ok((
-            pivots.into_inner().into_vec(),
-            centroid_m.into_inner().into_vec(),
-            chunk_offsets.into_inner().into_vec(),
+            parts.pivots.into_inner().into_vec(),
+            parts.centroid.into_inner().into_vec(),
+            parts.chunk_offsets.into_inner().into_vec(),
         ))
     }
 
@@ -287,7 +255,43 @@ impl PQStorage {
 
         info!("Loading PQ pivots from {}...", pq_pivots);
 
+        let PivotFileParts {
+            mut pivots,
+            centroid,
+            chunk_offsets,
+        } = self.load_pivot_file_parts(
+            pq_pivots,
+            (num_pq_chunks != 0).then_some(num_pq_chunks),
+            None,
+            None,
+            storage_provider,
+        )?;
+
+        // If the centroid is non-zero, we need to add it to the pivots to restore the
+        // numeric behavior.
+        if centroid.as_slice().iter().any(|c| *c != 0.0) {
+            accum_row_inplace(pivots.as_mut_view(), centroid.as_slice())
+        }
+
+        FixedChunkPQTable::new(
+            pivots.ncols(),
+            pivots.into_inner(),
+            chunk_offsets.into_inner(),
+        )
+    }
+
+    fn load_pivot_file_parts<Storage: StorageReadProvider>(
+        &self,
+        pq_pivots: &str,
+        expected_num_pq_chunks: Option<usize>,
+        expected_num_centers: Option<usize>,
+        expected_dim: Option<usize>,
+        storage_provider: &Storage,
+    ) -> ANNResult<PivotFileParts> {
         let mut reader = storage_provider.open_reader(pq_pivots)?;
+
+        // File layout: offset table(4*1) -> pivot data(num_centers*dim) ->
+        // centroid(dim*1) -> chunk offsets(num_chunks+1*1).
         let offsets = read_bin_from::<u64>(&mut reader, 0)?;
         if offsets.nrows() != 4 {
             return Err(ANNError::message(format!(
@@ -299,31 +303,53 @@ impl PQStorage {
         }
         let file_offset_data = offsets.map(|x| x.into_usize());
 
-        let mut pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
-        if pivots.nrows() > NUM_PQ_CENTROIDS {
-            return Err(ANNError::message(format!(
+        info!(" Offset data: {:?}", file_offset_data.as_slice());
+
+        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
+        if let Some(num_centers) = expected_num_centers {
+            if pivots.nrows() != num_centers {
+                return Err(ANNError::log_pq_error(format_args!(
+                    "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
+                    pq_pivots,
+                    pivots.nrows(),
+                    num_centers
+                )));
+            }
+        } else if pivots.nrows() > NUM_PQ_CENTROIDS {
+            return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
                 pq_pivots,
                 pivots.nrows(),
                 NUM_PQ_CENTROIDS
             )));
         }
-        let dim = pivots.ncols();
 
-        let centroids = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
-        if centroids.nrows() != dim || centroids.ncols() != 1 {
-            return Err(ANNError::message(format!(
+        if let Some(dim) = expected_dim {
+            if pivots.ncols() != dim {
+                return Err(ANNError::log_pq_error(format_args!(
+                    "Error reading pq_pivots file {}. file_dim = {} but expecting {} dimensions.",
+                    pq_pivots,
+                    pivots.ncols(),
+                    dim
+                )));
+            }
+        }
+
+        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
+        if centroid.nrows() != pivots.ncols() || centroid.ncols() != 1 {
+            return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_dim = {}, file_cols = {} \
                  but expecting {} entries in 1 dimension.",
                 pq_pivots,
-                centroids.nrows(),
-                centroids.ncols(),
-                dim
+                centroid.nrows(),
+                centroid.ncols(),
+                pivots.ncols()
             )));
         }
 
         let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
-        if (chunk_offsets_m.nrows() != num_pq_chunks + 1 && num_pq_chunks as u32 != 0)
+        if expected_num_pq_chunks
+            .is_some_and(|num_pq_chunks| chunk_offsets_m.nrows() != num_pq_chunks + 1)
             || chunk_offsets_m.ncols() != 1
         {
             return Err(ANNError::message(format!(
@@ -332,18 +358,27 @@ impl PQStorage {
                  passed as 0 if we want to infer.",
                 chunk_offsets_m.nrows(),
                 chunk_offsets_m.ncols(),
-                num_pq_chunks + 1
+                expected_num_pq_chunks.map_or(0, |num_pq_chunks| num_pq_chunks + 1)
             )));
         }
         let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
 
-        // If the centroid is non-zero, we need to add it to the pivots to restore the
-        // numeric behavior.
-        if centroids.as_slice().iter().any(|c| *c != 0.0) {
-            accum_row_inplace(pivots.as_mut_view(), centroids.as_slice())
+        let parts = PivotFileParts {
+            pivots,
+            centroid,
+            chunk_offsets,
+        };
+        if parts.chunk_offsets.nrows() < 2
+            || parts.chunk_offsets[(0, 0)] != 0
+            || parts.chunk_offsets[(parts.chunk_offsets.nrows() - 1, 0)] != parts.dim()
+        {
+            return Err(ANNError::log_pq_error(format_args!(
+                "Error reading pq_pivots file at chunk offsets; chunk offsets must start at 0, end at dim {}, and contain at least two entries.",
+                parts.dim()
+            )));
         }
 
-        FixedChunkPQTable::new(dim, pivots.into_inner(), chunk_offsets.into_inner())
+        Ok(parts)
     }
 
     /// streams data from the file, and samples each vector with probability p_val
