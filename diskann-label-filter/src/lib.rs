@@ -68,7 +68,9 @@ pub mod kv_index;
 pub mod stores;
 
 // Re-exports for convenience
-pub use live_filter::{FrozenAttributeIndex, InlineAttributeIndex};
+pub use live_filter::{
+    FrozenAttributeIndex, FrozenAttributeIndexCsr, InlineAttributeIndex, InlineAttributeIndexCsr,
+};
 pub use parser::ast::{ASTExpr, CompareOp};
 pub use parser::evaluator::eval_query_expr;
 pub use parser::query_parser::{get_value_by_path, parse_query_filter};
