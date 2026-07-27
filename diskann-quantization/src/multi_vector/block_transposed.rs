@@ -888,12 +888,14 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
 // ── BlockTransposedMut ───────────────────────────────────────────
 
 impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, T, GROUP, PACK> {
+    fn new(data: MatMut<'a, BlockTransposedRepr<T, GROUP, PACK>>) -> Self {
+        Self { data }
+    }
+
     /// Borrow as an immutable [`BlockTransposedRef`].
     #[inline]
     pub fn as_view(&self) -> BlockTransposedRef<'_, T, GROUP, PACK> {
-        BlockTransposedRef {
-            data: self.data.as_view(),
-        }
+        BlockTransposedRef::new(self.data.as_view())
     }
 
     // ── Delegated read methods ───────────────────────────────────
@@ -1021,9 +1023,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     // ── Private helpers ──────────────────────────────────────────
 
     fn reborrow_mut(&mut self) -> BlockTransposedMut<'_, T, GROUP, PACK> {
-        BlockTransposedMut {
-            data: self.data.reborrow_mut(),
-        }
+        BlockTransposedMut::new(self.data.reborrow_mut())
     }
 }
 
@@ -1037,9 +1037,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
 
     /// Borrow as a mutable [`BlockTransposedMut`].
     pub fn as_view_mut(&mut self) -> BlockTransposedMut<'_, T, GROUP, PACK> {
-        BlockTransposedMut {
-            data: self.data.as_view_mut(),
-        }
+        BlockTransposedMut::new(self.data.as_view_mut())
     }
 
     // ── Delegated read methods ───────────────────────────────────
@@ -2006,9 +2004,7 @@ mod tests {
         let mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
         let raw: &[f32] = mat.as_slice();
 
-        let mat_ref = BlockTransposedRef {
-            data: repr.new_ref(raw).unwrap(),
-        };
+        let mat_ref = BlockTransposedRef::new(repr.new_ref(raw).unwrap());
         assert_eq!(mat_ref.nrows(), nrows);
         assert_eq!(mat_ref.ncols(), ncols);
         for row in 0..nrows {
@@ -2018,9 +2014,7 @@ mod tests {
         }
 
         let mut buf = raw.to_vec();
-        let mat_mut = BlockTransposedMut {
-            data: repr.new_mut(&mut buf).unwrap(),
-        };
+        let mat_mut = BlockTransposedMut::new(repr.new_mut(&mut buf).unwrap());
         assert_eq!(mat_mut.nrows(), nrows);
         assert_eq!(mat_mut.ncols(), ncols);
 
