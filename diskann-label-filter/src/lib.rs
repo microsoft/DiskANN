@@ -69,7 +69,10 @@ pub mod stores;
 
 // Re-exports for convenience
 pub use live_filter::{
-    FrozenAttributeIndex, FrozenAttributeIndexCsr, InlineAttributeIndex, InlineAttributeIndexCsr,
+    FrozenAttributeIndex, FrozenAttributeIndexAuto, FrozenAttributeIndexBitslice,
+    FrozenAttributeIndexCsr, FrozenAttributeIndexPosting, InlineAttributeIndex,
+    InlineAttributeIndexAuto, InlineAttributeIndexBitslice, InlineAttributeIndexCsr,
+    InlineAttributeIndexPosting,
 };
 pub use parser::ast::{ASTExpr, CompareOp};
 pub use parser::evaluator::eval_query_expr;
