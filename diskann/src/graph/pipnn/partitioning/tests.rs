@@ -155,6 +155,13 @@ fn global_merge_never_overfills_before_reaching_c_min() {
 }
 
 #[test]
+fn global_merge_fills_exact_capacity_before_flushing() {
+    let merged = global_merge_small(vec![vec![0, 1], vec![2, 3]], 4, 4).unwrap();
+
+    assert_eq!(merged, vec![vec![0, 1, 2, 3]]);
+}
+
+#[test]
 fn replicas_cover_every_point_once_or_more_per_replica() {
     let data = directional_data(72, 5);
     let leaves = partition(
@@ -238,6 +245,25 @@ fn leader_count_is_bounded() {
     assert_eq!(sample_num_leaders(1, 1.0), 1);
     assert_eq!(sample_num_leaders(10, 0.01), 2);
     assert_eq!(sample_num_leaders(50_000, 1.0), LEADER_CAP);
+}
+
+#[test]
+fn replica_seed_derivation_is_stable_and_distinct() {
+    assert_eq!(mix_seed(PARTITION_SEED, 0), 9_518_416_997_697_480);
+    assert_eq!(mix_seed(PARTITION_SEED, 1), 9_518_416_997_697_481);
+}
+
+#[test]
+fn leader_assignment_handles_multiple_stripes() {
+    let points = 2_048;
+    let data: Vec<f32> = (0..points).map(|point| point as f32).collect();
+    let data = MatrixView::try_from(data.as_slice(), points, 1).unwrap();
+    let point_ids: Vec<u32> = (0..points as u32).collect();
+
+    let clusters = assign_to_leaders(data, &point_ids, &[0, 2_047], 1, Metric::L2).unwrap();
+
+    assert_eq!(clusters[0], (0..1_024).collect::<Vec<_>>());
+    assert_eq!(clusters[1], (1_024..2_048).collect::<Vec<_>>());
 }
 
 #[test]

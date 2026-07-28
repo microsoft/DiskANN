@@ -26,11 +26,11 @@ use crate::{
 // Private algorithm and batching constants live together. None are user policy.
 const PARTITION_SEED: u64 = 1_000;
 const LEADER_CAP: usize = 1_000;
-const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 512 * 1024;
+const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 524_288;
 const MIN_ASSIGNMENT_STRIPE_ROWS: usize = 32;
 const MAX_ASSIGNMENT_STRIPE_ROWS: usize = 1_024;
 const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
-const SCATTER_STRIPE_ROWS: usize = 64 * 1024;
+const SCATTER_STRIPE_ROWS: usize = 65_536;
 const MAX_PARTITION_ITERATIONS: usize = 30;
 
 /// A partition failure with enough context to diagnose non-progressing input.
@@ -182,12 +182,9 @@ where
     if work.is_empty() {
         return global_merge_small(leaves, config.c_min, config.c_max);
     }
-    let mut largest = &work[0];
-    for item in &work[1..] {
-        if item.indices.len() > largest.indices.len() {
-            largest = item;
-        }
-    }
+    let Some(largest) = work.iter().max_by_key(|item| item.indices.len()) else {
+        return global_merge_small(leaves, config.c_min, config.c_max);
+    };
     Err(ANNError::opaque(PartitionError::IterationLimit {
         size: largest.indices.len(),
         level: largest.level,
@@ -589,11 +586,9 @@ fn filled_vec<T: Clone>(len: usize, value: T) -> ANNResult<Vec<T>> {
 }
 
 fn resize_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
-    if len > values.len() {
-        values
-            .try_reserve(len - values.len())
-            .map_err(ANNError::opaque)?;
-    }
+    values
+        .try_reserve(len.saturating_sub(values.len()))
+        .map_err(ANNError::opaque)?;
     values.resize(len, value);
     Ok(())
 }
