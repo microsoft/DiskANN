@@ -437,6 +437,7 @@ version = "0.55.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "criterion",
  "dashmap",
  "diskann-utils",
  "diskann-vector",

@@ -32,6 +32,7 @@ diskann-wide = { workspace = true }
 dashmap = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion.workspace = true
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
@@ -40,6 +41,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync"] }
 dashmap = { workspace = true }
+
+[[bench]]
+name = "robust_prune"
+harness = false
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
 [lints.rust]
