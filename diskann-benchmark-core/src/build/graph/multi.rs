@@ -95,13 +95,11 @@ where
                     }
                 }
 
-                ANNError::message(
-                    OutOfBounds {
-                        max: self.data.nrows(),
-                        start: range.start,
-                        end: range.end,
-                    },
-                )
+                ANNError::message(OutOfBounds {
+                    max: self.data.nrows(),
+                    start: range.start,
+                    end: range.end,
+                })
             })?
             .to_owned();
 

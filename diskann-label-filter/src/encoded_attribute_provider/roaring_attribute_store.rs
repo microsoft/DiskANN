@@ -77,16 +77,14 @@ where
         let mut deleted = true;
 
         // Acquire locks in consistent order: index first, then inv_index
-        let mut index_guard = self.index.write().map_err(|_| {
-            ANNError::message(
-                "Failed to acquire write lock on index",
-            )
-        })?;
-        let mut inv_index_guard = self.inv_index.write().map_err(|_| {
-            ANNError::message(
-                "Failed to acquire write lock on inv_index",
-            )
-        })?;
+        let mut index_guard = self
+            .index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on index"))?;
+        let mut inv_index_guard = self
+            .inv_index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on inv_index"))?;
 
         let existing_set = match index_guard.get(vec_id)? {
             Some(set) => set,
@@ -114,18 +112,15 @@ where
         if deleted {
             Ok(true)
         } else {
-            Err(ANNError::message(
-                "Failed to delete id from the index.",
-            ))
+            Err(ANNError::message("Failed to delete id from the index."))
         }
     }
 
     fn id_exists(&self, vec_id: &IT) -> ANNResult<bool> {
-        let index_guard = self.index.read().map_err(|_| {
-            ANNError::message(
-                "Failed to acquire read lock on the label index.",
-            )
-        })?;
+        let index_guard = self
+            .index
+            .read()
+            .map_err(|_| ANNError::message("Failed to acquire read lock on the label index."))?;
         index_guard.exists(vec_id)
     }
 
@@ -143,21 +138,18 @@ where
         }
 
         // Acquire locks in consistent order: attribute_map, index, inv_index
-        let mut attr_map_guard = self.attribute_map.write().map_err(|_| {
-            ANNError::message(
-                "Failed to acquire write lock on attribute_map",
-            )
-        })?;
-        let mut index_guard = self.index.write().map_err(|_| {
-            ANNError::message(
-                "Failed to acquire write lock on index",
-            )
-        })?;
-        let mut inv_index_guard = self.inv_index.write().map_err(|_| {
-            ANNError::message(
-                "Failed to acquire write lock on inv_index",
-            )
-        })?;
+        let mut attr_map_guard = self
+            .attribute_map
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on attribute_map"))?;
+        let mut index_guard = self
+            .index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on index"))?;
+        let mut inv_index_guard = self
+            .inv_index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on inv_index"))?;
 
         // Update the inverted index.
         // Delete all instances of id from the inv_index for the old labels.

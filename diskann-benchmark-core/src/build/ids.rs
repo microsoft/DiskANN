@@ -8,7 +8,7 @@
 use std::marker::PhantomData;
 
 use diskann::{ANNError, ANNResult};
-use diskann_utils::{lazy_format, future::AsyncFriendly};
+use diskann_utils::{future::AsyncFriendly, lazy_format};
 
 /// Convert an implicit data index to an external ID.
 ///
@@ -116,14 +116,12 @@ where
     fn to_id(&self, i: usize) -> ANNResult<T> {
         self.0.get(i).cloned().ok_or_else(|| {
             let len = self.0.len();
-            ANNError::message(
-                lazy_format!(
-                    move,
-                    "tried to index a slice of length {} at index {}",
-                    len,
-                    i
-                ),
-            )
+            ANNError::message(lazy_format!(
+                move,
+                "tried to index a slice of length {} at index {}",
+                len,
+                i
+            ))
         })
     }
 }
@@ -169,14 +167,12 @@ macro_rules! impl_range {
             fn to_id(&self, i: usize) -> ANNResult<$T> {
                 self.0.clone().nth(i).ok_or_else(|| {
                     let len = self.0.len();
-                    ANNError::message(
-                        lazy_format!(
-                            move,
-                            "tried to index a range of length {} at index {}",
-                            len,
-                            i
-                        ),
-                    )
+                    ANNError::message(lazy_format!(
+                        move,
+                        "tried to index a range of length {} at index {}",
+                        len,
+                        i
+                    ))
                 })
             }
         }

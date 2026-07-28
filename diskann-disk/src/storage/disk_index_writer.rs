@@ -8,7 +8,7 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     storage::{get_mem_index_file, path_utility::*},
@@ -18,6 +18,7 @@ use tracing::info;
 
 use crate::{
     data_model::{GraphHeader, GraphMetadata},
+    error::{diskann_error, ErrorKind},
     storage::{CachedReader, CachedWriter},
 };
 
@@ -99,12 +100,10 @@ impl DiskIndexWriter {
         block_size: usize,
     ) -> ANNResult<Self> {
         if block_size < GraphMetadata::get_size() {
-            return Err(ANNError::log_index_config_error(
-                "index_block_size".to_string(),
-                format!(
-                    "block_size should be greater than the size of GraphMetadata: {}",
-                    GraphMetadata::get_size()
-                ),
+            return Err(diskann_error!(
+                ErrorKind::IndexConfigError("index_block_size"),
+                "block_size should be greater than the size of GraphMetadata: {}",
+                GraphMetadata::get_size()
             ));
         }
 
@@ -138,7 +137,10 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             num_nbrs = vamana_reader.read_u32::<LittleEndian>()?;
         } else {
-            return Err(ANNError::log_index_error("invalid index reader"));
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "invalid index reader"
+            ));
         }
 
         Ok(num_nbrs)
@@ -154,7 +156,10 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             vamana_reader.read_exact(nbrs_buf)?;
         } else {
-            return Err(ANNError::log_index_error("invalid index reader"));
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "invalid index reader"
+            ));
         }
 
         Ok(())
@@ -193,7 +198,10 @@ impl DiskIndexWriter {
             return Ok(());
         }
 
-        Err(ANNError::log_index_error("invalid index reader"))
+        Err(diskann_error!(
+            ErrorKind::IndexError,
+            "invalid index reader"
+        ))
     }
 
     fn open_associated_data_reader<StorageProvider>(
@@ -218,10 +226,11 @@ impl DiskIndexWriter {
                 let length = associated_data_reader.read_u32()? as usize;
 
                 if state.num_pts != associated_data_num_pts {
-                    return Err(ANNError::log_index_error(format_args!(
+                    return Err(diskann_error!(
+                        ErrorKind::IndexError,
                         "Number of points in dataset file ({}) does not match number of points in associated data file ({}).",
                         state.num_pts, associated_data_num_pts
-                    )));
+                    ));
                 }
 
                 (Option::Some(associated_data_reader), length)

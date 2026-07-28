@@ -11,7 +11,7 @@
 
 use std::cmp::min;
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNResult};
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
 use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
 use hashbrown::HashSet;
@@ -23,6 +23,8 @@ use rand::{
 use rayon::prelude::*;
 
 use super::math_util::{compute_closest_centers, compute_vecs_l2sq};
+
+use crate::error::{diskann_error, ErrorKind};
 
 /// Run Lloyds one iteration
 /// Given data in row-major num_points * dim, and centers in row-major
@@ -138,7 +140,8 @@ pub fn run_lloyds(
 
     for i in 0..max_reps {
         if *cancellation_token {
-            return Err(ANNError::log_pq_error(
+            return Err(diskann_error!(
+                ErrorKind::PQError,
                 "Error: Cancellation requested by caller.",
             ));
         }
@@ -178,18 +181,21 @@ fn select_random_pivots(
     rng: &mut impl Rng,
 ) -> ANNResult<()> {
     if num_points < num_centers {
-        return Err(ANNError::log_kmeans_error(format!(
+        return Err(diskann_error!(
+            ErrorKind::KMeansError,
             "Number of points {} is less than number of centers {}",
-            num_points, num_centers
-        )));
+            num_points,
+            num_centers
+        ));
     }
     if pivot_data.len() != num_centers * dim {
-        return Err(ANNError::log_kmeans_error(format!(
+        return Err(diskann_error!(
+            ErrorKind::KMeansError,
             "Pivot data buffer should be of size num_centers * dim = {} * {} = {}",
             num_centers,
             dim,
             num_centers * dim
-        )));
+        ));
     }
 
     let mut picked = HashSet::new();
@@ -238,23 +244,26 @@ pub fn k_meanspp_selecting_pivots(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if num_points > (1 << 23) {
-        return Err(ANNError::log_kmeans_error(format!(
+        return Err(diskann_error!(
+            ErrorKind::KMeansError,
             "Number of points {} is greater than 8388608, and k-means++ can not process this.
             Try selecting_random_pivots instead.",
             num_points
-        )));
+        ));
     }
     if pivot_data.len() != num_centers * dim {
-        return Err(ANNError::log_kmeans_error(format!(
+        return Err(diskann_error!(
+            ErrorKind::KMeansError,
             "Pivot data buffer should be of size num_centers * dim = {} * {} = {}",
             num_centers,
             dim,
             num_centers * dim
-        )));
+        ));
     }
 
     if *cancellation_token {
-        return Err(ANNError::log_pq_error(
+        return Err(diskann_error!(
+            ErrorKind::PQError,
             "Error: Cancellation requested by caller.",
         ));
     }
@@ -264,7 +273,7 @@ pub fn k_meanspp_selecting_pivots(
 
     let real_distribution = StandardUniform;
     let int_distribution = Uniform::new(0, num_points)
-        .map_err(|_| ANNError::log_kmeans_error("cannot cluster an empty dataset".into()))?;
+        .map_err(|_| diskann_error!(ErrorKind::KMeansError, "cannot cluster an empty dataset"))?;
 
     // Randomly select a node as the first pivot.
     let init_id = int_distribution.sample(rng);
@@ -291,7 +300,8 @@ pub fn k_meanspp_selecting_pivots(
     // At the end of the loop we should have num_centers pivots.
     for _ in 1..num_centers {
         if *cancellation_token {
-            return Err(ANNError::log_pq_error(
+            return Err(diskann_error!(
+                ErrorKind::PQError,
                 "Error: Cancellation requested by caller.",
             ));
         }
@@ -329,8 +339,8 @@ pub fn k_meanspp_selecting_pivots(
                     || (dart_val <= prefix_sum && *pivot_dist != 0.0f32))
             {
                 if picked.contains(&i) {
-                    return Err(ANNError::log_kmeans_error(
-                        "A pivot was sampled again, the condition on dart_val range should not have happened".to_string(),
+                    return Err(diskann_error!(ErrorKind::KMeansError,
+                        "A pivot was sampled again, the condition on dart_val range should not have happened",
                     ));
                 }
                 picked.insert(i);
@@ -341,18 +351,19 @@ pub fn k_meanspp_selecting_pivots(
             prefix_sum += *pivot_dist as f64;
         }
         if prefix_sum > sum {
-            return Err(ANNError::log_kmeans_error(
+            return Err(diskann_error!(
+                ErrorKind::KMeansError,
                 "Prefix sum should not be greater than sum.
             If the for loop above ran to conclusion without break,
             prefix_sum should be equal to sum"
-                    .to_string(),
             ));
         }
         // We should have picked a pivot in this loop.
         // If not, there is a corner condition we might have missed and we should fix this function.
         if picked_pivot_id == num_points {
-            return Err(ANNError::log_kmeans_error(
-                "Did not pick a pivot in this loop".to_string(),
+            return Err(diskann_error!(
+                ErrorKind::KMeansError,
+                "Did not pick a pivot in this loop",
             ));
         }
 
@@ -427,7 +438,6 @@ pub fn k_means_clustering(
 #[cfg(test)]
 mod kmeans_test {
     use approx::assert_relative_eq;
-    use diskann::ANNErrorKind;
     use diskann_providers::{
         storage::{StorageReadProvider, VirtualStorageProvider},
         utils::{
@@ -437,6 +447,8 @@ mod kmeans_test {
     };
     use diskann_utils::test_data_root;
     use rstest::rstest;
+
+    use crate::error::{error_kind, ErrorKind};
 
     use super::*;
 
@@ -555,7 +567,7 @@ mod kmeans_test {
         )
         .unwrap_err();
 
-        assert_eq!(err.kind(), ANNErrorKind::PQError);
+        assert_eq!(error_kind(&err), ErrorKind::PQError);
         assert!(err
             .to_string()
             .contains("Error: Cancellation requested by caller."));
@@ -666,7 +678,7 @@ mod kmeans_test {
         )
         .unwrap_err();
 
-        assert_eq!(err.kind(), ANNErrorKind::KMeansError);
+        assert_eq!(error_kind(&err), ErrorKind::KMeansError);
         assert!(err.to_string().contains(expected_error_message));
     }
 
@@ -850,7 +862,7 @@ mod kmeans_test {
         let use_correct_buffer_size = true;
         let cancellation_token = &mut false;
 
-        let expected_error_type = ANNErrorKind::KMeansError;
+        let expected_error_type = ErrorKind::KMeansError;
         let expected_error_message =
             "Number of points 8388609 is greater than 8388608, and k-means++ can not process this.";
 
@@ -873,7 +885,7 @@ mod kmeans_test {
         let use_correct_buffer_size = false; // Buffer size is 1 less than required
         let cancellation_token = &mut false;
 
-        let expected_error_type = ANNErrorKind::KMeansError;
+        let expected_error_type = ErrorKind::KMeansError;
         let expected_error_message =
             "Pivot data buffer should be of size num_centers * dim = 3 * 2 = 6";
 
@@ -896,7 +908,7 @@ mod kmeans_test {
         let use_correct_buffer_size = true;
         let cancellation_token = &mut true;
 
-        let expected_error_type = ANNErrorKind::PQError;
+        let expected_error_type = ErrorKind::PQError;
         let expected_error_message = "Error: Cancellation requested by caller.";
 
         k_meanspp_selecting_pivots_test_error_internal(
@@ -916,7 +928,7 @@ mod kmeans_test {
         num_centers: usize,
         use_correct_buffer_size: bool,
         cancellation_token: &mut bool,
-        expected_error_type: ANNErrorKind,
+        expected_error_type: ErrorKind,
         expected_error_message: &str,
     ) {
         // Generate some random data points
@@ -942,7 +954,7 @@ mod kmeans_test {
         )
         .unwrap_err();
 
-        assert_eq!(err.kind(), expected_error_type);
+        assert_eq!(error_kind(&err), expected_error_type);
         assert!(err.to_string().contains(expected_error_message));
     }
 
@@ -1056,7 +1068,7 @@ mod kmeans_test {
         )
         .unwrap_err();
 
-        assert_eq!(err.kind(), ANNErrorKind::PQError);
+        assert_eq!(error_kind(&err), ErrorKind::PQError);
         assert!(err.to_string().contains("Cancellation requested by caller"));
     }
 }

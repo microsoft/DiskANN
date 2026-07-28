@@ -65,9 +65,7 @@ where
             .attribute_accessor
             .visit_labels_of_point(id, |_, opt_set| match opt_set {
                 Some(set) => Ok(f(&mut self.computer, set)),
-                None => Err(ANNError::message(
-                    "No labels were found for vector",
-                )),
+                None => Err(ANNError::message("No labels were found for vector")),
             }) {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(err)) => Err(err),

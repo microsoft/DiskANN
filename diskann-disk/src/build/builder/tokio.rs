@@ -3,7 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNResult};
+
+use crate::error::{diskann_error, ErrorKind};
 
 /// Creates a new multi-threaded tokio runtime with the specified number of worker threads.
 /// If `num_threads` is 0, it defaults to the number of logical CPUs.
@@ -15,7 +17,11 @@ pub fn create_runtime(num_threads: usize) -> ANNResult<tokio::runtime::Runtime> 
     }
 
     builder.build().map_err(|err| {
-        ANNError::log_index_error(format!("Failed to initialize tokio runtime: {}", err))
+        diskann_error!(
+            ErrorKind::IndexError,
+            "Failed to initialize tokio runtime: {}",
+            err
+        )
     })
 }
 

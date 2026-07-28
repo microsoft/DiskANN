@@ -4,9 +4,11 @@
  */
 use std::io::{Read, Seek};
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNResult};
 use diskann_providers::storage::StorageReadProvider;
 use tracing::info;
+
+use crate::error::{diskann_error, ErrorKind};
 
 /// Sequential cached reads with a generic storage provider with read access.
 pub struct CachedReader<Storage>
@@ -76,13 +78,14 @@ where
             // case 2: cache contains some data
             let cached_bytes = self.cache_size - self.cur_off;
             if n_bytes - cached_bytes > self.size - self.reader.stream_position()? {
-                return Err(ANNError::log_index_error(format_args!(
+                return Err(diskann_error!(
+                    ErrorKind::IndexError,
                     "Reading beyond end of file, n_bytes: {} cached_bytes: {} fsize: {} current pos: {}",
                     n_bytes,
                     cached_bytes,
                     self.size,
                     self.reader.stream_position()?
-                )));
+                ));
             }
 
             read_buf[..cached_bytes as usize]

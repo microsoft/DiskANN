@@ -39,12 +39,10 @@ impl ASTLabelIdMapper {
     ) -> ANNResult<ASTIdExpr<u64>> {
         match encoder.get(attribute) {
             Some(attribute_id) => Ok(ASTIdExpr::Terminal(attribute_id)),
-            None => Err(ANNError::message(
-                format!(
-                    "{}+{} present in the query does not exist in the dataset.",
-                    field, op
-                ),
-            )),
+            None => Err(ANNError::message(format!(
+                "{}+{} present in the query does not exist in the dataset.",
+                field, op
+            ))),
         }
     }
 }
@@ -126,12 +124,10 @@ impl ASTVisitor for ASTLabelIdMapper {
                 }
             }
         } else {
-            Err(ANNError::message(
-                format!(
-                    "CompareOp {} is not supported in the mapped filter search scenario.",
-                    op
-                ),
-            ))
+            Err(ANNError::message(format!(
+                "CompareOp {} is not supported in the mapped filter search scenario.",
+                op
+            )))
         }
     }
 }

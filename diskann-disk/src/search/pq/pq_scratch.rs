@@ -4,9 +4,11 @@
  */
 //! Aligned allocator
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNResult};
 
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
+
+use crate::error::{diskann_error, ErrorKind};
 
 #[derive(Debug)]
 /// PQ scratch
@@ -42,12 +44,12 @@ impl PQScratch {
     ) -> ANNResult<Self> {
         let aligned_pq_coord_scratch =
             Poly::broadcast(0u8, graph_degree * num_pq_chunks, AlignedAllocator::A128)
-                .map_err(ANNError::log_index_error)?;
+                .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
         let aligned_pqtable_dist_scratch =
             Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128)
-                .map_err(ANNError::log_index_error)?;
+                .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
         let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
-            .map_err(ANNError::log_index_error)?;
+            .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
         let query_scratch = vec![0.0f32; dim];
 
         Ok(Self {
@@ -68,10 +70,11 @@ impl PQScratch {
     pub fn set(&mut self, query: &[f32]) -> ANNResult<()> {
         let dim = self.query_scratch.len();
         if query.len() != dim {
-            return Err(ANNError::log_dimension_mismatch_error(format!(
+            return Err(diskann_error!(
+                ErrorKind::DimensionMismatchError,
                 "PQScratch::set: expected query of length {dim}, got {}",
                 query.len()
-            )));
+            ));
         }
         self.query_scratch.copy_from_slice(query);
         Ok(())
@@ -90,6 +93,8 @@ mod tests {
     use rstest::rstest;
 
     use super::PQScratch;
+
+    use crate::error::{error_kind, ErrorKind};
 
     #[rstest]
     #[case(512, 8, 128, 256)] // default test case
@@ -135,7 +140,7 @@ mod tests {
         // Query shorter than dim should fail
         let short_query: Vec<f32> = (1..dim).map(|i| i as f32).collect(); // dim-1 elements
         let err = pq_scratch.set(&short_query).unwrap_err();
-        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+        assert_eq!(error_kind(&err), ErrorKind::DimensionMismatchError);
         assert!(err.to_string().contains("expected query of length"));
     }
 
@@ -147,7 +152,7 @@ mod tests {
         // Query longer than dim should fail
         let long_query: Vec<f32> = (1..=dim + 10).map(|i| i as f32).collect();
         let err = pq_scratch.set(&long_query).unwrap_err();
-        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+        assert_eq!(error_kind(&err), ErrorKind::DimensionMismatchError);
         assert!(err.to_string().contains("expected query of length"));
     }
 }
