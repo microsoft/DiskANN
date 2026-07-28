@@ -1232,7 +1232,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
                 Err(_) => continue, // Can't read the mapping; skip.
             };
 
-            if output.push(id, n.distance()).is_full() {
+            if output.push(id, *n.distance()).is_full() {
                 break;
             }
         }

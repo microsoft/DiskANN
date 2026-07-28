@@ -918,7 +918,7 @@ pub(crate) mod tests {
                 let expected: Neighbor<u32> = gt[gt.len() - 1 - position];
                 if id != *expected.id() {
                     // We can allow it if the distance is the same.
-                    if distance == expected.distance() {
+                    if distance == *expected.distance() {
                         Ok(())
                     } else {
                         Err(Box::new(format!(
@@ -926,7 +926,7 @@ pub(crate) mod tests {
                             expected, id
                         )))
                     }
-                } else if distance != expected.distance() {
+                } else if distance != *expected.distance() {
                     Err(Box::new(format!(
                         "expected neighbor {:?}, but found {}",
                         expected, distance
@@ -1086,7 +1086,7 @@ pub(crate) mod tests {
             let mut gt = groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
             for n in gt.iter_mut() {
                 if filter.is_match(*n.id()) {
-                    *n = Neighbor::new(*n.id(), n.distance() * beta);
+                    *n = Neighbor::new(*n.id(), *n.distance() * beta);
                 }
             }
             gt.sort_unstable_by(neighbor::ord::reverse(neighbor::ord::fast_distance));

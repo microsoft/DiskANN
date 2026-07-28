@@ -65,28 +65,28 @@ pub use diverse_priority_queue::{
 /// );
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Neighbor<I> {
+pub struct Neighbor<I, D = f32> {
     id: I,
-    distance: f32,
+    distance: D,
 }
 
-impl<I> Neighbor<I> {
+impl<I, D> Neighbor<I, D> {
     /// Create a [`Neighbor`] with `id` and `distance`.
     #[inline]
-    pub fn new(id: I, distance: f32) -> Self {
+    pub fn new(id: I, distance: D) -> Self {
         Self { id, distance }
     }
 
     /// Return the ID and distance in `self` as a tuple.
     #[inline]
-    pub fn as_tuple(self) -> (I, f32) {
+    pub fn as_tuple(self) -> (I, D) {
         (self.id, self.distance)
     }
 
     /// Return the distance.
     #[inline]
-    pub fn distance(&self) -> f32 {
-        self.distance
+    pub fn distance(&self) -> &D {
+        &self.distance
     }
 
     /// Return the ID.
@@ -97,9 +97,10 @@ impl<I> Neighbor<I> {
 }
 
 #[cfg(test)]
-impl<I> crate::test::cmp::VerboseEq for Neighbor<I>
+impl<I, D> crate::test::cmp::VerboseEq for Neighbor<I, D>
 where
     I: crate::test::cmp::VerboseEq,
+    D: crate::test::cmp::VerboseEq,
 {
     #[inline(never)]
     #[track_caller]
@@ -143,7 +144,7 @@ pub mod ord {
     /// ```
     pub fn fast_distance<I>(x: &Neighbor<I>, y: &Neighbor<I>) -> std::cmp::Ordering {
         x.distance()
-            .partial_cmp(&y.distance())
+            .partial_cmp(y.distance())
             .unwrap_or(std::cmp::Ordering::Equal)
     }
 

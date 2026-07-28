@@ -208,7 +208,7 @@ where
             let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             for neighbor in scratch.best.iter().take(starting_l) {
-                if neighbor.distance() <= self.radius() {
+                if *neighbor.distance() <= self.radius() {
                     in_range.push(neighbor);
                 }
             }
@@ -370,7 +370,7 @@ where
 
         // The predicate ensures that the contents of `neighbors` are unique.
         for neighbor in neighbors.iter() {
-            if neighbor.distance() <= search_params.radius() * search_params.range_slack()
+            if *neighbor.distance() <= search_params.radius() * search_params.range_slack()
                 && scratch.in_range.len() < max_returned
             {
                 scratch.in_range.push(*neighbor);
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(filtered.push(1, 0.5), BufferState::Available);
         assert_eq!(filtered.current_len(), 1);
         assert_eq!(*inner[0].id(), 1);
-        assert_eq!(inner[0].distance(), 0.5);
+        assert_eq!(*inner[0].distance(), 0.5);
     }
 
     #[test]

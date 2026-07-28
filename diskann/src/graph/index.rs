@@ -2615,9 +2615,9 @@ where
                 // Filter out self loops.
                 let id = neighbor.id();
                 if exclude(*id) {
-                    (neighbor.distance(), None)
+                    (*neighbor.distance(), None)
                 } else {
-                    (neighbor.distance(), map.get(*id))
+                    (*neighbor.distance(), map.get(*id))
                 }
             })
             .collect();

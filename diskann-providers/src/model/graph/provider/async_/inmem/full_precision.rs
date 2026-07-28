@@ -447,7 +447,7 @@ where
             // pattern used by `Rerank` above.
             let vector = unsafe { store.get_vector_sync(candidate.id().into_usize()) };
             ids.push(*candidate.id());
-            distances.push(candidate.distance());
+            distances.push(*candidate.distance());
             vectors.row_mut(i).copy_from_slice(vector);
         }
 

@@ -93,7 +93,7 @@ fn assert_no_duplicates(results: &[Neighbor<u32>]) {
 fn assert_range_invariants(results: &[Neighbor<u32>], radius: f32, inner_radius: Option<f32>) {
     for n in results {
         assert!(
-            n.distance() <= radius,
+            *n.distance() <= radius,
             "result {} distance {} exceeds radius {}",
             n.id(),
             n.distance(),
@@ -101,7 +101,7 @@ fn assert_range_invariants(results: &[Neighbor<u32>], radius: f32, inner_radius:
         );
         if let Some(inner) = inner_radius {
             assert!(
-                n.distance() > inner,
+                *n.distance() > inner,
                 "result {} distance {} is within inner radius {}",
                 n.id(),
                 n.distance(),

@@ -846,7 +846,7 @@ mod tests {
                         "monotonicity should at least hold for the 1d grid"
                     );
                     assert_eq!(
-                        neighbor.distance(),
+                        *neighbor.distance(),
                         (i as f32) * (i as f32),
                         "distance was computed incorrectly!",
                     );

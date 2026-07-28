@@ -88,7 +88,7 @@ impl KnnOracleRun {
             .take(stats.result_count as usize)
             .collect();
         sort_neighbors(&mut top_k);
-        let top_k_distances = top_k.iter().map(|n| n.distance()).collect();
+        let top_k_distances = top_k.iter().map(|n| *n.distance()).collect();
 
         let ground_truth =
             oracle.expected(brute_force_topk(index.provider(), Metric::L2, query, k));
