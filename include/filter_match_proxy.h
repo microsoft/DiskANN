@@ -32,6 +32,12 @@ namespace diskann
         virtual void prefetch_bitmask(uint32_t id) override;
 
     private:
+        // Single place that sizes _query_bitmask_buf (padded to >=4 words so the
+        // AVX2 256-bit load in test_full_mask_val never reads past the buffer)
+        // and folds the filter + universal labels into the query mask. Both ctors
+        // delegate here after binding _query_bitmask_buf to their chosen storage.
+        void build_query_mask(const std::vector<LabelT>& filter_labels, LabelT unv_label);
+
         simple_bitmask_buf& _bitmask_filters;
         std::vector<std::uint64_t> _owned_query_bitmask_buf;  // populated only by the 3-arg ctor
         std::vector<std::uint64_t>& _query_bitmask_buf;       // refs either external or _owned

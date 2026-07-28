@@ -329,4 +329,132 @@ BOOST_AUTO_TEST_CASE(integer_contain_matches_on_filter_or_unv)
     BOOST_TEST(m.contain_filtered_label(3) == true);  // has 4
 }
 
+// ---- AVX2 correctness corner cases -----------------------------------------
+//
+// test_full_mask_val's AVX2 fast path (_bitmask_size <= 4) issues an
+// UNCONDITIONAL 256-bit load over both the query and the node bitmask, then a
+// single 256-bit AND. This only agrees with the scalar semantics ("intersect
+// the first _bitmask_size words") if both operands are zero in the padding
+// lanes past _bitmask_size. These tests pin the invariants that make that true;
+// each one previously failed when the query buffer was not zero-padded to 4
+// words or was reused without re-zeroing.
+
+// A single-word bitmask (size 1) means the AVX2 load reads 3 words of the NEXT
+// three points as the query's high lanes. If a match on point p leaked in from
+// point p+1/p+2/p+3's labels, this would report a false positive. Only the
+// point that actually carries the filter label may match.
+BOOST_AUTO_TEST_CASE(bitmask_size1_no_cross_point_leak)
+{
+    // 64 bits -> size 1. Give ONLY point 5 the filter label; its neighbours
+    // 6/7/8 carry other labels that must not leak into point 5's test.
+    auto filters = make_bitmask_buf(/*num_points*/ 16, /*total_bits*/ 64,
+                                    /*point_id*/ 5, /*set_labels*/ {9});
+    // Set unrelated labels on the following points (whose words the AVX2 load
+    // over point 5 will also touch as high lanes).
+    {
+        simple_bitmask bm6(filters.get_bitmask(6), filters._bitmask_size);
+        bm6.set(9); // same label as the filter, but on a DIFFERENT point
+        simple_bitmask bm7(filters.get_bitmask(7), filters._bitmask_size);
+        bm7.set(9);
+        simple_bitmask bm8(filters.get_bitmask(8), filters._bitmask_size);
+        bm8.set(9);
+    }
+    BOOST_TEST(filters._bitmask_size == (std::uint64_t)1);
+
+    std::vector<std::uint64_t> qbuf;
+    std::vector<std::uint32_t> filter_labels = {9};
+    bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, /*unv*/ 0);
+
+    BOOST_TEST(m.contain_filtered_label(5) == true);   // really has label 9
+    BOOST_TEST(m.contain_filtered_label(4) == false);  // no labels
+    // Points 6/7/8 DO carry label 9, so they legitimately match -- the point is
+    // that testing point 5 must not have leaked THEIR bits into point 5's result
+    // (already asserted by 5==true / 4==false above). Confirm the boundary point
+    // just past the filter label owner behaves per its own bits.
+    BOOST_TEST(m.contain_filtered_label(6) == true);
+}
+
+// Reusing one query buffer across proxies is the exact scenario that broke:
+// the second ctor sees a buffer already at size 4 and must still zero every
+// word (clear+resize), or stale high/low words from the first proxy produce
+// false matches.
+BOOST_AUTO_TEST_CASE(bitmask_reused_query_buffer_is_rezeroed)
+{
+    auto filters = make_bitmask_buf(8, 64, /*point*/ 2, /*labels*/ {5});
+    std::vector<std::uint64_t> qbuf;
+
+    // First proxy: filter label 5, and deliberately a label whose bit lands in
+    // a high word would require size>1; here size==1 so all bits are word 0.
+    {
+        std::vector<std::uint32_t> f1 = {5};
+        bitmask_filter_match<std::uint32_t> m1(filters, qbuf, f1, /*unv*/ 0);
+        BOOST_TEST(m1.contain_filtered_label(2) == true);
+        BOOST_TEST(qbuf.size() == (size_t)4); // padded
+    }
+    // qbuf now retains proxy #1's bits (filter label 5 in word 0). A second
+    // proxy filtering a DISJOINT label must not inherit label 5.
+    {
+        std::vector<std::uint32_t> f2 = {7}; // point 2 does NOT have label 7
+        bitmask_filter_match<std::uint32_t> m2(filters, qbuf, f2, /*unv*/ 0);
+        // If qbuf's word 0 still held label 5's bit, point 2 (which has 5) would
+        // falsely match. It must not.
+        BOOST_TEST(m2.contain_filtered_label(2) == false);
+    }
+}
+
+// Labels on 64-bit word boundaries: bit 63 is the last bit of word 0, bit 64
+// the first of word 1. With size 2 the AVX2 fast path still applies. A filter
+// on bit 64 must match a point carrying bit 64 and not one carrying bit 63.
+BOOST_AUTO_TEST_CASE(bitmask_word_boundary_labels_63_and_64)
+{
+    auto filters = make_bitmask_buf(4, /*total_bits*/ 128, /*point*/ 0, /*labels*/ {63});
+    {
+        simple_bitmask bm1(filters.get_bitmask(1), filters._bitmask_size);
+        bm1.set(64);
+    }
+    BOOST_TEST(filters._bitmask_size == (std::uint64_t)2);
+
+    std::vector<std::uint64_t> qbuf;
+    std::vector<std::uint32_t> filter_labels = {64};
+    bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, /*unv*/ 0);
+
+    BOOST_TEST(m.contain_filtered_label(1) == true);  // has bit 64
+    BOOST_TEST(m.contain_filtered_label(0) == false); // has bit 63, not 64
+}
+
+// Universal label participates in the query mask via merge. A point carrying
+// only the universal label must match even when it lacks every filter label.
+BOOST_AUTO_TEST_CASE(bitmask_universal_label_matches)
+{
+    auto filters = make_bitmask_buf(4, 64, /*point*/ 0, /*labels*/ {7}); // unv label
+    {
+        simple_bitmask bm1(filters.get_bitmask(1), filters._bitmask_size);
+        bm1.set(3); // a real filter label
+    }
+    std::vector<std::uint64_t> qbuf;
+    std::vector<std::uint32_t> filter_labels = {3};
+    bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, /*unv*/ 7);
+
+    BOOST_TEST(m.contain_filtered_label(0) == true);  // has universal label 7
+    BOOST_TEST(m.contain_filtered_label(1) == true);  // has filter label 3
+    BOOST_TEST(m.contain_filtered_label(2) == false); // has neither
+}
+
+// A bitmask larger than 4 words exercises the AVX2 blocked loop plus the
+// scalar tail (size not a multiple of 4). A match whose only shared bit lives
+// in the tail words must still be found.
+BOOST_AUTO_TEST_CASE(bitmask_large_size_tail_match)
+{
+    // 320 bits -> size 5: one 4-word AVX2 block + a 1-word scalar tail.
+    auto filters = make_bitmask_buf(4, /*total_bits*/ 320, /*point*/ 2, /*labels*/ {300});
+    BOOST_TEST(filters._bitmask_size == (std::uint64_t)5);
+
+    std::vector<std::uint64_t> qbuf;
+    std::vector<std::uint32_t> filter_labels = {300}; // bit 300 lives in word 4 (tail)
+    bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, /*unv*/ 0);
+
+    BOOST_TEST(m.contain_filtered_label(2) == true);  // shared bit in the tail
+    BOOST_TEST(m.contain_filtered_label(0) == false);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -134,10 +134,14 @@ void unified_label_data_base::collect_label_medoids(std::vector<uint32_t> &out) 
 void unified_label_data_bitmask::load_encoding(UnifiedIndexReader &r, const UnifiedIndexHeader &h, uint64_t npts)
 {
     const uint64_t bitmask_words = simple_bitmask::get_bitmask_size(h.total_labels);
-    _bitmask_buf = simple_bitmask_buf(npts * bitmask_words, bitmask_words);
+    const uint64_t exact_words = npts * bitmask_words;
+    // Ctor sizes _buf to exact_words + AVX2 tail padding; the padding stays zero
+    // and is excluded from the region-size check and zero-copy read below (both
+    // use exact_words), keeping the on-disk format canonical.
+    _bitmask_buf = simple_bitmask_buf(exact_words, bitmask_words);
     if (h.per_point_labels_len > 0)
     {
-        const uint64_t expected_bytes = _bitmask_buf._buf.size() * sizeof(std::uint64_t);
+        const uint64_t expected_bytes = exact_words * sizeof(std::uint64_t);
         if (h.per_point_labels_len != expected_bytes)
         {
             throw ANNException("unified_label_data_bitmask: bitmask region size mismatch", -1, __FUNCSIG__, __FILE__,
@@ -216,6 +220,10 @@ std::unique_ptr<filter_match_proxy> unified_label_data_integer::make_match_proxy
         bool contain_filtered_label(uint32_t id) override
         {
             return inner.contain_filtered_label(id);
+        }
+        void prefetch_bitmask(uint32_t id) override
+        {
+            inner.prefetch_bitmask(id);
         }
     };
     return std::make_unique<integer_proxy_owner>(_label_vector, filter_label_ints, _universal_label);
