@@ -214,7 +214,7 @@ impl Store {
 
         // We have a hard upper-bound of `u32::MAX` total slots.
         //
-        // Thiis enforces that bound.
+        // This enforces that bound.
         let entries: u32 = entries.try_into().map_err(|_| too_many_entries())?;
 
         let frozen: u32 = init.nrows().try_into().map_err(|_| too_many_entries())?;
@@ -275,23 +275,23 @@ impl Store {
     ///
     /// If successful, returns the number of slots reclaimed.
     pub(crate) fn try_drain(&self) -> Option<usize> {
-        #[expect(clippy::panic, reason = "we cannot proceed if we observe this")]
         fn release(tag: &AtomicTag, kind: &'static str) {
             // Use `Release` ordering to ensure that the store to the mirror cannot get moved
             // after the store to the authoritative list.
-            if let Err(got) = tag.compare_exchange(
+            //
+            // The `load + check` is just runtime validation. The calling thread is expected
+            // to have exclusive ownership of this tag.
+            //
+            // Using a load + store avoids using a CAS style loop, which can be cheaper for
+            // the bulk styl operations we're going here at the cost of precision.
+            assert_eq!(
+                tag.load(Ordering::Relaxed),
                 Tag::RETIRING,
-                Tag::AVAILABLE,
-                Ordering::Release,
-                Ordering::Relaxed,
-            ) {
-                panic!(
-                    "CONCURRENCY VIOLATION: {} - expected {} - got {}",
-                    kind,
-                    Tag::AVAILABLE,
-                    got,
-                );
-            }
+                "CONCURRENCY VIOLATION: {}",
+                kind,
+            );
+
+            tag.store(Tag::AVAILABLE, Ordering::Release);
         }
 
         let drain = self.registry.try_advance()?;
@@ -477,6 +477,10 @@ impl Store {
     /// Caller asserts that `tag` was obtained from `self.tags[slot]`. This is meant as
     /// a performance optimization where `tag` is first queried for potential availability.
     unsafe fn try_acquire<'a>(&'a self, tag: &'a AtomicTag, slot: u32) -> Option<Slot<'a>> {
+        if tag.load(Ordering::Relaxed) != Tag::AVAILABLE {
+            return None;
+        }
+
         match tag.compare_exchange(
             Tag::AVAILABLE,
             Tag::OWNED,
