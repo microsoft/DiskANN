@@ -681,6 +681,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-pipnn"
+version = "0.55.0"
+dependencies = [
+ "criterion",
+ "diskann-linalg",
+ "diskann-vector",
+ "diskann-wide",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "diskann-providers"
 version = "0.56.0"
 dependencies = [

@@ -425,6 +425,38 @@ macro_rules! test_mul {
     };
 }
 
+macro_rules! test_div {
+    ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<div_ $wide:lower $(_$($ps )x+)?>]() {
+                use $crate::SIMDVector;
+                type T = $wide $(< $($ps),+>)?;
+                type Scalar = <T as SIMDVector>::Scalar;
+
+                if let Some(arch) = $arch {
+                    let f = move |a: &[Scalar], b: &[Scalar]| {
+                        let got = (
+                            <T>::from_array(arch, a.try_into().unwrap()) /
+                            <T>::from_array(arch, b.try_into().unwrap())
+                        ).to_array();
+                        test_utils::test_binary_op(
+                            &a,
+                            &b,
+                            &got,
+                            &|l: Scalar, r: Scalar| { l / r },
+                            "binary division",
+                        )
+                    };
+
+                    let n = T::LANES;
+                    $crate::test_utils::driver::drive_binary(&f, (n, n), $seed);
+                }
+            }
+        }
+    };
+}
+
 macro_rules! test_fma {
     ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
         paste::paste! {
@@ -1141,6 +1173,7 @@ pub(crate) use test_add;
 pub(crate) use test_bitops;
 pub(crate) use test_cast;
 pub(crate) use test_cmp;
+pub(crate) use test_div;
 pub(crate) use test_fma;
 pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
