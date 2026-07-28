@@ -424,6 +424,26 @@ fn rejects_shape_overflow_before_reading_buffers() {
     assert_eq!(error, LeafKernelError::TooManyPoints(usize::MAX));
 }
 
+#[test]
+fn cosine_zero_norm_masks_nan_norm_at_simd_boundaries() {
+    for points in [9, 17] {
+        let mut dots = vec![0.0; points * points];
+        dots[0] = 0.0;
+        for row in 1..points {
+            dots[row * points + row] = f32::NAN;
+        }
+
+        let (_, output) = run(&dots, points, 1, Metric::Cosine);
+        for (row, neighbor) in output.iter().enumerate().skip(1) {
+            assert_eq!(
+                *neighbor,
+                LeafNeighbor::new(0, 1.0),
+                "n={points}, row={row}"
+            );
+        }
+    }
+}
+
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn accepts_the_largest_representable_point_count_before_shape_validation() {
