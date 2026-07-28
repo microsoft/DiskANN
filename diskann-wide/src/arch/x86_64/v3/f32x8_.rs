@@ -33,6 +33,7 @@ macros::x86_splitjoin!(f32x8, f32x4, _mm256_extractf128_ps, _mm256_set_m128, "av
 helpers::unsafe_map_binary_op!(f32x8, std::ops::Add, add, _mm256_add_ps, "avx");
 helpers::unsafe_map_binary_op!(f32x8, std::ops::Sub, sub, _mm256_sub_ps, "avx");
 helpers::unsafe_map_binary_op!(f32x8, std::ops::Mul, mul, _mm256_mul_ps, "avx");
+helpers::unsafe_map_binary_op!(f32x8, std::ops::Div, div, _mm256_div_ps, "avx");
 
 impl f32x8 {
     #[inline(always)]
@@ -266,6 +267,7 @@ mod test_x86_f32 {
     test_utils::ops::test_add!(f32x8, 0x3824379d4a43a416, V3::new_checked_uncached());
     test_utils::ops::test_sub!(f32x8, 0x548fc74c07ba425d, V3::new_checked_uncached());
     test_utils::ops::test_mul!(f32x8, 0x6d340672ff91b256, V3::new_checked_uncached());
+    test_utils::ops::test_div!(f32x8, 0x776f54898c62dd0b, V3::new_checked_uncached());
     test_utils::ops::test_fma!(f32x8, 0x5f566d8968d4d201, V3::new_checked_uncached());
     test_utils::ops::test_minmax!(f32x8, 0x6d7fc8ed6d852187, V3::new_checked_uncached());
     test_utils::ops::test_abs!(f32x8, 0x2a4a9651d8ebe912, V3::new_checked_uncached());
