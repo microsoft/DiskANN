@@ -316,6 +316,9 @@ pub(crate) enum SearchPhase {
     TopkMultihopFilter(MultiHopSearchPhase),
     TopkMultihopLiveFilter(MultiHopSearchPhase),
     TopkMultihopLiveFilterCsr(MultiHopSearchPhase),
+    TopkMultihopLiveFilterBitmap(MultiHopSearchPhase),
+    TopkMultihopLiveFilterAuto(MultiHopSearchPhase),
+    TopkMultihopLiveFilterBitslice(MultiHopSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -344,6 +347,11 @@ impl SearchPhase {
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
             Self::TopkMultihopLiveFilter(_) => SearchPhaseKind::TopkMultihopLiveFilter,
             Self::TopkMultihopLiveFilterCsr(_) => SearchPhaseKind::TopkMultihopLiveFilterCsr,
+            Self::TopkMultihopLiveFilterBitmap(_) => SearchPhaseKind::TopkMultihopLiveFilterBitmap,
+            Self::TopkMultihopLiveFilterAuto(_) => SearchPhaseKind::TopkMultihopLiveFilterAuto,
+            Self::TopkMultihopLiveFilterBitslice(_) => {
+                SearchPhaseKind::TopkMultihopLiveFilterBitslice
+            }
         }
     }
 
@@ -412,6 +420,42 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_multihop_live_filter_bitmap(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopLiveFilterBitmap(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopLiveFilterBitmap,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_multihop_live_filter_auto(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopLiveFilterAuto(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopLiveFilterAuto,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_multihop_live_filter_bitslice(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopLiveFilterBitslice(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopLiveFilterBitslice,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -423,6 +467,9 @@ impl SearchPhase {
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterCsr(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopLiveFilterBitmap(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopLiveFilterAuto(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopLiveFilterBitslice(phase) => phase.validate(checker),
         }
     }
 }
@@ -435,6 +482,9 @@ pub(crate) enum SearchPhaseKind {
     TopkMultihopFilter,
     TopkMultihopLiveFilter,
     TopkMultihopLiveFilterCsr,
+    TopkMultihopLiveFilterBitmap,
+    TopkMultihopLiveFilterAuto,
+    TopkMultihopLiveFilterBitslice,
 }
 
 impl SearchPhaseKind {
@@ -446,6 +496,9 @@ impl SearchPhaseKind {
             Self::TopkMultihopFilter => "topk-multihop-filter",
             Self::TopkMultihopLiveFilter => "topk-multihop-live-filter",
             Self::TopkMultihopLiveFilterCsr => "topk-multihop-live-filter-csr",
+            Self::TopkMultihopLiveFilterBitmap => "topk-multihop-live-filter-bitmap",
+            Self::TopkMultihopLiveFilterAuto => "topk-multihop-live-filter-auto",
+            Self::TopkMultihopLiveFilterBitslice => "topk-multihop-live-filter-bitslice",
         }
     }
 }

@@ -24,8 +24,10 @@ use std::sync::Arc;
 
 use diskann_label_filter::attribute::Attribute;
 use diskann_label_filter::{
-    read_and_parse_queries, read_baselabels, FrozenAttributeIndex, FrozenAttributeIndexCsr,
-    InlineAttributeIndex, InlineAttributeIndexCsr,
+    read_and_parse_queries, read_baselabels, FrozenAttributeIndex, FrozenAttributeIndexAuto,
+    FrozenAttributeIndexBitslice, FrozenAttributeIndexCsr, FrozenAttributeIndexPosting,
+    InlineAttributeIndex, InlineAttributeIndexAuto, InlineAttributeIndexBitslice,
+    InlineAttributeIndexCsr, InlineAttributeIndexPosting,
 };
 
 pub struct QueryBitmapEvaluator {
@@ -122,6 +124,11 @@ pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider
     Arc::new(BitmapFilter(set))
 }
 
+fn checked_doc_id(doc_id: usize) -> anyhow::Result<u32> {
+    u32::try_from(doc_id)
+        .map_err(|_| anyhow::anyhow!("document id {doc_id} exceeds the u32 graph-id range"))
+}
+
 /// Build an in-memory inline attribute index from a jsonl label file (one document per line).
 ///
 /// Each document's flattened `(field, value)` pairs are encoded to integer attribute-ids and
@@ -143,8 +150,9 @@ pub(crate) fn build_inline_attribute_index(
                 })?);
             }
         }
+        let doc_id = checked_doc_id(doc.doc_id)?;
         index
-            .insert_document(doc.doc_id as u32, &attrs)
+            .insert_document(doc_id, &attrs)
             .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
     }
     Ok(Arc::new(index.freeze()))
@@ -191,8 +199,9 @@ pub(crate) fn build_inline_attribute_index_csr(
                 })?);
             }
         }
+        let doc_id = checked_doc_id(doc.doc_id)?;
         index
-            .insert_document(doc.doc_id as u32, &attrs)
+            .insert_document(doc_id, &attrs)
             .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
     }
     Ok(Arc::new(index.freeze()))
@@ -202,6 +211,138 @@ pub(crate) fn build_inline_attribute_index_csr(
 /// the same CSR attribute `index`. Mirrors [`make_live_providers`].
 pub(crate) fn make_live_providers_csr(
     index: &FrozenAttributeIndexCsr,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    let mut providers = Vec::with_capacity(parsed.len());
+    for (_query_id, ast) in parsed {
+        providers.push(
+            index
+                .make_provider(&ast)
+                .map_err(|e| anyhow::anyhow!("failed to build live provider: {e:?}"))?,
+        );
+    }
+    Ok(providers)
+}
+
+/// Build an in-memory posting-list attribute index (one `RoaringBitmap` of vector-ids per
+/// attribute) from a jsonl label file. Same inputs/encoding as [`build_inline_attribute_index`];
+/// used by the materialized-bitmap live provider.
+pub(crate) fn build_inline_attribute_index_posting(
+    data_labels: &InputFile,
+) -> anyhow::Result<Arc<FrozenAttributeIndexPosting>> {
+    let docs = read_baselabels(data_labels.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to read base labels: {e}"))?;
+    let mut index = InlineAttributeIndexPosting::new();
+    let mut attrs: Vec<Attribute> = Vec::new();
+    for doc in &docs {
+        attrs.clear();
+        if let Some(obj) = doc.label.as_object() {
+            for (field, value) in obj {
+                attrs.push(Attribute::from_json_value(field, value).map_err(|e| {
+                    anyhow::anyhow!("attribute conversion failed for field '{field}': {e:?}")
+                })?);
+            }
+        }
+        let doc_id = checked_doc_id(doc.doc_id)?;
+        index
+            .insert_document(doc_id, &attrs)
+            .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
+    }
+    Ok(Arc::new(index.freeze()))
+}
+
+/// Parse per-query predicates and build one materialized-bitmap [`QueryLabelProvider`] per query,
+/// all sharing the same posting `index`. Mirrors [`make_live_providers`].
+pub(crate) fn make_live_providers_posting(
+    index: &FrozenAttributeIndexPosting,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    let mut providers = Vec::with_capacity(parsed.len());
+    for (_query_id, ast) in parsed {
+        providers.push(
+            index
+                .make_provider(&ast)
+                .map_err(|e| anyhow::anyhow!("failed to build live provider: {e:?}"))?,
+        );
+    }
+    Ok(providers)
+}
+
+/// Build an in-memory adaptive (auto) attribute index (CSR + posting lists) from a jsonl label file.
+pub(crate) fn build_inline_attribute_index_auto(
+    data_labels: &InputFile,
+) -> anyhow::Result<Arc<FrozenAttributeIndexAuto>> {
+    let docs = read_baselabels(data_labels.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to read base labels: {e}"))?;
+    let mut index = InlineAttributeIndexAuto::new();
+    let mut attrs: Vec<Attribute> = Vec::new();
+    for doc in &docs {
+        attrs.clear();
+        if let Some(obj) = doc.label.as_object() {
+            for (field, value) in obj {
+                attrs.push(Attribute::from_json_value(field, value).map_err(|e| {
+                    anyhow::anyhow!("attribute conversion failed for field '{field}': {e:?}")
+                })?);
+            }
+        }
+        let doc_id = checked_doc_id(doc.doc_id)?;
+        index
+            .insert_document(doc_id, &attrs)
+            .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
+    }
+    Ok(Arc::new(index.freeze()))
+}
+
+/// Build one adaptive (auto) [`QueryLabelProvider`] per query. Mirrors [`make_live_providers`].
+pub(crate) fn make_live_providers_auto(
+    index: &FrozenAttributeIndexAuto,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    let mut providers = Vec::with_capacity(parsed.len());
+    for (_query_id, ast) in parsed {
+        providers.push(
+            index
+                .make_provider(&ast)
+                .map_err(|e| anyhow::anyhow!("failed to build live provider: {e:?}"))?,
+        );
+    }
+    Ok(providers)
+}
+
+/// Build an in-memory bit-sliced attribute index (one dense bitset per attribute) from a jsonl file.
+pub(crate) fn build_inline_attribute_index_bitslice(
+    data_labels: &InputFile,
+) -> anyhow::Result<Arc<FrozenAttributeIndexBitslice>> {
+    let docs = read_baselabels(data_labels.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to read base labels: {e}"))?;
+    let mut index = InlineAttributeIndexBitslice::new();
+    let mut attrs: Vec<Attribute> = Vec::new();
+    for doc in &docs {
+        attrs.clear();
+        if let Some(obj) = doc.label.as_object() {
+            for (field, value) in obj {
+                attrs.push(Attribute::from_json_value(field, value).map_err(|e| {
+                    anyhow::anyhow!("attribute conversion failed for field '{field}': {e:?}")
+                })?);
+            }
+        }
+        let doc_id = checked_doc_id(doc.doc_id)?;
+        index
+            .insert_document(doc_id, &attrs)
+            .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
+    }
+    Ok(Arc::new(index.freeze()))
+}
+
+/// Build one bit-sliced [`QueryLabelProvider`] per query. Mirrors [`make_live_providers`].
+pub(crate) fn make_live_providers_bitslice(
+    index: &FrozenAttributeIndexBitslice,
     query_predicates: &InputFile,
 ) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
     let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
@@ -251,5 +392,14 @@ mod tests {
 
         assert!(filter.is_match(1000u32));
         assert!(!filter.is_match(999u32));
+    }
+
+    #[test]
+    fn test_checked_doc_id() {
+        assert_eq!(checked_doc_id(42).unwrap(), 42);
+        assert_eq!(checked_doc_id(u32::MAX as usize).unwrap(), u32::MAX);
+        if let Some(too_large) = (u32::MAX as usize).checked_add(1) {
+            assert!(checked_doc_id(too_large).is_err());
+        }
     }
 }

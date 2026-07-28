@@ -208,3 +208,41 @@ impl TopkMultihopLiveFilterCsr {
         SearchPhaseKind::TopkMultihopLiveFilterCsr
     }
 }
+
+/// A multi-hop live-filter plugin that materializes the query's whole match set once (via roaring
+/// set-algebra over per-attribute posting lists) into a dense bitset, then answers each per-node
+/// match with an O(1) bit test. The materialization is timed as part of the query.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterBitmap;
+
+impl TopkMultihopLiveFilterBitmap {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterBitmap`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterBitmap
+    }
+}
+
+/// A multi-hop live-filter plugin that adapts per query: it materializes the match set's roaring
+/// bitmap once, and (by cardinality) either densifies to a bitset (selective) or falls back to the
+/// CSR row-scan (broad) — aiming to win across all selectivities.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterAuto;
+
+impl TopkMultihopLiveFilterAuto {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterAuto`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterAuto
+    }
+}
+
+/// A multi-hop live-filter plugin backed by per-attribute dense bitsets (bit-sliced), built at
+/// index time: `is_match` is one O(1) bit test per terminal with no per-query build.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterBitslice;
+
+impl TopkMultihopLiveFilterBitslice {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterBitslice`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterBitslice
+    }
+}
