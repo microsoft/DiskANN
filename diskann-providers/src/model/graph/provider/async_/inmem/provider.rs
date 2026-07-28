@@ -277,10 +277,6 @@ pub struct DefaultProviderParameters {
 /// Start points occupy a single trailing block in the neighbor provider.
 const NEIGHBOR_START_POINTS: usize = 1;
 
-/// `max_degree` in [`DefaultProviderParameters`] is already the true maximum degree, so the
-/// neighbor provider applies no further slack.
-const NEIGHBOR_SLACK_FACTOR: f32 = 1.0;
-
 impl DefaultProviderParameters {
     pub fn simple(max_points: usize, dim: usize, metric: Metric, max_degree: u32) -> Self {
         Self {
@@ -315,7 +311,6 @@ impl DefaultProviderParameters {
                 npts,
                 NEIGHBOR_START_POINTS,
                 self.max_degree,
-                NEIGHBOR_SLACK_FACTOR,
             )
     }
 }
@@ -348,7 +343,6 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
                 npts,
                 NEIGHBOR_START_POINTS,
                 params.max_degree,
-                NEIGHBOR_SLACK_FACTOR,
             ),
             deleted: delete_precursor.create(npts),
             metric: params.metric,

@@ -16,7 +16,7 @@ use crate::storage::{
 };
 
 pub struct SimpleNeighborProviderAsync {
-    // Each adjacency list is stored in a fixed size slice of size max_degree * graph_slack_factor + 1.
+    // Each adjacency list is stored in a fixed size slice of size max_degree + 1.
     // The length of the list is stored in the extra element at the end as a u32.
     graph: AlignedMemoryVectorStore<u32>,
     locks: Vec<RwLock<()>>,
@@ -27,35 +27,25 @@ pub struct SimpleNeighborProviderAsync {
 
 impl SimpleNeighborProviderAsync {
     /// The number of `u32` slots reserved per adjacency list, including the leading length slot.
-    fn row_width(max_degree: u32, graph_slack_factor: f32) -> usize {
-        (max_degree as f32 * graph_slack_factor) as usize + 1
+    fn row_width(max_degree: u32) -> usize {
+        max_degree as usize + 1
     }
 
     /// The number of heap bytes [`Self::new`] will allocate for these arguments.
-    pub fn estimate_bytes(
-        max_points: usize,
-        num_start_points: usize,
-        max_degree: u32,
-        graph_slack_factor: f32,
-    ) -> usize {
+    pub fn estimate_bytes(max_points: usize, num_start_points: usize, max_degree: u32) -> usize {
         let size = max_points + num_start_points;
-        AlignedMemoryVectorStore::<u32>::estimate_bytes(
-            size,
-            Self::row_width(max_degree, graph_slack_factor),
-        ) + size * std::mem::size_of::<RwLock<()>>()
+        AlignedMemoryVectorStore::<u32>::estimate_bytes(size, Self::row_width(max_degree))
+            + size * std::mem::size_of::<RwLock<()>>()
     }
 
-    pub fn new(
-        max_points: usize,
-        num_start_points: usize,
-        max_degree: u32,
-        graph_slack_factor: f32,
-    ) -> Self {
+    /// Construct an empty provider.
+    ///
+    /// `max_degree` is the *physical* maximum adjacency list length. Any graph slack factor
+    /// must already be applied by the caller, since slack is resolved when the index
+    /// configuration is built.
+    pub fn new(max_points: usize, num_start_points: usize, max_degree: u32) -> Self {
         let size = max_points + num_start_points;
-        let graph = AlignedMemoryVectorStore::with_capacity(
-            size,
-            Self::row_width(max_degree, graph_slack_factor),
-        );
+        let graph = AlignedMemoryVectorStore::with_capacity(size, Self::row_width(max_degree));
         let locks = (0..size).map(|_| RwLock::new(())).collect::<Vec<_>>();
 
         Self {
@@ -182,13 +172,8 @@ impl SimpleNeighborProviderAsync {
                 })?;
 
                 // The provided `max_degree` here is the observed maximum degree in the input
-                // file. Therefore, we don't need to apply a slack factor to it.
-                Ok(Self::new(
-                    max_points,
-                    num_start_points,
-                    max_degree as u32,
-                    1.0,
-                ))
+                // file, which is already a physical degree.
+                Ok(Self::new(max_points, num_start_points, max_degree as u32))
             },
         )
     }
@@ -387,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_neighbor_provider() {
-        let neighbor_provider = SimpleNeighborProviderAsync::new(10, 1, 5, 1.0);
+        let neighbor_provider = SimpleNeighborProviderAsync::new(10, 1, 5);
 
         let adj_list = vec![1, 2, 3];
         neighbor_provider.set_neighbors_sync(1, &adj_list).unwrap();
@@ -417,8 +402,7 @@ mod tests {
         let max_points = 8;
         let additional_points = 2;
 
-        let provider =
-            SimpleNeighborProviderAsync::new(max_points, additional_points, max_degree, 1.0);
+        let provider = SimpleNeighborProviderAsync::new(max_points, additional_points, max_degree);
 
         // Setup a virtual storage provider with memory filesystem
         let storage = VirtualStorageProvider::new_memory();
