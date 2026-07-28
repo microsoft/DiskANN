@@ -196,9 +196,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         self.num_get_calls.increment();
 
         if buf.len() < self.dim {
-            return Err(ANNError::message(
-                "The provided buffer is not long enough",
-            ));
+            return Err(ANNError::message("The provided buffer is not long enough"));
         }
 
         // Serialize the value into the reusable buffer.

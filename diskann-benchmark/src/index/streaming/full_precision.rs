@@ -9,7 +9,7 @@ use diskann::{
     graph::{DiskANNIndex, InplaceDeleteMethod},
     provider::{self, Delete},
     utils::{VectorRepr, ONE},
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
 };
 use diskann_benchmark_core::recall::{GroundTruthMode, Rows};
 use diskann_providers::model::graph::provider::async_::{
@@ -210,7 +210,7 @@ where
         for internal_id in range {
             let internal_id: u32 = internal_id
                 .try_into()
-                .map_err(|_| ANNError::message(ANNErrorKind::Opaque, "invalid id provided"))?;
+                .map_err(|_| ANNError::message("invalid id provided"))?;
             if provider
                 .status_by_external_id(ctx, &internal_id)
                 .await?

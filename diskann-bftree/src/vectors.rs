@@ -150,9 +150,10 @@ impl<T: VectorRepr> VectorProvider<T> {
             #[error("expected a buffer with dim {0}, instead got {1}")]
             struct WrongDim(usize, usize);
 
-            return Err(RankedError::Error(ANNError::new(
-                WrongDim(self.dim(), buffer.len()),
-            )));
+            return Err(RankedError::Error(ANNError::new(WrongDim(
+                self.dim(),
+                buffer.len(),
+            ))));
         }
 
         self.num_get_calls.increment();

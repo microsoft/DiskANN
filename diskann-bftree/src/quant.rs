@@ -123,9 +123,10 @@ impl QuantVectorProvider {
             #[error("expected a buffer with dim {0}, instead got {1}")]
             struct WrongDim(usize, usize);
 
-            return Err(AccessError::Error(ANNError::new(
-                WrongDim(expected, buffer.len()),
-            )));
+            return Err(AccessError::Error(ANNError::new(WrongDim(
+                expected,
+                buffer.len(),
+            ))));
         }
 
         self.num_get_calls.increment();

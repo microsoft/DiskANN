@@ -36,8 +36,8 @@ use diskann::{
     ANNError, ANNResult,
 };
 use diskann_utils::{
-    lazy_format,
     future::{AsyncFriendly, SendFuture},
+    lazy_format,
     views::MatrixView,
 };
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
