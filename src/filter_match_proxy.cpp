@@ -7,16 +7,16 @@ template <typename LabelT>
 void bitmask_filter_match<LabelT>::build_query_mask(const std::vector<LabelT>& filter_labels, LabelT unv_label)
 {
     // _query_bitmask_buf is already bound (by the ctor init list) to either the
-    // caller-supplied scratch buffer or the owned buffer. Size it to at least
-    // AVX2_TAIL_PADDING words so the 256-bit load in test_full_mask_val never
-    // reads past the end.
+    // caller-supplied scratch buffer or the owned buffer. Size it to
+    // _bitmask_size + AVX2_TAIL_PADDING words so the unconditional 256-bit load
+    // in test_full_mask_val's fast path never reads past the end (matches the
+    // node-side simple_bitmask_buf padding scheme).
     //
     // clear() first so the resize zero-fills every word: a reused scratch buffer
     // may already be at padded_size, in which case a bare resize is a no-op that
     // leaves stale high words from a previous query -- test_full_mask_val's
     // unconditional 256-bit AND would then treat them as real filter bits.
-    const std::uint64_t padded_size =
-        std::max(_bitmask_filters._bitmask_size, simple_bitmask_buf::AVX2_TAIL_PADDING);
+    const std::uint64_t padded_size = _bitmask_filters._bitmask_size + simple_bitmask_buf::AVX2_TAIL_PADDING;
     _query_bitmask_buf.clear();
     _query_bitmask_buf.resize(padded_size, 0);
     _bitmask_full_val._mask = _query_bitmask_buf.data();
