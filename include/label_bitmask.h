@@ -29,12 +29,27 @@ struct simple_bitmask_full_val
 
 struct simple_bitmask_buf
 {
+    // Extra trailing uint64 words kept past the logical per-point extent so the
+    // AVX2 fast path in simple_bitmask::test_full_mask_val can issue a 256-bit
+    // (4-word) load on the last node without reading past the allocation. Never
+    // participates in addressing or iteration (those use _bitmask_size), so it
+    // is inert on the scalar path.
+    static constexpr std::uint64_t AVX2_TAIL_PADDING = 4;
+
     simple_bitmask_buf() = default;
 
     simple_bitmask_buf(std::uint64_t capacity, std::uint64_t bitmask_size)
     {
-        _buf.resize(capacity);
         _bitmask_size = bitmask_size;
+        _buf.resize(capacity + AVX2_TAIL_PADDING, 0);
+    }
+
+    // Size the buffer to hold num_points per-point bitmasks plus AVX2 padding.
+    // Callers pass the logical extent; the padding is added here so no call site
+    // has to remember it.
+    void resize_for_points(std::uint64_t num_points)
+    {
+        _buf.resize(num_points * _bitmask_size + AVX2_TAIL_PADDING, 0);
     }
 
     std::uint64_t* get_bitmask(std::uint64_t index)

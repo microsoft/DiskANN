@@ -42,7 +42,9 @@ bitmask_filter_match<LabelT>::bitmask_filter_match(
 {
     if (_bitmask_filters._bitmask_size > 0)
     {
-        _query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
+        // Pad to at least 4 words (32 bytes) for safe AVX2 256-bit loads
+        size_t padded_size = std::max(_bitmask_filters._bitmask_size, (std::uint64_t)4);
+        _query_bitmask_buf.resize(padded_size, 0);
         _bitmask_full_val._mask = _query_bitmask_buf.data();
 
         for (const auto& filter_label : filter_labels)
