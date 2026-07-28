@@ -123,13 +123,11 @@ impl LeafBuffers {
             nearest_values,
             LeafNeighbor::default(),
         )?;
-        if points > self.local_graph.len() {
-            let additional = points - self.local_graph.len();
-            self.local_graph
-                .try_reserve(additional)
-                .map_err(|source| allocation_error("leaf adjacency rows", additional, source))?;
-            self.local_graph.resize_with(points, AdjacencyList::new);
-        }
+        let additional = points.saturating_sub(self.local_graph.len());
+        self.local_graph
+            .try_reserve(additional)
+            .map_err(|source| allocation_error("leaf adjacency rows", additional, source))?;
+        self.local_graph.resize_with(points, AdjacencyList::new);
         self.local_graph[..points]
             .iter_mut()
             .for_each(AdjacencyList::clear);
@@ -315,15 +313,11 @@ fn resize<T: Clone>(
     len: usize,
     value: T,
 ) -> Result<(), LeafBuildError> {
-    if len > values.len() {
-        let additional = len - values.len();
-        values
-            .try_reserve(additional)
-            .map_err(|source| allocation_error(buffer, additional, source))?;
-        values.resize(len, value);
-    } else {
-        values.truncate(len);
-    }
+    let additional = len.saturating_sub(values.len());
+    values
+        .try_reserve(additional)
+        .map_err(|source| allocation_error(buffer, additional, source))?;
+    values.resize(len, value);
     Ok(())
 }
 

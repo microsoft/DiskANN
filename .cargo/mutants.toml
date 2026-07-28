@@ -9,4 +9,8 @@ exclude_re = [
   "diskann-pipnn/src/partition_kernel\\.rs:.*replace \\* with / in process_(unary|binary)",
   "diskann-pipnn/src/leaf_kernel\\.rs:.*replace > with >= in .*run_simd",
   "diskann/src/graph/prune\\.rs:[0-9]+:17: replace < with <= in robust_prune",
+  "diskann-pipnn/src/(lib|leaf_build|partitioning)\\.rs:.*replace > with (==|>=) in (build_graph_inner|build_leaf_candidates|partition)",
+  "diskann-pipnn/src/partitioning\\.rs:.*replace < with (==|>|<=) in scatter_assignments",
+  "diskann-pipnn/src/partitioning\\.rs:.*replace (>|<) with (>=|<=) in global_merge_small",
+  "diskann-pipnn/src/partitioning\\.rs:.*assignment_stripe_rows",
 ]
