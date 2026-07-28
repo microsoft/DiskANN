@@ -51,16 +51,14 @@ BOOST_AUTO_TEST_SUITE(FilterMatchProxy_tests)
 
 // ---- (2) AVX2 padding of query_bitmask_buf ----------------------------------
 //
-// The optimization changed the ctor from:
-//     query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
-// to:
-//     size_t padded_size = std::max(_bitmask_size, (uint64_t)4);
-//     query_bitmask_buf.resize(padded_size, 0);
-// This ensures a 256-bit (4x uint64) AVX2 load starting at
-// query_bitmask_buf.data() never runs past the buffer end even when the
-// natural bitmask_size is 1, 2, or 3 words.
+// build_query_mask sizes the query buffer to:
+//     bitmask_size + AVX2_TAIL_PADDING
+// (unified with the node-side simple_bitmask_buf padding scheme). This ensures a
+// 256-bit (4x uint64) AVX2 load starting at query_bitmask_buf.data() never runs
+// past the buffer end for any bitmask_size, and the trailing padding words stay
+// zero so they never contribute false bits to the intersection test.
 
-BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_to_at_least_4_words_when_size_1)
+BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_1)
 {
     // 1 word covers up to 64 bits; use 64 bits total.
     auto filters = make_bitmask_buf(/*num_points*/ 8, /*total_bits*/ 64,
@@ -71,8 +69,8 @@ BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_to_at_least_4_words_when_size_1
     std::vector<std::uint32_t> filter_labels = {3};
     bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, /*unv*/ 0);
 
-    // Must be padded up to 4 for AVX2 safety.
-    BOOST_TEST(qbuf.size() == (size_t)4);
+    // size + 4 padding.
+    BOOST_TEST(qbuf.size() == (size_t)5);
 }
 
 BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_2)
@@ -85,7 +83,7 @@ BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_2)
     std::vector<std::uint32_t> filter_labels = {1};
     bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, 0);
 
-    BOOST_TEST(qbuf.size() == (size_t)4);
+    BOOST_TEST(qbuf.size() == (size_t)6);
 }
 
 BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_3)
@@ -98,12 +96,12 @@ BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_3)
     std::vector<std::uint32_t> filter_labels = {0};
     bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, 0);
 
-    BOOST_TEST(qbuf.size() == (size_t)4);
+    BOOST_TEST(qbuf.size() == (size_t)7);
 }
 
-BOOST_AUTO_TEST_CASE(bitmask_ctor_no_padding_when_size_ge_4)
+BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_4)
 {
-    // 256 bits -> bitmask_size == 4; no extra padding needed.
+    // 256 bits -> bitmask_size == 4.
     auto filters = make_bitmask_buf(4, 256, 0, {});
     BOOST_TEST(filters._bitmask_size == (std::uint64_t)4);
 
@@ -111,12 +109,12 @@ BOOST_AUTO_TEST_CASE(bitmask_ctor_no_padding_when_size_ge_4)
     std::vector<std::uint32_t> filter_labels = {0};
     bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, 0);
 
-    BOOST_TEST(qbuf.size() == (size_t)4);
+    BOOST_TEST(qbuf.size() == (size_t)8);
 }
 
-BOOST_AUTO_TEST_CASE(bitmask_ctor_keeps_size_when_larger_than_4)
+BOOST_AUTO_TEST_CASE(bitmask_ctor_pads_query_buf_when_size_larger_than_4)
 {
-    // 512 bits -> bitmask_size == 8; must not be truncated.
+    // 512 bits -> bitmask_size == 8; padded to 8 + 4.
     auto filters = make_bitmask_buf(4, 512, 0, {});
     BOOST_TEST(filters._bitmask_size == (std::uint64_t)8);
 
@@ -124,7 +122,7 @@ BOOST_AUTO_TEST_CASE(bitmask_ctor_keeps_size_when_larger_than_4)
     std::vector<std::uint32_t> filter_labels = {0};
     bitmask_filter_match<std::uint32_t> m(filters, qbuf, filter_labels, 0);
 
-    BOOST_TEST(qbuf.size() == (size_t)8);
+    BOOST_TEST(qbuf.size() == (size_t)12);
 }
 
 BOOST_AUTO_TEST_CASE(bitmask_ctor_size_zero_leaves_query_buf_empty)
@@ -389,7 +387,7 @@ BOOST_AUTO_TEST_CASE(bitmask_reused_query_buffer_is_rezeroed)
         std::vector<std::uint32_t> f1 = {5};
         bitmask_filter_match<std::uint32_t> m1(filters, qbuf, f1, /*unv*/ 0);
         BOOST_TEST(m1.contain_filtered_label(2) == true);
-        BOOST_TEST(qbuf.size() == (size_t)4); // padded
+        BOOST_TEST(qbuf.size() == (size_t)5); // size 1 + 4 padding
     }
     // qbuf now retains proxy #1's bits (filter label 5 in word 0). A second
     // proxy filtering a DISJOINT label must not inherit label 5.
