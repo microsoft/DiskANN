@@ -11,16 +11,26 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
+diskann.workspace = true
+diskann-linalg.workspace = true
+diskann-utils.workspace = true
 diskann-vector.workspace = true
 diskann-wide.workspace = true
+rand.workspace = true
+rayon.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-diskann-linalg.workspace = true
+half.workspace = true
 
 [[bench]]
 name = "kernels"
+harness = false
+
+[[bench]]
+name = "core"
 harness = false
 
 [lints]
