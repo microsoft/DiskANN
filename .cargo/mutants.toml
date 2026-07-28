@@ -1,11 +1,12 @@
-# Kernel mutations that cannot be distinguished by native correctness tests.
+# Mutations that cannot be distinguished by correctness tests.
 # V4 and Neon wrappers are exercised by SDE and AArch64 CI respectively.
 # The remaining transformations preserve outputs and only switch between
-# equivalent scalar-tail or zero-clamp expressions.
+# equivalent fast paths, scalar tails, zero clamps, or empty prune rounds.
 exclude_re = [
   "diskann-pipnn/src/(leaf|partition)_kernel\\.rs:.*Target<.*V4",
   "diskann-pipnn/src/(leaf|partition)_kernel\\.rs:.*Target<.*Neon",
   "diskann-pipnn/src/leaf_kernel\\.rs:.*replace < with <= in pair_distance",
   "diskann-pipnn/src/partition_kernel\\.rs:.*replace \\* with / in process_(unary|binary)",
   "diskann-pipnn/src/leaf_kernel\\.rs:.*replace > with >= in .*run_simd",
+  "diskann/src/graph/prune\\.rs:[0-9]+:17: replace < with <= in robust_prune",
 ]

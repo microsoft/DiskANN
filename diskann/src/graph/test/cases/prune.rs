@@ -21,18 +21,31 @@ struct PruneCase {
     source: u32,
 }
 
+struct PruneConfig {
+    metric: Metric,
+    source: u32,
+    degree: usize,
+    alpha: f32,
+    prune_kind: PruneKind,
+    saturate: bool,
+    max_occlusion_size: usize,
+}
+
 impl PruneCase {
     fn new(
-        metric: Metric,
         vectors: Vec<Vec<f32>>,
-        source: u32,
         candidates: impl IntoIterator<Item = u32>,
-        degree: usize,
-        alpha: f32,
-        prune_kind: PruneKind,
-        saturate: bool,
-        max_occlusion_size: usize,
+        config: PruneConfig,
     ) -> Self {
+        let PruneConfig {
+            metric,
+            source,
+            degree,
+            alpha,
+            prune_kind,
+            saturate,
+            max_occlusion_size,
+        } = config;
         let dimensions = vectors.first().expect("a source vector is required").len();
         assert!(vectors.iter().all(|vector| vector.len() == dimensions));
         assert!((source as usize) < vectors.len());
@@ -116,15 +129,17 @@ fn l2_case(
     max_occlusion_size: usize,
 ) -> PruneCase {
     PruneCase::new(
-        Metric::L2,
         positions.iter().map(|position| vec![*position]).collect(),
-        0,
         candidates,
-        degree,
-        alpha,
-        PruneKind::TriangleInequality,
-        saturate,
-        max_occlusion_size,
+        PruneConfig {
+            metric: Metric::L2,
+            source: 0,
+            degree,
+            alpha,
+            prune_kind: PruneKind::TriangleInequality,
+            saturate,
+            max_occlusion_size,
+        },
     )
 }
 
@@ -142,20 +157,22 @@ async fn rows_at_or_below_degree_are_unchanged() {
 #[tokio::test(flavor = "current_thread")]
 async fn equal_distances_keep_current_sorted_neighbor_order() {
     let case = PruneCase::new(
-        Metric::L2,
         vec![
             vec![0.0, 0.0, 0.0],
             vec![1.0, 0.0, 0.0],
             vec![0.0, 1.0, 0.0],
             vec![0.0, 0.0, 1.0],
         ],
-        0,
         [3, 1, 2],
-        2,
-        1.2,
-        PruneKind::TriangleInequality,
-        false,
-        10,
+        PruneConfig {
+            metric: Metric::L2,
+            source: 0,
+            degree: 2,
+            alpha: 1.2,
+            prune_kind: PruneKind::TriangleInequality,
+            saturate: false,
+            max_occlusion_size: 10,
+        },
     );
 
     assert_eq!(&*case.run(&test_provider::Strategy::new()).await, &[2, 1]);
@@ -191,20 +208,22 @@ async fn triangle_prune_revisits_candidates_across_alpha_rounds() {
 #[tokio::test(flavor = "current_thread")]
 async fn inner_product_uses_occluding_prune() {
     let case = PruneCase::new(
-        Metric::InnerProduct,
         vec![
             vec![1.0, 0.0],
             vec![3.0, 0.0],
             vec![2.0, 0.0],
             vec![1.0, 1.0],
         ],
-        0,
         [1, 2, 3],
-        2,
-        1.2,
-        PruneKind::Occluding,
-        false,
-        10,
+        PruneConfig {
+            metric: Metric::InnerProduct,
+            source: 0,
+            degree: 2,
+            alpha: 1.2,
+            prune_kind: PruneKind::Occluding,
+            saturate: false,
+            max_occlusion_size: 10,
+        },
     );
 
     assert_eq!(&*case.run(&test_provider::Strategy::new()).await, &[1, 2]);
@@ -224,6 +243,15 @@ async fn saturation_appends_candidates_in_pool_order() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn configured_saturation_requires_alpha_above_one() {
+    let neighbors = l2_case(&[0.0, 1.0, 2.0, 3.0, 4.0], 1..=4, 3, 1.0, true, 10)
+        .run(&test_provider::Strategy::new())
+        .await;
+
+    assert_eq!(&*neighbors, &[1]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn self_and_unavailable_candidates_are_excluded() {
     let case = l2_case(&[0.0, -1.0, 2.0, 3.0], [0, 1, 2, 3], 2, 1.2, false, 10);
     let strategy = test_provider::Strategy::with_transient(true, [2]);
@@ -234,7 +262,6 @@ async fn self_and_unavailable_candidates_are_excluded() {
 #[tokio::test(flavor = "current_thread")]
 async fn max_occlusion_size_truncates_to_nearest_candidates() {
     let case = PruneCase::new(
-        Metric::L2,
         vec![
             vec![0.0, 0.0],
             vec![1.0, 0.0],
@@ -242,13 +269,16 @@ async fn max_occlusion_size_truncates_to_nearest_candidates() {
             vec![-3.0, 0.0],
             vec![0.0, -4.0],
         ],
-        0,
         [4, 3, 2, 1],
-        3,
-        1.2,
-        PruneKind::TriangleInequality,
-        false,
-        2,
+        PruneConfig {
+            metric: Metric::L2,
+            source: 0,
+            degree: 3,
+            alpha: 1.2,
+            prune_kind: PruneKind::TriangleInequality,
+            saturate: false,
+            max_occlusion_size: 2,
+        },
     );
 
     assert_eq!(&*case.run(&test_provider::Strategy::new()).await, &[1, 2]);
@@ -261,15 +291,17 @@ async fn maximum_u16_candidate_pool_is_supported() {
         .map(|position| vec![position as f32])
         .collect();
     let case = PruneCase::new(
-        Metric::L2,
         vectors,
-        0,
         1..=u16::MAX as u32,
-        1,
-        1.2,
-        PruneKind::TriangleInequality,
-        false,
-        num_candidates,
+        PruneConfig {
+            metric: Metric::L2,
+            source: 0,
+            degree: 1,
+            alpha: 1.2,
+            prune_kind: PruneKind::TriangleInequality,
+            saturate: false,
+            max_occlusion_size: num_candidates,
+        },
     );
 
     let strategy = test_provider::Strategy::with_transient(true, 1..u16::MAX as u32);
