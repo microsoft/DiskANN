@@ -275,3 +275,43 @@ fn rejects_zero_dimensions() {
         PartitionError::EmptyDimensions
     );
 }
+
+#[test]
+fn rejects_invalid_gather_output_length() {
+    let data = Matrix::<f32>::new(0.0, 2, 2);
+    let error = gather_rows(data.as_view(), &[0, 1], &mut [0.0; 3]).unwrap_err();
+
+    assert_eq!(
+        error.downcast::<PartitionError>().unwrap(),
+        PartitionError::InvalidBufferLength {
+            buffer: "gather output",
+            expected: 4,
+            actual: 3,
+        }
+    );
+}
+
+#[test]
+fn rejects_assignment_to_an_unknown_leader() {
+    let error = scatter_serial(&[7], &[2], 1, 2).unwrap_err();
+
+    assert_eq!(
+        error.downcast::<PartitionError>().unwrap(),
+        PartitionError::InvalidBufferLength {
+            buffer: "leader assignment",
+            expected: 2,
+            actual: 3,
+        }
+    );
+}
+
+#[test]
+fn rejects_empty_and_oversized_leaves() {
+    for (leaves, size) in [(vec![vec![]], 0), (vec![vec![0, 1, 2]], 3)] {
+        let error = validate_leaves(&leaves, 2).unwrap_err();
+        assert_eq!(
+            error.downcast::<PartitionError>().unwrap(),
+            PartitionError::InvalidLeaf { size, limit: 2 }
+        );
+    }
+}
