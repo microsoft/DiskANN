@@ -1232,7 +1232,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
                 Err(_) => continue, // Can't read the mapping; skip.
             };
 
-            if output.push(id, *n.distance()).is_full() {
+            if output.push(Neighbor::new(id, *n.distance())).is_full() {
                 break;
             }
         }
@@ -1282,7 +1282,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         let mut v = Poly::broadcast(0u8, provider.dim * mem::size_of::<T>(), AlignToEight)?;
 
         // Filter before computing the full precision distances.
-        let mut reranked: Vec<(u32, f32)> = candidates
+        let mut reranked: Vec<_> = candidates
             .filter_map(|n| {
                 if !provider.vector_iid_exists(accessor.context, *n.id()) {
                     None
@@ -1291,7 +1291,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
                     *n.id(),
                     &mut v,
                 ) {
-                    Some((
+                    Some(Neighbor::new(
                         *n.id(),
                         f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(&v)),
                     ))
@@ -1302,13 +1302,12 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
             .collect();
 
         // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(diskann::neighbor::ord::fast_distance);
 
         next.post_process(
             accessor,
             query,
-            reranked.into_iter().map(|(id, d)| Neighbor::new(id, d)),
+            reranked.into_iter(),
             output,
         )
         .await

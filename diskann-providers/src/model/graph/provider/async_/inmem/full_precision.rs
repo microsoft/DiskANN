@@ -17,7 +17,7 @@ use diskann::{
         },
         workingset,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::{DefaultContext, ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
@@ -379,12 +379,12 @@ where
         let f = full.distance();
 
         // Filter before computing the full precision distances.
-        let mut reranked: Vec<(u32, f32)> = candidates
+        let mut reranked: Vec<_> = candidates
             .filter_map(|n| {
                 if checker.deletion_check(*n.id()) {
                     None
                 } else {
-                    Some((
+                    Some(Neighbor::new(
                         *n.id(),
                         f.evaluate_similarity(query, unsafe {
                             full.get_vector_sync(n.id().into_usize())
@@ -395,8 +395,7 @@ where
             .collect();
 
         // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(neighbor::ord::fast_distance);
 
         // Store the reranked results.
         std::future::ready(Ok(output.extend(reranked)))
@@ -462,7 +461,9 @@ where
             Err(error) => return std::future::ready(Err(error.into())),
         };
 
-        let reranked = indices.into_iter().map(|idx| (ids[idx], distances[idx]));
+        let reranked = indices
+            .into_iter()
+            .map(|idx| Neighbor::new(ids[idx], distances[idx]));
 
         std::future::ready(Ok(output.extend(reranked)))
     }

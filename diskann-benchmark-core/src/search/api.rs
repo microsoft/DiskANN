@@ -584,6 +584,8 @@ mod tests {
 
     use std::hash::{self, Hash, Hasher};
 
+    use diskann::neighbor::Neighbor;
+
     // We intentionally do not derive `Clone` to ensure that it is not needed
     // in the implementations.
     #[derive(Debug)]
@@ -675,7 +677,8 @@ mod tests {
             O: graph::SearchOutputBuffer<Self::Id> + Send,
         {
             let count = self.count(index, params);
-            let set = buffer.extend((0..count).map(|i| (self.format(index, i), i as f32)));
+            let set =
+                buffer.extend((0..count).map(|i| Neighbor::new(self.format(index, i), i as f32)));
             assert_eq!(set, count);
             Ok(count)
         }

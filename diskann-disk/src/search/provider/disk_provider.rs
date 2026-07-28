@@ -23,7 +23,7 @@ use diskann::{
         search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
-    neighbor::{Neighbor, NeighborPriorityQueue},
+    neighbor::{self, Neighbor, NeighborPriorityQueue},
     provider::{DataProvider, DefaultContext, HasId, NoopGuard},
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -349,10 +349,10 @@ where
         let provider = accessor.provider;
 
         let mut uncached_ids = Vec::new();
-        let mut reranked = {
+        let mut reranked: Vec<_> = {
             let mut process = |n: u32| {
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
-                    Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
+                    Some(Neighbor::new((n, entry.1), entry.0))
                 } else {
                     uncached_ids.push(n);
                     None
@@ -362,12 +362,12 @@ where
                 PostprocessStrategy::AcceptAll => candidates
                     .map(|n| *n.id())
                     .filter_map(&mut process)
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect(),
                 PostprocessStrategy::Apply(f) => candidates
                     .map(|n| *n.id())
                     .filter(|id| f(id))
                     .filter_map(&mut process)
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect(),
             }
         };
         if !uncached_ids.is_empty() {
@@ -376,13 +376,13 @@ where
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
                 let d = provider.distance_comparer.evaluate_similarity(query, v);
                 let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
-                reranked.push(((*n, *a), d));
+                reranked.push(Neighbor::new((*n, *a), d));
             }
         }
 
         // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(neighbor::ord::fast_distance);
+
         // Store the reranked results.
         Ok(output.extend(reranked))
     }
@@ -462,7 +462,7 @@ where
         Ok(output.extend(reranked.into_iter().map(|idx| {
             let id = candidate_ids[idx];
             let distance = candidate_distances[idx];
-            ((id, associated_data[idx]), distance)
+            Neighbor::new((id, associated_data[idx]), distance)
         })))
     }
 }
