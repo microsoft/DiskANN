@@ -17,6 +17,8 @@ pub use config::Config;
 pub mod index;
 pub use index::DiskANNIndex;
 
+pub mod prune;
+
 mod start_point;
 pub use start_point::{SampleableForStart, StartPointStrategy};
 
