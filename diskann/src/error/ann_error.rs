@@ -128,19 +128,21 @@ impl ANNError {
     #[inline(never)]
     pub fn message<D>(display: D) -> Self
     where
-        D: std::fmt::Display + std::fmt::Debug + Send + Sync + 'static,
+        D: Display + Debug + Send + Sync + 'static,
     {
         Self {
             error: anyhow::Error::msg(Located::new(display)),
         }
     }
 
+    /// Return `true` is the the type `E` exists as either the root error type of in the
+    /// context chain of `self`.
     #[must_use]
     pub fn is<E>(&self) -> bool
     where
         E: Display + Debug + Send + Sync + 'static,
     {
-        self.error.is::<E>()
+        self.error.is::<Located<E>>() || self.error.is::<E>()
     }
 
     /// Attempt to downcast the error object to a concrete type.
@@ -488,6 +490,9 @@ mod ann_result_test {
             // Make sure the error message is properly contained inside the larger error.
             assert!(format!("{}", ann).contains(&base_error));
 
+            // Make sure `is` is accurate.
+            assert!(ann.is::<SampleError>());
+
             // Can we downcast by reference?
             let r = ann.downcast_ref::<SampleError>().unwrap();
             assert_eq!(r.value, 10);
@@ -509,6 +514,8 @@ mod ann_result_test {
             let mut ann = ANNError::from(err.clone())
                 .context("some context here")
                 .context("more context");
+
+            assert!(ann.is::<SampleError>());
 
             let formatted = ann.to_string();
             assert!(formatted.contains(&base_error));
@@ -537,6 +544,8 @@ mod ann_result_test {
             let ann = ANNError::from(err.clone())
                 .context("some context here")
                 .context("more context");
+
+            assert!(!ann.is::<usize>());
 
             println!("{}", ann);
 
@@ -572,6 +581,7 @@ mod ann_result_test {
             assert!(message.contains("with context"), "got: {}", message);
             assert!(message.contains(&sample), "got: {}", message);
             assert_eq!(chained.downcast_ref::<SampleError>().unwrap().value, 5);
+            assert!(chained.is::<SampleError>());
         }
 
         // Context not applied if okay.
