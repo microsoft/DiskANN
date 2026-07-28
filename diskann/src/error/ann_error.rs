@@ -213,6 +213,8 @@ impl std::error::Error for ANNError {
 
 always_escalate!(ANNError);
 
+/// Define `From<T> for ANNError` for a simple type `T` to a [`ANNError`] in a way that
+/// preserves source location information of the conversion.
 #[macro_export]
 macro_rules! convert_error {
     ($T:ty) => {

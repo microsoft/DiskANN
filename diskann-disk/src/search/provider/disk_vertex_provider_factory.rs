@@ -154,10 +154,10 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         match self.caching_strategy {
             CachingStrategy::StaticCacheWithBfsNodes(mut num_nodes_to_cache) => {
                 if num_nodes_to_cache == 0 {
-                    diskann_error!(
+                    return Err(diskann_error!(
                         ErrorKind::IndexError,
                         "num_nodes_to_cache should be greater than 0 for StaticCacheWithBfsNodes caching strategy",
-                    );
+                    ));
                 }
 
                 let graph_metadata = self.get_header()?;
