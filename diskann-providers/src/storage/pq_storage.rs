@@ -348,17 +348,19 @@ impl PQStorage {
         }
 
         let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
-        if expected_num_pq_chunks
-            .is_some_and(|num_pq_chunks| chunk_offsets_m.nrows() != num_pq_chunks + 1)
-            || chunk_offsets_m.ncols() != 1
+        if let Some(num_pq_chunks) = expected_num_pq_chunks
+            && chunk_offsets_m.nrows() != num_pq_chunks + 1
         {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file at chunk offsets; file has nr={}, nc={} \
-                 but expecting nr={} and nc=1. The expected num_pq_chunks should be \
-                 passed as 0 if we want to infer.",
+            return Err(ANNError::log_pq_error(format_args!(
+                "Error reading pq_pivots file at chunk offsets; file has nr={}, but expecting nr={}.",
                 chunk_offsets_m.nrows(),
-                chunk_offsets_m.ncols(),
-                expected_num_pq_chunks.map_or(0, |num_pq_chunks| num_pq_chunks + 1)
+                num_pq_chunks + 1
+            )));
+        }
+        if chunk_offsets_m.ncols() != 1 {
+            return Err(ANNError::log_pq_error(format_args!(
+                "Error reading pq_pivots file at chunk offsets; file has nc={}, but expecting nc=1.",
+                chunk_offsets_m.ncols()
             )));
         }
         let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
@@ -649,6 +651,56 @@ mod pq_storage_tests {
                 .load_existing_pivot_data(&1, &3, &4, &storage_provider)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn load_pq_pivots_reports_chunk_offset_column_mismatch() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/wrong_chunk_offset_columns_pivots.bin";
+
+        {
+            let mut writer = storage_provider.create_for_write(pivot_path).unwrap();
+            let mut cumul_bytes = [0usize; 4];
+            cumul_bytes[0] = METADATA_SIZE;
+
+            writer.seek(SeekFrom::Start(cumul_bytes[0] as u64)).unwrap();
+
+            let pivots = [0.0, 1.0, 2.0, 3.0];
+            cumul_bytes[1] = cumul_bytes[0]
+                + write_bin(
+                    MatrixView::try_from(pivots.as_slice(), 2, 2).unwrap(),
+                    &mut writer,
+                )
+                .unwrap();
+
+            let centroid = [0.0, 0.0];
+            cumul_bytes[2] = cumul_bytes[1]
+                + write_bin(MatrixView::column_vector(centroid.as_slice()), &mut writer).unwrap();
+
+            let chunk_offsets = [0_u32, 2_u32];
+            cumul_bytes[3] = cumul_bytes[2]
+                + write_bin(
+                    MatrixView::try_from(chunk_offsets.as_slice(), 1, 2).unwrap(),
+                    &mut writer,
+                )
+                .unwrap();
+
+            let offsets: Vec<u64> = cumul_bytes.iter().map(|&offset| offset as u64).collect();
+            write_bin_from(
+                MatrixView::column_vector(offsets.as_slice()),
+                &mut writer,
+                0,
+            )
+            .unwrap();
+        }
+
+        let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
+            .load_pq_pivots_bin(pivot_path, 0, &storage_provider)
+            .unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("file has nc=2, but expecting nc=1"));
+        assert!(!message.contains("expecting nr=0"));
     }
 
     #[test]
