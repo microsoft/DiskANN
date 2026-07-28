@@ -207,6 +207,49 @@ pub fn sgemm(
     Ok(())
 }
 
+/// Computes the lower triangle of $C = A A^\mathsf{T}$ for a dense row-major
+/// $m \times k$ matrix $A$.
+///
+/// The lower triangle, including the diagonal, is overwritten. The upper
+/// triangle of the $m \times m$ destination is left unchanged.
+///
+/// # Errors
+///
+/// Returns an error if a matrix-size calculation overflows or either slice does
+/// not match its declared dimensions.
+pub fn sgemm_aat_lower(a: &[f32], m: usize, k: usize, c: &mut [f32]) -> Result<(), SgemmError> {
+    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::A,
+        rows: m,
+        cols: k,
+    })?;
+    if a.len() != expected_a_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::A,
+            expected_rows: m,
+            expected_cols: k,
+            actual_len: a.len(),
+        });
+    }
+
+    let expected_c_len = m.checked_mul(m).ok_or(SgemmError::DimensionOverflow {
+        matrix_name: MatrixName::C,
+        rows: m,
+        cols: m,
+    })?;
+    if c.len() != expected_c_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: MatrixName::C,
+            expected_rows: m,
+            expected_cols: m,
+            actual_len: c.len(),
+        });
+    }
+
+    faer::sgemm_aat_lower_impl(m, k, a, c);
+    Ok(())
+}
+
 /// Compute the SVD of the provided matrix implicit row-major matrix `data`.
 ///
 /// * `m`: The number of rows in `a`.
