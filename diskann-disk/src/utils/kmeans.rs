@@ -11,7 +11,7 @@
 
 use std::cmp::min;
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
 use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
 use hashbrown::HashSet;

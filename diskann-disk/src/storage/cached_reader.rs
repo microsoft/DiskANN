@@ -4,7 +4,7 @@
  */
 use std::io::{Read, Seek};
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
 use tracing::info;
 

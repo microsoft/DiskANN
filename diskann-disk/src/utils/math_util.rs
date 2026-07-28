@@ -12,7 +12,7 @@
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_linalg::{self, Transpose};
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
 use diskann_vector::{norm::FastL2NormSquared, Norm};

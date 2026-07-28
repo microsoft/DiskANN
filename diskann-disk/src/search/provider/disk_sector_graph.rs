@@ -7,7 +7,7 @@
 //! Sector graph
 use std::ops::Deref;
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{

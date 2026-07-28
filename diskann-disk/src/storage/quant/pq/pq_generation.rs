@@ -5,7 +5,7 @@
 
 use std::{marker::PhantomData, time::Instant};
 
-use diskann::{utils::VectorRepr};
+use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{

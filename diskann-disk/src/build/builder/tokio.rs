@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 
 use crate::error::{diskann_error, ErrorKind};
 

@@ -5,7 +5,7 @@
 
 use core::fmt::Debug;
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::product::TransposedTable;
 use diskann_utils::views::Matrix;

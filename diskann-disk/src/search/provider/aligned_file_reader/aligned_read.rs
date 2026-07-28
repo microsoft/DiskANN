@@ -5,7 +5,7 @@
 
 use std::marker::PhantomData;
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_quantization::num::PowerOfTwo;
 
 use crate::error::{diskann_error, ErrorKind};

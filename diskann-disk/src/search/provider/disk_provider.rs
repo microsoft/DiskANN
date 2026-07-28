@@ -1145,8 +1145,8 @@ where
                         .as_deref()
                         .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
                 );
-                let knn_search =
-                    Knn::new(k, l, beam_width).map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+                let knn_search = Knn::new(k, l, beam_width)
+                    .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
                 self.runtime.block_on(self.index.search(
                     knn_search,
                     &strategy,
@@ -1232,9 +1232,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 mod disk_provider_tests {
     use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
-        graph::{
-            search::{record::VisitedSearchRecord, Knn},
-        },
+        graph::search::{record::VisitedSearchRecord, Knn},
         utils::IntoUsize,
     };
     use diskann_providers::storage::{

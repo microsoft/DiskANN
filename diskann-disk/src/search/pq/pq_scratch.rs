@@ -4,7 +4,7 @@
  */
 //! Aligned allocator
 
-use diskann::{ANNResult};
+use diskann::ANNResult;
 
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 

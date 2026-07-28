@@ -8,7 +8,7 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     storage::{get_mem_index_file, path_utility::*},

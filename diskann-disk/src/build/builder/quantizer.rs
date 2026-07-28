@@ -4,7 +4,7 @@
  */
 //! Disk index quantizer implementation.
 use crate::data_model::GraphDataType;
-use diskann::{ANNResult};
+use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
