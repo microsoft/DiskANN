@@ -223,10 +223,21 @@ where
 // Direct Stream (no ID management) //
 /////////////////////////////////////
 
+/// Convert runbook tag IDs to `u32` provider slot IDs, erroring on overflow rather
+/// than silently truncating.
+fn tags_to_slots(tags: Range<usize>) -> anyhow::Result<Vec<u32>> {
+    tags.map(|t| {
+        u32::try_from(t).map_err(|_| {
+            anyhow::anyhow!("runbook tag id {t} exceeds the u32 provider slot ID space")
+        })
+    })
+    .collect()
+}
+
 /// Direct [`streaming::Stream`] implementation for providers that manage their own IDs.
 ///
 /// In this mode, the external tag IDs from the runbook are used directly as slot IDs
-/// (cast to `u32`). No [`super::Managed`] layer is needed.
+/// (checked conversion to `u32`). No [`super::Managed`] layer is needed.
 impl<DP, T, S, M> streaming::Stream<bigann::DataArgs<T, u32>> for StreamRunner<DP, T, S, M>
 where
     DP: DataProvider<Context: Default, ExternalId = u32, InternalId = u32>
@@ -274,7 +285,7 @@ where
         &mut self,
         (data, tags): (MatrixView<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
-        let slots: Vec<u32> = tags.map(|t| t as u32).collect();
+        let slots = tags_to_slots(tags)?;
         Ok(StreamStats::Insert(self.build(data, &slots)?))
     }
 
@@ -282,12 +293,12 @@ where
         &mut self,
         (data, tags): (MatrixView<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
-        let slots: Vec<u32> = tags.map(|t| t as u32).collect();
+        let slots = tags_to_slots(tags)?;
         Ok(StreamStats::Replace(self.build(data, &slots)?))
     }
 
     fn delete(&mut self, tags: Range<usize>) -> anyhow::Result<Self::Output> {
-        let slots: Vec<u32> = tags.map(|t| t as u32).collect();
+        let slots = tags_to_slots(tags)?;
         let runner = InplaceDelete::new(
             self.index.clone(),
             self.strategy.clone(),
