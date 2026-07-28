@@ -18,6 +18,74 @@ impl std::fmt::Display for Infallible {
 
 impl std::error::Error for Infallible {}
 
+/// A utility for printing the whole [source tree](https://doc.rust-lang.org/std/error/trait.Error.html#method.source).
+/// of an error type.
+///
+/// ```rust
+/// use diskann_quantization::error::Format;
+/// use std::{error::Error, fmt::{Display, Formatter, Result}};
+///
+/// #[derive(Debug)]
+/// struct A;
+///
+/// impl Display for A {
+///     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+///         f.write_str("A")
+///     }
+/// }
+///
+/// impl Error for A {
+///     fn source(&self) -> Option<&(dyn Error + 'static)> {
+///         Some(&B)
+///     }
+/// }
+///
+/// #[derive(Debug)]
+/// struct B;
+///
+/// impl Display for B {
+///     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+///         f.write_str("B")
+///     }
+/// }
+///
+/// impl Error for B {}
+///
+/// assert_eq!(Format(A).to_string(), "A\n    caused by: B");
+/// assert_eq!(Format(&A).to_string(), "A\n    caused by: B");
+/// ```
+#[derive(Debug)]
+pub struct Format<T>(pub T);
+
+impl<T> std::fmt::Display for Format<T>
+where
+    T: std::error::Error,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Cast wrap the walking of the source chain into something that behaves like an
+        // iterator.
+        struct Source<'a>(Option<&'a (dyn std::error::Error + 'static)>);
+        impl<'a> Iterator for Source<'a> {
+            type Item = &'a (dyn std::error::Error + 'static);
+            fn next(&mut self) -> Option<Self::Item> {
+                let current = self.0;
+                self.0 = match current {
+                    Some(current) => current.source(),
+                    None => None,
+                };
+                current
+            }
+        }
+
+        write!(f, "{}", self.0)?;
+        for source in Source(self.0.source()) {
+            write!(f, "\n    caused by: {}", source)?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Format the entire error chain for `err` by first calling `err.to_string()` and then
 /// by walking the error's
 /// [source tree](https://doc.rust-lang.org/std/error/trait.Error.html#method.source).
@@ -25,29 +93,7 @@ pub fn format<E>(err: &E) -> String
 where
     E: std::error::Error + ?Sized,
 {
-    // Cast wrap the walking of the source chain into something that behaves like an
-    // iterator.
-    struct SourceIterator<'a>(Option<&'a (dyn std::error::Error + 'static)>);
-    impl<'a> Iterator for SourceIterator<'a> {
-        type Item = &'a (dyn std::error::Error + 'static);
-        fn next(&mut self) -> Option<Self::Item> {
-            let current = self.0;
-            self.0 = match current {
-                Some(current) => current.source(),
-                None => None,
-            };
-            current
-        }
-    }
-
-    // Get the base message from the error.
-    let mut message = err.to_string();
-    // Walk the source chain, formatting each
-    for source in SourceIterator(err.source()) {
-        message.push_str("\n    caused by: ");
-        message.push_str(&source.to_string());
-    }
-    message
+    Format(err).to_string()
 }
 
 /// An implementation of `Box<dyn std::error::Error>` that stores the error payload inline,
@@ -251,11 +297,11 @@ mod tests {
 
     use super::*;
 
-    #[derive(Error, Debug)]
+    #[derive(Error, Debug, Clone)]
     #[error("error A")]
     struct ErrorA;
 
-    #[derive(Error, Debug)]
+    #[derive(Error, Debug, Clone)]
     #[error("error B with val {val}")]
     struct ErrorB<Inner: std::error::Error> {
         val: usize,
@@ -277,6 +323,9 @@ mod tests {
         let message = format(&ErrorA);
         assert_eq!(message, "error A");
 
+        assert_eq!(Format(ErrorA).to_string(), "error A");
+        assert_eq!(Format(&ErrorA).to_string(), "error A");
+
         // One Level of Nesting
         let error = ErrorB {
             val: 10,
@@ -285,6 +334,8 @@ mod tests {
 
         let expected = "error B with val 10\n    caused by: error A";
         assert_eq!(format(&error), expected);
+        assert_eq!(Format(&error).to_string(), expected);
+        assert_eq!(Format(error.clone()).to_string(), expected);
 
         // Multiple Levels of Nesting
         let error = ErrorC {
@@ -294,7 +345,10 @@ mod tests {
         let expected = "error C with message Hello World\n    \
                         caused by: error B with val 10\n    \
                         caused by: error A";
+
         assert_eq!(format(&error), expected);
+        assert_eq!(Format(&error).to_string(), expected);
+        assert_eq!(Format(error).to_string(), expected);
     }
 
     ///////////

@@ -7,7 +7,7 @@ use core::fmt::Debug;
 
 use diskann::ANNResult;
 use diskann_providers::model::FixedChunkPQTable;
-use diskann_quantization::product::TransposedTable;
+use diskann_quantization::{error::Format, product::TransposedTable};
 use diskann_utils::views::Matrix;
 
 use crate::error::{diskann_error, ErrorKind};
@@ -30,7 +30,7 @@ impl PQData {
             pq_pivot_table.view_pivots(),
             pq_pivot_table.view_offsets().to_owned(),
         )
-        .map_err(|err| diskann_error!(ErrorKind::PQError, err))?;
+        .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             pq_pivot_table,

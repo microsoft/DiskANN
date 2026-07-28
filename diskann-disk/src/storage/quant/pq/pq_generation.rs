@@ -15,7 +15,7 @@ use diskann_providers::{
     storage::PQStorage,
     utils::{BridgeErr, RayonThreadPoolRef},
 };
-use diskann_quantization::{product::TransposedTable, CompressInto};
+use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
@@ -138,7 +138,7 @@ where
                 .bridge_err()?
                 .to_owned(),
         )
-        .map_err(|err| diskann_error!(ErrorKind::PQError, err))?;
+        .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             table,
@@ -155,7 +155,7 @@ where
     ) -> Result<(), diskann::ANNError> {
         self.table
             .compress_into(vector, output)
-            .map_err(|err| diskann_error!(ErrorKind::PQError, err))
+            .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))
     }
 
     fn compressed_bytes(&self) -> usize {
