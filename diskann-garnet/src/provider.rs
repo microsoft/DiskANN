@@ -1304,14 +1304,9 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
         // Sort the full precision distances.
         reranked.sort_unstable_by(diskann::neighbor::ord::fast_distance);
 
-        next.post_process(
-            accessor,
-            query,
-            reranked.into_iter(),
-            output,
-        )
-        .await
-        .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)))
+        next.post_process(accessor, query, reranked.into_iter(), output)
+            .await
+            .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)))
     }
 }
 

@@ -209,7 +209,7 @@ pub mod ord {
     }
 }
 
-/// A [`SearchOutputBuffer`] wrapper around `&mut [Neighbor<I>]`. This can be used to
+/// A [`SearchOutputBuffer`] wrapper around `&mut [Neighbor<I, D>]`. This can be used to
 /// populate such a mutable slice as the result of [`crate::graph::DiskANNIndex::search`].
 #[derive(Debug)]
 pub struct BackInserter<'a, I, D = f32> {

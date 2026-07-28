@@ -19,7 +19,7 @@ pub trait SearchOutputBuffer<I, D = f32> {
     /// `None` may be returned in instances where the output has unknown or unbounded size.
     fn size_hint(&self) -> Option<usize>;
 
-    /// Push an `id` and `distance` pair to the next position in the buffer.
+    /// Push a [`Neighbor`] to the next position in the buffer.
     ///
     /// Returns a [`BufferState`] to indicate whether future insertions will succeed.
     ///
