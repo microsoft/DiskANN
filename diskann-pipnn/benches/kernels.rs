@@ -15,7 +15,7 @@ use diskann_vector::distance::Metric;
 
 const BIGANN_DIMENSIONS: usize = 128;
 const PARTITION_FANOUT: usize = 10;
-const LEAF_K: usize = 2;
+const LEAF_KS: [usize; 2] = [2, 3];
 const LEAF_SIZES: [usize; 3] = [64, 256, 512];
 const METRICS: [Metric; 4] = [
     Metric::L2,
@@ -133,28 +133,30 @@ fn benchmark_leaf_topk(c: &mut Criterion) {
     let mut group = c.benchmark_group("pipnn/leaf-topk");
     for points in LEAF_SIZES {
         for metric in METRICS {
-            let dots = lower_dots(points, metric);
-            let input = LeafTopK {
-                dots: &dots,
-                points,
-                metric,
-            };
-            let mut output = vec![LeafNeighbor::default(); points * LEAF_K];
-            let mut workspace = LeafTopKWorkspace::new();
-            nearest_leaf_neighbors(input, LEAF_K, &mut output, &mut workspace).unwrap();
+            for leaf_k in LEAF_KS {
+                let dots = lower_dots(points, metric);
+                let input = LeafTopK {
+                    dots: &dots,
+                    points,
+                    metric,
+                };
+                let mut output = vec![LeafNeighbor::default(); points * leaf_k];
+                let mut workspace = LeafTopKWorkspace::new();
+                nearest_leaf_neighbors(input, leaf_k, &mut output, &mut workspace).unwrap();
 
-            group.throughput(Throughput::Elements((points * (points - 1) / 2) as u64));
-            group.bench_with_input(
-                BenchmarkId::new(metric.as_str(), format!("{points}/k{LEAF_K}")),
-                &input,
-                |bencher, input| {
-                    bencher.iter(|| {
-                        nearest_leaf_neighbors(*input, LEAF_K, &mut output, &mut workspace)
-                            .unwrap();
-                        black_box(&output);
-                    });
-                },
-            );
+                group.throughput(Throughput::Elements((points * (points - 1) / 2) as u64));
+                group.bench_with_input(
+                    BenchmarkId::new(metric.as_str(), format!("{points}/k{leaf_k}")),
+                    &input,
+                    |bencher, input| {
+                        bencher.iter(|| {
+                            nearest_leaf_neighbors(*input, leaf_k, &mut output, &mut workspace)
+                                .unwrap();
+                            black_box(&output);
+                        });
+                    },
+                );
+            }
         }
     }
     group.finish();
@@ -163,44 +165,46 @@ fn benchmark_leaf_topk(c: &mut Criterion) {
 fn benchmark_full_leaf(c: &mut Criterion) {
     let mut group = c.benchmark_group("pipnn/full-leaf-numerical");
     for points in LEAF_SIZES {
-        let data = fixed_data(points, BIGANN_DIMENSIONS, points);
-        let mut dots = vec![0.0; points * points];
-        let mut output = vec![LeafNeighbor::default(); points * LEAF_K];
-        let mut workspace = LeafTopKWorkspace::new();
-        sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
-        nearest_leaf_neighbors(
-            LeafTopK {
-                dots: &dots,
-                points,
-                metric: Metric::L2,
-            },
-            LEAF_K,
-            &mut output,
-            &mut workspace,
-        )
-        .unwrap();
+        for leaf_k in LEAF_KS {
+            let data = fixed_data(points, BIGANN_DIMENSIONS, points);
+            let mut dots = vec![0.0; points * points];
+            let mut output = vec![LeafNeighbor::default(); points * leaf_k];
+            let mut workspace = LeafTopKWorkspace::new();
+            sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
+            nearest_leaf_neighbors(
+                LeafTopK {
+                    dots: &dots,
+                    points,
+                    metric: Metric::L2,
+                },
+                leaf_k,
+                &mut output,
+                &mut workspace,
+            )
+            .unwrap();
 
-        group.throughput(Throughput::Elements(points as u64));
-        group.bench_function(
-            BenchmarkId::new("l2", format!("{points}x{BIGANN_DIMENSIONS}/k{LEAF_K}")),
-            |bencher| {
-                bencher.iter(|| {
-                    sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
-                    nearest_leaf_neighbors(
-                        LeafTopK {
-                            dots: &dots,
-                            points,
-                            metric: Metric::L2,
-                        },
-                        LEAF_K,
-                        &mut output,
-                        &mut workspace,
-                    )
-                    .unwrap();
-                    black_box(&output);
-                });
-            },
-        );
+            group.throughput(Throughput::Elements(points as u64));
+            group.bench_function(
+                BenchmarkId::new("l2", format!("{points}x{BIGANN_DIMENSIONS}/k{leaf_k}")),
+                |bencher| {
+                    bencher.iter(|| {
+                        sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
+                        nearest_leaf_neighbors(
+                            LeafTopK {
+                                dots: &dots,
+                                points,
+                                metric: Metric::L2,
+                            },
+                            leaf_k,
+                            &mut output,
+                            &mut workspace,
+                        )
+                        .unwrap();
+                        black_box(&output);
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }

@@ -436,3 +436,6 @@ fn copy_ids(top: &TopK, output: &mut [u32]) {
         *destination = leader;
     }
 }
+
+#[cfg(test)]
+mod tests;
