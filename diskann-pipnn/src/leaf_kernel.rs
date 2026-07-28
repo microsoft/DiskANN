@@ -200,15 +200,11 @@ fn resize<T: Clone>(
     len: usize,
     value: T,
 ) -> Result<(), LeafKernelError> {
-    if len > values.len() {
-        let additional = len - values.len();
-        values
-            .try_reserve(additional)
-            .map_err(|_| LeafKernelError::Allocation { buffer, additional })?;
-        values.resize(len, value);
-    } else {
-        values.truncate(len);
-    }
+    let additional = len.saturating_sub(values.len());
+    values
+        .try_reserve(additional)
+        .map_err(|_| LeafKernelError::Allocation { buffer, additional })?;
+    values.resize(len, value);
     Ok(())
 }
 
@@ -253,18 +249,22 @@ impl LeafKernel<'_, '_, '_> {
         F::Mask: SIMDSelect<F>,
         u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
     {
-        match self.k {
-            1 => self.run_fused::<F, 1>(arch),
-            2 => self.run_fused::<F, 2>(arch),
-            3 => self.run_fused::<F, 3>(arch),
-            _ => process_pairs_simd_dynamic::<F>(
+        if self.k > 3 {
+            process_pairs_simd_dynamic::<F>(
                 arch,
                 self.input,
                 self.k,
                 self.output,
                 self.norms,
                 self.worst,
-            ),
+            );
+            return;
+        }
+        match self.k {
+            1 => self.run_fused::<F, 1>(arch),
+            2 => self.run_fused::<F, 2>(arch),
+            3 => self.run_fused::<F, 3>(arch),
+            _ => unreachable!("validated non-zero leaf width"),
         }
     }
 
@@ -689,10 +689,11 @@ where
         Metric::InnerProduct => zero - dot,
         Metric::Cosine => {
             let one = F::splat(arch, 1.0);
+            let row_zero = row_norm.eq_simd(zero);
+            let column_zero = column_norm.eq_simd(zero);
             let denominator = row_norm * column_norm;
-            let zero_denominator = denominator.eq_simd(zero);
-            let safe_denominator = zero_denominator.select(one, denominator);
-            let cosine = zero_denominator.select(zero, dot / safe_denominator);
+            let safe_denominator = row_zero.select(one, column_zero.select(one, denominator));
+            let cosine = row_zero.select(zero, column_zero.select(zero, dot / safe_denominator));
             let distance = one - cosine;
             // Comparisons with NaN are false, so this explicit lower clamp
             // preserves non-rankable NaNs while matching the existing PiPNN
@@ -762,3 +763,6 @@ fn insert_row(
     }
     worst[row] = row_output[k - 1].distance;
 }
+
+#[cfg(test)]
+mod tests;
