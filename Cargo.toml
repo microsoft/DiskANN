@@ -13,6 +13,7 @@ members = [
     "diskann-quantization",
     # Algorithm
     "diskann",
+    "diskann-pipnn",
     # Providers
     "diskann-providers",
     "diskann-disk",
@@ -58,6 +59,7 @@ diskann-utils = { path = "diskann-utils", default-features = false, version = "0
 diskann-quantization = { path = "diskann-quantization", default-features = false, version = "0.55.0" }
 # Algorithm
 diskann = { path = "diskann", version = "0.55.0" }
+diskann-pipnn = { path = "diskann-pipnn", version = "0.55.0" }
 # Providers
 diskann-providers = { path = "diskann-providers", default-features = false, version = "0.55.0" }
 diskann-disk = { path = "diskann-disk", version = "0.55.0" }
