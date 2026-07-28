@@ -2577,8 +2577,12 @@ void Index<T, TagT, LabelT>::aggregate_points_by_bitmask_label(
         std::advance(itr, lbl);
         auto& x = *itr;
 
+        // Pad to >=AVX2_TAIL_PADDING words: test_full_mask_val issues an
+        // unconditional 256-bit load over this query mask, so it must be at least
+        // 4 words long. clear() first so resize zero-fills every word (no stale
+        // bits carried across label iterations).
         label_bitmask.clear();
-        label_bitmask.resize(_bitmask_buf._bitmask_size, 0);
+        label_bitmask.resize(std::max(_bitmask_buf._bitmask_size, simple_bitmask_buf::AVX2_TAIL_PADDING), 0);
 
         simple_bitmask_full_val bitmask_full_val;
         bitmask_full_val._mask = label_bitmask.data();
