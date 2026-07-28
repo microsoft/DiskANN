@@ -424,6 +424,47 @@ mod tests {
             .expect("saved spherical bftree index should load back");
     }
 
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_save_load_roundtrip() {
+        let mut raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_bftree_save_roundtrip(&mut raw);
+
+        // Verify the saved index can be loaded back.
+        use diskann_bftree::{BfTreeProvider, NoStore};
+        use diskann_providers::storage::{FileStorageProvider, LoadWith};
+
+        let save_prefix = extract_save_path(&raw);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _loaded: BfTreeProvider<f32, NoStore> = rt
+            .block_on(<BfTreeProvider<f32, NoStore>>::load_with(
+                &FileStorageProvider,
+                &save_prefix,
+            ))
+            .expect("saved full-precision streaming bftree index should load back");
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_spherical_save_load_roundtrip() {
+        let mut raw =
+            value_from_file(&example_directory().join("graph-index-bftree-stream-spherical.json"));
+        run_bftree_save_roundtrip(&mut raw);
+
+        // Verify the saved index can be loaded back.
+        use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
+        use diskann_providers::storage::{FileStorageProvider, LoadWith};
+
+        let save_prefix = extract_save_path(&raw);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _loaded: BfTreeProvider<f32, QuantVectorProvider> = rt
+            .block_on(<BfTreeProvider<f32, QuantVectorProvider>>::load_with(
+                &FileStorageProvider,
+                &save_prefix,
+            ))
+            .expect("saved spherical streaming bftree index should load back");
+    }
+
     /// Run a bftree benchmark with `save_path` injected into the build config.
     ///
     /// Mutates `raw` in place so the caller can extract the save path afterward.
