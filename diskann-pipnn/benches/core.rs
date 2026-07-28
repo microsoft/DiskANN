@@ -3,20 +3,16 @@
  * Licensed under the MIT license.
  */
 
-use std::{convert::Infallible, hint::black_box, time::Duration};
+use std::{hint::black_box, time::Duration};
 
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
-use diskann::{
-    graph::{
-        config::{self, MaxDegree},
-        prune::{self, Policy},
-        Config,
-    },
-    neighbor::Neighbor,
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use diskann::graph::{
+    config::{self, MaxDegree},
+    Config,
 };
 use diskann_pipnn::{build_graph, PiPNNBuildContext, PiPNNConfig};
 use diskann_utils::views::MatrixView;
-use diskann_vector::{distance::Metric, DistanceFunction};
+use diskann_vector::distance::Metric;
 
 const DIMENSIONS: usize = 128;
 const POINTS: usize = 1_024;
@@ -110,65 +106,12 @@ fn benchmark_stage_focused_builds(c: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_repeated_robust_prune(c: &mut Criterion) {
-    let data = fixed_data(128, DIMENSIONS);
-    let view = MatrixView::try_from(data.as_slice(), 128, DIMENSIONS).unwrap();
-    let distance = <f32 as diskann_vector::distance::DistanceProvider<f32>>::distance_comparer(
-        Metric::L2,
-        Some(DIMENSIONS),
-    );
-    let source = view.row(0);
-    let mut candidates = (1..128_u32)
-        .map(|id| {
-            Neighbor::new(
-                id,
-                distance.evaluate_similarity(source, view.row(id as usize)),
-            )
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_unstable();
-    let policy = Policy::new(DEGREE, 1.2, Metric::L2.into(), false);
-    let mut scratch = prune::Scratch::new();
-    let mut cache = Vec::new();
-
-    let mut group = c.benchmark_group("vamana/robust-prune");
-    group.throughput(Throughput::Elements(candidates.len() as u64));
-    group.bench_function("127-to-64/reused-scratch", |bencher| {
-        bencher.iter_batched_ref(
-            || candidates.clone(),
-            |candidates| {
-                scratch.candidates_mut().clear();
-                scratch.candidates_mut().append(candidates);
-                let candidate_count = scratch.candidates_mut().len();
-                let mut context = scratch.as_context(candidate_count);
-                prune::robust_prune(
-                    &mut context,
-                    policy,
-                    &mut cache,
-                    Some,
-                    |left, right| {
-                        Ok::<_, Infallible>(distance.evaluate_similarity(
-                            view.row(*left as usize),
-                            view.row(*right as usize),
-                        ))
-                    },
-                    |_| false,
-                )
-                .unwrap();
-                black_box(scratch.neighbors());
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.finish();
-}
-
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .sample_size(20)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(3));
-    targets = benchmark_stage_focused_builds, benchmark_repeated_robust_prune
+    targets = benchmark_stage_focused_builds
 }
 criterion_main!(benches);
