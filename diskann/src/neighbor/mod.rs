@@ -4,8 +4,6 @@
  */
 
 // Imports
-use std::fmt::Debug;
-
 use crate::graph::{SearchOutputBuffer, search_output_buffer};
 
 // Exports
