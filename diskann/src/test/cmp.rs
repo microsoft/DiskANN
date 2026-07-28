@@ -47,7 +47,7 @@ pub(crate) trait VerboseEq {
 /// error if the lists differ.
 macro_rules! verbose_eq {
     ($struct:path { $($fields:ident),+ $(,)? }) => {
-        impl $crate::test::cmp::VerboseEq for $struct  {
+        impl $crate::test::cmp::VerboseEq for $struct {
             #[inline(never)]
             #[track_caller]
             fn verbose_eq(&self, other: &Self) -> $crate::ANNResult<()> {
