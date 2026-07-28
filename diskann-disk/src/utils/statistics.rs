@@ -18,6 +18,9 @@ pub struct QueryStatistics {
     /// Time spent in query preprocessing for the PQ in microseconds.
     pub query_pq_preprocess_time_us: u128,
 
+    /// Time spent routing query-specific graph start points.
+    pub router_time_us: u128,
+
     /// Total number of IO operations issued.
     pub total_io_operations: u32,
 
@@ -32,6 +35,18 @@ pub struct QueryStatistics {
 
     /// Number of hops performed during search.
     pub search_hops: u32,
+
+    /// Number of sampled posting-list PQ codes scored by the router.
+    pub router_sampled_adc_codes: u32,
+
+    /// Number of IVF posting lists probed by the router.
+    pub router_probed_lists: u32,
+
+    /// Number of IVF centroids scored by the router.
+    pub router_centroid_scores: u32,
+
+    /// Number of start points returned by the router.
+    pub routed_start_points_count: u32,
 }
 
 /// Calculates the percentile value of a specific metric in a list of QueryStats.

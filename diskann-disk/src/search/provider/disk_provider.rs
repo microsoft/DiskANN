@@ -4,7 +4,8 @@
  */
 
 use std::{
-    collections::HashMap,
+    cmp::Ordering,
+    collections::{BinaryHeap, HashMap},
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, AtomicUsize},
@@ -49,11 +50,13 @@ use tracing::debug;
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
     search::{
+        ivf_pq_router::IvfPqStartPointRouter,
         provider::{
             aligned_file_reader::AlignedFileReaderFactory,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
         search_mode::SearchMode,
+        start_point_router::StartPointRouter,
         traits::{VertexProvider, VertexProviderFactory},
     },
     storage::{api::AsyncDiskLoadContext, disk_index_reader::DiskIndexReader},
@@ -90,6 +93,9 @@ where
 
     /// The number of IO operations that can be done in parallel.
     search_io_limit: usize,
+
+    /// Optional query-time router used to seed graph traversal.
+    start_point_router: Option<Arc<StartPointRouter>>,
 }
 
 impl<Data> DataProvider for DiskProvider<Data>
@@ -171,6 +177,7 @@ where
             metric,
             num_points,
             ctx.search_io_limit,
+            None,
         )
     }
 }
@@ -185,6 +192,7 @@ where
         metric: Metric,
         num_points: usize,
         search_io_limit: usize,
+        start_point_router: Option<StartPointRouter>,
     ) -> ANNResult<Self> {
         let distance_comparer =
             Data::VectorDataType::distance(metric, Some(graph_header.metadata().dims));
@@ -198,6 +206,7 @@ where
             num_points,
             metric,
             search_io_limit,
+            start_point_router: start_point_router.map(Arc::new),
         })
     }
 }
@@ -256,6 +265,11 @@ struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
     io_count: AtomicUsize,
+    router_time_us: AtomicU64,
+    router_sampled_adc_codes: AtomicUsize,
+    router_probed_lists: AtomicUsize,
+    router_centroid_scores: AtomicUsize,
+    routed_start_points_count: AtomicUsize,
 }
 
 impl Default for IOTracker {
@@ -264,6 +278,11 @@ impl Default for IOTracker {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
             io_count: AtomicUsize::new(0),
+            router_time_us: AtomicU64::new(0),
+            router_sampled_adc_codes: AtomicUsize::new(0),
+            router_probed_lists: AtomicUsize::new(0),
+            router_centroid_scores: AtomicUsize::new(0),
+            routed_start_points_count: AtomicUsize::new(0),
         }
     }
 }
@@ -284,6 +303,255 @@ impl IOTracker {
 
     fn io_count(&self) -> usize {
         self.io_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn record_router_stats(&self, stats: &StartPointRoutingStats) {
+        Self::add_time(&self.router_time_us, stats.router_time_us);
+        self.router_sampled_adc_codes.fetch_add(
+            stats.sampled_adc_codes,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.router_probed_lists
+            .fetch_add(stats.probed_lists, std::sync::atomic::Ordering::Relaxed);
+        self.router_centroid_scores
+            .fetch_add(stats.centroid_scores, std::sync::atomic::Ordering::Relaxed);
+        self.routed_start_points_count.fetch_add(
+            stats.routed_start_points,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    fn router_time_us(&self) -> u64 {
+        Self::time(&self.router_time_us)
+    }
+
+    fn router_sampled_adc_codes(&self) -> usize {
+        self.router_sampled_adc_codes
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn router_probed_lists(&self) -> usize {
+        self.router_probed_lists
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn router_centroid_scores(&self) -> usize {
+        self.router_centroid_scores
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn routed_start_points_count(&self) -> usize {
+        self.routed_start_points_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct StartPointRoutingStats {
+    router_time_us: u64,
+    sampled_adc_codes: usize,
+    probed_lists: usize,
+    centroid_scores: usize,
+    routed_start_points: usize,
+}
+
+#[derive(Debug, Clone)]
+struct StartPointRoutingOutput {
+    ids: Vec<u32>,
+    stats: StartPointRoutingStats,
+}
+
+fn route_ivf_pq_start_points<Data>(
+    provider: &DiskProvider<Data>,
+    pq_scratch: &mut PQScratch,
+    router: &IvfPqStartPointRouter,
+    query: &[f32],
+    fallback_medoid: u32,
+) -> ANNResult<StartPointRoutingOutput>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+{
+    if router.num_points() != provider.num_points {
+        return Err(ANNError::log_index_error(format!(
+            "ivf_pq router posting count {} does not match disk index point count {}",
+            router.num_points(),
+            provider.num_points
+        )));
+    }
+
+    let batch_size = pq_scratch.max_vectors();
+    if batch_size == 0 {
+        return Err(ANNError::message(
+            diskann::ANNErrorKind::IndexError,
+            "pq scratch must support at least one vector",
+        ));
+    }
+
+    let route_timer = Instant::now();
+    let probed = router.probe_cells_with_stats(query)?;
+    let mut stats = StartPointRoutingStats {
+        centroid_scores: probed.centroid_scores,
+        ..StartPointRoutingStats::default()
+    };
+    let mut best = BoundedStartPoints::new(router.max_start_points());
+    let mut selected_ids = Vec::new();
+
+    for cell in probed.cells {
+        let posting_ids = router.posting_ids(cell);
+        let sample_count = posting_ids
+            .len()
+            .min(router.posting_list_samples_per_list());
+        if sample_count == 0 {
+            continue;
+        }
+
+        stats.probed_lists += 1;
+        selected_ids.clear();
+        append_sampled_posting_ids(posting_ids, sample_count, &mut selected_ids);
+
+        for ids in selected_ids.chunks(batch_size) {
+            if let Some(&bad_id) = ids.iter().find(|&&id| id as usize >= provider.num_points) {
+                return Err(ANNError::log_index_error(format!(
+                    "ivf_pq router posting id {bad_id} is out of bounds for {} points",
+                    provider.num_points
+                )));
+            }
+
+            compute_pq_distance(
+                ids,
+                provider.pq_data.get_num_chunks(),
+                &pq_scratch.aligned_pqtable_dist_scratch,
+                provider.pq_data.pq_compressed_data().as_slice(),
+                &mut pq_scratch.aligned_pq_coord_scratch,
+                &mut pq_scratch.aligned_dist_scratch,
+            )?;
+            stats.sampled_adc_codes += ids.len();
+            for (index, &id) in ids.iter().enumerate() {
+                best.push(pq_scratch.aligned_dist_scratch[index], id);
+            }
+        }
+    }
+
+    let mut routed: Vec<u32> = best
+        .into_sorted_vec()
+        .into_iter()
+        .map(|(_distance, id)| id)
+        .collect();
+    if routed.is_empty() {
+        routed.push(router.fallback_medoid().unwrap_or(fallback_medoid));
+    }
+    stats.routed_start_points = routed.len();
+    stats.router_time_us = route_timer.elapsed().as_micros() as u64;
+
+    Ok(StartPointRoutingOutput { ids: routed, stats })
+}
+
+fn append_sampled_posting_ids(
+    posting_ids: &[u32],
+    sample_count: usize,
+    selected_ids: &mut Vec<u32>,
+) {
+    if sample_count == 0 {
+        return;
+    }
+    debug_assert!(sample_count <= posting_ids.len());
+    for offset in 0..sample_count {
+        let posting_index = strided_posting_index(posting_ids.len(), sample_count, offset);
+        selected_ids.push(posting_ids[posting_index]);
+    }
+}
+
+fn strided_posting_index(list_len: usize, sample_count: usize, offset: usize) -> usize {
+    debug_assert!(list_len > 0);
+    debug_assert!(sample_count > 0);
+    debug_assert!(sample_count <= list_len);
+    debug_assert!(offset < sample_count);
+
+    if sample_count == 1 {
+        return 0;
+    }
+    offset.saturating_mul(list_len - 1) / (sample_count - 1)
+}
+
+fn compare_start_points(left: &(f32, u32), right: &(f32, u32)) -> Ordering {
+    left.0
+        .total_cmp(&right.0)
+        .then_with(|| left.1.cmp(&right.1))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StartPointScore {
+    distance: f32,
+    id: u32,
+}
+
+impl StartPointScore {
+    fn as_tuple(self) -> (f32, u32) {
+        (self.distance, self.id)
+    }
+}
+
+impl PartialEq for StartPointScore {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for StartPointScore {}
+
+impl PartialOrd for StartPointScore {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StartPointScore {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_start_points(&self.as_tuple(), &other.as_tuple())
+    }
+}
+
+struct BoundedStartPoints {
+    limit: usize,
+    heap: BinaryHeap<StartPointScore>,
+}
+
+impl BoundedStartPoints {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            heap: BinaryHeap::with_capacity(limit),
+        }
+    }
+
+    fn push(&mut self, distance: f32, id: u32) {
+        if self.limit == 0 {
+            return;
+        }
+
+        let candidate = StartPointScore { distance, id };
+        if self.heap.len() < self.limit {
+            self.heap.push(candidate);
+            return;
+        }
+
+        let Some(worst) = self.heap.peek() else {
+            return;
+        };
+        if candidate < *worst {
+            self.heap.pop();
+            self.heap.push(candidate);
+        }
+    }
+
+    fn into_sorted_vec(self) -> Vec<(f32, u32)> {
+        let mut values: Vec<_> = self
+            .heap
+            .into_iter()
+            .map(StartPointScore::as_tuple)
+            .collect();
+        values.sort_unstable_by(compare_start_points);
+        values
     }
 }
 
@@ -621,6 +889,7 @@ where
     io_tracker: &'a IOTracker,
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
     query: &'a [Data::VectorDataType],
+    start_points: Vec<u32>,
 }
 
 impl<Data, VP> DiskAccessor<'_, Data, VP>
@@ -667,16 +936,15 @@ where
     VP: VertexProvider<Data>,
 {
     async fn starting_points(&self) -> ANNResult<Vec<u32>> {
-        let start_vertex_id = self.provider.graph_header.metadata().medoid as u32;
-        Ok(vec![start_vertex_id])
+        Ok(self.start_points.clone())
     }
 
     async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
         F: FnMut(Self::Id, f32) + Send,
     {
-        let start_vertex_id = self.provider.graph_header.metadata().medoid as u32;
-        self.pq_distances(&[start_vertex_id], |dist, id| f(id, dist))
+        let start_points = self.start_points.clone();
+        self.pq_distances(&start_points, |dist, id| f(id, dist))
     }
 
     fn expand_beam<Itr, P, F>(
@@ -751,25 +1019,44 @@ where
         // Decode caller's native vector representation into `f32`; downstream PQ kernels operate purely on `&[f32]`.
         let f32_query = Data::VectorDataType::as_f32(query).into_ann_result()?;
         scratch.pq_scratch.set(&f32_query)?;
-        let start_vertex_id = provider.graph_header.metadata().medoid as u32;
+        let medoid = provider.graph_header.metadata().medoid as u32;
 
         let timer = Instant::now();
         quantizer_preprocess(
             &mut scratch.pq_scratch,
             &provider.pq_data,
             provider.metric,
-            &[start_vertex_id],
+            &[medoid],
         )?;
         IOTracker::add_time(
             &io_tracker.preprocess_time_us,
             timer.elapsed().as_micros() as u64,
         );
 
+        let route_output = match provider.start_point_router.as_deref() {
+            Some(StartPointRouter::IvfPq(router)) => route_ivf_pq_start_points(
+                provider,
+                &mut scratch.pq_scratch,
+                router,
+                &f32_query,
+                medoid,
+            )?,
+            None => StartPointRoutingOutput {
+                ids: vec![medoid],
+                stats: StartPointRoutingStats {
+                    routed_start_points: 1,
+                    ..StartPointRoutingStats::default()
+                },
+            },
+        };
+        io_tracker.record_router_stats(&route_output.stats);
+
         Ok(Self {
             provider,
             io_tracker,
             scratch,
             query,
+            start_points: route_output.ids,
         })
     }
 
@@ -872,6 +1159,27 @@ where
         metric: Metric,
         runtime: Option<Runtime>,
     ) -> ANNResult<Self> {
+        Self::new_with_start_point_router(
+            num_threads,
+            search_io_limit,
+            disk_index_reader,
+            vertex_provider_factory,
+            metric,
+            runtime,
+            None,
+        )
+    }
+
+    /// Create a new disk searcher with an optional start-point router.
+    pub fn new_with_start_point_router(
+        num_threads: usize,
+        search_io_limit: usize,
+        disk_index_reader: &DiskIndexReader,
+        vertex_provider_factory: ProviderFactory,
+        metric: Metric,
+        runtime: Option<Runtime>,
+        start_point_router: Option<StartPointRouter>,
+    ) -> ANNResult<Self> {
         let runtime = match runtime {
             Some(rt) => rt,
             None => tokio::runtime::Builder::new_current_thread().build()?,
@@ -909,6 +1217,7 @@ where
             metric,
             metadata.num_pts.into_usize(),
             search_io_limit,
+            start_point_router,
         )?;
 
         let index = DiskANNIndex::new(config, disk_provider, NonZeroUsize::new(num_threads));
@@ -1199,6 +1508,11 @@ where
         query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
         query_stats.query_pq_preprocess_time_us =
             IOTracker::time(&io_tracker.preprocess_time_us) as u128;
+        query_stats.router_time_us = io_tracker.router_time_us() as u128;
+        query_stats.router_sampled_adc_codes = io_tracker.router_sampled_adc_codes() as u32;
+        query_stats.router_probed_lists = io_tracker.router_probed_lists() as u32;
+        query_stats.router_centroid_scores = io_tracker.router_centroid_scores() as u32;
+        query_stats.routed_start_points_count = io_tracker.routed_start_points_count() as u32;
         query_stats.cpu_time_us = query_stats.total_execution_time_us
             - query_stats.io_time_us
             - query_stats.query_pq_preprocess_time_us;
@@ -1224,6 +1538,41 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
         vertex_provider.process_loaded_node(id, idx)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod ivf_sampled_adc_router_tests {
+    use super::*;
+
+    #[test]
+    fn append_sampled_posting_ids_spreads_samples_across_entire_list() {
+        let posting_ids = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+        let mut sampled = Vec::new();
+
+        append_sampled_posting_ids(&posting_ids, 4, &mut sampled);
+
+        assert_eq!(sampled, vec![10, 13, 16, 19]);
+    }
+
+    #[test]
+    fn bounded_start_points_keeps_best_distances_with_id_tiebreak() {
+        let mut best = BoundedStartPoints::new(3);
+        for (distance, id) in [
+            (4.0, 4),
+            (1.0, 30),
+            (2.0, 20),
+            (1.0, 10),
+            (3.0, 1),
+            (0.5, 99),
+        ] {
+            best.push(distance, id);
+        }
+
+        assert_eq!(
+            best.into_sorted_vec(),
+            vec![(0.5, 99), (1.0, 10), (1.0, 30)]
+        );
+    }
 }
 
 #[cfg(test)]

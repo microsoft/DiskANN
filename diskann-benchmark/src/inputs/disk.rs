@@ -70,6 +70,19 @@ pub(crate) struct DiskIndexBuild {
     #[cfg(feature = "disk-index")]
     pub(crate) quantization_type: QuantizationType,
     pub(crate) save_path: String,
+    #[cfg(feature = "disk-index")]
+    #[serde(default)]
+    pub(crate) ivf_pq_router_build: Option<IvfPqRouterBuildConfig>,
+}
+
+#[cfg(feature = "disk-index")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct IvfPqRouterBuildConfig {
+    pub(crate) save_path: String,
+    pub(crate) num_centroids: NonZeroUsize,
+    pub(crate) max_iterations: NonZeroUsize,
+    pub(crate) seed: u64,
+    pub(crate) training_sample_size: Option<NonZeroUsize>,
 }
 
 #[cfg(feature = "disk-index")]
@@ -170,6 +183,26 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
     pub(crate) post_processor: Option<TopkPostProcessor>,
+    #[cfg(feature = "disk-index")]
+    #[serde(default)]
+    pub(crate) start_point_router: Option<DiskStartPointRouter>,
+}
+
+#[cfg(feature = "disk-index")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub(crate) enum DiskStartPointRouter {
+    #[serde(rename = "ivf_pq")]
+    IvfPq(IvfPqStartPointRouterConfig),
+}
+
+#[cfg(feature = "disk-index")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct IvfPqStartPointRouterConfig {
+    pub(crate) artifact: InputFile,
+    pub(crate) nprobe: NonZeroUsize,
+    pub(crate) max_start_points: NonZeroUsize,
+    pub(crate) posting_list_samples_per_list: NonZeroUsize,
 }
 
 /////////
@@ -258,6 +291,40 @@ impl DiskIndexBuild {
             }
         };
 
+        #[cfg(feature = "disk-index")]
+        if let Some(ivf_pq_router_build) = &self.ivf_pq_router_build {
+            ivf_pq_router_build.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl IvfPqRouterBuildConfig {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        match Path::new(&self.save_path).parent() {
+            Some(parent_dir) => {
+                let parent_str = parent_dir.to_string_lossy();
+                if !parent_str.is_empty() && !parent_dir.is_dir() {
+                    anyhow::bail!(
+                        "parent directory - {} of ivf_pq_router_build.save_path - {} does not exist",
+                        parent_str,
+                        self.save_path
+                    );
+                }
+            }
+            None => {
+                anyhow::bail!("invalid ivf_pq_router_build.save_path - {}", self.save_path);
+            }
+        }
+        if let Some(training_sample_size) = self.training_sample_size {
+            if training_sample_size < self.num_centroids {
+                anyhow::bail!(
+                    "ivf_pq_router_build.training_sample_size must be at least num_centroids"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -320,6 +387,36 @@ impl DiskSearchPhase {
                 .context("invalid disk search post processor")?;
         }
 
+        #[cfg(feature = "disk-index")]
+        if let Some(router) = self.start_point_router.as_mut() {
+            router
+                .validate(checker)
+                .context("invalid disk start-point router")?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl DiskStartPointRouter {
+    fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        match self {
+            DiskStartPointRouter::IvfPq(config) => config.validate(checker),
+        }
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl IvfPqStartPointRouterConfig {
+    fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        // Resolve existing artifacts for load-only jobs, but do not fail here:
+        // build-and-search jobs can produce this file earlier in the same
+        // benchmark operation. The search loader reports a missing artifact if
+        // it still cannot be opened at execution time.
+        if let Ok(resolved) = checker.find_input_file(&self.artifact) {
+            self.artifact = InputFile::new(resolved);
+        }
         Ok(())
     }
 }
@@ -344,6 +441,8 @@ impl Example for DiskIndexOperation {
             #[cfg(feature = "disk-index")]
             quantization_type: QuantizationType::PQ { num_chunks: 16 },
             save_path: "sample_index_l50_r32".to_string(),
+            #[cfg(feature = "disk-index")]
+            ivf_pq_router_build: None,
         };
 
         let search = DiskSearchPhase {
@@ -367,6 +466,8 @@ impl Example for DiskIndexOperation {
             num_nodes_to_cache: None,
             search_io_limit: None,
             post_processor: None,
+            #[cfg(feature = "disk-index")]
+            start_point_router: None,
         };
 
         Self {
@@ -447,7 +548,29 @@ impl DiskIndexBuild {
             }
         }
         write_field!(f, "Save Path", self.save_path)?;
+        #[cfg(feature = "disk-index")]
+        match &self.ivf_pq_router_build {
+            Some(config) => write_field!(f, "IVF PQ Build", config)?,
+            None => write_field!(f, "IVF PQ Build", "none")?,
+        }
         Ok(())
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl fmt::Display for IvfPqRouterBuildConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "save_path={} num_centroids={} max_iterations={} seed={} training_sample_size={}",
+            self.save_path,
+            self.num_centroids,
+            self.max_iterations,
+            self.seed,
+            self.training_sample_size
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )
     }
 }
 
@@ -499,7 +622,28 @@ impl DiskSearchPhase {
             Some(pp) => write_field!(f, "Post Processor", pp)?,
             None => write_field!(f, "Post Processor", "none")?,
         }
+        #[cfg(feature = "disk-index")]
+        match &self.start_point_router {
+            Some(router) => write_field!(f, "Start Router", router)?,
+            None => write_field!(f, "Start Router", "none")?,
+        }
         Ok(())
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl fmt::Display for DiskStartPointRouter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IvfPq(config) => write!(
+                f,
+                "ivf_pq artifact={} nprobe={} max_start_points={} posting_list_samples_per_list={}",
+                config.artifact.display(),
+                config.nprobe,
+                config.max_start_points,
+                config.posting_list_samples_per_list
+            ),
+        }
     }
 }
 
@@ -507,5 +651,80 @@ impl fmt::Display for DiskSearchPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Disk Index Search Phase")?;
         self.summarize_fields(f)
+    }
+}
+
+#[cfg(all(test, feature = "disk-index"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_ivf_pq_router_build_config() {
+        let raw = r#"
+        {
+          "save_path": "index.ivf_pq_router.bin",
+          "num_centroids": 2048,
+          "max_iterations": 4,
+          "seed": 42,
+          "training_sample_size": 100000
+        }
+        "#;
+
+        let config: IvfPqRouterBuildConfig = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(config.save_path, "index.ivf_pq_router.bin");
+        assert_eq!(config.num_centroids.get(), 2048);
+        assert_eq!(config.max_iterations.get(), 4);
+        assert_eq!(config.seed, 42);
+        assert_eq!(config.training_sample_size.unwrap().get(), 100000);
+    }
+
+    #[test]
+    fn deserializes_ivf_pq_sampled_adc_start_point_router_config() {
+        let raw = r#"
+        {
+          "source": {
+            "disk-index-source": "Load",
+            "data_type": "float32",
+            "load_path": "test-index"
+          },
+          "search_phase": {
+            "queries": "queries.fbin",
+            "groundtruth": "truth.bin",
+            "search_list": [200],
+            "beam_width": 64,
+            "recall_at": 100,
+            "num_threads": 8,
+            "is_flat_search": false,
+            "distance": "squared_l2",
+            "vector_filters_file": null,
+            "num_nodes_to_cache": null,
+            "search_io_limit": null,
+            "post_processor": null,
+            "start_point_router": {
+              "type": "ivf_pq",
+              "artifact": "router.ivf_pq_router.bin",
+              "nprobe": 8,
+              "max_start_points": 16,
+              "posting_list_samples_per_list": 2048
+            }
+          }
+        }
+        "#;
+
+        let input: DiskIndexOperation = serde_json::from_str(raw).unwrap();
+        let router = input.search_phase.start_point_router.unwrap();
+
+        match router {
+            DiskStartPointRouter::IvfPq(config) => {
+                assert_eq!(
+                    config.artifact.display().to_string(),
+                    "router.ivf_pq_router.bin"
+                );
+                assert_eq!(config.nprobe.get(), 8);
+                assert_eq!(config.max_start_points.get(), 16);
+                assert_eq!(config.posting_list_samples_per_list.get(), 2048);
+            }
+        }
     }
 }

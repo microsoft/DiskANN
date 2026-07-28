@@ -4,7 +4,10 @@
  */
 
 use rayon::prelude::*;
-use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
+use std::{
+    collections::HashSet, fmt, fs::File, io::BufReader, path::Path, sync::atomic::AtomicBool,
+    time::Instant,
+};
 
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -14,11 +17,15 @@ use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
     search::{
+        ivf_pq_router::{
+            read_ivf_pq_router_binary, IvfPqRouter, IvfPqRouterData, IvfPqStartPointRouter,
+        },
         provider::{
             disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
         search_mode::SearchMode,
+        start_point_router::StartPointRouter,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, QueryStatistics},
@@ -36,7 +43,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::disk::{
+        DiskIndexLoad, DiskSearchPhase, DiskStartPointRouter, IvfPqStartPointRouterConfig,
+    },
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -64,6 +73,11 @@ pub(super) struct DiskSearchResult {
     pub(super) mean_io_time: f64,
     pub(super) mean_cpu_time: f64,
     pub(super) mean_pq_preprocess_time: f64,
+    pub(super) mean_router_time: f64,
+    pub(super) mean_router_sampled_adc_codes: f64,
+    pub(super) mean_router_probed_lists: f64,
+    pub(super) mean_router_centroid_scores: f64,
+    pub(super) mean_routed_start_points: f64,
     pub(super) mean_comparisons: f64,
     pub(super) mean_hops: f64,
     pub(super) cache_hit_percentage: f64,
@@ -148,6 +162,21 @@ impl DiskSearchResult {
             mean_pq_preprocess_time: statistics::get_mean_stats(statistics, |stats| {
                 stats.query_pq_preprocess_time_us as f64
             }),
+            mean_router_time: statistics::get_mean_stats(statistics, |stats| {
+                stats.router_time_us as f64
+            }),
+            mean_router_sampled_adc_codes: statistics::get_mean_stats(statistics, |stats| {
+                stats.router_sampled_adc_codes as f64
+            }),
+            mean_router_probed_lists: statistics::get_mean_stats(statistics, |stats| {
+                stats.router_probed_lists as f64
+            }),
+            mean_router_centroid_scores: statistics::get_mean_stats(statistics, |stats| {
+                stats.router_centroid_scores as f64
+            }),
+            mean_routed_start_points: statistics::get_mean_stats(statistics, |stats| {
+                stats.routed_start_points_count as f64
+            }),
             mean_comparisons: statistics::get_mean_stats(statistics, |stats| {
                 stats.total_comparisons as f64
             }),
@@ -221,7 +250,9 @@ where
     let vertex_provider_factory =
         DiskVertexProviderFactory::from_disk_index_path(disk_index_path, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
+    let start_point_router = load_start_point_router(search_params)?;
+
+    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new_with_start_point_router(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim
@@ -232,6 +263,7 @@ where
         vertex_provider_factory,
         search_params.distance.into(),
         None,
+        start_point_router,
     )?;
 
     logger.log_checkpoint("index_loaded");
@@ -358,6 +390,50 @@ where
     })
 }
 
+fn load_start_point_router(
+    search_params: &DiskSearchPhase,
+) -> anyhow::Result<Option<StartPointRouter>> {
+    let Some(router) = &search_params.start_point_router else {
+        return Ok(None);
+    };
+
+    match router {
+        DiskStartPointRouter::IvfPq(config) => {
+            let router_data = load_ivf_pq_router_data(config)?;
+            let router = IvfPqRouter::from_data(router_data)?;
+            let router = IvfPqStartPointRouter::new(
+                router,
+                config.nprobe.get(),
+                config.max_start_points.get(),
+                config.posting_list_samples_per_list.get(),
+            )?;
+            Ok(Some(StartPointRouter::IvfPq(Box::new(router))))
+        }
+    }
+}
+
+fn load_ivf_pq_router_data(
+    config: &IvfPqStartPointRouterConfig,
+) -> anyhow::Result<IvfPqRouterData> {
+    let path = &config.artifact;
+    let file = File::open(&**path)
+        .map_err(|err| anyhow::anyhow!("failed to open IVF+PQ router {}: {err}", path.display()))?;
+    let reader = BufReader::new(file);
+    if is_binary_artifact_path(path) {
+        Ok(read_ivf_pq_router_binary(reader)?)
+    } else {
+        let data: IvfPqRouterData = serde_json::from_reader(reader)?;
+        data.validate()?;
+        Ok(data)
+    }
+}
+
+fn is_binary_artifact_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("bin"))
+}
+
 // Simplified internal structures to reduce parameter count
 pub(super) struct GroundTruthContext {
     gt_ids: Option<Vec<u32>>,
@@ -401,7 +477,7 @@ impl fmt::Display for DiskSearchStats {
         let fmt_us = |v: f64| -> String { format!("{:.1}us", v) };
         let fmt_pct = |v: f64| -> String { format!("{:.1}%", v) };
 
-        let cols: [(&str, usize); 14] = [
+        let cols: [(&str, usize); 16] = [
             ("L", 2),
             ("KNN", 3),
             ("QPS", 8),
@@ -412,6 +488,8 @@ impl fmt::Display for DiskSearchStats {
             ("IO (us)", 10),
             ("CPU (us)", 10),
             ("PQ Preprocess (us)", 20),
+            ("Router (us)", 11),
+            ("Router ADC", 10),
             ("Mean Comps", 11),
             ("Mean Hops", 10),
             ("Cache Hit %", 12),
@@ -451,7 +529,7 @@ impl fmt::Display for DiskSearchStats {
 
         for r in &self.search_results_per_l {
             // Prepare values as strings with numeric formatting
-            let vals: [String; 14] = [
+            let vals: [String; 16] = [
                 format!("{}", r.search_l),
                 format!("{}", self.recall_at),
                 format!("{:.1}", r.qps),
@@ -462,6 +540,8 @@ impl fmt::Display for DiskSearchStats {
                 fmt_us(r.mean_io_time),
                 fmt_us(r.mean_cpu_time),
                 fmt_us(r.mean_pq_preprocess_time),
+                fmt_us(r.mean_router_time),
+                format!("{:.1}", r.mean_router_sampled_adc_codes),
                 format!("{:.1}", r.mean_comparisons),
                 format!("{:.1}", r.mean_hops),
                 fmt_pct(r.cache_hit_percentage),
