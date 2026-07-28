@@ -226,6 +226,49 @@ A CSR-backed provider (`InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr`) wa
 
 CSR gives a **3.4x (S1) - 4.4x (S4)** end-to-end latency/QPS improvement at equal recall, closing ~82-85% of the live-vs-precomputed-bitmap gap from section 8 while still evaluating the predicate live per node. The end-to-end factor is smaller than the ~15-20x on `is_match` alone because the ~13k vector-distance comparisons per query are unchanged and now dominate the remaining latency.
 
+## 8.2 Posting-list + materialized bitmap, and the selectivity crossover
+
+CSR still evaluates the predicate per visited node. The Lucene/Milvus/FAISS approach instead builds the query's whole match set **once** (roaring `AND`/`OR` over per-attribute posting lists) into a dense bitset, then answers each node with an `O(1)` bit test. `topk-multihop-live-filter-bitmap` (`InlineAttributeIndexPosting` / `MaterializedBitmapProvider`) implements this **live** — the match-set materialization is done lazily on the first `is_match`, so its cost is counted in query latency, not an offline pass. The benchmark reconstructs these lazy providers for every repetition and search-L run, preventing the materialized state from being reused across measurements.
+
+Three-way live comparison (same index, k=150, L=150, single thread, 1000 queries; recall identical within each case):
+
+| Case (sel.) | avg hops | live (roaring) | live-csr | live-bitmap |
+|---|---:|---:|---:|---:|
+| S1 (66.4%) | 1087 | 21.99 ms | **6.70 ms** | 51.44 ms |
+| S4 (10.0%) | 2492 | 79.74 ms | 17.98 ms | **17.18 ms** |
+| S8 (1.17%) | 4439 | 93.45 ms | 21.90 ms | **7.05 ms** |
+
+(p99, ms: S1 100.0 / 28.5 / 74.0; S4 207.6 / 47.4 / 26.5; S8 135.5 / 32.1 / 10.2.)
+
+There is a clean **selectivity crossover**:
+
+- The bitmap's per-query cost is dominated by **materializing the match set** (proportional to the number of matching ids). For a broad filter (S1, ~6.6M matches) this densify dominates and bitmap is the **worst** option (51 ms); for a selective filter (S8, ~117k matches) it is cheap and the `O(1)` per-node test wins decisively (**7.05 ms — 3.1x faster than CSR, 13x faster than roaring**).
+- Selective filters also **traverse more** (S8 avg hops 4439 vs S1 1087), so `is_match` is called far more often, further rewarding the bitmap's `O(1)` test / CSR's cheap row-scan and penalizing the roaring path.
+- CSR has **no per-query build** and a tiny per-node cost, so it is the **robust default**: 3.3-4.4x over roaring at every selectivity, best for broad, ~tied for mid.
+
+**Takeaway for live query latency:** no single per-node representation wins everywhere. A **selectivity-adaptive** provider is best — the posting-list index already knows `|match set|` cheaply (roaring cardinality, before any densify), so it can pick **bitmap when selective, CSR when broad**, yielding the best cell of each row (S1→CSR 6.70, S4/S8→bitmap 17.18/7.05 ms): up to **13x** over the roaring baseline for selective filters and **3.3x** for broad, all live.
+
+_Caveat: the bitmap build is per distinct query predicate. In this benchmark all queries share one predicate, so a system that caches the match set per predicate would amortize the broad-filter build; the numbers above are the honest cost for a unique-per-query predicate._
+
+## 8.3 Two "win everywhere" methods: adaptive (auto) and bit-sliced
+
+Section 8.2's bitmap/CSR winner flips with selectivity. Two methods remove that weakness. `topk-multihop-live-filter-auto` (`InlineAttributeIndexAuto`) builds the cheap roaring match set once, reads its cardinality for free, then densifies to a bitset when selective or falls back to the CSR row-scan when broad. `topk-multihop-live-filter-bitslice` (`InlineAttributeIndexBitslice`) precomputes **one dense bitset per attribute at index time**, so `is_match` is one `O(1)` bit test per equality terminal with **no** per-query build.
+
+Full live comparison (same index, k=150, L=150, single thread, 1000 queries; recall identical per case). live-roaring from section 8.2 shown for reference:
+
+| Case (sel.) | avg hops | roaring | csr | bitmap | auto | bitslice |
+|---|---:|---:|---:|---:|---:|---:|
+| S1 (66.4%) | 1087 | 21.99 | 5.64 | 49.39 | 6.27 | **3.18** |
+| S4 (10.0%) | 2492 | 79.74 | 18.38 | 17.38 | 17.36 | **6.61** |
+| S8 (1.17%) | 4439 | 93.45 | 22.45 | 7.08 | 7.06 | **6.39** |
+
+(mean ms; p99 ms — S1: csr 21.6 / bitmap 56.9 / auto 24.6 / bitslice 11.5; S4: 46.9 / 22.9 / 22.9 / 17.7; S8: 32.3 / 10.5 / 9.9 / 9.5.)
+
+- **Bit-sliced wins outright in every case** (3.18 / 6.61 / 6.39 ms): 1.8-3.5x over CSR and 6.9-14.6x over roaring, fastest mean *and* p99. Because the per-attribute bitsets are built once at index time, a single-term filter costs exactly one `O(1)` bit test per node — it even edges the section-8 precomputed-bitmap "ideal", built legitimately and amortized over all queries. Its cost is **memory**: `num_attributes * ceil(N/64) * 8` bytes (~14 MB for the 11 labels here, ~745 MB for the full 596-label vocabulary, infeasible for high-cardinality labels).
+- **Auto is the robust, memory-light alternative**: it dispatched S1->CSR, S4/S8->bitmap and thus **matched the better of {csr, bitmap} in every case** (never the worst) using the free match-set cardinality — no per-attribute bitset matrix required.
+
+**Bottom line for live query latency:** if the label vocabulary is modest, **bit-sliced per-attribute bitsets win across all selectivities**; otherwise **auto** (adaptive bitmap<->CSR) reliably takes the better of the two base methods. Both keep recall identical and evaluate the filter fully live.
+
 ## 9. Artifacts (`Q:\test6\filtered_test2\bench\full\`)
 
 - Labels: `data_labels_set.jsonl` (596 labels, general), `data_labels_min.jsonl` (11, fast)
@@ -236,6 +279,8 @@ CSR gives a **3.4x (S1) - 4.4x (S4)** end-to-end latency/QPS improvement at equa
 - Encoders: `gen_setmembership.py` (full), `gen_setmin.py` (minimal)
 - Live-filter code: `diskann-label-filter/src/live_filter.rs` (InlineAttributeIndex / FrozenAttributeIndex + QueryLabelProvider); benchmark search-type `topk-multihop-live-filter`
 - CSR live-filter code (section 8.1): `InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr` in the same module; benchmark search-type `topk-multihop-live-filter-csr`; is_match microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
+- Posting-list + materialized-bitmap live code (section 8.2): `InlineAttributeIndexPosting` / `FrozenAttributeIndexPosting` / `MaterializedBitmapProvider`; benchmark search-type `topk-multihop-live-filter-bitmap`
+- Adaptive + bit-sliced live code (section 8.3): `InlineAttributeIndexAuto` (search-type `topk-multihop-live-filter-auto`) and `InlineAttributeIndexBitslice` (search-type `topk-multihop-live-filter-bitslice`)
 - Index (reused): `idxsave_full`(+`.data`)
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
