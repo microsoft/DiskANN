@@ -220,3 +220,6 @@ fn effective_metric<T: 'static>(metric: Metric) -> Metric {
 fn config_error(message: impl std::fmt::Display) -> ANNError {
     ANNError::log_index_config_error("PiPNN".into(), message.to_string())
 }
+
+#[cfg(test)]
+mod tests;
