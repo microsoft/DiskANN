@@ -9,9 +9,10 @@ use half::f16;
 use std::collections::BTreeSet;
 
 use super::{
-    add_symmetric_edges, allocation_error, build_leaf_candidates, DirectCandidates, LeafBuffers,
-    LeafBuildError,
+    add_symmetric_edges, allocation_error, build_leaf_candidates, build_symmetric_edge_csr,
+    DirectCandidates, EdgeBuffers, LeafBuffers, LeafBuildError,
 };
+use crate::leaf_kernel::LeafNeighbor;
 
 fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
     MatrixView::try_from(data, rows, columns).unwrap()
@@ -320,6 +321,65 @@ fn skips_duplicate_global_ids_without_self_edges() {
     )
     .unwrap();
     assert!(graph.iter().all(|row| row.is_empty()));
+}
+
+#[test]
+fn symmetric_edge_csr_matches_expected_rows() {
+    let point_ids = [10, 20, 30];
+    let nearest = [
+        LeafNeighbor::new(1, 1.0),
+        LeafNeighbor::new(2, 2.0),
+        LeafNeighbor::new(1, 1.5),
+    ];
+    let mut seen = vec![false; 9];
+    let mut offsets = Vec::new();
+    let mut edges = Vec::new();
+    let mut cursor = Vec::new();
+
+    let count = build_symmetric_edge_csr(
+        0,
+        &point_ids,
+        1,
+        &nearest,
+        EdgeBuffers {
+            seen: &mut seen,
+            offsets: &mut offsets,
+            edges: &mut edges,
+            cursor: &mut cursor,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(count, 4);
+    assert_eq!(offsets, [0, 1, 3, 4]);
+    assert_eq!(edges, [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)]);
+}
+
+#[test]
+fn zero_k_edge_csr_has_empty_rows() {
+    let point_ids = [10, 20, 30];
+    let mut seen = vec![false; 9];
+    let mut offsets = Vec::new();
+    let mut edges = vec![(99, 99.0)];
+    let mut cursor = Vec::new();
+
+    let count = build_symmetric_edge_csr(
+        0,
+        &point_ids,
+        0,
+        &[],
+        EdgeBuffers {
+            seen: &mut seen,
+            offsets: &mut offsets,
+            edges: &mut edges,
+            cursor: &mut cursor,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(count, 0);
+    assert_eq!(offsets, [0, 0, 0, 0]);
+    assert!(edges.is_empty());
 }
 
 #[test]

@@ -29,6 +29,12 @@ use crate::bf16::{bf16_to_f32, f32_to_bf16};
 use crate::lsh::{LshSketchError, LshSketches};
 use bytemuck::Pod;
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
+use diskann_vector::prefetch_hint_all;
+use diskann_wide::{
+    arch::{self, Dispatched1, FTarget1, Target},
+    lifetime::As,
+    Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
+};
 use rayon::prelude::*;
 
 /// Owned slab allocated via direct `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`. The
@@ -363,50 +369,93 @@ fn round_up_to_32(n: usize) -> usize {
 
 // ─── find_hash SIMD: 32-way u16 compare ───────────────────────────────────────
 
-type FindHash = unsafe fn(*const u16, usize, u8, u16) -> Option<usize>;
-type RelativeHash = unsafe fn(*const f32, *const f32, usize) -> u16;
+#[derive(Clone, Copy)]
+struct FindHashArgs {
+    hashes: *const u16,
+    scan_lanes: usize,
+    len: u8,
+    target: u16,
+}
+
+#[derive(Clone, Copy)]
+struct RelativeHashArgs {
+    src: *const f32,
+    dst: *const f32,
+    len: usize,
+}
+
+type FindHash = Dispatched1<Option<usize>, As<FindHashArgs>>;
+type RelativeHash = Dispatched1<u16, As<RelativeHashArgs>>;
+
+struct FindHashKernel;
+struct RelativeHashKernel;
+struct SelectFindHash;
+struct SelectRelativeHash;
+
+impl<A> Target<A, FindHash> for SelectFindHash
+where
+    A: Architecture,
+    FindHashKernel: FTarget1<A, Option<usize>, FindHashArgs>,
+{
+    fn run(self, arch: A) -> FindHash {
+        arch.dispatch1::<FindHashKernel, Option<usize>, As<FindHashArgs>>()
+    }
+}
+
+impl<A> Target<A, RelativeHash> for SelectRelativeHash
+where
+    A: Architecture,
+    RelativeHashKernel: FTarget1<A, u16, RelativeHashArgs>,
+{
+    fn run(self, arch: A) -> RelativeHash {
+        arch.dispatch1::<RelativeHashKernel, u16, As<RelativeHashArgs>>()
+    }
+}
 
 fn select_find_hash() -> FindHash {
-    match crate::cpu_dispatch::u16_width() {
-        #[cfg(target_arch = "x86_64")]
-        crate::cpu_dispatch::VectorWidth::Wide => find_hash_wide,
-        #[cfg(target_arch = "x86_64")]
-        crate::cpu_dispatch::VectorWidth::Narrow => find_hash_narrow,
-        _ => find_hash_scalar,
-    }
+    arch::dispatch(SelectFindHash)
 }
 
 fn select_relative_hash() -> RelativeHash {
-    match crate::cpu_dispatch::f32_width() {
-        #[cfg(target_arch = "x86_64")]
-        crate::cpu_dispatch::VectorWidth::Wide => relative_hash_local_wide,
-        #[cfg(target_arch = "x86_64")]
-        crate::cpu_dispatch::VectorWidth::Narrow => relative_hash_local_narrow,
-        _ => relative_hash_local_scalar,
+    arch::dispatch(SelectRelativeHash)
+}
+
+impl<A> FTarget1<A, Option<usize>, FindHashArgs> for FindHashKernel
+where
+    A: Architecture,
+    A::i16x32: SIMDPartialEq,
+{
+    fn run(arch: A, args: FindHashArgs) -> Option<usize> {
+        find_hash_simd::<A::i16x32>(arch, args)
     }
 }
 
-/// SAFETY: caller guarantees AVX-512F + AVX-512BW at runtime and `hashes`
-/// spans `scan_lanes` elements.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f", enable = "avx512bw")]
-unsafe fn find_hash_wide(
-    hashes: *const u16,
-    scan_lanes: usize,
-    len: u8,
-    target: u16,
-) -> Option<usize> {
-    use std::arch::x86_64::*;
-    let len = len as usize;
-    let t = _mm512_set1_epi16(target as i16);
-    // Scan only the chunks that cover valid entries (len), not the full
-    // scan_lanes capacity. At avg_deg ~60 (l_max 128) this halves the scan.
-    let chunks = len.div_ceil(32).min(scan_lanes / 32);
+impl<A> FTarget1<A, u16, RelativeHashArgs> for RelativeHashKernel
+where
+    A: Architecture,
+    A::f32x16: SIMDPartialOrd + std::ops::Sub<Output = A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn run(arch: A, args: RelativeHashArgs) -> u16 {
+        relative_hash_simd::<A::f32x16>(arch, args)
+    }
+}
+
+/// Hashes are compared for equality only, so the lanes are loaded as `i16`
+/// (diskann-wide has no `u16` vector type) — the bit patterns, and therefore
+/// the equality result, are identical.
+fn find_hash_simd<F>(arch: F::Arch, args: FindHashArgs) -> Option<usize>
+where
+    F: SIMDVector<Scalar = i16> + SIMDPartialEq,
+{
+    let len = args.len as usize;
+    let target = F::splat(arch, args.target as i16);
+    let chunks = len.div_ceil(F::LANES).min(args.scan_lanes / F::LANES);
     for chunk in 0..chunks {
-        let v = _mm512_loadu_si512(hashes.add(chunk * 32) as *const __m512i);
-        let mask = _mm512_cmpeq_epi16_mask(v, t);
-        if mask != 0 {
-            let lane = chunk * 32 + mask.trailing_zeros() as usize;
+        // SAFETY: every full load stays inside the padded `scan_lanes` row.
+        let values = unsafe { F::load_simd(arch, args.hashes.add(chunk * F::LANES).cast::<i16>()) };
+        if let Some(offset) = values.eq_simd(target).first() {
+            let lane = chunk * F::LANES + offset;
             if lane < len {
                 return Some(lane);
             }
@@ -415,103 +464,29 @@ unsafe fn find_hash_wide(
     None
 }
 
-/// SAFETY: caller guarantees AVX2 at runtime. AVX2 is the workspace baseline
-/// (`x86-64-v3`) so this path covers every supported deployment.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn find_hash_narrow(
-    hashes: *const u16,
-    scan_lanes: usize,
-    len: u8,
-    target: u16,
-) -> Option<usize> {
-    use std::arch::x86_64::*;
-    let len = len as usize;
-    let t = _mm256_set1_epi16(target as i16);
-    // Scan only the chunks covering valid entries (len), not full scan_lanes.
-    let chunks = len.div_ceil(16).min(scan_lanes / 16);
-    for chunk in 0..chunks {
-        let v = _mm256_loadu_si256(hashes.add(chunk * 16) as *const __m256i);
-        let m = _mm256_cmpeq_epi16(v, t);
-        let bits = _mm256_movemask_epi8(m) as u32;
-        if bits != 0 {
-            let lane = chunk * 16 + (bits.trailing_zeros() as usize) / 2;
-            if lane < len {
-                return Some(lane);
-            }
-        }
-    }
-    None
-}
+/// Bit `j` of the returned hash is `dst[j] - src[j] >= 0.0`; equality,
+/// including signed zero, hashes as non-negative on every backend.
+fn relative_hash_simd<F>(arch: F::Arch, args: RelativeHashArgs) -> u16
+where
+    F: SIMDVector<Scalar = f32> + SIMDPartialOrd + std::ops::Sub<Output = F>,
+    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    debug_assert!(args.len <= F::LANES);
+    debug_assert!(F::LANES <= u16::BITS as usize);
 
-/// SAFETY: `hashes` must point at `len` valid `u16` slots.
-#[inline(always)]
-unsafe fn find_hash_scalar(
-    hashes: *const u16,
-    _scan_lanes: usize,
-    len: u8,
-    target: u16,
-) -> Option<usize> {
-    (0..len as usize).find(|&i| *hashes.add(i) == target)
-}
-
-// ─── relative_hash_local: AoSoA-friendly per-pair sketch comparison ───────────
-//
-// `relative_hash_local(src, dst, m)` returns the `m`-bit pattern formed by
-// `sign(dst[j] - src[j])` for j in 0..m. Used as the in-leaf LSH bucket for HP
-// insertion (the "local sketch" cache hits L1).
-//
-// The implementation is selected once when HashPrune is constructed.
-
-/// SAFETY: `src` / `dst` must point at `m` valid `f32` slots, `m <= 16`.
-unsafe fn relative_hash_local_scalar(src: *const f32, dst: *const f32, m: usize) -> u16 {
-    let mut h: u16 = 0;
-    for j in 0..m {
-        let diff = *dst.add(j) - *src.add(j);
-        let bit = ((!diff.is_sign_negative()) as u16) << j;
-        h |= bit;
-    }
-    h
-}
-
-/// AVX2-vectorized `relative_hash_local`. Matches the scalar kernel's
-/// `!is_sign_negative` semantics exactly (sign bit of `dst-src`), so the
-/// produced graph is bit-identical to the scalar path it replaces on AVX2.
-///
-/// SAFETY: caller guarantees AVX2 at runtime. `m <= 16` enforced upstream.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn relative_hash_local_narrow(src: *const f32, dst: *const f32, m: usize) -> u16 {
-    use std::arch::x86_64::*;
-    let mut h: u16 = 0;
-    let mut j = 0usize;
-    while j + 8 <= m {
-        let d = _mm256_sub_ps(_mm256_loadu_ps(dst.add(j)), _mm256_loadu_ps(src.add(j)));
-        // movemask = sign bits of (dst-src); we want the NON-negative lanes
-        // (sign clear), i.e. `!is_sign_negative`, matching the scalar kernel.
-        let signs = _mm256_movemask_ps(d) as u16;
-        h |= (!signs & 0xFF) << j;
-        j += 8;
-    }
-    while j < m {
-        let diff = *dst.add(j) - *src.add(j);
-        h |= ((!diff.is_sign_negative()) as u16) << j;
-        j += 1;
-    }
-    h
-}
-
-/// SAFETY: caller guarantees AVX-512F at runtime. `m <= 16` enforced upstream.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-unsafe fn relative_hash_local_wide(src: *const f32, dst: *const f32, m: usize) -> u16 {
-    use std::arch::x86_64::*;
-    let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
-    let dst_v = _mm512_maskz_loadu_ps(kmask, dst);
-    let src_v = _mm512_maskz_loadu_ps(kmask, src);
-    let diff = _mm512_sub_ps(dst_v, src_v);
-    let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
-    mask & kmask
+    // SAFETY: the first `len` lanes are valid and masked loads do not access
+    // inactive lanes. HashPrune limits sketches to 16 planes.
+    let dst = unsafe { F::load_simd_first(arch, args.dst, args.len) };
+    // SAFETY: as above.
+    let src = unsafe { F::load_simd_first(arch, args.src, args.len) };
+    let bits = u64::from(
+        (dst - src)
+            .ge_simd(F::splat(arch, 0.0))
+            .bitmask()
+            .to_underlying(),
+    );
+    let active = ((1_u32 << args.len) - 1) as u16;
+    bits as u16 & active
 }
 
 // ─── Per-reservoir mutation helpers (caller holds lock) ───────────────────────
@@ -555,7 +530,8 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
     let mut max_dist: u16 = 0;
     let mut max_idx: u8 = 0;
     for i in 0..hot.len as usize {
-        let d = *cold.distances.add(i);
+        // SAFETY: guaranteed by this function's contract.
+        let d = unsafe { *cold.distances.add(i) };
         if d > max_dist {
             max_dist = d;
             max_idx = i as u8;
@@ -583,13 +559,23 @@ unsafe fn insert_locked(
         return false;
     }
 
-    if let Some(idx) = find_hash(cold.hashes, cold.scan_lanes, hot.len, hash) {
-        if dist_key < *cold.distances.add(idx) {
+    if let Some(idx) = find_hash.call(FindHashArgs {
+        hashes: cold.hashes,
+        scan_lanes: cold.scan_lanes,
+        len: hot.len,
+        target: hash,
+    }) {
+        // SAFETY: `idx < hot.len <= cold.scan_lanes`.
+        if dist_key < unsafe { *cold.distances.add(idx) } {
             let was_farthest = idx == hot.farthest_idx as usize;
-            *cold.neighbors.add(idx) = neighbor;
-            *cold.distances.add(idx) = dist_key;
+            // SAFETY: as above; the caller holds the slot lock.
+            unsafe {
+                *cold.neighbors.add(idx) = neighbor;
+                *cold.distances.add(idx) = dist_key;
+            }
             if was_farthest {
-                update_farthest(hot, cold);
+                // SAFETY: this function's contract provides the same invariants.
+                unsafe { update_farthest(hot, cold) };
             }
             return true;
         }
@@ -598,9 +584,12 @@ unsafe fn insert_locked(
 
     if hot.len < l_max {
         let new_idx = hot.len as usize;
-        *cold.hashes.add(new_idx) = hash;
-        *cold.distances.add(new_idx) = dist_key;
-        *cold.neighbors.add(new_idx) = neighbor;
+        // SAFETY: `new_idx < l_max <= cold.scan_lanes`; the caller holds the lock.
+        unsafe {
+            *cold.hashes.add(new_idx) = hash;
+            *cold.distances.add(new_idx) = dist_key;
+            *cold.neighbors.add(new_idx) = neighbor;
+        }
         hot.len += 1;
         if dist_key >= hot.farthest_dist {
             hot.farthest_dist = dist_key;
@@ -611,10 +600,13 @@ unsafe fn insert_locked(
 
     if dist_key < hot.farthest_dist {
         let idx = hot.farthest_idx as usize;
-        *cold.hashes.add(idx) = hash;
-        *cold.distances.add(idx) = dist_key;
-        *cold.neighbors.add(idx) = neighbor;
-        update_farthest(hot, cold);
+        // SAFETY: `idx < hot.len <= cold.scan_lanes`; the caller holds the lock.
+        unsafe {
+            *cold.hashes.add(idx) = hash;
+            *cold.distances.add(idx) = dist_key;
+            *cold.neighbors.add(idx) = neighbor;
+            update_farthest(hot, cold);
+        }
         return true;
     }
     false
@@ -642,7 +634,8 @@ unsafe fn collect_sorted_neighbors(
         scratch.clear();
         scratch.reserve(n);
         for i in 0..n {
-            scratch.push((*neighbors.add(i), *distances.add(i)));
+            // SAFETY: guaranteed by this function's contract.
+            scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
         }
         scratch.sort_unstable_by_key(|&(_, d)| d);
         let out_len = n.min(cap);
@@ -666,7 +659,8 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
     let out_len = (hot.len as usize).min(cap);
     let mut out = Vec::with_capacity(out_len);
     for i in 0..out_len {
-        out.push(*neighbors.add(i));
+        // SAFETY: guaranteed by this function's contract.
+        out.push(unsafe { *neighbors.add(i) });
     }
     out
 }
@@ -870,34 +864,13 @@ impl HashPrune {
             let global_src = point_ids[local_src] as usize;
 
             // Prefetch the next non-empty source's hot and cold slots.
-            #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
+            if let Some(next) = (local_src + 1..n)
+                .find(|&i| edge_offsets[i] != edge_offsets[i + 1])
+                .map(|i| point_ids[i] as usize)
             {
-                use std::arch::x86_64::*;
-                if local_src + 1 < n {
-                    let mut nxt = local_src + 1;
-                    while nxt < n && edge_offsets[nxt] == edge_offsets[nxt + 1] {
-                        nxt += 1;
-                    }
-                    if nxt < n {
-                        let nxt_global = point_ids[nxt] as usize;
-                        let off = nxt_global * self.scan_lanes;
-                        // SAFETY: nxt_global < npoints; off + scan_lanes
-                        // bounded by slab capacity. Prefetch is non-fatal.
-                        unsafe {
-                            let hot_p = self.hot[nxt_global].get().cast::<i8>();
-                            _mm_prefetch::<{ _MM_HINT_T0 }>(hot_p);
-                            // hashes array covers `scan_lanes` u16 = scan_lanes*2 bytes;
-                            // prefetch in 64-byte cache-line strides.
-                            let hashes_p = self.cold_hashes.as_ptr().add(off) as *const i8;
-                            let hashes_bytes = self.scan_lanes * std::mem::size_of::<u16>();
-                            let mut b = 0usize;
-                            while b < hashes_bytes {
-                                _mm_prefetch::<{ _MM_HINT_T0 }>(hashes_p.add(b));
-                                b += 64;
-                            }
-                        }
-                    }
-                }
+                let off = next * self.scan_lanes;
+                prefetch_hint_all(std::slice::from_ref(&self.hot[next]));
+                prefetch_hint_all(&self.cold_hashes[off..off + self.scan_lanes]);
             }
 
             let src_sketch = &sketch_scratch[local_src * m..(local_src + 1) * m];
@@ -907,10 +880,11 @@ impl HashPrune {
                     let dst_sketch =
                         &sketch_scratch[dst_local as usize * m..(dst_local as usize + 1) * m];
                     debug_assert!(m <= 16, "num_planes <= 16 enforced by validate");
-                    // SAFETY: m <= 16, sketches are m-elt slices.
-                    let hash = unsafe {
-                        (self.relative_hash)(src_sketch.as_ptr(), dst_sketch.as_ptr(), m)
-                    };
+                    let hash = self.relative_hash.call(RelativeHashArgs {
+                        src: src_sketch.as_ptr(),
+                        dst: dst_sketch.as_ptr(),
+                        len: m,
+                    });
                     // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
                     unsafe {
                         insert_locked(hot, cold, hash, global_dst, dist, l_max, self.find_hash)

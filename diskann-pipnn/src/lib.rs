@@ -6,7 +6,6 @@
 //! PiPNN graph construction.
 
 mod bf16;
-pub(crate) mod cpu_dispatch;
 mod finalization;
 mod hash_prune;
 mod leaf_build;
