@@ -73,9 +73,9 @@ pub type ANNResult<T> = Result<T, ANNError>;
 /// assert_eq!(downcasted.0, 42);
 ///
 /// // If we don't have an `Error` - we can still use `ANNError` for ad-hoc errors.
-/// let err = ANNError::message("error message");
+/// let err = ANNError::message("an ad-hoc error message");
 /// assert!(err.is::<&'static str>());
-/// assert!(err.to_string().contains("error message"));
+/// assert!(err.to_string().contains("an ad-hoc error message"));
 /// ```
 ///
 /// # Backtraces
