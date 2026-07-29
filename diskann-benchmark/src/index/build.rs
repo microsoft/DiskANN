@@ -125,6 +125,10 @@ where
     use anyhow::Context;
 
     let npoints = data.nrows();
+    let dimensions = data.ncols();
+    let row_bytes = dimensions
+        .checked_mul(std::mem::size_of::<T>())
+        .context("dataset row size overflow")?;
     let graph = input.try_as_config()?.build()?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(input.num_threads())
@@ -138,26 +142,43 @@ where
     )?;
 
     let started = std::time::Instant::now();
-    let adjacency = diskann_pipnn::build_graph(data.as_view(), &context)?;
-    let start_points = StartPointStrategy::Medoid
-        .compute(data.as_view())
-        .map_err(|error| {
-            ANNError::new(
-                diskann::ANNErrorKind::DiskANN(StartPointComputeError),
-                error,
-            )
-        })?;
-    let start_vector = start_points.row(0);
-    let start_bytes: &[u8] = bytemuck::cast_slice(start_vector);
-    let real_start_id = data
-        .row_iter()
-        .position(|row| bytemuck::cast_slice::<T, u8>(row) == start_bytes)
-        .context("PiPNN medoid is not a dataset vector")?;
-
     for (id, vector) in data.row_iter().enumerate() {
         let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
         index.data_provider.base_vectors.set_element(&id, vector)?;
     }
+
+    let mut source = Some(data);
+    let (adjacency, start_points, real_start_id) = {
+        let build_data = if row_bytes.is_multiple_of(64) {
+            drop(source.take());
+            // SAFETY: every real row is initialized above, dense rows have no
+            // inter-row padding, and no writes race graph construction.
+            let values = unsafe { index.data_provider.base_vectors.flat_prefix(npoints) };
+            MatrixView::try_from(values, npoints, dimensions).map_err(|error| error.as_static())?
+        } else {
+            source
+                .as_ref()
+                .context("PiPNN source data was released before graph construction")?
+                .as_view()
+        };
+        let adjacency = diskann_pipnn::build_graph(build_data, &context)?;
+        let start_points = StartPointStrategy::Medoid
+            .compute(build_data)
+            .map_err(|error| {
+                ANNError::new(
+                    diskann::ANNErrorKind::DiskANN(StartPointComputeError),
+                    error,
+                )
+            })?;
+        let start_vector = start_points.row(0);
+        let start_bytes: &[u8] = bytemuck::cast_slice(start_vector);
+        let real_start_id = build_data
+            .row_iter()
+            .position(|row| bytemuck::cast_slice::<T, u8>(row) == start_bytes)
+            .context("PiPNN medoid is not a dataset vector")?;
+        (adjacency, start_points, real_start_id)
+    };
+    drop(source);
     for (id, neighbors) in adjacency.iter().enumerate() {
         index
             .provider()

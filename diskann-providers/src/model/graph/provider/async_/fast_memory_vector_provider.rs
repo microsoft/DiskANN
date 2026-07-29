@@ -95,6 +95,16 @@ impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
         self.dim
     }
 
+    /// Return the first `first_n` densely packed vectors as one contiguous slice.
+    ///
+    /// # Safety
+    ///
+    /// No writes may race this borrow; see [`AlignedMemoryVectorStore::flat_prefix`].
+    pub unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
+        // SAFETY: the caller inherits the backing store's contract.
+        unsafe { self.vectors.flat_prefix(first_n) }
+    }
+
     /// Return a [`diskann_vector::DistanceFunction`] capable of computing distances on elements
     /// yielded by this provider.
     pub(crate) fn distance(&self) -> &T::Distance {

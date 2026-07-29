@@ -145,6 +145,29 @@ impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
         self.dim
     }
 
+    /// Return the first `first_n` densely packed vectors as one contiguous slice.
+    ///
+    /// # Safety
+    ///
+    /// No writes may race this borrow. `first_n` must not exceed `max_vectors`,
+    /// and the vectors must have no alignment padding between rows.
+    pub unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
+        assert_eq!(
+            self.padded_vector_dim, self.dim,
+            "flat_prefix requires densely packed vectors"
+        );
+        assert!(first_n <= self.max_vectors, "first_n exceeds max_vectors");
+        let len = first_n
+            .checked_mul(self.dim)
+            .expect("flat_prefix length overflow");
+        // SAFETY: the assertions establish a contiguous initialized prefix and
+        // the caller excludes concurrent writes.
+        unsafe {
+            let buffer = (*self.store.get()).as_ptr();
+            slice::from_raw_parts(buffer.add(self.start_index), len)
+        }
+    }
+
     /// Return a vector as a slice.
     ///
     /// # Safety
@@ -472,6 +495,19 @@ mod tests {
         let r = sp.range().collect::<Vec<_>>();
         assert_eq!(r, vec![10, 11, 12, 13, 14]);
         assert_eq!(sp.end(), 15);
+    }
+
+    #[test]
+    fn dense_vector_prefix_is_contiguous() {
+        let store = AlignedMemoryVectorStore::<u32>::with_capacity(3, 16);
+        for row in 0..3 {
+            // SAFETY: the test has exclusive access to each in-bounds row.
+            unsafe { store.get_mut_slice(row) }.fill(row as u32);
+        }
+
+        // SAFETY: 16 u32 values occupy exactly one cache line, and no writes race.
+        let prefix = unsafe { store.flat_prefix(2) };
+        assert_eq!(prefix, [vec![0; 16], vec![1; 16]].concat());
     }
 
     #[test]
