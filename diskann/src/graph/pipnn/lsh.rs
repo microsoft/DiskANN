@@ -204,6 +204,57 @@ mod tests {
     }
 
     #[test]
+    fn sketches_match_serial_hyperplane_reference() {
+        let npoints = 3;
+        let ndims = 4;
+        let planes = 5;
+        let seed = 42;
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|value| value as f32 - 3.0)
+            .collect();
+        let actual = build_pool(2)
+            .install(|| {
+                LshSketches::try_new(npoints, ndims, planes, seed, |i, out| {
+                    out.copy_from_slice(&data[i * ndims..(i + 1) * ndims]);
+                    Ok::<_, std::convert::Infallible>(())
+                })
+            })
+            .unwrap();
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let hyperplanes: Vec<f32> = (0..planes * ndims)
+            .map(|_| StandardNormal.sample(&mut rng))
+            .collect();
+        let mut expected = Vec::<f32>::new();
+        for point in data.chunks_exact(ndims) {
+            for plane in hyperplanes.chunks_exact(ndims) {
+                expected.push(point.iter().zip(plane).map(|(x, h)| x * h).sum());
+            }
+        }
+        assert_eq!(actual.sketches(), expected);
+    }
+
+    #[test]
+    fn reports_shape_overflow_and_formats_errors() {
+        let hyperplanes = match LshSketches::try_new(1, usize::MAX, 2, 42, |_, _| {
+            Ok::<_, std::convert::Infallible>(())
+        }) {
+            Ok(_) => panic!("hyperplane shape overflow must fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(hyperplanes, LshSketchError::ShapeOverflow { .. }));
+        assert!(hyperplanes.to_string().contains("overflows"));
+
+        let sketches = match LshSketches::try_new(usize::MAX, 1, 2, 42, |_, _| {
+            Ok::<_, std::convert::Infallible>(())
+        }) {
+            Ok(_) => panic!("sketch shape overflow must fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(sketches, LshSketchError::ShapeOverflow { .. }));
+    }
+
+    #[test]
     fn different_seeds_change_hashes() {
         let pool = build_pool(2);
         let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
@@ -223,7 +274,8 @@ mod tests {
 
     #[test]
     fn try_new_propagates_fill_errors() {
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, PartialEq, thiserror::Error)]
+        #[error("fill failed")]
         struct FillError;
 
         let pool = build_pool(1);
@@ -233,7 +285,8 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(matches!(error, LshSketchError::Fill(FillError)));
+        assert!(matches!(&error, LshSketchError::Fill(FillError)));
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]

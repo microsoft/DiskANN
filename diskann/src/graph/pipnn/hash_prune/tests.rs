@@ -71,14 +71,11 @@ impl Reservoir {
 fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
     let m = hp.sketches.num_planes();
     let sketches = hp.sketches.sketches();
-    // SAFETY: both offsets select complete `m`-element sketch rows.
-    let hash = unsafe {
-        (hp.relative_hash)(
-            sketches.as_ptr().add(src * m),
-            sketches.as_ptr().add(dst * m),
-            m,
-        )
-    };
+    let hash = hp.relative_hash.call(RelativeHashArgs {
+        src: sketches[src * m..(src + 1) * m].as_ptr(),
+        dst: sketches[dst * m..(dst + 1) * m].as_ptr(),
+        len: m,
+    });
     let l_max = hp.l_max as u8;
     hp.with_locked(src, |hot, cold| {
         // SAFETY: with_locked guards the row and supplies valid cold-slab pointers.
@@ -87,33 +84,154 @@ fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
 }
 
 #[test]
-fn test_relative_hash_local_narrow_matches_scalar_semantics() {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if !is_x86_feature_detected!("avx2") {
-            return;
+fn test_relative_hash_matches_numeric_reference() {
+    let dispatched = select_relative_hash();
+
+    let src = [
+        1.0, -2.0, 0.0, 7.5, -0.0, 3.25, -9.0, 4.0, 8.0, -1.5, 2.0, 0.0, 6.0, -3.0, 5.5, -7.25,
+    ];
+    let dst = [
+        1.0, -3.0, 0.5, 7.0, 0.0, 3.25, -8.0, -4.0, 9.0, -1.5, -2.0, -0.0, 5.0, -2.0, 5.5, -8.0,
+    ];
+
+    for m in 0..=16 {
+        let mut expected = 0u16;
+        for j in 0..m {
+            let diff: f32 = dst[j] - src[j];
+            expected |= ((diff >= 0.0) as u16) << j;
         }
 
-        let src = [
-            1.0, -2.0, 0.0, 7.5, -0.0, 3.25, -9.0, 4.0, 8.0, -1.5, 2.0, 0.0, 6.0, -3.0, 5.5, -7.25,
-        ];
-        let dst = [
-            1.0, -3.0, 0.5, 7.0, 0.0, 3.25, -8.0, -4.0, 9.0, -1.5, -2.0, -0.0, 5.0, -2.0, 5.5, -8.0,
-        ];
+        let actual = dispatched.call(RelativeHashArgs {
+            src: src.as_ptr(),
+            dst: dst.as_ptr(),
+            len: m,
+        });
+        assert_eq!(actual, expected, "m={m}");
+    }
+}
 
-        for m in 0..=16 {
-            let mut expected = 0u16;
-            for j in 0..m {
-                let diff: f32 = dst[j] - src[j];
-                expected |= ((!diff.is_sign_negative()) as u16) << j;
+#[test]
+fn test_relative_hash_defines_signed_zero_and_nan_buckets() {
+    let src = [0.0; 4];
+    let dst = [
+        0.0,
+        -0.0,
+        f32::from_bits(0x7FC0_0000),
+        f32::from_bits(0xFFC0_0000),
+    ];
+
+    assert_eq!(
+        select_relative_hash().call(RelativeHashArgs {
+            src: src.as_ptr(),
+            dst: dst.as_ptr(),
+            len: dst.len(),
+        }),
+        0b0011
+    );
+}
+
+#[test]
+fn test_find_hash_handles_padded_boundaries_and_all_bit_patterns() {
+    let dispatched = select_find_hash();
+
+    for target in [0, 0xF00D] {
+        for len in [0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 254, 255] {
+            let scan_lanes = round_up_to_32(len.max(1));
+            let mut hashes = vec![target; scan_lanes];
+            hashes[..len].fill(0x8001);
+            let args = |hashes: &[u16]| FindHashArgs {
+                hashes: hashes.as_ptr(),
+                scan_lanes,
+                len: len as u8,
+                target,
+            };
+
+            assert_eq!(dispatched.call(args(&hashes)), None, "len={len}");
+            for index in [0, len / 2, len.saturating_sub(1)] {
+                if index < len {
+                    hashes[index] = target;
+                    assert_eq!(dispatched.call(args(&hashes)), Some(index), "len={len}");
+                    hashes[index] = 0x8001;
+                }
             }
-
-            // SAFETY: the feature guard above checked AVX2 and both arrays
-            // contain 16 elements, so every tested prefix is in bounds.
-            let actual = unsafe { relative_hash_local_narrow(src.as_ptr(), dst.as_ptr(), m) };
-            assert_eq!(actual, expected, "m={m}");
         }
     }
+}
+
+#[test]
+fn test_slab_is_zeroed_and_reports_its_bytes() {
+    let slab = MmapSlab::<u32>::new_zeroed(4).unwrap();
+    assert_eq!(slab.bytes(), 4 * std::mem::size_of::<u32>());
+    assert_eq!(slab.len(), 4);
+    assert!(!slab.as_ptr().is_null());
+    assert_eq!(&*slab, &[0; 4]);
+}
+
+#[test]
+fn test_round_up_to_32_boundaries() {
+    assert_eq!(round_up_to_32(0), 0);
+    assert_eq!(round_up_to_32(1), 32);
+    assert_eq!(round_up_to_32(32), 32);
+    assert_eq!(round_up_to_32(33), 64);
+}
+
+#[test]
+fn test_ordered_key_roundtrips_bf16_order_for_all_signs() {
+    let values = [
+        f32::NEG_INFINITY,
+        -100.0,
+        -0.0,
+        0.0,
+        0.25,
+        100.0,
+        f32::INFINITY,
+    ];
+    let keys: Vec<_> = values.iter().copied().map(ordered_key).collect();
+    assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]));
+    for (value, key) in values.into_iter().zip(keys) {
+        assert_eq!(
+            bf16_to_f32(key_to_bf16(key)),
+            bf16_to_f32(f32_to_bf16(value))
+        );
+    }
+}
+
+#[test]
+fn test_add_leaf_edges_matches_single_edge_reference() {
+    let data = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let batched = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
+    let reference = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
+    let point_ids = [0, 1, 2, 3];
+    let offsets = [0, 3, 6, 9, 12];
+    let edges = [
+        (1, 1.0),
+        (2, 1.0),
+        (3, 2.0),
+        (0, 1.0),
+        (2, 2.0),
+        (3, 1.0),
+        (0, 1.0),
+        (1, 2.0),
+        (3, 1.0),
+        (0, 2.0),
+        (1, 1.0),
+        (2, 1.0),
+    ];
+    let mut scratch = Vec::new();
+
+    batched.add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch);
+    for source in 0..point_ids.len() {
+        for &(target, distance) in &edges[offsets[source] as usize..offsets[source + 1] as usize] {
+            add_edge(&reference, source, target as usize, distance);
+        }
+    }
+    let mut actual = batched.into_candidate_lists();
+    let mut expected = reference.into_candidate_lists();
+    actual.iter_mut().for_each(|row| row.sort_unstable());
+    expected.iter_mut().for_each(|row| row.sort_unstable());
+
+    assert_eq!(actual, expected);
+    assert!(actual.iter().all(|row| !row.is_empty()));
 }
 
 #[test]
