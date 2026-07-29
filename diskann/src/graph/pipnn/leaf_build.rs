@@ -195,10 +195,10 @@ where
     }
 
     let candidates = DirectCandidates::new(data.nrows())?;
-    leaves.into_par_iter().enumerate().try_for_each_init(
+    leaves.par_iter().enumerate().try_for_each_init(
         LeafBuffers::default,
         |buffers, (leaf, point_ids)| {
-            build_leaf(data, leaf, &point_ids, k, metric, buffers, &candidates)
+            build_leaf(data, leaf, point_ids, k, metric, buffers, &candidates)
         },
     )?;
     candidates.into_rows()
