@@ -152,27 +152,39 @@ pub fn run(dir: &Path, registry: &Registry) -> anyhow::Result<()> {
     }
 
     for filename in GENERATED_OUTPUTS {
-        let generated = tempdir.path().join(filename);
-        let expected = dir.join(filename);
-        match (overwrite, generated.is_file(), expected.is_file()) {
-            (true, true, _) => {
-                std::fs::copy(&generated, &expected).with_context(|| {
-                    format!("failed to copy fixture output {}", expected.display())
-                })?;
-            }
-            (true, false, true) => std::fs::remove_file(&expected).with_context(|| {
-                format!(
-                    "failed to remove stale fixture output {}",
-                    expected.display()
-                )
-            })?,
-            (false, true, true) if read(&generated)? != read(&expected)? => {
-                bail!("generated {filename} differs from fixture");
-            }
-            (false, true, false) => bail!("{filename} was generated unexpectedly"),
-            (false, false, true) => bail!("{filename} was not generated"),
-            _ => {}
-        }
+        check_generated_output(dir, tempdir.path(), filename, overwrite)?;
     }
     Ok(())
 }
+
+fn check_generated_output(
+    dir: &Path,
+    tempdir: &Path,
+    filename: &str,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    let generated = tempdir.join(filename);
+    let expected = dir.join(filename);
+    match (overwrite, generated.is_file(), expected.is_file()) {
+        (true, true, _) => {
+            std::fs::copy(&generated, &expected)
+                .with_context(|| format!("failed to copy fixture output {}", expected.display()))?;
+        }
+        (true, false, true) => std::fs::remove_file(&expected).with_context(|| {
+            format!(
+                "failed to remove stale fixture output {}",
+                expected.display()
+            )
+        })?,
+        (false, true, true) if read(&generated)? != read(&expected)? => {
+            bail!("generated {filename} differs from fixture");
+        }
+        (false, true, false) => bail!("{filename} was generated unexpectedly"),
+        (false, false, true) => bail!("{filename} was not generated"),
+        _ => {}
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;
