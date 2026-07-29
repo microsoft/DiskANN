@@ -180,7 +180,7 @@ impl DirectCandidates {
 #[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
 pub(crate) fn build_leaf_candidates<T>(
     data: MatrixView<'_, T>,
-    leaves: &[Vec<u32>],
+    leaves: Vec<Vec<u32>>,
     k: usize,
     metric: Metric,
 ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
@@ -195,10 +195,10 @@ where
     }
 
     let candidates = DirectCandidates::new(data.nrows())?;
-    leaves.par_iter().enumerate().try_for_each_init(
+    leaves.into_par_iter().enumerate().try_for_each_init(
         LeafBuffers::default,
         |buffers, (leaf, point_ids)| {
-            build_leaf(data, leaf, point_ids, k, metric, buffers, &candidates)
+            build_leaf(data, leaf, &point_ids, k, metric, buffers, &candidates)
         },
     )?;
     candidates.into_rows()

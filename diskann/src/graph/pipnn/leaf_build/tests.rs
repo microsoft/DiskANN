@@ -33,7 +33,7 @@ fn build<T>(
 where
     T: diskann::utils::VectorRepr + 'static,
 {
-    pool().install(|| build_leaf_candidates(data, leaves, k, metric))
+    pool().install(|| build_leaf_candidates(data, leaves.to_vec(), k, metric))
 }
 
 fn rows(graph: Vec<diskann::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
@@ -204,9 +204,11 @@ fn parallel_leaf_schedule_does_not_change_candidate_order() {
         .collect();
     let pool = pool();
     pool.install(|| {
-        let expected = build_leaf_candidates(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+        let expected =
+            build_leaf_candidates(view(&data, 64, 1), leaves.clone(), 2, Metric::L2).unwrap();
         for _ in 0..8 {
-            let actual = build_leaf_candidates(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+            let actual =
+                build_leaf_candidates(view(&data, 64, 1), leaves.clone(), 2, Metric::L2).unwrap();
             assert_eq!(actual, expected);
         }
     });
