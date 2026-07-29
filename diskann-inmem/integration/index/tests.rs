@@ -54,7 +54,7 @@ pub(super) fn knn(
         let stats = rt.block_on(index.search(query, knn, &mut neighbors))?;
         misc += stats;
 
-        std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = s.id);
+        std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = *s.id());
     }
     let counters = before.delta(&index.counters())?;
 
