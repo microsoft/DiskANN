@@ -5,9 +5,13 @@
 
 //! PiPNN graph construction.
 
+mod bf16;
+pub(crate) mod cpu_dispatch;
 mod finalization;
+mod hash_prune;
 mod leaf_build;
 pub mod leaf_kernel;
+mod lsh;
 pub mod partition_kernel;
 mod partitioning;
 
@@ -84,6 +88,44 @@ impl PiPNNConfig {
     }
 }
 
+/// HashPrune reservoir policy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashPruneConfig {
+    /// Number of random-hyperplane sketch dimensions.
+    pub num_hash_planes: usize,
+    /// Maximum retained candidates per point.
+    pub l_max: usize,
+    /// Apply shared Vamana RobustPrune after HashPrune extraction.
+    pub final_prune: bool,
+}
+
+impl HashPruneConfig {
+    /// Validate HashPrune's structural bounds.
+    pub fn validate(&self) -> ANNResult<()> {
+        if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
+            return Err(config_error(format!(
+                "num_hash_planes ({}) must be in [1, {}]",
+                self.num_hash_planes,
+                lsh::MAX_PLANES
+            )));
+        }
+        if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
+            return Err(config_error(format!(
+                "l_max ({}) must be in [1, {}]",
+                self.l_max,
+                hash_prune::MAX_RESERVOIR_LEN
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+enum CandidateMerge {
+    Direct,
+    HashPrune(HashPruneConfig),
+}
+
 /// Validated, borrowed policy and execution context for one PiPNN graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
@@ -91,6 +133,7 @@ pub struct PiPNNBuildContext<'a> {
     pub(crate) graph: &'a Config,
     pub(crate) metric: Metric,
     pub(crate) pool: &'a ThreadPool,
+    candidate_merge: CandidateMerge,
 }
 
 impl<'a> PiPNNBuildContext<'a> {
@@ -120,7 +163,15 @@ impl<'a> PiPNNBuildContext<'a> {
             graph,
             metric,
             pool,
+            candidate_merge: CandidateMerge::Direct,
         })
+    }
+
+    /// Enable HashPrune candidate merging for this build.
+    pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
+        config.validate()?;
+        self.candidate_merge = CandidateMerge::HashPrune(config);
+        Ok(self)
     }
 }
 
@@ -174,13 +225,54 @@ where
 
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition(data, &context.config, metric))?;
-    let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates(data, &leaves, context.config.k, metric)
-            .map_err(ANNError::opaque)
-    })?;
-    drop(leaves);
-    tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+    match &context.candidate_merge {
+        CandidateMerge::Direct => {
+            let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::build_leaf_candidates(data, &leaves, context.config.k, metric)
+                    .map_err(ANNError::opaque)
+            })?;
+            drop(leaves);
+            tracing::info_span!("pipnn.finalization")
+                .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+        }
+        CandidateMerge::HashPrune(config) => {
+            let hash_prune = hash_prune::HashPrune::new(
+                data.as_slice(),
+                data.nrows(),
+                data.ncols(),
+                config.num_hash_planes,
+                config.l_max,
+                42,
+            )?;
+            tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::add_hash_prune_candidates(
+                    data,
+                    &leaves,
+                    context.config.k,
+                    metric,
+                    &hash_prune,
+                )
+                .map_err(ANNError::opaque)
+            })?;
+            drop(leaves);
+            if config.final_prune {
+                let candidates = rows_to_adjacency(hash_prune.into_candidate_lists());
+                tracing::info_span!("pipnn.finalization").in_scope(|| {
+                    finalization::prune_overfull(data, candidates, context.graph, metric)
+                })
+            } else {
+                Ok(rows_to_adjacency(
+                    hash_prune.into_nearest_lists(context.graph.pruned_degree().get()),
+                ))
+            }
+        }
+    }
+}
+
+fn rows_to_adjacency(rows: Vec<Vec<u32>>) -> Vec<AdjacencyList<u32>> {
+    rows.into_iter()
+        .map(AdjacencyList::from_iter_untrusted)
+        .collect()
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {

@@ -663,6 +663,7 @@ dependencies = [
 name = "diskann-pipnn"
 version = "0.55.0"
 dependencies = [
+ "bytemuck",
  "criterion",
  "diskann",
  "diskann-linalg",
@@ -670,7 +671,10 @@ dependencies = [
  "diskann-vector",
  "diskann-wide",
  "half",
+ "libc",
+ "parking_lot",
  "rand",
+ "rand_distr",
  "rayon",
  "thiserror 2.0.17",
  "tracing",

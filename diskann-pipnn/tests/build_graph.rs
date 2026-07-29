@@ -4,7 +4,7 @@
  */
 
 use diskann::graph::config::{self, MaxDegree};
-use diskann_pipnn::{build_graph, PiPNNBuildContext, PiPNNConfig};
+use diskann_pipnn::{build_graph, HashPruneConfig, PiPNNBuildContext, PiPNNConfig};
 use diskann_utils::views::MatrixView;
 use diskann_vector::distance::Metric;
 use half::f16;
@@ -191,6 +191,44 @@ fn is_deterministic_for_a_fixed_pool_size() {
 
     assert_eq!(first, second);
     assert_graph_invariants(&first, 96, 8);
+}
+
+#[test]
+fn hash_prune_build_is_deterministic_and_degree_bounded() {
+    let points = 64;
+    let dimensions = 4;
+    let values: Vec<f32> = (0..points * dimensions)
+        .map(|value| ((value * 17 + 3) % 101) as f32)
+        .collect();
+    let data = MatrixView::try_from(values.as_slice(), points, dimensions).unwrap();
+    let graph = graph_config(Metric::L2, 8);
+    let pool = pool(4);
+    let config = PiPNNConfig {
+        c_max: 16,
+        c_min: 4,
+        p_samp: 0.25,
+        fanout: vec![3, 2],
+        k: 3,
+        replicas: 2,
+    };
+    let hash_prune = HashPruneConfig {
+        num_hash_planes: 8,
+        l_max: 16,
+        final_prune: true,
+    };
+    let build = || {
+        let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
+            .unwrap()
+            .with_hash_prune(hash_prune.clone())
+            .unwrap();
+        build_graph(data, &context).unwrap()
+    };
+
+    let first = build();
+    let second = build();
+
+    assert_eq!(first, second);
+    assert_graph_invariants(&first, points, 8);
 }
 
 #[test]

@@ -4,7 +4,7 @@
  */
 
 use diskann::graph::config::{self, MaxDegree};
-use diskann_pipnn::{PiPNNBuildContext, PiPNNConfig};
+use diskann_pipnn::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig};
 use diskann_vector::distance::Metric;
 
 fn pipnn_config() -> PiPNNConfig {
@@ -101,6 +101,46 @@ fn rejects_each_invalid_algorithm_parameter() {
             .expect_err("invalid PiPNN config must be rejected");
         assert_eq!(error.kind(), diskann::ANNErrorKind::IndexConfigError);
     }
+}
+
+#[test]
+fn validates_hash_prune_parameters() {
+    let graph = graph_config(Metric::L2, 1.2);
+    let pool = pool();
+    for config in [
+        HashPruneConfig {
+            num_hash_planes: 0,
+            l_max: 64,
+            final_prune: true,
+        },
+        HashPruneConfig {
+            num_hash_planes: 17,
+            l_max: 64,
+            final_prune: true,
+        },
+        HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 0,
+            final_prune: true,
+        },
+        HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 256,
+            final_prune: true,
+        },
+    ] {
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        assert!(context.with_hash_prune(config).is_err());
+    }
+
+    PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool)
+        .unwrap()
+        .with_hash_prune(HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 64,
+            final_prune: true,
+        })
+        .unwrap();
 }
 
 #[test]

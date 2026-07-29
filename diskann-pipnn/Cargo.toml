@@ -11,12 +11,16 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
 diskann.workspace = true
 diskann-linalg.workspace = true
 diskann-utils.workspace = true
 diskann-vector.workspace = true
 diskann-wide.workspace = true
+libc = "0.2"
+parking_lot = "0.12"
 rand.workspace = true
+rand_distr.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
