@@ -106,9 +106,14 @@ struct StripeBuffers {
     row_scales: Vec<f32>,
 }
 
-/// Partition every configured replica of `data` into leaves no larger than
-/// `config.c_max`. The caller is responsible for installing this operation in
-/// its build-owned Rayon pool.
+/// Partition every configured replica into overlapping bounded leaves.
+///
+/// Each oversized work item samples `ceil(p_samp * points)` leaders (clamped
+/// to the private leader bound), assigns every point to its nearest `fanout`
+/// leaders for the current level, and recurses only on oversized clusters.
+/// Levels beyond `fanout.len()` retain one leader assignment. Completed small
+/// leaves are merged without exceeding `c_max`; every input point must remain
+/// covered once per replica. The caller installs the operation in its pool.
 pub(crate) fn partition<T>(
     data: MatrixView<'_, T>,
     config: PartitionConfig,
