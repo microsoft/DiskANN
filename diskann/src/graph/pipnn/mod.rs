@@ -144,6 +144,8 @@ impl<'a> PiPNNBuildContext<'a> {
 ///
 /// This is the core algorithm boundary. Search entry-point selection, frozen nodes,
 /// providers, serialization, and index writers belong to the outer build pipelines.
+/// For raw `u8` and `i8` rows, `CosineNormalized` is evaluated as `Cosine` because
+/// those representations are converted to f32 scratch but are not unit-normalized.
 pub fn build_graph<T>(
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
