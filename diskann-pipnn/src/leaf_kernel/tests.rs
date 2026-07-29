@@ -4,7 +4,6 @@
  */
 
 use super::*;
-use diskann_wide::arch::{Scalar, Target};
 
 fn dots(metric: Metric, points: usize) -> Vec<f32> {
     let mut dots = vec![f32::NAN; points * points];
@@ -39,7 +38,7 @@ fn norms(input: LeafTopK<'_>) -> Vec<f32> {
 }
 
 #[test]
-fn scalar_target_matches_runtime_dispatch() {
+fn scalar_reference_matches_runtime_dispatch() {
     for metric in [
         Metric::L2,
         Metric::Cosine,
@@ -61,16 +60,7 @@ fn scalar_target_matches_runtime_dispatch() {
                 let mut actual = vec![LeafNeighbor::default(); points * k];
                 let mut worst = vec![f32::INFINITY; points];
                 let norms = norms(input);
-                <LeafKernel<'_, '_, '_> as Target<Scalar, ()>>::run(
-                    LeafKernel {
-                        input,
-                        k,
-                        output: &mut actual,
-                        norms: &norms,
-                        worst: &mut worst,
-                    },
-                    Scalar::new(),
-                );
+                process_pairs_scalar(input, k, &mut actual, &norms, &mut worst);
 
                 assert_eq!(actual, expected, "{metric:?}, n={points}, k={k}");
             }

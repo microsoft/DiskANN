@@ -10,8 +10,7 @@
 //! positions; partition recursion and cluster ownership stay with the caller.
 
 use diskann_vector::distance::Metric;
-#[cfg(target_arch = "x86_64")]
-use diskann_wide::{SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector};
+use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 /// Maximum number of leaders retained for one point.
 pub const MAX_PARTITION_FANOUT: usize = 16;
@@ -175,11 +174,6 @@ struct PartitionKernel<'a, 'o> {
 }
 
 impl PartitionKernel<'_, '_> {
-    fn run_scalar(self) {
-        process_rows_scalar(self.input, self.fanout, self.output);
-    }
-
-    #[cfg(target_arch = "x86_64")]
     fn run_simd<F>(self, arch: F::Arch)
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -190,40 +184,20 @@ impl PartitionKernel<'_, '_> {
     }
 }
 
-impl diskann_wide::arch::Target<diskann_wide::arch::Scalar, ()> for PartitionKernel<'_, '_> {
+impl<A> diskann_wide::arch::Target<A, ()> for PartitionKernel<'_, '_>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
     #[inline(always)]
-    fn run(self, _: diskann_wide::arch::Scalar) {
-        self.run_scalar();
+    fn run(self, arch: A) {
+        self.run_simd::<A::f32x16>(arch);
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V3, ()> for PartitionKernel<'_, '_> {
-    #[inline(always)]
-    fn run(self, arch: diskann_wide::arch::x86_64::V3) {
-        diskann_wide::alias!(F32x8 = <diskann_wide::arch::x86_64::V3>::f32x8);
-        self.run_simd::<F32x8>(arch);
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V4, ()> for PartitionKernel<'_, '_> {
-    #[inline(always)]
-    fn run(self, arch: diskann_wide::arch::x86_64::V4) {
-        diskann_wide::alias!(F32x16 = <diskann_wide::arch::x86_64::V4>::f32x16);
-        self.run_simd::<F32x16>(arch);
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::aarch64::Neon, ()> for PartitionKernel<'_, '_> {
-    #[inline(always)]
-    fn run(self, arch: diskann_wide::arch::aarch64::Neon) {
-        let _scalar = arch.retarget();
-        self.run_scalar();
-    }
-}
-
+#[cfg(test)]
 fn process_rows_scalar(input: PartitionTopK<'_>, fanout: usize, output: &mut [u32]) {
     for (row_index, (dot_row, output_row)) in input
         .dots
@@ -246,7 +220,6 @@ fn process_rows_scalar(input: PartitionTopK<'_>, fanout: usize, output: &mut [u3
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn process_rows_simd<F>(arch: F::Arch, input: PartitionTopK<'_>, fanout: usize, output: &mut [u32])
 where
     F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -290,7 +263,6 @@ where
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn process_cosine<F>(
     arch: F::Arch,
     dots: &[f32],
@@ -315,7 +287,6 @@ fn process_cosine<F>(
     });
 }
 
-#[cfg(target_arch = "x86_64")]
 fn process_unary<F, Transform>(
     arch: F::Arch,
     dots: &[f32],
@@ -342,7 +313,6 @@ fn process_unary<F, Transform>(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn process_binary<F, Transform>(
     arch: F::Arch,
     dots: &[f32],
@@ -375,7 +345,6 @@ fn process_binary<F, Transform>(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn insert_lanes<F>(distances: F, base: usize, top: &mut TopK, fanout: usize)
 where
     F: SIMDVector<Scalar = f32> + SIMDPartialOrd,
@@ -399,6 +368,7 @@ where
 }
 
 #[inline(always)]
+#[cfg(test)]
 fn distance(metric: Metric, dot: f32, row_scale: f32, leader_scale: f32) -> f32 {
     match metric {
         Metric::L2 => (-2.0f32).mul_add(dot, leader_scale),
