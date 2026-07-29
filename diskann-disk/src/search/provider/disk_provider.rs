@@ -1756,6 +1756,40 @@ mod disk_provider_tests {
     }
 
     #[test]
+    fn test_search_rejects_search_list_size_less_than_return_list_size() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let query = vec![0f32; 128];
+        let return_list_size = 10u32;
+        let search_list_size = return_list_size - 1;
+
+        let result = search_engine.search(
+            &query,
+            return_list_size,
+            search_list_size,
+            None,
+            SearchMode::graph(),
+        );
+
+        match result {
+            Err(e) => assert_eq!(e.kind(), ANNErrorKind::IndexError),
+            Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
+        }
+    }
+
+    #[test]
     fn test_disk_search_beam_search() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
