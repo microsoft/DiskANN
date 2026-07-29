@@ -21,6 +21,14 @@
 //! * Constructing a tagged [`Error`] in an efficient way.
 //! * Creating a new [`diskann::ANNError`] in-place, ensuring that the source line tracking
 //!   of that type is accurate.
+//!
+//! A limitation of this approach is that it forces string formatting upon error construction
+//! (though in a few cases like `&'static str` literals, we can avoid this allocation).
+//! Depending on the context, this formatting can negatively impact generated code even when
+//! not used or add overhead on the error path. Direct use of [`diskann::ANNResult`] has
+//! less overhead as error/display types are moved directly into that's types allocated
+//! storage, costing just a relatively small allocation at construction time rather than
+//! running string formatting eagerly.
 
 use std::borrow::Cow;
 
