@@ -1437,7 +1437,7 @@ impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for Filt
         next.post_process(
             accessor,
             query,
-            candidates.filter(|n| !provider.is_deleted(n.id).unwrap_or(true)),
+            candidates.filter(|n| !provider.is_deleted(*n.id()).unwrap_or(true)),
             output,
         )
     }

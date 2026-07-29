@@ -208,7 +208,7 @@ where
             let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             for neighbor in scratch.best.iter().take(starting_l) {
-                if neighbor.distance <= self.radius() {
+                if neighbor.distance() <= self.radius() {
                     in_range.push(neighbor);
                 }
             }
@@ -216,7 +216,7 @@ where
             // clear the visited set and repopulate it with just the in-range points
             scratch.visited.clear();
             for neighbor in in_range.iter() {
-                scratch.visited.insert(neighbor.id);
+                scratch.visited.insert(*neighbor.id());
             }
             scratch.in_range = in_range;
 
@@ -340,7 +340,7 @@ where
     let beam_width = search_params.beam_width().unwrap_or(1);
 
     for neighbor in &scratch.in_range {
-        scratch.range_frontier.push_back(neighbor.id);
+        scratch.range_frontier.push_back(*neighbor.id());
     }
 
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
@@ -370,11 +370,11 @@ where
 
         // The predicate ensures that the contents of `neighbors` are unique.
         for neighbor in neighbors.iter() {
-            if neighbor.distance <= search_params.radius() * search_params.range_slack()
+            if neighbor.distance() <= search_params.radius() * search_params.range_slack()
                 && scratch.in_range.len() < max_returned
             {
                 scratch.in_range.push(*neighbor);
-                scratch.range_frontier.push_back(neighbor.id);
+                scratch.range_frontier.push_back(*neighbor.id());
             }
         }
         scratch.cmps += neighbors.len() as u32;
@@ -424,8 +424,8 @@ mod tests {
 
         assert_eq!(filtered.push(1, 0.5), BufferState::Available);
         assert_eq!(filtered.current_len(), 1);
-        assert_eq!(inner[0].id, 1);
-        assert_eq!(inner[0].distance, 0.5);
+        assert_eq!(*inner[0].id(), 1);
+        assert_eq!(inner[0].distance(), 0.5);
     }
 
     #[test]
@@ -448,9 +448,9 @@ mod tests {
 
         assert_eq!(count, 3);
         assert_eq!(inner.len(), 3);
-        assert_eq!(inner[0].id, 1);
-        assert_eq!(inner[1].id, 3);
-        assert_eq!(inner[2].id, 5);
+        assert_eq!(*inner[0].id(), 1);
+        assert_eq!(*inner[1].id(), 3);
+        assert_eq!(*inner[2].id(), 5);
     }
 
     #[test]
@@ -487,7 +487,7 @@ mod tests {
 
         // 0.1 and 0.3 are <= inner_radius, 1.0 is not < radius
         assert_eq!(count, 2);
-        assert_eq!(inner[0].id, 2);
-        assert_eq!(inner[1].id, 5);
+        assert_eq!(*inner[0].id(), 2);
+        assert_eq!(*inner[1].id(), 5);
     }
 }

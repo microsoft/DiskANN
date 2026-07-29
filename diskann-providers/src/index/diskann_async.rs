@@ -171,7 +171,7 @@ pub(crate) mod tests {
             search::Range,
             search_output_buffer,
         },
-        neighbor::Neighbor,
+        neighbor::{self, Neighbor},
         provider::{
             DataProvider, DefaultContext, Delete, ExecutionContext, Guard, NeighborAccessor,
             NeighborAccessorMut, SetElement,
@@ -915,9 +915,9 @@ pub(crate) mod tests {
 
             let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
                 let expected: Neighbor<u32> = gt[gt.len() - 1 - position];
-                if id != expected.id {
+                if id != *expected.id() {
                     // We can allow it if the distance is the same.
-                    if distance == expected.distance {
+                    if distance == expected.distance() {
                         Ok(())
                     } else {
                         Err(Box::new(format!(
@@ -925,7 +925,7 @@ pub(crate) mod tests {
                             expected, id
                         )))
                     }
-                } else if distance != expected.distance {
+                } else if distance != expected.distance() {
                     Err(Box::new(format!(
                         "expected neighbor {:?}, but found {}",
                         expected, distance
@@ -1084,11 +1084,11 @@ pub(crate) mod tests {
         let gt = {
             let mut gt = groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
             for n in gt.iter_mut() {
-                if filter.is_match(n.id) {
-                    n.distance *= beta;
+                if filter.is_match(*n.id()) {
+                    *n = Neighbor::new(*n.id(), n.distance() * beta);
                 }
             }
-            gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
+            gt.sort_unstable_by(neighbor::ord::reverse(neighbor::ord::fast_distance));
             gt
         };
 
@@ -1527,7 +1527,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
 
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
                 assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
@@ -1540,7 +1540,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
 
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
                 assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
@@ -1564,7 +1564,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
 
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                let ids: Vec<u32> = results.iter().map(|n| *n.id()).collect();
                 assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
             }
 
@@ -1581,7 +1581,7 @@ pub(crate) mod tests {
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
                 for n in &results {
-                    assert!(ids_set.insert(n.id));
+                    assert!(ids_set.insert(*n.id()));
                 }
             }
         }

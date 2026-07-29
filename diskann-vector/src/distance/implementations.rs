@@ -41,7 +41,7 @@ macro_rules! architecture_hook {
         {
             #[inline(always)]
             fn run(arch: A, left: L, right: R) -> T {
-                arch.run2(Self::default(), left, right)
+                arch.run2_inline(Self::default(), left, right)
             }
         }
     };
