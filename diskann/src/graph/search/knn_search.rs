@@ -193,6 +193,89 @@ where
     }
 }
 
+/////////////////////////////
+// KnnWithExtraStarts //
+/////////////////////////////
+
+/// K-NN search with optional per-query extra start points.
+///
+/// Identical to [`Knn`] but also seeds the priority queue with the IDs in `extra_ids`
+/// (at distance 0.0) alongside the normal medoid start points before the greedy beam
+/// search begins.  Use this on a temporary/experimental branch to evaluate whether
+/// providing better starting points improves recall or latency.
+///
+/// The extra IDs are expected to be valid internal IDs in the index.  IDs that are
+/// already visited (e.g., the medoid itself) are silently ignored.
+#[derive(Debug, Clone)]
+pub struct KnnWithExtraStarts<I> {
+    /// Base k-NN search parameters.
+    pub inner: Knn,
+    /// Additional per-query start point IDs.
+    pub extra_ids: std::sync::Arc<[I]>,
+}
+
+impl<I> KnnWithExtraStarts<I> {
+    /// Create a new [`KnnWithExtraStarts`].
+    pub fn new(inner: Knn, extra_ids: impl Into<std::sync::Arc<[I]>>) -> Self {
+        Self {
+            inner,
+            extra_ids: extra_ids.into(),
+        }
+    }
+}
+
+impl<'a, DP, S, T> Search<'a, DP, S, T> for KnnWithExtraStarts<DP::InternalId>
+where
+    DP: DataProvider,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
+    T: Copy + Send + Sync,
+{
+    type Output = SearchStats;
+
+    fn search<O, PP, OB>(
+        self,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
+        processor: PP,
+        context: &'a DP::Context,
+        query: T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        async move {
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context, query)
+                .into_ann_result()?;
+
+            let num_start_ids = accessor.num_starting_points().await?;
+            let extra_count = self.extra_ids.len();
+            let mut scratch =
+                index.search_scratch(self.inner.l_value.get(), num_start_ids + extra_count);
+
+            let stats = index
+                .search_internal_seeded(
+                    Some(self.inner.beam_width.get()),
+                    &mut accessor,
+                    &mut scratch,
+                    &mut NoopSearchRecord::new(),
+                    &self.extra_ids,
+                )
+                .await?;
+
+            let result_count = processor
+                .post_process(&mut accessor, query, scratch.best.iter(), output)
+                .await
+                .into_ann_result()?;
+
+            Ok(stats.finish(result_count as u32))
+        }
+    }
+}
+
 ////////////////////////
 // Recorded Knn //
 ////////////////////////

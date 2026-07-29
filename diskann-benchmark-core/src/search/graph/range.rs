@@ -35,6 +35,7 @@ where
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
+    per_query_start_ids: std::sync::OnceLock<Arc<Matrix<u32>>>,
 }
 
 impl<DP, T, S> Range<DP, T, S>
@@ -63,7 +64,13 @@ where
             index,
             queries,
             strategy,
+            per_query_start_ids: std::sync::OnceLock::new(),
         }))
+    }
+
+    /// Configure optional per-query extra start point IDs.
+    pub fn set_start_points(&self, start_ids: Arc<Matrix<u32>>) {
+        let _ = self.per_query_start_ids.set(start_ids);
     }
 }
 
@@ -78,8 +85,10 @@ pub struct Metrics {}
 impl<DP, T, S> Search for Range<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
+    DP::InternalId: From<u32>,
     S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
     graph::search::Range: for<'a> graph::Search<'a, DP, S, &'a [T]>,
+    graph::search::RangeWithExtraStarts<DP::InternalId>: for<'a> graph::Search<'a, DP, S, &'a [T]>,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -105,16 +114,36 @@ where
     {
         let context = DP::Context::default();
         let range_search = *parameters;
-        let _ = self
-            .index
-            .search(
-                range_search,
-                self.strategy.get(index)?,
-                &context,
-                self.queries.row(index),
-                buffer,
-            )
-            .await?;
+        let strategy = self.strategy.get(index)?;
+
+        let extra_ids: Option<Vec<DP::InternalId>> = self
+            .per_query_start_ids
+            .get()
+            .map(|m| m.row(index).iter().copied().map(Into::into).collect())
+            .filter(|v: &Vec<DP::InternalId>| !v.is_empty());
+
+        if let Some(ids) = extra_ids {
+            let range_with_extra = graph::search::RangeWithExtraStarts::new(range_search, ids);
+            self.index
+                .search(
+                    range_with_extra,
+                    strategy,
+                    &context,
+                    self.queries.row(index),
+                    buffer,
+                )
+                .await?;
+        } else {
+            self.index
+                .search(
+                    range_search,
+                    strategy,
+                    &context,
+                    self.queries.row(index),
+                    buffer,
+                )
+                .await?;
+        }
 
         Ok(Metrics {})
     }

@@ -79,6 +79,7 @@ where
                 &mut accessor,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
+                &[],
             )
             .await?;
 
@@ -131,6 +132,7 @@ async fn multihop_search_internal<I, A, SR>(
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
+    extra_start_ids: &[I],
 ) -> ANNResult<Ret<I>>
 where
     I: VectorId,
@@ -156,6 +158,13 @@ where
                 .insert(Neighbor::new(id.into_inner(), distance));
         })
         .await?;
+
+    // Seed extra per-query start points for graph navigation.
+    for &id in extra_start_ids {
+        if scratch.visited.insert(id) {
+            scratch.best.insert(Neighbor::new(id, 0.0));
+        }
+    }
 
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
@@ -241,4 +250,98 @@ where
         hops: scratch.hops,
         rejected_start_points,
     })
+}
+
+/////////////////////////////////////////
+// MultihopFilterSearchWithExtraStarts //
+/////////////////////////////////////////
+
+/// Multi-hop filtered search with optional per-query extra start points.
+///
+/// Identical to [`MultihopFilterSearch`] but also seeds the scratch with `extra_ids`
+/// (at distance 0.0) alongside the normal medoid start points.
+#[derive(Debug)]
+pub struct MultihopFilterSearchWithExtraStarts<I> {
+    /// Base multi-hop filtered search parameters.
+    pub inner: MultihopFilterSearch,
+    /// Additional per-query start point IDs.
+    pub extra_ids: std::sync::Arc<[I]>,
+}
+
+impl<I> MultihopFilterSearchWithExtraStarts<I> {
+    /// Create a new [`MultihopFilterSearchWithExtraStarts`].
+    pub fn new(inner: MultihopFilterSearch, extra_ids: impl Into<std::sync::Arc<[I]>>) -> Self {
+        Self {
+            inner,
+            extra_ids: extra_ids.into(),
+        }
+    }
+}
+
+impl<'a, DP, S, T> Search<'a, DP, S, T> for MultihopFilterSearchWithExtraStarts<DP::InternalId>
+where
+    DP: DataProvider,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor<Id = DP::InternalId>>,
+    T: Copy + Send + Sync,
+{
+    type Output = SearchStats;
+
+    fn search<O, PP, OB>(
+        self,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
+        processor: PP,
+        context: &'a DP::Context,
+        query: T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        async move {
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context, query)
+                .into_ann_result()?;
+
+            let num_starting_points = accessor.num_starting_points().await?;
+            let extra_count = self.extra_ids.len();
+            let mut scratch = index.search_scratch(
+                self.inner.inner.l_value().get(),
+                num_starting_points + extra_count,
+            );
+
+            let ret = multihop_search_internal(
+                index.max_degree_with_slack(),
+                &self.inner.inner,
+                &mut accessor,
+                &mut scratch,
+                &mut NoopSearchRecord::new(),
+                &self.extra_ids,
+            )
+            .await?;
+
+            let result_count = processor
+                .post_process(
+                    &mut accessor,
+                    query,
+                    scratch
+                        .best
+                        .iter()
+                        .filter(|n| !ret.rejected_start_points.contains(n.id()))
+                        .take(self.inner.inner.l_value().get()),
+                    output,
+                )
+                .await
+                .into_ann_result()?;
+
+            Ok(SearchStats {
+                cmps: ret.cmps,
+                hops: ret.hops,
+                range_search_second_round: false,
+                result_count: result_count as u32,
+            })
+        }
+    }
 }

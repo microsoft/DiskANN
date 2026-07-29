@@ -353,6 +353,143 @@ where
     }
 }
 
+/////////////////////////////
+// RangeWithExtraStarts //
+/////////////////////////////
+
+/// Range search with optional per-query extra start points.
+///
+/// Identical to [`Range`] but seeds the initial priority queue with `extra_ids`
+/// (at distance 0.0) alongside the normal medoid start points.
+#[derive(Debug, Clone)]
+pub struct RangeWithExtraStarts<I> {
+    /// Base range search parameters.
+    pub inner: Range,
+    /// Additional per-query start point IDs.
+    pub extra_ids: std::sync::Arc<[I]>,
+}
+
+impl<I> RangeWithExtraStarts<I> {
+    /// Create a new [`RangeWithExtraStarts`].
+    pub fn new(inner: Range, extra_ids: impl Into<std::sync::Arc<[I]>>) -> Self {
+        Self {
+            inner,
+            extra_ids: extra_ids.into(),
+        }
+    }
+}
+
+impl<'a, DP, S, T> Search<'a, DP, S, T> for RangeWithExtraStarts<DP::InternalId>
+where
+    DP: DataProvider,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
+    T: Copy + Send + Sync,
+{
+    type Output = SearchStats;
+
+    fn search<O, PP, OB>(
+        self,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
+        processor: PP,
+        context: &'a DP::Context,
+        query: T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        async move {
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context, query)
+                .into_ann_result()?;
+            let num_start_ids = accessor.num_starting_points().await?;
+            let extra_count = self.extra_ids.len();
+            let mut scratch =
+                index.search_scratch(self.inner.starting_l().get(), num_start_ids + extra_count);
+
+            // Initial greedy search seeded with medoid AND extra start points.
+            let initial_stats = index
+                .search_internal_seeded(
+                    Some(self.inner.beam_width().get()),
+                    &mut accessor,
+                    &mut scratch,
+                    &mut NoopSearchRecord::new(),
+                    &self.extra_ids,
+                )
+                .await?;
+
+            let mut in_range = Vec::with_capacity(self.inner.starting_l().get());
+            let starting_l = self.inner.starting_l().get();
+            let max_returned = self.inner.max_returned().unwrap_or(usize::MAX);
+
+            for neighbor in scratch.best.iter().take(starting_l) {
+                if *neighbor.distance() <= self.inner.radius() {
+                    in_range.push(neighbor);
+                }
+            }
+
+            scratch.visited.clear();
+            for neighbor in in_range.iter() {
+                scratch.visited.insert(*neighbor.id());
+            }
+            scratch.in_range = in_range;
+
+            let stats = if scratch.in_range.len()
+                >= ((starting_l as f32) * self.inner.initial_slack()) as usize
+                && scratch.in_range.len() < max_returned
+            {
+                let range_stats = range_search_internal(
+                    index.max_degree_with_slack(),
+                    &self.inner,
+                    &mut accessor,
+                    &mut scratch,
+                )
+                .await?;
+
+                InternalSearchStats {
+                    cmps: initial_stats.cmps,
+                    hops: initial_stats.hops + range_stats.hops,
+                    range_search_second_round: true,
+                }
+            } else {
+                initial_stats
+            };
+
+            let radius = self.inner.radius();
+            let inner_radius = self.inner.inner_radius();
+            let mut filtered = DistanceFiltered::new(output, |dist| {
+                if let Some(ir) = inner_radius
+                    && dist <= ir
+                {
+                    false
+                } else {
+                    dist <= radius
+                }
+            });
+
+            let result_count = processor
+                .post_process(
+                    &mut accessor,
+                    query,
+                    scratch.in_range.iter().copied(),
+                    &mut filtered,
+                )
+                .await
+                .into_ann_result()?;
+
+            Ok(SearchStats {
+                cmps: stats.cmps,
+                hops: stats.hops,
+                result_count: result_count as u32,
+                range_search_second_round: stats.range_search_second_round,
+            })
+        }
+    }
+}
+
 /// A [`SearchOutputBuffer`] wrapper that filters results by distance before
 /// forwarding them to an inner buffer.
 pub(super) struct DistanceFiltered<'a, F, B: ?Sized> {

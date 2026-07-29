@@ -115,10 +115,10 @@ where
 }
 
 pub use filtered_range_search::FilteredRange;
-pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
-pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
-pub use multihop_filter_search::MultihopFilterSearch;
-pub use range_search::{Range, RangeBuilder, RangeSearchError};
+pub use inline_filter_search::{AdaptiveL, InlineFilterSearch, InlineFilterSearchWithExtraStarts};
+pub use knn_search::{Knn, KnnSearchError, KnnWithExtraStarts, RecordedKnn};
+pub use multihop_filter_search::{MultihopFilterSearch, MultihopFilterSearchWithExtraStarts};
+pub use range_search::{Range, RangeBuilder, RangeSearchError, RangeWithExtraStarts};
 
 // Feature-gated diverse search.
 #[cfg(feature = "experimental_diversity_search")]

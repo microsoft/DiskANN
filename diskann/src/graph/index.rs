@@ -1923,12 +1923,42 @@ where
         }
     }
 
+    /// Core graph search implementation.
+    ///
+    /// This is a thin wrapper around [`Self::search_internal_seeded`] that passes an empty
+    /// extra-start-IDs slice. Prefer this overload for the common case where no per-query
+    /// custom start points are needed.
     pub(crate) fn search_internal<A, SR, Q>(
         &self,
         beam_width: Option<usize>,
         accessor: &mut A,
         scratch: &mut SearchScratch<DP::InternalId, Q>,
         search_record: &mut SR,
+    ) -> impl SendFuture<ANNResult<InternalSearchStats>>
+    where
+        A: SearchAccessor<Id = DP::InternalId>,
+        SR: SearchRecord<DP::InternalId> + ?Sized,
+        Q: NeighborQueue<DP::InternalId>,
+    {
+        self.search_internal_seeded(beam_width, accessor, scratch, search_record, &[])
+    }
+
+    /// Core graph search with optional extra per-query start points.
+    ///
+    /// Identical to [`Self::search_internal`] except that, during the initialisation phase,
+    /// the IDs in `extra_start_ids` are also inserted into the priority queue alongside the
+    /// medoid(s) returned by `accessor.start_point_distances`. They are inserted with a
+    /// distance of `0.0` so they are expanded before the medoid's neighbourhood, which
+    /// ensures the search explores both regions early.
+    ///
+    /// Duplicate IDs (already visited) are silently skipped.
+    pub(crate) fn search_internal_seeded<A, SR, Q>(
+        &self,
+        beam_width: Option<usize>,
+        accessor: &mut A,
+        scratch: &mut SearchScratch<DP::InternalId, Q>,
+        search_record: &mut SR,
+        extra_start_ids: &[DP::InternalId],
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
         A: SearchAccessor<Id = DP::InternalId>,
@@ -1948,6 +1978,13 @@ where
                         scratch.cmps += 1;
                     })
                     .await?;
+
+                // Seed extra per-query start points alongside the medoid.
+                for &id in extra_start_ids {
+                    if scratch.visited.insert(id) {
+                        scratch.best.insert(Neighbor::new(id, 0.0));
+                    }
+                }
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());

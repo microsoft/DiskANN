@@ -51,6 +51,9 @@ where
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
     post_processor: PP,
+    /// Optional per-query extra start point IDs (groundtruth file format: N×K matrix of u32).
+    /// Set via [`KNN::set_start_points`]. Row `i` contains the IDs for query `i`.
+    per_query_start_ids: std::sync::OnceLock<Arc<Matrix<u32>>>,
 }
 
 impl<DP, T, S> KNN<DP, T, S, Defaulted>
@@ -80,9 +83,12 @@ where
             queries,
             strategy,
             post_processor: Defaulted,
+            per_query_start_ids: std::sync::OnceLock::new(),
         }))
     }
 }
+
+impl<DP, T, S> KNN<DP, T, S, Defaulted> where DP: provider::DataProvider {}
 
 impl<DP, T, S, PP> KNN<DP, T, S, Forwarded<PP>>
 where
@@ -107,6 +113,7 @@ where
             queries,
             strategy,
             post_processor: Forwarded(post_processor),
+            per_query_start_ids: std::sync::OnceLock::new(),
         }))
     }
 }
@@ -118,6 +125,14 @@ where
     /// Access the index.
     pub fn index(&self) -> &Arc<graph::DiskANNIndex<DP>> {
         &self.index
+    }
+
+    /// Configure optional per-query extra start point IDs for ANY post-processor variant.
+    ///
+    /// Row `i` of `start_ids` contains the extra start point IDs for query `i`.
+    /// May be called at most once; subsequent calls are silently ignored.
+    pub fn set_start_points(&self, start_ids: Arc<Matrix<u32>>) {
+        let _ = self.per_query_start_ids.set(start_ids);
     }
 }
 
@@ -188,9 +203,12 @@ pub struct Metrics {
 impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
+    DP::InternalId: From<u32>,
     S: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
     PP: for<'a> AsPostProcessor<'a, S, DP, &'a [T]> + AsyncFriendly,
     graph::search::Knn:
+        for<'a> graph::Search<'a, DP, S, &'a [T], Output = graph::index::SearchStats>,
+    graph::search::KnnWithExtraStarts<DP::InternalId>:
         for<'a> graph::Search<'a, DP, S, &'a [T], Output = graph::index::SearchStats>,
     T: AsyncFriendly + Clone,
 {
@@ -220,17 +238,36 @@ where
         let strategy = self.strategy.get(index)?;
         let processor = self.post_processor.as_post_processor(strategy);
 
-        let stats = self
-            .index
-            .search_with(
-                knn_search,
-                strategy,
-                processor,
-                &context,
-                self.queries.row(index),
-                buffer,
-            )
-            .await?;
+        let extra_ids: Option<Vec<DP::InternalId>> = self
+            .per_query_start_ids
+            .get()
+            .map(|m| m.row(index).iter().copied().map(Into::into).collect())
+            .filter(|v: &Vec<DP::InternalId>| !v.is_empty());
+
+        let stats = if let Some(ids) = extra_ids {
+            let knn_with_extra = graph::search::KnnWithExtraStarts::new(knn_search, ids);
+            self.index
+                .search_with(
+                    knn_with_extra,
+                    strategy,
+                    processor,
+                    &context,
+                    self.queries.row(index),
+                    buffer,
+                )
+                .await?
+        } else {
+            self.index
+                .search_with(
+                    knn_search,
+                    strategy,
+                    processor,
+                    &context,
+                    self.queries.row(index),
+                    buffer,
+                )
+                .await?
+        };
 
         Ok(Metrics {
             comparisons: stats.cmps,

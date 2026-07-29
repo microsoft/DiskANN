@@ -152,6 +152,7 @@ where
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 None,
+                &[],
             )
             .await?;
 

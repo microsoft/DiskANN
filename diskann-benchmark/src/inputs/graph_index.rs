@@ -46,6 +46,12 @@ pub(crate) struct GraphSearch {
     pub(crate) search_n: usize,
     pub(crate) search_l: Vec<usize>,
     pub(crate) recall_k: usize,
+    /// Optional path to a per-query start-point file in groundtruth binary format
+    /// (int32 N_queries, int32 K, then K × N_queries int32 IDs).
+    /// When provided, the first K IDs per query are injected as extra start points
+    /// alongside the medoid during graph search.
+    #[serde(default)]
+    pub(crate) start_points_file: Option<std::path::PathBuf>,
 }
 
 impl GraphSearch {
@@ -144,6 +150,7 @@ impl Example for TopkSearchPhase {
             search_n: 10,
             search_l: vec![10, 20, 30, 40],
             recall_k: 10,
+            start_points_file: None,
         }];
 
         Self {
@@ -419,6 +426,7 @@ impl Example for TopkDeterminantDiversityPhase {
                 search_n: 10,
                 search_l: vec![10, 20, 30, 40],
                 recall_k: 10,
+                start_points_file: None,
             }],
             power: 1.0,
             eta: 0.5,

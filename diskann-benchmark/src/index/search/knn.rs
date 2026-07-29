@@ -7,8 +7,13 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 use diskann_benchmark_core::{recall::GroundTruthMode, search::graph::KnnParams};
+use diskann_utils::views::Matrix;
 
-use crate::{index::result::SearchResults, inputs::graph_index::GraphSearch};
+use crate::{
+    index::result::SearchResults,
+    inputs::graph_index::GraphSearch,
+    utils::datafiles::{load_groundtruth, BinFile},
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SearchSteps<'a> {
@@ -43,6 +48,16 @@ pub(crate) fn run<I>(
 
     for threads in steps.num_tasks.iter() {
         for run in steps.runs.iter() {
+            // Load per-query start points if configured for this run.
+            if let Some(path) = &run.start_points_file {
+                let start_ids = load_groundtruth(BinFile(path.as_path()), None)
+                    .map(Arc::new)
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to load start_points_file {:?}: {}", path, e)
+                    })?;
+                runner.set_start_points(start_ids);
+            }
+
             let setup = core_search::Setup {
                 threads: *threads,
                 tasks: *threads,
@@ -82,6 +97,11 @@ pub(crate) trait Knn<I> {
         recall_n: usize,
         groundtruth_mode: GroundTruthMode,
     ) -> anyhow::Result<Vec<SearchResults>>;
+
+    /// Apply optional per-query extra start point IDs (loaded from a groundtruth-format
+    /// file). This method is called once per search run before `search_all`.
+    /// Implementations that don't support extra start points may ignore this call.
+    fn set_start_points(&self, start_ids: Arc<Matrix<u32>>);
 }
 
 ///////////
@@ -118,6 +138,10 @@ where
 
         Ok(results.into_iter().map(SearchResults::new).collect())
     }
+
+    fn set_start_points(&self, start_ids: Arc<Matrix<u32>>) {
+        (**self).set_start_points(start_ids);
+    }
 }
 
 impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::MultiHop<DP, T, S>>
@@ -150,6 +174,10 @@ where
 
         Ok(results.into_iter().map(SearchResults::new).collect())
     }
+
+    fn set_start_points(&self, start_ids: Arc<Matrix<u32>>) {
+        (**self).set_start_points(start_ids);
+    }
 }
 
 impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::InlineFilterSearch<DP, T, S>>
@@ -181,5 +209,9 @@ where
         )?;
 
         Ok(results.into_iter().map(SearchResults::new).collect())
+    }
+
+    fn set_start_points(&self, start_ids: Arc<Matrix<u32>>) {
+        (**self).set_start_points(start_ids);
     }
 }

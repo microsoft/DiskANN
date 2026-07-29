@@ -33,6 +33,7 @@ where
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
     labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
+    per_query_start_ids: std::sync::OnceLock<Arc<Matrix<u32>>>,
 }
 
 impl<DP, T, S> MultiHop<DP, T, S>
@@ -78,14 +79,21 @@ where
                 queries,
                 strategy,
                 labels,
+                per_query_start_ids: std::sync::OnceLock::new(),
             }))
         }
+    }
+
+    /// Configure optional per-query extra start point IDs.
+    pub fn set_start_points(&self, start_ids: Arc<Matrix<u32>>) {
+        let _ = self.per_query_start_ids.set(start_ids);
     }
 }
 
 impl<DP, T, S> Search for MultiHop<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
+    DP::InternalId: From<u32>,
     S: for<'a> glue::DefaultSearchStrategy<
             'a,
             DP,
@@ -118,20 +126,41 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let knn = parameters.knn;
-        let multihop_search = graph::search::MultihopFilterSearch::new(knn);
         let strategy =
             labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
-        let stats = self
-            .index
-            .search(
-                multihop_search,
-                &strategy,
-                &context,
-                self.queries.row(index),
-                buffer,
-            )
-            .await?;
+
+        let extra_ids: Option<Vec<DP::InternalId>> = self
+            .per_query_start_ids
+            .get()
+            .map(|m| m.row(index).iter().copied().map(Into::into).collect())
+            .filter(|v: &Vec<DP::InternalId>| !v.is_empty());
+
+        let stats = if let Some(ids) = extra_ids {
+            let multihop_search = graph::search::MultihopFilterSearchWithExtraStarts::new(
+                graph::search::MultihopFilterSearch::new(parameters.knn),
+                ids,
+            );
+            self.index
+                .search(
+                    multihop_search,
+                    &strategy,
+                    &context,
+                    self.queries.row(index),
+                    buffer,
+                )
+                .await?
+        } else {
+            let multihop_search = graph::search::MultihopFilterSearch::new(parameters.knn);
+            self.index
+                .search(
+                    multihop_search,
+                    &strategy,
+                    &context,
+                    self.queries.row(index),
+                    buffer,
+                )
+                .await?
+        };
 
         Ok(super::knn::Metrics {
             comparisons: stats.cmps,
