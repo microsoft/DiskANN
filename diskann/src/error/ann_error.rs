@@ -19,10 +19,28 @@ pub type ANNResult<T> = Result<T, ANNError>;
 
 /// Common error type shared through DiskANN.
 ///
-/// This type disambiguates the runtime origin of errors using the `kind()` enum. Third
-/// party implementations of DiskANN plugin types like provider can use `kind()` and the
-/// downcasting API to throw custom errors from low in the callstack and retrieve those
-/// errors higher in the stack.
+/// [`ANNError`] is used to represent and propagate unrecoverable errors with minimal
+/// overhead on the happy path. It attempts to gather as much information upon creation and
+/// provides the following services.
+///
+/// * Constructible from types implementing [`std::error::Error`] via [`ANNError::new`].
+///   When using this constructor, the [`source`](std::error::Error::source) chain of the
+///   original error will be printed as well.
+///
+/// * Constructible from non-error types implementing [`Display`] and [`Debug`] via
+///   [`ANNError::message`] to support ad-hoc errors.
+///
+/// * Context chaining via [`ANNError::context`] to add information as the error propagates
+///   up the call stack.
+///
+/// * [Down casting](ANNError::downcast) to attempt to retrieve the original error type.
+///
+/// * Construction site source information via
+///   [`#[track_caller]`](https://rustc-dev-guide.rust-lang.org/backend/implicit-caller-location.html) for all constructors.
+///
+/// * Backtrace collection under `RUST_BACKTRACE=1`.
+///
+/// * A footprint of `std::mem::size_of::<*const ()>()` for minimal impact on the happy path.
 /// ```rust
 /// use diskann::{ANNError, error::ErrorContext};
 /// use thiserror::Error;
@@ -53,6 +71,11 @@ pub type ANNResult<T> = Result<T, ANNError>;
 /// // If we know the concrete error type, we can downcast the error.
 /// let downcasted = err.downcast_ref::<CustomError>().unwrap();
 /// assert_eq!(downcasted.0, 42);
+///
+/// // If we don't have an `Error` - we can still use `ANNError` for ad-hoc errors.
+/// let err = ANNError::message("error message");
+/// assert!(err.is::<&'static str>());
+/// assert!(err.to_string().contains("error message"));
 /// ```
 ///
 /// # Backtraces
@@ -62,14 +85,13 @@ pub type ANNResult<T> = Result<T, ANNError>;
 ///
 /// Backtrace collection adds a time overhead to error collection.
 ///
-/// # Properties
+/// # Source Information
 ///
-/// `ANNError` has the following properties to support efficiency:
-///
-/// * `std::mem::size_of::<ANNError>() == 8`: The struct is 8 bytes. This allows it to be
-///   returned in registers rather than on the stack.
-/// * `std::mem::size_of::<Option<ANNError>>() == 8`: The struct can use Rust's niche
-///   optimization.
+/// All constructors are decorated with `#[track_caller]` to associate source location
+/// information for better debugging. As such, implementations of `From<T> for ANNError`
+/// should also use `#[track_caller]` to record the source location where the error is
+/// actually created. Simple error types may use the [`crate::convert_error!`] macro to
+/// perform this automatically.
 #[derive(Debug)]
 pub struct ANNError {
     error: anyhow::Error,

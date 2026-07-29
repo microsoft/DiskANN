@@ -3,9 +3,26 @@
  * Licensed under the MIT license.
  */
 
-use std::borrow::Cow;
+//! Local tagged error type for `diskann-disk`.
+//!
+//! # Historical Context
+//!
+//! Error representation has changed over the course of the `diskann`'s history. Original
+//! versions of error handling used single top-level enum to encode error types and payloads
+//! and much of the test code checking errors within `diskann-disk` was written using this
+//! paradigm.
+//!
+//! The decisions around using a tagged [`ErrorKind`] are to keep test code within
+//! `diskann-disk` relatively static during refactors of central [`diskann::ANNError`].
+//!
+//! The [`crate::diskann_error!`] marco should be used to get most of the benefits from
+//! [`diskann::ANNError`] by:
+//!
+//! * Constructing a tagged [`Error`] in an efficient way.
+//! * Creating a new [`diskann::ANNError`] in-place, ensuring that the source line tracking
+//!   of that type is accurate.
 
-use diskann::convert_error;
+use std::borrow::Cow;
 
 /// Disk index related errors tagged with a provenance [`ErrorKind`].
 ///
@@ -19,7 +36,7 @@ pub struct Error {
 
 impl Error {
     /// Construct a new tagged [`Error`].
-    pub fn new(kind: ErrorKind, message: impl Into<Cow<'static, str>>) -> Self {
+    pub(crate) fn new(kind: ErrorKind, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -27,7 +44,7 @@ impl Error {
     }
 
     /// Construct a new [`Error`] using `message`'s implementation of [`ToString`].
-    pub fn from_display<D>(kind: ErrorKind, message: D) -> Self
+    pub(crate) fn from_display<D>(kind: ErrorKind, message: D) -> Self
     where
         D: ToString,
     {
@@ -62,7 +79,7 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-convert_error!(Error);
+diskann::convert_error!(Error);
 
 /// Classification of error types in [`Error`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
