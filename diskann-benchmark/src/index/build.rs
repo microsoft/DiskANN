@@ -5,6 +5,8 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+#[cfg(feature = "pipnn")]
+use diskann::graph::AdjacencyList;
 use diskann::{
     graph::{DiskANNIndex, StartPointStrategy},
     provider::{self, DataProvider, DefaultContext},
@@ -167,10 +169,18 @@ where
                 .context("PiPNN cannot connect a start point to an empty dataset")
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let start_neighbors: Vec<_> = start_sources
+    let degree = graph.pruned_degree().get();
+    let start_neighbors = start_sources
         .into_iter()
-        .map(|source| adjacency[source].clone())
-        .collect();
+        .map(|source| {
+            let source_id = u32::try_from(source).context("PiPNN start source exceeds u32::MAX")?;
+            let mut neighbors = AdjacencyList::with_capacity(degree);
+            neighbors.push(source_id);
+            neighbors.extend_from_slice(&adjacency[source]);
+            neighbors.truncate(degree);
+            Ok(neighbors)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let batch_elapsed = started.elapsed();
 
     // Unlike incremental insertion, PiPNN finishes all batch-build scratch
@@ -458,5 +468,15 @@ mod pipnn_tests {
                 .get_vector_sync(starts[0] as usize)
         };
         assert_eq!(start, [0.0, 0.0]);
+        let mut neighbors = AdjacencyList::new();
+        index
+            .provider()
+            .neighbors()
+            .get_neighbors_sync(starts[0] as usize, &mut neighbors)
+            .unwrap();
+        assert!(
+            neighbors.contains(0),
+            "start slot must enter the real graph"
+        );
     }
 }
