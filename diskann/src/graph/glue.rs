@@ -688,7 +688,7 @@ where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
-        let count = output.extend(candidates.map(|n| (n.id, n.distance)));
+        let count = output.extend(candidates.map(|n| n.as_tuple()));
         std::future::ready(Ok(count))
     }
 }
@@ -758,12 +758,17 @@ where
         Next: SearchPostProcess<A, T, O> + Sync,
     {
         let filter = accessor.is_not_start_point().await?;
-        next.post_process(accessor, query, candidates.filter(|n| filter(n.id)), output)
-            .await
-            .map_err(|err| {
-                let err = err.into();
-                err.context("after filtering start points")
-            })
+        next.post_process(
+            accessor,
+            query,
+            candidates.filter(|n| filter(*n.id())),
+            output,
+        )
+        .await
+        .map_err(|err| {
+            let err = err.into();
+            err.context("after filtering start points")
+        })
     }
 }
 

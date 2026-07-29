@@ -1541,11 +1541,11 @@ where
         for n in candidates {
             match provider
                 .full_vectors
-                .get_vector_sync(n.id.into_usize())
+                .get_vector_sync(n.id().into_usize())
                 .allow_transient("stale candidate during rerank")
             {
                 Ok(Some(vec)) => {
-                    reranked.push((n.id, f.evaluate_similarity(query, &vec)));
+                    reranked.push((*n.id(), f.evaluate_similarity(query, &vec)));
                 }
                 Ok(None) => {
                     // Transient (deleted/missing) — skip this candidate.
@@ -2093,7 +2093,7 @@ mod tests {
             res.result_count, 5,
             "there are 15 points and we're asking for 5, we expect 5"
         );
-        assert_eq!(neighbors[0].id, 3);
+        assert_eq!(*neighbors[0].id(), 3);
     }
 
     #[tokio::test]
@@ -2144,7 +2144,7 @@ mod tests {
             res.result_count, 5,
             "there are 15 points and we're asking for 5, we expect 5"
         );
-        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| n.id).collect();
+        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         for expected in 1u32..=5 {
             assert!(
                 neighbor_ids.contains(&expected),
@@ -2191,7 +2191,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.result_count, 5);
-        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| n.id).collect();
+        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
     }
@@ -2265,7 +2265,7 @@ mod tests {
             res.result_count, 5,
             "there are 15 points and we're asking for 5, we expect 5"
         );
-        assert_eq!(neighbors[0].id, 3);
+        assert_eq!(*neighbors[0].id(), 3);
     }
 
     #[tokio::test]
@@ -2318,7 +2318,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.result_count, 5);
-        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| n.id).collect();
+        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
     }
