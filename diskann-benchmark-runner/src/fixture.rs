@@ -37,7 +37,11 @@ fn read(path: &Path) -> anyhow::Result<String> {
 }
 
 fn overwrite() -> anyhow::Result<bool> {
-    match std::env::var(ENV) {
+    parse_overwrite(std::env::var(ENV))
+}
+
+fn parse_overwrite(value: Result<String, std::env::VarError>) -> anyhow::Result<bool> {
+    match value {
         Ok(value) if value == "overwrite" => Ok(true),
         Ok(value) => bail!("unknown {ENV} value {value:?}; expected \"overwrite\""),
         Err(std::env::VarError::NotPresent) => Ok(false),
@@ -147,8 +151,16 @@ pub fn run(dir: &Path, registry: &Registry) -> anyhow::Result<()> {
     if overwrite {
         std::fs::write(&expected_path, &actual)
             .with_context(|| format!("failed to write {}", expected_path.display()))?;
-    } else if actual != read(&expected_path)? {
-        bail!("fixture output differs from {}", expected_path.display());
+    } else {
+        let expected = read(&expected_path)?;
+        if actual != expected {
+            bail!(
+                "fixture output differs from {}:\n-- actual --\n{}\n-- expected --\n{}",
+                expected_path.display(),
+                actual,
+                expected
+            );
+        }
     }
 
     for filename in GENERATED_OUTPUTS {
@@ -176,8 +188,14 @@ fn check_generated_output(
                 expected.display()
             )
         })?,
-        (false, true, true) if read(&generated)? != read(&expected)? => {
-            bail!("generated {filename} differs from fixture");
+        (false, true, true) => {
+            let actual = read(&generated)?;
+            let wanted = read(&expected)?;
+            if actual != wanted {
+                bail!(
+                    "generated {filename} differs from fixture:\n-- actual --\n{actual}\n-- expected --\n{wanted}"
+                );
+            }
         }
         (false, true, false) => bail!("{filename} was generated unexpectedly"),
         (false, false, true) => bail!("{filename} was not generated"),

@@ -3,38 +3,16 @@
  * Licensed under the MIT license.
  */
 
-use std::{path::Path, sync::Mutex};
+use std::path::Path;
 
 use super::*;
 use crate::test::TestConfig;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-fn with_test_env(value: Option<&str>, test: impl FnOnce()) {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let original = std::env::var_os(ENV);
-    // SAFETY: this test serializes all access to `DISKANN_TEST` with `ENV_LOCK`.
-    unsafe {
-        match value {
-            Some(value) => std::env::set_var(ENV, value),
-            None => std::env::remove_var(ENV),
-        }
-    }
-    test();
-    // SAFETY: guarded by the same process-local lock as the mutation above.
-    unsafe {
-        match original {
-            Some(value) => std::env::set_var(ENV, value),
-            None => std::env::remove_var(ENV),
-        }
-    }
-}
-
 #[test]
 fn overwrite_accepts_only_the_documented_value() {
-    with_test_env(None, || assert!(!overwrite().unwrap()));
-    with_test_env(Some("overwrite"), || assert!(overwrite().unwrap()));
-    with_test_env(Some("other"), || assert!(overwrite().is_err()));
+    assert!(!parse_overwrite(Err(std::env::VarError::NotPresent)).unwrap());
+    assert!(parse_overwrite(Ok("overwrite".to_owned())).unwrap());
+    assert!(parse_overwrite(Ok("other".to_owned())).is_err());
 }
 
 #[test]
@@ -103,7 +81,7 @@ fn run_reports_output_mismatch() {
     let mut registry = Registry::new();
     crate::test::register_benchmarks(&mut registry, &TestConfig::new()).unwrap();
 
-    with_test_env(None, || assert!(run(fixture.path(), &registry).is_err()));
+    assert!(run(fixture.path(), &registry).is_err());
 }
 
 #[test]
