@@ -88,7 +88,7 @@ fn reference(input: LeafTopK<'_>, requested_k: usize) -> Vec<LeafNeighbor> {
                     clamp(1.0 - similarity)
                 }
             };
-            if distance.partial_cmp(&f32::MAX) == Some(Ordering::Less) {
+            if distance.partial_cmp(&f32::INFINITY) == Some(Ordering::Less) {
                 candidates.push(LeafNeighbor::new(position as u32, distance));
             }
         }
@@ -253,6 +253,21 @@ fn preserves_pipnn_metric_edge_semantics() {
     assert_eq!(
         run(&minimum_normal, 2, 1, Metric::Cosine).1[0].distance,
         0.0
+    );
+}
+
+#[test]
+fn finite_max_distance_fills_the_final_simd_slot() {
+    let points = 9;
+    let mut dots = vec![0.0; points * points];
+    dots[8 * points] = -f32::MAX;
+
+    let (actual_k, output) = run(&dots, points, points - 1, Metric::InnerProduct);
+
+    assert_eq!(actual_k, 8);
+    assert_eq!(
+        output[8 * actual_k + actual_k - 1],
+        LeafNeighbor::new(0, f32::MAX)
     );
 }
 

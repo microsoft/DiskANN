@@ -231,7 +231,7 @@ fn process_rows_scalar(input: PartitionTopK<'_>, fanout: usize, output: &mut [u3
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
-        let mut top = [(u32::MAX, f32::MAX); MAX_PARTITION_FANOUT];
+        let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
         let row_scale = input.row_scales.get(row_index).copied().unwrap_or(0.0);
         for (leader, &dot) in dot_row.iter().enumerate() {
             let leader_scale = input.leader_scales.get(leader).copied().unwrap_or(0.0);
@@ -259,7 +259,7 @@ where
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
-        let mut top = [(u32::MAX, f32::MAX); MAX_PARTITION_FANOUT];
+        let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
         match input.metric {
             Metric::L2 => process_binary::<F, _>(
                 arch,

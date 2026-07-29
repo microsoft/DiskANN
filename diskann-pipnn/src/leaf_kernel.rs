@@ -40,7 +40,7 @@ impl LeafNeighbor {
 
 impl Default for LeafNeighbor {
     fn default() -> Self {
-        Self::new(u32::MAX, f32::MAX)
+        Self::new(u32::MAX, f32::INFINITY)
     }
 }
 
@@ -139,7 +139,7 @@ pub fn nearest_leaf_neighbors(
         "worst distances",
         &mut workspace.worst,
         input.points,
-        f32::MAX,
+        f32::INFINITY,
     )?;
     for (row, norm) in workspace.norms.iter_mut().enumerate() {
         let squared_norm = input.dots[row * input.points + row];
@@ -157,7 +157,7 @@ pub fn nearest_leaf_neighbors(
         };
     }
     output.fill(LeafNeighbor::default());
-    workspace.worst.fill(f32::MAX);
+    workspace.worst.fill(f32::INFINITY);
 
     diskann_wide::arch::dispatch(LeafKernel {
         input,
