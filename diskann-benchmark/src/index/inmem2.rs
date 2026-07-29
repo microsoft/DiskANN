@@ -150,7 +150,10 @@ impl KnnInstance {
                     .iter()
                     .map(move |search_l| -> anyhow::Result<_> {
                         let knn_params = core_search::graph::KnnParams::new(search_n, *search_l)?;
-                        Ok(KnnInstance { knn_params, recall_k })
+                        Ok(KnnInstance {
+                            knn_params,
+                            recall_k,
+                        })
                     })
             })
             .collect()
