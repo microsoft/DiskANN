@@ -615,8 +615,8 @@ unsafe fn insert_locked(
 }
 
 /// Collect the reservoir's entries sorted by distance, truncated to `cap`.
-/// A thread-local scratch `Vec`, sized to the reservoir's runtime fill and
-/// reused across calls, avoids per-row allocation during extraction.
+/// A Rayon-owned scratch `Vec`, sized to the reservoir's runtime fill and
+/// reused within one extraction job, avoids per-row allocation.
 ///
 /// SAFETY: caller holds the slot lock; `distances` and `neighbors` are valid
 /// for `hot.len` elements.
@@ -625,28 +625,22 @@ unsafe fn collect_sorted_neighbors(
     distances: *const u16,
     neighbors: *const u32,
     cap: usize,
+    scratch: &mut Vec<(u32, u16)>,
 ) -> Vec<(u32, f32)> {
-    thread_local! {
-        static SCRATCH: std::cell::RefCell<Vec<(u32, u16)>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-    }
     let n = hot.len as usize;
-    SCRATCH.with(|cell| {
-        let mut scratch = cell.borrow_mut();
-        scratch.clear();
-        scratch.reserve(n);
-        for i in 0..n {
-            // SAFETY: guaranteed by this function's contract.
-            scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
-        }
-        scratch.sort_unstable_by_key(|&(_, d)| d);
-        let out_len = n.min(cap);
-        let mut out = Vec::with_capacity(out_len);
-        for &(id, d) in &scratch[..out_len] {
-            out.push((id, bf16_to_f32(key_to_bf16(d))));
-        }
-        out
-    })
+    scratch.clear();
+    scratch.reserve(n);
+    for i in 0..n {
+        // SAFETY: guaranteed by this function's contract.
+        scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
+    }
+    scratch.sort_unstable_by_key(|&(_, d)| d);
+    let out_len = n.min(cap);
+    let mut out = Vec::with_capacity(out_len);
+    for &(id, d) in &scratch[..out_len] {
+        out.push((id, bf16_to_f32(key_to_bf16(d))));
+    }
+    out
 }
 
 /// Collect the reservoir's neighbor ids, truncated to `cap`, WITHOUT sorting.
@@ -921,7 +915,7 @@ impl HashPrune {
         drop(cold_hashes);
         (0..hot.len())
             .into_par_iter()
-            .map(|i| {
+            .map_init(Vec::new, |scratch, i| {
                 let off = i * scan_lanes;
                 // SAFETY: extraction owns every row, so no mutation remains.
                 let hot = unsafe { &*hot[i].get() };
@@ -933,6 +927,7 @@ impl HashPrune {
                         cold_distances.as_ptr().wrapping_add(off),
                         cold_neighbors.as_ptr().wrapping_add(off),
                         max_degree,
+                        scratch,
                     )
                 };
                 let ids = nbrs.into_iter().map(|(id, _)| id).collect();
