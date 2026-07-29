@@ -225,10 +225,17 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
             add_edge(&reference, source, target as usize, distance);
         }
     }
-    let mut actual = batched.into_candidate_lists();
-    let mut expected = reference.into_candidate_lists();
-    actual.iter_mut().for_each(|row| row.sort_unstable());
-    expected.iter_mut().for_each(|row| row.sort_unstable());
+    let canonicalize = |rows: Vec<diskann::graph::AdjacencyList<u32>>| {
+        rows.into_iter()
+            .map(|row| {
+                let mut ids = row.to_vec();
+                ids.sort_unstable();
+                ids
+            })
+            .collect::<Vec<_>>()
+    };
+    let actual = canonicalize(batched.into_candidate_lists());
+    let expected = canonicalize(reference.into_candidate_lists());
 
     assert_eq!(actual, expected);
     assert!(actual.iter().all(|row| !row.is_empty()));
@@ -398,7 +405,7 @@ fn test_into_candidate_lists_returns_full_reservoir() {
     // ids-only, unsorted: every id is one of node 0's inserted neighbors
     // {1,2,3} with no duplicates (the LSH bucket may keep-closer-collapse a
     // colliding pair on this tiny 4-plane sketch, so we don't assert all 3).
-    let mut n0 = full[0].clone();
+    let mut n0 = full[0].to_vec();
     n0.sort_unstable();
     let deduped = {
         let mut d = n0.clone();
