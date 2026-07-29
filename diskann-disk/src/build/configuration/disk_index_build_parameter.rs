@@ -8,9 +8,13 @@
 use std::num::NonZeroUsize;
 
 use diskann::ANNError;
+#[cfg(feature = "pipnn")]
+use diskann::ANNResult;
 use thiserror::Error;
 
-use super::QuantizationType;
+#[cfg(feature = "pipnn")]
+use super::PiPNNParameters;
+use super::{BuildAlgorithm, QuantizationType};
 
 use crate::error::{diskann_error, ErrorKind};
 
@@ -107,9 +111,10 @@ impl NumPQChunks {
 }
 
 /// Parameters specific for disk index construction.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct DiskIndexBuildParameters {
-    /// Limit on the memory allowed for building the index.
+    /// Limit on graph-construction memory. PiPNN falls back to Vamana when its
+    /// estimated one-shot peak exceeds this value.
     build_memory_limit: MemoryBudget,
 
     /// Number of PQ chunks stored in-memory for search and to be generated during build.
@@ -120,6 +125,9 @@ pub struct DiskIndexBuildParameters {
 
     /// Number of vectors processed per data-compression chunk.
     data_compression_chunk_vector_count: usize,
+
+    /// Which graph construction algorithm to use.
+    build_algorithm: BuildAlgorithm,
 }
 
 impl DiskIndexBuildParameters {
@@ -134,6 +142,26 @@ impl DiskIndexBuildParameters {
             search_pq_chunks,
             build_quantization,
             data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
+            build_algorithm: BuildAlgorithm::default(),
+        }
+    }
+
+    /// Create parameters for one-shot PiPNN graph construction.
+    ///
+    /// PiPNN uses the common search-PQ and disk-layout pipeline. The memory
+    /// budget selects Vamana when the estimated PiPNN peak does not fit.
+    #[cfg(feature = "pipnn")]
+    pub fn new_pipnn(
+        build_memory_limit: MemoryBudget,
+        search_pq_chunks: NumPQChunks,
+        config: PiPNNParameters,
+    ) -> Self {
+        Self {
+            build_memory_limit,
+            search_pq_chunks,
+            build_quantization: QuantizationType::FP,
+            data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
+            build_algorithm: BuildAlgorithm::PiPNN(config),
         }
     }
 
@@ -165,6 +193,129 @@ impl DiskIndexBuildParameters {
     pub fn data_compression_chunk_vector_count(&self) -> usize {
         self.data_compression_chunk_vector_count
     }
+
+    /// Get the graph-construction algorithm.
+    pub fn build_algorithm(&self) -> &BuildAlgorithm {
+        &self.build_algorithm
+    }
+
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn pipnn_config(&self) -> Option<diskann_pipnn::PiPNNConfig> {
+        match &self.build_algorithm {
+            BuildAlgorithm::PiPNN(config) => Some(config.into()),
+            BuildAlgorithm::Vamana => None,
+        }
+    }
+
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn use_vamana_if_pipnn_exceeds(
+        &mut self,
+        npoints: usize,
+        dimensions: usize,
+        element_size: usize,
+        num_threads: usize,
+    ) -> ANNResult<usize> {
+        let parameters = match &self.build_algorithm {
+            BuildAlgorithm::PiPNN(parameters) => parameters,
+            BuildAlgorithm::Vamana => {
+                return Err(ANNError::log_index_error(
+                    "memory selection requires PiPNN parameters",
+                ));
+            }
+        };
+        let estimate =
+            estimate_pipnn_peak_memory(parameters, npoints, dimensions, element_size, num_threads);
+        if estimate.is_none_or(|bytes| bytes > self.build_memory_limit.in_bytes()) {
+            self.build_algorithm = BuildAlgorithm::Vamana;
+        }
+        Ok(estimate.unwrap_or(usize::MAX))
+    }
+}
+
+#[cfg(feature = "pipnn")]
+fn estimate_pipnn_peak_memory(
+    config: &PiPNNParameters,
+    npoints: usize,
+    dimensions: usize,
+    element_size: usize,
+    num_threads: usize,
+) -> Option<usize> {
+    const PROPORTIONAL_HEADROOM_PERCENT: u128 = 108;
+    const PROCESS_HEADROOM: u128 = 16 * 1024 * 1024;
+    const PER_WORKER_HEADROOM: u128 = 28 * 1024 * 1024;
+
+    let workers = if num_threads == 0 {
+        std::thread::available_parallelism().map_or(1, NonZeroUsize::get)
+    } else {
+        num_threads
+    } as u128;
+    let copies = config
+        .fanout
+        .iter()
+        .try_fold(config.replicas as u128, |copies, &fanout| {
+            copies.checked_mul(fanout as u128)
+        })?;
+    let dataset = (dimensions as u128).checked_mul(element_size as u128)?;
+    let leaf_ids = copies.checked_mul(size_of::<u32>() as u128)?;
+    let offered = copies.checked_mul(config.k as u128)?.checked_mul(2)?;
+    let candidate_capacity = offered.checked_next_power_of_two()?;
+    let candidate_storage = candidate_capacity.checked_mul(size_of::<u32>() as u128)?;
+    let candidate_metadata =
+        size_of::<std::sync::Mutex<diskann::graph::AdjacencyList<u32>>>() as u128;
+
+    let partition_per_point = dataset
+        .checked_add(16)?
+        .checked_add(leaf_ids.checked_mul(2)?)?;
+    let leaf_per_point = dataset
+        .checked_add(candidate_metadata)?
+        .checked_add(candidate_storage)?
+        .checked_add(leaf_ids)?;
+    let finalization_per_point = dataset
+        .checked_add(candidate_metadata)?
+        .checked_add(size_of::<Vec<u32>>() as u128)?
+        .checked_add(candidate_storage)?;
+
+    let leaf_size = config.c_max.min(npoints).max(1) as u128;
+    let leaf_scratch = leaf_size
+        .checked_mul(dimensions as u128)?
+        .checked_mul(size_of::<f32>() as u128)?
+        .checked_add(leaf_size.checked_mul(leaf_size)?.checked_mul(5)?)?
+        .checked_add(leaf_size.checked_mul(config.k as u128)?.checked_mul(24)?)?
+        .checked_add(leaf_size.checked_mul(20)?)?
+        .checked_add(68)?;
+    let partition_rows = (npoints as u128).min(1_024);
+    let partition_leaders = (npoints as u128).min(1_000);
+    let partition_scratch = partition_leaders
+        .checked_mul(dimensions as u128)?
+        .checked_mul(size_of::<f32>() as u128)?
+        .checked_add(
+            partition_rows
+                .checked_mul(dimensions as u128)?
+                .checked_mul(size_of::<f32>() as u128)?,
+        )?
+        .checked_add(
+            partition_rows
+                .checked_mul(partition_leaders)?
+                .checked_mul(size_of::<f32>() as u128)?,
+        )?;
+
+    let points = npoints as u128;
+    let structural = points
+        .checked_mul(partition_per_point)?
+        .checked_add(workers.checked_mul(partition_scratch)?)?
+        .max(
+            points
+                .checked_mul(leaf_per_point)?
+                .checked_add(workers.checked_mul(leaf_scratch)?)?,
+        )
+        .max(points.checked_mul(finalization_per_point)?);
+    let proportional = structural
+        .checked_mul(PROPORTIONAL_HEADROOM_PERCENT)?
+        .div_ceil(100);
+    let allocator_floor = structural
+        .checked_add(PROCESS_HEADROOM)?
+        .checked_add(workers.checked_mul(PER_WORKER_HEADROOM)?)?;
+    usize::try_from(proportional.max(allocator_floor)).ok()
 }
 
 #[cfg(test)]
@@ -251,5 +402,59 @@ mod dataset_test {
     fn num_pq_chunks_new_accepts_valid_values() {
         let chunks = NumPQChunks::new_with(64, 128).unwrap();
         assert_eq!(chunks.get(), 64);
+    }
+
+    #[cfg(feature = "pipnn")]
+    #[test]
+    fn new_pipnn_uses_the_common_disk_pipeline_parameters() {
+        let pq = NumPQChunks::new_with(1, 128).unwrap();
+        let parameters = PiPNNParameters::default();
+        let config = diskann_pipnn::PiPNNConfig::from(&parameters);
+        let budget = MemoryBudget::try_from_gb(2.0).unwrap();
+        let params = DiskIndexBuildParameters::new_pipnn(budget, pq, parameters);
+
+        assert_eq!(params.pipnn_config(), Some(config));
+        assert_eq!(params.search_pq_chunks(), pq);
+        assert_eq!(
+            params.data_compression_chunk_vector_count(),
+            DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT
+        );
+        assert!(matches!(params.build_algorithm(), BuildAlgorithm::PiPNN(_)));
+    }
+
+    #[cfg(feature = "pipnn")]
+    #[test]
+    fn pipnn_memory_estimate_covers_measured_bigann10m_peak() {
+        const MEASURED_PEAK: usize = 8_656_004 * 1024;
+        let parameters = PiPNNParameters {
+            c_max: 512,
+            c_min: 64,
+            p_samp: 0.01,
+            fanout: vec![10, 3],
+            k: 2,
+            replicas: 1,
+        };
+
+        let estimate = estimate_pipnn_peak_memory(&parameters, 10_000_000, 128, 2, 16).unwrap();
+
+        assert!(estimate >= MEASURED_PEAK);
+        assert!(estimate <= MEASURED_PEAK * 120 / 100);
+    }
+
+    #[cfg(feature = "pipnn")]
+    #[test]
+    fn pipnn_falls_back_to_vamana_above_budget() {
+        let budget = MemoryBudget::try_from_gb(1.0).unwrap();
+        let pq = NumPQChunks::new_with(1, 128).unwrap();
+        let mut params =
+            DiskIndexBuildParameters::new_pipnn(budget, pq, PiPNNParameters::default());
+
+        let estimate = params
+            .use_vamana_if_pipnn_exceeds(10_000_000, 128, 2, 16)
+            .unwrap();
+
+        assert!(estimate > budget.in_bytes());
+        assert!(matches!(params.build_algorithm(), BuildAlgorithm::Vamana));
+        assert_eq!(params.build_quantization(), &QuantizationType::FP);
     }
 }
