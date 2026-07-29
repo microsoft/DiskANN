@@ -198,9 +198,9 @@ impl DiskIndexBuildParameters {
     }
 
     #[cfg(feature = "pipnn")]
-    pub(crate) fn pipnn_config(&self) -> Option<diskann::graph::pipnn::PiPNNConfig> {
+    pub(crate) fn pipnn_parameters(&self) -> Option<&PiPNNParameters> {
         match &self.build_algorithm {
-            BuildAlgorithm::PiPNN(config) => Some(config.into()),
+            BuildAlgorithm::PiPNN(config) => Some(config),
             BuildAlgorithm::Vamana => None,
         }
     }
@@ -291,4 +291,5 @@ mod dataset_test {
         let chunks = NumPQChunks::new_with(64, 128).unwrap();
         assert_eq!(chunks.get(), 64);
     }
+
 }
