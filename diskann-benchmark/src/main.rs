@@ -312,6 +312,25 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    #[cfg(feature = "pipnn")]
+    fn pipnn_graph_index_integration() {
+        let raw = value_from_file(&example_directory().join("pipnn-graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(all(feature = "disk-index", feature = "pipnn"))]
+    fn pipnn_disk_index_integration() {
+        let mut raw = value_from_file(&example_directory().join("pipnn-disk-index.json"));
+        let directory = tempfile::tempdir().unwrap();
+        let save_path = directory.path().join("pipnn_disk_index");
+        *raw.pointer_mut("/jobs/0/content/source/save_path")
+            .expect("PiPNN disk example must declare save_path") =
+            Value::String(save_path.to_string_lossy().into_owned());
+        run_integration_test(raw);
+    }
+
     /////////////////////////
     //    Flat Search      //
     /////////////////////////
