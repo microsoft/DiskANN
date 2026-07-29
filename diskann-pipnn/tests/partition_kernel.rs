@@ -35,7 +35,7 @@ fn reference(input: PartitionTopK<'_>, fanout: usize) -> Vec<u32> {
                         }
                     }
                 };
-                (distance.partial_cmp(&f32::MAX) == Some(std::cmp::Ordering::Less))
+                (distance.partial_cmp(&f32::INFINITY) == Some(std::cmp::Ordering::Less))
                     .then_some((leader as u32, distance))
             })
             .collect();
@@ -211,6 +211,29 @@ fn cosine_treats_a_zero_norm_as_zero_similarity() {
     .unwrap();
 
     assert_eq!(assignments, [0, 1]);
+}
+
+#[test]
+fn finite_max_distance_fills_the_final_simd_slot() {
+    let mut assignments = [u32::MAX; 8];
+    let mut dots = [0.0; 8];
+    dots[7] = -f32::MAX;
+
+    nearest_leaders(
+        PartitionTopK {
+            dots: &dots,
+            rows: 1,
+            leaders: 8,
+            row_scales: &[],
+            leader_scales: &[],
+            metric: Metric::InnerProduct,
+        },
+        8,
+        &mut assignments,
+    )
+    .unwrap();
+
+    assert_eq!(assignments, [0, 1, 2, 3, 4, 5, 6, 7]);
 }
 
 #[test]

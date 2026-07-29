@@ -83,7 +83,7 @@ fn scalar_distance_matches_metric_contract() {
 
 #[test]
 fn scalar_topk_orders_candidates_and_preserves_ties() {
-    let mut top = [(u32::MAX, f32::MAX); MAX_PARTITION_FANOUT];
+    let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
     for (leader, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 1.0)] {
         insert_topk(&mut top, 4, leader, distance);
     }
