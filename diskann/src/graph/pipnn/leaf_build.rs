@@ -8,30 +8,49 @@
 //! Partitioning supplies sorted, unique global point IDs for each leaf. One leaf
 //! job does these steps:
 //!
-//! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for Gram construction, norms, and local ranking.
-//! 3. Convert local positions to global point IDs.
-//! 4. Add both edge directions to global candidate lists.
+//! 1. Check each ID and convert its vector to reusable `f32` storage.
+//! 2. Compute the lower triangle of `A · Aᵀ`.
+//! 3. Select local neighbors for both points of each pair.
+//! 4. Convert local positions to global point IDs.
+//! 5. Add both edge directions to global candidate lists.
 //!
 //! Overlapping leaves run concurrently. A worker locks one destination list only
 //! while it adds one leaf's IDs. Reusable buffers keep their largest allocation.
 //! Each operation uses an explicit active prefix.
 
-use parking_lot::Mutex;
+use std::{collections::TryReserveError, sync::Mutex};
 
 use crate::{graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafMetric,
-    leaf_kernel::{LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, select_leaf_neighbors},
+    kernel_metric::{LeafMetric, NormPreparation},
+    leaf_kernel::{
+        LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, nearest_neighbors,
+    },
     simd::PiPNNSIMDSchema,
 };
 
 /// Failure while converting leaves into direct graph candidates.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LeafBuildError {
+    #[error("leaf build requires at least one dimension")]
+    EmptyDimensions,
+    #[error("dataset point count {0} exceeds the u32 ID limit")]
+    TooManyPoints(usize),
+    #[error("leaf {leaf} is empty")]
+    EmptyLeaf { leaf: usize },
+    #[error("point ID {point} in leaf {leaf} is outside a {points}-point dataset")]
+    InvalidPointId {
+        leaf: usize,
+        point: u32,
+        points: usize,
+    },
+    #[error("point ID {point} appears more than once in leaf {leaf}")]
+    DuplicatePointId { leaf: usize, point: u32 },
+    #[error("point IDs in leaf {leaf} are not strictly increasing")]
+    UnsortedPointIds { leaf: usize },
     #[error("leaf {leaf} shape {rows} x {columns} overflows usize")]
     ShapeOverflow {
         leaf: usize,
@@ -40,6 +59,13 @@ pub(crate) enum LeafBuildError {
     },
     #[error("failed to form {buffer} view for leaf {leaf}")]
     InvalidView { leaf: usize, buffer: &'static str },
+    #[error("failed to reserve {additional} values for {buffer}")]
+    Allocation {
+        buffer: &'static str,
+        additional: usize,
+        #[source]
+        source: TryReserveError,
+    },
     #[error("failed to convert point {point} in leaf {leaf}")]
     Conversion {
         leaf: usize,
@@ -47,12 +73,24 @@ pub(crate) enum LeafBuildError {
         #[source]
         source: crate::ANNError,
     },
+    #[error("lower-AAT failed for leaf {leaf}")]
+    LowerAat {
+        leaf: usize,
+        #[source]
+        source: diskann_linalg::SgemmError,
+    },
     #[error("nearest-neighbor selection failed for leaf {leaf}")]
     Kernel {
         leaf: usize,
         #[source]
-        source: crate::ANNError,
+        source: LeafKernelError,
     },
+    #[error("leaf kernel returned local target {target} for a {points}-point leaf")]
+    InvalidLocalTarget { target: u32, points: usize },
+    #[error("candidate list for point {point} is poisoned")]
+    PoisonedCandidateList { point: u32 },
+    #[error("leaf {leaf} produced too many directed edges")]
+    TooManyEdges { leaf: usize },
 }
 
 /// Reusable buffers for one Rayon leaf job.
@@ -62,9 +100,16 @@ pub(crate) enum LeafBuildError {
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
+    dots: Vec<f32>,
+    norms: Vec<f32>,
     neighbors: Vec<LeafNeighbor>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
+    seen_pairs: Vec<bool>,
+    edge_offsets: Vec<u32>,
+    edges: Vec<(u32, f32)>,
+    edge_cursor: Vec<u32>,
+    sketch_scratch: Vec<f32>,
 }
 
 impl LeafBuffers {
@@ -83,7 +128,16 @@ impl LeafBuffers {
                     rows: point_count,
                     columns: dimension_count,
                 })?;
-        let leaf_k = leaf_neighbor_count(point_count, requested_k);
+        let dot_count =
+            point_count
+                .checked_mul(point_count)
+                .ok_or(LeafBuildError::ShapeOverflow {
+                    leaf,
+                    rows: point_count,
+                    columns: point_count,
+                })?;
+        let leaf_k = leaf_neighbor_count(point_count, requested_k)
+            .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
         let neighbor_count =
             point_count
                 .checked_mul(leaf_k)
@@ -93,16 +147,33 @@ impl LeafBuffers {
                     columns: leaf_k,
                 })?;
 
-        grow(&mut self.point_values, point_value_count, 0.0);
-        grow(&mut self.neighbors, neighbor_count, LeafNeighbor::default());
+        grow(
+            "leaf point values",
+            &mut self.point_values,
+            point_value_count,
+            0.0,
+        )?;
+        grow("leaf dot products", &mut self.dots, dot_count, 0.0)?;
+        grow(
+            "leaf neighbors",
+            &mut self.neighbors,
+            neighbor_count,
+            LeafNeighbor::default(),
+        )?;
+        grow("leaf seen pairs", &mut self.seen_pairs, dot_count, false)?;
         Ok((leaf_k, neighbor_count))
     }
 
-    fn prepare_local_adjacency(&mut self, point_count: usize) {
+    fn prepare_local_adjacency(&mut self, point_count: usize) -> Result<(), LeafBuildError> {
+        let additional = point_count.saturating_sub(self.local_adjacency.len());
+        self.local_adjacency
+            .try_reserve(additional)
+            .map_err(|source| allocation_error("leaf adjacency lists", additional, source))?;
         self.local_adjacency.resize_with(point_count, Vec::new);
         self.local_adjacency[..point_count]
             .iter_mut()
             .for_each(Vec::clear);
+        Ok(())
     }
 }
 
@@ -116,31 +187,47 @@ struct DirectCandidates {
 }
 
 impl DirectCandidates {
-    fn new(point_count: usize) -> Self {
-        let lists = (0..point_count)
-            .map(|_| Mutex::new(AdjacencyList::new()))
-            .collect();
-        Self { lists }
+    fn new(point_count: usize) -> Result<Self, LeafBuildError> {
+        let mut lists = Vec::new();
+        lists
+            .try_reserve_exact(point_count)
+            .map_err(|source| allocation_error("candidate lists", point_count, source))?;
+        lists.resize_with(point_count, || Mutex::new(AdjacencyList::new()));
+        Ok(Self { lists })
     }
 
-    fn add_leaf(&self, point_ids: &[u32], local_adjacency: &[Vec<u32>]) {
+    fn add_leaf(
+        &self,
+        point_ids: &[u32],
+        local_adjacency: &[Vec<u32>],
+    ) -> Result<(), LeafBuildError> {
         for (&source, additions) in point_ids.iter().zip(local_adjacency) {
             // `add_direct_leaf_candidates` checks every point ID before this append.
-            self.lists[source as usize]
+            let candidates = &self.lists[source as usize];
+            let mut candidates = candidates
                 .lock()
-                .extend_from_slice(additions);
+                .map_err(|_| LeafBuildError::PoisonedCandidateList { point: source })?;
+            candidates.extend_from_slice(additions);
         }
+        Ok(())
     }
 
-    fn into_lists(self) -> Vec<AdjacencyList<u32>> {
-        self.lists
-            .into_iter()
-            .map(Mutex::into_inner)
-            .map(|mut candidates| {
-                candidates.sort();
+    fn into_lists(self) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError> {
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(self.lists.len())
+            .map_err(|source| allocation_error("candidate output", self.lists.len(), source))?;
+        for (point, candidates) in self.lists.into_iter().enumerate() {
+            let mut candidates =
                 candidates
-            })
-            .collect()
+                    .into_inner()
+                    .map_err(|_| LeafBuildError::PoisonedCandidateList {
+                        point: point as u32,
+                    })?;
+            candidates.sort();
+            output.push(candidates);
+        }
+        Ok(output)
     }
 }
 
@@ -160,7 +247,14 @@ where
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
-    let candidates = DirectCandidates::new(data.nrows());
+    if data.ncols() == 0 {
+        return Err(LeafBuildError::EmptyDimensions);
+    }
+    if data.nrows() > u32::MAX as usize {
+        return Err(LeafBuildError::TooManyPoints(data.nrows()));
+    }
+
+    let candidates = DirectCandidates::new(data.nrows())?;
     leaves.par_iter().enumerate().try_for_each_init(
         LeafBuffers::default,
         |buffers, (leaf, point_ids)| {
@@ -175,11 +269,65 @@ where
             )
         },
     )?;
-    Ok(candidates.into_lists())
+    candidates.into_lists()
+}
+
+/// Add weighted symmetric leaf edges to HashPrune reservoirs.
+#[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
+pub(super) fn add_hash_prune_candidates<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    leaves: Vec<Vec<u32>>,
+    requested_k: usize,
+    hash_prune: &super::hash_prune::HashPrune,
+) -> Result<(), LeafBuildError>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
+    T: VectorRepr + 'static,
+{
+    if data.ncols() == 0 {
+        return Err(LeafBuildError::EmptyDimensions);
+    }
+    if data.nrows() > u32::MAX as usize {
+        return Err(LeafBuildError::TooManyPoints(data.nrows()));
+    }
+
+    leaves.par_iter().enumerate().try_for_each_init(
+        LeafBuffers::default,
+        |buffers, (leaf, point_ids)| {
+            let leaf_k =
+                compute_leaf::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
+            let point_count = point_ids.len();
+            let edge_count = build_symmetric_edge_csr(
+                leaf,
+                point_ids,
+                leaf_k,
+                &buffers.neighbors[..point_count * leaf_k],
+                EdgeBuffers {
+                    seen: &mut buffers.seen_pairs[..point_count * point_count],
+                    offsets: &mut buffers.edge_offsets,
+                    edges: &mut buffers.edges,
+                    cursor: &mut buffers.edge_cursor,
+                },
+            )?;
+            hash_prune.add_leaf_edges(
+                point_ids,
+                &buffers.edge_offsets,
+                &buffers.edges[..edge_count],
+                &mut buffers.sketch_scratch,
+            );
+            Ok(())
+        },
+    )
 }
 
 /// Add one leaf's symmetric neighbors to the direct candidate lists.
 ///
+/// The function rejects empty, duplicate, unsorted, or out-of-range point IDs.
 /// Reusable buffers can be longer than this leaf, so all accesses use the current
 /// leaf shape.
 #[allow(clippy::too_many_arguments)]
@@ -197,18 +345,69 @@ where
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
-    let (leaf_k, neighbor_value_count) =
-        buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
+    let leaf_k = compute_leaf::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
     if leaf_k == 0 {
         return Ok(());
     }
+    buffers.prepare_local_adjacency(point_ids.len())?;
+    add_symmetric_neighbors(
+        point_ids,
+        leaf_k,
+        &buffers.neighbors[..point_ids.len() * leaf_k],
+        &mut buffers.local_adjacency[..point_ids.len()],
+    )?;
+    candidates.add_leaf(point_ids, &buffers.local_adjacency[..point_ids.len()])
+}
+
+fn compute_leaf<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    leaf: usize,
+    point_ids: &[u32],
+    requested_k: usize,
+    buffers: &mut LeafBuffers,
+) -> Result<usize, LeafBuildError>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
+    T: VectorRepr + 'static,
+{
+    if point_ids.is_empty() {
+        return Err(LeafBuildError::EmptyLeaf { leaf });
+    }
+    for &point in point_ids {
+        if point as usize >= data.nrows() {
+            return Err(LeafBuildError::InvalidPointId {
+                leaf,
+                point,
+                points: data.nrows(),
+            });
+        }
+    }
+    if let Some(pair) = point_ids.windows(2).find(|pair| pair[0] >= pair[1]) {
+        if pair[0] == pair[1] {
+            return Err(LeafBuildError::DuplicatePointId {
+                leaf,
+                point: pair[0],
+            });
+        }
+        return Err(LeafBuildError::UnsortedPointIds { leaf });
+    }
+    let (leaf_k, neighbor_value_count) =
+        buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
+    if leaf_k == 0 {
+        return Ok(0);
+    }
 
     let point_value_count = point_ids.len() * data.ncols();
-    let point_values = &mut buffers.point_values[..point_value_count];
+    let dot_count = point_ids.len() * point_ids.len();
 
     for (&point, point_output) in point_ids
         .iter()
-        .zip(point_values.chunks_exact_mut(data.ncols()))
+        .zip(buffers.point_values[..point_value_count].chunks_exact_mut(data.ncols()))
     {
         let source_values = data.row(point as usize);
         T::as_f32_into(source_values, point_output).map_err(|source| {
@@ -220,13 +419,24 @@ where
         })?;
     }
 
-    let points =
-        MatrixView::try_from(&*point_values, point_ids.len(), data.ncols()).map_err(|_| {
-            LeafBuildError::InvalidView {
-                leaf,
-                buffer: "leaf point matrix",
-            }
-        })?;
+    diskann_linalg::sgemm_aat_lower(
+        point_ids.len(),
+        data.ncols(),
+        &buffers.point_values[..point_value_count],
+        &mut buffers.dots[..dot_count],
+    )
+    .map_err(|source| LeafBuildError::LowerAat { leaf, source })?;
+    let dots = MatrixView::try_from(&buffers.dots[..dot_count], point_ids.len(), point_ids.len())
+        .map_err(|_| LeafBuildError::InvalidView {
+        leaf,
+        buffer: "leaf dot-product matrix",
+    })?;
+    M::prepare_leaf_norms(NormPreparation {
+        values: dots,
+        norms: &mut buffers.norms,
+    })
+    .map_err(|source| allocation_error("leaf norms", point_ids.len(), source))?;
+    let norms = &*buffers.norms;
     let output = MutMatrixView::try_from(
         &mut buffers.neighbors[..neighbor_value_count],
         point_ids.len(),
@@ -236,18 +446,9 @@ where
         leaf,
         buffer: "leaf output",
     })?;
-    select_leaf_neighbors::<A, M>(arch, points, output, &mut buffers.kernel_workspace)
+    nearest_neighbors::<A, M>(arch, dots, norms, output, &mut buffers.kernel_workspace)
         .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
-
-    buffers.prepare_local_adjacency(point_ids.len());
-    add_symmetric_neighbors(
-        point_ids,
-        leaf_k,
-        &buffers.neighbors[..neighbor_value_count],
-        &mut buffers.local_adjacency[..point_ids.len()],
-    );
-    candidates.add_leaf(point_ids, &buffers.local_adjacency[..point_ids.len()]);
-    Ok(())
+    Ok(leaf_k)
 }
 
 fn add_symmetric_neighbors(
@@ -255,26 +456,182 @@ fn add_symmetric_neighbors(
     leaf_k: usize,
     neighbors: &[LeafNeighbor],
     local_adjacency: &mut [Vec<u32>],
-) {
+) -> Result<(), LeafBuildError> {
     for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in source_neighbors {
             if !neighbor.is_assigned() {
                 continue;
             }
             let target = neighbor.target as usize;
+            let Some(&target_id) = point_ids.get(target) else {
+                return Err(LeafBuildError::InvalidLocalTarget {
+                    target: neighbor.target,
+                    points: point_ids.len(),
+                });
+            };
             let source_id = point_ids[source];
-            let target_id = point_ids[target];
             if source_id != target_id {
                 local_adjacency[source].push(target_id);
                 local_adjacency[target].push(source_id);
             }
         }
     }
+    Ok(())
 }
 
-fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
+struct EdgeBuffers<'a> {
+    seen: &'a mut [bool],
+    offsets: &'a mut Vec<u32>,
+    edges: &'a mut Vec<(u32, f32)>,
+    cursor: &'a mut Vec<u32>,
+}
+
+fn build_symmetric_edge_csr(
+    leaf: usize,
+    point_ids: &[u32],
+    leaf_k: usize,
+    neighbors: &[LeafNeighbor],
+    buffers: EdgeBuffers<'_>,
+) -> Result<usize, LeafBuildError> {
+    let EdgeBuffers {
+        seen,
+        offsets,
+        edges,
+        cursor,
+    } = buffers;
+    let point_count = point_ids.len();
+    if leaf_k == 0 {
+        resize("leaf edge offsets", offsets, point_count + 1, 0)?;
+        offsets.fill(0);
+        edges.clear();
+        return Ok(0);
+    }
+    seen.fill(false);
+    resize("leaf edge offsets", offsets, point_count + 1, 0)?;
+    offsets.fill(0);
+
+    for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
+        for neighbor in neighbors {
+            let target = neighbor.target as usize;
+            if target >= point_count {
+                return Err(LeafBuildError::InvalidLocalTarget {
+                    target: neighbor.target,
+                    points: point_count,
+                });
+            }
+            count_directed_edge(leaf, point_count, source, target, seen, offsets)?;
+            count_directed_edge(leaf, point_count, target, source, seen, offsets)?;
+        }
+    }
+    for point in 1..=point_count {
+        offsets[point] = offsets[point]
+            .checked_add(offsets[point - 1])
+            .ok_or(LeafBuildError::TooManyEdges { leaf })?;
+    }
+
+    let edge_count = offsets[point_count] as usize;
+    resize("leaf edges", edges, edge_count, (0, 0.0))?;
+    resize("leaf edge cursor", cursor, point_count, 0)?;
+    cursor.copy_from_slice(&offsets[..point_count]);
+    seen.fill(false);
+
+    for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
+        for neighbor in neighbors {
+            let target = neighbor.target as usize;
+            write_directed_edge(
+                point_count,
+                source,
+                target,
+                neighbor.distance,
+                seen,
+                edges,
+                cursor,
+            );
+            write_directed_edge(
+                point_count,
+                target,
+                source,
+                neighbor.distance,
+                seen,
+                edges,
+                cursor,
+            );
+        }
+    }
+    Ok(edge_count)
+}
+
+fn count_directed_edge(
+    leaf: usize,
+    point_count: usize,
+    source: usize,
+    target: usize,
+    seen: &mut [bool],
+    offsets: &mut [u32],
+) -> Result<(), LeafBuildError> {
+    let seen_entry = &mut seen[source * point_count + target];
+    if !*seen_entry {
+        *seen_entry = true;
+        offsets[source + 1] = offsets[source + 1]
+            .checked_add(1)
+            .ok_or(LeafBuildError::TooManyEdges { leaf })?;
+    }
+    Ok(())
+}
+
+fn write_directed_edge(
+    point_count: usize,
+    source: usize,
+    target: usize,
+    distance: f32,
+    seen: &mut [bool],
+    edges: &mut [(u32, f32)],
+    cursor: &mut [u32],
+) {
+    let seen_entry = &mut seen[source * point_count + target];
+    if !*seen_entry {
+        *seen_entry = true;
+        let edge_slot = cursor[source] as usize;
+        edges[edge_slot] = (target as u32, distance);
+        cursor[source] += 1;
+    }
+}
+
+fn grow<T: Clone>(
+    buffer: &'static str,
+    values: &mut Vec<T>,
+    len: usize,
+    value: T,
+) -> Result<(), LeafBuildError> {
     if values.len() < len {
-        values.resize(len, value);
+        resize(buffer, values, len, value)?;
+    }
+    Ok(())
+}
+
+fn resize<T: Clone>(
+    buffer: &'static str,
+    values: &mut Vec<T>,
+    len: usize,
+    value: T,
+) -> Result<(), LeafBuildError> {
+    let additional = len.saturating_sub(values.len());
+    values
+        .try_reserve(additional)
+        .map_err(|source| allocation_error(buffer, additional, source))?;
+    values.resize(len, value);
+    Ok(())
+}
+
+fn allocation_error(
+    buffer: &'static str,
+    additional: usize,
+    source: TryReserveError,
+) -> LeafBuildError {
+    LeafBuildError::Allocation {
+        buffer,
+        additional,
+        source,
     }
 }
 
@@ -288,7 +645,7 @@ mod tests {
 
     use super::super::simd::PiPNNSIMDSchema;
     use super::{
-        DirectCandidates, LeafBuffers, LeafBuildError, add_symmetric_neighbors,
+        DirectCandidates, LeafBuffers, LeafBuildError, add_symmetric_neighbors, allocation_error,
         build_leaf_candidates,
     };
 
@@ -580,6 +937,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_dimensions_and_leaf_membership() {
+        let data = [0.0_f32, 1.0];
+        let no_dimensions = MatrixView::try_from(&data[..0], 2, 0).unwrap();
+        assert!(matches!(
+            build(no_dimensions, &[], 1, Metric::L2),
+            Err(LeafBuildError::EmptyDimensions)
+        ));
+        assert!(matches!(
+            build(view(&data, 2, 1), &[vec![]], 1, Metric::L2),
+            Err(LeafBuildError::EmptyLeaf { leaf: 0 })
+        ));
+        assert!(matches!(
+            build(view(&data, 2, 1), &[vec![0, 2]], 1, Metric::L2),
+            Err(LeafBuildError::InvalidPointId {
+                leaf: 0,
+                point: 2,
+                points: 2
+            })
+        ));
+        assert!(matches!(
+            build(view(&data, 2, 1), &[vec![2]], 1, Metric::L2),
+            Err(LeafBuildError::InvalidPointId { point: 2, .. })
+        ));
+        assert!(matches!(
+            build(view(&data, 2, 1), &[vec![0, 2]], 0, Metric::L2),
+            Err(LeafBuildError::InvalidPointId { point: 2, .. })
+        ));
+        assert!(matches!(
+            build(view(&data, 2, 1), &[vec![0, 0]], 1, Metric::L2),
+            Err(LeafBuildError::DuplicatePointId { leaf: 0, point: 0 })
+        ));
+        assert!(matches!(
+            build(view(&data, 2, 1), &[vec![1, 0]], 1, Metric::L2),
+            Err(LeafBuildError::UnsortedPointIds { leaf: 0 })
+        ));
+    }
+
+    #[test]
     fn singleton_and_zero_k_leaves_add_no_candidates() {
         let data = [0.0_f32, 1.0, 2.0];
         let singleton = build(
@@ -608,6 +1003,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_an_invalid_kernel_target() {
+        let mut graph = vec![Vec::new(); 2];
+        let error = add_symmetric_neighbors(
+            &[10, 20],
+            1,
+            &[
+                super::super::leaf_kernel::LeafNeighbor::new(9, 1.0),
+                super::super::leaf_kernel::LeafNeighbor::new(0, 1.0),
+            ],
+            &mut graph,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            LeafBuildError::InvalidLocalTarget {
+                target: 9,
+                points: 2
+            }
+        ));
+    }
+
+    #[test]
     fn symmetric_edge_mapping_skips_duplicate_ids_instead_of_adding_self_edges() {
         let mut graph = vec![Vec::new(); 2];
         add_symmetric_neighbors(
@@ -618,14 +1035,52 @@ mod tests {
                 super::super::leaf_kernel::LeafNeighbor::new(0, 0.0),
             ],
             &mut graph,
-        );
+        )
+        .unwrap();
         assert!(graph.iter().all(|neighbors| neighbors.is_empty()));
     }
 
     #[test]
+    fn poisoned_candidate_lists_return_errors() {
+        let candidates = DirectCandidates::new(1).unwrap();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = candidates.lists[0].lock().unwrap();
+            panic!("poison candidate list");
+        });
+        assert!(matches!(
+            candidates.add_leaf(&[0], &[Vec::new()]),
+            Err(LeafBuildError::PoisonedCandidateList { point: 0 })
+        ));
+        assert!(matches!(
+            candidates.into_lists(),
+            Err(LeafBuildError::PoisonedCandidateList { point: 0 })
+        ));
+    }
+
+    #[test]
+    fn allocation_errors_preserve_buffer_context() {
+        let mut values = Vec::<u8>::new();
+        let source = values.try_reserve(usize::MAX).unwrap_err();
+        let error = allocation_error("test", 1, source);
+        assert!(matches!(
+            error,
+            LeafBuildError::Allocation {
+                buffer: "test",
+                additional: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn direct_candidate_accumulator_keeps_unique_sorted_lists() {
-        let candidates = DirectCandidates::new(2);
-        candidates.add_leaf(&[0, 1], &[vec![1, 1], vec![0]]);
-        assert_eq!(adjacency_lists(candidates.into_lists()), [vec![1], vec![0]]);
+        let candidates = DirectCandidates::new(2).unwrap();
+        candidates
+            .add_leaf(&[0, 1], &[vec![1, 1], vec![0]])
+            .unwrap();
+        assert_eq!(
+            adjacency_lists(candidates.into_lists().unwrap()),
+            [vec![1], vec![0]]
+        );
     }
 }
