@@ -180,10 +180,10 @@ where
         for idx in indices {
             // Check if the index is within bounds
             if idx >= self.npts {
-                let npts = self.npts - 1;
+                let npts = self.npts;
                 return Err(ANNError::message(lazy_format!(
                     move,
-                    "Vector index {} is out of bounds (max: {})",
+                    "Vector index {} is out of bounds (must be less than: {})",
                     idx,
                     npts,
                 )));
