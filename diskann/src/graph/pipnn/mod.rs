@@ -11,7 +11,7 @@
 //!
 //! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
 //!    at most `c_max` points.
-//! 2. `leaf_build` computes one ranking-distance buffer for each leaf. It
+//! 2. `leaf_build` computes a lower-triangular Gram matrix for each leaf. It
 //!    selects local neighbors and merges their global point IDs.
 //! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
 //!    longer than the graph degree.
@@ -31,14 +31,17 @@
 //! Partition and leaf work use separate reusable buffers. The build consumes
 //! each output before it creates another graph representation.
 
+mod kernel_metric;
+mod simd;
+
+mod bf16;
 mod finalization;
+mod hash_prune;
 mod leaf_build;
 mod leaf_kernel;
-mod leaf_metric;
+mod lsh;
 mod partition_kernel;
-mod partition_metric;
 mod partitioning;
-mod simd;
 
 use crate::{
     ANNError, ANNResult,
@@ -50,129 +53,10 @@ use diskann_vector::distance::Metric;
 use diskann_wide::arch::{self, Target1};
 use rayon::ThreadPool;
 
-use self::{leaf_metric::LeafMetric, partition_metric::PartitionMetric, simd::PiPNNSIMDSchema};
-
-pub(super) struct L2;
-pub(super) struct Cosine;
-pub(super) struct CosineNormalized;
-pub(super) struct InnerProduct;
-
-/// Convert one dot product and two norms to cosine distance.
-///
-/// Treat a zero or subnormal norm as zero similarity. This rule takes precedence
-/// over the dot value. Clamp finite similarity to the cosine range. Otherwise,
-/// a NaN input produces a NaN distance.
-#[inline(always)]
-fn cosine_distance(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
-    if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {
-        1.0
-    } else {
-        1.0 - (dot / (source_norm * target_norm)).clamp(-1.0, 1.0)
-    }
-}
-
-#[cfg(test)]
-mod cosine_distance_contract_tests {
-    use super::cosine_distance;
-    use rstest::rstest;
-
-    mod cosine_distance_tests {
-        use super::*;
-
-        #[test]
-        fn zero_norm_takes_precedence_over_a_nan_dot_product() {
-            // Given
-            let dot = f32::NAN;
-            let source_norm = 0.0_f32;
-            let target_norm = 1.0_f32;
-            let zero_similarity = 0.0_f32;
-            let expected = 1.0 - zero_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::zero_source(0.0, 1.0)]
-        #[case::zero_target(1.0, 0.0)]
-        #[case::subnormal_source(f32::MIN_POSITIVE.sqrt() / 2.0, 1.0)]
-        #[case::subnormal_target(1.0, f32::MIN_POSITIVE.sqrt() / 2.0)]
-        #[trace]
-        fn zero_or_subnormal_norm_produces_unit_distance(
-            #[case] source_norm: f32,
-            #[case] target_norm: f32,
-        ) {
-            // Given
-            let dot = 0.0_f32;
-            let zero_similarity = 0.0_f32;
-            let expected = 1.0 - zero_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn minimum_normal_norm_uses_normalized_similarity() {
-            // Given
-            let source_norm = f32::MIN_POSITIVE.sqrt();
-            let target_norm = 1.0_f32;
-            let expected_similarity = 0.5_f32;
-            let dot = expected_similarity * source_norm * target_norm;
-            let expected = 1.0 - expected_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::above_one(1.0)]
-        #[case::below_negative_one(-1.0)]
-        #[trace]
-        fn finite_similarity_outside_the_cosine_range_is_clamped(#[case] bounded_similarity: f32) {
-            // Given
-            let source_norm = 2.0_f32;
-            let target_norm = 2.0_f32;
-            let norm_product = source_norm * target_norm;
-            let rounding_excess = f32::EPSILON * norm_product;
-            let dot = bounded_similarity * (norm_product + rounding_excess);
-            let expected = 1.0 - bounded_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::nan_dot(f32::NAN, 1.0, 1.0)]
-        #[case::nan_source_norm(0.0, f32::NAN, 1.0)]
-        #[case::nan_target_norm(0.0, 1.0, f32::NAN)]
-        #[trace]
-        fn nan_without_a_zero_norm_produces_nan_distance(
-            #[case] dot: f32,
-            #[case] source_norm: f32,
-            #[case] target_norm: f32,
-        ) {
-            // Given: the case supplies one NaN. The other values do not select the zero-norm rule.
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert!(actual.is_nan());
-        }
-    }
-}
+use self::{
+    kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2, LeafMetric, PartitionMetric},
+    simd::PiPNNSIMDSchema,
+};
 
 /// PiPNN partition and leaf-selection policy.
 ///
@@ -231,6 +115,44 @@ impl PiPNNConfig {
     }
 }
 
+/// HashPrune policy for bounded candidate reservoirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashPruneConfig {
+    /// Number of random-hyperplane bits in each relative-direction hash.
+    pub num_hash_planes: usize,
+    /// Maximum number of direction buckets retained for each source point.
+    pub l_max: usize,
+    /// Apply Vamana RobustPrune after reservoir extraction.
+    pub final_prune: bool,
+}
+
+impl HashPruneConfig {
+    /// Check the structural HashPrune limits.
+    pub fn validate(&self) -> ANNResult<()> {
+        if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
+            return Err(config_error(format!(
+                "num_hash_planes ({}) must be in [1, {}]",
+                self.num_hash_planes,
+                lsh::MAX_PLANES
+            )));
+        }
+        if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
+            return Err(config_error(format!(
+                "l_max ({}) must be in [1, {}]",
+                self.l_max,
+                hash_prune::MAX_RESERVOIR_LEN
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+enum CandidateMerge {
+    Direct,
+    HashPrune(HashPruneConfig),
+}
+
 /// PiPNN policy and borrowed execution resources for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
@@ -238,6 +160,7 @@ pub struct PiPNNBuildContext<'a> {
     pub(crate) graph: &'a Config,
     pub(crate) metric: Metric,
     pub(crate) pool: &'a ThreadPool,
+    candidate_merge: CandidateMerge,
 }
 
 impl<'a> PiPNNBuildContext<'a> {
@@ -261,7 +184,15 @@ impl<'a> PiPNNBuildContext<'a> {
             graph,
             metric,
             pool,
+            candidate_merge: CandidateMerge::Direct,
         })
+    }
+
+    /// Enable HashPrune candidate merging for this build.
+    pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
+        config.validate()?;
+        self.candidate_merge = CandidateMerge::HashPrune(config);
+        Ok(self)
     }
 }
 
@@ -375,17 +306,60 @@ where
     T: VectorRepr + Send + Sync + 'static,
 {
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
-    // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
-    // so its complete allocation drops when leaf construction returns.
-    let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.leaf_k)
-            .map_err(ANNError::new)
-    })?;
-    // Finalization consumes each candidate list. It reuses that list's allocation
-    // for the final adjacency when the graph policy permits it.
-    tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+.in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
+    match &context.candidate_merge {
+        CandidateMerge::Direct => {
+            // Leaf jobs borrow individual ID lists. This call consumes the leaf
+            // vector, so its allocation drops when leaf construction returns.
+            let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::build_leaf_candidates::<A, M, T>(
+                    arch,
+                    data,
+                    leaves,
+                    context.config.leaf_k,
+                )
+                .map_err(ANNError::new)
+            })?;
+            tracing::info_span!("pipnn.finalization").in_scope(|| {
+                finalization::prune_overfull(data, candidates, context.graph, metric)
+            })
+        }
+        CandidateMerge::HashPrune(config) => {
+            let hash_prune = hash_prune::HashPrune::new(
+                data.as_slice(),
+                data.nrows(),
+                data.ncols(),
+                config.num_hash_planes,
+                config.l_max,
+                42,
+            )?;
+            tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::add_hash_prune_candidates::<A, M, T>(
+                    arch,
+                    data,
+                    leaves,
+                    context.config.leaf_k,
+                    &hash_prune,
+                )
+                .map_err(ANNError::new)
+            })?;
+            if config.final_prune {
+                let candidates = lists_to_adjacency(hash_prune.into_candidate_lists());
+                tracing::info_span!("pipnn.finalization").in_scope(|| {
+                    finalization::prune_overfull(data, candidates, context.graph, metric)
+                })
+            } else {
+                Ok(lists_to_adjacency(
+                    hash_prune.into_nearest_lists(context.graph.pruned_degree().get()),
+                ))
+            }
+        }
+    }
+}
+
+fn lists_to_adjacency(lists: Vec<Vec<u32>>) -> Vec<AdjacencyList<u32>> {
+    lists.into_iter().map(AdjacencyList::from_iter_untrusted).collect()
+}
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {
