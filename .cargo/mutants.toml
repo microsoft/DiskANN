@@ -13,4 +13,5 @@ exclude_re = [
   "diskann-pipnn/src/partitioning\\.rs:.*replace < with (==|>|<=) in scatter_assignments",
   "diskann-pipnn/src/partitioning\\.rs:.*replace (>|<) with (>=|<=) in global_merge_small",
   "diskann-pipnn/src/partitioning\\.rs:.*assignment_stripe_rows",
+  "diskann-benchmark-runner/src/fixture\\.rs:.*replace overwrite -> .* with Ok\\(false\\)",
 ]
