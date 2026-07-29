@@ -8,8 +8,8 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 edition.workspace = true
-# Example harnesses live in category subdirectories under `scripts/`; each is
-# declared explicitly below, so disable top-level autodiscovery.
+# The remaining diagnostic/dataprep harnesses live in category subdirectories under
+# `scripts/`; each is declared explicitly below, so disable top-level autodiscovery.
 autoexamples = false
 
 [dependencies]
@@ -37,35 +37,19 @@ tempfile.workspace = true
 [lints]
 workspace = true
 
-# Example harnesses live in category subdirectories under `scripts/` (build/,
-# search/, analysis/, dataprep/); see `scripts/README.md` for a catalog. Each is
+# Building, searching and profiling a graph-IVF index is done through the shared
+# benchmark harness (`diskann-benchmark`, feature `graph-ivf`) — see
+# `scripts/README.md`. What remains here are the two tools that harness does not
+# cover: corpus preparation, and a centroid-graph quality diagnostic. Each is
 # declared explicitly (top-level autodiscovery is disabled in `[package]`); the
 # `name` is the produced binary name and is kept stable regardless of source path.
 
-# --- build/ : index construction (static, online, and centroid refinement) ---
-[[example]]
-name = "build_static"
-path = "scripts/build/build_static.rs"
-
-[[example]]
-name = "build_online"
-path = "scripts/build/build_online.rs"
-
-# --- search/ : search sweeps and combined build+search harnesses ---
-[[example]]
-name = "sweep"
-path = "scripts/search/sweep.rs"
-
-# --- analysis/ : profiling, ablation, and disk-read reliability harnesses ---
-[[example]]
-name = "profile_layercake"
-path = "scripts/analysis/profile_layercake.rs"
-
+# --- analysis/ : index-quality diagnostics ---
 [[example]]
 name = "centroid_graph_ablation"
 path = "scripts/analysis/centroid_graph_ablation.rs"
 
-# --- dataprep/ : corpus/query compression and subsampling utilities ---
+# --- dataprep/ : corpus/query compression utilities ---
 [[example]]
 name = "compress_minmax"
 path = "scripts/dataprep/compress_minmax.rs"

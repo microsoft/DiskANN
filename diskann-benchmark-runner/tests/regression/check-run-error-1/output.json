@@ -6,6 +6,14 @@
       },
       "type": "test-input-dim"
     },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
+    },
     "results": 128
   },
   {
@@ -14,6 +22,14 @@
         "dim": 512
       },
       "type": "test-input-dim"
+    },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
     },
     "results": 512
   }

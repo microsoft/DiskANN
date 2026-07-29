@@ -504,6 +504,15 @@ mod tests {
         }
     }
 
+    // Read a generated or expected JSON output file with the run's provenance blanked.
+    //
+    // Provenance records the wall-clock time, host and revision of the run, so comparing it
+    // literally would fail on every machine and every invocation. Both sides of a
+    // comparison go through here, and so does the file written in overwrite mode.
+    fn read_output_file<P: AsRef<Path>>(path: P, ctx: &str) -> String {
+        ux::scrub_provenance(read_to_string(path, ctx))
+    }
+
     // Check if `POCKETBENCH_TEST=overwrite` is configured. Return `true` if so - otherwise
     // return `false`.
     //
@@ -664,9 +673,12 @@ mod tests {
                         generated_path, expected_path
                     );
 
-                    if let Err(err) = std::fs::rename(&generated_path, &expected_path) {
+                    // Written rather than renamed so the stored file is scrubbed of the
+                    // run's provenance, which would otherwise differ on every regeneration.
+                    let contents = read_output_file(&generated_path, "generated");
+                    if let Err(err) = std::fs::write(&expected_path, contents) {
                         panic!(
-                            "Moving generated file {:?} to expected location {:?} failed: {}",
+                            "Writing generated file {:?} to expected location {:?} failed: {}",
                             generated_path, expected_path, err
                         );
                     }
@@ -679,9 +691,9 @@ mod tests {
             } else {
                 match (was_generated, is_expected) {
                     (true, true) => {
-                        let output_contents = read_to_string(generated_path, "generated");
+                        let output_contents = read_output_file(generated_path, "generated");
 
-                        let expected_contents = read_to_string(expected_path, "expected");
+                        let expected_contents = read_output_file(expected_path, "expected");
 
                         if output_contents != expected_contents {
                             panic!(
@@ -691,7 +703,7 @@ mod tests {
                         }
                     }
                     (true, false) => {
-                        let output_contents = read_to_string(generated_path, "generated");
+                        let output_contents = read_output_file(generated_path, "generated");
 
                         panic!(
                             "{} was generated when none was expected. Contents:\n\n{}",

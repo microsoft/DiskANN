@@ -1,0 +1,32 @@
+{
+    "search_directories": [
+        "test_data/disk_index_search"
+    ],
+    "jobs": [
+        {
+            "type": "graph-ivf",
+            "content": {
+                "source": {
+                    "graph-ivf-source": "Load",
+                    "data_type": "float32",
+                    "load_path": "graphivf_siftsmall_static"
+                },
+                "search_phase": {
+                    "queries": "disk_index_sample_query_10pts.fbin",
+                    "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+                    "num_threads": 1,
+                    "nlist": [
+                        1,
+                        2,
+                        4,
+                        8,
+                        16
+                    ],
+                    "centroid_search_l": 64,
+                    "recall_at": 10,
+                    "distance": "squared_l2"
+                }
+            }
+        }
+    ]
+}

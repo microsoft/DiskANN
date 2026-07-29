@@ -30,8 +30,12 @@ pub struct Checker {
 }
 
 impl Checker {
-    /// Create a new checker with the list of search directories..
-    pub(crate) fn new(search_directories: Vec<PathBuf>, output_directory: Option<PathBuf>) -> Self {
+    /// Create a new checker over `search_directories`, optionally rooted at
+    /// `output_directory`.
+    ///
+    /// [`Input::from_raw`](crate::Input::from_raw) hands implementors a [`Checker`], so
+    /// crates defining inputs need this to exercise their validation logic in tests.
+    pub fn new(search_directories: Vec<PathBuf>, output_directory: Option<PathBuf>) -> Self {
         Self {
             search_directories,
             output_directory,

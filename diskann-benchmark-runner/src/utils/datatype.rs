@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 
 /// An enum representation for common DiskANN data types.
 ///
+/// Most variants name a primitive scalar. [`Self::MinMax8`] is the exception: it names a
+/// quantized composite element whose on-disk row is wider than the vector's logical
+/// dimension, so consumers must recover that dimension from the element type rather than
+/// from the row width.
+///
 /// See also: [`AsDataType`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -24,6 +29,8 @@ pub enum DataType {
     Int32,
     Int64,
     Bool,
+    /// 8-bit MinMax-quantized codes with per-vector scale metadata.
+    MinMax8,
 }
 
 impl DataType {
@@ -44,6 +51,7 @@ impl DataType {
             Self::Int32 => "int32",
             Self::Int64 => "int64",
             Self::Bool => "bool",
+            Self::MinMax8 => "minmax8",
         }
     }
 }

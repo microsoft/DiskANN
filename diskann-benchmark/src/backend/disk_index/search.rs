@@ -55,6 +55,7 @@ pub(super) struct DiskSearchResult {
     pub(super) qps: f32,
     pub(super) mean_latency: f64,
     pub(super) p95_latency: MicroSeconds,
+    pub(super) p99_latency: MicroSeconds,
     pub(super) p999_latency: MicroSeconds,
     pub(super) mean_ios: f64,
     pub(super) mean_io_time: f64,
@@ -131,6 +132,10 @@ impl DiskSearchResult {
             }),
             p95_latency: MicroSeconds::new(
                 statistics::get_percentile_stats(statistics, 0.95, |s| s.total_execution_time_us)
+                    as u64,
+            ),
+            p99_latency: MicroSeconds::new(
+                statistics::get_percentile_stats(statistics, 0.99, |s| s.total_execution_time_us)
                     as u64,
             ),
             p999_latency: MicroSeconds::new(statistics::get_percentile_stats(
@@ -395,12 +400,13 @@ impl fmt::Display for DiskSearchStats {
         let fmt_us = |v: f64| -> String { format!("{:.1}us", v) };
         let fmt_pct = |v: f64| -> String { format!("{:.1}%", v) };
 
-        let cols: [(&str, usize); 14] = [
+        let cols: [(&str, usize); 15] = [
             ("L", 2),
             ("KNN", 3),
             ("QPS", 8),
             ("Mean Latency", 13),
             ("95% Latency", 13),
+            ("99% Latency", 13),
             ("99.9 Latency", 13),
             ("IOs", 6),
             ("IO (us)", 10),
@@ -445,12 +451,13 @@ impl fmt::Display for DiskSearchStats {
 
         for r in &self.search_results_per_l {
             // Prepare values as strings with numeric formatting
-            let vals: [String; 14] = [
+            let vals: [String; 15] = [
                 format!("{}", r.search_l),
                 format!("{}", self.recall_at),
                 format!("{:.1}", r.qps),
                 fmt_us(r.mean_latency),
                 format!("{}", r.p95_latency),
+                format!("{}", r.p99_latency),
                 format!("{}", r.p999_latency),
                 format!("{:.1}", r.mean_ios),
                 fmt_us(r.mean_io_time),

@@ -298,6 +298,85 @@ barebone rust index and is separately handled by its users at the time when the 
 added. See `benchmark/src/utils/streaming.rs` for details. The integration tests for this
 can be run by `cargo test -p benchmark streaming`.
 
+### Graph-IVF
+
+Graph-IVF (see [`diskann-graphivf`](../diskann-graphivf/README.md)) is behind the
+off-by-default `graph-ivf` feature, so a build that does not want it does not pay for it:
+```sh
+cargo run --release --package diskann-benchmark --features graph-ivf -- \
+    run --input-file ./diskann-benchmark/example/graph-ivf-build-static.json \
+        --output-file output.json
+```
+Without the feature the `graph-ivf` input kind is still parsed and validated — only the
+backends (`graph-ivf-f32`, `-f16`, `-u8`, `-i8`, `-minmax8`) are absent, so a config that
+uses it fails at benchmark-matching rather than at deserialization.
+
+A job is one `source` (how the index comes to exist) plus one `search_phase`. The three
+sources are tagged by `graph-ivf-source`, and the tag matches the `build_kind` reported in
+the output, so a config and the results it produced name the same builder:
+
+| `graph-ivf-source` | What it does | Key fields |
+| --- | --- | --- |
+| `Static` | Batch build: fit `k` centroids by k-means over a corpus sample, then assign every point. | `num_clusters`, `sample_size`, `kmeans_iters`, `assign_method`, `empty_clusters`, `save_path` |
+| `Online` | Streaming build: insert points in corpus order, splitting a cluster whenever it overflows. The cluster count emerges from the data. | `split_threshold`, `max_clusters`, `reassign_neighbors`, `reassign_l`, `normalize`, `save_path`, `telemetry_csv` |
+| `Load` | Search an index built by an earlier job. | `load_path` |
+
+All three sources take `data_type` (`float32` \| `float16` \| `uint8` \| `int8` \|
+`minmax8`), which is the on-disk element type of the inverted lists and selects the
+backend — a `Load` job must name the same type the index was built with. The two build
+sources additionally take the corpus (`data`, `dim`, `distance`) and the centroid-graph
+parameters (`graph_degree`, `graph_slack`, `graph_l_build`, `graph_alpha`).
+
+The two build sources are deliberately disjoint and both use `deny_unknown_fields`: a
+config that mixes k-means knobs into an online build is a hard error rather than a set of
+silently ignored keys. `save_path` and `load_path` are index *prefixes* — the
+`.graphivf_meta`, `.graphivf_lists` and `.graphivf_centroids.fbin` suffixes are added by
+the backend. A relative `save_path` is resolved against the working directory, not the
+runner's `output_directory`; setting `output_directory` alongside a graph-IVF build is
+rejected rather than silently ignored.
+
+The search phase sweeps `nlist` (the number of nearest clusters to probe), running one
+search per value:
+```json
+"search_phase": {
+  "queries": "disk_index_sample_query_10pts.fbin",
+  "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+  "num_threads": 1,
+  "nlist": [1, 2, 4, 8, 16],
+  "centroid_search_l": 64,
+  "recall_at": 10,
+  "distance": "squared_l2"
+}
+```
+Each sweep reports recall, QPS, mean/p95/p999 latency, bytes read and IOs per query, plus
+a per-stage latency breakdown (preprocess, centroid search, plan I/O, disk read, score,
+top-k). A job measures a single `recall_at`; to compare recall@50 and recall@1000, run two
+jobs. Online builds can also write `telemetry_csv`, one row per split, which is a complete
+timeline of cluster growth and split cost.
+
+Three constraints are worth calling out because they are checked up front:
+
+- No `nlist` may exceed the index's cluster count. For an online build that count emerges
+  from the data rather than being declared, so size the sweep against what the build
+  actually produced (or cap it with `max_clusters`).
+- Online builds store corpus rows verbatim and cannot normalize them, so `cosine` is
+  rejected — pre-normalize the corpus and use `cosine_normalized`.
+- For `minmax8` indexes the corpus and queries must both already be quantized; see
+  [`compress_minmax`](../diskann-graphivf/scripts/README.md).
+
+Three runnable examples cover the shapes, all against the checked-in `test_data` corpus so
+they work from a fresh clone:
+
+| Config | What it shows |
+| --- | --- |
+| [`example/graph-ivf-build-static.json`](example/graph-ivf-build-static.json) | k-means build + search sweep in one job |
+| [`example/graph-ivf-build-online.json`](example/graph-ivf-build-online.json) | streaming build with split telemetry + search sweep |
+| [`example/graph-ivf-search.json`](example/graph-ivf-search.json) | re-sweeping an index built by an earlier job |
+
+Run them from the repository root; the two build configs write their index prefix into the
+working directory, and `graph-ivf-search.json` loads the one the static config produced, so
+run that one first.
+
 ## Adding New Benchmarks
 
 The benchmarking infrastructure works in two phases: first a raw JSON file is parsed into a

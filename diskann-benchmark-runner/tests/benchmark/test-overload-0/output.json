@@ -8,6 +8,14 @@
       },
       "type": "test-input-types"
     },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
+    },
     "results": "hello<1000>: float32"
   },
   {
@@ -18,6 +26,14 @@
         "error_when_checked": false
       },
       "type": "test-input-types"
+    },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
     },
     "results": "float32"
   }

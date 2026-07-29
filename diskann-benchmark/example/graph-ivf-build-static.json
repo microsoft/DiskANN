@@ -1,0 +1,45 @@
+{
+    "search_directories": [
+        "test_data/disk_index_search"
+    ],
+    "jobs": [
+        {
+            "type": "graph-ivf",
+            "content": {
+                "source": {
+                    "graph-ivf-source": "Static",
+                    "data_type": "float32",
+                    "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+                    "distance": "squared_l2",
+                    "dim": 128,
+                    "num_clusters": 16,
+                    "sample_size": 256,
+                    "kmeans_iters": 5,
+                    "assign_l": 32,
+                    "graph_degree": 32,
+                    "graph_slack": 1.2,
+                    "graph_l_build": 64,
+                    "graph_alpha": 1.2,
+                    "num_threads": 1,
+                    "seed": 0,
+                    "save_path": "graphivf_siftsmall_static"
+                },
+                "search_phase": {
+                    "queries": "disk_index_sample_query_10pts.fbin",
+                    "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+                    "num_threads": 1,
+                    "nlist": [
+                        1,
+                        2,
+                        4,
+                        8,
+                        16
+                    ],
+                    "centroid_search_l": 64,
+                    "recall_at": 10,
+                    "distance": "squared_l2"
+                }
+            }
+        }
+    ]
+}

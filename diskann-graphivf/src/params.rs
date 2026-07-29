@@ -193,7 +193,13 @@ impl BuildParams {
 
     /// Sample size actually used, clamped to the corpus size and the k-means++
     /// limit of `2^23` points.
-    pub(crate) fn effective_sample_size(&self, num_points: usize) -> usize {
+    ///
+    /// [`CentroidInit::Forgy`] takes an unclamped `samples` count, so callers
+    /// constructing one by hand should route the configured sample size through
+    /// here first.
+    ///
+    /// [`CentroidInit::Forgy`]: crate::CentroidInit::Forgy
+    pub fn effective_sample_size(&self, num_points: usize) -> usize {
         const KMEANSPP_MAX: usize = 1 << 23;
         self.sample_size.min(num_points).min(KMEANSPP_MAX)
     }

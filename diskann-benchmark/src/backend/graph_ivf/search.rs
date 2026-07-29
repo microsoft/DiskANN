@@ -23,7 +23,7 @@ use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
 
 use crate::{
-    backend::graph_ivf::build::to_graphivf_metric,
+    backend::graph_ivf::{build::to_graphivf_metric, element::GraphIvfElement},
     inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase},
     utils::{datafiles, SimilarityMeasure},
 };
@@ -59,6 +59,10 @@ pub(super) struct GraphIvfLatencyBreakdown {
     pub(super) score_ns: u64,
     pub(super) topk_ns: u64,
     pub(super) total_ns: u64,
+    /// Mean disk read requests issued per query.
+    pub(super) io_count: u64,
+    /// Mean bytes fetched from disk per query.
+    pub(super) bytes_read: u64,
 }
 
 /// Thread-shared accumulator summing each stage's wall-clock (in nanoseconds)
@@ -72,6 +76,8 @@ struct PhaseAccum {
     score: AtomicU64,
     topk: AtomicU64,
     total: AtomicU64,
+    io_count: AtomicU64,
+    bytes_read: AtomicU64,
 }
 
 pub(super) fn search_graph_ivf<T>(
@@ -79,7 +85,7 @@ pub(super) fn search_graph_ivf<T>(
     search_params: &GraphIvfSearchPhase,
 ) -> anyhow::Result<GraphIvfSearchStats>
 where
-    T: VectorRepr,
+    T: GraphIvfElement,
 {
     use std::sync::atomic::Ordering;
 
@@ -88,6 +94,16 @@ where
     // to match; L2 / already-normalized cosine leave queries untouched.
     let metric = to_graphivf_metric(search_params.distance)?;
     let normalize_queries = matches!(metric, diskann_graphivf::Metric::Cosine);
+    // Normalizing a query means decoding it, scaling, then re-encoding to `T`. That is
+    // element-wise only for native types; a quantized row's per-vector metadata would
+    // have to be re-derived. Such corpora are expected to be normalized before they are
+    // quantized, which is what `cosine_normalized` denotes.
+    anyhow::ensure!(
+        !(normalize_queries && T::STORED_VERBATIM),
+        "{:?} queries cannot be normalized in place; pre-normalize the corpus and queries \
+         before quantizing and use `cosine_normalized`",
+        T::DATA_TYPE,
+    );
 
     // Load the index from disk.
     let index = GraphIvfIndex::<T>::load(
@@ -187,6 +203,12 @@ where
                         accum
                             .total
                             .fetch_add(profile.total.as_nanos() as u64, Ordering::Relaxed);
+                        accum
+                            .io_count
+                            .fetch_add(profile.io_count, Ordering::Relaxed);
+                        accum
+                            .bytes_read
+                            .fetch_add(profile.bytes_read, Ordering::Relaxed);
                     }
                     Err(e) => {
                         eprintln!("graph-ivf search failed for a query: {e:?}");
@@ -246,6 +268,8 @@ where
             score_ns: mean_ns(&accum.score),
             topk_ns: mean_ns(&accum.topk),
             total_ns: mean_ns(&accum.total),
+            io_count: mean_ns(&accum.io_count),
+            bytes_read: mean_ns(&accum.bytes_read),
         };
 
         search_results_per_nlist.push(GraphIvfSearchResult {
@@ -329,6 +353,19 @@ impl fmt::Display for GraphIvfSearchStats {
             row.insert(us(b.topk_ns), 6);
             row.insert(us(b.total_ns), 7);
         }
-        bd.fmt(f)
+        bd.fmt(f)?;
+
+        // Per-query I/O volume (bytes moved and request counts).
+        writeln!(f, "\nSearch I/O volume (mean per query):")?;
+        let io_header = ["NList", "Reads", "DiskKiB"];
+        let mut io = Table::new(io_header, self.search_results_per_nlist.len());
+        for (i, r) in self.search_results_per_nlist.iter().enumerate() {
+            let b = &r.breakdown;
+            let mut row = io.row(i);
+            row.insert(r.nlist.to_string(), 0);
+            row.insert(b.io_count.to_string(), 1);
+            row.insert(format!("{:.1}", b.bytes_read as f64 / 1024.0), 2);
+        }
+        io.fmt(f)
     }
 }

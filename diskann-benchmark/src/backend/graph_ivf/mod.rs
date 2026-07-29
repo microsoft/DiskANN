@@ -9,6 +9,8 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "graph-ivf")] {
         mod benchmarks;
         mod build;
+        mod element;
+        mod online;
         mod search;
 
         /// Register graph-IVF benchmarks when the `graph-ivf` feature is enabled.

@@ -15,6 +15,7 @@ pub mod app;
 pub mod files;
 pub mod input;
 pub mod output;
+pub mod provenance;
 pub mod registry;
 pub mod utils;
 
@@ -23,6 +24,7 @@ pub use benchmark::Benchmark;
 pub use checker::Checker;
 pub use input::Input;
 pub use output::Output;
+pub use provenance::Provenance;
 pub use registry::{Registry, RegistryError};
 pub use result::Checkpoint;
 

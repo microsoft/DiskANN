@@ -140,10 +140,26 @@ struct CheckpointInner<'a> {
 // This applies the "zip" like behavior between pairs of `input` and `results` in
 // `CheckpointInner`, so the data structure can act as a vector of pairs rather than as a
 // pair of vectors.
+//
+// Provenance is attached per entry rather than wrapped around the whole document. The
+// top-level array is a published shape that both `compare` and external analysis tooling
+// index into directly, and adding a key to each element extends it without moving anything
+// those readers depend on. The value is identical for every entry in a file.
 #[derive(Debug, Serialize)]
 struct SingleResult<'a> {
     input: &'a serde_json::Value,
     results: &'a serde_json::Value,
+    provenance: &'static crate::Provenance,
+}
+
+impl<'a> SingleResult<'a> {
+    fn new(input: &'a serde_json::Value, results: &'a serde_json::Value) -> Self {
+        Self {
+            input,
+            results,
+            provenance: crate::Provenance::current(),
+        }
+    }
 }
 impl Serialize for CheckpointInner<'_> {
     /// Serialize up to `self.results.len()` pairs of inputs and results.
@@ -153,7 +169,7 @@ impl Serialize for CheckpointInner<'_> {
     {
         let mut seq = serializer.serialize_seq(Some(self.results.len()))?;
         for (input, results) in std::iter::zip(self.input.iter(), self.results.iter()) {
-            seq.serialize_element(&SingleResult { input, results })?;
+            seq.serialize_element(&SingleResult::new(input, results))?;
         }
         seq.end()
     }
@@ -181,7 +197,9 @@ impl Serialize for Appended<'_> {
                 .iter()
                 .chain(std::iter::once(&self.partial)),
         )
-        .try_for_each(|(input, results)| seq.serialize_element(&SingleResult { input, results }))?;
+        .try_for_each(|(input, results)| {
+            seq.serialize_element(&SingleResult::new(input, results))
+        })?;
         seq.end()
     }
 }
@@ -212,6 +230,7 @@ mod tests {
     // {
     //     input: <input-object>,
     //     results: <result-object>,
+    //     provenance: <provenance-object>,
     // }
     // ```
     fn check_results(results: &[Value], inputs: &[TypeInput], expected: &[Value]) {
@@ -223,12 +242,17 @@ mod tests {
                 Value::Object(map) => {
                     assert_eq!(
                         map.len(),
-                        2,
-                        "Each serialized result should only have two top level entries"
+                        3,
+                        "Each serialized result should only have three top level entries"
                     );
                     let input = TypeInput::deserialize(&map["input"]).unwrap();
                     assert_eq!(input, inputs[i].clone());
                     assert_eq!(map["results"], expected[i]);
+
+                    // Every entry carries the provenance of the run that produced it, and
+                    // since a file is written by a single process they must all agree.
+                    let provenance = crate::Provenance::deserialize(&map["provenance"]).unwrap();
+                    assert_eq!(&provenance, crate::Provenance::current());
                 }
                 _ => panic!("incorrect formatting for output {}", i),
             }

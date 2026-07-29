@@ -37,18 +37,18 @@ is produced, not in how it is stored or searched.
 
 ```mermaid
 flowchart LR
-    Q([query]) -.route.-> C1
-    subgraph MEM["Level 1 · centroid Vamana graph — in memory, f32"]
-        C0((c0)) --- C1((c1))
-        C1 --- C2((c2))
-        C1 --- C3((c3))
+    Q(["query"]) -.route.-> C1
+    subgraph MEM["Level 1 · centroid graph — memory, f32"]
+        C0(("c0")) --- C1(("c1"))
+        C1 --- C2(("c2"))
+        C1 --- C3(("c3"))
         C2 --- C3
     end
-    subgraph DISK["Level 2 · inverted lists — on disk, element type T"]
-        L0["c0 · ids u32 + vectors T"]
-        L1["c1 · ids u32 + vectors T"]
-        L2["c2 · ids u32 + vectors T"]
-        L3["c3 · ids u32 + vectors T"]
+    subgraph DISK["Level 2 · inverted lists — disk, type T"]
+        L0["c0 · ids + vectors"]
+        L1["c1 · ids + vectors"]
+        L2["c2 · ids + vectors"]
+        L3["c3 · ids + vectors"]
     end
     C0 -.owns list.-> L0
     C1 -.-> L1
@@ -69,10 +69,12 @@ flowchart LR
   corpus and query vectors; `--normalize` normalizes centroids, not the input.
 - **Decoupled clustering vs. stored precision.** Clustering uses `f32`, but the
   inverted lists are written from the corpus in its on-disk element type `T`,
-  copied verbatim at flush. `T` is chosen at build time with `--format`
-  (`minmax8` — 1 B/component, `f16` — 2 B, or `f32` — 4 B) and is recorded in the
-  metadata, so search tooling can recover it without being told. The centroid
-  graph is always `f32`.
+  copied verbatim at flush. `T` is chosen at build time with `data_type`
+  (`minmax8` — 1 B/component, `float16` — 2 B, or `float32` — 4 B; `uint8` and
+  `int8` are also supported). Only the element *size* is recorded in the metadata,
+  and `load` checks it against the requested `T` — enough to catch `float16` vs
+  `float32`, not enough to distinguish `uint8` from `int8`. The centroid graph is
+  always `f32`.
 - **Single writer.** The build is single-threaded at the insert level (a thread
   pool is used only inside 2-means and graph construction). There is no
   concurrent insert/search; the index is immutable once flushed.
@@ -81,25 +83,55 @@ flowchart LR
 
 ## Quick start
 
-Build, then sweep. `--split-threshold` is the only required knob; everything
-else has a default (full flag reference in
-[`scripts/README.md`](scripts/README.md)).
+A build and its `nlist` sweep are one job in a benchmark config. `split_threshold` is
+the only required knob; everything else has a default (full field reference in the
+[graph-IVF section of
+`diskann-benchmark/README.md`](../diskann-benchmark/README.md#graph-ivf)).
 
-```text
-# build: ~16384 clusters at th=106, s=5 reassignment neighbors, f16 lists
-cargo run --release --example build_online -- \
-    corpus_f16.bin out_prefix --split-threshold 106 \
-    --reassign-neighbors 5 --max-clusters 16384 --format f16
-
-# search: sweep nlist on the result (queries must be in the same element type)
-cargo run --release --example sweep -- \
-    out_prefix_th106_f16 "164,410,656,901,1147,1638,2458" 1 \
-    queries_f16.bin groundtruth.bin
+```json
+{
+  "type": "graph-ivf",
+  "content": {
+    "source": {
+      "graph-ivf-source": "Online",
+      "data_type": "float16",
+      "data": "corpus_f16.bin",
+      "distance": "squared_l2",
+      "dim": 384,
+      "split_threshold": 106,
+      "reassign_neighbors": 5,
+      "max_clusters": 16384,
+      "graph_degree": 32,
+      "graph_slack": 1.2,
+      "graph_l_build": 64,
+      "graph_alpha": 1.2,
+      "num_threads": 16,
+      "seed": 0,
+      "save_path": "/abs/path/out_prefix_th106_f16",
+      "telemetry_csv": "/abs/path/out_prefix_th106_f16.splits.csv"
+    },
+    "search_phase": {
+      "queries": "queries_f16.bin",
+      "groundtruth": "groundtruth.bin",
+      "num_threads": 1,
+      "nlist": [164, 410, 656, 901, 1147, 1638, 2458],
+      "centroid_search_l": 1024,
+      "recall_at": 50,
+      "distance": "squared_l2"
+    }
+  }
+}
 ```
 
-The build writes `<out_prefix>_th<split_threshold>_<format>.graphivf_*` plus a
-`.splits.csv` telemetry file. `sweep` reads the stored element type from the
-metadata, so the same command serves `minmax8`, `f16`, and `f32` indexes.
+```sh
+cargo run --release --package diskann-benchmark --features graph-ivf -- \
+    run --input-file online.json --output-file output.json
+```
+
+The build writes `<save_path>.graphivf_*` plus the telemetry CSV if one was asked for.
+Queries must be in the same element type as the corpus. A later `Load` job pointed at
+the same prefix re-sweeps the index without rebuilding it; give it the same `data_type`
+the index was built with.
 
 ---
 
@@ -120,26 +152,22 @@ contain per-row quantization metadata, so their stored width is larger.
 
 ```mermaid
 flowchart TB
-    subgraph FILE["&lt;prefix&gt;.graphivf_lists (ascending cluster id)"]
+    subgraph FILE["&lt;prefix&gt;.graphivf_lists — ascending cluster id"]
         direction LR
-        R0["c0<br/>ids u32 · vectors T"] --> R1["c1<br/>ids u32 · vectors T"] --> R2["c2<br/>ids u32 · vectors T"] --> PAD["… zero-pad<br/>to 512 multiple"]
+        R0["c0<br/>ids · vectors"] --> R1["c1<br/>ids · vectors"] --> R2["c2<br/>ids · vectors"] --> PAD["zero-pad to<br/>512 multiple"]
     end
-    W["read window for c1:<br/>smallest 512-aligned span ⊇ c1,<br/>then index to exact bytes"]
-    R1 -.probe.-> W
-    classDef pad fill:#eee,stroke-dasharray:3 3;
-    classDef win fill:#eef7ff;
-    class PAD pad;
-    class W win;
+    R1 -.probe c1.-> W["read window:<br/>smallest 512-aligned span<br/>containing c1"]
 ```
 
-The online build additionally emits `<prefix>.splits.csv` — per-split telemetry
-(see [Telemetry](#telemetry)) — which is **not** part of the loadable index.
+The online build additionally emits a per-split telemetry CSV at the configured
+`telemetry_csv` path — see [Telemetry](#telemetry) — which is **not** part of the
+loadable index.
 
 ---
 
 ## Build algorithm
 
-Driver: [`scripts/build/build_online.rs`](scripts/build/build_online.rs).
+Driver: a `"graph-ivf-source": "Online"` job in the benchmark harness.
 Core: [`OnlineClusterer`](src/online.rs).
 
 ### 1. Seed the initial centroids
@@ -147,11 +175,11 @@ Core: [`OnlineClusterer`](src/online.rs).
 The clusterer starts from a small initial centroid set, chosen by a
 [`SeedStrategy`](src/online.rs):
 
-- **`Warmup { num_centroids, warmup_points, iters }`** (used by the example): run an exact
+- **`Warmup { num_centroids, warmup_points, iters }`** (used by the harness): run an exact
   k-means (Forgy init + `iters` Lloyd iterations) over the **first**
   `warmup_points` corpus points. `warmup_points` is clamped to
-  `[num_centroids, corpus_len]`. The example exposes the centroid/point counts
-  as `--warmup-centroids` and `--warmup-points`, and uses 15 iterations.
+  `[num_centroids, corpus_len]`. The config exposes these as `warmup_centroids`,
+  `warmup_points` and `warmup_iters` (default 100 / 10000 / 15).
 - **`Explicit(matrix)`** (library API): use a precomputed centroid matrix as-is.
 
 The initial centroids are inserted into a **mutable Vamana centroid graph**
@@ -176,18 +204,6 @@ For each streamed point `pid` (`insert`):
 Routing an insert never changes the partition unless it triggers a split, so
 **splits are the only structural events** in the build.
 
-```mermaid
-flowchart TD
-    A[next point pid] --> B[route via centroid graph<br/>search-list = assign_l]
-    B --> C{live centroid<br/>returned?}
-    C -- no --> W[widen L to max 8·assign_l, 512<br/>else brute-force over live centroids]
-    W --> D
-    C -- yes --> D["append pid to list c<br/>assignments[pid] = c"]
-    D --> E{"len(list c) &gt; split_threshold<br/>AND live &lt; max_clusters<br/>AND id budget fits +2?"}
-    E -- no --> A
-    E -- yes --> F[[split c]]
-    F --> A
-```
 
 ### 3. Split a cluster (split-and-reassign)
 
@@ -218,13 +234,15 @@ Each split is a net **+1** to the live-cluster count (−1 retired, +2 children)
 
 ```mermaid
 flowchart TD
-    S0[cluster c overflows split_threshold] --> S1["2-means over c's members → child1, child2"]
-    S1 --> S2["search c's centroid in the graph →<br/>s nearest live centroids (excluding c)"]
-    S2 --> S3[alloc 2 new ids; retire c's id as tombstone]
-    S3 --> S4[graph: delete c, insert child1 &amp; child2]
-    S4 --> S5["candidate centroids = neighbors ∪ {child1, child2}<br/>candidate points = c.members ∪ all neighbor-list points"]
-    S5 --> S6[reassign each candidate point to its<br/>nearest candidate centroid by exact L2]
-    S6 --> S7[rebuild affected lists · live count +1]
+    S0["cluster c exceeds split_threshold"]
+    S1["2-means over c's members<br/>→ child1, child2"]
+    S2["graph search from c's centroid<br/>→ s nearest live centroids"]
+    S3["alloc ids for child1, child2<br/>retire c's id as a tombstone"]
+    S4["graph: delete c,<br/>insert child1 and child2"]
+    S5["candidate centroids = s neighbors + 2 children<br/>candidate points = c's members + neighbor lists"]
+    S6["reassign each candidate point to its<br/>nearest candidate centroid, exact L2"]
+    S7["rebuild affected lists<br/>live cluster count +1"]
+    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
 ```
 
 Only `c` and the `reassign_neighbors` clusters selected by graph search are
@@ -266,13 +284,15 @@ query in the stored type `T` and target `k`:
 
 ```mermaid
 flowchart TD
-    Q[query in type T] --> P["preprocess: build T-space scorer<br/>+ decode query to f32 for the graph"]
-    P --> K["centroid KNN: nearest nlist centroids<br/>L = max(centroid_search_l, nlist)"]
-    K --> IO["plan I/O: smallest 512-aligned window per<br/>non-empty probed list → one reusable buffer"]
-    IO --> R[single batched direct read of all probed lists]
-    R --> SC[exhaustively score query vs list vectors in T]
-    SC --> TK["top-k: select_nth + sort ascending (smaller is better)"]
-    TK --> O["return k nearest (id, score)"]
+    Q(["query in type T"])
+    P["preprocess:<br/>build T-space scorer,<br/>decode query to f32"]
+    K["centroid KNN:<br/>nearest nlist centroids"]
+    IO["plan I/O: one 512-aligned window<br/>per probed list, into one buffer"]
+    R["one batched direct read"]
+    SC["score query vs fetched vectors, in T"]
+    TK["top-k: select_nth + sort ascending"]
+    O(["k nearest, as id and score"])
+    Q --> P --> K --> IO --> R --> SC --> TK --> O
 ```
 
 1. **Preprocess.** Build a `T`-space scorer once (query and corpus are both `T`,
@@ -337,8 +357,8 @@ Practical tuning order:
 4. Raise `assign_l` or `centroid_search_l` only if routing quality is limiting
   build or search recall.
 
-The example's complete flag/default table is in
-[`scripts/README.md`](scripts/README.md).
+The complete field/default table is in the [graph-IVF section of
+`diskann-benchmark/README.md`](../diskann-benchmark/README.md#graph-ivf).
 
 ---
 
@@ -347,7 +367,6 @@ The example's complete flag/default table is in
 [`BuildTelemetry`](src/online.rs) records routing/split totals and one event per
 split: triggering insert, retired cluster and size, neighbor count, points that
 changed cluster, resulting live-cluster count, and 2-means/reassignment/total
-latencies. The example writes those events to
-`<out_prefix>_th<split_threshold>_<format>.splits.csv`. Because splits are the
-only structural events, the CSV is a complete timeline of cluster-count growth
+latencies. Setting `telemetry_csv` on the job writes those events out. Because splits
+are the only structural events, the CSV is a complete timeline of cluster-count growth
 and split cost.

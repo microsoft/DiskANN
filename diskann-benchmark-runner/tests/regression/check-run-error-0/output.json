@@ -6,6 +6,14 @@
       },
       "type": "test-input-dim"
     },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
+    },
     "results": 128
   },
   {
@@ -17,6 +25,14 @@
       },
       "type": "test-input-types"
     },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
+    },
     "results": "int8"
   },
   {
@@ -25,6 +41,14 @@
         "dim": 256
       },
       "type": "test-input-dim"
+    },
+    "provenance": {
+      "git_dirty": "$SCRUBBED",
+      "git_sha": "$SCRUBBED",
+      "host": "$SCRUBBED",
+      "unix_time": "$SCRUBBED",
+      "utc": "$SCRUBBED",
+      "version": "$SCRUBBED"
     },
     "results": 256
   }

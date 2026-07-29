@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::io::Write;
+use std::{fmt, io::Write};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,14 +11,16 @@ use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     output::Output,
-    utils::datatype::AsDataType,
     Benchmark, Checkpoint, Registry,
 };
+use diskann_providers::common::MinMax8;
 use half::f16;
 
 use crate::{
     backend::graph_ivf::{
         build::{build_graph_ivf, GraphIvfBuildStats},
+        element::GraphIvfElement,
+        online::{build_graph_ivf_online, GraphIvfOnlineBuildStats},
         search::{search_graph_ivf, GraphIvfSearchStats},
     },
     inputs::graph_ivf::{GraphIvfLoad, GraphIvfOperation, GraphIvfSource},
@@ -29,9 +31,30 @@ struct GraphIvf<T> {
     _vector_type: std::marker::PhantomData<T>,
 }
 
+/// Build statistics, tagged by how the index was constructed.
+///
+/// The two builders share no parameters and report disjoint telemetry, so a single
+/// flattened struct would be mostly-null either way; the tag keeps the output
+/// self-describing for downstream analysis.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "build_kind")]
+pub(super) enum GraphIvfBuildOutcome {
+    Static(GraphIvfBuildStats),
+    Online(GraphIvfOnlineBuildStats),
+}
+
+impl fmt::Display for GraphIvfBuildOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static(stats) => stats.fmt(f),
+            Self::Online(stats) => stats.fmt(f),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct GraphIvfStats {
-    pub(super) build: Option<GraphIvfBuildStats>,
+    pub(super) build: Option<GraphIvfBuildOutcome>,
     pub(super) search: GraphIvfSearchStats,
 }
 
@@ -48,17 +71,17 @@ where
 
 impl<T> Benchmark for GraphIvf<T>
 where
-    T: VectorRepr + AsDataType,
+    T: GraphIvfElement,
 {
     type Input = GraphIvfOperation;
     type Output = GraphIvfStats;
 
     fn try_match(&self, input: &GraphIvfOperation) -> Result<MatchScore, FailureScore> {
-        let data_type = match &input.source {
-            GraphIvfSource::Load(load) => load.data_type,
-            GraphIvfSource::Build(build) => build.data_type,
-        };
-        crate::utils::match_data_type::<T>(data_type)
+        if input.source.data_type() == T::DATA_TYPE {
+            Ok(MatchScore(0))
+        } else {
+            Err(crate::utils::DATA_TYPE_MISMATCH)
+        }
     }
 
     fn description(
@@ -68,11 +91,12 @@ where
     ) -> std::fmt::Result {
         match input {
             Some(arg) => {
-                let desc = match &arg.source {
-                    GraphIvfSource::Load(load) => T::describe(load.data_type),
-                    GraphIvfSource::Build(build) => T::describe(build.data_type),
-                };
-                write!(f, "{}", desc)
+                let got = arg.source.data_type();
+                if got == T::DATA_TYPE {
+                    write!(f, "successful match")
+                } else {
+                    write!(f, "expected {:?} but found {:?}", T::DATA_TYPE, got)
+                }
             }
             None => write!(f, "{}", T::DATA_TYPE),
         }
@@ -88,13 +112,23 @@ where
 
         let (build_stats, index_load) = match &input.source {
             GraphIvfSource::Load(load) => (None, (*load).clone()),
-            GraphIvfSource::Build(build) => {
+            GraphIvfSource::Static(build) => {
                 let stats = build_graph_ivf::<T>(build)?;
                 (
-                    Some(stats),
+                    Some(GraphIvfBuildOutcome::Static(stats)),
                     GraphIvfLoad {
                         data_type: build.data_type,
                         load_path: build.save_path.clone(),
+                    },
+                )
+            }
+            GraphIvfSource::Online(online) => {
+                let stats = build_graph_ivf_online::<T>(online)?;
+                (
+                    Some(GraphIvfBuildOutcome::Online(stats)),
+                    GraphIvfLoad {
+                        data_type: online.data_type,
+                        load_path: online.save_path.clone(),
                     },
                 )
             }
@@ -123,5 +157,6 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     registry.register("graph-ivf-f16", GraphIvf::<f16>::new())?;
     registry.register("graph-ivf-u8", GraphIvf::<u8>::new())?;
     registry.register("graph-ivf-i8", GraphIvf::<i8>::new())?;
+    registry.register("graph-ivf-minmax8", GraphIvf::<MinMax8>::new())?;
     Ok(())
 }
