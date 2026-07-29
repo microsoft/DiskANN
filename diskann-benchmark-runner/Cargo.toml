@@ -15,6 +15,7 @@ indicatif = "0.18.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"
@@ -34,6 +35,9 @@ test-app = []
 
 # Expose internal utilities for performing UX error message normalization.
 ux-tools = []
+
+# Expose the cached CLI-fixture runner to downstream benchmark applications.
+test-fixtures = ["dep:tempfile", "ux-tools"]
 
 [[bin]]
 name = "dev"

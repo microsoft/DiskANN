@@ -680,6 +680,9 @@ pub(crate) struct IndexBuild {
     num_threads: usize,
     multi_insert: Option<MultiInsert>,
     save_path: Option<String>,
+    #[cfg(feature = "pipnn")]
+    #[serde(default)]
+    build_algorithm: diskann_disk::BuildAlgorithm,
 }
 
 impl IndexBuild {
@@ -745,9 +748,17 @@ impl IndexBuild {
         num_points: usize,
         dim: usize,
     ) -> DefaultProviderParameters {
+        #[cfg(feature = "pipnn")]
+        let frozen_points = match self.build_algorithm {
+            diskann_disk::BuildAlgorithm::PiPNN(_) => NonZero::new(1).unwrap(),
+            _ => NonZero::new(self.start_point_strategy.count()).unwrap(),
+        };
+        #[cfg(not(feature = "pipnn"))]
+        let frozen_points = NonZero::new(self.start_point_strategy.count()).unwrap();
+
         DefaultProviderParameters {
             max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
+            frozen_points,
             metric: self.distance.into(),
             dim,
             max_degree: self.exact_max_degree() as u32,
@@ -813,7 +824,11 @@ impl IndexBuild {
         self.num_threads
     }
 
-    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    #[cfg(any(
+        feature = "spherical-quantization",
+        feature = "bftree",
+        feature = "pipnn"
+    ))]
     pub(crate) fn distance(&self) -> SimilarityMeasure {
         self.distance
     }
@@ -833,6 +848,11 @@ impl IndexBuild {
     pub(crate) fn save_path(&self) -> Option<&str> {
         self.save_path.as_deref()
     }
+
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn build_algorithm(&self) -> &diskann_disk::BuildAlgorithm {
+        &self.build_algorithm
+    }
 }
 
 impl Example for IndexBuild {
@@ -850,6 +870,8 @@ impl Example for IndexBuild {
             insert_retry: None,
             start_point_strategy: StartPointStrategy::Medoid,
             save_path: None,
+            #[cfg(feature = "pipnn")]
+            build_algorithm: diskann_disk::BuildAlgorithm::Vamana,
         }
     }
 }
