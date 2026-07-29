@@ -198,9 +198,9 @@ impl DiskIndexBuildParameters {
     }
 
     #[cfg(feature = "pipnn")]
-    pub(crate) fn pipnn_config(&self) -> Option<diskann_pipnn::PiPNNConfig> {
+    pub(crate) fn pipnn_parameters(&self) -> Option<&PiPNNParameters> {
         match &self.build_algorithm {
-            BuildAlgorithm::PiPNN(config) => Some(config.into()),
+            BuildAlgorithm::PiPNN(config) => Some(config),
             BuildAlgorithm::Vamana => None,
         }
     }
@@ -255,23 +255,43 @@ fn estimate_pipnn_peak_memory(
         })?;
     let dataset = (dimensions as u128).checked_mul(element_size as u128)?;
     let leaf_ids = copies.checked_mul(size_of::<u32>() as u128)?;
-    let offered = copies.checked_mul(config.k as u128)?.checked_mul(2)?;
-    let candidate_capacity = offered.checked_next_power_of_two()?;
-    let candidate_storage = candidate_capacity.checked_mul(size_of::<u32>() as u128)?;
-    let candidate_metadata =
-        size_of::<std::sync::Mutex<diskann::graph::AdjacencyList<u32>>>() as u128;
+    let (sketches, merge_metadata, merge_storage, finalization_per_point) =
+        if let Some(hash_prune) = &config.hash_prune {
+            let scan_lanes = (hash_prune.l_max as u128)
+                .div_ceil(32)
+                .checked_mul(32)?
+                .max(32);
+            let sketches = (hash_prune.num_hash_planes as u128).checked_mul(4)?;
+            let retained_cold =
+                scan_lanes.checked_mul(if hash_prune.final_prune { 4 } else { 6 })?;
+            let finalization = dataset
+                .checked_add(16)?
+                .checked_add(retained_cold)?
+                .checked_add(size_of::<Vec<u32>>() as u128)?
+                .checked_add((hash_prune.l_max as u128).checked_mul(4)?)?;
+            (sketches, 16, scan_lanes.checked_mul(8)?, finalization)
+        } else {
+            let offered = copies.checked_mul(config.k as u128)?.checked_mul(2)?;
+            let capacity = offered.checked_next_power_of_two()?;
+            let storage = capacity.checked_mul(size_of::<u32>() as u128)?;
+            let metadata =
+                size_of::<std::sync::Mutex<diskann::graph::AdjacencyList<u32>>>() as u128;
+            let finalization = dataset
+                .checked_add(metadata)?
+                .checked_add(size_of::<Vec<u32>>() as u128)?
+                .checked_add(storage)?;
+            (0, metadata, storage, finalization)
+        };
 
     let partition_per_point = dataset
         .checked_add(16)?
+        .checked_add(sketches)?
         .checked_add(leaf_ids.checked_mul(2)?)?;
     let leaf_per_point = dataset
-        .checked_add(candidate_metadata)?
-        .checked_add(candidate_storage)?
+        .checked_add(merge_metadata)?
+        .checked_add(sketches)?
+        .checked_add(merge_storage)?
         .checked_add(leaf_ids)?;
-    let finalization_per_point = dataset
-        .checked_add(candidate_metadata)?
-        .checked_add(size_of::<Vec<u32>>() as u128)?
-        .checked_add(candidate_storage)?;
 
     let leaf_size = config.c_max.min(npoints).max(1) as u128;
     let leaf_scratch = leaf_size
@@ -279,6 +299,16 @@ fn estimate_pipnn_peak_memory(
         .checked_mul(size_of::<f32>() as u128)?
         .checked_add(leaf_size.checked_mul(leaf_size)?.checked_mul(5)?)?
         .checked_add(leaf_size.checked_mul(config.k as u128)?.checked_mul(24)?)?
+        .checked_add(
+            leaf_size
+                .checked_mul(
+                    config
+                        .hash_prune
+                        .as_ref()
+                        .map_or(0, |hp| hp.num_hash_planes) as u128,
+                )?
+                .checked_mul(4)?,
+        )?
         .checked_add(leaf_size.checked_mul(20)?)?
         .checked_add(68)?;
     let partition_rows = (npoints as u128).min(1_024);
@@ -402,11 +432,10 @@ mod dataset_test {
     fn new_pipnn_uses_the_common_disk_pipeline_parameters() {
         let pq = NumPQChunks::new_with(1, 128).unwrap();
         let parameters = PiPNNParameters::default();
-        let config = diskann_pipnn::PiPNNConfig::from(&parameters);
         let budget = MemoryBudget::try_from_gb(2.0).unwrap();
-        let params = DiskIndexBuildParameters::new_pipnn(budget, pq, parameters);
+        let params = DiskIndexBuildParameters::new_pipnn(budget, pq, parameters.clone());
 
-        assert_eq!(params.pipnn_config(), Some(config));
+        assert_eq!(params.pipnn_parameters(), Some(&parameters));
         assert_eq!(params.search_pq_chunks(), pq);
         assert_eq!(
             params.data_compression_chunk_vector_count(),
@@ -426,6 +455,7 @@ mod dataset_test {
             fanout: vec![10, 3],
             k: 2,
             replicas: 1,
+            hash_prune: None,
         };
 
         let estimate = estimate_pipnn_peak_memory(&parameters, 10_000_000, 128, 2, 16).unwrap();

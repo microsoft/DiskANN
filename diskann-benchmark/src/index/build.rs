@@ -134,12 +134,15 @@ where
         .num_threads(input.num_threads())
         .build()
         .context("failed to create PiPNN build thread pool")?;
-    let context = diskann_pipnn::PiPNNBuildContext::new(
+    let mut context = diskann_pipnn::PiPNNBuildContext::new(
         parameters.into(),
         &graph,
         input.distance().into(),
         &pool,
     )?;
+    if let Some(hash_prune) = &parameters.hash_prune {
+        context = context.with_hash_prune(hash_prune.into())?;
+    }
 
     let started = std::time::Instant::now();
     for (id, vector) in data.row_iter().enumerate() {

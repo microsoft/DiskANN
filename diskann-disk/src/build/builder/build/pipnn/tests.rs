@@ -36,6 +36,7 @@ fn pipnn() -> PiPNNParameters {
         fanout: vec![10, 3],
         k: 2,
         replicas: 1,
+        hash_prune: Some(crate::HashPruneParameters::default()),
     }
 }
 
@@ -131,7 +132,7 @@ fn pipnn_graph_adapter_writes_real_point_header() {
     let builder = builder(&storage, points, dimensions, 1.0, 1.2, parameters.clone());
     let pool = create_thread_pool(1).unwrap();
 
-    super::build_graph(&builder, pool.as_ref(), (&parameters).into()).unwrap();
+    super::build_graph(&builder, pool.as_ref(), &parameters).unwrap();
 
     let mut header = [0_u8; 24];
     std::io::Read::read_exact(

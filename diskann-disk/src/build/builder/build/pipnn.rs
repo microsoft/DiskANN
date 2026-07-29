@@ -6,7 +6,7 @@
 //! PiPNN graph adapter for the common disk-build pipeline.
 
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
-use diskann_pipnn::{PiPNNBuildContext, PiPNNConfig};
+use diskann_pipnn::PiPNNBuildContext;
 use diskann_providers::{
     storage::{save_adjacency_graph, StorageReadProvider, StorageWriteProvider},
     utils::{find_medoid_with_sampling, RayonThreadPoolRef, MAX_MEDOID_SAMPLE_SIZE},
@@ -14,12 +14,12 @@ use diskann_providers::{
 use diskann_utils::io::{read_bin, Metadata};
 
 use super::{u32_try_from, DiskIndexBuilder};
-use crate::data_model::GraphDataType;
+use crate::{data_model::GraphDataType, PiPNNParameters};
 
 pub(super) fn build_graph<Data, StorageProvider>(
     builder: &DiskIndexBuilder<'_, Data, StorageProvider>,
     pool: RayonThreadPoolRef<'_>,
-    config: PiPNNConfig,
+    parameters: &PiPNNParameters,
 ) -> ANNResult<()>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -44,12 +44,15 @@ where
 
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
-    let context = PiPNNBuildContext::new(
-        config,
+    let mut context = PiPNNBuildContext::new(
+        parameters.into(),
         &builder.index_configuration.config,
         builder.index_configuration.dist_metric,
         pool.as_rayon(),
     )?;
+    if let Some(hash_prune) = &parameters.hash_prune {
+        context = context.with_hash_prune(hash_prune.into())?;
+    }
     let adjacency = diskann_pipnn::build_graph(data.as_view(), &context)?;
 
     let mut rng = diskann_providers::utils::create_rnd_from_optional_seed(

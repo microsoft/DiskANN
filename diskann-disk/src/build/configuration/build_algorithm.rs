@@ -29,6 +29,43 @@ pub struct PiPNNParameters {
     pub k: usize,
     /// Number of independent partition passes.
     pub replicas: usize,
+    /// HashPrune policy, or `None` for exact direct-candidate accumulation.
+    pub hash_prune: Option<HashPruneParameters>,
+}
+
+/// JSON-facing HashPrune parameters.
+#[cfg(feature = "pipnn")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HashPruneParameters {
+    /// Number of random-hyperplane sketch dimensions.
+    pub num_hash_planes: usize,
+    /// Maximum candidates retained per point.
+    pub l_max: usize,
+    /// Apply shared Vamana RobustPrune after reservoir extraction.
+    pub final_prune: bool,
+}
+
+#[cfg(feature = "pipnn")]
+impl Default for HashPruneParameters {
+    fn default() -> Self {
+        Self {
+            num_hash_planes: 12,
+            l_max: 64,
+            final_prune: true,
+        }
+    }
+}
+
+#[cfg(feature = "pipnn")]
+impl From<&HashPruneParameters> for diskann_pipnn::HashPruneConfig {
+    fn from(config: &HashPruneParameters) -> Self {
+        Self {
+            num_hash_planes: config.num_hash_planes,
+            l_max: config.l_max,
+            final_prune: config.final_prune,
+        }
+    }
 }
 
 #[cfg(feature = "pipnn")]
@@ -41,6 +78,7 @@ impl Default for PiPNNParameters {
             fanout: vec![8, 3],
             k: 2,
             replicas: 1,
+            hash_prune: Some(HashPruneParameters::default()),
         }
     }
 }
@@ -116,6 +154,7 @@ mod tests {
         assert_eq!(config.fanout, [10, 3]);
         assert_eq!(config.k, 3);
         assert_eq!(config.replicas, 1);
+        assert_eq!(config.hash_prune, Some(HashPruneParameters::default()));
         assert!(
             serde_json::from_str::<BuildAlgorithm>(r#"{"algorithm":"PiPNN","l_max":72}"#).is_err()
         );
