@@ -439,7 +439,7 @@ impl std::fmt::Display for Unavailable {
 
 impl std::error::Error for Unavailable {}
 
-crate::opaque!(Unavailable);
+diskann::convert_error!(Unavailable);
 
 // Delays
 //
