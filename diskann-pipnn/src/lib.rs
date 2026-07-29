@@ -41,7 +41,8 @@ pub struct PiPNNConfig {
 }
 
 impl PiPNNConfig {
-    fn validate(&self) -> ANNResult<()> {
+    /// Validate the algorithm-specific partition and leaf-build parameters.
+    pub fn validate(&self) -> ANNResult<()> {
         if self.c_max == 0 {
             return Err(config_error("c_max must be greater than zero"));
         }
