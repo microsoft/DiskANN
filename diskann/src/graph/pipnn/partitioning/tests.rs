@@ -8,13 +8,12 @@ use diskann_vector::{distance::Metric, Half};
 
 use super::*;
 
-fn config(c_min: usize, c_max: usize, fanout: Vec<usize>, replicas: usize) -> PiPNNConfig {
-    PiPNNConfig {
+fn config(c_min: usize, c_max: usize, fanout: Vec<usize>, replicas: usize) -> PartitionConfig {
+    PartitionConfig {
         c_max,
         c_min,
         p_samp: 0.25,
         fanout,
-        k: 2,
         replicas,
     }
 }
@@ -91,7 +90,7 @@ fn assert_valid_partition(leaves: &[Vec<u32>], points: usize, c_max: usize, repl
 fn returns_one_leaf_at_and_below_c_max() {
     for points in [7, 8] {
         let data = clustered_data(points, 3);
-        let leaves = partition(data.as_view(), &config(2, 8, vec![2], 1), Metric::L2).unwrap();
+        let leaves = partition(data.as_view(), config(2, 8, vec![2], 1), Metric::L2).unwrap();
         assert_eq!(leaves, vec![(0..points as u32).collect::<Vec<_>>()]);
     }
 }
@@ -101,8 +100,8 @@ fn partition_is_fixed_seed_deterministic_and_bounded() {
     let data = clustered_data(96, 8);
     let config = config(4, 16, vec![3, 2], 2);
 
-    let first = partition(data.as_view(), &config, Metric::L2).unwrap();
-    let second = partition(data.as_view(), &config, Metric::L2).unwrap();
+    let first = partition(data.as_view(), config.clone(), Metric::L2).unwrap();
+    let second = partition(data.as_view(), config, Metric::L2).unwrap();
 
     assert_eq!(sorted_memberships(&first), sorted_memberships(&second));
     assert_valid_partition(&first, 96, 16, 2);
@@ -112,7 +111,7 @@ fn partition_is_fixed_seed_deterministic_and_bounded() {
 #[test]
 fn recursion_after_fanout_levels_falls_back_to_one() {
     let data = clustered_data(80, 4);
-    let leaves = partition(data.as_view(), &config(2, 8, vec![2], 1), Metric::L2).unwrap();
+    let leaves = partition(data.as_view(), config(2, 8, vec![2], 1), Metric::L2).unwrap();
 
     assert_valid_partition(&leaves, 80, 8, 1);
 }
@@ -120,7 +119,7 @@ fn recursion_after_fanout_levels_falls_back_to_one() {
 #[test]
 fn duplicate_points_return_iteration_limit_instead_of_oversized_leaf() {
     let data = Matrix::new(1.0f32, 24, 4);
-    let error = partition(data.as_view(), &config(2, 4, vec![1], 1), Metric::L2).unwrap_err();
+    let error = partition(data.as_view(), config(2, 4, vec![1], 1), Metric::L2).unwrap_err();
     let error = error.downcast::<PartitionError>().unwrap();
 
     assert!(matches!(
@@ -166,7 +165,7 @@ fn replicas_cover_every_point_once_or_more_per_replica() {
     let data = directional_data(72, 5);
     let leaves = partition(
         data.as_view(),
-        &config(3, 12, vec![3, 2], 3),
+        config(3, 12, vec![3, 2], 3),
         Metric::CosineNormalized,
     )
     .unwrap();
@@ -184,25 +183,25 @@ fn supported_source_types_share_partition_contract() {
 
     let f32_leaves = partition(
         MatrixView::try_from(f32_data.as_slice(), 64, 4).unwrap(),
-        &config,
+        config.clone(),
         Metric::L2,
     )
     .unwrap();
     let half_leaves = partition(
         MatrixView::try_from(half_data.as_slice(), 64, 4).unwrap(),
-        &config,
+        config.clone(),
         Metric::L2,
     )
     .unwrap();
     let u8_leaves = partition(
         MatrixView::try_from(u8_data.as_slice(), 64, 4).unwrap(),
-        &config,
+        config.clone(),
         Metric::L2,
     )
     .unwrap();
     let i8_leaves = partition(
         MatrixView::try_from(i8_data.as_slice(), 64, 4).unwrap(),
-        &config,
+        config,
         Metric::L2,
     )
     .unwrap();
@@ -235,7 +234,7 @@ fn all_metrics_produce_valid_partitions() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        let leaves = partition(data.as_view(), &config, metric).unwrap();
+        let leaves = partition(data.as_view(), config.clone(), metric).unwrap();
         assert_valid_partition(&leaves, 64, 20, 1);
     }
 }
@@ -283,7 +282,7 @@ fn parallel_scatter_matches_serial_order() {
 #[test]
 fn rejects_empty_dataset() {
     let data = Matrix::<f32>::new(0.0, 0, 4);
-    let error = partition(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2).unwrap_err();
+    let error = partition(data.as_view(), config(1, 4, vec![1], 1), Metric::L2).unwrap_err();
 
     assert_eq!(
         error.downcast::<PartitionError>().unwrap(),
@@ -294,7 +293,7 @@ fn rejects_empty_dataset() {
 #[test]
 fn rejects_zero_dimensions() {
     let data = Matrix::<f32>::new(0.0, 4, 0);
-    let error = partition(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2).unwrap_err();
+    let error = partition(data.as_view(), config(1, 4, vec![1], 1), Metric::L2).unwrap_err();
 
     assert_eq!(
         error.downcast::<PartitionError>().unwrap(),
