@@ -25,6 +25,7 @@ use crate::{
 
 // Private algorithm and batching constants live together. None are user policy.
 const PARTITION_SEED: u64 = 1_000;
+const REPLICA_SEED_STEP: u64 = 7_919;
 const LEADER_CAP: usize = 1_000;
 const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 524_288;
 const MIN_ASSIGNMENT_STRIPE_ROWS: usize = 32;
@@ -106,7 +107,7 @@ where
 
     let mut leaves = Vec::new();
     for replica in 0..config.replicas {
-        let seed = mix_seed(PARTITION_SEED, replica as u64);
+        let seed = replica_seed(replica);
         let mut replica_leaves = partition_replica(data, config, metric, seed)?;
         leaves
             .try_reserve(replica_leaves.len())
@@ -251,8 +252,12 @@ fn sample_num_leaders(points: usize, sampling_fraction: f64) -> usize {
         .min(points)
 }
 
-// A single LCG mixer derives both replica and recursive seeds. Wrapping makes
-// the mapping stable across debug/release builds and supported platforms.
+fn replica_seed(replica: usize) -> u64 {
+    PARTITION_SEED.wrapping_add((replica as u64).wrapping_mul(REPLICA_SEED_STEP))
+}
+
+// A single LCG mixer derives recursive seeds. Wrapping makes the mapping stable
+// across debug/release builds and supported platforms.
 fn mix_seed(seed: u64, salt: u64) -> u64 {
     seed.wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(salt)
