@@ -14,12 +14,12 @@ pub(crate) mod test_utils;
 pub mod error;
 
 pub mod build;
-#[cfg(feature = "pipnn")]
-pub use build::PiPNNParameters;
 pub use build::{
     disk_index_build_parameter, filter_parameter, BuildAlgorithm, DiskIndexBuildParameters,
     QuantizationType,
 };
+#[cfg(feature = "pipnn")]
+pub use build::{HashPruneParameters, PiPNNParameters};
 
 pub mod data_model;
 pub mod search;
