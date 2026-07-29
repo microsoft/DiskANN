@@ -38,7 +38,8 @@ pub mod distance;
 pub mod norm;
 
 cfg_if::cfg_if! {
-    if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {
+    // x86-64 guarantees SSE2; `_mm_prefetch` needs only SSE.
+    if #[cfg(target_arch = "x86_64")] {
         const CACHE_LINE_SIZE: usize = 64;
 
         #[inline(always)]
