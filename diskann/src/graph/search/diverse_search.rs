@@ -30,6 +30,11 @@ pub enum DiverseSearchError {
     TotalKZero,
     #[error("diverse k_value cannot be zero")]
     DiverseKZero,
+    #[error("diverse k_value ({diverse_results_k}) cannot exceed total k_value ({total_k_value})")]
+    DiverseKGreaterThanTotalK {
+        diverse_results_k: usize,
+        total_k_value: usize,
+    },
 }
 
 impl From<DiverseSearchError> for ANNError {
