@@ -314,7 +314,7 @@ where
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition(data, &context.config, metric))?;
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates(data, &leaves, context.config.k, metric)
+        leaf_build::build_leaf_candidates(data, leaves, context.config.k, metric)
             .map_err(ANNError::opaque)
     })?;
     tracing::info_span!("pipnn.finalization")
