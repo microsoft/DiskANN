@@ -30,7 +30,7 @@ use super::{
     lsh::{LshSketchError, LshSketches},
 };
 use bytemuck::Pod;
-use crate::{utils::VectorRepr, ANNError, ANNResult};
+use crate::{graph::AdjacencyList, utils::VectorRepr, ANNError, ANNResult};
 use diskann_vector::prefetch_hint_all;
 use diskann_wide::{
     arch::{self, Dispatched1, FTarget1, Target},
@@ -908,7 +908,7 @@ impl HashPrune {
 
     /// Extract the nearest `max_degree` candidates retained by HashPrune.
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
-    pub(crate) fn into_nearest_lists(self, max_degree: usize) -> Vec<Vec<u32>> {
+    pub(crate) fn into_nearest_lists(self, max_degree: usize) -> Vec<AdjacencyList<u32>> {
         let scan_lanes = self.scan_lanes;
         drop(self.sketches);
         let HashPrune {
@@ -935,7 +935,10 @@ impl HashPrune {
                         max_degree,
                     )
                 };
-                nbrs.into_iter().map(|(id, _)| id).collect()
+                let ids = nbrs.into_iter().map(|(id, _)| id).collect();
+                // A neighbor always has the same relative hash for this source;
+                // insertion replaces an existing hash slot instead of appending.
+                AdjacencyList::from_vec_trusted(ids)
             })
             .collect()
     }
@@ -944,7 +947,7 @@ impl HashPrune {
     /// and distances slabs (2/3 of the reservoir) before materializing the copy,
     /// so only the neighbors slab overlaps it.
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
-    pub(crate) fn into_candidate_lists(self) -> Vec<Vec<u32>> {
+    pub(crate) fn into_candidate_lists(self) -> Vec<AdjacencyList<u32>> {
         let cap = self.l_max;
         let scan_lanes = self.scan_lanes;
         drop(self.sketches);
@@ -968,7 +971,10 @@ impl HashPrune {
                 let hot = unsafe { &*hot[i].get() };
                 // SAFETY: i < hot.len() == npoints; the row spans scan_lanes
                 // slots and hot.len <= l_max <= scan_lanes.
-                unsafe { collect_neighbor_ids(hot, neighbors, cap) }
+                let ids = unsafe { collect_neighbor_ids(hot, neighbors, cap) };
+                // Reservoir slots have unique hashes, and one neighbor cannot
+                // produce two hashes for the same source.
+                AdjacencyList::from_vec_trusted(ids)
             })
             .collect()
     }
