@@ -1881,7 +1881,7 @@ mod tests {
         // Quantization is not needed yet
         assert!(!provider.quantization_needed());
 
-        let params = search::Knn::new(10, 10, None).unwrap();
+        let params = search::Knn::new(10, None).unwrap();
         let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
         let mut output_dists = vec![0f32; 10];
         let mut output = SearchResults::new(
@@ -2068,7 +2068,7 @@ mod tests {
         }
 
         // Searches should still work and use quantized vectors
-        let params = search::Knn::new(10, 10, None).unwrap();
+        let params = search::Knn::new(10, None).unwrap();
         let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
         let mut output_dists = vec![0f32; 10];
         let mut output = SearchResults::new(
