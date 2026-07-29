@@ -188,8 +188,9 @@ where
     })?;
     let metric = effective_metric::<T>(context.metric);
 
+    let partition = partitioning::PartitionConfig::from(&context.config);
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition(data, &context.config, metric))?;
+        .in_scope(|| partitioning::partition(data, partition, metric))?;
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
         leaf_build::build_leaf_candidates(data, leaves, context.config.k, metric)
             .map_err(ANNError::opaque)
