@@ -21,8 +21,11 @@ half = { workspace = true, features = ["bytemuck", "num-traits"] }
 # Note: hashbrown not using workspace because diskann needs default-features = false
 # while other crates use default-features = true. Keeping version 0.16.0 consistent.
 hashbrown = { version = "0.16.0", default-features = false, features = ["default-hasher"] }
+libc = { version = "0.2", optional = true }
 num-traits.workspace = true
+parking_lot = { version = "0.12", optional = true }
 rand.workspace = true
+rand_distr = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
@@ -59,7 +62,14 @@ panic = "warn"
 default = ["tracing"]
 
 # Enable PiPNN batch graph construction.
-pipnn = ["dep:diskann-linalg", "dep:rayon", "tracing"]
+pipnn = [
+    "dep:diskann-linalg",
+    "dep:libc",
+    "dep:parking_lot",
+    "dep:rand_distr",
+    "dep:rayon",
+    "tracing",
+]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
