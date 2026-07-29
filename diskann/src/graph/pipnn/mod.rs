@@ -193,6 +193,13 @@ impl<'a> PiPNNBuildContext<'a> {
     /// Enable HashPrune candidate merging for this build.
     pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
         config.validate()?;
+        let degree = self.graph.pruned_degree().get();
+        if config.l_max < degree {
+            return Err(config_error(format!(
+                "HashPrune l_max ({}) must be at least the graph degree ({degree})",
+                config.l_max
+            )));
+        }
         self.candidate_merge = CandidateMerge::HashPrune(config);
         Ok(self)
     }
