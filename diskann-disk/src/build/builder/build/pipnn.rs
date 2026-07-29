@@ -20,13 +20,13 @@ use diskann_providers::{
 use diskann_utils::io::{read_bin, Metadata};
 
 use super::{u32_try_from, DiskIndexBuilder};
-use crate::data_model::GraphDataType;
+use crate::{data_model::GraphDataType, PiPNNParameters};
 
 /// Build PiPNN adjacency and persist it through the canonical disk graph writer.
 pub(super) fn build_graph<Data, StorageProvider>(
     builder: &DiskIndexBuilder<'_, Data, StorageProvider>,
     pool: RayonThreadPoolRef<'_>,
-    config: PiPNNConfig,
+    parameters: &PiPNNParameters,
 ) -> ANNResult<()>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -55,12 +55,15 @@ where
     // supplied Rayon pool.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
-    let context = PiPNNBuildContext::new(
-        config,
+    let mut context = PiPNNBuildContext::new(
+        parameters.into(),
         &builder.index_configuration.config,
         builder.index_configuration.dist_metric,
         pool.as_rayon(),
     )?;
+    if let Some(hash_prune) = &parameters.hash_prune {
+        context = context.with_hash_prune(hash_prune.into())?;
+    }
     let adjacency = diskann::graph::pipnn::build_graph(data.as_view(), &context)?;
 
     // The disk header requires a start point. Use the same sampled medoid policy
