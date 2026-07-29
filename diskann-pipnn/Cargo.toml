@@ -37,5 +37,9 @@ harness = false
 name = "core"
 harness = false
 
+[[bench]]
+name = "hash_prune"
+harness = false
+
 [lints]
 workspace = true
