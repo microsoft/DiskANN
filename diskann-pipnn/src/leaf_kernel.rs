@@ -6,20 +6,14 @@
 //! Fused nearest-neighbor kernel for a leaf's lower dot-product matrix.
 
 use diskann_vector::distance::Metric;
-#[cfg(target_arch = "x86_64")]
-use diskann_wide::{SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
+use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
 
 /// Widest f32 SIMD lane count DiskANN dispatches to, used to size lane scratch.
-#[cfg(target_arch = "x86_64")]
 const MAX_LANES: usize = 16;
 
-#[cfg(target_arch = "x86_64")]
 const L2: u8 = 0;
-#[cfg(target_arch = "x86_64")]
 const COSINE_NORMALIZED: u8 = 1;
-#[cfg(target_arch = "x86_64")]
 const INNER_PRODUCT: u8 = 2;
-#[cfg(target_arch = "x86_64")]
 const COSINE: u8 = 3;
 
 /// One leaf-local neighbor and its metric distance.
@@ -238,11 +232,6 @@ struct LeafKernel<'a, 'o, 'w> {
 }
 
 impl LeafKernel<'_, '_, '_> {
-    fn run_scalar(self) {
-        process_pairs_scalar(self.input, self.k, self.output, self.norms, self.worst);
-    }
-
-    #[cfg(target_arch = "x86_64")]
     fn run_simd<F>(self, arch: F::Arch)
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -268,7 +257,6 @@ impl LeafKernel<'_, '_, '_> {
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
     fn run_fused<F, const SLOTS: usize>(self, arch: F::Arch)
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -308,40 +296,20 @@ impl LeafKernel<'_, '_, '_> {
     }
 }
 
-impl diskann_wide::arch::Target<diskann_wide::arch::Scalar, ()> for LeafKernel<'_, '_, '_> {
+impl<A> diskann_wide::arch::Target<A, ()> for LeafKernel<'_, '_, '_>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
     #[inline(always)]
-    fn run(self, _: diskann_wide::arch::Scalar) {
-        self.run_scalar();
+    fn run(self, arch: A) {
+        self.run_simd::<A::f32x16>(arch);
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V3, ()> for LeafKernel<'_, '_, '_> {
-    #[inline(always)]
-    fn run(self, arch: diskann_wide::arch::x86_64::V3) {
-        diskann_wide::alias!(F32x8 = <diskann_wide::arch::x86_64::V3>::f32x8);
-        self.run_simd::<F32x8>(arch);
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V4, ()> for LeafKernel<'_, '_, '_> {
-    #[inline(always)]
-    fn run(self, arch: diskann_wide::arch::x86_64::V4) {
-        diskann_wide::alias!(F32x16 = <diskann_wide::arch::x86_64::V4>::f32x16);
-        self.run_simd::<F32x16>(arch);
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::aarch64::Neon, ()> for LeafKernel<'_, '_, '_> {
-    #[inline(always)]
-    fn run(self, arch: diskann_wide::arch::aarch64::Neon) {
-        let _scalar = arch.retarget();
-        self.run_scalar();
-    }
-}
-
+#[cfg(test)]
 fn process_pairs_scalar(
     input: LeafTopK<'_>,
     k: usize,
@@ -359,7 +327,6 @@ fn process_pairs_scalar(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 /// Fused dual-endpoint scan for row widths without a specialized arm.
 ///
 /// Identical structure to [`process_pairs_simd_fused`], with the slot count
@@ -462,7 +429,6 @@ fn process_pairs_simd_dynamic<F>(
 /// a chunk where neither endpoint can accept costs one branch. `SLOTS` is the
 /// per-row neighbor count, threaded as a const so the insert arm is selected at
 /// compile time.
-#[cfg(target_arch = "x86_64")]
 #[inline(never)]
 fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
     arch: F::Arch,
@@ -567,7 +533,6 @@ fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 const fn metric<const METRIC: u8>() -> Metric {
     match METRIC {
         L2 => Metric::L2,
@@ -589,7 +554,6 @@ const fn metric<const METRIC: u8>() -> Metric {
 /// # Safety
 ///
 /// `base + slots` must be within the allocation behind `output`.
-#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn insert_slots(
     output: *mut LeafNeighbor,
@@ -669,7 +633,6 @@ unsafe fn insert_slots(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn pair_distances<F>(arch: F::Arch, metric: Metric, dot: F, row_norm: F, column_norm: F) -> F
 where
@@ -741,6 +704,7 @@ fn pair_distance(metric: Metric, dot: f32, row_norm: f32, column_norm: f32) -> f
 }
 
 #[inline(always)]
+#[cfg(test)]
 fn insert_row(
     output: &mut [LeafNeighbor],
     worst: &mut [f32],

@@ -4,7 +4,6 @@
  */
 
 use super::*;
-use diskann_wide::arch::{Scalar, Target};
 
 fn input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let dots = (0..2 * leaders)
@@ -32,7 +31,7 @@ fn input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
 }
 
 #[test]
-fn scalar_target_matches_runtime_dispatch() {
+fn scalar_reference_matches_runtime_dispatch() {
     for metric in [
         Metric::L2,
         Metric::Cosine,
@@ -54,14 +53,7 @@ fn scalar_target_matches_runtime_dispatch() {
                 nearest_leaders(input, fanout, &mut expected).unwrap();
 
                 let mut actual = vec![u32::MAX; input.rows * fanout];
-                <PartitionKernel<'_, '_> as Target<Scalar, ()>>::run(
-                    PartitionKernel {
-                        input,
-                        fanout,
-                        output: &mut actual,
-                    },
-                    Scalar::new(),
-                );
+                process_rows_scalar(input, fanout, &mut actual);
 
                 assert_eq!(
                     actual, expected,
