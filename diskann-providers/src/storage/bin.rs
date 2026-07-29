@@ -9,6 +9,7 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{
     ANNError, ANNResult,
+    graph::AdjacencyList,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::io::Metadata;
@@ -377,4 +378,58 @@ where
     out.write_all(&max_degree.to_le_bytes())?;
     out.flush()?;
     Ok(index_size.into_usize())
+}
+
+/// Save real-point adjacency lists in the canonical graph layout.
+pub fn save_adjacency_graph<P>(
+    adjacency: &[AdjacencyList<u32>],
+    max_degree: u32,
+    provider: &P,
+    start_point: u32,
+    path: &str,
+) -> ANNResult<usize>
+where
+    P: StorageWriteProvider,
+{
+    save_graph(
+        &AdjacencyGraph {
+            adjacency,
+            max_degree,
+        },
+        provider,
+        start_point,
+        path,
+    )
+}
+
+struct AdjacencyGraph<'a> {
+    adjacency: &'a [AdjacencyList<u32>],
+    max_degree: u32,
+}
+
+impl GetAdjacencyList for AdjacencyGraph<'_> {
+    type Element = u32;
+    type Item<'a>
+        = &'a [u32]
+    where
+        Self: 'a;
+
+    fn get_adjacency_list(&self, index: usize) -> ANNResult<Self::Item<'_>> {
+        self.adjacency
+            .get(index)
+            .map(|row| &**row)
+            .ok_or_else(|| ANNError::log_index_error(format_args!("missing graph row {index}")))
+    }
+
+    fn total(&self) -> usize {
+        self.adjacency.len()
+    }
+
+    fn additional_points(&self) -> u64 {
+        0
+    }
+
+    fn max_degree(&self) -> Option<u32> {
+        Some(self.max_degree)
+    }
 }
