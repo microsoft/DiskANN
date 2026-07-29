@@ -55,8 +55,17 @@ impl Reservoir {
 
     fn neighbors(&self) -> Vec<(u32, f32)> {
         let cold = self.cold();
+        let mut scratch = Vec::new();
         // SAFETY: the test owns the reservoir; all cold slabs span scan_lanes entries.
-        unsafe { collect_sorted_neighbors(&self.hot, cold.distances, cold.neighbors, usize::MAX) }
+        unsafe {
+            collect_sorted_neighbors(
+                &self.hot,
+                cold.distances,
+                cold.neighbors,
+                usize::MAX,
+                &mut scratch,
+            )
+        }
     }
 
     fn len(&self) -> usize {
