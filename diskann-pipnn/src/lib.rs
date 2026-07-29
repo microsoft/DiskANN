@@ -178,6 +178,7 @@ where
         leaf_build::build_leaf_candidates(data, &leaves, context.config.k, metric)
             .map_err(ANNError::opaque)
     })?;
+    drop(leaves);
     tracing::info_span!("pipnn.finalization")
         .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
 }
