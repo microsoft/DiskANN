@@ -62,6 +62,10 @@ where
     T: std::error::Error,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Protect against pathological `Source` implementations that just return
+        // themselves.
+        const LIMIT: usize = 256;
+
         // Cast wrap the walking of the source chain into something that behaves like an
         // iterator.
         struct Source<'a>(Option<&'a (dyn std::error::Error + 'static)>);
@@ -78,8 +82,13 @@ where
         }
 
         write!(f, "{}", self.0)?;
-        for source in Source(self.0.source()) {
+        let mut itr = Source(self.0.source());
+        for source in itr.by_ref().take(LIMIT) {
             write!(f, "\n    caused by: {}", source)?;
+        }
+
+        if itr.next().is_some() {
+            write!(f, "\n    ... (limit reached)")?;
         }
 
         Ok(())
@@ -349,6 +358,31 @@ mod tests {
         assert_eq!(format(&error), expected);
         assert_eq!(Format(&error).to_string(), expected);
         assert_eq!(Format(error).to_string(), expected);
+    }
+
+    // A pathological error type that returns itself for `source` and thus ends up
+    // with an unlimited chain.
+    #[derive(Debug)]
+    struct Infinite;
+
+    impl std::fmt::Display for Infinite {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an unending source")
+        }
+    }
+
+    impl std::error::Error for Infinite {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self)
+        }
+    }
+
+    #[test]
+    fn test_infinite_detected() {
+        // Without a limit - this line will never finish (we'll either hit a stack overflow
+        // or run out of memory for the string).
+        let s = Format(Infinite).to_string();
+        assert!(s.contains("(limit reached)"));
     }
 
     ///////////
