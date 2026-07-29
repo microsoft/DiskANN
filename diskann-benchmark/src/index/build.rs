@@ -171,6 +171,7 @@ where
         .into_iter()
         .map(|source| adjacency[source].clone())
         .collect();
+    let batch_elapsed = started.elapsed();
 
     // Unlike incremental insertion, PiPNN finishes all batch-build scratch
     // before allocating the provider that owns the searchable index.
@@ -179,6 +180,9 @@ where
         input.inmem_parameters(npoints, dimensions),
         common::NoDeletes,
     )?;
+    // Provider allocation is setup, just as it is for the incremental path;
+    // BuildStats covers graph construction plus provider installation.
+    let install_started = std::time::Instant::now();
     for (id, vector) in data.row_iter().enumerate() {
         let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
         index.data_provider.base_vectors.set_element(&id, vector)?;
@@ -204,7 +208,7 @@ where
             .set_neighbors_sync(start_id as usize, neighbors)?;
     }
 
-    let total_time = MicroSeconds::from(started.elapsed());
+    let total_time = MicroSeconds::from(batch_elapsed + install_started.elapsed());
     let per_vector = MicroSeconds::new(
         total_time
             .as_micros()
