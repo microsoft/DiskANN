@@ -194,9 +194,14 @@ impl<'a> PiPNNBuildContext<'a> {
     pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
         config.validate()?;
         let degree = self.graph.pruned_degree().get();
-        if config.l_max < degree {
+        let hash_capacity = 1usize
+            .checked_shl(config.num_hash_planes as u32)
+            .unwrap_or(usize::MAX);
+        let candidate_capacity = config.l_max.min(hash_capacity);
+        if candidate_capacity < degree {
             return Err(config_error(format!(
-                "HashPrune l_max ({}) must be at least the graph degree ({degree})",
+                "HashPrune capacity min(l_max={}, hash buckets={hash_capacity}) must be at least \
+                 the graph degree ({degree})",
                 config.l_max
             )));
         }
