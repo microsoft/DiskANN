@@ -17,10 +17,7 @@ use vfs::MemoryFS;
 
 use crate::{
     build::{
-        builder::{
-            build::DiskIndexBuilder,
-            core::{determine_build_strategy, IndexBuildStrategy},
-        },
+        builder::build::DiskIndexBuilder,
         configuration::{MemoryBudget, NumPQChunks, PiPNNParameters},
     },
     data_model::AdHoc,
@@ -147,7 +144,7 @@ fn pipnn_graph_adapter_writes_real_point_header() {
 }
 
 #[test]
-fn pipnn_disk_build_falls_back_to_complete_vamana_pipeline() {
+fn explicit_pipnn_selection_is_not_replaced_by_memory_budget() {
     let storage = VirtualStorageProvider::new_memory();
     let (points, dimensions) = (256, 8);
     write_data(&storage, points, dimensions);
@@ -155,7 +152,7 @@ fn pipnn_disk_build_falls_back_to_complete_vamana_pipeline() {
 
     assert!(matches!(
         builder.disk_build_param.build_algorithm(),
-        crate::BuildAlgorithm::Vamana
+        crate::BuildAlgorithm::PiPNN(_)
     ));
     assert_eq!(
         builder.disk_build_param.build_quantization(),
@@ -164,21 +161,12 @@ fn pipnn_disk_build_falls_back_to_complete_vamana_pipeline() {
     assert_eq!(builder.index_configuration.config.pruned_degree().get(), 32);
     assert_eq!(builder.index_configuration.config.l_build().get(), 50);
     assert_eq!(builder.index_configuration.config.alpha(), 1.3);
-    assert!(matches!(
-        determine_build_strategy::<AdHoc<f32>>(
-            &builder.index_configuration,
-            builder.disk_build_param.build_memory_limit().in_bytes() as f64,
-            builder.disk_build_param.build_quantization(),
-        ),
-        IndexBuildStrategy::Merged
-    ));
-
     builder.build().unwrap();
     assert!(storage.exists(&get_disk_index_file("/index")));
 }
 
 #[test]
-fn pipnn_disk_build_rejects_invalid_config_before_fallback() {
+fn pipnn_disk_build_rejects_invalid_config() {
     let storage = VirtualStorageProvider::new_memory();
     let invalid = PiPNNParameters {
         c_max: 0,
@@ -193,7 +181,7 @@ fn pipnn_disk_build_rejects_invalid_config_before_fallback() {
     let writer = DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
 
     let error = match DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, config, writer) {
-        Ok(_) => panic!("invalid PiPNN config must not silently fall back to Vamana"),
+        Ok(_) => panic!("invalid PiPNN config must be rejected"),
         Err(error) => error,
     };
 
