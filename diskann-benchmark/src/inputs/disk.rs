@@ -69,8 +69,8 @@ pub(crate) struct DiskIndexBuild {
     #[serde(default = "default_alpha")]
     pub(crate) alpha: f32,
     pub(crate) num_threads: usize,
-    /// Graph-build RAM limit. PiPNN falls back to Vamana when its estimated
-    /// one-shot peak exceeds this value.
+    /// Memory budget for bounded disk-index pipeline stages. Explicit PiPNN
+    /// graph construction remains one-shot and is not silently replaced.
     pub(crate) build_ram_limit_gb: f64,
     pub(crate) num_pq_chunks: NonZeroUsize,
     #[cfg(feature = "disk-index")]
