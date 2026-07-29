@@ -77,26 +77,9 @@ where
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
         #[cfg(feature = "pipnn")]
-        let disk_build_param = {
-            let mut disk_build_param = disk_build_param;
-            if let Some(config) = disk_build_param.pipnn_config() {
-                config.validate()?;
-                let estimate = disk_build_param.use_vamana_if_pipnn_exceeds(
-                    index_configuration.max_points,
-                    index_configuration.dim,
-                    std::mem::size_of::<Data::VectorDataType>(),
-                    index_configuration.num_threads,
-                )?;
-                let selected = disk_build_param.build_algorithm();
-                info!(
-                    estimated_peak_bytes = estimate,
-                    memory_limit_bytes = disk_build_param.build_memory_limit().in_bytes(),
-                    algorithm = %selected,
-                    "Selected graph build algorithm"
-                );
-            }
-            disk_build_param
-        };
+        if let Some(config) = disk_build_param.pipnn_config() {
+            config.validate()?;
+        }
 
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
