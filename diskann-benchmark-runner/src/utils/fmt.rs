@@ -379,6 +379,135 @@ where
     }
 }
 
+//////////////
+// KeyValue //
+//////////////
+
+enum MaybeLazy<'a> {
+    Lazy(&'a dyn std::fmt::Display),
+    Eager(String),
+}
+
+impl std::fmt::Display for MaybeLazy<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lazy(lazy) => write!(f, "{}", lazy),
+            Self::Eager(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::fmt::Debug for MaybeLazy<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct AsDisplay<'a>(&'a dyn std::fmt::Display);
+        impl std::fmt::Debug for AsDisplay<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        match self {
+            Self::Lazy(o) => {
+                let as_display = AsDisplay(o);
+                f.debug_tuple("MaybeLazy::Lazy").field(&as_display).finish()
+            }
+            Self::Eager(s) => f.debug_tuple("MaybeLazy::Eager").field(s).finish(),
+        }
+    }
+}
+
+/// Display a dynamic list of key-value pairs in a YAML-like style.
+///
+/// Keys are left-aligned and single-line values are aligned into a common column
+/// just past the longest key. A value that renders to multiple lines (for example
+/// a nested [`KeyValue`] or any other multi-line block) is placed on the lines
+/// following its key, indented by two spaces. This keeps nested structures visibly
+/// subordinate to their key regardless of whether the value is itself a key-value
+/// list or an opaque block.
+///
+/// # Examples
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::KeyValue;
+///
+/// let mut kv = KeyValue::new();
+/// kv.push("a", &1);
+/// kv.push("hello", &"world");
+///
+/// let expected = "a:     1\nhello: world";
+///
+/// assert_eq!(kv.to_string(), expected);
+/// ```
+///
+/// Multi-line values are indented beneath their key:
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::KeyValue;
+///
+/// let mut inner = KeyValue::new();
+/// inner.push("x", &1);
+/// inner.push("yy", &2);
+/// let inner = inner.to_string();
+///
+/// let mut kv = KeyValue::new();
+/// kv.push("name", &"example");
+/// kv.push("nested", &inner);
+///
+/// let expected = "name:   example\nnested:\n  x:  1\n  yy: 2";
+///
+/// assert_eq!(kv.to_string(), expected);
+/// ```
+#[derive(Debug, Default)]
+pub struct KeyValue<'a> {
+    kv: Vec<(&'a str, MaybeLazy<'a>)>,
+    max_key_length: usize,
+}
+
+impl<'a> KeyValue<'a> {
+    /// Create a new empty [`KeyValue`] formatter.
+    pub fn new() -> Self {
+        Self {
+            kv: Vec::new(),
+            max_key_length: 0,
+        }
+    }
+
+    /// Push the key-value pair to `self` for formatting.
+    pub fn push(&mut self, key: &'a str, value: &'a dyn std::fmt::Display) {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv.push((key, MaybeLazy::Lazy(value)))
+    }
+
+    /// Push the key-value pair to `self` for formatting - eagerly formatting `value`.
+    pub fn push_eager<D>(&mut self, key: &'a str, value: D)
+    where
+        D: std::fmt::Display,
+    {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv.push((key, MaybeLazy::Eager(value.to_string())))
+    }
+}
+
+impl std::fmt::Display for KeyValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let width = self.max_key_length;
+        let mut prefix = "";
+        for (k, v) in self.kv.iter() {
+            let rendered = v.to_string();
+            if rendered.contains('\n') {
+                write!(f, "{}{}:\n{}", prefix, k, Indent::new(&rendered, 2))?
+            } else {
+                // Left-align the key and pad so that all single-line values line up in a
+                // column one space past the longest key's colon.
+                let pad = (width + 1).saturating_sub(k.len());
+                write!(f, "{}{}:{:pad$}{rendered}", prefix, k, "")?;
+            }
+            prefix = "\n";
+        }
+        Ok(())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -605,5 +734,94 @@ string,        ,   string
             .with_last(", and ")
             .with_pair(" and ");
         assert_eq!(d.to_string(), "\"topk\" and \"range\"");
+    }
+
+    //----------//
+    // KeyValue //
+    //----------//
+
+    // Strip a preceding newline if it exists.
+    fn process(x: &str) -> &str {
+        let x = x.strip_prefix('\n').unwrap_or(x);
+        x.strip_suffix('\n').unwrap_or(x)
+    }
+
+    #[test]
+    fn test_key_value_empty() {
+        let kv = KeyValue::new();
+        assert_eq!(kv.to_string(), "");
+    }
+
+    #[test]
+    fn test_key_value_single_pair() {
+        let mut kv = KeyValue::new();
+        kv.push("a", &1);
+        assert_eq!(kv.to_string(), "a: 1");
+    }
+
+    #[test]
+    fn test_key_value_aligns_values() {
+        let mut kv = KeyValue::new();
+        kv.push("a", &1);
+        kv.push("hello", &"world");
+        let expected = process(
+            r#"
+a:     1
+hello: world
+"#,
+        );
+        assert_eq!(kv.to_string(), expected);
+    }
+
+    #[test]
+    fn test_key_value_push_eager() {
+        let mut kv = KeyValue::new();
+        kv.push_eager("a", 1);
+        kv.push_eager("hello", "world");
+
+        let expected = process(
+            r#"
+a:     1
+hello: world
+"#,
+        );
+
+        assert_eq!(kv.to_string(), expected);
+    }
+
+    #[test]
+    fn test_key_value_multiline_value_is_indented() {
+        let mut inner = KeyValue::new();
+        inner.push("x", &1);
+        inner.push("yy", &2);
+        let inner = inner.to_string();
+
+        let mut kv = KeyValue::new();
+        kv.push("name", &"example");
+        kv.push("nested", &inner);
+        kv.push("another line", &1);
+
+        let expected = process(
+            r#"
+name:         example
+nested:
+  x:  1
+  yy: 2
+another line: 1
+"#,
+        );
+
+        assert_eq!(kv.to_string(), expected);
+    }
+
+    #[test]
+    fn maybe_lazy_debug() {
+        let x = MaybeLazy::Lazy(&1);
+        let dbg = format!("{:?}", x);
+        assert_eq!(dbg, "MaybeLazy::Lazy(1)");
+
+        let x = MaybeLazy::Eager("hello".into());
+        let dbg = format!("{:?}", x);
+        assert_eq!(dbg, "MaybeLazy::Eager(\"hello\")");
     }
 }
