@@ -1112,6 +1112,15 @@ where
         associated_data: &mut [Data::AssociatedDataType],
         mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
+        let l = search_list_size as usize;
+
+        if l < k_value {
+            return Err(ANNError::message(
+                diskann::ANNErrorKind::IndexError,
+                "search list size must be at least as large as the number of results requested",
+            ));
+        }
+
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
             &mut distances[..k_value],
@@ -1119,7 +1128,6 @@ where
         );
 
         let timer = Instant::now();
-        let l = search_list_size as usize;
 
         let io_tracker = IOTracker::default();
 
