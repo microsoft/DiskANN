@@ -2195,7 +2195,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.result_count, k as u32);
-        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| n.id).collect();
+        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
     }
@@ -2325,7 +2325,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.result_count, k as u32);
-        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| n.id).collect();
+        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
     }
