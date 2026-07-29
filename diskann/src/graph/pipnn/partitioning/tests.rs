@@ -249,8 +249,8 @@ fn leader_count_is_bounded() {
 
 #[test]
 fn replica_seed_derivation_is_stable_and_distinct() {
-    assert_eq!(mix_seed(PARTITION_SEED, 0), 9_518_416_997_697_480);
-    assert_eq!(mix_seed(PARTITION_SEED, 1), 9_518_416_997_697_481);
+    assert_eq!(replica_seed(0), 1_000);
+    assert_eq!(replica_seed(1), 8_919);
 }
 
 #[test]
