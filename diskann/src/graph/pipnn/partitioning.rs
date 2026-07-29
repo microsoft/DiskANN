@@ -34,6 +34,29 @@ const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
 const SCATTER_STRIPE_ROWS: usize = 65_536;
 const MAX_PARTITION_ITERATIONS: usize = 30;
 
+/// Policy owned by the partition stage. Leaf-neighbor and merge settings do
+/// not cross this boundary.
+#[derive(Clone, Debug)]
+pub(crate) struct PartitionConfig {
+    c_max: usize,
+    c_min: usize,
+    p_samp: f64,
+    fanout: Vec<usize>,
+    replicas: usize,
+}
+
+impl From<&PiPNNConfig> for PartitionConfig {
+    fn from(config: &PiPNNConfig) -> Self {
+        Self {
+            c_max: config.c_max,
+            c_min: config.c_min,
+            p_samp: config.p_samp,
+            fanout: config.fanout.clone(),
+            replicas: config.replicas,
+        }
+    }
+}
+
 /// A partition failure with enough context to diagnose non-progressing input.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum PartitionError {
@@ -88,7 +111,7 @@ struct StripeBuffers {
 /// its build-owned Rayon pool.
 pub(crate) fn partition<T>(
     data: MatrixView<'_, T>,
-    config: &PiPNNConfig,
+    config: PartitionConfig,
     metric: Metric,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
@@ -108,7 +131,7 @@ where
     let mut leaves = Vec::new();
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
-        let mut replica_leaves = partition_replica(data, config, metric, seed)?;
+        let mut replica_leaves = partition_replica(data, &config, metric, seed)?;
         leaves
             .try_reserve(replica_leaves.len())
             .map_err(ANNError::opaque)?;
@@ -120,7 +143,7 @@ where
 
 fn partition_replica<T>(
     data: MatrixView<'_, T>,
-    config: &PiPNNConfig,
+    config: &PartitionConfig,
     metric: Metric,
     seed: u64,
 ) -> ANNResult<Vec<Vec<u32>>>
@@ -195,7 +218,7 @@ where
 
 fn partition_one_level<T>(
     data: MatrixView<'_, T>,
-    config: &PiPNNConfig,
+    config: &PartitionConfig,
     metric: Metric,
     item: WorkItem,
 ) -> ANNResult<(Vec<WorkItem>, Vec<Vec<u32>>)>
