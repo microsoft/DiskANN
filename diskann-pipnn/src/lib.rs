@@ -255,23 +255,15 @@ where
             })?;
             drop(leaves);
             if config.final_prune {
-                let candidates = rows_to_adjacency(hash_prune.into_candidate_lists());
+                let candidates = hash_prune.into_candidate_lists();
                 tracing::info_span!("pipnn.finalization").in_scope(|| {
                     finalization::prune_overfull(data, candidates, context.graph, metric)
                 })
             } else {
-                Ok(rows_to_adjacency(
-                    hash_prune.into_nearest_lists(context.graph.pruned_degree().get()),
-                ))
+                Ok(hash_prune.into_nearest_lists(context.graph.pruned_degree().get()))
             }
         }
     }
-}
-
-fn rows_to_adjacency(rows: Vec<Vec<u32>>) -> Vec<AdjacencyList<u32>> {
-    rows.into_iter()
-        .map(AdjacencyList::from_iter_untrusted)
-        .collect()
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {
