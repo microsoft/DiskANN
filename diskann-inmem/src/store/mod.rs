@@ -70,6 +70,9 @@ use crate::{
     tag::{AtomicTag, Tag},
 };
 
+pub(crate) mod plugin;
+pub(crate) mod invasive;
+
 /// Configuration for the concurrenct store.
 #[derive(Debug)]
 pub(crate) struct Config {
@@ -170,9 +173,6 @@ impl Store {
     /// within the store and must be compatible the the number of bytes in `config`.
     pub(crate) fn new(
         config: Config,
-        // entries: usize,
-        // bytes: Bytes,
-        // max_neighbors: usize,
         init: MatrixView<'_, u8>,
     ) -> Result<Self, StoreError> {
         let Config {
