@@ -59,7 +59,7 @@ fn scalar_target_matches_runtime_dispatch() {
                     .unwrap();
 
                 let mut actual = vec![LeafNeighbor::default(); points * k];
-                let mut worst = vec![f32::MAX; points];
+                let mut worst = vec![f32::INFINITY; points];
                 let norms = norms(input);
                 <LeafKernel<'_, '_, '_> as Target<Scalar, ()>>::run(
                     LeafKernel {
@@ -81,7 +81,7 @@ fn scalar_target_matches_runtime_dispatch() {
 #[test]
 fn scalar_insertion_orders_candidates_and_rejects_nan() {
     let mut output = [LeafNeighbor::default(); 4];
-    let mut worst = [f32::MAX];
+    let mut worst = [f32::INFINITY];
 
     for (position, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 0.5)] {
         insert_row(&mut output, &mut worst, 4, 0, position, distance);
