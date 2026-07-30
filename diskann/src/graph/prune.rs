@@ -8,10 +8,11 @@ use thiserror::Error;
 use super::{config::PruneKind, internal::SortedNeighbors};
 
 use crate::{
-    ANNError, ANNErrorKind, error,
+    error,
     graph::AdjacencyList,
     neighbor::Neighbor,
     utils::{IntoUsize, VectorId},
+    ANNError, ANNErrorKind,
 };
 
 /// Options provided to prune. See the field-level documentation for more details.
