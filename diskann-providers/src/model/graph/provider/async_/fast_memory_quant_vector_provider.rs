@@ -78,10 +78,6 @@ impl FastMemoryQuantVectorProviderAsync {
         }
     }
 
-    /// Return the metric associated with this provider.
-    pub(crate) fn metric(&self) -> Metric {
-        self.metric
-    }
     /// Return the total number of points (including frozen points) included in `self.
     #[inline(always)]
     pub fn total(&self) -> usize {

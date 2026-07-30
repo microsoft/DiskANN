@@ -410,12 +410,9 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let full = &provider.base_vectors;
         let quant = &provider.aux_vectors;
-        let metric = quant.metric();
 
-        let distance = distances::pq::HybridComputer::new(
-            quant.distance_computer(),
-            T::distance(metric, Some(full.dim())),
-        );
+        let distance =
+            distances::pq::HybridComputer::new(quant.distance_computer(), Some(full.dim()));
 
         let accessor = HybridPruneAccessor {
             full: &provider.base_vectors,

@@ -66,7 +66,7 @@ pub mod pq {
 
     use diskann::utils::VectorRepr;
     use diskann_utils::Reborrow;
-    use diskann_vector::DistanceFunction;
+    use diskann_vector::{DistanceFunction, distance::Metric};
 
     use crate::model::pq;
 
@@ -121,14 +121,23 @@ pub mod pq {
     {
         quant: pq::distance::DistanceComputer<'a>,
         full: T::Distance,
+        full_scale: f32,
     }
 
     impl<'a, T> HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
-        pub fn new(quant: pq::distance::DistanceComputer<'a>, full: T::Distance) -> Self {
-            Self { quant, full }
+        pub fn new(quant: pq::distance::DistanceComputer<'a>, dim: Option<usize>) -> Self {
+            let (full_metric, full_scale) = match quant.metric() {
+                Metric::CosineNormalized => (Metric::L2, pq::COSINE_NORMALIZED_L2_SCALE),
+                metric => (metric, 1.0),
+            };
+            Self {
+                quant,
+                full: T::distance(full_metric, dim),
+                full_scale,
+            }
         }
     }
 
@@ -141,7 +150,7 @@ pub mod pq {
         fn evaluate_similarity(&self, x: Hybrid<&[T], &[u8]>, y: Hybrid<&[T], &[u8]>) -> f32 {
             match x {
                 Hybrid::Full(x) => match y {
-                    Hybrid::Full(y) => self.full.evaluate_similarity(x, y),
+                    Hybrid::Full(y) => self.full_scale * self.full.evaluate_similarity(x, y),
                     Hybrid::Quant(y) => {
                         // SAFETY: This can only panic when T = `MinMaxElement` and the underlying slice is ill-defined.
                         // we are ok with panicking in distance functions for now.
@@ -164,17 +173,10 @@ pub mod pq {
 
     #[cfg(test)]
     mod tests {
-        use approx::assert_relative_eq;
-        use diskann::utils::VectorRepr;
-        use diskann_vector::{
-            DistanceFunction, PureDistanceFunction,
-            distance::{Metric, SquaredL2},
-        };
+        use diskann_vector::{DistanceFunction, distance::Metric};
 
         use super::{Hybrid, HybridComputer};
-        use crate::model::pq::{
-            COSINE_NORMALIZED_L2_SCALE, FixedChunkPQTable, distance::DistanceComputer,
-        };
+        use crate::model::pq::{FixedChunkPQTable, distance::DistanceComputer};
 
         #[test]
         fn hybrid_cosine_normalized_pq_pairs_use_scaled_l2() {
@@ -184,32 +186,35 @@ pub mod pq {
                 vec![0, 2, 4].into(),
             )
             .unwrap();
-            let computer = HybridComputer::<f32>::new(
+            let computer = HybridComputer::<u8>::new(
                 DistanceComputer::new(&table, Metric::CosineNormalized),
-                f32::distance(Metric::CosineNormalized, Some(4)),
+                Some(4),
             );
-            let full = [1.0, 0.0, 0.0, 0.0];
+            let full0 = [1, 0, 0, 2];
+            let full1 = [2, 0, 0, 1];
             let code0 = [0, 1];
             let code1 = [1, 0];
-            let reconstructed0 = table.inflate_vector(&code0);
-            let reconstructed1 = table.inflate_vector(&code1);
 
-            let full_quant = computer.evaluate_similarity(
-                Hybrid::Full(full.as_slice()),
-                Hybrid::Quant(code0.as_slice()),
-            );
-            let squared_l2: f32 = SquaredL2::evaluate(full.as_slice(), reconstructed0.as_slice());
-            let expected_full_quant = COSINE_NORMALIZED_L2_SCALE * squared_l2;
-            assert_relative_eq!(full_quant, expected_full_quant, max_relative = 1.0e-7);
-
-            let quant_quant = computer.evaluate_similarity(
-                Hybrid::Quant(code0.as_slice()),
-                Hybrid::Quant(code1.as_slice()),
-            );
-            let squared_l2: f32 =
-                SquaredL2::evaluate(reconstructed0.as_slice(), reconstructed1.as_slice());
-            let expected_quant_quant = COSINE_NORMALIZED_L2_SCALE * squared_l2;
-            assert_relative_eq!(quant_quant, expected_quant_quant, max_relative = 1.0e-7);
+            for (left, right) in [
+                (
+                    Hybrid::Full(full0.as_slice()),
+                    Hybrid::Full(full1.as_slice()),
+                ),
+                (
+                    Hybrid::Full(full0.as_slice()),
+                    Hybrid::Quant(code1.as_slice()),
+                ),
+                (
+                    Hybrid::Quant(code0.as_slice()),
+                    Hybrid::Full(full1.as_slice()),
+                ),
+                (
+                    Hybrid::Quant(code0.as_slice()),
+                    Hybrid::Quant(code1.as_slice()),
+                ),
+            ] {
+                assert_eq!(computer.evaluate_similarity(left, right), 1.0);
+            }
         }
     }
 }

@@ -198,6 +198,21 @@ pub(super) fn test_l2_inner<'a, F, R>(
     F: for<'any> PreprocessedDistanceFunction<&'any [u8], f32>,
     R: Rng,
 {
+    test_scaled_l2_inner(create, table, num_trials, config, rng, errors, 1.0);
+}
+
+pub(super) fn test_scaled_l2_inner<'a, F, R>(
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
+    table: &'a FixedChunkPQTable,
+    num_trials: usize,
+    config: TableConfig,
+    rng: &mut R,
+    errors: RelativeAndAbsolute,
+    scale: f32,
+) where
+    F: for<'any> PreprocessedDistanceFunction<&'any [u8], f32>,
+    R: Rng,
+{
     for _ in 0..num_trials {
         let input_query: Vec<f32> = f32::generate(config.dim, rng);
 
@@ -208,7 +223,9 @@ pub(super) fn test_l2_inner<'a, F, R>(
                 generate_expected_vector(&code, table.get_chunk_offsets(), config.start_value);
 
             let got = computer.evaluate_similarity(&code);
-            let expected = SquaredL2::evaluate(input_query.as_slice(), expected_vector.as_slice());
+            let squared_l2: f32 =
+                SquaredL2::evaluate(input_query.as_slice(), expected_vector.as_slice());
+            let expected = scale * squared_l2;
 
             // This doesn't need to be exact due to rounding differences.
             assert_relative_eq!(

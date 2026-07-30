@@ -3,7 +3,6 @@
  * Licensed under the MIT license.
  */
 mod fixed_chunk_pq_table;
-#[cfg(test)]
 pub(crate) use fixed_chunk_pq_table::COSINE_NORMALIZED_L2_SCALE;
 pub use fixed_chunk_pq_table::{
     FixedChunkPQTable, compute_pq_distance, compute_pq_distance_for_pq_coordinates,
