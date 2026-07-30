@@ -340,29 +340,25 @@ where
 
     let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.into_dims();
 
-    let mut full_pivot_data: Vec<f32>;
-    let centroid: Vec<f32>;
-    let chunk_offsets: Vec<usize>;
     let full_dim: usize;
+    let mut table;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
         return Err(ANNError::message("ERROR: PQ k-means pivot file not found."));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        (full_pivot_data, centroid, chunk_offsets) = pq_storage.load_existing_pivot_data(
-            &num_pq_chunks,
-            &num_centers,
-            &full_dim,
+        let (loaded_table, centroid) = pq_storage.load_existing_pivot_table(
+            num_pq_chunks,
+            num_centers,
+            full_dim,
             storage_provider,
         )?;
-    }
+        table = loaded_table;
 
-    // Instead of subtracting the center from each data set component, we instead
-    // add it to each center.
-    let mut full_pivot_data_mat =
-        MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
-            .bridge_err()?;
-    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
+        // Instead of subtracting the center from each data set component, we instead
+        // add it to each center.
+        accum_row_inplace(table.view_pivots_mut(), centroid.as_slice());
+    }
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,
@@ -387,13 +383,8 @@ where
     ))?;
 
     // The compression table.
-    let table = TransposedTable::from_parts(
-        full_pivot_data_mat.as_view(),
-        diskann_quantization::views::ChunkOffsetsView::new(&chunk_offsets)
-            .bridge_err()?
-            .to_owned(),
-    )
-    .map_err(ANNError::new)?;
+    let table = TransposedTable::from_parts(table.view_pivots(), table.view_offsets().to_owned())
+        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
@@ -503,6 +494,19 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
     )
     .map_err(ANNError::new)?;
 
+    generate_pq_data_from_pivots_table(vector_data, &table, pq_out)
+}
+
+fn generate_pq_data_from_pivots_table<T, U, V>(
+    vector_data: &[T],
+    table: &diskann_quantization::product::BasicTableBase<U, V>,
+    pq_out: &mut [u8],
+) -> ANNResult<()>
+where
+    T: Copy + Into<f32>,
+    U: diskann_utils::views::DenseData<Elem = f32>,
+    V: diskann_utils::views::DenseData<Elem = usize>,
+{
     let data = vector_data
         .iter()
         .map(|x| (*x).into())
@@ -546,17 +550,17 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
         return Err(ANNError::message("Error: Invalid PQ buffer input size."));
     }
 
+    let table = BasicTableView::new(
+        MatrixView::try_from(pivot_data, parameters.num_centers(), dim).bridge_err()?,
+        ChunkOffsetsView::new(offsets).bridge_err()?,
+    )
+    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+
     pq_out
         .par_chunks_mut(num_pq_chunks)
         .zip(vector_data.par_chunks(dim))
         .try_for_each_in_pool(pool, |(pq_slice, vector_slice)| {
-            generate_pq_data_from_pivots_from_membuf(
-                vector_slice,
-                pivot_data,
-                parameters.num_centers(),
-                offsets,
-                pq_slice,
-            )
+            generate_pq_data_from_pivots_table(vector_slice, &table, pq_slice)
         })
 }
 

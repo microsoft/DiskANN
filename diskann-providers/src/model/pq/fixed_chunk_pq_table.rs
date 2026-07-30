@@ -144,6 +144,11 @@ impl FixedChunkPQTable {
         Ok(Self { table })
     }
 
+    /// Wrap an already-validated basic PQ table.
+    pub fn from_basic_table(table: BasicTable) -> Self {
+        Self { table }
+    }
+
     /// Get chunk number.
     pub fn get_num_chunks(&self) -> usize {
         self.table.nchunks()

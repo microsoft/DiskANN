@@ -5,7 +5,7 @@
 
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
-use diskann_utils::views::{DenseData, MatrixBase, MatrixView};
+use diskann_utils::views::{DenseData, MatrixBase, MatrixView, MutDenseData, MutMatrixView};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
 
@@ -86,6 +86,14 @@ where
         self.pivots.as_view()
     }
 
+    /// Return a mutable view over the pivot table.
+    pub fn view_pivots_mut(&mut self) -> MutMatrixView<'_, f32>
+    where
+        T: MutDenseData,
+    {
+        self.pivots.as_mut_view()
+    }
+
     /// Return a view over the schema offsets.
     pub fn view_offsets(&self) -> ChunkOffsetsView<'_> {
         self.offsets.as_view()
@@ -104,6 +112,11 @@ where
     /// Return the dimensionality of the full-precision vectors associated with this table.
     pub fn dim(&self) -> usize {
         self.pivots.ncols()
+    }
+
+    /// Consume this table and return the underlying pivots and offsets.
+    pub fn into_parts(self) -> (MatrixBase<T>, ChunkOffsetsBase<U>) {
+        (self.pivots, self.offsets)
     }
 }
 
