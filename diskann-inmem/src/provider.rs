@@ -62,6 +62,10 @@ pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
 
 impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
 
+// pub trait Index: Send + Sync + 'static {
+//     type Query<'a>: Copy + Send + Sync + 'static;
+// }
+
 /// An in-memory data-provider for DiskANN's graph indexing algorithms.
 ///
 /// The first type parameter `L` is a [`layers::Layer`] for describing the kind of data

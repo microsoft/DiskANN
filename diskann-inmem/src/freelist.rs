@@ -17,6 +17,7 @@
 //! bounded to conserve memory.
 //!
 //! ## Minted
+//!
 //! If no slots live in the recycled queue, new slots can be "minted" up to the configured
 //! maximum. This simply tracks the maximum slot ID that has been yielded so far and returns
 //! the next one.
