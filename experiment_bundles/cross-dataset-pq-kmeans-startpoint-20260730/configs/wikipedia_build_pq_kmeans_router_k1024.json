@@ -1,0 +1,17 @@
+{
+  "search_directories": [
+    ".",
+    "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/wikipedia_cohere"
+  ],
+  "jobs": [
+    {
+      "type": "pq-kmeans-router-build",
+      "content": {
+        "load_path": "/private/tmp/diskann-pq-kmeans-bfs-cache-router/outputs/wikipedia_cohere_10m_index_full",
+        "artifact": "/private/tmp/diskann-pq-kmeans-bfs-cache-router/outputs/wikipedia_cohere_10m.pq_kmeans_router_k1024.bin",
+        "max_iterations": 4,
+        "num_representatives": 1024
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "search_directories": [
+    "."
+  ],
+  "jobs": [
+    {
+      "type": "pq-kmeans-router-build",
+      "content": {
+        "load_path": "outputs/msturingann10m_user_m59_l80_sq1_pq64_index",
+        "artifact": "outputs/msturingann10m_user_m59_l80_sq1_pq64.pq_kmeans_router.bin",
+        "max_iterations": 4
+      }
+    }
+  ]
+}

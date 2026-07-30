@@ -32,6 +32,8 @@ use crate::inputs::graph_index::AdaptiveL;
 //////////////
 
 as_input!(DiskIndexOperation);
+#[cfg(feature = "disk-index")]
+as_input!(PqKmeansRouterBuild);
 
 ///////////
 // Input //
@@ -70,6 +72,24 @@ pub(crate) struct DiskIndexBuild {
     #[cfg(feature = "disk-index")]
     pub(crate) quantization_type: QuantizationType,
     pub(crate) save_path: String,
+}
+
+#[cfg(feature = "disk-index")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct PqKmeansRouterBuild {
+    pub(crate) load_path: String,
+    pub(crate) artifact: String,
+    #[serde(default)]
+    pub(crate) num_representatives: Option<usize>,
+    #[serde(default)]
+    pub(crate) training_sample_size: Option<usize>,
+    #[serde(default = "default_pq_kmeans_router_iterations")]
+    pub(crate) max_iterations: usize,
+}
+
+#[cfg(feature = "disk-index")]
+fn default_pq_kmeans_router_iterations() -> usize {
+    4
 }
 
 #[cfg(feature = "disk-index")]
@@ -135,6 +155,36 @@ impl DiskSearchMode {
 }
 
 #[cfg(feature = "disk-index")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum DiskStartPointRouter {
+    PqKmeans {
+        artifact: InputFile,
+        max_start_points: usize,
+    },
+}
+
+#[cfg(feature = "disk-index")]
+impl DiskStartPointRouter {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        match self {
+            DiskStartPointRouter::PqKmeans {
+                artifact,
+                max_start_points,
+            } => {
+                artifact
+                    .resolve(checker)
+                    .context("invalid PQ-kmeans router artifact")?;
+                if *max_start_points == 0 {
+                    anyhow::bail!("max_start_points must be positive for PQ-kmeans router");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "disk-index")]
 impl fmt::Display for DiskSearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let base = if self.is_flat_search { "flat" } else { "graph" };
@@ -168,8 +218,19 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) distance: SimilarityMeasure,
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
+    #[cfg(feature = "disk-index")]
+    #[serde(default)]
+    pub(crate) start_point_router: Option<DiskStartPointRouter>,
+    #[serde(default)]
+    pub(crate) warmup_runs: usize,
+    #[serde(default = "default_disk_search_repetitions")]
+    pub(crate) repetitions: usize,
     pub(crate) search_io_limit: Option<usize>,
     pub(crate) post_processor: Option<TopkPostProcessor>,
+}
+
+fn default_disk_search_repetitions() -> usize {
+    1
 }
 
 /////////
@@ -187,6 +248,57 @@ impl DiskIndexOperation {
             DiskIndexSource::Build(build) => build.validate(checker)?,
         }
         self.search_phase.validate(checker)?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl PqKmeansRouterBuild {
+    pub(crate) const fn tag() -> &'static str {
+        "pq-kmeans-router-build"
+    }
+
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        let files = [
+            (get_pq_pivot_file(&self.load_path), "pq pivot file"),
+            (
+                get_compressed_pq_file(&self.load_path),
+                "compressed pq file",
+            ),
+            (get_disk_index_file(&self.load_path), "disk index file"),
+        ];
+
+        for (path_str, label) in files {
+            let path = Path::new(&path_str);
+            if !path.is_file() {
+                anyhow::bail!("{} {} does not exist", label, path.display());
+            }
+        }
+
+        if self.max_iterations == 0 {
+            anyhow::bail!("max_iterations must be positive");
+        }
+        if matches!(self.num_representatives, Some(0)) {
+            anyhow::bail!("num_representatives must be positive if specified");
+        }
+        if matches!(self.training_sample_size, Some(0)) {
+            anyhow::bail!("training_sample_size must be positive if specified");
+        }
+
+        match Path::new(&self.artifact).parent() {
+            Some(parent_dir) => {
+                let parent_str = parent_dir.to_string_lossy();
+                if !parent_str.is_empty() && !parent_dir.is_dir() {
+                    anyhow::bail!(
+                        "parent directory - {} of artifact - {} does not exist",
+                        parent_str,
+                        self.artifact
+                    );
+                }
+            }
+            None => anyhow::bail!("invalid artifact - {}", self.artifact),
+        }
+
         Ok(())
     }
 }
@@ -309,6 +421,15 @@ impl DiskSearchPhase {
                 anyhow::bail!("num_nodes_to_cache must be positive if specified");
             }
         }
+        #[cfg(feature = "disk-index")]
+        if let Some(router) = self.start_point_router.as_mut() {
+            router
+                .validate(checker)
+                .context("invalid start_point_router")?;
+        }
+        if self.repetitions == 0 {
+            anyhow::bail!("repetitions must be positive");
+        }
         if let Some(lim) = self.search_io_limit {
             if lim == 0 {
                 anyhow::bail!("search_io_limit must be positive if specified");
@@ -365,6 +486,10 @@ impl Example for DiskIndexOperation {
             distance: SimilarityMeasure::SquaredL2,
             vector_filters_file: None,
             num_nodes_to_cache: None,
+            #[cfg(feature = "disk-index")]
+            start_point_router: None,
+            warmup_runs: 0,
+            repetitions: 1,
             search_io_limit: None,
             post_processor: None,
         };
@@ -458,6 +583,44 @@ impl fmt::Display for DiskIndexBuild {
     }
 }
 
+#[cfg(feature = "disk-index")]
+impl Example for PqKmeansRouterBuild {
+    fn example() -> Self {
+        Self {
+            load_path: "sample_index_l50_r32".to_string(),
+            artifact: "sample_index_l50_r32.pq_kmeans_router.bin".to_string(),
+            num_representatives: None,
+            training_sample_size: Some(16_384),
+            max_iterations: 4,
+        }
+    }
+}
+
+#[cfg(feature = "disk-index")]
+impl fmt::Display for PqKmeansRouterBuild {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "PQ-kmeans Router Build")?;
+        write_field!(f, "Load Path", self.load_path)?;
+        write_field!(f, "Artifact", self.artifact)?;
+        write_field!(
+            f,
+            "Representatives",
+            self.num_representatives
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "ceil(sqrt(N))".to_string())
+        )?;
+        write_field!(
+            f,
+            "Training Sample",
+            self.training_sample_size
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "auto".to_string())
+        )?;
+        write_field!(f, "Max Iterations", self.max_iterations)?;
+        Ok(())
+    }
+}
+
 impl DiskSearchPhase {
     fn summarize_fields(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_field!(f, "Queries", self.queries.display())?;
@@ -491,6 +654,24 @@ impl DiskSearchPhase {
             Some(n) => write_field!(f, "Num Nodes to Cache", n)?,
             None => write_field!(f, "Num Nodes to Cache", "none (defaults to 0)")?,
         }
+        #[cfg(feature = "disk-index")]
+        match &self.start_point_router {
+            Some(DiskStartPointRouter::PqKmeans {
+                artifact,
+                max_start_points,
+            }) => write_field!(
+                f,
+                "Start Point Router",
+                format!(
+                    "pq_kmeans, artifact {}, max_start_points {}",
+                    artifact.display(),
+                    max_start_points
+                )
+            )?,
+            None => write_field!(f, "Start Point Router", "none")?,
+        }
+        write_field!(f, "Warmup Runs", self.warmup_runs)?;
+        write_field!(f, "Repetitions", self.repetitions)?;
         match &self.search_io_limit {
             Some(lim) => write_field!(f, "Search IO Limit", format!("{lim}"))?,
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,

@@ -6,6 +6,7 @@
 //! Model module containing data structures, providers, and traits for disk index operations
 
 pub mod pq;
+pub mod pq_kmeans_router;
 pub mod provider;
 pub mod search_mode;
 pub mod traits;

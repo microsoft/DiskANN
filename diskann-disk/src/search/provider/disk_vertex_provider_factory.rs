@@ -76,8 +76,9 @@ where
         header: &GraphHeader,
     ) -> ANNResult<Self::VertexProviderType> {
         let sector_reader = self.aligned_reader_factory.build()?;
-        match self.caching_strategy {
-            CachingStrategy::StaticCacheWithBfsNodes(_) => match self.cache {
+        match &self.caching_strategy {
+            CachingStrategy::StaticCacheWithBfsNodes(_)
+            | CachingStrategy::StaticCacheWithBfsStartNodes { .. } => match self.cache {
                 Some(ref cache) => CachedDiskVertexProvider::new(
                     header,
                     max_batch_size,
@@ -85,7 +86,7 @@ where
                     cache.clone(),
                 ),
                 None => Err(ANNError::log_index_error(
-                    "Cache must be initialised for StaticCacheWithBfsNodes caching strategy",
+                    "Cache must be initialised for static BFS caching strategy",
                 )),
             },
             CachingStrategy::None => CachedDiskVertexProvider::new(
@@ -146,12 +147,13 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
     fn setup_cache(&mut self) -> ANNResult<()> {
         let timer = Instant::now();
 
-        match self.caching_strategy {
-            CachingStrategy::StaticCacheWithBfsNodes(mut num_nodes_to_cache) => {
+        match &self.caching_strategy {
+            CachingStrategy::StaticCacheWithBfsNodes(num_nodes_to_cache) => {
+                let mut num_nodes_to_cache = *num_nodes_to_cache;
                 if num_nodes_to_cache == 0 {
-                    ANNError::log_index_error(
+                    return Err(ANNError::log_index_error(
                         "num_nodes_to_cache should be greater than 0 for StaticCacheWithBfsNodes caching strategy",
-                    );
+                    ));
                 }
 
                 let graph_metadata = self.get_header()?;
@@ -167,7 +169,49 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
 
                 let start_node = graph_metadata.medoid as u32;
                 self.cache = Some(Arc::new(self.build_cache_via_bfs(
-                    start_node,
+                    &[start_node],
+                    num_nodes_to_cache,
+                    graph_metadata.dims,
+                )?));
+            }
+            CachingStrategy::StaticCacheWithBfsStartNodes {
+                num_nodes_to_cache,
+                start_nodes,
+            } => {
+                let mut num_nodes_to_cache = *num_nodes_to_cache;
+                if num_nodes_to_cache == 0 {
+                    return Err(ANNError::log_index_error(
+                        "num_nodes_to_cache should be greater than 0 for StaticCacheWithBfsStartNodes caching strategy",
+                    ));
+                }
+                if start_nodes.is_empty() {
+                    return Err(ANNError::log_index_error(
+                        "start_nodes should not be empty for StaticCacheWithBfsStartNodes caching strategy",
+                    ));
+                }
+
+                let graph_metadata = self.get_header()?;
+                let graph_metadata = graph_metadata.metadata();
+
+                if num_nodes_to_cache > graph_metadata.num_pts as usize {
+                    info!(
+                        "Reducing nodes to cache from: {} to: {} (total no. of nodes)",
+                        num_nodes_to_cache, graph_metadata.num_pts
+                    );
+                    num_nodes_to_cache = graph_metadata.num_pts as usize;
+                }
+
+                for start_node in start_nodes {
+                    if *start_node as u64 >= graph_metadata.num_pts {
+                        return Err(ANNError::log_index_error(format!(
+                            "BFS cache start node {} is out of bounds for graph with {} nodes",
+                            start_node, graph_metadata.num_pts
+                        )));
+                    }
+                }
+
+                self.cache = Some(Arc::new(self.build_cache_via_bfs(
+                    start_nodes,
                     num_nodes_to_cache,
                     graph_metadata.dims,
                 )?));
@@ -181,11 +225,15 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
 
     fn build_cache_via_bfs(
         &self,
-        start_node: u32,
+        start_nodes: &[u32],
         num_nodes_to_cache: usize,
         dimension: usize,
     ) -> ANNResult<Cache<Data>> {
-        info!("Building cache with {} nodes via BFS.", num_nodes_to_cache);
+        info!(
+            "Building cache with {} nodes via BFS from {} start nodes.",
+            num_nodes_to_cache,
+            start_nodes.len()
+        );
         let mut cache = Cache::new(dimension, num_nodes_to_cache)?;
         let mut vertex_provider =
             self.create_disk_vertex_provider(BEAM_WIDTH_FOR_BFS, &self.get_header()?)?;
@@ -194,8 +242,14 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         let mut queue = VecDeque::with_capacity(num_nodes_to_cache);
         let mut nodes_in_a_batch = Vec::with_capacity(BEAM_WIDTH_FOR_BFS);
 
-        queue.push_back(start_node);
-        visited.insert(start_node);
+        for start_node in start_nodes {
+            if cache.len() + queue.len() >= num_nodes_to_cache {
+                break;
+            }
+            if visited.insert(*start_node) {
+                queue.push_back(*start_node);
+            }
+        }
 
         while (!queue.is_empty()) && cache.len() < num_nodes_to_cache {
             nodes_in_a_batch.clear();
@@ -302,6 +356,34 @@ pub(crate) mod tests {
         let cache = factory.cache.as_ref().unwrap();
         assert!(!cache.is_empty());
         assert!(cache.len() <= num_nodes_to_cache);
+    }
+
+    #[test]
+    fn test_disk_vertex_provider_factory_with_static_cache_from_multiple_roots() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let start_nodes = vec![72, 118, 108, 72];
+        let num_nodes_to_cache = 16;
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorUnitData,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
+            CachingStrategy::StaticCacheWithBfsStartNodes {
+                num_nodes_to_cache,
+                start_nodes: start_nodes.clone(),
+            },
+        )
+        .unwrap();
+
+        let cache = factory.cache.as_ref().unwrap();
+        assert!(cache.len() <= num_nodes_to_cache);
+        for root in [72, 118, 108] {
+            assert!(
+                cache.contains(&root),
+                "multi-source BFS cache should seed requested root {root}"
+            );
+        }
     }
 
     #[test]
