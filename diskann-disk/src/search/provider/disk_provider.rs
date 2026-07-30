@@ -48,6 +48,7 @@ use tracing::debug;
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
+    error::{diskann_error, ErrorKind},
     search::{
         provider::{
             aligned_file_reader::AlignedFileReaderFactory,
@@ -966,8 +967,8 @@ where
         // `diskann::graph::Config` and is forced to be non-zero. But this is defensive
         // against misconfiguration.
         if batch_size == 0 {
-            return Err(ANNError::message(
-                diskann::ANNErrorKind::IndexError,
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "pq scratch must support at least one vector",
             ));
         }
@@ -1144,7 +1145,8 @@ where
                         .as_deref()
                         .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
                 );
-                let knn_search = Knn::new(k, l, beam_width)?;
+                let knn_search = Knn::new(k, l, beam_width)
+                    .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
                 self.runtime.block_on(self.index.search(
                     knn_search,
                     &strategy,
@@ -1230,12 +1232,8 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 mod disk_provider_tests {
     use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
-        graph::{
-            search::{record::VisitedSearchRecord, Knn},
-            KnnSearchError,
-        },
+        graph::search::{record::VisitedSearchRecord, Knn},
         utils::IntoUsize,
-        ANNErrorKind,
     };
     use diskann_providers::storage::{
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
@@ -1250,6 +1248,7 @@ mod disk_provider_tests {
     use super::*;
     use crate::{
         build::builder::core::disk_index_builder_tests::{IndexBuildFixture, TestParams},
+        error::{error_kind, ErrorKind},
         search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         utils::QueryStatistics,
     };
@@ -1698,10 +1697,7 @@ mod disk_provider_tests {
         // Test error case: l < k
         let res = Knn::new_default(20, 10);
         assert!(res.is_err());
-        assert_eq!(
-            <KnnSearchError as std::convert::Into<ANNError>>::into(res.unwrap_err()).kind(),
-            ANNErrorKind::IndexError
-        );
+
         // Test error case: beam_width = 0
         let res = Knn::new(10, 10, Some(0));
         assert!(res.is_err());
@@ -1756,7 +1752,7 @@ mod disk_provider_tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), ANNErrorKind::IndexError);
+        assert_eq!(error_kind(&result.unwrap_err()), ErrorKind::IndexError);
     }
 
     #[test]

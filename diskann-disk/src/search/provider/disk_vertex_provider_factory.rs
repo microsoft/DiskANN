@@ -5,7 +5,7 @@
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
 use crate::data_model::GraphDataType;
-use diskann::{graph::AdjacencyList, ANNError, ANNResult};
+use diskann::{graph::AdjacencyList, ANNResult};
 use diskann_quantization::{
     alloc::{AlignedAllocator, Poly},
     num::PowerOfTwo,
@@ -15,6 +15,7 @@ use tracing::info;
 
 use crate::{
     data_model::{Cache, CachingStrategy, GraphHeader},
+    error::{diskann_error, ErrorKind},
     search::provider::aligned_file_reader::{
         traits::{AlignedFileReader, AlignedReaderFactory},
         AlignedFileReaderFactory, AlignedRead,
@@ -58,9 +59,12 @@ where
         let mut read_buf = Poly::broadcast(
             0u8,
             buffer_len,
-            AlignedAllocator::new(PowerOfTwo::new(buffer_len).map_err(ANNError::log_index_error)?),
+            AlignedAllocator::new(
+                PowerOfTwo::new(buffer_len)
+                    .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?,
+            ),
         )
-        .map_err(ANNError::log_index_error)?;
+        .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
         let aligned_read = AlignedRead::new(0_u64, &mut read_buf)?;
         self.aligned_reader_factory
             .build()?
@@ -84,7 +88,8 @@ where
                     sector_reader,
                     cache.clone(),
                 ),
-                None => Err(ANNError::log_index_error(
+                None => Err(diskann_error!(
+                    ErrorKind::IndexError,
                     "Cache must be initialised for StaticCacheWithBfsNodes caching strategy",
                 )),
             },
@@ -149,9 +154,10 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         match self.caching_strategy {
             CachingStrategy::StaticCacheWithBfsNodes(mut num_nodes_to_cache) => {
                 if num_nodes_to_cache == 0 {
-                    ANNError::log_index_error(
+                    return Err(diskann_error!(
+                        ErrorKind::IndexError,
                         "num_nodes_to_cache should be greater than 0 for StaticCacheWithBfsNodes caching strategy",
-                    );
+                    ));
                 }
 
                 let graph_metadata = self.get_header()?;
@@ -202,7 +208,10 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
             let batch_size = min(queue.len(), BEAM_WIDTH_FOR_BFS);
             for _ in 0..batch_size {
                 let node = queue.pop_front().ok_or_else(|| {
-                    ANNError::log_index_error("Error while caching Nodes via BFS: Queue is empty")
+                    diskann_error!(
+                        ErrorKind::IndexError,
+                        "Error while caching Nodes via BFS: Queue is empty"
+                    )
                 })?;
                 nodes_in_a_batch.push(node);
             }
@@ -212,7 +221,11 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
             for (idx, node) in nodes_in_a_batch.iter().enumerate() {
                 Self::insert_in_cache(node, idx, &mut vertex_provider, &mut cache)?;
                 let adjacency_list = cache.get_adjacency_list(node).ok_or_else(|| {
-                    ANNError::log_index_error(format!("Error while caching Nodes via BFS: Adjacency List not found for inserted node {} in cache.", node))
+                    diskann_error!(
+                        ErrorKind::IndexError,
+                        "Error while caching Nodes via BFS: Adjacency List not found for inserted node {} in cache.",
+                        node
+                    )
                 })?;
                 for neighbor_id in adjacency_list.iter() {
                     if !visited.contains(neighbor_id) {

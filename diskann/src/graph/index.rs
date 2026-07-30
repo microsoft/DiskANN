@@ -39,7 +39,7 @@ use super::{
 };
 
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult},
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
@@ -493,13 +493,10 @@ where
     {
         async move {
             if batch.len() != ids.len() {
-                return Err(ANNError::new(
-                    ANNErrorKind::IndexError,
-                    BatchIdMismatch {
-                        batch_len: batch.len(),
-                        ids_len: ids.len(),
-                    },
-                ));
+                return Err(ANNError::new(BatchIdMismatch {
+                    batch_len: batch.len(),
+                    ids_len: ids.len(),
+                }));
             }
 
             let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
@@ -526,9 +523,7 @@ where
             let mut guards = Vec::with_capacity(batch.len());
 
             for h in handles {
-                let processed = h
-                    .await
-                    .map_err(|err| ANNError::new(ANNErrorKind::IndexError, err))??;
+                let processed = h.await.map_err(ANNError::new)??;
                 for guard in processed {
                     guards.push(guard);
                 }
@@ -1401,7 +1396,7 @@ where
                         #[error("Spawning a task failed in inplace-delete: {0}")]
                         struct LocalError(tokio::task::JoinError);
 
-                        ANNError::log_async_error(LocalError(err))
+                        ANNError::new(LocalError(err))
                     });
                     edge_collection.push(res);
                 }
@@ -1458,7 +1453,7 @@ where
                         loop {
                             let result = {
                                 let mut guard = edges_clone.lock().map_err(|_| {
-                                    ANNError::log_async_error("Poisoned mutex during construction")
+                                    ANNError::message("Poisoned mutex during construction")
                                 })?;
                                 guard.next()
                             };

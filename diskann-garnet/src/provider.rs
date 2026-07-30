@@ -5,7 +5,7 @@
 
 use dashmap::DashMap;
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult, default_post_processor,
+    ANNError, ANNResult, default_post_processor,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
@@ -107,13 +107,7 @@ pub(crate) enum GarnetProviderError {
     PostProcessing(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
-impl From<GarnetProviderError> for ANNError {
-    #[track_caller]
-    fn from(value: GarnetProviderError) -> Self {
-        ANNError::new(ANNErrorKind::GetVertexDataError, value)
-    }
-}
-
+diskann::convert_error!(GarnetProviderError);
 diskann::always_escalate!(GarnetProviderError);
 
 /// The Garnet DataProvider implementation.
