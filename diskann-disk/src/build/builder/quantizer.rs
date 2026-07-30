@@ -4,7 +4,7 @@
  */
 //! Disk index quantizer implementation.
 use crate::data_model::GraphDataType;
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
@@ -19,7 +19,10 @@ use diskann_quantization::scalar::train::ScalarQuantizationParameters;
 use diskann_utils::views::MatrixView;
 use tracing::info;
 
-use crate::QuantizationType;
+use crate::{
+    error::{diskann_error, ErrorKind},
+    QuantizationType,
+};
 
 /// Quantizer types used specifically for async disk index building.
 #[derive(Clone)]
@@ -86,9 +89,9 @@ impl BuildQuantizer {
                 standard_deviation,
             } => {
                 if nbits != 1 {
-                    return Err(ANNError::log_index_config_error(
-                        "build_quantization_type".to_string(),
-                        "SQ quantization is only supported for 1 bit".to_string(),
+                    return Err(diskann_error!(
+                        ErrorKind::IndexConfigError("build_quantization_type"),
+                        "SQ quantization is only supported for 1 bit",
                     ));
                 }
                 let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(

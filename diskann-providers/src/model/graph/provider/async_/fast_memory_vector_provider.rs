@@ -144,12 +144,12 @@ impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
     #[inline(always)]
     pub(crate) unsafe fn set_vector_sync(&self, i: usize, v: &[T]) -> ANNResult<()> {
         if v.len() != self.dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }

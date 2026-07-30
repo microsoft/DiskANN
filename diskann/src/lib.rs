@@ -17,7 +17,7 @@ pub mod flat;
 pub mod graph;
 
 // Top level exports.
-pub use error::ann_error::{ANNError, ANNErrorKind, ANNResult};
+pub use error::ann_error::{ANNError, ANNResult};
 
 /// Returns the version of the DiskANN crate.
 pub fn version() -> &'static str {

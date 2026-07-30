@@ -7,6 +7,7 @@ use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
+use diskann_utils::lazy_format;
 use diskann_vector::contains::ContainsSimd;
 use tracing::trace;
 
@@ -156,9 +157,11 @@ impl SimpleNeighborProviderAsync {
                 //
                 // Work backwards from this value to determine the internal `max_points`.
                 let max_points = num_points.checked_sub(num_start_points).ok_or_else(|| {
-                    ANNError::log_index_error(format_args!(
+                    ANNError::message(lazy_format!(
+                        move,
                         "expected {} start points but the on-disk dataset only has {} total points",
-                        num_start_points, num_points,
+                        num_start_points,
+                        num_points,
                     ))
                 })?;
 

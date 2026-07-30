@@ -5,7 +5,7 @@
 
 use std::{marker::PhantomData, time::Instant};
 
-use diskann::{utils::VectorRepr, ANNError};
+use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
@@ -15,12 +15,15 @@ use diskann_providers::{
     storage::PQStorage,
     utils::{BridgeErr, RayonThreadPoolRef},
 };
-use diskann_quantization::{product::TransposedTable, CompressInto};
+use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
-use crate::storage::quant::compressor::QuantCompressor;
+use crate::{
+    error::{diskann_error, ErrorKind},
+    storage::quant::compressor::QuantCompressor,
+};
 
 pub struct PQGenerationContext<'a, Storage>
 where
@@ -59,7 +62,8 @@ where
     fn new(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
         // validate that the number of chunks is correct.
         if context.num_chunks > context.dim {
-            return Err(ANNError::log_pq_error(
+            return Err(diskann_error!(
+                ErrorKind::PQError,
                 "Error: number of chunks more than dimension.",
             ));
         }
@@ -134,7 +138,7 @@ where
                 .bridge_err()?
                 .to_owned(),
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             table,
@@ -151,7 +155,7 @@ where
     ) -> Result<(), diskann::ANNError> {
         self.table
             .compress_into(vector, output)
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))
+            .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))
     }
 
     fn compressed_bytes(&self) -> usize {

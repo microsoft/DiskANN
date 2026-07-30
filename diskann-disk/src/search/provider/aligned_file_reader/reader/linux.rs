@@ -11,8 +11,11 @@ use diskann::{ANNError, ANNResult};
 use io_uring::IoUring;
 use libc;
 
-use crate::search::provider::aligned_file_reader::{
-    platform::IOContext, traits::AlignedFileReader, AlignedRead, A512,
+use crate::{
+    error::{diskann_error, ErrorKind},
+    search::provider::aligned_file_reader::{
+        platform::IOContext, traits::AlignedFileReader, AlignedRead, A512,
+    },
 };
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
@@ -34,17 +37,10 @@ impl LinuxAlignedFileReader {
         // Open file as read-only
         // Apply the `O_DIRECT` flag to bypass the kernel page cache.
         // See: https://man7.org/linux/man-pages/man2/open.2.html
-        let open_result = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECT)
-            .open(fname);
-
-        let file = match open_result {
-            Ok(file_handle) => file_handle,
-            Err(err) => {
-                return Err(ANNError::log_io_error(err));
-            }
-        };
+            .open(fname)?;
 
         let ring = IoUring::new(MAX_IO_CONCURRENCY as u32)?;
         let fd = file.as_raw_fd();
@@ -80,7 +76,7 @@ impl LinuxAlignedFileReader {
         unsafe {
             ring.submission()
                 .push(&read)
-                .map_err(ANNError::log_push_error)?
+                .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?
         };
         Ok(())
     }
@@ -117,9 +113,7 @@ impl AlignedFileReader for LinuxAlignedFileReader {
             // Flush the completion queue.
             for cqe in ring.completion() {
                 if cqe.result() < 0 {
-                    return Err(ANNError::log_io_error(std::io::Error::from_raw_os_error(
-                        cqe.result(),
-                    )));
+                    return Err(std::io::Error::from_raw_os_error(cqe.result()).into());
                 }
             }
         }

@@ -47,17 +47,3 @@ impl Hidden {
         Self(())
     }
 }
-
-macro_rules! opaque {
-    ($T:ty) => {
-        impl From<$T> for diskann::ANNError {
-            #[track_caller]
-            #[cold]
-            fn from(err: $T) -> diskann::ANNError {
-                diskann::ANNError::opaque(err)
-            }
-        }
-    };
-}
-
-pub(crate) use opaque;
