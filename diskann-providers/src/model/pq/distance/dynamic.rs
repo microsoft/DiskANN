@@ -55,11 +55,14 @@ impl<'a> QueryComputer<'a> {
     /// s = 2 - 2<x, y> = 2 * (1 - <x, y>)
     /// ```
     /// In other words, half the squared L2 distance equals normalized cosine distance when
-    /// both operands are normalized.
+    /// both operands are normalized, and the two differ by a positive factor otherwise, so
+    /// candidate ordering is preserved either way.
     ///
     /// PQ does not necessarily preserve the norms of compressed vectors, so this remains an
     /// approximation. The same approximation is used for query/PQ, full/PQ, and PQ/PQ
-    /// comparisons so graph search and pruning operate on compatible values.
+    /// comparisons so graph search and pruning operate on compatible values. Full/full
+    /// comparisons use the exact implementation instead; it agrees with this one for
+    /// unit-norm inputs.
     pub fn new(
         table: &'a FixedChunkPQTable,
         metric: Metric,
@@ -77,12 +80,9 @@ impl<'a> QueryComputer<'a> {
             Metric::L2 => Self::L2(TableL2::new(table, query, pool)?),
             Metric::InnerProduct => Self::IP(TableIP::new(table, query, pool)?),
             Metric::Cosine => Self::Cosine(DirectCosine::new(table, query)?),
-            Metric::CosineNormalized => Self::L2(TableL2::new_scaled(
-                table,
-                query,
-                pool,
-                COSINE_NORMALIZED_L2_SCALE,
-            )?),
+            Metric::CosineNormalized => {
+                Self::L2(TableL2::new(table, query, pool)?.scaled(COSINE_NORMALIZED_L2_SCALE))
+            }
         };
         Ok(result)
     }
@@ -219,6 +219,11 @@ mod tests {
     use rstest::rstest;
 
     use super::{super::test_utils, *};
+
+    /// Tolerance for comparing a table-lookup result against a directly evaluated
+    /// distance. Both sides accumulate rounding over `dim` terms in a different order,
+    /// so allow a small multiple of the f32 epsilon.
+    const LOOKUP_TOLERANCE: f32 = 8.0 * f32::EPSILON;
 
     // A wrapper for the `DistanceComputer` that enables it to behave like a
     // `PreprocessedDistanceFunction`.
@@ -430,12 +435,16 @@ mod tests {
         let squared_l2: f32 = SquaredL2::evaluate(&*query, &*reconstructed);
         let expected = COSINE_NORMALIZED_L2_SCALE * squared_l2;
 
-        assert_relative_eq!(query_distance, expected, max_relative = 5.0e-7);
-        assert_relative_eq!(random_access_distance, expected, max_relative = 5.0e-7);
+        assert_relative_eq!(query_distance, expected, max_relative = LOOKUP_TOLERANCE);
+        assert_relative_eq!(
+            random_access_distance,
+            expected,
+            max_relative = LOOKUP_TOLERANCE
+        );
         assert_relative_eq!(
             query_distance,
             random_access_distance,
-            max_relative = 5.0e-7
+            max_relative = LOOKUP_TOLERANCE
         );
     }
 
@@ -501,7 +510,7 @@ mod tests {
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),
                 expected,
-                max_relative = 6.3e-7,
+                max_relative = LOOKUP_TOLERANCE,
             );
         }
     }

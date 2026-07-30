@@ -16,6 +16,11 @@ use diskann_wide::ARCH;
 use super::NUM_PQ_CENTROIDS;
 use crate::utils::{Bridge, BridgeErr};
 
+/// Scale relating squared L2 to normalized cosine distance for unit-norm vectors.
+///
+/// Applied to every PQ-involved `CosineNormalized` comparison so that search and pruning
+/// share one scale. See [`QueryComputer::new`](crate::model::pq::distance::QueryComputer::new)
+/// for the derivation.
 pub(crate) const COSINE_NORMALIZED_L2_SCALE: f32 = 0.5;
 
 /// PQ Pivot table loading and calculate distance

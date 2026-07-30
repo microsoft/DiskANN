@@ -54,20 +54,6 @@ impl<'a> TableL2<'a> {
         Ok(object)
     }
 
-    pub(crate) fn new_scaled(
-        parent: &'a FixedChunkPQTable,
-        query: &[f32],
-        pool: Option<Arc<ObjectPool<Vec<f32>>>>,
-        scale: f32,
-    ) -> ANNResult<Self> {
-        let mut object = Self::new(parent, query, pool)?;
-        object
-            .lookup_table
-            .iter_mut()
-            .for_each(|distance| *distance *= scale);
-        Ok(object)
-    }
-
     fn new_unpopulated(
         parent: &'a FixedChunkPQTable,
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
@@ -87,6 +73,17 @@ impl<'a> TableL2<'a> {
         // Compute the partial distances into the lookup-table.
         self.parent
             .populate_chunk_distances(query, &mut self.lookup_table)
+    }
+
+    /// Scale every entry of the lookup table.
+    ///
+    /// `Metric::CosineNormalized` is half the squared L2 distance for unit-norm vectors;
+    /// applying that factor to the table keeps evaluation a plain lookup.
+    pub(crate) fn scaled(mut self, scale: f32) -> Self {
+        self.lookup_table
+            .iter_mut()
+            .for_each(|distance| *distance *= scale);
+        self
     }
 
     /// Compute the distance between a PQ code that the query provided to the most recent
