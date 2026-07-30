@@ -83,5 +83,5 @@ disk-index = [
     "dep:scopeguard",
 ]
 
-# Compare the legacy disk and quantization K-means implementations.
+# Compare the Disk and quantization K-means implementations.
 kmeans-comparison = ["dep:diskann-disk"]

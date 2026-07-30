@@ -17,7 +17,7 @@ cfg_if::cfg_if! {
             registry.register_partially_gated::<crate::inputs::kmeans::KmeansComparison>(
                 "kmeans-comparison",
                 diskann_benchmark_runner::Features::new("kmeans-comparison"),
-                "Legacy disk and quantization K-means comparison",
+                "Disk and quantization K-means comparison",
             )?;
             Ok(())
         }

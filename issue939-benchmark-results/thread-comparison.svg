@@ -1,68 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650" role="img" aria-labelledby="title desc">
   <title id="title">Total K-means latency by configured thread count</title>
-  <desc id="desc">Disk and quantization median total latency for 50000 four-dimensional points, 256 centers, and 10 iterations.</desc>
-  <rect width="900" height="500" fill="#ffffff"/>
-  <text x="450" y="30" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="20" font-weight="600" fill="#1f2328">Total K-means latency by configured threads (dimension 4)</text>
-
-  <g font-family="Segoe UI, sans-serif" font-size="13" fill="#1f2328">
-    <line x1="80" y1="420" x2="820" y2="420" stroke="#1f2328" stroke-width="1.5"/>
-    <line x1="80" y1="70" x2="80" y2="420" stroke="#1f2328" stroke-width="1.5"/>
-
-    <g stroke="#d0d7de" stroke-width="1">
-      <line x1="80" y1="356.4" x2="820" y2="356.4"/>
-      <line x1="80" y1="292.7" x2="820" y2="292.7"/>
-      <line x1="80" y1="229.1" x2="820" y2="229.1"/>
-      <line x1="80" y1="165.5" x2="820" y2="165.5"/>
-      <line x1="80" y1="101.8" x2="820" y2="101.8"/>
-    </g>
-
-    <g text-anchor="end">
-      <text x="70" y="425">0</text>
-      <text x="70" y="361">50</text>
-      <text x="70" y="297">100</text>
-      <text x="70" y="234">150</text>
-      <text x="70" y="170">200</text>
-      <text x="70" y="107">250</text>
-    </g>
-
-    <g text-anchor="middle">
-      <text x="120" y="445">1</text>
-      <text x="347" y="445">2</text>
-      <text x="573" y="445">4</text>
-      <text x="800" y="445">8</text>
-    </g>
-
-    <text x="450" y="480" text-anchor="middle" font-size="14">Configured threads</text>
-    <text x="20" y="245" text-anchor="middle" font-size="14" transform="rotate(-90 20 245)">Median latency (ms)</text>
-  </g>
-
+  <desc id="desc">Disk and quantization median total latency for dimensions 4, 32, and 128.</desc>
+  <rect width="900" height="650" fill="#ffffff"/>
+  <text x="450" y="28" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="20" font-weight="600" fill="#1f2328">Total K-means latency by configured threads</text>
   <g font-family="Segoe UI, sans-serif" font-size="13">
-    <line x1="585" y1="52" x2="620" y2="52" stroke="#0969da" stroke-width="4"/>
-    <circle cx="602" cy="52" r="4" fill="#0969da"/>
-    <text x="628" y="57" fill="#1f2328">Disk</text>
-    <line x1="690" y1="52" x2="725" y2="52" stroke="#d97706" stroke-width="4"/>
-    <circle cx="707" cy="52" r="4" fill="#d97706"/>
-    <text x="733" y="57" fill="#1f2328">Quantization</text>
+    <line x1="590" y1="50" x2="625" y2="50" stroke="#0969da" stroke-width="4"/><circle cx="607" cy="50" r="4" fill="#0969da"/><text x="633" y="55" fill="#1f2328">Disk</text>
+    <line x1="695" y1="50" x2="730" y2="50" stroke="#d97706" stroke-width="4"/><circle cx="712" cy="50" r="4" fill="#d97706"/><text x="738" y="55" fill="#1f2328">Quantization</text>
   </g>
 
-  <polyline points="120,122.4 347,183.9 573,183.9 800,98.5" fill="none" stroke="#0969da" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
-  <polyline points="120,370.0 347,369.1 573,368.5 800,369.1" fill="none" stroke="#d97706" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+  <g font-family="Segoe UI, sans-serif" font-size="12" fill="#1f2328">
+    <text x="75" y="88" font-size="15" font-weight="600">Dimension 4</text>
+    <line x1="90" y1="230" x2="820" y2="230" stroke="#1f2328"/><line x1="90" y1="80" x2="90" y2="230" stroke="#1f2328"/>
+    <line x1="90" y1="155" x2="820" y2="155" stroke="#d0d7de"/><text x="80" y="234" text-anchor="end">0</text><text x="80" y="159" text-anchor="end">350</text><text x="80" y="84" text-anchor="end">700 ms</text>
+    <polyline points="130,179.9 350,167.4 570,169.1 790,91.5" fill="none" stroke="#0969da" stroke-width="4"/><polyline points="130,221.6 350,220.8 570,220.5 790,220.7" fill="none" stroke="#d97706" stroke-width="4"/>
 
-  <g fill="#0969da">
-    <circle cx="120" cy="122.4" r="5"/><circle cx="347" cy="183.9" r="5"/><circle cx="573" cy="183.9" r="5"/><circle cx="800" cy="98.5" r="5"/>
-  </g>
-  <g fill="#d97706">
-    <circle cx="120" cy="370.0" r="5"/><circle cx="347" cy="369.1" r="5"/><circle cx="573" cy="368.5" r="5"/><circle cx="800" cy="369.1" r="5"/>
-  </g>
+    <text x="75" y="278" font-size="15" font-weight="600">Dimension 32</text>
+    <line x1="90" y1="420" x2="820" y2="420" stroke="#1f2328"/><line x1="90" y1="270" x2="90" y2="420" stroke="#1f2328"/>
+    <line x1="90" y1="345" x2="820" y2="345" stroke="#d0d7de"/><text x="80" y="424" text-anchor="end">0</text><text x="80" y="349" text-anchor="end">450</text><text x="80" y="274" text-anchor="end">900 ms</text>
+    <polyline points="130,364.5 350,356.6 570,354.9 790,280.8" fill="none" stroke="#0969da" stroke-width="4"/><polyline points="130,389.4 350,386.4 570,385.6 790,386.4" fill="none" stroke="#d97706" stroke-width="4"/>
 
-  <g font-family="Segoe UI, sans-serif" font-size="12" font-weight="600">
-    <text x="120" y="110" text-anchor="middle" fill="#0969da">233.9</text>
-    <text x="347" y="171" text-anchor="middle" fill="#0969da">185.5</text>
-    <text x="573" y="171" text-anchor="middle" fill="#0969da">185.5</text>
-    <text x="800" y="86" text-anchor="middle" fill="#0969da">252.6</text>
-    <text x="120" y="390" text-anchor="middle" fill="#d97706">39.3</text>
-    <text x="347" y="390" text-anchor="middle" fill="#d97706">40.0</text>
-    <text x="573" y="390" text-anchor="middle" fill="#d97706">40.4</text>
-    <text x="800" y="390" text-anchor="middle" fill="#d97706">40.0</text>
+    <text x="75" y="468" font-size="15" font-weight="600">Dimension 128</text>
+    <line x1="90" y1="610" x2="820" y2="610" stroke="#1f2328"/><line x1="90" y1="460" x2="90" y2="610" stroke="#1f2328"/>
+    <line x1="90" y1="535" x2="820" y2="535" stroke="#d0d7de"/><text x="80" y="614" text-anchor="end">0</text><text x="80" y="539" text-anchor="end">650</text><text x="80" y="464" text-anchor="end">1300 ms</text>
+    <polyline points="130,522.3 350,520.3 570,524.7 790,466.7" fill="none" stroke="#0969da" stroke-width="4"/><polyline points="130,513.4 350,499.8 570,498.6 790,496.2" fill="none" stroke="#d97706" stroke-width="4"/>
+
+    <g fill="#0969da"><circle cx="130" cy="179.9" r="4"/><circle cx="350" cy="167.4" r="4"/><circle cx="570" cy="169.1" r="4"/><circle cx="790" cy="91.5" r="4"/><circle cx="130" cy="364.5" r="4"/><circle cx="350" cy="356.6" r="4"/><circle cx="570" cy="354.9" r="4"/><circle cx="790" cy="280.8" r="4"/><circle cx="130" cy="522.3" r="4"/><circle cx="350" cy="520.3" r="4"/><circle cx="570" cy="524.7" r="4"/><circle cx="790" cy="466.7" r="4"/></g>
+    <g fill="#d97706"><circle cx="130" cy="221.6" r="4"/><circle cx="350" cy="220.8" r="4"/><circle cx="570" cy="220.5" r="4"/><circle cx="790" cy="220.7" r="4"/><circle cx="130" cy="389.4" r="4"/><circle cx="350" cy="386.4" r="4"/><circle cx="570" cy="385.6" r="4"/><circle cx="790" cy="386.4" r="4"/><circle cx="130" cy="513.4" r="4"/><circle cx="350" cy="499.8" r="4"/><circle cx="570" cy="498.6" r="4"/><circle cx="790" cy="496.2" r="4"/></g>
+
+    <g text-anchor="middle"><text x="130" y="635">1</text><text x="350" y="635">2</text><text x="570" y="635">4</text><text x="790" y="635">8</text></g>
+    <text x="450" y="649" text-anchor="middle">Configured threads</text>
   </g>
 </svg>

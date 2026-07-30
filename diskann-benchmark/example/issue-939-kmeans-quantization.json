@@ -21,7 +21,7 @@
         "implementation": "quantization",
         "phase": "all",
         "num_points": 50000,
-        "dimensions": [4],
+        "dimensions": [4, 32, 128],
         "center_counts": [256],
         "max_iterations": 10,
         "thread_counts": [2, 4, 8],

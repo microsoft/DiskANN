@@ -14,7 +14,7 @@
 
 Each measurement calls K-means++ once and, for `phase: "all"`, Lloyd once using the selected centers. The benchmark records initialization, Lloyd, and total wall-clock latency from that single execution. Fixture generation and quality calculation are outside the timed region.
 
-The Disk path calls `k_meanspp_selecting_pivots` followed by `run_lloyds`, passing the explicit repository Rayon pool to both functions. The old quantization path calls `kmeans_plusplus_into` followed by `lloyds`; these baseline APIs are sequential, so changing the benchmark thread count does not change their execution.
+The Disk path calls `k_meanspp_selecting_pivots` followed by `run_lloyds`, passing the explicit repository Rayon pool to both functions. The quantization path calls `kmeans_plusplus_into` followed by `lloyds`; these APIs are sequential, so changing the benchmark thread count does not change their execution.
 
 ## Dimension sweep
 
@@ -34,20 +34,28 @@ Thread count is 1. Latencies are medians in milliseconds.
 
 ## Thread sweep
 
-Dimension is 4. Latencies are medians in milliseconds.
+Dimensions are 4, 32, and 128. Latencies are medians in milliseconds.
 
-| Threads | Disk init | Quant init | Disk Lloyd | Quant Lloyd | Disk total | Quant total |
-|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 79.132 | 12.890 | 154.482 | 26.176 | 233.885 | 39.269 |
-| 2 | 56.398 | 13.002 | 128.981 | 27.000 | 185.514 | 40.026 |
-| 4 | 54.880 | 13.162 | 128.571 | 26.916 | 185.477 | 40.432 |
-| 8 | 76.757 | 13.419 | 175.219 | 26.468 | 252.584 | 39.963 |
+| Dimension | Threads | Disk init | Quant init | Disk Lloyd | Quant Lloyd | Disk total | Quant total |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 1 | 79.132 | 12.890 | 154.482 | 26.176 | 233.885 | 39.269 |
+| 4 | 2 | 93.420 | 14.013 | 191.393 | 28.925 | 291.925 | 43.144 |
+| 4 | 4 | 91.438 | 14.634 | 192.179 | 29.078 | 284.325 | 44.184 |
+| 4 | 8 | 216.815 | 14.135 | 432.785 | 29.009 | 646.388 | 43.416 |
+| 32 | 1 | 93.925 | 36.040 | 238.536 | 147.149 | 332.902 | 183.473 |
+| 32 | 2 | 94.530 | 41.224 | 286.002 | 160.463 | 380.600 | 201.898 |
+| 32 | 4 | 96.984 | 41.086 | 289.568 | 165.916 | 390.559 | 206.356 |
+| 32 | 8 | 251.475 | 41.028 | 580.572 | 158.886 | 835.157 | 201.424 |
+| 128 | 1 | 202.912 | 173.231 | 553.041 | 663.220 | 760.494 | 836.838 |
+| 128 | 2 | 193.639 | 239.483 | 586.743 | 711.697 | 777.325 | 955.052 |
+| 128 | 4 | 143.072 | 250.808 | 596.197 | 713.639 | 739.211 | 965.208 |
+| 128 | 8 | 278.502 | 261.207 | 953.971 | 728.626 | 1,241.718 | 986.318 |
 
-**[measured]** Old quantization total latency remains within 3.0% across 1, 2, 4, and 8 configured threads, confirming that this implementation does not use the benchmark's Rayon pool. Disk improves through four threads on this low-dimensional workload and regresses at eight threads.
+**[measured]** Quantization remains effectively insensitive to the configured thread count at dimensions 4 and 32; dimension 128 varies more but does not scale down with additional threads. Disk reaches its best dimension-128 total at four threads and regresses sharply at eight threads across all three dimensions on this host.
 
 ## Quality observations
 
-The final center hash and objective match exactly through dimension 384 and for every dimension-4 thread workload. They differ at dimensions 768, 1,024, and 3,072, so performance comparisons at those dimensions should not be interpreted as bit-identical algorithm executions.
+The final center hash and objective match exactly through dimension 384 and for every thread-sweep workload. They differ at dimensions 768, 1,024, and 3,072, so performance comparisons at those dimensions should not be interpreted as bit-identical algorithm executions.
 
 ## Raw results
 
