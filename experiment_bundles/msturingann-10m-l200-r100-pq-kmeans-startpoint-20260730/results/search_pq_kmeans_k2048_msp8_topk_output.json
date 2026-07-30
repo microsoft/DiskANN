@@ -1,0 +1,103 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 64,
+          "distance": "squared_l2",
+          "groundtruth": "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS/msturing-gt-10M",
+          "num_nodes_to_cache": 50000,
+          "num_threads": 4,
+          "post_processor": null,
+          "queries": "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS/query100K.fbin",
+          "recall_at": 100,
+          "repetitions": 5,
+          "search_io_limit": null,
+          "search_list": [
+            200
+          ],
+          "search_mode": {
+            "adaptive_l": null,
+            "is_flat_search": false
+          },
+          "start_point_router": {
+            "artifact": "/private/tmp/diskann-pq-kmeans-bfs-cache-router/outputs/msturingann10m_user_m59_l80_sq1_pq64.pq_kmeans_router_k2048.bin",
+            "max_start_points": 8,
+            "type": "pq_kmeans"
+          },
+          "vector_filters_file": null,
+          "warmup_runs": 2
+        },
+        "source": {
+          "data_type": "float32",
+          "disk-index-source": "Load",
+          "load_path": "outputs/msturingann10m_user_m59_l80_sq1_pq64_index"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 64,
+        "distance": "squared_l2",
+        "is_flat_search": false,
+        "num_nodes_to_cache": 50000,
+        "num_threads": 4,
+        "recall_at": 100,
+        "repetitions": 5,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 21834.79745,
+            "mean_cpu_time": 1026.454908,
+            "mean_hops": 447.89796,
+            "mean_io_time": 252.162192,
+            "mean_ios": 447.89796,
+            "mean_latency": 1290.388758,
+            "mean_pq_preprocess_time": 1.920552,
+            "mean_routed_start_points": 8.0,
+            "mean_router_scanned_codes": 2048.0,
+            "mean_router_time": 9.851106,
+            "p95_latency": 1567,
+            "p999_latency": 3483,
+            "qps": 3086.3427734375,
+            "recall": 74.63871765136719,
+            "search_l": 200
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 0.0,
+                "duration_seconds": 3.125876708,
+                "elapsed_cycles": 0.0,
+                "peak_memory_usage": 7.2127227783203125
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 233.028404
+              },
+              "span_name": "search-with-L=200-bw=64"
+            },
+            {
+              "metrics": {
+                "cpu_time": 0.0,
+                "duration_seconds": 233.028518875,
+                "elapsed_cycles": 0.0,
+                "peak_memory_usage": 26.281082153320312
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "start_point_router": "pq_kmeans",
+        "uses_vector_filters": false,
+        "warmup_runs": 2
+      }
+    }
+  }
+]

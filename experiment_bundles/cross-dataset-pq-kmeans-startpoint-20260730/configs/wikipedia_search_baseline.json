@@ -1,0 +1,37 @@
+{
+  "search_directories": [
+    ".",
+    "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/wikipedia_cohere"
+  ],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Load",
+          "data_type": "float32",
+          "load_path": "/private/tmp/diskann-pq-kmeans-bfs-cache-router/outputs/wikipedia_cohere_10m_index_full"
+        },
+        "search_phase": {
+          "queries": "wikipedia_query.bin",
+          "groundtruth": "wikipedia-10M",
+          "search_list": [
+            200
+          ],
+          "beam_width": 64,
+          "recall_at": 100,
+          "num_threads": 4,
+          "is_flat_search": false,
+          "distance": "squared_l2",
+          "vector_filters_file": null,
+          "num_nodes_to_cache": 50000,
+          "start_point_router": null,
+          "warmup_runs": 2,
+          "repetitions": 5,
+          "search_io_limit": null,
+          "post_processor": null
+        }
+      }
+    }
+  ]
+}

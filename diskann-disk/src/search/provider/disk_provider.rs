@@ -41,7 +41,10 @@ use diskann_utils::{
     views::Matrix,
 };
 
-use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
+use crate::search::{
+    pq::{quantizer_preprocess, PQData, PQScratch},
+    pq_kmeans_router::PqKmeansStartPointRouter,
+};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
 use tracing::debug;
@@ -248,6 +251,9 @@ where
 
     /// Scratch pool for disk search operations that need allocations.
     scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
+
+    /// Optional query-aware router that supplies multiple graph start points.
+    start_point_router: Option<&'a PqKmeansStartPointRouter>,
 }
 
 // Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
@@ -255,6 +261,9 @@ where
 struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
+    router_time_us: AtomicU64,
+    router_scanned_codes: AtomicUsize,
+    routed_start_points_count: AtomicUsize,
     io_count: AtomicUsize,
 }
 
@@ -263,6 +272,9 @@ impl Default for IOTracker {
         Self {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
+            router_time_us: AtomicU64::new(0),
+            router_scanned_codes: AtomicUsize::new(0),
+            routed_start_points_count: AtomicUsize::new(0),
             io_count: AtomicUsize::new(0),
         }
     }
@@ -280,6 +292,16 @@ impl IOTracker {
     fn add_io_count(&self, count: usize) {
         self.io_count
             .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn add_router_scanned_codes(&self, count: usize) {
+        self.router_scanned_codes
+            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn set_routed_start_points_count(&self, count: usize) {
+        self.routed_start_points_count
+            .store(count, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn io_count(&self) -> usize {
@@ -527,6 +549,7 @@ where
             query,
             self.vertex_provider_factory,
             self.scratch_pool,
+            self.start_point_router,
         )
     }
 }
@@ -621,6 +644,7 @@ where
     io_tracker: &'a IOTracker,
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
     query: &'a [Data::VectorDataType],
+    start_vertex_ids: Vec<u32>,
 }
 
 impl<Data, VP> DiskAccessor<'_, Data, VP>
@@ -667,16 +691,15 @@ where
     VP: VertexProvider<Data>,
 {
     async fn starting_points(&self) -> ANNResult<Vec<u32>> {
-        let start_vertex_id = self.provider.graph_header.metadata().medoid as u32;
-        Ok(vec![start_vertex_id])
+        Ok(self.start_vertex_ids.clone())
     }
 
     async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
         F: FnMut(Self::Id, f32) + Send,
     {
-        let start_vertex_id = self.provider.graph_header.metadata().medoid as u32;
-        self.pq_distances(&[start_vertex_id], |dist, id| f(id, dist))
+        let start_vertex_ids = self.start_vertex_ids.clone();
+        self.pq_distances(&start_vertex_ids, |dist, id| f(id, dist))
     }
 
     fn expand_beam<Itr, P, F>(
@@ -732,6 +755,7 @@ where
         query: &'a [Data::VectorDataType],
         vertex_provider_factory: &'a VPF,
         scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, VP>>>,
+        start_point_router: Option<&'a PqKmeansStartPointRouter>,
     ) -> ANNResult<Self>
     where
         VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
@@ -751,14 +775,33 @@ where
         // Decode caller's native vector representation into `f32`; downstream PQ kernels operate purely on `&[f32]`.
         let f32_query = Data::VectorDataType::as_f32(query).into_ann_result()?;
         scratch.pq_scratch.set(&f32_query)?;
-        let start_vertex_id = provider.graph_header.metadata().medoid as u32;
+        let medoid = provider.graph_header.metadata().medoid as u32;
+        let mut start_vertex_ids = vec![medoid];
+
+        if let Some(router) = start_point_router {
+            let router_timer = Instant::now();
+            let route = router.route(&f32_query, &provider.pq_data)?;
+            IOTracker::add_time(
+                &io_tracker.router_time_us,
+                router_timer.elapsed().as_micros() as u64,
+            );
+            io_tracker.add_router_scanned_codes(route.scanned_codes);
+            if !route.start_points.is_empty() {
+                start_vertex_ids = route.start_points;
+            }
+        }
+        let max_start_points = scratch.pq_scratch.max_vectors().max(1);
+        if start_vertex_ids.len() > max_start_points {
+            start_vertex_ids.truncate(max_start_points);
+        }
+        io_tracker.set_routed_start_points_count(start_vertex_ids.len());
 
         let timer = Instant::now();
         quantizer_preprocess(
             &mut scratch.pq_scratch,
             &provider.pq_data,
             provider.metric,
-            &[start_vertex_id],
+            &start_vertex_ids,
         )?;
         IOTracker::add_time(
             &io_tracker.preprocess_time_us,
@@ -770,6 +813,7 @@ where
             io_tracker,
             scratch,
             query,
+            start_vertex_ids,
         })
     }
 
@@ -817,6 +861,9 @@ pub struct DiskIndexSearcher<
 
     /// Scratch pool for disk search operations that need allocations.
     scratch_pool: Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
+
+    /// Optional query-aware router that supplies graph start points per query.
+    start_point_router: Option<Arc<PqKmeansStartPointRouter>>,
 }
 
 #[derive(Debug)]
@@ -872,6 +919,26 @@ where
         metric: Metric,
         runtime: Option<Runtime>,
     ) -> ANNResult<Self> {
+        Self::new_with_start_point_router(
+            num_threads,
+            search_io_limit,
+            disk_index_reader,
+            vertex_provider_factory,
+            metric,
+            None,
+            runtime,
+        )
+    }
+
+    pub fn new_with_start_point_router(
+        num_threads: usize,
+        search_io_limit: usize,
+        disk_index_reader: &DiskIndexReader,
+        vertex_provider_factory: ProviderFactory,
+        metric: Metric,
+        start_point_router: Option<PqKmeansStartPointRouter>,
+        runtime: Option<Runtime>,
+    ) -> ANNResult<Self> {
         let runtime = match runtime {
             Some(rt) => rt,
             None => tokio::runtime::Builder::new_current_thread().build()?,
@@ -917,6 +984,7 @@ where
             runtime,
             vertex_provider_factory,
             scratch_pool,
+            start_point_router: start_point_router.map(Arc::new),
         })
     }
 
@@ -931,6 +999,7 @@ where
             postprocess_filter,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
+            start_point_router: self.start_point_router.as_deref(),
         }
     }
 
@@ -1199,9 +1268,20 @@ where
         query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
         query_stats.query_pq_preprocess_time_us =
             IOTracker::time(&io_tracker.preprocess_time_us) as u128;
-        query_stats.cpu_time_us = query_stats.total_execution_time_us
-            - query_stats.io_time_us
-            - query_stats.query_pq_preprocess_time_us;
+        query_stats.router_time_us = IOTracker::time(&io_tracker.router_time_us) as u128;
+        query_stats.router_scanned_codes = io_tracker
+            .router_scanned_codes
+            .load(std::sync::atomic::Ordering::Relaxed)
+            as u32;
+        query_stats.routed_start_points_count = io_tracker
+            .routed_start_points_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+            as u32;
+        query_stats.cpu_time_us = query_stats
+            .total_execution_time_us
+            .saturating_sub(query_stats.io_time_us)
+            .saturating_sub(query_stats.query_pq_preprocess_time_us)
+            .saturating_sub(query_stats.router_time_us);
         Ok(SearchResultStats {
             cmps: query_stats.total_comparisons,
             result_count: stats.result_count,
@@ -1250,6 +1330,7 @@ mod disk_provider_tests {
     use super::*;
     use crate::{
         build::builder::core::disk_index_builder_tests::{IndexBuildFixture, TestParams},
+        search::pq_kmeans_router::{PqKmeansRouterData, PqKmeansStartPointRouter},
         search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         utils::QueryStatistics,
     };
@@ -1362,6 +1443,71 @@ mod disk_provider_tests {
             k: 10,
             l: 20,
         });
+    }
+
+    #[test]
+    fn test_disk_search_uses_pq_kmeans_router_start_points() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let disk_index_reader = DiskIndexReader::new(
+            TEST_PQ_PIVOT_128DIM.to_string(),
+            TEST_PQ_COMPRESSED_128DIM.to_string(),
+            storage_provider.as_ref(),
+        )
+        .unwrap();
+        let pq_data = disk_index_reader.get_pq_data();
+        let representative_ids = vec![72, 118, 108];
+        let mut representative_codes = Vec::new();
+        for id in &representative_ids {
+            representative_codes
+                .extend_from_slice(pq_data.get_compressed_vector(*id as usize).unwrap());
+        }
+        let router = PqKmeansStartPointRouter::new(
+            PqKmeansRouterData {
+                num_points: pq_data.pq_compressed_data().nrows(),
+                num_pq_chunks: pq_data.get_num_chunks(),
+                representative_ids,
+                representative_codes,
+                fallback_medoid: Some(0),
+            },
+            3,
+        )
+        .unwrap();
+
+        let aligned_reader_factory = VirtualAlignedReaderFactory::new(
+            get_disk_index_file(TEST_INDEX_PREFIX_128DIM),
+            Arc::clone(&storage_provider),
+        );
+        let vertex_provider_factory =
+            DiskVertexProviderFactory::<GraphDataF32VectorUnitData, _>::new(
+                aligned_reader_factory,
+                CachingStrategy::None,
+            )
+            .unwrap();
+        let search_engine = DiskIndexSearcher::<
+            GraphDataF32VectorUnitData,
+            DiskVertexProviderFactory<GraphDataF32VectorUnitData, _>,
+        >::new_with_start_point_router(
+            1,
+            usize::MAX,
+            &disk_index_reader,
+            vertex_provider_factory,
+            Metric::L2,
+            Some(router),
+            Some(runtime),
+        )
+        .unwrap();
+
+        let query = vec![1.0f32; 128];
+        let result = search_engine
+            .search(&query, 10, 20, Some(4), SearchMode::graph())
+            .unwrap();
+
+        assert_eq!(result.stats.query_statistics.routed_start_points_count, 3);
+        assert_eq!(result.stats.query_statistics.router_scanned_codes, 3);
     }
 
     fn get_truth_associated_data<StorageReader: StorageReadProvider>(

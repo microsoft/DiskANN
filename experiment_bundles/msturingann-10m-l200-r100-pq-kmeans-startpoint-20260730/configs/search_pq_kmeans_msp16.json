@@ -1,0 +1,41 @@
+{
+  "search_directories": [
+    ".",
+    "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS"
+  ],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Load",
+          "data_type": "float32",
+          "load_path": "outputs/msturingann10m_user_m59_l80_sq1_pq64_index"
+        },
+        "search_phase": {
+          "queries": "query100K.fbin",
+          "groundtruth": "msturing-gt-10M",
+          "search_list": [
+            200
+          ],
+          "beam_width": 64,
+          "recall_at": 100,
+          "num_threads": 4,
+          "is_flat_search": false,
+          "distance": "squared_l2",
+          "vector_filters_file": null,
+          "num_nodes_to_cache": 50000,
+          "start_point_router": {
+            "type": "pq_kmeans",
+            "artifact": "outputs/msturingann10m_user_m59_l80_sq1_pq64.pq_kmeans_router.bin",
+            "max_start_points": 16
+          },
+          "warmup_runs": 2,
+          "repetitions": 5,
+          "search_io_limit": null,
+          "post_processor": null
+        }
+      }
+    }
+  ]
+}

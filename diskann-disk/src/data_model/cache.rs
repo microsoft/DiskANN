@@ -137,10 +137,14 @@ where
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CachingStrategy {
     None,
     StaticCacheWithBfsNodes(usize),
+    StaticCacheWithBfsStartNodes {
+        num_nodes_to_cache: usize,
+        start_nodes: Vec<u32>,
+    },
 }
 
 #[cfg(test)]

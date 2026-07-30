@@ -1,0 +1,103 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 64,
+          "distance": "squared_l2",
+          "groundtruth": "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS/msturing-gt-10M",
+          "num_nodes_to_cache": 50000,
+          "num_threads": 4,
+          "post_processor": null,
+          "queries": "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS/query100K.fbin",
+          "recall_at": 100,
+          "repetitions": 5,
+          "search_io_limit": null,
+          "search_list": [
+            200
+          ],
+          "search_mode": {
+            "adaptive_l": null,
+            "is_flat_search": false
+          },
+          "start_point_router": {
+            "artifact": "./outputs/msturingann10m_user_m59_l80_sq1_pq64.pq_kmeans_router.bin",
+            "max_start_points": 4,
+            "type": "pq_kmeans"
+          },
+          "vector_filters_file": null,
+          "warmup_runs": 2
+        },
+        "source": {
+          "data_type": "float32",
+          "disk-index-source": "Load",
+          "load_path": "outputs/msturingann10m_user_m59_l80_sq1_pq64_index"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 64,
+        "distance": "squared_l2",
+        "is_flat_search": false,
+        "num_nodes_to_cache": 50000,
+        "num_threads": 4,
+        "recall_at": 100,
+        "repetitions": 5,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 22169.16808,
+            "mean_cpu_time": 1027.37925,
+            "mean_hops": 453.68933,
+            "mean_io_time": 261.224314,
+            "mean_ios": 453.68933,
+            "mean_latency": 1301.99791,
+            "mean_pq_preprocess_time": 1.46901,
+            "mean_routed_start_points": 4.0,
+            "mean_router_scanned_codes": 3163.0,
+            "mean_router_time": 11.925336,
+            "p95_latency": 1577,
+            "p999_latency": 2998,
+            "qps": 3066.446044921875,
+            "recall": 74.52649688720703,
+            "search_l": 200
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 0.0,
+                "duration_seconds": 3.7490506249999997,
+                "elapsed_cycles": 0.0,
+                "peak_memory_usage": 7.2129058837890625
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 236.045396
+              },
+              "span_name": "search-with-L=200-bw=64"
+            },
+            {
+              "metrics": {
+                "cpu_time": 0.0,
+                "duration_seconds": 236.044011875,
+                "elapsed_cycles": 0.0,
+                "peak_memory_usage": 26.2919921875
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "start_point_router": "pq_kmeans",
+        "uses_vector_filters": false,
+        "warmup_runs": 2
+      }
+    }
+  }
+]

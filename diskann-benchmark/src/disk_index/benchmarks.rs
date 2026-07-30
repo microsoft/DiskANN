@@ -22,16 +22,20 @@ use half::f16;
 
 use crate::{
     disk_index::{
-        build::{build_disk_index, DiskBuildStats},
+        build::{
+            build_disk_index, build_pq_kmeans_router, DiskBuildStats, PqKmeansRouterBuildStats,
+        },
         search::{search_disk_index, DiskSearchStats},
     },
-    inputs::disk::{DiskIndexLoad, DiskIndexOperation, DiskIndexSource},
+    inputs::disk::{DiskIndexLoad, DiskIndexOperation, DiskIndexSource, PqKmeansRouterBuild},
 };
 
 /// Disk Index
 struct DiskIndex<T> {
     _vector_type: std::marker::PhantomData<T>,
 }
+
+struct PqKmeansRouterBuildJob;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct DiskIndexStats {
@@ -108,11 +112,37 @@ where
     }
 }
 
+impl Benchmark for PqKmeansRouterBuildJob {
+    type Input = PqKmeansRouterBuild;
+    type Output = PqKmeansRouterBuildStats;
+
+    fn try_match(&self, _input: &PqKmeansRouterBuild, context: &MatchContext) -> Score {
+        context.success(0)
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PQ-kmeans start-point router build")
+    }
+
+    fn run(
+        &self,
+        input: &PqKmeansRouterBuild,
+        _checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<PqKmeansRouterBuildStats> {
+        writeln!(output, "{}", input)?;
+        let stats = build_pq_kmeans_router(input)?;
+        writeln!(output, "{}", stats)?;
+        Ok(stats)
+    }
+}
+
 ////////////////////////////
 // Benchmark Registration //
 ////////////////////////////
 
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register("pq-kmeans-router-build", PqKmeansRouterBuildJob)?;
     registry.register_regression("disk-index-f32", DiskIndex::<f32>::new())?;
     registry.register_regression("disk-index-f16", DiskIndex::<f16>::new())?;
     registry.register_regression("disk-index-u8", DiskIndex::<u8>::new())?;

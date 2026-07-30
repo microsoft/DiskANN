@@ -14,11 +14,13 @@ use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
     search::{
+        pq_kmeans_router::{PqKmeansRouterData, PqKmeansStartPointRouter},
         provider::{
             disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
         search_mode::SearchMode,
+        traits::VertexProviderFactory,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, QueryStatistics},
@@ -28,7 +30,7 @@ use diskann_providers::{
     storage::{
         get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, FileStorageProvider,
     },
-    utils::{create_thread_pool, ParallelIteratorInPool},
+    utils::{create_thread_pool, ParallelIteratorInPool, RayonThreadPoolRef},
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
@@ -36,7 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::disk::{DiskIndexLoad, DiskSearchPhase, DiskStartPointRouter},
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -49,6 +51,9 @@ pub(super) struct DiskSearchStats {
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
     pub(super) num_nodes_to_cache: Option<usize>,
+    pub(super) warmup_runs: usize,
+    pub(super) repetitions: usize,
+    pub(super) start_point_router: Option<String>,
     pub(super) search_results_per_l: Vec<DiskSearchResult>,
     span_metrics: serde_json::Value,
 }
@@ -64,6 +69,9 @@ pub(super) struct DiskSearchResult {
     pub(super) mean_io_time: f64,
     pub(super) mean_cpu_time: f64,
     pub(super) mean_pq_preprocess_time: f64,
+    pub(super) mean_router_time: f64,
+    pub(super) mean_router_scanned_codes: f64,
+    pub(super) mean_routed_start_points: f64,
     pub(super) mean_comparisons: f64,
     pub(super) mean_hops: f64,
     pub(super) cache_hit_percentage: f64,
@@ -78,6 +86,7 @@ impl DiskSearchResult {
         search_l: u32,
         total_time_as_secs: f32,
         num_queries: usize,
+        repetitions: usize,
         gt_context: &GroundTruthContext,
     ) -> anyhow::Result<DiskSearchResult> {
         let total_ios = statistics::get_sum_stats(statistics, |stats| stats.total_io_operations);
@@ -126,7 +135,7 @@ impl DiskSearchResult {
         Ok(DiskSearchResult {
             search_l,
             qps: if total_time_as_secs > 0.0 {
-                num_queries as f32 / total_time_as_secs
+                (num_queries * repetitions) as f32 / total_time_as_secs
             } else {
                 0.0
             },
@@ -147,6 +156,15 @@ impl DiskSearchResult {
             mean_cpu_time: statistics::get_mean_stats(statistics, |stats| stats.cpu_time_us as f64),
             mean_pq_preprocess_time: statistics::get_mean_stats(statistics, |stats| {
                 stats.query_pq_preprocess_time_us as f64
+            }),
+            mean_router_time: statistics::get_mean_stats(statistics, |stats| {
+                stats.router_time_us as f64
+            }),
+            mean_router_scanned_codes: statistics::get_mean_stats(statistics, |stats| {
+                stats.router_scanned_codes as f64
+            }),
+            mean_routed_start_points: statistics::get_mean_stats(statistics, |stats| {
+                stats.routed_start_points_count as f64
             }),
             mean_comparisons: statistics::get_mean_stats(statistics, |stats| {
                 stats.total_comparisons as f64
@@ -212,8 +230,37 @@ where
 
     let index_reader = DiskIndexReader::new(pivot_path, pq_data_path, &FileStorageProvider)?;
 
+    let (start_point_router, start_point_router_name) = match &search_params.start_point_router {
+        Some(DiskStartPointRouter::PqKmeans {
+            artifact,
+            max_start_points,
+        }) => {
+            let router_data = PqKmeansRouterData::load_from_path(&**artifact)?;
+            (
+                Some(PqKmeansStartPointRouter::new(
+                    router_data,
+                    *max_start_points,
+                )?),
+                Some("pq_kmeans".to_string()),
+            )
+        }
+        None => (None, None),
+    };
+
     let caching_strategy = if let Some(num_nodes) = search_params.num_nodes_to_cache {
-        CachingStrategy::StaticCacheWithBfsNodes(num_nodes)
+        if let Some(router) = &start_point_router {
+            let representative_ids = router.data().representative_ids.clone();
+            if representative_ids.is_empty() {
+                CachingStrategy::StaticCacheWithBfsNodes(num_nodes)
+            } else {
+                CachingStrategy::StaticCacheWithBfsStartNodes {
+                    num_nodes_to_cache: num_nodes,
+                    start_nodes: representative_ids,
+                }
+            }
+        } else {
+            CachingStrategy::StaticCacheWithBfsNodes(num_nodes)
+        }
     } else {
         CachingStrategy::None
     };
@@ -221,7 +268,7 @@ where
     let vertex_provider_factory =
         DiskVertexProviderFactory::from_disk_index_path(disk_index_path, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
+    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new_with_start_point_router(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim
@@ -231,6 +278,7 @@ where
         &index_reader,
         vertex_provider_factory,
         search_params.distance.into(),
+        start_point_router,
         None,
     )?;
 
@@ -242,8 +290,38 @@ where
 
     // Execute search iterations
     for &l in search_params.search_list.iter() {
+        let mut l_span = {
+            let tracer = global::tracer("");
+            let span_name = format!("search-with-L={}-bw={}", l, search_params.beam_width);
+            tracer.start(span_name)
+        };
+
+        for _ in 0..search_params.warmup_runs {
+            let mut statistics_vec: Vec<QueryStatistics> =
+                vec![QueryStatistics::default(); num_queries];
+            let mut result_counts: Vec<u32> = vec![0; num_queries];
+            let mut result_ids: Vec<u32> =
+                vec![0; (search_params.recall_at as usize) * num_queries];
+            let mut result_dists: Vec<f32> =
+                vec![0.0; (search_params.recall_at as usize) * num_queries];
+
+            execute_search_iteration(
+                searcher,
+                &queries,
+                &vector_filters,
+                search_params,
+                l,
+                pool.as_ref(),
+                &mut statistics_vec,
+                &mut result_ids,
+                &mut result_dists,
+                &mut result_counts,
+                &has_any_search_failed,
+            );
+        }
+
         let mut statistics_vec: Vec<QueryStatistics> =
-            vec![QueryStatistics::default(); num_queries];
+            Vec::with_capacity(num_queries * search_params.repetitions);
         let mut result_counts: Vec<u32> = vec![0; num_queries];
         let mut result_ids: Vec<u32> = vec![0; (search_params.recall_at as usize) * num_queries];
         let mut result_dists: Vec<f32> =
@@ -251,67 +329,27 @@ where
 
         let start = Instant::now();
 
-        let mut l_span = {
-            let tracer = global::tracer("");
-            let span_name = format!("search-with-L={}-bw={}", l, search_params.beam_width);
-            tracer.start(span_name)
-        };
+        for _ in 0..search_params.repetitions {
+            let mut repetition_statistics: Vec<QueryStatistics> =
+                vec![QueryStatistics::default(); num_queries];
 
-        let zipped = queries
-            .par_row_iter()
-            .zip(vector_filters.par_iter())
-            .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-            .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
-            .zip(statistics_vec.par_iter_mut())
-            .zip(result_counts.par_iter_mut());
+            execute_search_iteration(
+                searcher,
+                &queries,
+                &vector_filters,
+                search_params,
+                l,
+                pool.as_ref(),
+                &mut repetition_statistics,
+                &mut result_ids,
+                &mut result_dists,
+                &mut result_counts,
+                &has_any_search_failed,
+            );
 
-        zipped.for_each_in_pool(
-            pool.as_ref(),
-            |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                // Construct the SearchMode from the JSON-driven
-                // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
-                // benchmark only supplies the per-query filter and post-processor.
-                let has_filter = search_params.vector_filters_file.is_some();
-                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
-                    has_filter,
-                    vf,
-                    search_params.post_processor.as_ref(),
-                );
+            statistics_vec.extend(repetition_statistics);
+        }
 
-                match searcher.search(
-                    q,
-                    search_params.recall_at,
-                    l,
-                    Some(search_params.beam_width),
-                    mode,
-                ) {
-                    Ok(search_result) => {
-                        *stats = search_result.stats.query_statistics;
-                        let base_count = (search_result.stats.result_count as usize)
-                            .min(search_params.recall_at as usize)
-                            .min(search_result.results.len());
-
-                        *rc = base_count as u32;
-                        id_chunk.fill(0);
-                        dist_chunk.fill(0.0);
-
-                        for (i, result_item) in
-                            search_result.results.iter().take(base_count).enumerate()
-                        {
-                            id_chunk[i] = result_item.vertex_id;
-                            dist_chunk[i] = result_item.distance;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Search failed for query: {:?}", e);
-                        *rc = 0;
-                        id_chunk.fill(0);
-                        dist_chunk.fill(0.0);
-                        has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                }
-            },
-        );
         let total_time = start.elapsed();
 
         if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
@@ -325,6 +363,7 @@ where
             l,
             total_time.as_secs_f32(),
             num_queries,
+            search_params.repetitions,
             &gt_context,
         )?;
 
@@ -353,9 +392,81 @@ where
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
+        warmup_runs: search_params.warmup_runs,
+        repetitions: search_params.repetitions,
+        start_point_router: start_point_router_name,
         search_results_per_l,
         span_metrics,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_search_iteration<T, StorageType>(
+    searcher: &DiskIndexSearcher<AdHoc<T>, StorageType>,
+    queries: &Matrix<T>,
+    vector_filters: &[HashSet<u32>],
+    search_params: &DiskSearchPhase,
+    l: u32,
+    pool: RayonThreadPoolRef<'_>,
+    statistics_vec: &mut [QueryStatistics],
+    result_ids: &mut [u32],
+    result_dists: &mut [f32],
+    result_counts: &mut [u32],
+    has_any_search_failed: &AtomicBool,
+) where
+    T: VectorRepr,
+    StorageType: VertexProviderFactory<AdHoc<T>>,
+{
+    let zipped = queries
+        .par_row_iter()
+        .zip(vector_filters.par_iter())
+        .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
+        .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+        .zip(statistics_vec.par_iter_mut())
+        .zip(result_counts.par_iter_mut());
+
+    zipped.for_each_in_pool(pool, |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+        // Construct the SearchMode from the JSON-driven
+        // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
+        // benchmark only supplies the per-query filter and post-processor.
+        let has_filter = search_params.vector_filters_file.is_some();
+        let mode: SearchMode<'_> = search_params.search_mode.search_mode(
+            has_filter,
+            vf,
+            search_params.post_processor.as_ref(),
+        );
+
+        match searcher.search(
+            q,
+            search_params.recall_at,
+            l,
+            Some(search_params.beam_width),
+            mode,
+        ) {
+            Ok(search_result) => {
+                *stats = search_result.stats.query_statistics;
+                let base_count = (search_result.stats.result_count as usize)
+                    .min(search_params.recall_at as usize)
+                    .min(search_result.results.len());
+
+                *rc = base_count as u32;
+                id_chunk.fill(0);
+                dist_chunk.fill(0.0);
+
+                for (i, result_item) in search_result.results.iter().take(base_count).enumerate() {
+                    id_chunk[i] = result_item.vertex_id;
+                    dist_chunk[i] = result_item.distance;
+                }
+            }
+            Err(e) => {
+                eprintln!("Search failed for query: {:?}", e);
+                *rc = 0;
+                id_chunk.fill(0);
+                dist_chunk.fill(0.0);
+                has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    });
 }
 
 // Simplified internal structures to reduce parameter count
@@ -401,7 +512,7 @@ impl fmt::Display for DiskSearchStats {
         let fmt_us = |v: f64| -> String { format!("{:.1}us", v) };
         let fmt_pct = |v: f64| -> String { format!("{:.1}%", v) };
 
-        let cols: [(&str, usize); 14] = [
+        let cols: [(&str, usize); 17] = [
             ("L", 2),
             ("KNN", 3),
             ("QPS", 8),
@@ -412,6 +523,9 @@ impl fmt::Display for DiskSearchStats {
             ("IO (us)", 10),
             ("CPU (us)", 10),
             ("PQ Preprocess (us)", 20),
+            ("Router (us)", 12),
+            ("Router Codes", 12),
+            ("Start Pts", 9),
             ("Mean Comps", 11),
             ("Mean Hops", 10),
             ("Cache Hit %", 12),
@@ -438,6 +552,13 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
         writeln!(
             f,
+            "Start router,     : {}",
+            self.start_point_router.as_deref().unwrap_or("none")
+        )?;
+        writeln!(f, "Warmup runs,      : {}", self.warmup_runs)?;
+        writeln!(f, "Repetitions,      : {}", self.repetitions)?;
+        writeln!(
+            f,
             "Nodes to cache,   : {}",
             self.num_nodes_to_cache
                 .map(|n| n.to_string())
@@ -451,7 +572,7 @@ impl fmt::Display for DiskSearchStats {
 
         for r in &self.search_results_per_l {
             // Prepare values as strings with numeric formatting
-            let vals: [String; 14] = [
+            let vals: [String; 17] = [
                 format!("{}", r.search_l),
                 format!("{}", self.recall_at),
                 format!("{:.1}", r.qps),
@@ -462,6 +583,9 @@ impl fmt::Display for DiskSearchStats {
                 fmt_us(r.mean_io_time),
                 fmt_us(r.mean_cpu_time),
                 fmt_us(r.mean_pq_preprocess_time),
+                fmt_us(r.mean_router_time),
+                format!("{:.1}", r.mean_router_scanned_codes),
+                format!("{:.1}", r.mean_routed_start_points),
                 format!("{:.1}", r.mean_comparisons),
                 format!("{:.1}", r.mean_hops),
                 fmt_pct(r.cache_hit_percentage),
