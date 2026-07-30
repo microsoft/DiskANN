@@ -260,13 +260,34 @@ fn assignment_stripes_use_power_of_two_row_counts() {
 }
 
 #[test]
+fn stripe_buffer_pool_reuses_returned_capacity() {
+    let pool = StripeBufferPool::default();
+    let mut buffers = pool.take();
+    buffers.points.resize(16, 0.0);
+    let points = buffers.points.as_ptr();
+    pool.put(buffers);
+
+    let buffers = pool.take();
+    assert_eq!(buffers.points.as_ptr(), points);
+    assert_eq!(buffers.points.len(), 16);
+}
+
+#[test]
 fn leader_assignment_handles_multiple_stripes() {
     let points = 2_048;
     let data: Vec<f32> = (0..points).map(|point| point as f32).collect();
     let data = MatrixView::try_from(data.as_slice(), points, 1).unwrap();
     let point_ids: Vec<u32> = (0..points as u32).collect();
 
-    let clusters = assign_to_leaders(data, &point_ids, &[0, 2_047], 1, Metric::L2).unwrap();
+    let clusters = assign_to_leaders(
+        data,
+        &point_ids,
+        &[0, 2_047],
+        1,
+        Metric::L2,
+        &StripeBufferPool::default(),
+    )
+    .unwrap();
 
     assert_eq!(clusters[0], (0..1_024).collect::<Vec<_>>());
     assert_eq!(clusters[1], (1_024..2_048).collect::<Vec<_>>());
