@@ -6,10 +6,11 @@
 //! Deterministic overlapping partition construction for PiPNN.
 //!
 //! The stage maps real dataset rows to bounded leaf ID lists. Numerical work
-//! reuses the partition kernel and dense GEMM; scratch belongs to the Rayon
-//! iterator that uses it, so no thread-local cleanup protocol is required.
+//! reuses the partition kernel and dense GEMM. A stage-owned pool leases scratch
+//! to Rayon chunks and takes it back after each chunk; computation never holds
+//! the pool lock, and no thread-local cleanup protocol is required.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Mutex};
 
 use crate::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_linalg::Transpose;
@@ -105,6 +106,28 @@ struct StripeBuffers {
     row_scales: Vec<f32>,
 }
 
+#[derive(Default)]
+struct StripeBufferPool {
+    available: Mutex<Vec<StripeBuffers>>,
+}
+
+impl StripeBufferPool {
+    fn take(&self) -> StripeBuffers {
+        self.available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop()
+            .unwrap_or_default()
+    }
+
+    fn put(&self, buffers: StripeBuffers) {
+        self.available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(buffers);
+    }
+}
+
 /// Partition every configured replica into overlapping bounded leaves.
 ///
 /// Each oversized work item samples `ceil(p_samp * points)` leaders (clamped
@@ -133,9 +156,10 @@ where
     }
 
     let mut leaves = Vec::new();
+    let stripe_buffers = StripeBufferPool::default();
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
-        let mut replica_leaves = partition_replica(data, &config, metric, seed)?;
+        let mut replica_leaves = partition_replica(data, &config, metric, seed, &stripe_buffers)?;
         leaves
             .try_reserve(replica_leaves.len())
             .map_err(ANNError::opaque)?;
@@ -150,6 +174,7 @@ fn partition_replica<T>(
     config: &PartitionConfig,
     metric: Metric,
     seed: u64,
+    stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     T: VectorRepr + Send + Sync,
@@ -188,7 +213,13 @@ where
             .par_iter_mut()
             .zip(work.into_par_iter())
             .for_each(|(slot, item)| {
-                *slot = Some(partition_one_level(data, config, metric, item));
+                *slot = Some(partition_one_level(
+                    data,
+                    config,
+                    metric,
+                    item,
+                    stripe_buffers,
+                ));
             });
 
         let mut next_work = Vec::new();
@@ -225,6 +256,7 @@ fn partition_one_level<T>(
     config: &PartitionConfig,
     metric: Metric,
     item: WorkItem,
+    stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<(Vec<WorkItem>, Vec<Vec<u32>>)>
 where
     T: VectorRepr + Send + Sync,
@@ -236,7 +268,14 @@ where
         config.p_samp,
         mix_seed(item.seed, points as u64),
     )?;
-    let clusters = assign_to_leaders(data, &item.indices, &leaders, fanout, metric)?;
+    let clusters = assign_to_leaders(
+        data,
+        &item.indices,
+        &leaders,
+        fanout,
+        metric,
+        stripe_buffers,
+    )?;
 
     let mut pending = Vec::new();
     let mut finished = Vec::new();
@@ -296,6 +335,7 @@ fn assign_to_leaders<T>(
     leaders: &[u32],
     fanout: usize,
     metric: Metric,
+    stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     T: VectorRepr + Send + Sync,
@@ -325,63 +365,107 @@ where
     let mut assignments = filled_vec(assignment_len, 0u32)?;
     let stripe_rows = assignment_stripe_rows(leaders.len());
     let assignment_stripe = checked_area("assignment stripe", stripe_rows, fanout)?;
+    let stripes = points.len().div_ceil(stripe_rows);
+    let worker_stripes = stripes.div_ceil(rayon::current_num_threads().max(1));
+    let worker_rows = checked_area("assignment worker", worker_stripes, stripe_rows)?;
+    let worker_assignment = checked_area("assignment worker", worker_rows, fanout)?;
 
+    // Each worker chunk owns one scratch value and reuses it for its stripes.
     // build_graph pins this terminal operation to the caller-owned pool.
     #[allow(clippy::disallowed_methods)]
     assignments
-        .par_chunks_mut(assignment_stripe)
+        .par_chunks_mut(worker_assignment)
         .enumerate()
-        .try_for_each_init(StripeBuffers::default, |buffers, (stripe, output)| {
-            let first = stripe * stripe_rows;
-            let rows = output.len() / fanout;
-            let point_values_len = checked_area("point stripe", rows, dimensions)?;
-            let dots_len = checked_area("dot-product stripe", rows, leaders.len())?;
-            resize_fallible(&mut buffers.points, point_values_len, 0.0)?;
-            resize_fallible(&mut buffers.dots, dots_len, 0.0)?;
-            gather_rows(data, &points[first..first + rows], &mut buffers.points)?;
-            diskann_linalg::sgemm(
-                Transpose::None,
-                Transpose::Ordinary,
-                rows,
-                leaders.len(),
-                dimensions,
-                1.0,
-                &buffers.points,
-                &leader_values,
-                None,
-                &mut buffers.dots,
-            )
-            .map_err(ANNError::opaque)?;
-
-            let row_scales = if metric == Metric::Cosine {
-                resize_fallible(&mut buffers.row_scales, rows, 0.0)?;
-                for (scale, row) in buffers
-                    .row_scales
-                    .iter_mut()
-                    .zip(buffers.points.chunks_exact(dimensions))
-                {
-                    *scale = FastL2NormSquared.evaluate(row);
+        .try_for_each(|(worker, worker_output)| {
+            let mut buffers = stripe_buffers.take();
+            let result = (|| -> ANNResult<()> {
+                let worker_first = worker * worker_rows;
+                for (stripe, output) in worker_output.chunks_mut(assignment_stripe).enumerate() {
+                    let first = worker_first + stripe * stripe_rows;
+                    let rows = output.len() / fanout;
+                    assign_stripe(
+                        data,
+                        &points[first..first + rows],
+                        &leader_values,
+                        &leader_scales,
+                        metric,
+                        fanout,
+                        &mut buffers,
+                        output,
+                    )?;
                 }
-                buffers.row_scales.as_slice()
-            } else {
-                &[]
-            };
-            nearest_leaders(
-                PartitionTopK {
-                    dots: &buffers.dots,
-                    rows,
-                    leaders: leaders.len(),
-                    row_scales,
-                    leader_scales: &leader_scales,
-                    metric,
-                },
-                fanout,
-                output,
-            )
-            .map_err(ANNError::opaque)
+                Ok(())
+            })();
+            stripe_buffers.put(buffers);
+            result
         })?;
 
     scatter_assignments(points, &assignments, fanout, leaders.len())
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn assign_stripe<T>(
+    data: MatrixView<'_, T>,
+    points: &[u32],
+    leader_values: &[f32],
+    leader_scales: &[f32],
+    metric: Metric,
+    fanout: usize,
+    buffers: &mut StripeBuffers,
+    output: &mut [u32],
+) -> ANNResult<()>
+where
+    T: VectorRepr,
+{
+    let rows = points.len();
+    let dimensions = data.ncols();
+    let leaders = leader_values.len() / dimensions;
+    let point_values_len = checked_area("point stripe", rows, dimensions)?;
+    let dots_len = checked_area("dot-product stripe", rows, leaders)?;
+    resize_fallible(&mut buffers.points, point_values_len, 0.0)?;
+    resize_fallible(&mut buffers.dots, dots_len, 0.0)?;
+    gather_rows(data, points, &mut buffers.points)?;
+    diskann_linalg::sgemm(
+        Transpose::None,
+        Transpose::Ordinary,
+        rows,
+        leaders,
+        dimensions,
+        1.0,
+        &buffers.points,
+        leader_values,
+        None,
+        &mut buffers.dots,
+    )
+    .map_err(ANNError::opaque)?;
+
+    let row_scales = if metric == Metric::Cosine {
+        resize_fallible(&mut buffers.row_scales, rows, 0.0)?;
+        for (scale, row) in buffers
+            .row_scales
+            .iter_mut()
+            .zip(buffers.points.chunks_exact(dimensions))
+        {
+            *scale = FastL2NormSquared.evaluate(row);
+        }
+        buffers.row_scales.as_slice()
+    } else {
+        &[]
+    };
+    nearest_leaders(
+        PartitionTopK {
+            dots: &buffers.dots,
+            rows,
+            leaders,
+            row_scales,
+            leader_scales,
+            metric,
+        },
+        fanout,
+        output,
+    )
+    .map_err(ANNError::opaque)
 }
 
 fn gather_rows<T>(data: MatrixView<'_, T>, indices: &[u32], output: &mut [f32]) -> ANNResult<()>
