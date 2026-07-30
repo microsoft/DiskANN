@@ -9,14 +9,19 @@ use diskann::utils::IntoUsize;
 
 use crate::{
     buffer::{Buffer, RawSlice},
-    num::{Bytes, Align},
-    tag::{Tag, AtomicTag},
     epoch,
+    num::{Align, Bytes},
+    tag::{AtomicTag, Tag},
 };
 
+/// The invasive store where concurrency tags are stored inline with the data.
 #[derive(Debug)]
 pub(crate) struct Invasive {
+    // The inline tags are `AtomicTag`s stored after the data.
     buffer: Buffer,
+
+    // The unpadded size of each row in `buffer`. This includes both the data **and** the
+    // 1-byte tag. Tags are located at byte `unpadded - 1`.
     unpadded: Bytes,
 }
 
@@ -26,12 +31,17 @@ impl Invasive {
     pub(crate) fn new(entries: usize, bytes: Bytes) -> Self {
         let unpadded = bytes.checked_add(AtomicTag::SIZE).unwrap();
         let padded_bytes = unpadded
-            .checked_next_multiple_of(Bytes::CACHELINE.div(TWO)).unwrap();
+            .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
+            .unwrap();
 
         Self {
             buffer: Buffer::new(entries, padded_bytes, Align::_128).unwrap(),
             unpadded,
         }
+    }
+
+    pub(crate) fn bytes(&self) -> Bytes {
+        self.unpadded
     }
 
     pub(crate) unsafe fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
@@ -252,4 +262,3 @@ impl super::plugin::Slot for Slot<'_> {
         self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }
-

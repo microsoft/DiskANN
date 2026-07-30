@@ -107,7 +107,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn read(&self, i: usize) -> Option<&[u8]> {
-        self.reader.read(i)
+        self.reader.inner().read(i)
     }
 }
 

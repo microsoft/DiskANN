@@ -53,6 +53,7 @@
 
 use std::{
     iter::repeat_n,
+    mem::ManuallyDrop,
     num::{NonZeroU32, NonZeroUsize},
     sync::atomic::Ordering,
 };
@@ -62,16 +63,19 @@ use diskann_utils::views::MatrixView;
 use thiserror::Error;
 
 use crate::{
-    buffer::{Buffer, BufferError, RawSlice},
+    buffer::{BufferError},
     epoch::{self, Registry},
     freelist::{self, Freelist},
     neighbors::{Neighbors, NeighborsError},
-    num::{Align, Bytes},
+    num::{Bytes},
     tag::{AtomicTag, Tag},
 };
 
 pub(crate) mod plugin;
+pub(crate) mod stacked;
 pub(crate) mod invasive;
+
+pub(crate) const TAG_SIZE: Bytes = AtomicTag::SIZE;
 
 /// Configuration for the concurrenct store.
 #[derive(Debug)]
@@ -134,17 +138,8 @@ impl Config {
 /// A concurrent data and graph store.
 #[derive(Debug)]
 pub(crate) struct Store {
-    // The invasive store where concurrency tags are stored inline with the data.
-    //
-    // These tags are mirrored from `tags` - with the latter being used for secondary scans
-    // offering slightly better locality.
-    //
-    // The inline tags are stored after the data.
-    buffer: Buffer,
-
-    // The unpadded size of each row in `buffer`. This includes both the data **and** the
-    // 1-byte tag. Tags are located at byte `unpadded - 1`.
-    unpadded: Bytes,
+    // This is a temporary concrete type until [`Store`] is properly parameterized by its plugin.
+    plugin: invasive::Invasive,
 
     // The number of unfrozen points. This is guaranteed to be less than `buffer`.
     unfrozen: usize,
@@ -160,21 +155,13 @@ pub(crate) struct Store {
     neighbors: Neighbors,
 }
 
-/// The number of bytes occupied by the in-line concurrency tag.
-pub(crate) const TAG_SIZE: Bytes = Bytes::size_of::<AtomicTag>();
-
-const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-
 // TODO: This is a guess and probably needs tuning.
 const RETRY_LIMIT: usize = 20;
 
 impl Store {
     /// Create a new [`Store`]. The entries within `init` will be used as frozen points
     /// within the store and must be compatible the the number of bytes in `config`.
-    pub(crate) fn new(
-        config: Config,
-        init: MatrixView<'_, u8>,
-    ) -> Result<Self, StoreError> {
+    pub(crate) fn new(config: Config, init: MatrixView<'_, u8>) -> Result<Self, StoreError> {
         let Config {
             entries,
             bytes,
@@ -190,25 +177,6 @@ impl Store {
         if init.nrows() == 0 {
             return Err(StoreError::need_frozen_point());
         }
-
-        #[expect(
-            clippy::expect_used,
-            reason = "we expect `init` to have at least one row, so this should never happen"
-        )]
-        let unpadded = bytes
-            .checked_add(TAG_SIZE)
-            .expect("unreachable because `init` cannot exceed `isize::MAX` bytes");
-
-        // Pad to half a cache line. When data occupies just part of a cache line, this
-        // results in the same total number of cache lines being fetched while potentially
-        // enabling more compact memory.
-        #[expect(
-            clippy::expect_used,
-            reason = "we expect `init` to have at least one row, so this should never happen"
-        )]
-        let padded_bytes = unpadded
-            .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
-            .expect("unreachable because `init` cannot exceed `isize::MAX` bytes");
 
         let too_many_entries = || StoreError::too_many_entries(entries, init.nrows());
 
@@ -226,8 +194,7 @@ impl Store {
             .map_err(|_| StoreError::too_many_neighbors(max_neighbors))?;
 
         let me = Self {
-            buffer: Buffer::new(total.into_usize(), padded_bytes, Align::_128)?,
-            unpadded,
+            plugin: invasive::Invasive::new(total.into_usize(), bytes),
             unfrozen: entries.into_usize(),
             tags: repeat_n(Tag::AVAILABLE, total.into_usize())
                 .map(AtomicTag::new)
@@ -256,14 +223,13 @@ impl Store {
         Ok(me)
     }
 
-    /// Return the range of slots containing frozen items in `self`.
-    pub(crate) fn frozen(&self) -> std::ops::Range<u32> {
-        (self.unfrozen as u32)..(self.buffer.len() as u32)
+    pub(crate) fn plugin(&self) -> &invasive::Invasive {
+        &self.plugin
     }
 
-    /// Return the number of bytes occupied by each entry.
-    pub(crate) fn bytes(&self) -> Bytes {
-        self.unpadded
+    /// Return the range of slots containing frozen items in `self`.
+    pub(crate) fn frozen(&self) -> std::ops::Range<u32> {
+        (self.unfrozen as u32)..self.neighbors.entries()
     }
 
     /// Return the maximum degree that can be stored in the graph.
@@ -275,7 +241,21 @@ impl Store {
     ///
     /// If successful, returns the number of slots reclaimed.
     pub(crate) fn try_drain(&self) -> Option<usize> {
-        fn release(tag: &AtomicTag, kind: &'static str) {
+        let drain = self.registry.try_advance()?;
+        let items = drain.len();
+        for i in drain {
+            let Some(tag) = self.tags.get(i.into_usize()) else {
+                panic!(
+                    "received an invalid ID ({}) while reclaiming slots - max allowed is {}",
+                    i,
+                    self.neighbors.entries(),
+                );
+            };
+
+            // We release the plugin before the main tag. The other direction would
+            // prematurely advertise availability.
+            plugin::Plugin::reclaim(self.plugin(), i);
+
             // Use `Release` ordering to ensure that the store to the mirror cannot get moved
             // after the store to the authoritative list.
             //
@@ -287,30 +267,10 @@ impl Store {
             assert_eq!(
                 tag.load(Ordering::Relaxed),
                 Tag::RETIRING,
-                "CONCURRENCY VIOLATION: {}",
-                kind,
+                "CONCURRENCY VIOLATION",
             );
 
             tag.store(Tag::AVAILABLE, Ordering::Release);
-        }
-
-        let drain = self.registry.try_advance()?;
-        let items = drain.len();
-        for i in drain {
-            assert!(
-                i.into_usize() < self.buffer.len(),
-                "received an invalid ID ({}) while reclaiming slots - max allowed is {}",
-                i,
-                self.buffer.len(),
-            );
-
-            // We release the mirror before the main tag. The other direction would
-            // prematurely advertise availability.
-            //
-            // SAFETY: We've verified that `i` is in-bounds.
-            let (mirror, _) = unsafe { self.data_unchecked(i.into_usize()) };
-            release(mirror, "mirror");
-            release(&self.tags[i.into_usize()], "tag");
             self.freelist.push(i);
         }
         Some(items)
@@ -323,10 +283,8 @@ impl Store {
     /// Returns [`epoch::Unavailable`] if there are too many active readers.
     pub(crate) fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
         Ok(Reader {
-            buffer: &self.buffer,
-            unpadded: self.unpadded,
+            inner: unsafe { self.plugin().reader(self.registry.guard()?) },
             neighbors: &self.neighbors,
-            _guard: self.registry.guard()?,
         })
     }
 
@@ -390,10 +348,7 @@ impl Store {
         match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 // Set the metadata in the mirror as well.
-                //
-                // SAFETY: We've checked that `i` is in-bounds.
-                let (mirror, _) = unsafe { self.data_unchecked(i) };
-                mirror.store(retiring, Ordering::Relaxed);
+                plugin::Plugin::retire(self.plugin(), i.try_into().unwrap());
                 guard.retire(i as u32);
                 Ok(())
             }
@@ -488,35 +443,15 @@ impl Store {
             Ordering::Relaxed,
         ) {
             Ok(_) => {
-                // SAFETY: Inherited from caller - `slot` is in-bounds.
-                let (mirror, data) = unsafe { self.data_unchecked(slot.into_usize()) };
+                let data = unsafe { plugin::Plugin::acquire(self.plugin(), slot) };
                 Some(Slot {
                     tag,
-                    mirror,
-                    data,
+                    data: ManuallyDrop::new(data),
                     slot,
                 })
             }
             Err(_) => None,
         }
-    }
-
-    /// Return the data at position `i` without bound-checking.
-    ///
-    /// # Safety
-    ///
-    /// The index `i` must be less then `self.buffer.len()`.
-    unsafe fn data_unchecked(&self, i: usize) -> (&AtomicTag, RawSlice<'_>) {
-        // SAFETY: inherited from caller.
-        let (data, mirror) = unsafe { self.buffer.get_unchecked(i) }
-            .truncate(self.unpadded)
-            .split(self.unpadded.unchecked_sub(TAG_SIZE));
-        (
-            // SAFETY: We're careful in this module to ensure the inline tags are only
-            // ever accessed atomically.
-            unsafe { AtomicTag::from_ptr(mirror.as_mut_ptr().cast()) },
-            data,
-        )
     }
 
     /// Return whether or not it is probably okay to read from the slot `i`.
@@ -618,124 +553,21 @@ pub(crate) enum RetireError {
 /// Created via [`Store::reader`].
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
-    buffer: &'a Buffer,
-    unpadded: Bytes,
+    inner: invasive::Reader<'a>,
     neighbors: &'a Neighbors,
-    // It's important that we hold onto this, even if we don't use it.
-    _guard: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
-    /// Attempt to read the value at index `i`. This can fail for any of the
-    /// following reasons:
-    ///
-    /// 1. Index `i` is out-of-bounds.
-    /// 2. The read cannot be guaranteed to be race-free.
-    #[inline]
-    pub(crate) fn read(&self, i: usize) -> Option<&[u8]> {
-        if self.is_in_bounds(i) {
-            // SAFETY: `i` is in-bounds.
-            unsafe { self.read_in_bounds(i) }
-        } else {
-            None
-        }
-    }
-
     /// Return `true` if the index `i` is in-bounds.
     #[inline]
     #[must_use = "this function has no side-effects"]
     pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
-        i < self.buffer.len()
+        i < self.neighbors.entries().into_usize()
     }
 
-    /// Return `true` if it is safe to read the data at position `i`.
-    ///
-    /// This guarantee only holds while `self` is alive. Construction of a new [`Reader`]
-    /// requires a separate check.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this is non-trivial method that likely be used in the future"
-        )
-    )]
-    pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
-        if !self.is_in_bounds(i) {
-            return None;
-        }
-
-        // SAFETY: We've checked that `i` is in-bounds.
-        //
-        // Further, we guarantee that `self.unpadded >= TAG_SIZE`, so the pointer arithmetic
-        // is in-bounds.
-        let tag_ptr = unsafe {
-            self.buffer
-                .get_unchecked(i)
-                .as_mut_ptr()
-                .add(self.unpadded.unchecked_sub(TAG_SIZE).value())
-        };
-
-        // SAFETY: We only access tag pointers atomically.
-        let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.cast()) }
-            .load(Ordering::Acquire)
-            .can_read();
-
-        Some(can_read)
-    }
-
-    /// Read the data as position `i` if it is guaranteed to be race-free without bounds
-    /// checking.
-    ///
-    /// # Safety
-    ///
-    /// The index `i` must satisfy [`Self::is_in_bounds`].
     #[inline]
-    pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
-        debug_assert!(self.is_in_bounds(i));
-
-        // SAFETY:
-        //
-        // * The caller asserts `i` is in-bounds.
-        // * We maintain an internal invariant that `self.buffer.stride() <= self.unpadded`.
-        // * Further, we maintain that `self.unpadded >= TAG_SIZE`.
-        let (data, tag_ptr) = unsafe {
-            self.buffer
-                .get_unchecked(i)
-                .truncate_unchecked(self.unpadded)
-                .split_unchecked(self.unpadded.unchecked_sub(TAG_SIZE))
-        };
-
-        // NOTE: Must be `Acquire` to correctly synchronize with writes.
-        //
-        // SAFETY: We are careful in this module to ensure that inline tags are only accessed
-        // atomically.
-        let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.as_mut_ptr().cast()) }
-            .load(Ordering::Acquire)
-            .can_read();
-
-        if can_read {
-            // SAFETY: We've passed the `can_read` check - `_guard` will ensure the read
-            // slice is valid and race-free.
-            Some(unsafe { data.as_slice() })
-        } else {
-            None
-        }
-    }
-
-    /// Return the raw data slice for index `i` without any race guarantees.
-    ///
-    /// # Safety
-    ///
-    /// The index `i` must be satisfy [`Self::is_in_bounds`].
-    #[inline]
-    pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
-        // SAFETY: Inherited from caller: `i` is inbounds.
-        unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
-    }
-
-    /// Return the number of bytes for each entry.
-    pub(crate) fn bytes(&self) -> Bytes {
-        self.unpadded
+    pub(crate) fn inner(&self) -> &invasive::Reader<'_> {
+        &self.inner
     }
 
     /// Return [`Neighbors`].
@@ -748,8 +580,7 @@ impl<'a> Reader<'a> {
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
     tag: &'a AtomicTag,
-    mirror: &'a AtomicTag,
-    data: RawSlice<'a>,
+    data: ManuallyDrop<invasive::Slot<'a>>,
     slot: u32,
 }
 
@@ -766,8 +597,13 @@ impl<'a> Slot<'a> {
     }
 
     fn freeze(self) {
-        let me = std::mem::ManuallyDrop::new(self);
-        me.mirror.store(Tag::FROZEN, Ordering::Release);
+        // Suppress normal `Drop`.
+        let mut me = ManuallyDrop::new(self);
+
+        // Freeze the inner slot.
+        plugin::Slot::freeze(unsafe { ManuallyDrop::take(&mut me.data) });
+
+        // Update the authoritative store.
         me.tag.store(Tag::FROZEN, Ordering::Release);
     }
 
@@ -776,8 +612,14 @@ impl<'a> Slot<'a> {
     /// Return the internal slot ID.
     pub(crate) fn publish(self) -> u32 {
         let id = self.slot();
-        let me = std::mem::ManuallyDrop::new(self);
-        me.mirror.store(Tag::PUBLISHED, Ordering::Release);
+
+        // Suppress normal `Drop`.
+        let mut me = ManuallyDrop::new(self);
+
+        // Publish the inner slot.
+        plugin::Slot::publish(unsafe { ManuallyDrop::take(&mut me.data) });
+
+        // Update the authoritative store.
         me.tag.store(Tag::PUBLISHED, Ordering::Release);
         id
     }
@@ -785,7 +627,7 @@ impl<'a> Slot<'a> {
 
 impl Drop for Slot<'_> {
     fn drop(&mut self) {
-        self.mirror.store(Tag::AVAILABLE, Ordering::Release);
+        plugin::Slot::abort(unsafe { ManuallyDrop::take(&mut self.data) });
         self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }
@@ -878,21 +720,21 @@ mod tests {
         let reader = s.reader().unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
-            assert!(!reader.can_read(i).unwrap());
-            assert!(reader.read(i).is_none());
+            assert!(!reader.inner().can_read(i).unwrap());
+            assert!(reader.inner().read(i).is_none());
         }
 
         assert!(s.can_read_approximate(4).unwrap());
-        assert!(reader.can_read(4).unwrap());
-        assert_eq!(reader.read(4).unwrap(), &[0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(reader.inner().can_read(4).unwrap());
+        assert_eq!(reader.inner().read(4).unwrap(), &[0, 0, 0, 0, 0, 0, 0, 0]);
 
         assert!(s.can_read_approximate(5).unwrap());
-        assert!(reader.can_read(5).unwrap());
-        assert_eq!(reader.read(5).unwrap(), &[1, 1, 1, 1, 1, 1, 1, 1]);
+        assert!(reader.inner().can_read(5).unwrap());
+        assert_eq!(reader.inner().read(5).unwrap(), &[1, 1, 1, 1, 1, 1, 1, 1]);
 
         assert!(s.can_read_approximate(6).is_none());
-        assert!(reader.can_read(6).is_none());
-        assert!(reader.read(6).is_none());
+        assert!(reader.inner().can_read(6).is_none());
+        assert!(reader.inner().read(6).is_none());
     }
 
     ///////////////
@@ -912,13 +754,16 @@ mod tests {
                 .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
 
             // Before the slot is dropped - we should not be able to read it.
-            assert!(reader.read(idx).is_none());
+            assert!(reader.inner().read(idx).is_none());
             assert!(!s.can_read_approximate(idx).unwrap());
             slot.publish();
             idx
         };
 
-        assert_eq!(reader.read(idx), Some([1, 2, 3, 4, 5, 6, 7, 8].as_slice()));
+        assert_eq!(
+            reader.inner().read(idx),
+            Some([1, 2, 3, 4, 5, 6, 7, 8].as_slice())
+        );
         assert!(s.can_read_approximate(idx).unwrap());
     }
 
@@ -935,14 +780,14 @@ mod tests {
                 .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
 
             // Before the slot is dropped - we should not be able to read it.
-            assert!(reader.read(idx).is_none());
+            assert!(reader.inner().read(idx).is_none());
             assert!(!s.can_read_approximate(idx).unwrap());
 
             // NOTE: We do not explicitly publish the slot.
             idx
         };
 
-        assert!(reader.read(idx).is_none());
+        assert!(reader.inner().read(idx).is_none());
         assert!(!s.can_read_approximate(idx).unwrap());
     }
 
@@ -1003,8 +848,8 @@ mod tests {
 
         // A reader opened after retirement must not observe the retired slot.
         let reader = s.reader().unwrap();
-        assert_eq!(reader.read(idx), None);
-        assert_eq!(reader.can_read(idx), Some(false));
+        assert_eq!(reader.inner().read(idx), None);
+        assert_eq!(reader.inner().can_read(idx), Some(false));
 
         // The slot can also not be retired again.
         assert!(matches!(

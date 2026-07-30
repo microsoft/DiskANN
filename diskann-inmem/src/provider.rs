@@ -419,7 +419,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || {
             for p in self.start_points.clone() {
-                match self.reader.read(p.into_usize()) {
+                match self.reader.inner().read(p.into_usize()) {
                     Some(point) => {
                         // Counters are no-ops without `integration-test`.
                         self.counters.get_vector(1);
@@ -636,16 +636,16 @@ where
     T: layers::QueryDistance,
 {
     debug_assert!(
-        BYTES + store::TAG_SIZE.value() <= reader.bytes().value(),
+        BYTES + store::TAG_SIZE.value() <= reader.inner().bytes().value(),
         "we really rely on this: {}, bytes = {}",
         BYTES + store::TAG_SIZE.value(),
-        reader.bytes()
+        reader.inner().bytes()
     );
 
     debug_assert!(buffer.len() >= list.len());
 
     let bytes = if BYTES == 0 {
-        reader.bytes().value()
+        reader.inner().bytes().value()
     } else {
         BYTES + store::TAG_SIZE.value()
     };
@@ -659,6 +659,7 @@ where
         unsafe {
             prefetch(
                 reader
+                    .inner()
                     .read_raw_unchecked(list.get_unchecked(j).into_usize())
                     .as_ptr()
                     .cast(),
@@ -677,6 +678,7 @@ where
             unsafe {
                 prefetch(
                     reader
+                        .inner()
                         .read_raw_unchecked(list.get_unchecked(j).into_usize())
                         .as_ptr()
                         .cast(),
@@ -687,7 +689,7 @@ where
         }
 
         // SAFETY: Caller asserts that `i` is in-bounds.
-        if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
+        if let Some(data) = unsafe { reader.inner().read_in_bounds(i.into_usize()) } {
             // SAFETY: Inherited from caller.
             *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
             processed += 1;
@@ -837,7 +839,7 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
     where
         Self: 'a;
     fn get(&self, id: u32) -> Option<&[u8]> {
-        match self.reader.read(id.into_usize()) {
+        match self.reader.inner().read(id.into_usize()) {
             Some(data) => {
                 self.counters.get_vector_ref(1);
                 Some(data)
@@ -873,7 +875,7 @@ where
             &provider.layer,
             query,
             ExpandBeamVisitor {
-                bytes: provider.store.bytes(),
+                bytes: provider.store.plugin().bytes(),
                 prefetch_lookahead: provider.config.prefetch_lookahead.map_or(0, |x| x.get()),
             },
         )?;
@@ -1030,7 +1032,7 @@ where
     {
         let work = move || {
             let reader = provider.store.reader()?;
-            let data = match reader.read(id.into_usize()) {
+            let data = match reader.inner().read(id.into_usize()) {
                 Some(data) => data,
                 None => {
                     return Err(ANNError::message(
