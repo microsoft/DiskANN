@@ -1141,7 +1141,7 @@ mod tests {
         assert!(index.provider().to_external_id(&Context, 26).is_err());
 
         // Searches should return something reasonable.
-        let knn = Knn::new(10, 10, None).unwrap();
+        let knn = Knn::new(10, None).unwrap();
         let mut neighbors = Vec::<Neighbor<u64>>::new();
         index
             .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)

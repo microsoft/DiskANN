@@ -1059,6 +1059,13 @@ where
         let mut associated_data =
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
+        if search_list_size < return_list_size {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "search list size must be at least as large as the number of results requested",
+            ));
+        }
+
         let stats = self.search_internal(
             query,
             return_list_size as usize,
@@ -1106,6 +1113,15 @@ where
         associated_data: &mut [Data::AssociatedDataType],
         mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
+        let l = search_list_size as usize;
+
+        if l < k_value {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "search list size must be at least as large as the number of results requested",
+            ));
+        }
+
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
             &mut distances[..k_value],
@@ -1113,8 +1129,6 @@ where
         );
 
         let timer = Instant::now();
-        let k = k_value;
-        let l = search_list_size as usize;
 
         let io_tracker = IOTracker::default();
 
@@ -1145,7 +1159,7 @@ where
                         .as_deref()
                         .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
                 );
-                let knn_search = Knn::new(k, l, beam_width)
+                let knn_search = Knn::new(l, beam_width)
                     .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
                 self.runtime.block_on(self.index.search(
                     knn_search,
@@ -1160,7 +1174,7 @@ where
                 // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
                 // its counters reachable from this scope.
                 let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
-                let knn_search = Knn::new(k, l, beam_width)?;
+                let knn_search = Knn::new(l, beam_width)?;
                 self.runtime.block_on(self.filter_search(
                     strategy,
                     query,
@@ -1178,7 +1192,7 @@ where
                     .as_deref()
                     .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
                 let strategy = self.search_strategy(&io_tracker, postprocess_config);
-                let knn_search = Knn::new(k, l, beam_width)?;
+                let knn_search = Knn::new(l, beam_width)?;
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
@@ -1694,12 +1708,8 @@ mod disk_provider_tests {
             "index_path is not correct"
         );
 
-        // Test error case: l < k
-        let res = Knn::new_default(20, 10);
-        assert!(res.is_err());
-
         // Test error case: beam_width = 0
-        let res = Knn::new(10, 10, Some(0));
+        let res = Knn::new(10, Some(0));
         assert!(res.is_err());
 
         let search_engine =
@@ -1756,6 +1766,40 @@ mod disk_provider_tests {
     }
 
     #[test]
+    fn test_search_rejects_search_list_size_less_than_return_list_size() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let query = vec![0f32; 128];
+        let return_list_size = 10u32;
+        let search_list_size = return_list_size - 1;
+
+        let result = search_engine.search(
+            &query,
+            return_list_size,
+            search_list_size,
+            None,
+            SearchMode::graph(),
+        );
+
+        match result {
+            Err(_) => {}
+            Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
+        }
+    }
+
+    #[test]
     fn test_disk_search_beam_search() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
@@ -1772,9 +1816,10 @@ mod disk_provider_tests {
         );
 
         let query_vector: [f32; 128] = [1f32; 128];
-        let mut indices = vec![0u32; 10];
-        let mut distances = vec![0f32; 10];
-        let mut associated_data = vec![(); 10];
+        let k = 10;
+        let mut indices = vec![0u32; k];
+        let mut distances = vec![0f32; k];
+        let mut associated_data = vec![(); k];
 
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices,
@@ -1784,7 +1829,7 @@ mod disk_provider_tests {
         let io_tracker = IOTracker::default();
         let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
         let mut search_record = VisitedSearchRecord::new(0);
-        let search_params = Knn::new(10, 10, Some(4)).unwrap();
+        let search_params = Knn::new(10, Some(4)).unwrap();
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
@@ -1810,11 +1855,10 @@ mod disk_provider_tests {
 
         assert_eq!(ids, &EXPECTED_NODES);
 
-        let return_list_size = 10;
         let search_list_size = 10;
         let result = search_engine.search(
             &query_vector,
-            return_list_size,
+            k as u32,
             search_list_size,
             Some(4),
             SearchMode::graph(),
@@ -1822,8 +1866,8 @@ mod disk_provider_tests {
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
         assert_eq!(
-            search_result.results.len() as u32,
-            return_list_size,
+            search_result.results.len(),
+            k,
             "Expected result count to match"
         );
         assert_eq!(
@@ -1950,7 +1994,7 @@ mod disk_provider_tests {
     #[cfg(feature = "experimental_diversity_search")]
     #[test]
     fn test_disk_search_diversity_search() {
-        use diskann::graph::DiverseSearchParams;
+        use diskann::graph::search::DiverseSearchParams;
         use diskann::neighbor::AttributeValueProvider;
         use std::collections::HashMap;
 
@@ -2008,9 +2052,10 @@ mod disk_provider_tests {
         // Wrap in Arc once to avoid cloning the HashMap later
         let attribute_provider = std::sync::Arc::new(attribute_provider);
 
-        let mut indices = vec![0u32; 10];
-        let mut distances = vec![0f32; 10];
-        let mut associated_data = vec![(); 10];
+        let original_k = 10;
+        let mut indices = vec![0u32; original_k];
+        let mut distances = vec![0f32; original_k];
+        let mut associated_data = vec![(); original_k];
 
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices,
@@ -2024,12 +2069,15 @@ mod disk_provider_tests {
         let diverse_params = DiverseSearchParams::new(
             0, // diverse_attribute_id
             3, // diverse_results_k
+            original_k,
             attribute_provider.clone(),
-        );
+        )
+        .unwrap();
 
-        let search_params = Knn::new(10, 20, None).unwrap();
+        let search_params = Knn::new(20, None).unwrap();
 
-        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let diverse_search =
+            diskann::graph::search::Diverse::new(search_params, diverse_params).unwrap();
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -2047,19 +2095,20 @@ mod disk_provider_tests {
             "Expected to get some results during diversity search"
         );
 
-        let return_list_size = 10;
         let search_list_size = 20;
         let diverse_results_k = 1;
         let diverse_params = DiverseSearchParams::new(
             0, // diverse_attribute_id
             diverse_results_k,
+            original_k,
             attribute_provider.clone(),
-        );
+        )
+        .unwrap();
 
         // Test diverse search using the search API
-        let mut indices2 = vec![0u32; return_list_size as usize];
-        let mut distances2 = vec![0f32; return_list_size as usize];
-        let mut associated_data2 = vec![(); return_list_size as usize];
+        let mut indices2 = vec![0u32; original_k];
+        let mut distances2 = vec![0f32; original_k];
+        let mut associated_data2 = vec![(); original_k];
         let mut result_output_buffer2 = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices2,
             &mut distances2,
@@ -2067,10 +2116,10 @@ mod disk_provider_tests {
         );
         let io_tracker2 = IOTracker::default();
         let strategy2 = search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll);
-        let search_params2 =
-            Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
+        let search_params2 = Knn::new(search_list_size as usize, None).unwrap();
 
-        let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
+        let diverse_search2 =
+            diskann::graph::search::Diverse::new(search_params2, diverse_params).unwrap();
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -2088,9 +2137,9 @@ mod disk_provider_tests {
             "Expected diversity search to return results"
         );
         assert!(
-            stats.result_count <= return_list_size,
+            stats.result_count <= original_k as u32,
             "Expected result count to be <= {}",
-            return_list_size
+            original_k
         );
 
         // Verify that we got some results
@@ -2469,9 +2518,10 @@ mod disk_provider_tests {
         );
         let query_vector: [f32; 128] = [1f32; 128];
 
-        let mut indices = vec![0u32; 10];
-        let mut distances = vec![0f32; 10];
-        let mut associated_data = vec![(); 10];
+        let k = 10;
+        let mut indices = vec![0u32; k];
+        let mut distances = vec![0f32; k];
+        let mut associated_data = vec![(); k];
 
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices,
@@ -2483,7 +2533,7 @@ mod disk_provider_tests {
         let strategy = search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
 
         let mut search_record = VisitedSearchRecord::new(0);
-        let search_params = Knn::new(10, 10, Some(4)).unwrap();
+        let search_params = Knn::new(10, Some(4)).unwrap();
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine

@@ -134,7 +134,7 @@ mod dto {
 
 #[derive(Debug, Clone)]
 struct KnnInstance {
-    knn: graph::search::Knn,
+    knn_params: core_search::graph::KnnParams,
     recall_k: usize,
 }
 
@@ -149,8 +149,11 @@ impl KnnInstance {
                     .search_l
                     .iter()
                     .map(move |search_l| -> anyhow::Result<_> {
-                        let knn = graph::search::Knn::new_default(search_n, *search_l)?;
-                        Ok(KnnInstance { knn, recall_k })
+                        let knn_params = core_search::graph::KnnParams::new(search_n, *search_l)?;
+                        Ok(KnnInstance {
+                            knn_params,
+                            recall_k,
+                        })
                     })
             })
             .collect()
@@ -163,8 +166,8 @@ impl Display for KnnInstance {
             f,
             "knn = {}, search_l = {}, beam_width = {}",
             self.recall_k,
-            self.knn.l_value(),
-            self.knn.beam_width(),
+            self.knn_params.knn.l_value(),
+            self.knn_params.knn.beam_width(),
         )
     }
 }
@@ -555,13 +558,13 @@ fn _knn(
                 reps,
             };
 
-            let run = core_search::Run::new(instance.knn, setup);
+            let run = core_search::Run::new(instance.knn_params, setup);
 
             let r = runner.search_all(
                 vec![run],
                 groundtruth,
                 instance.recall_k,
-                instance.knn.k_value().get(),
+                instance.knn_params.k_value().get(),
                 GroundTruthMode::Fixed,
             )?;
 

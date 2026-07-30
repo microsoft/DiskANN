@@ -2075,9 +2075,10 @@ mod tests {
         }
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2090,8 +2091,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            res.result_count, 5,
-            "there are 15 points and we're asking for 5, we expect 5"
+            res.result_count, k as u32,
+            "there are 15 points and we're asking for {}, we expect {}",
+            5, k
         );
         assert_eq!(*neighbors[0].id(), 3);
     }
@@ -2126,9 +2128,10 @@ mod tests {
             .unwrap();
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2141,8 +2144,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            res.result_count, 5,
-            "there are 15 points and we're asking for 5, we expect 5"
+            res.result_count, k as u32,
+            "there are 15 points and we're asking for {}, we expect {}",
+            5, k
         );
         let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         for expected in 1u32..=5 {
@@ -2176,9 +2180,10 @@ mod tests {
             .unwrap();
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2190,7 +2195,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(res.result_count, 5);
+        assert_eq!(res.result_count, k as u32);
         let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
@@ -2247,9 +2252,10 @@ mod tests {
         }
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2262,8 +2268,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            res.result_count, 5,
-            "there are 15 points and we're asking for 5, we expect 5"
+            res.result_count, k as u32,
+            "there are 15 points and we're asking for {}, we expect {}",
+            5, k
         );
         assert_eq!(*neighbors[0].id(), 3);
     }
@@ -2303,9 +2310,10 @@ mod tests {
             .unwrap();
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2317,7 +2325,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(res.result_count, 5);
+        assert_eq!(res.result_count, k as u32);
         let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
