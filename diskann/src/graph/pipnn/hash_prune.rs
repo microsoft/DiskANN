@@ -848,7 +848,9 @@ impl HashPrune {
         let l_max = self.l_max as u8;
         debug_assert_eq!(edge_offsets.len(), n + 1);
         let sketch_len = n * m;
-        sketch_scratch.resize(sketch_len, 0.0);
+        if sketch_scratch.len() < sketch_len {
+            sketch_scratch.resize(sketch_len, 0.0);
+        }
         self.gather_sketches(point_ids, &mut sketch_scratch[..sketch_len]);
 
         for local_src in 0..n {
