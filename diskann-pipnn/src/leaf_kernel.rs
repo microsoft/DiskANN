@@ -640,14 +640,21 @@ where
     F::Mask: SIMDSelect<F>,
 {
     let zero = F::default(arch);
+    let clamp_nonnegative = |distance: F| {
+        // SIMD max has ISA-specific NaN behavior. Select the original NaN
+        // explicitly so it remains non-rankable on every backend.
+        distance
+            .eq_simd(distance)
+            .select(zero.max_simd(distance), distance)
+    };
     match metric {
         Metric::L2 => {
             let distance = row_norm + column_norm - F::splat(arch, 2.0) * dot;
-            zero.max_simd(distance)
+            clamp_nonnegative(distance)
         }
         Metric::CosineNormalized => {
             let distance = F::splat(arch, 1.0) - dot;
-            zero.max_simd(distance)
+            clamp_nonnegative(distance)
         }
         Metric::InnerProduct => zero - dot,
         Metric::Cosine => {
@@ -657,11 +664,7 @@ where
             let denominator = row_norm * column_norm;
             let safe_denominator = row_zero.select(one, column_zero.select(one, denominator));
             let cosine = row_zero.select(zero, column_zero.select(zero, dot / safe_denominator));
-            let distance = one - cosine;
-            // Comparisons with NaN are false, so this explicit lower clamp
-            // preserves non-rankable NaNs while matching the existing PiPNN
-            // distance formulas for finite values.
-            zero.max_simd(distance)
+            clamp_nonnegative(one - cosine)
         }
     }
 }
