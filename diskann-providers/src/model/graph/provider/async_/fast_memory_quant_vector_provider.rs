@@ -161,7 +161,7 @@ impl FastMemoryQuantVectorProviderAsync {
         T: VectorRepr,
     {
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
@@ -169,7 +169,7 @@ impl FastMemoryQuantVectorProviderAsync {
         let vf32: &[f32] = &T::as_f32(v).into_ann_result()?;
 
         if vf32.len() != self.full_dim() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector f32 dimension is not equal to the expected dimension.",
             ));
         }
@@ -208,12 +208,12 @@ impl FastMemoryQuantVectorProviderAsync {
     /// 2. Be okay with racey data.
     pub(crate) unsafe fn set_quant_vector(&self, i: usize, v: &[u8]) -> ANNResult<()> {
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
         if v.len() != self.pq_chunks() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
@@ -379,7 +379,7 @@ impl storage::bin::GetData for FastMemoryQuantVectorProviderAsync {
 #[cfg(test)]
 mod tests {
     use crate::storage::VirtualStorageProvider;
-    use diskann::{ANNErrorKind, utils::ONE};
+    use diskann::utils::ONE;
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
     use super::*;
@@ -397,16 +397,28 @@ mod tests {
         // try to set an out of bounds vector
         // SAFETY: We have exclusive ownership of `provider`.
         let result = unsafe { provider.set_quant_vector(20, &[]) }.unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let msg = result.to_string();
+        assert!(
+            msg.contains("Vector id is out of boundary in the dataset."),
+            "{msg}",
+        );
 
         // SAFETY: We have exclusive ownership of `provider`.
         let result = unsafe { provider.set_vector_sync::<f32>(20, &[]) }.unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let msg = result.to_string();
+        assert!(
+            msg.contains("Vector id is out of boundary in the dataset."),
+            "{msg}",
+        );
 
         // try to set a vector with the wrong dimension
         // SAFETY: We have exclusive ownership of `provider`.
         let result = unsafe { provider.set_quant_vector(0, &[]) }.unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let msg = result.to_string();
+        assert!(
+            msg.contains("Vector dimension is not equal to the expected dimension.",),
+            "{msg}",
+        );
     }
 
     fn create_test_provider() -> FastMemoryQuantVectorProviderAsync {

@@ -7,9 +7,7 @@ use thiserror::Error;
 
 use super::SortedNeighbors;
 
-use crate::{
-    ANNError, ANNErrorKind, error, graph::AdjacencyList, neighbor::Neighbor, utils::VectorId,
-};
+use crate::{ANNError, error, graph::AdjacencyList, neighbor::Neighbor, utils::VectorId};
 
 /// Options provided to prune. See the field-level documentation for more details.
 ///
@@ -114,7 +112,7 @@ where
     where
         D: std::fmt::Display,
     {
-        ANNError::new(ANNErrorKind::IndexError, self).context(why.to_string())
+        ANNError::new(self).context(why.to_string())
     }
 }
 

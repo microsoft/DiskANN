@@ -36,7 +36,7 @@ use std::{
 };
 
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{self, HybridPredicate},
@@ -244,7 +244,7 @@ where
     ) -> Result<Self::InternalId, Self::Error> {
         match self.mapping.to_internal(gid) {
             Some(id) => Ok(id),
-            None => Err(ANNError::message(ANNErrorKind::Opaque, "no mapping")),
+            None => Err(ANNError::message("no mapping")),
         }
     }
 
@@ -256,7 +256,7 @@ where
     ) -> Result<Self::ExternalId, Self::Error> {
         match self.mapping.to_external(id) {
             Some(gid) => Ok(gid),
-            None => Err(ANNError::message(ANNErrorKind::Opaque, "no mapping")),
+            None => Err(ANNError::message("no mapping")),
         }
     }
 }
@@ -278,10 +278,7 @@ where
         // This ensures both either succeed or are aborted.
         let entry = match self.mapping.occupied_entry(gid.clone()) {
             None => {
-                return Err(ANNError::message(
-                    ANNErrorKind::Opaque,
-                    "id already deleted",
-                ));
+                return Err(ANNError::message("id already deleted"));
             }
             Some(e) => e,
         };
@@ -292,7 +289,7 @@ where
                 entry.delete();
                 Ok(())
             }
-            Err(err) => Err(ANNError::opaque(err)),
+            Err(err) => Err(ANNError::new(err)),
         }
     }
 
@@ -310,10 +307,7 @@ where
         match self.store.can_read_approximate(id.into_usize()) {
             Some(true) => Ok(diskann::provider::ElementStatus::Valid),
             Some(false) => Ok(diskann::provider::ElementStatus::Deleted),
-            None => Err(ANNError::message(
-                ANNErrorKind::Opaque,
-                "accessed invalid internal ID",
-            )),
+            None => Err(ANNError::message("accessed invalid internal ID")),
         }
     }
 
@@ -351,9 +345,10 @@ where
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
-            let mut slot = self.store.acquire().ok_or_else(|| {
-                ANNError::message(ANNErrorKind::Opaque, "could not allocate a new slot")
-            })?;
+            let mut slot = self
+                .store
+                .acquire()
+                .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
 
             // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
             // insert failure after `set_element` returns.
@@ -428,10 +423,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                         f(p, self.expand_beam.evaluate(point)?);
                     }
                     None => {
-                        return Err(ANNError::message(
-                            ANNErrorKind::Opaque,
-                            "could not retrieve start point",
-                        ));
+                        return Err(ANNError::message("could not retrieve start point"));
                     }
                 }
             }
@@ -934,7 +926,7 @@ where
             // By construction - the downcast should succeed. Otherwise, this is a program bug.
             let provider = match accessor.provider.downcast_ref::<Provider<L, M>>() {
                 Some(provider) => provider,
-                None => return Err(ANNError::message(ANNErrorKind::Opaque, "bad any cast")),
+                None => return Err(ANNError::message("bad any cast")),
             };
 
             let mut count = 0;
@@ -1036,10 +1028,7 @@ where
             let data = match reader.read(id.into_usize()) {
                 Some(data) => data,
                 None => {
-                    return Err(ANNError::message(
-                        ANNErrorKind::Opaque,
-                        "item could not be read",
-                    ));
+                    return Err(ANNError::message("item could not be read"));
                 }
             };
 
@@ -1155,7 +1144,7 @@ mod tests {
         assert!(index.provider().to_external_id(&Context, 26).is_err());
 
         // Searches should return something reasonable.
-        let knn = Knn::new(10, 10, None).unwrap();
+        let knn = Knn::new(10, None).unwrap();
         let mut neighbors = Vec::<Neighbor<u64>>::new();
         index
             .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)

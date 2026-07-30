@@ -103,7 +103,7 @@ mod tests {
     use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
     use super::*;
-    use crate::{ANNError, always_escalate, error::Infallible, utils::VectorRepr};
+    use crate::{always_escalate, convert_error, error::Infallible, utils::VectorRepr};
 
     /// Sample dataset shared by every test below.
     fn sample_items() -> Vec<(u32, Vec<f32>)> {
@@ -182,13 +182,7 @@ mod tests {
     struct Boom(u32);
 
     always_escalate!(Boom);
-
-    impl From<Boom> for ANNError {
-        #[track_caller]
-        fn from(boom: Boom) -> ANNError {
-            ANNError::opaque(boom)
-        }
-    }
+    convert_error!(Boom);
 
     /// Scans `items`, but returns `Err(Boom(id))` exactly once after `fail_after`
     /// successful yields.
