@@ -9,12 +9,15 @@
 //! [`DataProvider`](diskann::provider::DataProvider) trait, enabling indexes that can
 //! transparently spill to disk for datasets larger than available memory.
 
+pub mod id;
 pub mod neighbors;
 pub mod provider;
 pub mod quant;
 pub mod vectors;
 
 mod locks;
+
+pub use id::BfTreeId;
 
 // Accessors
 pub use provider::{
