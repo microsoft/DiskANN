@@ -31,7 +31,6 @@ const ASSIGNMENT_CACHE_TARGET_BYTES: usize = 524_288;
 const MIN_ASSIGNMENT_STRIPE_ROWS: usize = 32;
 const MAX_ASSIGNMENT_STRIPE_ROWS: usize = 1_024;
 const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
-const SCATTER_STRIPE_ROWS: usize = 65_536;
 const MAX_PARTITION_ITERATIONS: usize = 30;
 
 /// Policy owned by the partition stage. Leaf-neighbor and merge settings do
@@ -413,8 +412,9 @@ fn scatter_assignments(
         return scatter_serial(points, assignments, fanout, leaders);
     }
 
-    let assignment_stripe = checked_area("scatter assignment stripe", SCATTER_STRIPE_ROWS, fanout)?;
-    let stripes = points.len().div_ceil(SCATTER_STRIPE_ROWS);
+    let stripe_rows = points.len().div_ceil(rayon::current_num_threads().max(1));
+    let assignment_stripe = checked_area("scatter assignment stripe", stripe_rows, fanout)?;
+    let stripes = points.len().div_ceil(stripe_rows);
     let mut partials = Vec::new();
     partials
         .try_reserve_exact(stripes)
@@ -426,7 +426,7 @@ fn scatter_assignments(
         .par_iter_mut()
         .zip(
             points
-                .par_chunks(SCATTER_STRIPE_ROWS)
+                .par_chunks(stripe_rows)
                 .zip(assignments.par_chunks(assignment_stripe)),
         )
         .for_each(|(slot, (points, assignments))| {
@@ -454,14 +454,20 @@ fn scatter_assignments(
         }
     }
 
-    let mut clusters = clusters_with_capacities(&sizes)?;
-    for local in locals {
-        for (cluster, part) in clusters.iter_mut().zip(local) {
-            debug_assert!(cluster.capacity().saturating_sub(cluster.len()) >= part.len());
-            cluster.extend(part);
-        }
-    }
-    Ok(clusters)
+    // See the pool invariant at the other partition terminal operations.
+    #[allow(clippy::disallowed_methods)]
+    sizes
+        .into_par_iter()
+        .enumerate()
+        .map(|(leader, size)| {
+            let mut cluster = Vec::new();
+            cluster.try_reserve_exact(size).map_err(ANNError::opaque)?;
+            for local in &locals {
+                cluster.extend_from_slice(&local[leader]);
+            }
+            Ok(cluster)
+        })
+        .collect()
 }
 
 fn scatter_serial(
@@ -632,8 +638,13 @@ fn checked_area(buffer: &'static str, rows: usize, cols: usize) -> ANNResult<usi
 }
 
 fn assignment_stripe_rows(leaders: usize) -> usize {
-    (ASSIGNMENT_CACHE_TARGET_BYTES / (leaders.max(1) * size_of::<f32>()))
-        .clamp(MIN_ASSIGNMENT_STRIPE_ROWS, MAX_ASSIGNMENT_STRIPE_ROWS)
+    let rows = ASSIGNMENT_CACHE_TARGET_BYTES / (leaders.max(1) * size_of::<f32>());
+    let rows = if rows.is_power_of_two() {
+        rows
+    } else {
+        rows.next_power_of_two() / 2
+    };
+    rows.clamp(MIN_ASSIGNMENT_STRIPE_ROWS, MAX_ASSIGNMENT_STRIPE_ROWS)
 }
 
 #[cfg(test)]
