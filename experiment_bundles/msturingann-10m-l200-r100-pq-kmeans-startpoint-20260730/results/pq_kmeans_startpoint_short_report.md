@@ -14,12 +14,7 @@ MSTuringANN 10M 上，`k=1024/top8` 相比同 setting baseline：
 - comparisons：23360.0 → 17936.1（-23.22%）
 - artifact 只有 69.7 KB
 
-BigANN 10M 上，`k=1024/top8` 也有稳定收益：
-
-- recall：96.6686 → 96.7224（+0.054 pp）
-- mean latency：902.12 us → 817.64 us（-9.37%）
-- hops / IOs：451.764 → 341.307（-24.45%）
-- comparisons：10593.2 → 7262.2（-31.44%）
+这版报告只把 MSTuringANN 作为有效实验数据集。BigANN 10M 暂时不纳入结论，因为当前本地 BigANN index/PQ 配置不适合作为这个 PR 的可比实验。
 
 ## 关键修复
 
@@ -40,7 +35,7 @@ sum((lhs_label_id - rhs_label_id)^2)
 
 ## 实验设置
 
-MSTuringANN 和 BigANN 都使用：
+MSTuringANN 使用：
 
 | Setting | Value |
 | --- | ---: |
@@ -62,17 +57,9 @@ MSTuringANN 和 BigANN 都使用：
 | k=512, top8 | 74.1320 | 1104.49 us | 1418 us | 2720 us | 397.728 | 3614.01 | 44.6 us | 34.9 KB | recall +0.649 pp, latency -11.18%, IO -19.03% |
 | k=1024, top8 | 74.0571 | 1071.73 us | 1381 us | 1761 us | 387.552 | 3725.45 | 58.6 us | 69.7 KB | recall +0.574 pp, latency -13.82%, IO -21.10% |
 
-## BigANN 10M
-
-| Variant | Recall@100 | Mean latency | P95 | P99.9 | Hops / IOs | Comparisons | QPS | Delta vs baseline |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Baseline | 96.6686 | 902.12 us | 1043 us | 1184 us | 451.764 | 10593.2 | 4414.30 | — |
-| k=1024, top8 | 96.7224 | 817.64 us | 963 us | 1149 us | 341.307 | 7262.2 | 4867.83 | recall +0.054 pp, latency -9.37%, IO -24.45% |
-
-BigANN 的收益仍然明显，主要因为 routed starts 大幅减少 traversal：hops/IOs -24.45%，comparisons -31.44%。这说明 PQ codebook geometry 对 BigANN/SIFT-like uint8 数据的 coarse locality 捕捉得比较好。
-
 ## Caveat
 
 - 旧 label-ID 结果只能作为 invalid reference；不能再作为有效实验结论。
 - `cache_hit_percentage` 仍然显示 0.0%。当前 counter 没有准确反映 multi-source BFS cache hit attribution，所以这里用 hops/IOs、comparisons 和 latency 衡量实际效果。
+- BigANN 10M 暂时排除，因为对应 PQ/index 配置不适合作为当前可比实验。
 - Wikipedia/Cohere 本地 base 文件损坏/截断；Enron 本地缺少可用数据和预建 index，因此没有有效 rerun。

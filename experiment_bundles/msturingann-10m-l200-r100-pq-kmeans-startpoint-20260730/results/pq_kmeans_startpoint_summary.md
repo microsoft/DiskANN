@@ -57,35 +57,6 @@ Fixed-geometry router rows:
 - k=256 and k=512 are still useful if the priority is even smaller router metadata. They already capture most of the traversal reduction, with only 17 KB and 35 KB artifacts.
 - Router CPU cost is now higher than the old label-ID implementation because ADC computes/query-loads codebook distances instead of doing ordinal byte subtraction. The traversal reduction more than pays for it at k=1024.
 
-## BigANN 10M fixed-geometry rerun
-
-Current baseline:
-
-`experiment_bundles/cross-dataset-pq-kmeans-startpoint-20260730/results/bigann_search_baseline_after_geometry_fix_output.json`
-
-Fixed-geometry router row:
-
-`experiment_bundles/cross-dataset-pq-kmeans-startpoint-20260730/results/bigann_search_pq_kmeans_k1024_msp8_geometry_output.json`
-
-### Absolute metrics
-
-| Variant | k | Start points | Recall@100 | QPS | Mean latency | P95 | P99.9 | Hops / IOs | Comparisons | Router time | Scanned codes | Artifact bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Baseline | — | 1 | 96.6686 | 4414.30 | 902.12 us | 1043 us | 1184 us | 451.764 | 10593.2 | 0.0 us | 0 | — |
-| PQ-geometry k=1024 top8 | 1,024 | 8 | 96.7224 | 4867.83 | 817.64 us | 963 us | 1149 us | 341.307 | 7262.2 | 120.1 us | 1024 | 135,205 |
-
-### Delta vs baseline
-
-| Variant | Recall delta | QPS delta | Mean latency delta | P95 delta | P99.9 delta | Hops / IOs delta | Comparisons delta | Router-time delta |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| PQ-geometry k=1024 top8 | +0.054 pp | +453.53 (+10.27%) | -84.48 us (-9.37%) | -80 us (-7.67%) | -35 us (-2.96%) | -110.457 (-24.45%) | -3330.9 (-31.44%) | +120.1 us |
-
-### BigANN readout
-
-BigANN still benefits after the geometry fix. The result is good because the routed starts cut a large amount of graph traversal: hops/IOs fall by 24.5% and comparisons fall by 31.4%. Even with a 120 us ADC router cost, the reduced traversal produces a 9.4% mean-latency win.
-
-The dataset likely helps because BigANN/SIFT-like uint8 vectors have strong local visual-feature structure that PQ codebooks preserve well enough for coarse routing. In that setting, finding several geometrically close representative starts avoids a lot of baseline medoid-to-neighborhood travel.
-
 ## Old label-ID results are invalid reference rows
 
 These rows are retained only to explain earlier discrepancies. They should not be used as the final experiment result because they treated PQ label IDs as geometric coordinates.
@@ -93,11 +64,14 @@ These rows are retained only to explain earlier discrepancies. They should not b
 | Dataset | Invalid variant | Recall@100 | Mean latency | Hops / IOs | Comparisons | Router time | Why invalid |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | MSTuringANN | old label-ID k=1024/top8 | 74.6721 | 1264.76 us | 447.408 | 21828.8 | 6.64 us | clustered/scored PQ label ordinals |
-| BigANN | old label-ID k=1024/top8 | 96.7447 | 888.19 us | 400.051 | 8715.8 | 10.04 us | clustered/scored PQ label ordinals |
 
 The old label-ID router looked cheaper because it only did byte-level ordinal distance. The fixed router is semantically correct but spends more time in ADC scoring. The fixed MSTuring row nevertheless has much better latency and traversal because its start points are selected in PQ codebook geometry.
 
 ## Blocked datasets
+
+### BigANN 10M
+
+Excluded from the current valid result set. The local BigANN 10M index/PQ setup is not considered comparable for this PR because the dataset's corresponding PQ configuration is suspected to be wrong. Do not use earlier BigANN rows as evidence for this iteration.
 
 ### Wikipedia/Cohere 10M
 
@@ -117,7 +91,7 @@ Blocked locally: no Enron base vectors, query file, groundtruth, or prebuilt Dis
 
 - The reported `cache_hit_percentage` remains 0.0% in these outputs. The BFS cache path is implemented as multi-source cache population, but the benchmark counter currently does not expose meaningful physical cache-hit attribution for this path. Use hops/IOs/comparisons/latency as the practical effect metrics for this experiment.
 - The benchmark's `mean_ios` and `mean_hops` are identical in these runs, so the IO number should be read as logical traversal/load count, not verified storage-device misses.
-- Router metadata memory remains tiny: 69,669 bytes for MSTuring k=1024 and 135,205 bytes for BigANN k=1024. The additional retained PQ geometry table is also small because it is just the PQ codebook/pivots, not per-point vectors.
+- Router metadata memory remains tiny: 69,669 bytes for MSTuring k=1024. The additional retained PQ geometry table is also small because it is just the PQ codebook/pivots, not per-point vectors.
 
 ## Verification snapshot
 
