@@ -608,7 +608,7 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(not(any(target_arch = "x86_64", target_feature = "avx2")))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
 
 /// # Safety
