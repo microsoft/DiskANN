@@ -201,10 +201,10 @@ where
     let increment_factor = policy.alpha.min(1.2);
 
     cache.extend(pool.iter().map(|neighbor| {
-        if exclude(neighbor.id) {
-            (neighbor.distance, None)
+        if exclude(*neighbor.id()) {
+            (neighbor.distance(), None)
         } else {
-            (neighbor.distance, lookup(neighbor.id))
+            (neighbor.distance(), lookup(*neighbor.id()))
         }
     }));
 
@@ -294,7 +294,7 @@ where
 
     let mut guard = neighbors.resize(found);
     std::iter::zip(guard.iter_mut(), states.iter()).for_each(|(destination, state)| {
-        *destination = pool[state.neighbor.into_usize()].id;
+        *destination = *pool[state.neighbor.into_usize()].id();
     });
     guard.finish(found);
 
@@ -308,8 +308,8 @@ where
             if neighbors.len() >= policy.degree {
                 break;
             }
-            if !exclude(neighbor.id) {
-                neighbors.push(neighbor.id);
+            if !exclude(*neighbor.id()) {
+                neighbors.push(*neighbor.id());
             }
         }
     }
