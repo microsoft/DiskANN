@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     error::IntoANNResult,
     graph::{
         glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
@@ -40,7 +40,7 @@ pub enum DiverseSearchError {
 impl From<DiverseSearchError> for ANNError {
     #[track_caller]
     fn from(err: DiverseSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
+        Self::new(err)
     }
 }
 
@@ -57,7 +57,7 @@ pub enum DiverseError {
 impl From<DiverseError> for ANNError {
     #[track_caller]
     fn from(err: DiverseError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
+        Self::new(err)
     }
 }
 

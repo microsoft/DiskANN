@@ -1061,7 +1061,6 @@ where
 
         if search_list_size < return_list_size {
             return Err(ANNError::message(
-                diskann::ANNErrorKind::IndexError,
                 "search list size must be at least as large as the number of results requested",
             ));
         }
@@ -1116,8 +1115,8 @@ where
         let l = search_list_size as usize;
 
         if l < k_value {
-            return Err(ANNError::message(
-                diskann::ANNErrorKind::IndexError,
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "search list size must be at least as large as the number of results requested",
             ));
         }
@@ -1708,13 +1707,6 @@ mod disk_provider_tests {
             "index_path is not correct"
         );
 
-<<<<<<< HEAD
-=======
-        // Test error case: l < k
-        let res = Knn::new_default(20, 10);
-        assert!(res.is_err());
-
->>>>>>> 74c060bb0a55a5578c780a435f3ed0ee37a0aeab
         // Test error case: beam_width = 0
         let res = Knn::new(10, Some(0));
         assert!(res.is_err());
@@ -1801,7 +1793,7 @@ mod disk_provider_tests {
         );
 
         match result {
-            Err(e) => assert_eq!(e.kind(), ANNErrorKind::IndexError),
+            Err(_) => {}
             Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
         }
     }

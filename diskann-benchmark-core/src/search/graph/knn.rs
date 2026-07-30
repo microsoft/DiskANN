@@ -252,7 +252,7 @@ pub enum KnnParamsError {
 impl From<KnnParamsError> for ANNError {
     #[track_caller]
     fn from(err: KnnParamsError) -> Self {
-        ANNError::opaque(err)
+        ANNError::new(err)
     }
 }
 
