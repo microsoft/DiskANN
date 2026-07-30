@@ -539,7 +539,7 @@ fn write_ground_truth<A: Serialize + Copy>(
     for mut query_neighbors in ground_truth {
         while let Some(closest_node) = query_neighbors.closest_notvisited() {
             gt_ids.push(*closest_node.id());
-            gt_distances.push(closest_node.distance());
+            gt_distances.push(*closest_node.distance());
         }
     }
 

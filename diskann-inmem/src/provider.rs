@@ -932,7 +932,10 @@ where
             let mut count = 0;
             for c in candidates {
                 if let Some(ext) = provider.mapping.to_external(*c.id()) {
-                    if output.push(ext, c.distance()).is_available() {
+                    if output
+                        .push(Neighbor::new(ext, *c.distance()))
+                        .is_available()
+                    {
                         count += 1;
                     } else {
                         break;

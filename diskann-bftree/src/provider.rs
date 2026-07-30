@@ -30,7 +30,7 @@ use diskann::{
         workingset::map,
         AdjacencyList, SearchOutputBuffer,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::{DataProvider, DefaultContext, Delete, ElementStatus, HasId, NoopGuard, SetElement},
     utils::VectorRepr,
     ANNError, ANNResult,
@@ -1588,7 +1588,7 @@ where
         let provider = accessor.provider;
         let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
 
-        let mut reranked: Vec<(I, f32)> = Vec::new();
+        let mut reranked = Vec::new();
         for n in candidates {
             match provider
                 .full_vectors
@@ -1596,7 +1596,7 @@ where
                 .allow_transient("stale candidate during rerank")
             {
                 Ok(Some(vec)) => {
-                    reranked.push((*n.id(), f.evaluate_similarity(query, &vec)));
+                    reranked.push(Neighbor::new(*n.id(), f.evaluate_similarity(query, &vec)));
                 }
                 Ok(None) => {
                     // Transient (deleted/missing) — skip this candidate.
@@ -1605,8 +1605,7 @@ where
             }
         }
 
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(neighbor::ord::fast_distance);
         std::future::ready(Ok(output.extend(reranked)))
     }
 }

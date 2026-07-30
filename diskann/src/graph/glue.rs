@@ -688,7 +688,7 @@ where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
-        let count = output.extend(candidates.map(|n| n.as_tuple()));
+        let count = output.extend(candidates);
         std::future::ready(Ok(count))
     }
 }

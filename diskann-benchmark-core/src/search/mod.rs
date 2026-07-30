@@ -39,6 +39,7 @@
 //!
 //! ```rust
 //! use std::{sync::Arc, num::NonZeroUsize};
+//! use diskann::neighbor::Neighbor;
 //! use diskann_benchmark_core::search;
 //!
 //! /// A simple example implementation of the `Search` trait.
@@ -96,7 +97,7 @@
 //!        use diskann::graph::SearchOutputBuffer;
 //!
 //!        // Fill the buffer with `index`.
-//!        buffer.extend((0..parameters.num_ids).map(|_| (index, 0.0f32)));
+//!        buffer.extend((0..parameters.num_ids).map(|_| Neighbor::new(index, 0.0f32)));
 //!        Ok(Output::new(index))
 //!    }
 //! }
