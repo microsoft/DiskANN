@@ -82,3 +82,6 @@ disk-index = [
     "dep:opentelemetry_sdk",
     "dep:scopeguard",
 ]
+
+# Compare the legacy disk and quantization K-means implementations.
+kmeans-comparison = ["dep:diskann-disk"]

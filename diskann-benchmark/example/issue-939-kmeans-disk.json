@@ -1,0 +1,33 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "kmeans-comparison",
+      "content": {
+        "implementation": "disk",
+        "phase": "all",
+        "num_points": 50000,
+        "dimensions": [4, 32, 128, 384, 768, 1024, 3072],
+        "center_counts": [256],
+        "max_iterations": 10,
+        "thread_counts": [1],
+        "measurements": 30,
+        "seed": 42
+      }
+    },
+    {
+      "type": "kmeans-comparison",
+      "content": {
+        "implementation": "disk",
+        "phase": "all",
+        "num_points": 50000,
+        "dimensions": [4],
+        "center_counts": [256],
+        "max_iterations": 10,
+        "thread_counts": [2, 4, 8],
+        "measurements": 30,
+        "seed": 42
+      }
+    }
+  ]
+}
