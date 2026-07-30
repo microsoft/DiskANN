@@ -74,6 +74,18 @@ pub enum QueryComputerError {
     FullPrecisionConversionErr(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+#[derive(Debug, Clone, Copy, Error)]
+pub enum CodeImportError {
+    #[error("compressed code payload length is not a multiple of {bytes_per_code}")]
+    MisalignedPayload { bytes_per_code: usize },
+    #[error("compressed code range {start}..{end} exceeds provider capacity {capacity}")]
+    CapacityExceeded {
+        start: usize,
+        end: usize,
+        capacity: usize,
+    },
+}
+
 //////////////
 // Provider //
 //////////////
@@ -221,6 +233,40 @@ impl SphericalStore {
         // SAFETY: Spherical codes are plain bytes. Export requires exclusive ownership of the
         // surrounding index, so no writer can race this read.
         unsafe { self.data.get_slice(index) }
+    }
+
+    /// Imports canonical compressed codes into consecutive slots starting at zero.
+    pub fn import_codes(&self, codes: &[u8]) -> Result<usize, CodeImportError> {
+        self.import_codes_at(0, codes)
+    }
+
+    /// Imports canonical compressed codes into consecutive slots starting at `start`.
+    pub fn import_codes_at(&self, start: usize, codes: &[u8]) -> Result<usize, CodeImportError> {
+        let bytes_per_code = self.bytes();
+        if !codes.len().is_multiple_of(bytes_per_code) {
+            return Err(CodeImportError::MisalignedPayload { bytes_per_code });
+        }
+        let code_count = codes.len() / bytes_per_code;
+        let capacity = self.total();
+        let end = start
+            .checked_add(code_count)
+            .ok_or(CodeImportError::CapacityExceeded {
+                start,
+                end: usize::MAX,
+                capacity,
+            })?;
+        if end > capacity {
+            return Err(CodeImportError::CapacityExceeded {
+                start,
+                end,
+                capacity,
+            });
+        }
+        for (index, code) in (start..end).zip(codes.chunks_exact(bytes_per_code)) {
+            // SAFETY: Every index is below capacity and import happens before publication.
+            unsafe { self.data.get_mut_slice(index) }.copy_from_slice(code);
+        }
+        Ok(code_count)
     }
 }
 

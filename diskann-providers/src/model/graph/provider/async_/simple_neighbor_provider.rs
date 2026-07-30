@@ -3,9 +3,11 @@
  * Licensed under the MIT license.
  */
 
+use std::io::BufReader;
 use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
+use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
 use diskann_utils::lazy_format;
 use diskann_vector::contains::ContainsSimd;
@@ -185,6 +187,60 @@ impl SimpleNeighborProviderAsync {
         P: StorageWriteProvider,
     {
         storage::bin::save_graph(self, provider, start_point, path)
+    }
+
+    /// Imports canonical DiskANN graph storage into this preallocated provider.
+    pub fn import_direct<P>(&self, provider: &P, path: &str) -> ANNResult<u32>
+    where
+        P: StorageReadProvider,
+    {
+        let mut header = BufReader::new(provider.open_reader(path)?);
+        header.read_u64::<LittleEndian>()?;
+        header.read_u32::<LittleEndian>()?;
+        let start_point = header.read_u32::<LittleEndian>()?;
+        let target = BorrowedNeighborProvider(self);
+        storage::bin::load_graph(
+            provider,
+            path,
+            |num_points, max_degree, num_start_points| {
+                if num_points != self.locks.len() {
+                    return Err(ANNError::message(format!(
+                        "graph has {num_points} points but provider capacity is {}",
+                        self.locks.len()
+                    )));
+                }
+                if max_degree >= self.graph.dim() {
+                    return Err(ANNError::message(format!(
+                        "graph degree {max_degree} exceeds provider degree {}",
+                        self.graph.dim() - 1
+                    )));
+                }
+                if num_start_points != self.num_start_points {
+                    return Err(ANNError::message(format!(
+                        "graph has {num_start_points} start points but provider expects {}",
+                        self.num_start_points
+                    )));
+                }
+                Ok(target)
+            },
+        )?;
+        Ok(start_point)
+    }
+}
+
+struct BorrowedNeighborProvider<'a>(&'a SimpleNeighborProviderAsync);
+
+impl storage::bin::SetAdjacencyList for BorrowedNeighborProvider<'_> {
+    type Item = u32;
+
+    fn set_adjacency_list(&mut self, index: usize, neighbors: &[u32]) -> ANNResult<()> {
+        if neighbors
+            .iter()
+            .any(|neighbor| *neighbor as usize >= self.0.locks.len())
+        {
+            return Err(ANNError::message("graph contains an out-of-range neighbor"));
+        }
+        self.0.set_neighbors_sync(index, neighbors)
     }
 }
 

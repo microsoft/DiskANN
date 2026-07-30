@@ -363,12 +363,28 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
             .save_direct(&storage, start_point, "graph")?;
         storage.into_bytes().map_err(ANNError::from)
     }
+
+    /// Imports a canonical graph into this provider and validates its start point.
+    pub fn import_graph(&self, graph: Vec<u8>, expected_start_point: u32) -> ANNResult<()> {
+        let storage = MemoryStorage::from_bytes(graph);
+        let start_point = self.neighbor_provider.import_direct(&storage, "graph")?;
+        if start_point != expected_start_point {
+            return Err(ANNError::message(format!(
+                "graph start point {start_point} does not match expected {expected_start_point}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default)]
 struct MemoryStorage(Arc<Mutex<Cursor<Vec<u8>>>>);
 
 impl MemoryStorage {
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(Arc::new(Mutex::new(Cursor::new(bytes))))
+    }
+
     fn lock(&self) -> std::io::Result<std::sync::MutexGuard<'_, Cursor<Vec<u8>>>> {
         self.0
             .lock()
@@ -399,6 +415,23 @@ impl Write for MemoryStorage {
 impl Seek for MemoryStorage {
     fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
         self.lock()?.seek(position)
+    }
+}
+
+impl StorageReadProvider for MemoryStorage {
+    type Reader = Self;
+
+    fn open_reader(&self, _item_identifier: &str) -> std::io::Result<Self::Reader> {
+        self.lock()?.set_position(0);
+        Ok(self.clone())
+    }
+
+    fn get_length(&self, _item_identifier: &str) -> std::io::Result<u64> {
+        Ok(self.lock()?.get_ref().len() as u64)
+    }
+
+    fn exists(&self, _item_identifier: &str) -> bool {
+        true
     }
 }
 
