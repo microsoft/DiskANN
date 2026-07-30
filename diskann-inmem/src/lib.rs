@@ -9,6 +9,7 @@
 
 pub mod num;
 
+mod arch;
 mod buffer;
 mod counters;
 mod epoch;

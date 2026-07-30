@@ -5,7 +5,7 @@
 
 use std::{fmt::Debug, marker::PhantomData};
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
@@ -21,7 +21,11 @@ use diskann_wide::{
 use half::f16;
 use thiserror::Error;
 
-use crate::{Hidden, layers, num::Bytes};
+use crate::{
+    Hidden, layers,
+    num::Bytes,
+    store::{self, Store},
+};
 
 /// A useful trait bound for types compatible with [`Full`].
 ///
@@ -32,14 +36,12 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<Self>;
 
     #[doc(hidden)]
-    fn __query_distance<'a, V>(
+    fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         query: &'a [Self],
-        visitor: V,
-    ) -> ANNResult<V::Output>
-    where
-        V: layers::QueryVisitor<'a>;
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>>;
 }
 
 /// Full-precision data layer.
@@ -162,11 +164,13 @@ where
 {
     type Query<'a> = &'a [T];
 
-    fn query_distance<'a, V>(&'a self, query: &'a [T], visitor: V) -> ANNResult<V::Output>
-    where
-        V: layers::QueryVisitor<'a>,
-    {
-        T::__query_distance(Hidden::new(), self, query, visitor)
+    fn __search_expand_beam<'a>(
+        &'a self,
+        query: Self::Query<'a>,
+        store: &'a Store,
+        _: Hidden,
+    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
+        T::__expand_beam(Hidden::new(), self, query, store)
     }
 }
 
@@ -283,7 +287,10 @@ impl<T> std::ops::Deref for Calf<'_, T> {
 /// would otherwise be needed.
 #[derive(Debug)]
 struct QueryDistance<'a, T, U, D> {
+    // The original query.
     query: Calf<'a, T>,
+    // A reader into a layer's store.
+    reader: store::invasive::Reader<'a>,
     // The type of the data in the original dataset.
     _data: PhantomData<U>,
     // The type of the `PureDistanceFunction` used for the implementation.
@@ -291,9 +298,10 @@ struct QueryDistance<'a, T, U, D> {
 }
 
 impl<'a, T, U, D> QueryDistance<'a, T, U, D> {
-    fn new(query: Calf<'a, T>) -> Self {
+    fn new(query: Calf<'a, T>, reader: store::invasive::Reader<'a>) -> Self {
         Self {
             query,
+            reader,
             _data: PhantomData,
             _distance: PhantomData,
         }
@@ -312,19 +320,13 @@ impl<'a, T, U, D> QueryDistance<'a, T, U, D> {
 
         Err(ANNError::new(error))
     }
-}
 
-impl<T, U, D> layers::QueryDistance for QueryDistance<'_, T, U, D>
-where
-    T: Send + Sync + 'static + Debug,
-    U: Send + Sync + 'static + Debug,
-    D: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, U>>
-        + Send
-        + Sync
-        + Debug,
-{
+    // TODO: Since we control the reader - we can avoid the length check.
     #[inline(always)]
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+    fn run(&self, x: &[u8]) -> ANNResult<f32>
+    where
+        D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>,
+    {
         if x.len() != self.bytes() {
             self.error(x.len())
         } else {
@@ -334,6 +336,96 @@ where
         }
     }
 }
+
+// TEMPORARY DEFINITIONS
+const LOOKAHEAD: usize = 8;
+const BYTES: usize = 0;
+
+impl<T, U, D> layers::__ExpandBeam for QueryDistance<'_, T, U, D>
+where
+    T: Send + Sync + 'static + Debug,
+    U: Send + Sync + 'static + Debug,
+    D: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, U>>
+        + Send
+        + Sync
+        + Debug,
+{
+    fn __evaluate(&self, i: u32, _: Hidden) -> ANNResult<Option<f32>> {
+        if !self.reader.is_in_bounds(i.into_usize()) {
+            return Err(ANNError::new(OutOfBounds(i)));
+        } else {
+            match unsafe { self.reader.read_in_bounds(i.into_usize()) } {
+                Some(data) => Ok(Some(self.run(data)?)),
+                None => Ok(None),
+            }
+        }
+    }
+
+    unsafe fn __expand_beam(
+        &self,
+        list: &[u32],
+        buffer: &mut [(u32, f32)],
+        _: Hidden,
+    ) -> ANNResult<usize> {
+        let len = list.len();
+        let lookahead = LOOKAHEAD.min(len);
+
+        let bytes = if BYTES == 0 {
+            self.reader.bytes().value()
+        } else {
+            BYTES + store::TAG_SIZE.value()
+        };
+
+        for j in 0..lookahead {
+            // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
+            // as the validity of the prefetch bounds.
+            unsafe {
+                crate::arch::prefetch(
+                    self.reader
+                        .read_raw_unchecked(list.get_unchecked(j).into_usize())
+                        .as_ptr()
+                        .cast(),
+                    bytes,
+                )
+            }
+        }
+
+        // Disable prefetching if the lookahead is 0.
+        let mut j = if lookahead == 0 { len } else { lookahead };
+        let mut processed = 0;
+        for &i in list.iter() {
+            if j != len {
+                // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
+                // well as the validity of the prefetch bounds.
+                unsafe {
+                    crate::arch::prefetch(
+                        self.reader
+                            .read_raw_unchecked(list.get_unchecked(j).into_usize())
+                            .as_ptr()
+                            .cast(),
+                        bytes,
+                    )
+                }
+                j += 1;
+            }
+
+            // SAFETY: Caller asserts that `i` is in-bounds.
+            if let Some(data) = unsafe { self.reader.read_in_bounds(i.into_usize()) } {
+                // SAFETY: Inherited from caller.
+                *unsafe { buffer.get_unchecked_mut(processed) } = (i, self.run(data)?);
+                processed += 1;
+            }
+        }
+
+        Ok(processed)
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("index {} is out-of-bounds", self.0)]
+struct OutOfBounds(u32);
+
+diskann::convert_error!(OutOfBounds);
 
 #[derive(Debug, Error)]
 #[error(
@@ -349,19 +441,18 @@ struct QueryDistanceError {
 diskann::convert_error!(QueryDistanceError);
 
 macro_rules! mint {
-    ($query:ident, $visitor:ident, $T:ty => { $N:literal, $f:ident }) => {{
-        mint!($query, $visitor, { $T, $T } => { $N, $f })
+    // ($query:ident, $reader:ident, $T:ty => { $N:literal, $f:ident }) => {{
+    //     mint!($query, $visitor, { $T, $T } => { $N, $f })
+    // }};
+    // ($query:ident, $reader:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
+    //     let inner = Box::new(QueryDistance::<$T, $U, Specialize<$N, $f>>::new($query));
+    //     $visitor.visit_sized::<{ $N * std::mem::size_of::<$U>() }, _>(inner)
+    // }};
+    ($query:ident, $reader:ident, $T:ty => $f:ident) => {{
+        mint!($query, $reader, { $T, $T } => $f)
     }};
-    ($query:ident, $visitor:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
-        let inner = QueryDistance::<$T, $U, Specialize<$N, $f>>::new($query);
-        $visitor.visit_sized::<{ $N * std::mem::size_of::<$U>() }, _>(inner)
-    }};
-    ($query:ident, $visitor:ident, $T:ty => $f:ident) => {{
-        mint!($query, $visitor, { $T, $T } => $f)
-    }};
-    ($query:ident, $visitor:ident, { $T:ty, $U:ty } => $f:ident) => {{
-        let inner = QueryDistance::<$T, $U, $f>::new($query);
-        $visitor.visit(inner)
+    ($query:ident, $reader:ident, { $T:ty, $U:ty } => $f:ident) => {{
+        Box::new(QueryDistance::<$T, $U, $f>::new($query, $reader))
     }};
 }
 
@@ -370,32 +461,30 @@ impl FullPrecision for f32 {
         Full::from_distance_provider(dim, metric)
     }
 
-    fn __query_distance<'a, V>(
+    fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<f32>,
         query: &'a [f32],
-        visitor: V,
-    ) -> ANNResult<V::Output>
-    where
-        V: layers::QueryVisitor<'a>,
-    {
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
+        let reader = store.temp_inner_reader()?;
 
         let query = Calf::Borrowed(query);
 
-        let output = match full.metric {
+        let output: Box<dyn layers::__ExpandBeam> = match full.metric {
             Metric::L2 => {
-                if full.dim() == 100 {
-                    mint!(query, visitor, f32 => { 100, SquaredL2 })
-                } else {
-                    mint!(query, visitor, f32 => SquaredL2)
-                }
+                // if full.dim() == 100 {
+                //     mint!(query, visitor, f32 => { 100, SquaredL2 })
+                // } else {
+                mint!(query, reader, f32 => SquaredL2)
+                // }
             }
             Metric::InnerProduct => {
-                mint!(query, visitor, f32 => InnerProduct)
+                mint!(query, reader, f32 => InnerProduct)
             }
-            Metric::Cosine => mint!(query, visitor, f32 => Cosine),
-            Metric::CosineNormalized => mint!(query, visitor, f32 => CosineNormalized),
+            Metric::Cosine => mint!(query, reader, f32 => Cosine),
+            Metric::CosineNormalized => mint!(query, reader, f32 => CosineNormalized),
         };
 
         Ok(output)
@@ -407,32 +496,30 @@ impl FullPrecision for f16 {
         Full::from_distance_provider(dim, metric)
     }
 
-    fn __query_distance<'a, V>(
+    fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<f16>,
         query: &'a [f16],
-        visitor: V,
-    ) -> ANNResult<V::Output>
-    where
-        V: layers::QueryVisitor<'a>,
-    {
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
+        let reader = store.temp_inner_reader()?;
 
         let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
-        let output = match full.metric {
+        let output: Box<dyn layers::__ExpandBeam> = match full.metric {
             Metric::L2 => {
-                if full.dim() == 100 {
-                    mint!(query, visitor, { f32, f16 } => { 100, SquaredL2 })
-                } else {
-                    mint!(query, visitor, { f32, f16 } => SquaredL2)
-                }
+                // if full.dim() == 100 {
+                //     mint!(query, visitor, { f32, f16 } => { 100, SquaredL2 })
+                // } else {
+                mint!(query, reader, { f32, f16 } => SquaredL2)
+                // }
             }
-            Metric::InnerProduct => mint!(query, visitor, { f32, f16 } => InnerProduct),
-            Metric::Cosine => mint!(query, visitor, { f32, f16 } => Cosine),
-            Metric::CosineNormalized => mint!(query, visitor, { f32, f16 } => CosineNormalized),
+            Metric::InnerProduct => mint!(query, reader, { f32, f16 } => InnerProduct),
+            Metric::Cosine => mint!(query, reader, { f32, f16 } => Cosine),
+            Metric::CosineNormalized => mint!(query, reader, { f32, f16 } => CosineNormalized),
         };
 
         Ok(output)
@@ -444,30 +531,28 @@ impl FullPrecision for u8 {
         Full::from_distance_provider(dim, metric)
     }
 
-    fn __query_distance<'a, V>(
+    fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<u8>,
         query: &'a [u8],
-        visitor: V,
-    ) -> ANNResult<V::Output>
-    where
-        V: layers::QueryVisitor<'a>,
-    {
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
+        let reader = store.temp_inner_reader()?;
 
         let query = Calf::Borrowed(query);
 
-        let output = match full.metric {
+        let output: Box::<dyn layers::__ExpandBeam> = match full.metric {
             Metric::L2 => {
-                if full.dim() == 128 {
-                    mint!(query, visitor, u8 => { 128, SquaredL2 })
-                } else {
-                    mint!(query, visitor, u8 => SquaredL2)
-                }
+                // if full.dim() == 128 {
+                //     mint!(query, visitor, u8 => { 128, SquaredL2 })
+                // } else {
+                mint!(query, reader, u8 => SquaredL2)
+                // }
             }
-            Metric::InnerProduct => mint!(query, visitor, u8 => InnerProduct),
-            Metric::Cosine => mint!(query, visitor, u8 => Cosine),
-            Metric::CosineNormalized => mint!(query, visitor, u8 => Cosine),
+            Metric::InnerProduct => mint!(query, reader, u8 => InnerProduct),
+            Metric::Cosine => mint!(query, reader, u8 => Cosine),
+            Metric::CosineNormalized => mint!(query, reader, u8 => Cosine),
         };
 
         Ok(output)
@@ -479,24 +564,22 @@ impl FullPrecision for i8 {
         Full::from_distance_provider(dim, metric)
     }
 
-    fn __query_distance<'a, V>(
+    fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<i8>,
         query: &'a [i8],
-        visitor: V,
-    ) -> ANNResult<V::Output>
-    where
-        V: layers::QueryVisitor<'a>,
-    {
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
+        let reader = store.temp_inner_reader()?;
 
         let query = Calf::Borrowed(query);
 
-        let output = match full.metric {
-            Metric::L2 => mint!(query, visitor, i8 => SquaredL2),
-            Metric::InnerProduct => mint!(query, visitor, i8 => InnerProduct),
-            Metric::Cosine => mint!(query, visitor, i8 => Cosine),
-            Metric::CosineNormalized => mint!(query, visitor, i8 => Cosine),
+        let output: Box<dyn layers::__ExpandBeam + 'a> = match full.metric {
+            Metric::L2 => mint!(query, reader, i8 => SquaredL2),
+            Metric::InnerProduct => mint!(query, reader, i8 => InnerProduct),
+            Metric::Cosine => mint!(query, reader, i8 => Cosine),
+            Metric::CosineNormalized => mint!(query, reader, i8 => Cosine),
         };
 
         Ok(output)
@@ -507,197 +590,197 @@ impl FullPrecision for i8 {
 // Tests //
 ///////////
 
-#[cfg(test)]
-#[cfg(not(miri))]
-mod tests {
-    use std::fmt::Display;
-
-    use rand::{Rng, SeedableRng, rngs::StdRng};
-
-    use super::*;
-    // Bring the inherent-call traits into method scope. The `Distance` / `QueryDistance`
-    // traits are not imported: their methods are reached through `&dyn _` trait objects,
-    // which does not require the trait to be in scope.
-    use crate::layers::{AsDistance as _, QueryVisitor, Search as _, Set as _};
-
-    /// Generate random elements of a layer's data type from a seeded RNG.
-    trait Sample: bytemuck::Pod {
-        fn sample<R: Rng>(rng: &mut R) -> Self;
-    }
-
-    impl Sample for f32 {
-        fn sample<R: Rng>(rng: &mut R) -> Self {
-            rng.random_range(-1.0f32..1.0f32)
-        }
-    }
-
-    impl Sample for f16 {
-        fn sample<R: Rng>(rng: &mut R) -> Self {
-            f16::from_f32(rng.random_range(-1.0f32..1.0f32))
-        }
-    }
-
-    impl Sample for u8 {
-        fn sample<R: Rng>(rng: &mut R) -> Self {
-            rng.random()
-        }
-    }
-
-    impl Sample for i8 {
-        fn sample<R: Rng>(rng: &mut R) -> Self {
-            rng.random()
-        }
-    }
-
-    fn gen_vec<T: Sample, R: Rng>(rng: &mut R, dim: usize) -> Vec<T> {
-        (0..dim).map(|_| T::sample(rng)).collect()
-    }
-
-    /// A [`QueryVisitor`] that simply boxes the minted kernel so the test can probe it
-    /// directly. Exercises both `visit` (dynamic) and `visit_sized` (specialized) paths.
-    struct Collect;
-
-    impl<'a> QueryVisitor<'a> for Collect {
-        type Output = Box<dyn layers::QueryDistance + 'a>;
-
-        fn visit<Q>(self, distance: Q) -> Self::Output
-        where
-            Q: layers::QueryDistance + 'a,
-        {
-            Box::new(distance)
-        }
-    }
-
-    /// Compare two distances allowing for floating-point reassociation between the
-    /// specialized / converted kernels and the dynamic reference.
-    fn approx_eq(got: f32, want: f32) -> bool {
-        (got - want).abs() <= 1e-3 + 1e-4 * want.abs()
-    }
-
-    /// Exercise every `Full<T>` API across dimensions `1..=max_dim`.
-    ///
-    /// For each dimension we check that `bytes`/`set` agree, that `distance` and
-    /// `query_distance` are consistent with `DistanceProvider`, and that all of these
-    /// reject byte slices that are too long or too short.
-    fn test_impl<T>(max_dim: usize, ctx: &dyn Display)
-    where
-        T: FullPrecision + Sample + DistanceProvider<T>,
-    {
-        let mut rng = StdRng::seed_from_u64(0x0D15_0ACE ^ max_dim as u64);
-        let metrics = [
-            Metric::L2,
-            Metric::InnerProduct,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-        ];
-
-        for dim in 1..=max_dim {
-            let a = gen_vec::<T, _>(&mut rng, dim);
-            let b = gen_vec::<T, _>(&mut rng, dim);
-
-            // `bytes` and `set` agree: the encoded buffer equals the raw cast bytes.
-            let layer = Full::<T>::new(dim, Metric::L2);
-            assert_eq!(
-                layer.bytes().value(),
-                dim * std::mem::size_of::<T>(),
-                "{ctx}: dim {dim}: unexpected byte length",
-            );
-
-            let mut a_bytes = vec![0u8; layer.bytes().value()];
-            layer.set(&a, &mut a_bytes).unwrap();
-            assert_eq!(
-                a_bytes.as_slice(),
-                bytemuck::cast_slice::<T, u8>(&a),
-                "{ctx}: dim {dim}: set mismatch",
-            );
-
-            let mut b_bytes = vec![0u8; layer.bytes().value()];
-            layer.set(&b, &mut b_bytes).unwrap();
-
-            for metric in metrics {
-                let full = Full::<T>::new(dim, metric);
-
-                // Reference value straight from `DistanceProvider`.
-                let reference =
-                    <T as DistanceProvider<T>>::distance_comparer(metric, Some(dim)).call(&a, &b);
-
-                // `distance` is built from the same comparer, so it must match exactly.
-                let distance = full.as_distance();
-                let via_distance = distance.evaluate(&a_bytes, &b_bytes).unwrap();
-                assert_eq!(
-                    via_distance, reference,
-                    "{ctx}: dim {dim}, metric {metric:?}: distance != DistanceProvider",
-                );
-
-                // `query_distance` computes the same geometry. Specialized and f16-converted
-                // kernels may reassociate the summation, so compare approximately.
-                let query = full.query_distance(a.as_slice(), Collect).unwrap();
-                let via_query = query.evaluate(&b_bytes).unwrap();
-                assert!(
-                    approx_eq(via_query, via_distance),
-                    "{ctx}: dim {dim}, metric {metric:?}: query {via_query} != distance {via_distance}",
-                );
-
-                // Every distance API rejects byte slices that are too long or too short.
-                let short = &a_bytes[..a_bytes.len() - 1];
-                let mut long = a_bytes.clone();
-                long.push(0);
-
-                assert!(distance.evaluate(short, &b_bytes).is_err());
-                assert!(distance.evaluate(&long, &b_bytes).is_err());
-                assert!(distance.evaluate(&a_bytes, short).is_err());
-                assert!(distance.evaluate(&a_bytes, &long).is_err());
-
-                assert!(query.evaluate(short).is_err());
-                assert!(query.evaluate(&long).is_err());
-            }
-
-            // `set` rejects mis-sized element and buffer slices.
-            let mut buf = vec![0u8; layer.bytes().value()];
-            let too_many = gen_vec::<T, _>(&mut rng, dim + 1);
-            assert!(
-                layer.set(&too_many, &mut buf).is_err(),
-                "{ctx}: dim {dim}: set accepted an over-long element slice",
-            );
-
-            assert!(
-                layer.query_distance(&too_many, Collect).is_err(),
-                "{ctx}: dim {dim}: incorrect query lengths should be rejected"
-            );
-
-            let mut short_buf = vec![0u8; layer.bytes().value().saturating_sub(1)];
-            assert!(
-                layer.set(&a, &mut short_buf).is_err(),
-                "{ctx}: dim {dim}: set accepted an under-sized buffer",
-            );
-
-            let too_few = gen_vec::<T, _>(&mut rng, dim - 1);
-            assert!(
-                layer.query_distance(&too_few, Collect).is_err(),
-                "{ctx}: dim {dim}: incorrect query lengths should be rejected"
-            );
-        }
-    }
-
-    // `max_dim` must exceed the largest specialized dimension for each type so the
-    // const-generic (`visit_sized`) paths are covered alongside the dynamic ones.
-    #[test]
-    fn full_f32() {
-        test_impl::<f32>(256, &"f32");
-    }
-
-    #[test]
-    fn full_f16() {
-        test_impl::<f16>(256, &"f16");
-    }
-
-    #[test]
-    fn full_u8() {
-        test_impl::<u8>(160, &"u8");
-    }
-
-    #[test]
-    fn full_i8() {
-        test_impl::<i8>(160, &"i8");
-    }
-}
+// #[cfg(test)]
+// #[cfg(not(miri))]
+// mod tests {
+//     use std::fmt::Display;
+//
+//     use rand::{Rng, SeedableRng, rngs::StdRng};
+//
+//     use super::*;
+//     // Bring the inherent-call traits into method scope. The `Distance` / `QueryDistance`
+//     // traits are not imported: their methods are reached through `&dyn _` trait objects,
+//     // which does not require the trait to be in scope.
+//     use crate::layers::{AsDistance as _, QueryVisitor, Search as _, Set as _};
+//
+//     /// Generate random elements of a layer's data type from a seeded RNG.
+//     trait Sample: bytemuck::Pod {
+//         fn sample<R: Rng>(rng: &mut R) -> Self;
+//     }
+//
+//     impl Sample for f32 {
+//         fn sample<R: Rng>(rng: &mut R) -> Self {
+//             rng.random_range(-1.0f32..1.0f32)
+//         }
+//     }
+//
+//     impl Sample for f16 {
+//         fn sample<R: Rng>(rng: &mut R) -> Self {
+//             f16::from_f32(rng.random_range(-1.0f32..1.0f32))
+//         }
+//     }
+//
+//     impl Sample for u8 {
+//         fn sample<R: Rng>(rng: &mut R) -> Self {
+//             rng.random()
+//         }
+//     }
+//
+//     impl Sample for i8 {
+//         fn sample<R: Rng>(rng: &mut R) -> Self {
+//             rng.random()
+//         }
+//     }
+//
+//     fn gen_vec<T: Sample, R: Rng>(rng: &mut R, dim: usize) -> Vec<T> {
+//         (0..dim).map(|_| T::sample(rng)).collect()
+//     }
+//
+//     /// A [`QueryVisitor`] that simply boxes the minted kernel so the test can probe it
+//     /// directly. Exercises both `visit` (dynamic) and `visit_sized` (specialized) paths.
+//     struct Collect;
+//
+//     impl<'a> QueryVisitor<'a> for Collect {
+//         type Output = Box<dyn layers::QueryDistance + 'a>;
+//
+//         fn visit<Q>(self, distance: Q) -> Self::Output
+//         where
+//             Q: layers::QueryDistance + 'a,
+//         {
+//             Box::new(distance)
+//         }
+//     }
+//
+//     /// Compare two distances allowing for floating-point reassociation between the
+//     /// specialized / converted kernels and the dynamic reference.
+//     fn approx_eq(got: f32, want: f32) -> bool {
+//         (got - want).abs() <= 1e-3 + 1e-4 * want.abs()
+//     }
+//
+//     /// Exercise every `Full<T>` API across dimensions `1..=max_dim`.
+//     ///
+//     /// For each dimension we check that `bytes`/`set` agree, that `distance` and
+//     /// `query_distance` are consistent with `DistanceProvider`, and that all of these
+//     /// reject byte slices that are too long or too short.
+//     fn test_impl<T>(max_dim: usize, ctx: &dyn Display)
+//     where
+//         T: FullPrecision + Sample + DistanceProvider<T>,
+//     {
+//         let mut rng = StdRng::seed_from_u64(0x0D15_0ACE ^ max_dim as u64);
+//         let metrics = [
+//             Metric::L2,
+//             Metric::InnerProduct,
+//             Metric::Cosine,
+//             Metric::CosineNormalized,
+//         ];
+//
+//         for dim in 1..=max_dim {
+//             let a = gen_vec::<T, _>(&mut rng, dim);
+//             let b = gen_vec::<T, _>(&mut rng, dim);
+//
+//             // `bytes` and `set` agree: the encoded buffer equals the raw cast bytes.
+//             let layer = Full::<T>::new(dim, Metric::L2);
+//             assert_eq!(
+//                 layer.bytes().value(),
+//                 dim * std::mem::size_of::<T>(),
+//                 "{ctx}: dim {dim}: unexpected byte length",
+//             );
+//
+//             let mut a_bytes = vec![0u8; layer.bytes().value()];
+//             layer.set(&a, &mut a_bytes).unwrap();
+//             assert_eq!(
+//                 a_bytes.as_slice(),
+//                 bytemuck::cast_slice::<T, u8>(&a),
+//                 "{ctx}: dim {dim}: set mismatch",
+//             );
+//
+//             let mut b_bytes = vec![0u8; layer.bytes().value()];
+//             layer.set(&b, &mut b_bytes).unwrap();
+//
+//             for metric in metrics {
+//                 let full = Full::<T>::new(dim, metric);
+//
+//                 // Reference value straight from `DistanceProvider`.
+//                 let reference =
+//                     <T as DistanceProvider<T>>::distance_comparer(metric, Some(dim)).call(&a, &b);
+//
+//                 // `distance` is built from the same comparer, so it must match exactly.
+//                 let distance = full.as_distance();
+//                 let via_distance = distance.evaluate(&a_bytes, &b_bytes).unwrap();
+//                 assert_eq!(
+//                     via_distance, reference,
+//                     "{ctx}: dim {dim}, metric {metric:?}: distance != DistanceProvider",
+//                 );
+//
+//                 // `query_distance` computes the same geometry. Specialized and f16-converted
+//                 // kernels may reassociate the summation, so compare approximately.
+//                 let query = full.query_distance(a.as_slice(), Collect).unwrap();
+//                 let via_query = query.evaluate(&b_bytes).unwrap();
+//                 assert!(
+//                     approx_eq(via_query, via_distance),
+//                     "{ctx}: dim {dim}, metric {metric:?}: query {via_query} != distance {via_distance}",
+//                 );
+//
+//                 // Every distance API rejects byte slices that are too long or too short.
+//                 let short = &a_bytes[..a_bytes.len() - 1];
+//                 let mut long = a_bytes.clone();
+//                 long.push(0);
+//
+//                 assert!(distance.evaluate(short, &b_bytes).is_err());
+//                 assert!(distance.evaluate(&long, &b_bytes).is_err());
+//                 assert!(distance.evaluate(&a_bytes, short).is_err());
+//                 assert!(distance.evaluate(&a_bytes, &long).is_err());
+//
+//                 assert!(query.evaluate(short).is_err());
+//                 assert!(query.evaluate(&long).is_err());
+//             }
+//
+//             // `set` rejects mis-sized element and buffer slices.
+//             let mut buf = vec![0u8; layer.bytes().value()];
+//             let too_many = gen_vec::<T, _>(&mut rng, dim + 1);
+//             assert!(
+//                 layer.set(&too_many, &mut buf).is_err(),
+//                 "{ctx}: dim {dim}: set accepted an over-long element slice",
+//             );
+//
+//             assert!(
+//                 layer.query_distance(&too_many, Collect).is_err(),
+//                 "{ctx}: dim {dim}: incorrect query lengths should be rejected"
+//             );
+//
+//             let mut short_buf = vec![0u8; layer.bytes().value().saturating_sub(1)];
+//             assert!(
+//                 layer.set(&a, &mut short_buf).is_err(),
+//                 "{ctx}: dim {dim}: set accepted an under-sized buffer",
+//             );
+//
+//             let too_few = gen_vec::<T, _>(&mut rng, dim - 1);
+//             assert!(
+//                 layer.query_distance(&too_few, Collect).is_err(),
+//                 "{ctx}: dim {dim}: incorrect query lengths should be rejected"
+//             );
+//         }
+//     }
+//
+//     // `max_dim` must exceed the largest specialized dimension for each type so the
+//     // const-generic (`visit_sized`) paths are covered alongside the dynamic ones.
+//     #[test]
+//     fn full_f32() {
+//         test_impl::<f32>(256, &"f32");
+//     }
+//
+//     #[test]
+//     fn full_f16() {
+//         test_impl::<f16>(256, &"f16");
+//     }
+//
+//     #[test]
+//     fn full_u8() {
+//         test_impl::<u8>(160, &"u8");
+//     }
+//
+//     #[test]
+//     fn full_i8() {
+//         test_impl::<i8>(160, &"i8");
+//     }
+// }

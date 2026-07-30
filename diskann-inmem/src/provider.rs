@@ -50,9 +50,11 @@ use diskann_utils::views::Matrix;
 use thiserror::Error;
 
 use crate::{
+    Hidden,
     counters::{Counters, LocalCounters},
     ids::IdMap,
     layers::{self, QueryDistance},
+    neighbors::Neighbors,
     num::Bytes,
     store::{self, Store},
 };
@@ -61,10 +63,6 @@ use crate::{
 pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
 
 impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
-
-// pub trait Index: Send + Sync + 'static {
-//     type Query<'a>: Copy + Send + Sync + 'static;
-// }
 
 /// An in-memory data-provider for DiskANN's graph indexing algorithms.
 ///
@@ -387,9 +385,9 @@ where
 /// kernel once and reuse it to balance compile times and performance.
 #[derive(Debug)]
 pub struct SearchAccessor<'a> {
-    reader: store::Reader<'a>,
+    neighbors: &'a Neighbors,
     ids: AdjacencyList<u32>,
-    expand_beam: Box<dyn ExpandBeam + 'a>,
+    expand_beam: Box<dyn layers::__ExpandBeam + 'a>,
     buffer: Vec<(u32, f32)>,
 
     // The parent provider for the accessor.
@@ -418,13 +416,12 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || {
             for p in self.start_points.clone() {
-                match self.reader.inner().read(p.into_usize()) {
-                    Some(point) => {
+                match self.expand_beam.__evaluate(p, Hidden::new())? {
+                    Some(distance) => {
                         // Counters are no-ops without `integration-test`.
                         self.counters.get_vector(1);
                         self.counters.query_distance(1);
-
-                        f(p, self.expand_beam.evaluate(point)?);
+                        f(p, distance);
                     }
                     None => {
                         return Err(ANNError::message("could not retrieve start point"));
@@ -450,22 +447,25 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || -> ANNResult<()> {
             for i in ids {
-                self.reader.neighbors().get(i, &mut self.ids)?;
+                self.neighbors.get(i, &mut self.ids)?;
                 self.counters.get_neighbors(1);
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
                 self.ids
-                    .retain(|i| pred.eval_mut(i) && self.reader.is_in_bounds(i.into_usize()));
+                    .retain(|i| pred.eval_mut(i) && *i < self.neighbors.entries());
 
                 // This should always hold, but let's double check.
                 assert!(self.buffer.len() >= self.ids.len());
 
                 // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
                 // `self.buffer` is long enough to hold all the IDs.
-                let processed = unsafe {
-                    self.expand_beam
-                        .expand_beam(&self.ids, &self.reader, &mut self.buffer)
-                }?;
+                let processed =
+                    unsafe { self.expand_beam.__expand_beam(&self.ids, &mut self.buffer, Hidden::new()) }?;
+
+                // let processed = unsafe {
+                //     self.expand_beam
+                //         .expand_beam(&self.ids, &self.reader, &mut self.buffer)
+                // }?;
 
                 self.counters.get_vector(processed as u64);
                 self.counters.query_distance(processed as u64);
@@ -483,217 +483,217 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     }
 }
 
-trait ExpandBeam: Send + Sync + std::fmt::Debug {
-    /// Evaluate a raw distance function.
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
-
-    /// Compute the distance between the query and each neighbor in `list`.
-    ///
-    /// # Safety
-    ///
-    /// * All items in `list` must in-bounds with respect to `reader`.
-    /// * `buffer.len() >= list.len()`.
-    unsafe fn expand_beam(
-        &self,
-        list: &[u32],
-        reader: &store::Reader<'_>,
-        buffer: &mut [(u32, f32)],
-    ) -> ANNResult<usize>;
-}
-
-#[derive(Debug)]
-struct ExpandBeamImpl<T, const BYTES: usize> {
-    inner: T,
-    prefetch_lookahead: usize,
-}
-
-impl<T, const BYTES: usize> ExpandBeamImpl<T, BYTES> {
-    fn new(inner: T, prefetch_lookahead: usize) -> Self {
-        Self {
-            inner,
-            prefetch_lookahead,
-        }
-    }
-}
-
-impl<T, const BYTES: usize> ExpandBeam for ExpandBeamImpl<T, BYTES>
-where
-    T: layers::QueryDistance,
-{
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
-        self.inner.evaluate(x)
-    }
-
-    unsafe fn expand_beam(
-        &self,
-        list: &[u32],
-        reader: &store::Reader<'_>,
-        buffer: &mut [(u32, f32)],
-    ) -> ANNResult<usize> {
-        // SAFETY: Inherited from caller.
-        unsafe {
-            expand_beam_inner::<T, BYTES>(
-                &self.inner,
-                list,
-                self.prefetch_lookahead,
-                reader,
-                buffer,
-            )
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ExpandBeamVisitor {
-    bytes: Bytes,
-    prefetch_lookahead: usize,
-}
-
-impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
-    type Output = Box<dyn ExpandBeam + 'a>;
-
-    fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
-    where
-        T: QueryDistance + 'a,
-    {
-        // This is critical to ensure we emit the correct number of prefetches.
-        assert!(Bytes::new(BYTES + store::TAG_SIZE.value()) <= self.bytes);
-        Box::new(ExpandBeamImpl::<_, BYTES>::new(
-            distance,
-            self.prefetch_lookahead,
-        ))
-    }
-
-    fn visit<T>(self, distance: T) -> Self::Output
-    where
-        T: QueryDistance + 'a,
-    {
-        Box::new(ExpandBeamImpl::<_, 0>::new(
-            distance,
-            self.prefetch_lookahead,
-        ))
-    }
-}
-
-/// Prefetch `len` bytes beginning at `ptr`.
-///
-/// The last cache line prefetched first, followed by the rest in ascending order.
-///
-/// # Safety
-///
-/// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
-unsafe fn prefetch(ptr: *const u8, len: usize) {
-    use std::arch::x86_64::*;
-
-    // Fetch the last cache line (the one with the tag) first.
-    let stride = Bytes::CACHELINE.value();
-    let ptr = ptr.cast::<i8>();
-    let lines = len.div_ceil(stride);
-    if lines == 0 {
-        return;
-    }
-
-    // SAFETY: Inherited from caller.
-    unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
-    for i in 0..(lines - 1) {
-        // SAFETY: Inherited from caller.
-        unsafe {
-            _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
-        }
-    }
-}
-
-/// Prefetch `len` bytes beginning at `ptr`.
-///
-/// The last cache line prefetched first, followed by the rest in ascending order.
-///
-/// # Safety
-///
-/// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(not(any(target_arch = "x86_64", target_feature = "avx2")))]
-unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
-
-/// # Safety
-///
-/// * All items in `list` must in-bounds with respect to `reader`.
-/// * The number of bytes associated with `N` cache lines must "make sense".
-/// * `buffer.len() >= list.len()`.
-#[inline]
-unsafe fn expand_beam_inner<T, const BYTES: usize>(
-    distance: &T,
-    list: &[u32],
-    lookahead: usize,
-    reader: &store::Reader<'_>,
-    buffer: &mut [(u32, f32)],
-) -> ANNResult<usize>
-where
-    T: layers::QueryDistance,
-{
-    debug_assert!(
-        BYTES + store::TAG_SIZE.value() <= reader.inner().bytes().value(),
-        "we really rely on this: {}, bytes = {}",
-        BYTES + store::TAG_SIZE.value(),
-        reader.inner().bytes()
-    );
-
-    debug_assert!(buffer.len() >= list.len());
-
-    let bytes = if BYTES == 0 {
-        reader.inner().bytes().value()
-    } else {
-        BYTES + store::TAG_SIZE.value()
-    };
-
-    let len = list.len();
-    let lookahead = lookahead.min(len);
-
-    for j in 0..lookahead {
-        // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
-        // as the validity of the prefetch bounds.
-        unsafe {
-            prefetch(
-                reader
-                    .inner()
-                    .read_raw_unchecked(list.get_unchecked(j).into_usize())
-                    .as_ptr()
-                    .cast(),
-                bytes,
-            )
-        }
-    }
-
-    // Disable prefetching if the lookahead is 0.
-    let mut j = if lookahead == 0 { len } else { lookahead };
-    let mut processed = 0;
-    for &i in list.iter() {
-        if j != len {
-            // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
-            // well as the validity of the prefetch bounds.
-            unsafe {
-                prefetch(
-                    reader
-                        .inner()
-                        .read_raw_unchecked(list.get_unchecked(j).into_usize())
-                        .as_ptr()
-                        .cast(),
-                    bytes,
-                )
-            }
-            j += 1;
-        }
-
-        // SAFETY: Caller asserts that `i` is in-bounds.
-        if let Some(data) = unsafe { reader.inner().read_in_bounds(i.into_usize()) } {
-            // SAFETY: Inherited from caller.
-            *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
-            processed += 1;
-        }
-    }
-
-    Ok(processed)
-}
+// trait ExpandBeam: Send + Sync + std::fmt::Debug {
+//     /// Evaluate a raw distance function.
+//     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
+//
+//     /// Compute the distance between the query and each neighbor in `list`.
+//     ///
+//     /// # Safety
+//     ///
+//     /// * All items in `list` must in-bounds with respect to `reader`.
+//     /// * `buffer.len() >= list.len()`.
+//     unsafe fn expand_beam(
+//         &self,
+//         list: &[u32],
+//         reader: &store::Reader<'_>,
+//         buffer: &mut [(u32, f32)],
+//     ) -> ANNResult<usize>;
+// }
+//
+// #[derive(Debug)]
+// struct ExpandBeamImpl<T, const BYTES: usize> {
+//     inner: T,
+//     prefetch_lookahead: usize,
+// }
+//
+// impl<T, const BYTES: usize> ExpandBeamImpl<T, BYTES> {
+//     fn new(inner: T, prefetch_lookahead: usize) -> Self {
+//         Self {
+//             inner,
+//             prefetch_lookahead,
+//         }
+//     }
+// }
+//
+// impl<T, const BYTES: usize> ExpandBeam for ExpandBeamImpl<T, BYTES>
+// where
+//     T: layers::QueryDistance,
+// {
+//     fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+//         self.inner.evaluate(x)
+//     }
+//
+//     unsafe fn expand_beam(
+//         &self,
+//         list: &[u32],
+//         reader: &store::Reader<'_>,
+//         buffer: &mut [(u32, f32)],
+//     ) -> ANNResult<usize> {
+//         // SAFETY: Inherited from caller.
+//         unsafe {
+//             expand_beam_inner::<T, BYTES>(
+//                 &self.inner,
+//                 list,
+//                 self.prefetch_lookahead,
+//                 reader,
+//                 buffer,
+//             )
+//         }
+//     }
+// }
+//
+// #[derive(Debug)]
+// struct ExpandBeamVisitor {
+//     bytes: Bytes,
+//     prefetch_lookahead: usize,
+// }
+//
+// impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
+//     type Output = Box<dyn ExpandBeam + 'a>;
+//
+//     fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
+//     where
+//         T: QueryDistance + 'a,
+//     {
+//         // This is critical to ensure we emit the correct number of prefetches.
+//         assert!(Bytes::new(BYTES + store::TAG_SIZE.value()) <= self.bytes);
+//         Box::new(ExpandBeamImpl::<_, BYTES>::new(
+//             distance,
+//             self.prefetch_lookahead,
+//         ))
+//     }
+//
+//     fn visit<T>(self, distance: T) -> Self::Output
+//     where
+//         T: QueryDistance + 'a,
+//     {
+//         Box::new(ExpandBeamImpl::<_, 0>::new(
+//             distance,
+//             self.prefetch_lookahead,
+//         ))
+//     }
+// }
+//
+// /// Prefetch `len` bytes beginning at `ptr`.
+// ///
+// /// The last cache line prefetched first, followed by the rest in ascending order.
+// ///
+// /// # Safety
+// ///
+// /// The memory range `[ptr, ptr.add(len))` must be valid.
+// #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+// #[inline(always)]
+// unsafe fn prefetch(ptr: *const u8, len: usize) {
+//     use std::arch::x86_64::*;
+//
+//     // Fetch the last cache line (the one with the tag) first.
+//     let stride = Bytes::CACHELINE.value();
+//     let ptr = ptr.cast::<i8>();
+//     let lines = len.div_ceil(stride);
+//     if lines == 0 {
+//         return;
+//     }
+//
+//     // SAFETY: Inherited from caller.
+//     unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
+//     for i in 0..(lines - 1) {
+//         // SAFETY: Inherited from caller.
+//         unsafe {
+//             _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
+//         }
+//     }
+// }
+//
+// /// Prefetch `len` bytes beginning at `ptr`.
+// ///
+// /// The last cache line prefetched first, followed by the rest in ascending order.
+// ///
+// /// # Safety
+// ///
+// /// The memory range `[ptr, ptr.add(len))` must be valid.
+// #[cfg(not(any(target_arch = "x86_64", target_feature = "avx2")))]
+// unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
+//
+// /// # Safety
+// ///
+// /// * All items in `list` must in-bounds with respect to `reader`.
+// /// * The number of bytes associated with `N` cache lines must "make sense".
+// /// * `buffer.len() >= list.len()`.
+// #[inline]
+// unsafe fn expand_beam_inner<T, const BYTES: usize>(
+//     distance: &T,
+//     list: &[u32],
+//     lookahead: usize,
+//     reader: &store::Reader<'_>,
+//     buffer: &mut [(u32, f32)],
+// ) -> ANNResult<usize>
+// where
+//     T: layers::QueryDistance,
+// {
+//     debug_assert!(
+//         BYTES + store::TAG_SIZE.value() <= reader.inner().bytes().value(),
+//         "we really rely on this: {}, bytes = {}",
+//         BYTES + store::TAG_SIZE.value(),
+//         reader.inner().bytes()
+//     );
+//
+//     debug_assert!(buffer.len() >= list.len());
+//
+//     let bytes = if BYTES == 0 {
+//         reader.inner().bytes().value()
+//     } else {
+//         BYTES + store::TAG_SIZE.value()
+//     };
+//
+//     let len = list.len();
+//     let lookahead = lookahead.min(len);
+//
+//     for j in 0..lookahead {
+//         // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
+//         // as the validity of the prefetch bounds.
+//         unsafe {
+//             prefetch(
+//                 reader
+//                     .inner()
+//                     .read_raw_unchecked(list.get_unchecked(j).into_usize())
+//                     .as_ptr()
+//                     .cast(),
+//                 bytes,
+//             )
+//         }
+//     }
+//
+//     // Disable prefetching if the lookahead is 0.
+//     let mut j = if lookahead == 0 { len } else { lookahead };
+//     let mut processed = 0;
+//     for &i in list.iter() {
+//         if j != len {
+//             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
+//             // well as the validity of the prefetch bounds.
+//             unsafe {
+//                 prefetch(
+//                     reader
+//                         .inner()
+//                         .read_raw_unchecked(list.get_unchecked(j).into_usize())
+//                         .as_ptr()
+//                         .cast(),
+//                     bytes,
+//                 )
+//             }
+//             j += 1;
+//         }
+//
+//         // SAFETY: Caller asserts that `i` is in-bounds.
+//         if let Some(data) = unsafe { reader.inner().read_in_bounds(i.into_usize()) } {
+//             // SAFETY: Inherited from caller.
+//             *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance.evaluate(data)?);
+//             processed += 1;
+//         }
+//     }
+//
+//     Ok(processed)
+// }
 
 ////////////
 // Insert //
@@ -867,17 +867,15 @@ where
         query: L::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
         let reader = provider.store.reader()?;
-        let expand_beam = <L as layers::Search>::query_distance(
+        let expand_beam = <L as layers::Search>::__search_expand_beam(
             &provider.layer,
             query,
-            ExpandBeamVisitor {
-                bytes: provider.store.plugin().bytes(),
-                prefetch_lookahead: provider.config.prefetch_lookahead.map_or(0, |x| x.get()),
-            },
+            &provider.store,
+            Hidden::new(),
         )?;
 
         let accessor = SearchAccessor {
-            reader,
+            neighbors: provider.store.temp_neighbors(),
             ids: AdjacencyList::new(),
             expand_beam,
             buffer: vec![(0, 0.0); provider.max_degree()],

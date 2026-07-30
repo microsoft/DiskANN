@@ -28,7 +28,7 @@
 
 use diskann::ANNResult;
 
-use crate::num::Bytes;
+use crate::{Hidden, num::Bytes, store::Store};
 
 mod full;
 pub use full::{Full, FullPrecision};
@@ -76,6 +76,25 @@ pub trait QueryDistance: Send + Sync + std::fmt::Debug {
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
 }
 
+#[doc(hidden)]
+pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
+    /// Evaluate a raw distance against index `i`.
+    fn __evaluate(&self, i: u32, _: Hidden) -> ANNResult<Option<f32>>;
+
+    /// Compute the distance between the query and each neighbor in `list`.
+    ///
+    /// # Safety
+    ///
+    /// * All items in `list` must in-bounds with respect to `reader`.
+    /// * `buffer.len() >= list.len()`.
+    unsafe fn __expand_beam(
+        &self,
+        list: &[u32],
+        buffer: &mut [(u32, f32)],
+        _: Hidden,
+    ) -> ANNResult<usize>;
+}
+
 /// Enable search over vectors defined by a [`Layer`].
 pub trait Search: Send + Sync + 'static {
     /// The type of the query. This should be equivalent to the generic parameter in
@@ -83,34 +102,42 @@ pub trait Search: Send + Sync + 'static {
     /// design.
     type Query<'a>;
 
-    /// Create a distance computer specialized for `query` and provide it to `visitor`.
-    fn query_distance<'a, V>(&'a self, query: Self::Query<'a>, visitor: V) -> ANNResult<V::Output>
-    where
-        V: QueryVisitor<'a>;
+    #[doc(hidden)]
+    fn __search_expand_beam<'a>(
+        &'a self,
+        query: Self::Query<'a>,
+        store: &'a Store,
+        _: Hidden,
+    ) -> ANNResult<Box<dyn __ExpandBeam + 'a>>;
+
+    // /// Create a distance computer specialized for `query` and provide it to `visitor`.
+    // fn query_distance<'a, V>(&'a self, query: Self::Query<'a>, visitor: V) -> ANNResult<V::Output>
+    // where
+    //     V: QueryVisitor<'a>;
 }
 
-/// Specialize a kernel around a [`QueryDistance`] implementation.
-pub trait QueryVisitor<'a>: Sized {
-    /// The type of the type-erased output.
-    type Output;
-
-    /// Specialize [`Self::Output`] for `distance`.
-    fn visit<T>(self, distance: T) -> Self::Output
-    where
-        T: QueryDistance + 'a;
-
-    /// Specialize [`Self::Output`] for `distance` accepting a hint that `distance` has been
-    /// specialized to work on data elements of exactly `BYTES` bytes long.
-    ///
-    /// This can be used to tailor surrounding code (e.g. software prefetches) for exactly
-    /// the length of the data being processed.
-    fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
-    where
-        T: QueryDistance + 'a,
-    {
-        self.visit(distance)
-    }
-}
+// /// Specialize a kernel around a [`QueryDistance`] implementation.
+// pub trait QueryVisitor<'a>: Sized {
+//     /// The type of the type-erased output.
+//     type Output;
+//
+//     /// Specialize [`Self::Output`] for `distance`.
+//     fn visit<T>(self, distance: T) -> Self::Output
+//     where
+//         T: QueryDistance + 'a;
+//
+//     /// Specialize [`Self::Output`] for `distance` accepting a hint that `distance` has been
+//     /// specialized to work on data elements of exactly `BYTES` bytes long.
+//     ///
+//     /// This can be used to tailor surrounding code (e.g. software prefetches) for exactly
+//     /// the length of the data being processed.
+//     fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
+//     where
+//         T: QueryDistance + 'a,
+//     {
+//         self.visit(distance)
+//     }
+// }
 
 /// A insert-specific specialization of [`Search`].
 ///
@@ -118,10 +145,13 @@ pub trait QueryVisitor<'a>: Sized {
 /// to `diskann` to full resolve.
 pub trait Insert: Search + for<'a> Set<Self::Query<'a>> + AsDistance {
     /// A specialization of [`Search::query_distance`] targeting vector insert specifically.
-    fn insert_distance<'a, V>(&'a self, query: Self::Query<'a>, visitor: V) -> ANNResult<V::Output>
-    where
-        V: QueryVisitor<'a>,
-    {
-        self.query_distance(query, visitor)
+    #[doc(hidden)]
+    fn __insert_expand_beam<'a, V>(
+        &'a self,
+        query: Self::Query<'a>,
+        store: &'a Store,
+        _: Hidden,
+    ) -> ANNResult<Box<dyn __ExpandBeam + 'a>> {
+        self.__search_expand_beam(query, store, Hidden::new())
     }
 }

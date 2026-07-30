@@ -63,17 +63,17 @@ use diskann_utils::views::MatrixView;
 use thiserror::Error;
 
 use crate::{
-    buffer::{BufferError},
+    buffer::BufferError,
     epoch::{self, Registry},
     freelist::{self, Freelist},
     neighbors::{Neighbors, NeighborsError},
-    num::{Bytes},
+    num::Bytes,
     tag::{AtomicTag, Tag},
 };
 
+pub(crate) mod invasive;
 pub(crate) mod plugin;
 pub(crate) mod stacked;
-pub(crate) mod invasive;
 
 pub(crate) const TAG_SIZE: Bytes = AtomicTag::SIZE;
 
@@ -237,6 +237,10 @@ impl Store {
         self.neighbors.max_length()
     }
 
+    pub(crate) fn temp_neighbors(&self) -> &Neighbors {
+        &self.neighbors
+    }
+
     /// Attempt to reclaim retired slots.
     ///
     /// If successful, returns the number of slots reclaimed.
@@ -286,6 +290,11 @@ impl Store {
             inner: unsafe { self.plugin().reader(self.registry.guard()?) },
             neighbors: &self.neighbors,
         })
+    }
+
+    // TODO: Rework neighbor storage.
+    pub(crate) fn temp_inner_reader(&self) -> Result<invasive::Reader<'_>, epoch::Unavailable> {
+        Ok(unsafe { self.plugin().reader(self.registry.guard()?) })
     }
 
     /// Attempt to acquire a new [`Slot`] for writing.

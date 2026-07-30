@@ -20,7 +20,9 @@ where
     type Slot<'a> = Slot<T::Slot<'a>, U::Slot<'a>>;
 
     unsafe fn acquire(&self, i: u32) -> Self::Slot<'_> {
-        Slot::new(unsafe { self.first.acquire(i) }, unsafe { self.rest.acquire(i) })
+        Slot::new(unsafe { self.first.acquire(i) }, unsafe {
+            self.rest.acquire(i)
+        })
     }
 
     fn reclaim(&self, i: u32) {

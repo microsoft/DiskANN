@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt::Debug};
+use std::fmt::Debug;
 
 pub(crate) trait Plugin: Debug + 'static {
     type Slot<'a>: Slot;
@@ -18,5 +18,3 @@ pub(crate) trait Slot: Debug {
     fn freeze(self);
     fn abort(self);
 }
-
-
