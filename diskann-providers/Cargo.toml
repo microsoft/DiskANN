@@ -29,7 +29,7 @@ arc-swap.workspace = true
 tracing.workspace = true
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
-diskann-quantization = { workspace = true, features = ["rayon"] }
+diskann-quantization = { workspace = true, features = ["flatbuffers", "rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 prost = "0.14.1"

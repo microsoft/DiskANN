@@ -206,6 +206,22 @@ impl SphericalStore {
     pub fn prefetch_lookahead(&self) -> usize {
         self.prefetch_lookahead
     }
+
+    /// Serializes the spherical quantizer plan using its canonical FlatBuffer encoding.
+    pub fn export_quantizer(&self) -> Result<Vec<u8>, AllocatorError> {
+        Ok(self.plan.serialize(GlobalAllocator)?.to_vec())
+    }
+
+    /// Returns the canonical compressed code for one allocated vector slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `index` is outside [`Self::total`].
+    pub fn code(&self, index: usize) -> &[u8] {
+        // SAFETY: Spherical codes are plain bytes. Export requires exclusive ownership of the
+        // surrounding index, so no writer can race this read.
+        unsafe { self.data.get_slice(index) }
+    }
 }
 
 impl VectorStore for SphericalStore {
@@ -786,6 +802,28 @@ mod tests {
                 v.len(),
             );
         }
+    }
+
+    #[test]
+    fn exports_quantizer_and_canonical_codes() {
+        let mut rng = StdRng::seed_from_u64(0x721e3de995bc908c);
+        let data = dataset(5, 30, &mut rng);
+        let store = make_store::<2>(data.as_view(), SupportedMetric::SquaredL2, &mut rng);
+
+        for index in 0..data.nrows() {
+            store
+                .set_vector(index, data.get_row(index).unwrap())
+                .unwrap();
+        }
+
+        let quantizer = store.export_quantizer().unwrap();
+        let restored =
+            spherical::iface::try_deserialize::<GlobalAllocator, _>(&quantizer, GlobalAllocator)
+                .unwrap();
+        assert_eq!(restored.bytes(), store.bytes());
+        assert_eq!(restored.dim(), store.output_dim());
+        assert_eq!(store.code(0).len(), store.bytes());
+        assert_ne!(store.code(0), store.code(1));
     }
 
     #[test]

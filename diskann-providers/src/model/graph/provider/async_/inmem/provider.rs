@@ -3,7 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt::Debug, future::Future, num::NonZeroUsize};
+use std::{
+    fmt::Debug,
+    future::Future,
+    io::{Cursor, Read, Seek, SeekFrom, Write},
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
+};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
@@ -348,6 +354,70 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
     /// Return the total capacity of the provider, **including** start points.
     pub fn total_points(&self) -> usize {
         self.start_points.end().into_usize()
+    }
+
+    /// Serializes the graph with the canonical DiskANN graph encoding.
+    pub fn export_graph(&self, start_point: u32) -> ANNResult<Vec<u8>> {
+        let storage = MemoryStorage::default();
+        self.neighbor_provider
+            .save_direct(&storage, start_point, "graph")?;
+        storage.into_bytes().map_err(ANNError::from)
+    }
+}
+
+#[derive(Clone, Default)]
+struct MemoryStorage(Arc<Mutex<Cursor<Vec<u8>>>>);
+
+impl MemoryStorage {
+    fn lock(&self) -> std::io::Result<std::sync::MutexGuard<'_, Cursor<Vec<u8>>>> {
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("in-memory graph writer lock was poisoned"))
+    }
+
+    fn into_bytes(self) -> std::io::Result<Vec<u8>> {
+        Ok(self.lock()?.get_ref().clone())
+    }
+}
+
+impl Read for MemoryStorage {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.lock()?.read(buffer)
+    }
+}
+
+impl Write for MemoryStorage {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.lock()?.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.lock()?.flush()
+    }
+}
+
+impl Seek for MemoryStorage {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.lock()?.seek(position)
+    }
+}
+
+impl StorageWriteProvider for MemoryStorage {
+    type Writer = Self;
+
+    fn open_writer(&self, _item_identifier: &str) -> std::io::Result<Self::Writer> {
+        Ok(self.clone())
+    }
+
+    fn create_for_write(&self, _item_identifier: &str) -> std::io::Result<Self::Writer> {
+        let mut cursor = self.lock()?;
+        cursor.set_position(0);
+        cursor.get_mut().clear();
+        Ok(self.clone())
+    }
+
+    fn delete(&self, _item_identifier: &str) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

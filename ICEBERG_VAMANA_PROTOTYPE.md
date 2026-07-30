@@ -100,9 +100,10 @@ struct ExternalVector {
 }
 ```
 
-The mapping from `node_id` to Iceberg `(_file, _pos)` is not a DiskANN concept
-and is persisted by the integration crate next to the compressed codes. The
-following invariants cross the repository boundary:
+The mapping from `node_id` to Iceberg `(_file, _pos)` is not a DiskANN concept.
+The integration crate persists it as a separate blob in the same Puffin file
+as the graph/runtime state, not in the compressed-code artifact. The following
+invariants cross the repository boundary:
 
 - every live non-frozen node ID has exactly one external row key;
 - frozen/start-point IDs never have external row keys;
@@ -253,24 +254,27 @@ of duplicate live nodes is not allowed.
 ## Base And Overlay Interpretation
 
 The demo publishes a base plus small overlays so each table update does not
-rewrite the full base. This does not require a special overlay graph inside
-DiskANN:
+rewrite the full base. Overlays do not contain a DiskANN index:
 
 - a base is a normal quantized Vamana index;
-- an insert overlay is another, usually small, quantized Vamana index using the
-  base quantizer;
-- an overlay deletion list contains external labels and is interpreted by the
-  Iceberg adapter; and
-- a delete-only overlay may have empty code and graph payloads.
+- each overlay is one Puffin file containing a `delete` blob of
+  `(_file, _pos)` pairs and an `insert` blob of
+  `(_file, _pos, full_precision_vector)` triplets;
+- inserted vectors are neither compressed with the base quantizer nor assigned
+  overlay-local DiskANN node IDs;
+- no Vamana graph is built for overlay inserts; and
+- either blob may be empty, including the `insert` blob for a delete-only
+  overlay.
 
-Search fans out to the base and every insert overlay. The adapter unions
-tombstones, filters candidates, maps node IDs to external labels, and merges
-duplicate labels by their best approximate distance. It requests an expanded
-candidate set rather than treating approximate distances as final. The adapter
-then groups candidates by Parquet file, reads their original vectors from the
-object store, computes the configured metric in the original full-precision
-space, sorts by exact distance, and returns the final `k`. It increases
-per-component search breadth when tombstone filtering leaves fewer than `R`
+Search traverses only the base Vamana graph and flat-scans every overlay's
+uncompressed insert vectors with the configured metric. The adapter unions
+tombstones, filters base and overlay candidates, maps base node IDs through the
+separate row map, and deduplicates row identities by their best distance. It
+requests an expanded base candidate set rather than treating approximate base
+distances as final. The adapter then reads original vectors for surviving base
+candidates from Parquet and computes exact distances; overlay insert distances
+are already exact. It sorts the combined exact results and returns the final
+`k`, increasing base search breadth when tombstone filtering leaves too few
 live candidates.
 
 The asynchronous Parquet reads and exact-distance reranker remain outside
@@ -279,11 +283,12 @@ failure semantics into graph post-processing and would couple this repository
 to a storage system. The existing resident `FullPrecisionStore` reranker stays
 available for other users.
 
-At consolidation, the worker imports the base, applies overlay deletes and
-inserts through the incremental APIs, consolidates graph edges, and exports one
-replacement base. If capacity or compatibility prevents in-place application,
-it performs a bootstrap rebuild from the exact target Iceberg snapshot. Both
-paths produce the same base artifact contract.
+At consolidation, the worker imports the base, resolves overlay deletions to
+base node IDs, compresses overlay insert vectors with the base quantizer, and
+applies both through the incremental APIs before consolidating graph edges and
+exporting one replacement base. If capacity or compatibility prevents in-place
+application, it performs a bootstrap rebuild from the exact target Iceberg
+snapshot. Both paths produce the same base artifact contract.
 
 ## Required DiskANN Changes
 
