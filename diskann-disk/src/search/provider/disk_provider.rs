@@ -1060,7 +1060,8 @@ where
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
         if search_list_size < return_list_size {
-            return Err(ANNError::message(
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "search list size must be at least as large as the number of results requested",
             ));
         }
