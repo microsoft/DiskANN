@@ -161,4 +161,53 @@ pub mod pq {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use approx::assert_relative_eq;
+        use diskann::utils::VectorRepr;
+        use diskann_vector::{
+            DistanceFunction, PureDistanceFunction,
+            distance::{Metric, SquaredL2},
+        };
+
+        use super::{Hybrid, HybridComputer};
+        use crate::model::pq::{FixedChunkPQTable, distance::DistanceComputer};
+
+        #[test]
+        fn hybrid_cosine_normalized_pq_pairs_use_scaled_l2() {
+            let table = FixedChunkPQTable::new(
+                4,
+                vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0].into(),
+                vec![0, 2, 4].into(),
+            )
+            .unwrap();
+            let computer = HybridComputer::<f32>::new(
+                DistanceComputer::new(&table, Metric::CosineNormalized),
+                f32::distance(Metric::CosineNormalized, Some(4)),
+            );
+            let full = [1.0, 0.0, 0.0, 0.0];
+            let code0 = [0, 1];
+            let code1 = [1, 0];
+            let reconstructed0 = table.inflate_vector(&code0);
+            let reconstructed1 = table.inflate_vector(&code1);
+
+            let full_quant = computer.evaluate_similarity(
+                Hybrid::Full(full.as_slice()),
+                Hybrid::Quant(code0.as_slice()),
+            );
+            let squared_l2: f32 = SquaredL2::evaluate(full.as_slice(), reconstructed0.as_slice());
+            let expected_full_quant = 0.5 * squared_l2;
+            assert_relative_eq!(full_quant, expected_full_quant, max_relative = 1.0e-7);
+
+            let quant_quant = computer.evaluate_similarity(
+                Hybrid::Quant(code0.as_slice()),
+                Hybrid::Quant(code1.as_slice()),
+            );
+            let squared_l2: f32 =
+                SquaredL2::evaluate(reconstructed0.as_slice(), reconstructed1.as_slice());
+            let expected_quant_quant = 0.5 * squared_l2;
+            assert_relative_eq!(quant_quant, expected_quant_quant, max_relative = 1.0e-7);
+        }
+    }
 }

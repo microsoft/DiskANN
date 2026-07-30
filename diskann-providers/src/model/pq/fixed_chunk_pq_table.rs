@@ -16,6 +16,8 @@ use diskann_wide::ARCH;
 use super::NUM_PQ_CENTROIDS;
 use crate::utils::{Bridge, BridgeErr};
 
+pub(super) const COSINE_NORMALIZED_L2_SCALE: f32 = 0.5;
+
 /// PQ Pivot table loading and calculate distance
 ///
 /// The fields of this struct are public in the PQ crate to allow scoped computers direct
@@ -242,11 +244,14 @@ impl FixedChunkPQTable {
         )
     }
 
-    /// Calculate the distance between query and given centroid by cosine distance
+    /// Approximate normalized cosine distance between a query and a PQ vector.
+    ///
+    /// This uses half the squared L2 distance so that every PQ-involved
+    /// `CosineNormalized` comparison uses the same scale.
     /// * `query_vec` - query vector: 1 * dim
     /// * `base_vec` - given centroid array: 1 * num_pq_chunks
     pub fn cosine_normalized_distance(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
-        self.cosine_distance(query_vec, base_vec)
+        COSINE_NORMALIZED_L2_SCALE * self.l2_distance(query_vec, base_vec)
     }
 
     /// Calculate the distance between query and given centroid by inner product
@@ -329,6 +334,14 @@ impl FixedChunkPQTable {
     /// is not used.
     pub fn qq_l2_distance(&self, left: &[u8], right: &[u8]) -> f32 {
         self.self_distance::<distance::simd::ResumableL2<diskann_wide::arch::Current>>(left, right)
+    }
+
+    /// Approximate normalized cosine distance between two compressed vectors.
+    ///
+    /// This uses half the squared L2 distance to match query-to-PQ and
+    /// full-precision-to-PQ comparisons.
+    pub fn qq_cosine_normalized_distance(&self, left: &[u8], right: &[u8]) -> f32 {
+        COSINE_NORMALIZED_L2_SCALE * self.qq_l2_distance(left, right)
     }
 
     /// Compute the inner product between two compressed vectors that use the same

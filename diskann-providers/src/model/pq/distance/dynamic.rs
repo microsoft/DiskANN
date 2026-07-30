@@ -11,7 +11,7 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::M
 
 // Concrete implementations
 use super::{cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
-use crate::model::pq::fixed_chunk_pq_table::FixedChunkPQTable;
+use crate::model::pq::fixed_chunk_pq_table::{COSINE_NORMALIZED_L2_SCALE, FixedChunkPQTable};
 
 /// A quantized computation that works for multiple distance functions.
 #[derive(Debug)]
@@ -32,13 +32,12 @@ impl<'a> QueryComputer<'a> {
     /// * `Metric::L2`
     /// * `Metric::InnerProduct`
     /// * `Metric::Cosine`
-    /// * `Metric::CosineNormalized - partially supported as it is currently computed using L2`
+    /// * `Metric::CosineNormalized`
     ///
     /// # Notes on CosineNormalized
     ///
-    /// This is a temporary fix made with the following rationale: Our implementation of
-    /// CosineNormalized yielding a similarity score for vectors `x` and `y` can be computed as
-    /// follows:
+    /// `CosineNormalized` yielding a distance for normalized vectors `x` and `y` can be
+    /// computed as follows:
     /// ```text
     /// s = 1 - <x, y> / (||x|| * ||y||)
     /// ```
@@ -55,12 +54,12 @@ impl<'a> QueryComputer<'a> {
     /// ```text
     /// s = 2 - 2<x, y> = 2 * (1 - <x, y>)
     /// ```
-    /// In other words, the similarity score for the squared L2 distance in an ideal world is
-    /// 2 times that for cosine similarity. Therefore, squared L2 may serves as a stand-in for
-    /// cosine normalized as ordering is preserved.
+    /// In other words, half the squared L2 distance equals normalized cosine distance when
+    /// both operands are normalized.
     ///
-    /// Even though PQ does not necessarily preserve the norms of compressed vectors, using L2
-    /// for Cosine Normalized seems to work well enough in practice to work as a temporary fix.
+    /// PQ does not necessarily preserve the norms of compressed vectors, so this remains an
+    /// approximation. The same approximation is used for query/PQ, full/PQ, and PQ/PQ
+    /// comparisons so graph search and pruning operate on compatible values.
     pub fn new(
         table: &'a FixedChunkPQTable,
         metric: Metric,
@@ -78,7 +77,12 @@ impl<'a> QueryComputer<'a> {
             Metric::L2 => Self::L2(TableL2::new(table, query, pool)?),
             Metric::InnerProduct => Self::IP(TableIP::new(table, query, pool)?),
             Metric::Cosine => Self::Cosine(DirectCosine::new(table, query)?),
-            Metric::CosineNormalized => Self::L2(TableL2::new(table, query, pool)?),
+            Metric::CosineNormalized => Self::L2(TableL2::new_scaled(
+                table,
+                query,
+                pool,
+                COSINE_NORMALIZED_L2_SCALE,
+            )?),
         };
         Ok(result)
     }
@@ -123,7 +127,7 @@ impl VTable {
             Metric::L2 => FixedChunkPQTable::qq_l2_distance,
             Metric::Cosine => FixedChunkPQTable::qq_cosine_distance,
             Metric::InnerProduct => FixedChunkPQTable::qq_ip_distance,
-            Metric::CosineNormalized => FixedChunkPQTable::qq_cosine_distance,
+            Metric::CosineNormalized => FixedChunkPQTable::qq_cosine_normalized_distance,
         };
 
         Self {
@@ -208,9 +212,8 @@ impl DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<'_> {
 mod tests {
     use approx::assert_relative_eq;
     use diskann_vector::{
-        Norm, PureDistanceFunction,
-        distance::{Cosine, CosineNormalized, InnerProduct, SquaredL2},
-        norm::FastL2Norm,
+        PureDistanceFunction,
+        distance::{Cosine, InnerProduct, SquaredL2},
     };
     use rand::SeedableRng;
     use rstest::rstest;
@@ -399,14 +402,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cosine_normalized_query_and_random_access_distances_match() {
+        let config = test_utils::TableConfig {
+            dim: 17,
+            pq_chunks: 4,
+            num_pivots: 20,
+            start_value: 1.0,
+        };
+        let table = test_utils::seed_pivot_table(config);
+        let query = (0..config.dim)
+            .map(|i| (i as f32 + 1.0) / config.dim as f32)
+            .collect::<Vec<_>>();
+        let code = vec![1, 3, 5, 7];
+        let reconstructed = test_utils::generate_expected_vector(
+            &code,
+            table.get_chunk_offsets(),
+            config.start_value,
+        );
+
+        let query_computer =
+            QueryComputer::new(&table, Metric::CosineNormalized, &query, None).unwrap();
+        let distance_computer = DistanceComputer::new(&table, Metric::CosineNormalized);
+        let query_distance = query_computer.evaluate_similarity(&code);
+        let random_access_distance =
+            distance_computer.evaluate_similarity(query.as_slice(), code.as_slice());
+        let squared_l2: f32 = SquaredL2::evaluate(&*query, &*reconstructed);
+        let expected = COSINE_NORMALIZED_L2_SCALE * squared_l2;
+
+        assert_relative_eq!(query_distance, expected, max_relative = 5.0e-7);
+        assert_relative_eq!(random_access_distance, expected, max_relative = 5.0e-7);
+        assert_relative_eq!(
+            query_distance,
+            random_access_distance,
+            max_relative = 5.0e-7
+        );
+    }
+
     ///////////////////////////
     // Quant-Quant Distances //
     ///////////////////////////
-
-    fn normalize(x: &mut [f32]) {
-        let norm: f32 = (FastL2Norm).evaluate(&*x);
-        x.iter_mut().for_each(|i| *i /= norm);
-    }
 
     #[rstest]
     #[case(20, 7)]
@@ -430,12 +465,12 @@ mod tests {
             let code1 =
                 test_utils::generate_random_code(config.num_pivots, config.pq_chunks, &mut rng);
 
-            let mut v0 = test_utils::generate_expected_vector(
+            let v0 = test_utils::generate_expected_vector(
                 &code0,
                 table.get_chunk_offsets(),
                 config.start_value,
             );
-            let mut v1 = test_utils::generate_expected_vector(
+            let v1 = test_utils::generate_expected_vector(
                 &code1,
                 table.get_chunk_offsets(),
                 config.start_value,
@@ -460,15 +495,13 @@ mod tests {
             let expected: f32 = Cosine::evaluate(&*v0, &*v1);
             assert_eq!(sim, expected);
 
-            normalize(&mut v0);
-            normalize(&mut v1);
-
             let cosine_normalized = DistanceComputer::new(&table, Metric::CosineNormalized);
-            let expected: f32 = CosineNormalized::evaluate(&*v0, &*v1);
+            let squared_l2: f32 = SquaredL2::evaluate(&*v0, &*v1);
+            let expected = COSINE_NORMALIZED_L2_SCALE * squared_l2;
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),
                 expected,
-                max_relative = 4.0e-6,
+                max_relative = 6.3e-7,
             );
         }
     }

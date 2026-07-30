@@ -49,8 +49,21 @@ impl<'a> TableL2<'a> {
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> ANNResult<Self> {
+        Self::new_scaled(parent, query, pool, 1.0)
+    }
+
+    pub(crate) fn new_scaled(
+        parent: &'a FixedChunkPQTable,
+        query: &[f32],
+        pool: Option<Arc<ObjectPool<Vec<f32>>>>,
+        scale: f32,
+    ) -> ANNResult<Self> {
         let mut object = Self::new_unpopulated(parent, pool);
         object.populate(query)?;
+        object
+            .lookup_table
+            .iter_mut()
+            .for_each(|distance| *distance *= scale);
         Ok(object)
     }
 
