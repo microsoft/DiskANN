@@ -10,6 +10,7 @@ use std::{
 use crate::storage::StorageReadProvider;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::VectorRepr};
+use diskann_utils::lazy_format;
 use rand::{
     Rng,
     distr::{Distribution, StandardUniform},
@@ -146,7 +147,7 @@ where
         let expected_size = 8 + (npts as u64 * dim as u64 * std::mem::size_of::<T>() as u64);
         let actual_size = storage_provider.get_length(data_file)?;
         if actual_size != expected_size {
-            return Err(ANNError::log_invalid_file_format(format!(
+            return Err(ANNError::message(format!(
                 "Vector file '{}' has invalid format: size {} bytes doesn't match expected size of {} bytes based on header ({} vectors of dimension {})",
                 data_file, actual_size, expected_size, npts, dim
             )));
@@ -179,10 +180,12 @@ where
         for idx in indices {
             // Check if the index is within bounds
             if idx >= self.npts {
-                return Err(ANNError::log_index_error(format!(
-                    "Vector index {} is out of bounds (max: {})",
+                let npts = self.npts;
+                return Err(ANNError::message(lazy_format!(
+                    move,
+                    "Vector index {} is out of bounds (must be less than: {})",
                     idx,
-                    self.npts - 1
+                    npts,
                 )));
             }
             let offset = (idx as i64 - self.cur_pos as i64) * vector_len as i64;
@@ -270,9 +273,7 @@ pub fn gen_random_slice<T: VectorRepr, StorageProvider: StorageReadProvider>(
 
         Ok((sampled_vectors, sampled_count, full_dim))
     } else {
-        Err(ANNError::log_index_error(
-            "Could not read vectors to sample from.",
-        ))
+        Err(ANNError::message("Could not read vectors to sample from."))
     }
 }
 
@@ -282,7 +283,6 @@ mod sampling_test {
 
     use crate::storage::{StorageWriteProvider, VirtualStorageProvider};
     use byteorder::{LittleEndian, WriteBytesExt};
-    use diskann::ANNErrorKind;
     use rstest::rstest;
 
     use super::*;
@@ -407,10 +407,9 @@ mod sampling_test {
         .unwrap();
 
         // Try to read invalid indices
-        let result = reader
+        let _ = reader
             .read_vectors(vec![TEST_NUM_POINTS + 1].into_iter(), |_| Ok(()))
             .unwrap_err();
-        assert!(matches!(result.kind(), ANNErrorKind::IndexError));
     }
 
     #[rstest]
@@ -428,7 +427,7 @@ mod sampling_test {
             writer.flush().unwrap();
         }
         // Should fail validation check
-        let err = match SampleVectorReader::<f32, _>::new(
+        let _ = match SampleVectorReader::<f32, _>::new(
             TEST_BINARY_FILE,
             sampling_density,
             &storage_provider,
@@ -436,10 +435,5 @@ mod sampling_test {
             Ok(_) => panic!("operations should not succeed"),
             Err(err) => err,
         };
-        assert!(
-            matches!(err.kind(), ANNErrorKind::InvalidFileFormatError),
-            "Invalid file format error expected, got {:?}",
-            err
-        );
     }
 }

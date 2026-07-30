@@ -31,6 +31,7 @@ pub(super) fn insert(
 
 pub(super) fn knn(
     index: &dyn Index,
+    k: usize,
     knn: Knn,
     queries: DatasetView<'_>,
     groundtruth: &dyn Rows<u64>,
@@ -43,7 +44,7 @@ pub(super) fn knn(
         groundtruth.nrows(),
     );
 
-    let mut ids = Matrix::new(u64::MAX, queries.nrows(), knn.k_value().get());
+    let mut ids = Matrix::new(u64::MAX, queries.nrows(), k);
 
     let before = index.counters();
     let mut misc = KnnSearch::new();
@@ -62,8 +63,8 @@ pub(super) fn knn(
         groundtruth,
         None,
         &ids.as_view(),
-        knn.k_value().get(),
-        knn.k_value().get(),
+        k,
+        k,
         diskann_benchmark_core::recall::GroundTruthMode::Fixed,
     )?;
 

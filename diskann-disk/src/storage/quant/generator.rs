@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
+use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
 use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider},
     utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
@@ -18,7 +18,10 @@ use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
-use crate::storage::quant::compressor::QuantCompressor;
+use crate::{
+    error::{diskann_error, ErrorKind},
+    storage::quant::compressor::QuantCompressor,
+};
 
 /// [`QuantDataGenerator`] orchestrates the process of reading vector data, applying quantization,
 /// and writing compressed results to storage in batches.
@@ -78,12 +81,14 @@ where
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
         let (num_points, dim) = metadata.into_dims();
         if max_block_size == 0 {
-            return Err(ANNError::log_pq_error(
+            return Err(diskann_error!(
+                ErrorKind::PQError,
                 "Data compression chunk vector count must be greater than zero",
             ));
         }
         if num_points == 0 {
-            return Err(ANNError::log_pq_error(
+            return Err(diskann_error!(
+                ErrorKind::PQError,
                 "Cannot generate compressed data for an empty dataset",
             ));
         }

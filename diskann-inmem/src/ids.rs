@@ -174,7 +174,7 @@ pub(crate) enum InsertError {
     InternalExists,
 }
 
-crate::opaque!(InsertError);
+diskann::convert_error!(InsertError);
 
 /// A handle to a valid entry in a [`IdMap`].
 ///

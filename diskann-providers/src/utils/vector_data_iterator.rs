@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::storage::StorageReadProvider;
-use diskann::{ANNError, ANNErrorKind, utils::read_exact_into};
+use diskann::utils::read_exact_into;
 use diskann_utils::io::Metadata;
 use serde::Deserialize;
 use thiserror::Error;
@@ -205,17 +205,16 @@ enum SkipElementsError {
     IoError(#[from] std::io::Error),
 }
 
-impl From<SkipElementsError> for ANNError {
-    fn from(err: SkipElementsError) -> Self {
-        ANNError::new(ANNErrorKind::IndexError, err)
-    }
-}
+diskann::convert_error!(SkipElementsError);
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use std::io::Cursor;
 
-    use super::*;
+    use diskann::ANNError;
+
     const TEST_VECTOR_STREAM: &str = "vector";
     const TEST_ASSOCIATED_DATA_STREAM: &str = "associated_data";
     const INCORRECT_TEST_ASSOCIATED_DATA_STREAM: &str = "incorrect_associated_data";
@@ -334,8 +333,6 @@ mod tests {
         };
         let ann_err = ANNError::from(skip_err);
 
-        assert_eq!(ann_err.kind(), ANNErrorKind::IndexError);
-
         let err_msg = ann_err.to_string();
         assert!(err_msg.contains("Tried to skip 10 elements, but only 5 are left"));
 
@@ -354,8 +351,6 @@ mod tests {
             std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected end of file");
         let skip_err = SkipElementsError::IoError(io_err);
         let ann_err = ANNError::from(skip_err);
-
-        assert_eq!(ann_err.kind(), ANNErrorKind::IndexError);
 
         let err_msg = ann_err.to_string();
         assert!(err_msg.contains("IO error while skipping elements"));

@@ -455,12 +455,7 @@ mod tests {
     #[error("generic error message: {0}")]
     struct AlwaysEscalate(usize);
 
-    impl From<AlwaysEscalate> for ANNError {
-        fn from(value: AlwaysEscalate) -> ANNError {
-            ANNError::log_index_error(value)
-        }
-    }
-
+    crate::convert_error!(AlwaysEscalate);
     always_escalate!(AlwaysEscalate);
 
     #[test]
@@ -559,8 +554,8 @@ mod tests {
 
     impl From<Disarmed<'_>> for ANNError {
         #[track_caller]
-        fn from(value: Disarmed<'_>) -> ANNError {
-            ANNError::log_index_error(&value)
+        fn from(err: Disarmed<'_>) -> Self {
+            Self::message(err.to_string())
         }
     }
 
@@ -842,7 +837,7 @@ mod tests {
         // We can't actually construct an Infallible value to test this directly since it's unconstructable
         // But we can verify the From implementation exists by checking the type constraint
         fn _test_infallible_into_ann_error(_: Infallible) -> ANNError {
-            ANNError::log_index_error("This should never be called")
+            ANNError::message("This should never be called")
         }
     }
 }

@@ -37,6 +37,7 @@ use diskann::{
 };
 use diskann_utils::{
     future::{AsyncFriendly, SendFuture},
+    lazy_format,
     views::MatrixView,
 };
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
@@ -343,7 +344,7 @@ where
     {
         // Early validation before allocating resources
         if start_points.nrows() != params.num_start_points.get() {
-            return Err(ANNError::log_async_index_error(format!(
+            return Err(ANNError::message(format!(
                 "start_points matrix has {} rows, but params.num_start_points is {}",
                 start_points.nrows(),
                 params.num_start_points.get(),
@@ -732,7 +733,7 @@ where
     fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
         let start_point_ids = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
-            return Err(ANNError::log_async_index_error(format!(
+            return Err(ANNError::message(format!(
                 "expected start_points to contain `{}` rows, instead it has {}",
                 start_point_ids.len(),
                 start_points.nrows(),
@@ -763,7 +764,7 @@ where
     fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
         let start_point_ids = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
-            return Err(ANNError::log_async_index_error(format!(
+            return Err(ANNError::message(format!(
                 "expected start_points to contain `{}` rows, instead it has {}",
                 start_point_ids.len(),
                 start_points.nrows(),
@@ -1691,7 +1692,7 @@ fn save_bftree(
     use_snapshot: bool,
 ) -> ANNResult<()> {
     if !use_snapshot {
-        return Err(ANNError::log_index_error(
+        return Err(ANNError::message(
             "cannot snapshot a BfTree that was not configured with use_snapshot(true)",
         ));
     }
@@ -1726,7 +1727,7 @@ where
         let saved_params = SavedParams {
             max_points: self.max_points(),
             frozen_points: NonZeroUsize::new(self.num_start_points())
-                .ok_or_else(|| ANNError::log_index_error("num_start_points is zero"))?,
+                .ok_or_else(|| ANNError::message("num_start_points is zero"))?,
             dim: self.dim(),
             metric: self.metric().as_str().to_string(),
             max_degree: self.max_degree(),
@@ -1756,7 +1757,7 @@ where
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
             let params_json = serde_json::to_string(&saved_params).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to serialize params: {}", e))
+                ANNError::message(lazy_format!(move, "Failed to serialize params: {}", e))
             })?;
             let mut params_writer = storage.create_for_write(&params_filename)?;
             params_writer.write_all(params_json.as_bytes())?;
@@ -1793,12 +1794,12 @@ where
             let mut params_json = String::new();
             params_reader.read_to_string(&mut params_json)?;
             serde_json::from_str(&params_json).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to deserialize params: {}", e))
+                ANNError::message(lazy_format!(move, "Failed to deserialize params: {}", e))
             })?
         };
 
         let metric = Metric::from_str(&saved_params.metric)
-            .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
+            .map_err(|e| ANNError::message(lazy_format!(move, "Failed to parse metric: {}", e)))?;
 
         let vector_index = load_bftree(
             BfTreePaths::vectors_bftree(&saved_params.prefix),
@@ -1846,7 +1847,7 @@ where
         let saved_params = SavedParams {
             max_points: self.max_points(),
             frozen_points: NonZeroUsize::new(self.num_start_points())
-                .ok_or_else(|| ANNError::log_index_error("num_start_points is zero"))?,
+                .ok_or_else(|| ANNError::message("num_start_points is zero"))?,
             dim: self.dim(),
             metric: self.metric().as_str().to_string(),
             max_degree: self.max_degree(),
@@ -1887,7 +1888,7 @@ where
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
             let params_json = serde_json::to_string(&saved_params).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to serialize params: {}", e))
+                ANNError::message(lazy_format!(move, "Failed to serialize params: {}", e))
             })?;
             let mut params_writer = storage.create_for_write(&params_filename)?;
             params_writer.write_all(params_json.as_bytes())?;
@@ -1914,7 +1915,7 @@ where
             .quant_vectors
             .quantizer
             .serialize(GlobalAllocator)
-            .map_err(|e| ANNError::log_index_error(format!("{e}")))?;
+            .map_err(|e| ANNError::message(lazy_format!(move, "{e}")))?;
         let mut writer = storage.create_for_write(&filename)?;
         writer.write_all(&serialized)?;
 
@@ -1938,16 +1939,16 @@ where
             let mut params_json = String::new();
             params_reader.read_to_string(&mut params_json)?;
             serde_json::from_str(&params_json).map_err(|e| {
-                ANNError::log_index_error(format!("Failed to deserialize params: {}", e))
+                ANNError::message(lazy_format!(move, "Failed to deserialize params: {}", e))
             })?
         };
 
         let _quant_params = saved_params.quant_params.ok_or_else(|| {
-            ANNError::log_index_error("Missing quant_params in saved params for quantized provider")
+            ANNError::message("Missing quant_params in saved params for quantized provider")
         })?;
 
         let metric = Metric::from_str(&saved_params.metric)
-            .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
+            .map_err(|e| ANNError::message(lazy_format!(move, "Failed to parse metric: {}", e)))?;
 
         let vector_index = load_bftree(
             BfTreePaths::vectors_bftree(&saved_params.prefix),
@@ -1974,7 +1975,7 @@ where
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
         let quantizer: Poly<dyn Quantizer> = try_deserialize(&bytes, GlobalAllocator)
-            .map_err(|e| ANNError::log_index_error(format!("{e}")))?;
+            .map_err(|e| ANNError::message(lazy_format!(move, "{e}")))?;
 
         let quant_vector_index = load_bftree(
             BfTreePaths::quant_bftree(&saved_params.prefix),
@@ -2074,9 +2075,10 @@ mod tests {
         }
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2089,8 +2091,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            res.result_count, 5,
-            "there are 15 points and we're asking for 5, we expect 5"
+            res.result_count, k as u32,
+            "there are 15 points and we're asking for {}, we expect {}",
+            5, k
         );
         assert_eq!(*neighbors[0].id(), 3);
     }
@@ -2125,9 +2128,10 @@ mod tests {
             .unwrap();
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2140,8 +2144,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            res.result_count, 5,
-            "there are 15 points and we're asking for 5, we expect 5"
+            res.result_count, k as u32,
+            "there are 15 points and we're asking for {}, we expect {}",
+            5, k
         );
         let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         for expected in 1u32..=5 {
@@ -2175,9 +2180,10 @@ mod tests {
             .unwrap();
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2189,7 +2195,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(res.result_count, 5);
+        assert_eq!(res.result_count, k as u32);
         let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));
@@ -2246,9 +2252,10 @@ mod tests {
         }
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2261,8 +2268,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            res.result_count, 5,
-            "there are 15 points and we're asking for 5, we expect 5"
+            res.result_count, k as u32,
+            "there are 15 points and we're asking for {}, we expect {}",
+            5, k
         );
         assert_eq!(*neighbors[0].id(), 3);
     }
@@ -2302,9 +2310,10 @@ mod tests {
             .unwrap();
 
         let query = vec![3.0; 5];
-        let params = Knn::new(5, 10, None).unwrap();
+        let params = Knn::new(10, None).unwrap();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); 5];
+        let k = 5;
+        let mut neighbors = vec![Neighbor::<u32>::default(); k];
         let res = index
             .search(
                 params,
@@ -2316,7 +2325,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(res.result_count, 5);
+        assert_eq!(res.result_count, k as u32);
         let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| *n.id()).collect();
         assert!(!neighbor_ids.contains(&2u32));
         assert!(!neighbor_ids.contains(&4u32));

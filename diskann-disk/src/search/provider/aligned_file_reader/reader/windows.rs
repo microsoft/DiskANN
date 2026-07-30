@@ -35,20 +35,10 @@ impl WindowsAlignedFileReader {
     pub fn new(fname: &str) -> ANNResult<Self> {
         let mut io_context = IOContext::new();
         tracing::debug!("Creating file handle for {}", fname);
-        match unsafe { FileHandle::new(fname) } {
-            Ok(file_handle) => io_context.file_handle = file_handle,
-            Err(err) => {
-                return Err(ANNError::log_io_error(err));
-            }
-        }
+        io_context.file_handle = unsafe { FileHandle::new(fname) }?;
 
         // Create a io completion port for the file handle, later it will be used to get the completion status.
-        match IOCompletionPort::new(&io_context.file_handle, None, 0, 0) {
-            Ok(io_completion_port) => io_context.io_completion_port = io_completion_port,
-            Err(err) => {
-                return Err(ANNError::log_io_error(err));
-            }
-        }
+        io_context.io_completion_port = IOCompletionPort::new(&io_context.file_handle, None, 0, 0)?;
 
         Ok(WindowsAlignedFileReader { io_context })
     }
@@ -77,14 +67,7 @@ impl AlignedFileReader for WindowsAlignedFileReader {
                 let offset = req.offset();
                 let os = &mut overlapped_in_out[j];
 
-                match unsafe {
-                    read_file_to_slice(&ctx.file_handle, req.aligned_buf_mut(), os, offset)
-                } {
-                    Ok(_) => {}
-                    Err(error) => {
-                        return Err(ANNError::log_io_error(error));
-                    }
-                }
+                unsafe { read_file_to_slice(&ctx.file_handle, req.aligned_buf_mut(), os, offset) }?;
             }
 
             let mut n_read: DWORD = 0;
@@ -108,7 +91,7 @@ impl AlignedFileReader for WindowsAlignedFileReader {
                         thread::sleep(ASYNC_IO_COMPLETION_CHECK_INTERVAL);
                     }
                     // An error ocurred.
-                    Err(error) => return Err(ANNError::log_io_error(error)),
+                    Err(error) => return Err(ANNError::from(error)),
                 }
             }
         }

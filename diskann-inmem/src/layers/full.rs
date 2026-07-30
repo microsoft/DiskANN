@@ -145,7 +145,7 @@ enum SetError {
     Bytes { got: usize, expected: usize },
 }
 
-crate::opaque!(SetError);
+diskann::convert_error!(SetError);
 
 impl<T> layers::AsDistance for Full<T>
 where
@@ -209,7 +209,7 @@ where
             ylen: y.len(),
         };
 
-        Err(ANNError::opaque(error))
+        Err(ANNError::new(error))
     }
 
     fn dim(&self) -> usize {
@@ -310,7 +310,7 @@ impl<'a, T, U, D> QueryDistance<'a, T, U, D> {
             xlen: len,
         };
 
-        Err(ANNError::opaque(error))
+        Err(ANNError::new(error))
     }
 }
 
@@ -346,7 +346,7 @@ struct QueryDistanceError {
     xlen: usize,
 }
 
-crate::opaque!(QueryDistanceError);
+diskann::convert_error!(QueryDistanceError);
 
 macro_rules! mint {
     ($query:ident, $visitor:ident, $T:ty => { $N:literal, $f:ident }) => {{
