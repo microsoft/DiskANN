@@ -55,8 +55,9 @@ impl<'a> QueryComputer<'a> {
     /// s = 2 - 2<x, y> = 2 * (1 - <x, y>)
     /// ```
     /// In other words, half the squared L2 distance equals normalized cosine distance when
-    /// both operands are normalized, and the two differ by a positive factor otherwise, so
-    /// candidate ordering is preserved either way.
+    /// both operands are normalized. Multiplying squared L2 by one half preserves its
+    /// ordering for any operands, but does not make it exact cosine distance for reconstructed
+    /// PQ vectors.
     ///
     /// PQ does not necessarily preserve the norms of compressed vectors, so this remains an
     /// approximation. The same approximation is used for query/PQ, full/PQ, and PQ/PQ
