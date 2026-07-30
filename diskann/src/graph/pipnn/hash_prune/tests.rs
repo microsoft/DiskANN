@@ -229,6 +229,10 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
     let mut scratch = Vec::new();
 
     batched.add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch);
+    let scratch_len = scratch.len();
+    batched.add_leaf_edges(&point_ids[..2], &[0, 0, 0], &[], &mut scratch);
+    assert_eq!(scratch.len(), scratch_len);
+
     for source in 0..point_ids.len() {
         for &(target, distance) in &edges[offsets[source] as usize..offsets[source + 1] as usize] {
             add_edge(&reference, source, target as usize, distance);
