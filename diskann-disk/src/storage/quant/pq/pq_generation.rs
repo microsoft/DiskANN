@@ -52,14 +52,14 @@ where
     phantom_storage: PhantomData<&'a Storage>,
 }
 
-impl<'a, T, Storage> QuantCompressor<T> for PQGeneration<'a, T, Storage>
+impl<'a, T, Storage> PQGeneration<'a, T, Storage>
 where
     T: VectorRepr,
     Storage: StorageReadProvider + StorageWriteProvider + 'a,
 {
-    type CompressorContext = PQGenerationContext<'a, Storage>;
-
-    fn new(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
+    pub(crate) fn generate_pivots(
+        context: &PQGenerationContext<'a, Storage>,
+    ) -> diskann::ANNResult<()> {
         // validate that the number of chunks is correct.
         if context.num_chunks > context.dim {
             return Err(diskann_error!(
@@ -108,6 +108,20 @@ where
                 timer.elapsed().as_secs_f64()
             );
         }
+
+        Ok(())
+    }
+}
+
+impl<'a, T, Storage> QuantCompressor<T> for PQGeneration<'a, T, Storage>
+where
+    T: VectorRepr,
+    Storage: StorageReadProvider + StorageWriteProvider + 'a,
+{
+    type CompressorContext = PQGenerationContext<'a, Storage>;
+
+    fn prepare(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
+        Self::generate_pivots(context)?;
 
         let (_, full_dim) = context
             .pq_storage
@@ -169,9 +183,6 @@ where
 
 #[cfg(test)]
 mod pq_generation_tests {
-    use diskann::ANNError;
-    use diskann_providers::model::pq::generate_pq_pivots;
-    use diskann_providers::model::GeneratePivotArguments;
     use diskann_providers::storage::{
         PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
@@ -199,7 +210,7 @@ mod pq_generation_tests {
         100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
     ];
     #[allow(clippy::too_many_arguments)]
-    fn create_new_compressor<'a, F: vfs::FileSystem>(
+    fn create_context<'a, F: vfs::FileSystem>(
         provider: &'a VirtualStorageProvider<F>,
         dim: usize,
         num_chunks: usize,
@@ -210,9 +221,9 @@ mod pq_generation_tests {
         pivots_path: String,
         compressed_path: String,
         data_path: Option<&str>,
-    ) -> Result<PQGeneration<'a, f32, VirtualStorageProvider<F>>, ANNError> {
+    ) -> PQGenerationContext<'a, VirtualStorageProvider<F>> {
         let pq_storage = PQStorage::new(&pivots_path, &compressed_path, data_path);
-        let context = PQGenerationContext::<'_, _> {
+        PQGenerationContext::<'_, _> {
             pq_storage,
             num_chunks,
             num_centers,
@@ -223,48 +234,31 @@ mod pq_generation_tests {
             pool,
             metric: Metric::L2,
             dim,
-        };
-        PQGeneration::<_, _>::new(&context)
+        }
     }
 
     #[rstest]
-    fn test_create_and_load_pivots_file() {
+    fn explicit_generation_creates_pivots_file() {
         let storage_provider = VirtualStorageProvider::new_memory();
         storage_provider
             .filesystem()
             .create_dir("/pq_generation_tests")
             .expect("Could not create test directory");
 
-        let pivot_file_name = "/pq_generation_tests/generate_pq_pivots_test.bin";
-        let pivot_file_name_compressor = "/pq_generation_tests/compressor_pivots_test.bin";
+        let pivot_file_name = "/pq_generation_tests/pivots_test.bin";
         let compressed_file_name = "/pq_generation_tests/compressed_not_used.bin";
         let data_path = "/pq_generation_tests/data_path.bin";
-        let pq_storage: PQStorage =
-            PQStorage::new(pivot_file_name, compressed_file_name, Some(data_path));
 
         let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
-        let mut train_data: Vec<f32> = VALIDATION_DATA.to_vec();
 
         write_bin(
-            MatrixView::try_from(train_data.as_slice(), ndata, dim).unwrap(),
+            MatrixView::try_from(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
 
         let pool = create_thread_pool_for_test();
-        generate_pq_pivots(
-            GeneratePivotArguments::new(ndata, dim, num_centers, num_chunks, max_k_means_reps)
-                .unwrap(),
-            true,
-            &mut train_data,
-            &pq_storage,
-            &storage_provider,
-            diskann_providers::utils::create_rnd_provider_from_seed_in_tests(42),
-            pool.as_ref(),
-        )
-        .unwrap();
-
-        let compressor = create_new_compressor(
+        let context = create_context(
             &storage_provider,
             dim,
             num_chunks,
@@ -272,12 +266,16 @@ mod pq_generation_tests {
             num_centers,
             1.0, //take all the data to compute codebook
             pool.as_ref(),
-            pivot_file_name_compressor.to_string(),
+            pivot_file_name.to_string(),
             compressed_file_name.to_string(),
             Some(data_path),
         );
 
+        assert!(!storage_provider.exists(pivot_file_name));
+
+        let compressor = PQGeneration::<f32, _>::prepare(&context);
         assert!(compressor.is_ok());
+        assert!(storage_provider.exists(pivot_file_name));
 
         let compressor = compressor.unwrap();
         assert_eq!(compressor.num_chunks, num_chunks);
@@ -286,17 +284,44 @@ mod pq_generation_tests {
         assert_eq!(compressor.table.dim(), dim);
         assert_eq!(compressor.table.ncenters(), num_centers);
         assert_eq!(compressor.table.nchunks(), num_chunks);
+    }
 
-        assert!(&storage_provider.exists(pivot_file_name_compressor));
-        let compressor_pivots = read_bin::<u8>(
-            &mut storage_provider
-                .open_reader(pivot_file_name_compressor)
-                .unwrap(),
+    #[rstest]
+    fn prepare_generates_missing_pivots() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/pq_generation_tests")
+            .expect("Could not create test directory");
+
+        let pivot_file_name = "/pq_generation_tests/missing_pivots.bin";
+        let compressed_file_name = "/pq_generation_tests/compressed_not_used.bin";
+        let data_path = "/pq_generation_tests/data_path.bin";
+
+        write_bin(
+            MatrixView::try_from(VALIDATION_DATA.as_slice(), 5, 8).unwrap(),
+            &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
-        let true_pivots =
-            read_bin::<u8>(&mut storage_provider.open_reader(pivot_file_name).unwrap()).unwrap();
-        assert_eq!(compressor_pivots, true_pivots);
+
+        let pool = create_thread_pool_for_test();
+        let context = create_context(
+            &storage_provider,
+            8,
+            2,
+            5,
+            2,
+            1.0,
+            pool.as_ref(),
+            pivot_file_name.to_string(),
+            compressed_file_name.to_string(),
+            Some(data_path),
+        );
+
+        let compressor = PQGeneration::<f32, _>::prepare(&context);
+
+        assert!(compressor.is_ok());
+        assert!(storage_provider.exists(pivot_file_name));
     }
 
     #[rstest]
@@ -308,7 +333,7 @@ mod pq_generation_tests {
         let num_chunks = 1;
         let max_k_means_reps = 10;
 
-        let compressor = create_new_compressor(
+        let context = create_context(
             &storage_provider,
             dim,
             num_chunks,
@@ -320,6 +345,7 @@ mod pq_generation_tests {
             "".to_string(),
             None,
         );
+        let compressor = PQGeneration::<f32, _>::prepare(&context);
 
         if let Err(x) = compressor.as_ref() {
             println!("Error creating compressor: {x}");
@@ -359,7 +385,7 @@ mod pq_generation_tests {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pool = create_thread_pool_for_test();
         let max_k_means_reps = 10;
-        let compressor = create_new_compressor(
+        let context = create_context(
             &storage_provider,
             dim,
             num_chunks,
@@ -371,6 +397,7 @@ mod pq_generation_tests {
             "".to_string(),
             None,
         );
+        let compressor = PQGeneration::<f32, _>::prepare(&context);
         assert!(compressor.is_err());
     }
 }
