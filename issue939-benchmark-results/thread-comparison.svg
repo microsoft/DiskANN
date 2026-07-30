@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" role="img" aria-labelledby="title desc">
+  <title id="title">Total K-means latency by configured thread count</title>
+  <desc id="desc">Disk and quantization median total latency for 50000 four-dimensional points, 256 centers, and 10 iterations.</desc>
+  <rect width="900" height="500" fill="#ffffff"/>
+  <text x="450" y="30" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="20" font-weight="600" fill="#1f2328">Total K-means latency by configured threads (dimension 4)</text>
+
+  <g font-family="Segoe UI, sans-serif" font-size="13" fill="#1f2328">
+    <line x1="80" y1="420" x2="820" y2="420" stroke="#1f2328" stroke-width="1.5"/>
+    <line x1="80" y1="70" x2="80" y2="420" stroke="#1f2328" stroke-width="1.5"/>
+
+    <g stroke="#d0d7de" stroke-width="1">
+      <line x1="80" y1="356.4" x2="820" y2="356.4"/>
+      <line x1="80" y1="292.7" x2="820" y2="292.7"/>
+      <line x1="80" y1="229.1" x2="820" y2="229.1"/>
+      <line x1="80" y1="165.5" x2="820" y2="165.5"/>
+      <line x1="80" y1="101.8" x2="820" y2="101.8"/>
+    </g>
+
+    <g text-anchor="end">
+      <text x="70" y="425">0</text>
+      <text x="70" y="361">50</text>
+      <text x="70" y="297">100</text>
+      <text x="70" y="234">150</text>
+      <text x="70" y="170">200</text>
+      <text x="70" y="107">250</text>
+    </g>
+
+    <g text-anchor="middle">
+      <text x="120" y="445">1</text>
+      <text x="347" y="445">2</text>
+      <text x="573" y="445">4</text>
+      <text x="800" y="445">8</text>
+    </g>
+
+    <text x="450" y="480" text-anchor="middle" font-size="14">Configured threads</text>
+    <text x="20" y="245" text-anchor="middle" font-size="14" transform="rotate(-90 20 245)">Median latency (ms)</text>
+  </g>
+
+  <g font-family="Segoe UI, sans-serif" font-size="13">
+    <line x1="585" y1="52" x2="620" y2="52" stroke="#0969da" stroke-width="4"/>
+    <circle cx="602" cy="52" r="4" fill="#0969da"/>
+    <text x="628" y="57" fill="#1f2328">Disk</text>
+    <line x1="690" y1="52" x2="725" y2="52" stroke="#d97706" stroke-width="4"/>
+    <circle cx="707" cy="52" r="4" fill="#d97706"/>
+    <text x="733" y="57" fill="#1f2328">Quantization</text>
+  </g>
+
+  <polyline points="120,122.4 347,183.9 573,183.9 800,98.5" fill="none" stroke="#0969da" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+  <polyline points="120,370.0 347,369.1 573,368.5 800,369.1" fill="none" stroke="#d97706" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+
+  <g fill="#0969da">
+    <circle cx="120" cy="122.4" r="5"/><circle cx="347" cy="183.9" r="5"/><circle cx="573" cy="183.9" r="5"/><circle cx="800" cy="98.5" r="5"/>
+  </g>
+  <g fill="#d97706">
+    <circle cx="120" cy="370.0" r="5"/><circle cx="347" cy="369.1" r="5"/><circle cx="573" cy="368.5" r="5"/><circle cx="800" cy="369.1" r="5"/>
+  </g>
+
+  <g font-family="Segoe UI, sans-serif" font-size="12" font-weight="600">
+    <text x="120" y="110" text-anchor="middle" fill="#0969da">233.9</text>
+    <text x="347" y="171" text-anchor="middle" fill="#0969da">185.5</text>
+    <text x="573" y="171" text-anchor="middle" fill="#0969da">185.5</text>
+    <text x="800" y="86" text-anchor="middle" fill="#0969da">252.6</text>
+    <text x="120" y="390" text-anchor="middle" fill="#d97706">39.3</text>
+    <text x="347" y="390" text-anchor="middle" fill="#d97706">40.0</text>
+    <text x="573" y="390" text-anchor="middle" fill="#d97706">40.4</text>
+    <text x="800" y="390" text-anchor="middle" fill="#d97706">40.0</text>
+  </g>
+</svg>
