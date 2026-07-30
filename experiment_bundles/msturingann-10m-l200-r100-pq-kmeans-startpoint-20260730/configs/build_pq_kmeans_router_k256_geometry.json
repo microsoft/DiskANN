@@ -1,0 +1,16 @@
+{
+  "search_directories": [
+    "."
+  ],
+  "jobs": [
+    {
+      "type": "pq-kmeans-router-build",
+      "content": {
+        "load_path": "outputs/msturingann10m_user_m59_l80_sq1_pq64_index",
+        "artifact": "/private/tmp/diskann-pq-kmeans-bfs-cache-router/outputs/msturingann10m_user_m59_l80_sq1_pq64.pq_kmeans_router_k256_geometry.bin",
+        "max_iterations": 4,
+        "num_representatives": 256
+      }
+    }
+  ]
+}

@@ -4,12 +4,13 @@
  */
 
 use std::{
+    cmp::Ordering,
     collections::{BinaryHeap, HashSet},
     path::Path,
 };
 
 use diskann::{ANNError, ANNResult};
-use diskann_quantization::CompressInto;
+use diskann_providers::model::{pq::pq_dist_lookup_single, FixedChunkPQTable};
 use serde::{Deserialize, Serialize};
 
 use crate::storage::quant::pq::PQData;
@@ -88,32 +89,38 @@ impl PqKmeansRouterData {
             .num_representatives
             .unwrap_or_else(|| Self::default_num_representatives(num_points));
         let k = requested_k.clamp(1, num_points);
-        let default_sample_size = (k.saturating_mul(2)).clamp(k, 16_384);
+        let default_sample_size = default_training_sample_size(k);
         let sample_size = params
             .training_sample_size
             .unwrap_or(default_sample_size)
             .clamp(k, num_points);
         let sample_ids = evenly_spaced_sample_ids(num_points, sample_size);
+        let pq_table = pq_data.pq_geometry_table();
+        let dim = pq_data.get_dim();
 
-        let mut centroids = Vec::with_capacity(k * num_pq_chunks);
+        let mut centroids = Vec::with_capacity(k * dim);
         for centroid_idx in 0..k {
             let sample_id = sample_ids[centroid_idx * sample_ids.len() / k];
-            centroids.extend_from_slice(pq_data.get_compressed_vector(sample_id)?);
+            let mut centroid = vec![0.0; dim];
+            pq_table.inflate_vector_into(pq_data.get_compressed_vector(sample_id)?, &mut centroid);
+            centroids.extend_from_slice(&centroid);
         }
 
         let mut counts = vec![0usize; k];
-        let mut sums = vec![0u64; k * num_pq_chunks];
+        let mut sums = vec![0.0f32; k * dim];
+        let mut reconstructed = vec![0.0f32; dim];
         for _ in 0..params.max_iterations {
             counts.fill(0);
-            sums.fill(0);
+            sums.fill(0.0);
 
             for sample_id in &sample_ids {
                 let code = pq_data.get_compressed_vector(*sample_id)?;
-                let centroid = nearest_code(code, &centroids, num_pq_chunks);
+                let centroid = nearest_reconstructed_centroid(code, pq_table, &centroids, dim);
                 counts[centroid] += 1;
-                let sum_base = centroid * num_pq_chunks;
-                for (chunk, value) in code.iter().enumerate() {
-                    sums[sum_base + chunk] += u64::from(*value);
+                pq_table.inflate_vector_into(code, &mut reconstructed);
+                let sum_base = centroid * dim;
+                for (dimension, value) in reconstructed.iter().enumerate() {
+                    sums[sum_base + dimension] += *value;
                 }
             }
 
@@ -121,10 +128,10 @@ impl PqKmeansRouterData {
                 if count == 0 {
                     continue;
                 }
-                let base = centroid * num_pq_chunks;
-                for chunk in 0..num_pq_chunks {
-                    centroids[base + chunk] =
-                        ((sums[base + chunk] + (count as u64 / 2)) / count as u64) as u8;
+                let base = centroid * dim;
+                let count = count as f32;
+                for dimension in 0..dim {
+                    centroids[base + dimension] = sums[base + dimension] / count;
                 }
             }
         }
@@ -136,7 +143,7 @@ impl PqKmeansRouterData {
             if let Some(sample_id) = nearest_sample_to_centroid(
                 pq_data,
                 &sample_ids,
-                &centroids[centroid * num_pq_chunks..(centroid + 1) * num_pq_chunks],
+                &centroids[centroid * dim..(centroid + 1) * dim],
                 &used,
             )? {
                 used.insert(sample_id);
@@ -249,6 +256,13 @@ impl PqKmeansStartPointRouter {
     }
 
     pub fn route(&self, query: &[f32], pq_data: &PQData) -> ANNResult<PqKmeansRouteResult> {
+        if pq_data.pq_compressed_data().nrows() != self.data.num_points {
+            return Err(ANNError::log_index_error(format!(
+                "PQ-kmeans router artifact has {} points but PQ data contains {} points",
+                self.data.num_points,
+                pq_data.pq_compressed_data().nrows()
+            )));
+        }
         if pq_data.get_num_chunks() != self.data.num_pq_chunks {
             return Err(ANNError::log_index_error(format!(
                 "PQ-kmeans router chunk count {} does not match PQ data chunk count {}",
@@ -256,17 +270,26 @@ impl PqKmeansStartPointRouter {
                 pq_data.get_num_chunks()
             )));
         }
+        if query.len() != pq_data.get_dim() {
+            return Err(ANNError::log_pq_error(format!(
+                "PQ-kmeans router query has dimension {} but PQ table expects {}",
+                query.len(),
+                pq_data.get_dim()
+            )));
+        }
 
-        let mut query_code = vec![0u8; self.data.num_pq_chunks];
-        pq_data
-            .pq_table()
-            .compress_into(query, query_code.as_mut_slice())
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        let pq_table = pq_data.pq_geometry_table();
+        let mut query_distances =
+            vec![0.0f32; pq_table.get_num_chunks() * pq_table.get_num_centers()];
+        pq_table.populate_chunk_distances(query, query_distances.as_mut_slice())?;
 
         let mut scored = BinaryHeap::with_capacity(self.max_start_points);
         for (idx, representative_id) in self.data.representative_ids.iter().enumerate() {
             let code = self.representative_code(idx);
-            let candidate = (pq_code_distance(&query_code, code), *representative_id);
+            let candidate = ScoredRepresentative::new(
+                pq_dist_lookup_single(code, query_distances.as_slice(), pq_table.get_num_centers()),
+                *representative_id,
+            );
             if scored.len() < self.max_start_points {
                 scored.push(candidate);
             } else if scored.peek().is_some_and(|worst| candidate < *worst) {
@@ -275,13 +298,13 @@ impl PqKmeansStartPointRouter {
             }
         }
         let mut scored = scored.into_vec();
-        scored.sort_unstable_by_key(|(distance, id)| (*distance, *id));
+        scored.sort_unstable();
 
         let mut seen = HashSet::with_capacity(self.max_start_points);
         let mut start_points = Vec::with_capacity(self.max_start_points);
-        for (_, id) in scored {
-            if seen.insert(id) {
-                start_points.push(id);
+        for candidate in scored {
+            if seen.insert(candidate.id) {
+                start_points.push(candidate.id);
                 if start_points.len() >= self.max_start_points {
                     break;
                 }
@@ -308,6 +331,34 @@ impl PqKmeansStartPointRouter {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScoredRepresentative {
+    distance: f32,
+    id: u32,
+}
+
+impl ScoredRepresentative {
+    fn new(distance: f32, id: u32) -> Self {
+        Self { distance, id }
+    }
+}
+
+impl Eq for ScoredRepresentative {}
+
+impl Ord for ScoredRepresentative {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.id.cmp(&other.id))
+    }
+}
+
+impl PartialOrd for ScoredRepresentative {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn evenly_spaced_sample_ids(num_points: usize, sample_size: usize) -> Vec<usize> {
     if sample_size >= num_points {
         return (0..num_points).collect();
@@ -317,11 +368,30 @@ fn evenly_spaced_sample_ids(num_points: usize, sample_size: usize) -> Vec<usize>
         .collect()
 }
 
-fn nearest_code(query_code: &[u8], codes: &[u8], num_pq_chunks: usize) -> usize {
-    codes
-        .chunks_exact(num_pq_chunks)
+fn default_training_sample_size(k: usize) -> usize {
+    if k >= 16_384 {
+        k
+    } else {
+        k.saturating_mul(2).min(16_384)
+    }
+}
+
+fn nearest_reconstructed_centroid(
+    code: &[u8],
+    pq_table: &FixedChunkPQTable,
+    centroids: &[f32],
+    dim: usize,
+) -> usize {
+    centroids
+        .chunks_exact(dim)
         .enumerate()
-        .min_by_key(|(_, code)| pq_code_distance(query_code, code))
+        .min_by(|(left_idx, left), (right_idx, right)| {
+            let left_distance = pq_table.l2_distance(left, code);
+            let right_distance = pq_table.l2_distance(right, code);
+            left_distance
+                .total_cmp(&right_distance)
+                .then_with(|| left_idx.cmp(right_idx))
+        })
         .map(|(idx, _)| idx)
         .unwrap_or(0)
 }
@@ -329,34 +399,33 @@ fn nearest_code(query_code: &[u8], codes: &[u8], num_pq_chunks: usize) -> usize 
 fn nearest_sample_to_centroid(
     pq_data: &PQData,
     sample_ids: &[usize],
-    centroid_code: &[u8],
+    centroid: &[f32],
     used: &HashSet<usize>,
 ) -> ANNResult<Option<usize>> {
+    let pq_table = pq_data.pq_geometry_table();
     let mut best_unused = None;
     let mut best_any = None;
     for sample_id in sample_ids {
         let code = pq_data.get_compressed_vector(*sample_id)?;
-        let distance = pq_code_distance(centroid_code, code);
+        let distance = pq_table.l2_distance(centroid, code);
         let candidate = (distance, *sample_id);
-        if best_any.is_none_or(|best| candidate < best) {
+        if best_any.is_none_or(|best| pq_distance_candidate_lt(candidate, best)) {
             best_any = Some(candidate);
         }
-        if !used.contains(sample_id) && best_unused.is_none_or(|best| candidate < best) {
+        if !used.contains(sample_id)
+            && best_unused.is_none_or(|best| pq_distance_candidate_lt(candidate, best))
+        {
             best_unused = Some(candidate);
         }
     }
     Ok(best_unused.or(best_any).map(|(_, sample_id)| sample_id))
 }
 
-fn pq_code_distance(lhs: &[u8], rhs: &[u8]) -> u32 {
-    debug_assert_eq!(lhs.len(), rhs.len());
-    lhs.iter()
-        .zip(rhs.iter())
-        .map(|(lhs, rhs)| {
-            let diff = i32::from(*lhs) - i32::from(*rhs);
-            (diff * diff) as u32
-        })
-        .sum()
+fn pq_distance_candidate_lt(lhs: (f32, usize), rhs: (f32, usize)) -> bool {
+    lhs.0
+        .total_cmp(&rhs.0)
+        .then_with(|| lhs.1.cmp(&rhs.1))
+        .is_lt()
 }
 
 #[cfg(test)]
@@ -370,6 +439,14 @@ mod tests {
         let table =
             FixedChunkPQTable::new(1, Box::new([0.0, 10.0, 20.0, 30.0]), Box::new([0, 1])).unwrap();
         let codes = Matrix::try_from(Box::new([0u8, 1, 2, 3]) as Box<[u8]>, 4, 1).unwrap();
+        PQData::new(table, codes).unwrap()
+    }
+
+    fn non_ordinal_one_chunk_pq_data(codes: Box<[u8]>) -> PQData {
+        let table =
+            FixedChunkPQTable::new(1, Box::new([0.0, 100.0, 101.0]), Box::new([0, 1])).unwrap();
+        let num_points = codes.len();
+        let codes = Matrix::try_from(codes, num_points, 1).unwrap();
         PQData::new(table, codes).unwrap()
     }
 
@@ -392,6 +469,69 @@ mod tests {
 
         assert_eq!(result.start_points, vec![2, 3]);
         assert_eq!(result.scanned_codes, 3);
+    }
+
+    #[test]
+    fn route_scores_representatives_with_adc_geometry_not_label_ids() {
+        let pq_data = non_ordinal_one_chunk_pq_data(Box::new([0u8, 1, 2]));
+        let router = PqKmeansStartPointRouter::new(
+            PqKmeansRouterData {
+                num_points: 3,
+                num_pq_chunks: 1,
+                representative_ids: vec![0, 2],
+                representative_codes: vec![0, 2],
+                fallback_medoid: Some(1),
+            },
+            1,
+        )
+        .unwrap();
+
+        let result = router.route(&[99.0], &pq_data).unwrap();
+
+        assert_eq!(result.start_points, vec![2]);
+        assert_eq!(result.scanned_codes, 2);
+    }
+
+    #[test]
+    fn build_clusters_pq_reconstructed_geometry_not_label_ids() {
+        let pq_data = non_ordinal_one_chunk_pq_data(Box::new([0u8, 2, 2]));
+
+        let data = PqKmeansRouterData::build_from_pq_data(
+            &pq_data,
+            PqKmeansRouterBuildParams {
+                num_representatives: Some(1),
+                training_sample_size: Some(3),
+                max_iterations: 1,
+            },
+            Some(0),
+        )
+        .unwrap();
+
+        assert_eq!(data.representative_ids, vec![1]);
+        assert_eq!(data.representative_codes, vec![2]);
+    }
+
+    #[test]
+    fn default_training_sample_size_handles_k_larger_than_cap() {
+        assert_eq!(default_training_sample_size(16_385), 16_385);
+    }
+
+    #[test]
+    fn route_rejects_router_artifact_for_different_num_points() {
+        let pq_data = one_chunk_pq_data();
+        let router = PqKmeansStartPointRouter::new(
+            PqKmeansRouterData {
+                num_points: 5,
+                num_pq_chunks: 1,
+                representative_ids: vec![4],
+                representative_codes: vec![0],
+                fallback_medoid: None,
+            },
+            1,
+        )
+        .unwrap();
+
+        assert!(router.route(&[0.0], &pq_data).is_err());
     }
 
     #[test]

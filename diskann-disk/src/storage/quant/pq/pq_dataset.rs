@@ -12,6 +12,10 @@ use diskann_utils::views::Matrix;
 
 #[derive(Debug)]
 pub struct PQData {
+    // pq pivot table in the original row-major layout, used for PQ codebook-geometry
+    // distances between compressed vectors and query-to-code ADC scoring.
+    pq_geometry_table: FixedChunkPQTable,
+
     // pq pivot table.
     pq_pivot_table: TransposedTable,
 
@@ -24,6 +28,7 @@ impl PQData {
         pq_pivot_table: FixedChunkPQTable,
         pq_compressed_data: Matrix<u8>,
     ) -> ANNResult<Self> {
+        let pq_geometry_table = pq_pivot_table.clone();
         let pq_pivot_table = TransposedTable::from_parts(
             pq_pivot_table.view_pivots(),
             pq_pivot_table.view_offsets().to_owned(),
@@ -31,6 +36,7 @@ impl PQData {
         .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
 
         Ok(Self {
+            pq_geometry_table,
             pq_pivot_table,
             pq_compressed_data,
         })
@@ -39,6 +45,11 @@ impl PQData {
     /// Get pq_table
     pub fn pq_table(&self) -> &TransposedTable {
         &self.pq_pivot_table
+    }
+
+    /// Return the row-major PQ table used for codebook-geometry distance scoring.
+    pub fn pq_geometry_table(&self) -> &FixedChunkPQTable {
+        &self.pq_geometry_table
     }
 
     /// Return the logical dimension of the original (pre-quantization) vectors.
