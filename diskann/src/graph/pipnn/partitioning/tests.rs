@@ -253,6 +253,13 @@ fn replica_seed_derivation_is_stable_and_distinct() {
 }
 
 #[test]
+fn assignment_stripes_use_power_of_two_row_counts() {
+    assert_eq!(assignment_stripe_rows(1_000), 128);
+    assert_eq!(assignment_stripe_rows(256), 512);
+    assert_eq!(assignment_stripe_rows(1), MAX_ASSIGNMENT_STRIPE_ROWS);
+}
+
+#[test]
 fn leader_assignment_handles_multiple_stripes() {
     let points = 2_048;
     let data: Vec<f32> = (0..points).map(|point| point as f32).collect();
