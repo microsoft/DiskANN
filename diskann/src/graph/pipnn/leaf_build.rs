@@ -115,14 +115,18 @@ impl LeafBuffers {
                 columns: actual_k,
             })?;
 
-        resize("leaf points", &mut self.points, point_values, 0.0)?;
-        resize("leaf dot products", &mut self.dots, dot_values, 0.0)?;
-        resize(
+        grow("leaf points", &mut self.points, point_values, 0.0)?;
+        grow("leaf dot products", &mut self.dots, dot_values, 0.0)?;
+        grow(
             "leaf nearest neighbors",
             &mut self.nearest,
             nearest_values,
             LeafNeighbor::default(),
         )?;
+        Ok(actual_k)
+    }
+
+    fn prepare_local_graph(&mut self, points: usize) -> Result<(), LeafBuildError> {
         let additional = points.saturating_sub(self.local_graph.len());
         self.local_graph
             .try_reserve(additional)
@@ -131,7 +135,7 @@ impl LeafBuffers {
         self.local_graph[..points]
             .iter_mut()
             .for_each(AdjacencyList::clear);
-        Ok(actual_k)
+        Ok(())
     }
 }
 
@@ -219,11 +223,6 @@ where
     if point_ids.is_empty() {
         return Err(LeafBuildError::EmptyLeaf { leaf });
     }
-    buffers.seen_ids.clear();
-    buffers
-        .seen_ids
-        .try_reserve(point_ids.len())
-        .map_err(|source| allocation_error("leaf ID set", point_ids.len(), source))?;
     for &point in point_ids {
         if point as usize >= data.nrows() {
             return Err(LeafBuildError::InvalidPointId {
@@ -232,8 +231,24 @@ where
                 points: data.nrows(),
             });
         }
-        if !buffers.seen_ids.insert(point) {
-            return Err(LeafBuildError::DuplicatePointId { leaf, point });
+    }
+    if point_ids.is_sorted() {
+        if let Some(pair) = point_ids.windows(2).find(|pair| pair[0] == pair[1]) {
+            return Err(LeafBuildError::DuplicatePointId {
+                leaf,
+                point: pair[0],
+            });
+        }
+    } else {
+        buffers.seen_ids.clear();
+        buffers
+            .seen_ids
+            .try_reserve(point_ids.len())
+            .map_err(|source| allocation_error("leaf ID set", point_ids.len(), source))?;
+        for &point in point_ids {
+            if !buffers.seen_ids.insert(point) {
+                return Err(LeafBuildError::DuplicatePointId { leaf, point });
+            }
         }
     }
     let actual_k = buffers.prepare(leaf, point_ids.len(), data.ncols(), k)?;
@@ -241,11 +256,14 @@ where
         return Ok(());
     }
 
+    let point_values = point_ids.len() * data.ncols();
+    let dot_values = point_ids.len() * point_ids.len();
+    let nearest_values = point_ids.len() * actual_k;
+
     for (&point, output) in point_ids
         .iter()
-        .zip(buffers.points.chunks_exact_mut(data.ncols()))
+        .zip(buffers.points[..point_values].chunks_exact_mut(data.ncols()))
     {
-        // Point IDs were validated before the zero-k/singleton fast path.
         let row = data.row(point as usize);
         T::as_f32_into(row, output).map_err(|source| LeafBuildError::Conversion {
             leaf,
@@ -255,28 +273,29 @@ where
     }
 
     diskann_linalg::sgemm_aat_lower(
-        &buffers.points,
+        &buffers.points[..point_values],
         point_ids.len(),
         data.ncols(),
-        &mut buffers.dots,
+        &mut buffers.dots[..dot_values],
     )
     .map_err(|source| LeafBuildError::LowerAat { leaf, source })?;
     nearest_leaf_neighbors(
         LeafTopK {
-            dots: &buffers.dots,
+            dots: &buffers.dots[..dot_values],
             points: point_ids.len(),
             metric,
         },
         k,
-        &mut buffers.nearest,
+        &mut buffers.nearest[..nearest_values],
         &mut buffers.top_k,
     )
     .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
 
+    buffers.prepare_local_graph(point_ids.len())?;
     add_symmetric_edges(
         point_ids,
         actual_k,
-        &buffers.nearest,
+        &buffers.nearest[..nearest_values],
         &mut buffers.local_graph[..point_ids.len()],
     )?;
     candidates.add_leaf(point_ids, &buffers.local_graph[..point_ids.len()])
@@ -303,6 +322,18 @@ fn add_symmetric_edges(
                 local_graph[target].push(source_id);
             }
         }
+    }
+    Ok(())
+}
+
+fn grow<T: Clone>(
+    buffer: &'static str,
+    values: &mut Vec<T>,
+    len: usize,
+    value: T,
+) -> Result<(), LeafBuildError> {
+    if values.len() < len {
+        resize(buffer, values, len, value)?;
     }
     Ok(())
 }

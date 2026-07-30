@@ -246,6 +246,10 @@ fn rejects_invalid_shape_inputs_without_panicking() {
         build(view(&data, 2, 1), &[vec![0, 0]], 1, Metric::L2),
         Err(LeafBuildError::DuplicatePointId { leaf: 0, point: 0 })
     ));
+    assert!(matches!(
+        build(view(&data, 2, 1), &[vec![1, 0, 1]], 1, Metric::L2),
+        Err(LeafBuildError::DuplicatePointId { leaf: 0, point: 1 })
+    ));
 }
 
 #[test]
@@ -275,6 +279,9 @@ fn reuses_worker_buffers_for_smaller_leaves() {
     assert_eq!(buffers.points.as_ptr(), points);
     assert_eq!(buffers.dots.as_ptr(), dots);
     assert_eq!(buffers.nearest.as_ptr(), nearest);
+    assert_eq!(buffers.points.len(), 64 * 128);
+    assert_eq!(buffers.dots.len(), 64 * 64);
+    assert_eq!(buffers.nearest.len(), 64 * 2);
 }
 
 #[test]
