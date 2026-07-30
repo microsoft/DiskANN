@@ -384,7 +384,7 @@ where
 
     // The compression table.
     let table = TransposedTable::from_parts(table.view_pivots(), table.view_offsets().to_owned())
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
@@ -554,7 +554,7 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
         MatrixView::try_from(pivot_data, parameters.num_centers(), dim).bridge_err()?,
         ChunkOffsetsView::new(offsets).bridge_err()?,
     )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+    .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
 
     pq_out
         .par_chunks_mut(num_pq_chunks)
