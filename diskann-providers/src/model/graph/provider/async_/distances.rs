@@ -172,7 +172,9 @@ pub mod pq {
         };
 
         use super::{Hybrid, HybridComputer};
-        use crate::model::pq::{FixedChunkPQTable, distance::DistanceComputer};
+        use crate::model::pq::{
+            COSINE_NORMALIZED_L2_SCALE, FixedChunkPQTable, distance::DistanceComputer,
+        };
 
         #[test]
         fn hybrid_cosine_normalized_pq_pairs_use_scaled_l2() {
@@ -197,7 +199,7 @@ pub mod pq {
                 Hybrid::Quant(code0.as_slice()),
             );
             let squared_l2: f32 = SquaredL2::evaluate(full.as_slice(), reconstructed0.as_slice());
-            let expected_full_quant = 0.5 * squared_l2;
+            let expected_full_quant = COSINE_NORMALIZED_L2_SCALE * squared_l2;
             assert_relative_eq!(full_quant, expected_full_quant, max_relative = 1.0e-7);
 
             let quant_quant = computer.evaluate_similarity(
@@ -206,7 +208,7 @@ pub mod pq {
             );
             let squared_l2: f32 =
                 SquaredL2::evaluate(reconstructed0.as_slice(), reconstructed1.as_slice());
-            let expected_quant_quant = 0.5 * squared_l2;
+            let expected_quant_quant = COSINE_NORMALIZED_L2_SCALE * squared_l2;
             assert_relative_eq!(quant_quant, expected_quant_quant, max_relative = 1.0e-7);
         }
     }

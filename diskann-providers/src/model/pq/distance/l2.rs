@@ -49,7 +49,9 @@ impl<'a> TableL2<'a> {
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> ANNResult<Self> {
-        Self::new_scaled(parent, query, pool, 1.0)
+        let mut object = Self::new_unpopulated(parent, pool);
+        object.populate(query)?;
+        Ok(object)
     }
 
     pub(crate) fn new_scaled(
@@ -58,8 +60,7 @@ impl<'a> TableL2<'a> {
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
         scale: f32,
     ) -> ANNResult<Self> {
-        let mut object = Self::new_unpopulated(parent, pool);
-        object.populate(query)?;
+        let mut object = Self::new(parent, query, pool)?;
         object
             .lookup_table
             .iter_mut()

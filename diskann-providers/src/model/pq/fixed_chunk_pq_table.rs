@@ -16,7 +16,7 @@ use diskann_wide::ARCH;
 use super::NUM_PQ_CENTROIDS;
 use crate::utils::{Bridge, BridgeErr};
 
-pub(super) const COSINE_NORMALIZED_L2_SCALE: f32 = 0.5;
+pub(crate) const COSINE_NORMALIZED_L2_SCALE: f32 = 0.5;
 
 /// PQ Pivot table loading and calculate distance
 ///
@@ -249,7 +249,7 @@ impl FixedChunkPQTable {
     /// This uses half the squared L2 distance so that every PQ-involved
     /// `CosineNormalized` comparison uses the same scale.
     /// * `query_vec` - query vector: 1 * dim
-    /// * `base_vec` - given centroid array: 1 * num_pq_chunks
+    /// * `base_vec` - PQ code containing one centroid index per chunk
     pub fn cosine_normalized_distance(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
         COSINE_NORMALIZED_L2_SCALE * self.l2_distance(query_vec, base_vec)
     }
