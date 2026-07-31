@@ -15,6 +15,30 @@
 //! 4. writes selected IDs to the output adjacency list; and
 //! 5. optionally fills unused degree slots from the original pool.
 //!
+//! ```text
+//! sorted source-distance pool ──> lookup cache + State[]
+//!                                      │
+//!                  alpha = 1.0 ────────┤
+//!                                      v
+//!                         scan/resume candidate cursors
+//!                                      │
+//!                    alpha *= min(target, 1.2)
+//!                                      │
+//!                                      v
+//!                              selected prefix
+//!                                      │
+//!                         optional ordered saturation
+//!                                      v
+//!                              adjacency output
+//! ```
+//!
+//! | Candidate state | Meaning on the next alpha round |
+//! | --- | --- |
+//! | `occlude_factor > alpha` | skip until a later, permissive round |
+//! | `last_checked < found` | resume with the first unseen selected neighbor |
+//! | `occlude_factor == f32::MAX` | selected, excluded, or unavailable; never revisit |
+//! | selected prefix entry | `neighbor` indexes the original sorted pool |
+//!
 //! Keeping lookup outside this module lets asynchronous providers fetch before
 //! entering the synchronous state machine, while in-memory builders can pass
 //! borrowed rows without copying provider policy into the algorithm.
