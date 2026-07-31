@@ -12,6 +12,8 @@ use thiserror::Error;
 
 use super::QuantizationType;
 
+use crate::error::{diskann_error, ErrorKind};
+
 /// GB to bytes ratio.
 pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
 
@@ -28,7 +30,7 @@ pub struct InvalidMemBudget;
 
 impl From<InvalidMemBudget> for ANNError {
     fn from(value: InvalidMemBudget) -> Self {
-        ANNError::log_index_config_error("MemoryBudget".to_string(), format!("{value:?}"))
+        diskann_error!(ErrorKind::IndexConfigError("MemoryBudget"), value)
     }
 }
 
@@ -71,7 +73,7 @@ pub enum PQChunksError {
 
 impl From<PQChunksError> for ANNError {
     fn from(value: PQChunksError) -> Self {
-        ANNError::log_index_config_error("NumPQChunks".to_string(), format!("{value:?}"))
+        diskann_error!(ErrorKind::IndexConfigError("NumPQChunks"), value)
     }
 }
 
@@ -167,7 +169,9 @@ impl DiskIndexBuildParameters {
 
 #[cfg(test)]
 mod dataset_test {
-    use diskann::{ANNError, ANNErrorKind};
+    use diskann::ANNError;
+
+    use crate::error::{error_kind, ErrorKind};
 
     use super::*;
 
@@ -230,7 +234,10 @@ mod dataset_test {
         let err = MemoryBudget::try_from_gb(-1.0)
             .map_err(ANNError::from)
             .unwrap_err();
-        assert_eq!(err.kind(), ANNErrorKind::IndexConfigError);
+        assert_eq!(
+            error_kind(&err),
+            ErrorKind::IndexConfigError("MemoryBudget")
+        );
     }
 
     #[test]

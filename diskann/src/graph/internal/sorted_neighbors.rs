@@ -7,7 +7,7 @@
 
 use std::ops::Deref;
 
-use crate::neighbor::Neighbor;
+use crate::neighbor::{self, Neighbor};
 
 /// A utility that asserts the contained neighbors are sorted by distance.
 #[derive(Debug)]
@@ -34,8 +34,9 @@ where
         // `neighbors.len() == 0`. In either case, the resulting slice will be empty
         // and there's no actual work to be done.
         if let Some(position) = max.min(neighbors.len()).checked_sub(1) {
-            let (prefix, _, _) = neighbors.select_nth_unstable(position);
-            prefix.sort_unstable()
+            let (prefix, _, _) =
+                neighbors.select_nth_unstable_by(position, neighbor::ord::fast_distance);
+            prefix.sort_unstable_by(neighbor::ord::fast_distance)
         }
 
         neighbors.truncate(max);
@@ -60,6 +61,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::cmp::assert_eq_verbose;
 
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
@@ -99,7 +101,7 @@ mod tests {
 
                 let expected_len = reference.len().min(max);
                 assert_eq!(sorted.len(), expected_len);
-                assert_eq!(&sorted[..expected_len], &reference[..expected_len],);
+                assert_eq_verbose!(&sorted[..expected_len], &reference[..expected_len]);
 
                 // Changes are visible on the taken vector.
                 assert_eq!(shuffled.len(), expected_len)

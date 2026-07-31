@@ -201,10 +201,11 @@ fn run_searches(
 
     let mut results = Vec::new();
     for (query, desc) in queries {
-        let params = Knn::new(10, 10, None).unwrap();
+        let k_value = 10;
+        let params = Knn::new(10, None).unwrap();
         let search_ctx = test_provider::Context::new();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
+        let mut neighbors = vec![Neighbor::<u32>::default(); k_value];
         let graph::index::SearchStats {
             cmps,
             hops,

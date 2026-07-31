@@ -4,7 +4,7 @@
  */
 
 pub(crate) mod ann_error;
-pub use ann_error::{ANNError, ANNErrorKind, ANNResult, DiskANNError, ErrorContext, IntoANNResult};
+pub use ann_error::{ANNError, ANNResult, ErrorContext, IntoANNResult};
 
 pub(crate) mod ranked;
 pub use ranked::{ErrorExt, Infallible, NeverTransient, RankedError, ToRanked, TransientError};
@@ -14,11 +14,8 @@ impl<T> StandardError for T where T: std::error::Error + Send + Sync + 'static +
 
 #[cfg(any(test, feature = "testing"))]
 macro_rules! message {
-    ($kind:ident, $($args:tt)*) => {
-        $crate::ANNError::message($kind, format!($($args)*))
-    };
     ($($args:tt)*) => {
-        $crate::ANNError::message($crate::ANNErrorKind::Opaque, format!($($args)*))
+        $crate::ANNError::message(format!($($args)*))
     };
 }
 
