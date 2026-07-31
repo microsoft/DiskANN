@@ -92,6 +92,63 @@ fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
     });
 }
 
+fn assert_sketch_source_type_matches_f32<T>(
+    label: &str,
+    convert: impl Fn(u8) -> T,
+    reference: impl Fn(u8) -> f32,
+) where
+    T: VectorRepr + Send + Sync,
+{
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    let points = 5;
+    for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+        let raw: Vec<u8> = (0..points * dimensions)
+            .map(|index| ((index * 7 + index / dimensions * 3) % 23) as u8)
+            .collect();
+        let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
+        let f32_data: Vec<f32> = raw.iter().copied().map(&reference).collect();
+        for planes in [1, 8, 16] {
+            let (actual, expected) = pool.install(|| {
+                (
+                    sketches_from_data(&converted, points, dimensions, planes, 42).unwrap(),
+                    sketches_from_data(&f32_data, points, dimensions, planes, 42).unwrap(),
+                )
+            });
+            assert_eq!(
+                actual.sketches(),
+                expected.sketches(),
+                "{label} dimensions={dimensions} planes={planes}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_f16_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+    assert_sketch_source_type_matches_f32(
+        "f16",
+        |value| half::f16::from_f32(value as f32),
+        |value| value as f32,
+    );
+}
+
+#[test]
+fn test_u8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+    assert_sketch_source_type_matches_f32("u8", |value| value, |value| value as f32);
+}
+
+#[test]
+fn test_i8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+    assert_sketch_source_type_matches_f32(
+        "i8",
+        |value| value as i8 - 11,
+        |value| (value as i8 - 11) as f32,
+    );
+}
+
 #[test]
 fn test_relative_hash_matches_numeric_reference() {
     let dispatched = select_relative_hash();
@@ -182,6 +239,30 @@ fn test_round_up_to_32_boundaries() {
     assert_eq!(round_up_to_32(1), 32);
     assert_eq!(round_up_to_32(32), 32);
     assert_eq!(round_up_to_32(33), 64);
+}
+
+#[test]
+fn test_hash_prune_accepts_structural_l_max_boundaries() {
+    let data = [0.0_f32];
+    let low = HashPrune::new(&data, 1, 1, 1, 1, 42).unwrap();
+    assert_eq!(low.l_max, 1);
+    assert_eq!(low.scan_lanes, 32);
+
+    let high = HashPrune::new(&data, 1, 1, 1, MAX_RESERVOIR_LEN, 42).unwrap();
+    assert_eq!(high.l_max, MAX_RESERVOIR_LEN);
+    assert_eq!(high.scan_lanes, 256);
+}
+
+#[test]
+fn test_hash_prune_rejects_l_max_outside_structural_boundaries() {
+    for l_max in [0, MAX_RESERVOIR_LEN + 1] {
+        let result = HashPrune::new(&[0.0_f32], 1, 1, 1, l_max, 42);
+        let error = match result {
+            Ok(_) => panic!("l_max={l_max} must be rejected"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains(&format!("l_max ({l_max})")));
+    }
 }
 
 #[test]

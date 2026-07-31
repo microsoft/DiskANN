@@ -5,6 +5,34 @@
 
 //! HashPrune: LSH-based online pruning for merging edges from overlapping partitions.
 //!
+//! ```text
+//! dataset ──> random-hyperplane sketches (one row per point)
+//!                                  │
+//! leaf-local symmetric CSR ──> gather leaf sketches
+//!                                  │
+//!                                  v
+//!                     relative hash(source, target)
+//!                                  │
+//!                                  v
+//!                 lock source row ──> update bounded reservoir
+//!                                  │
+//!                    consume HashPrune at stage exit
+//!                       ┌──────────┴──────────┐
+//!                       v                     v
+//!               nearest rows          unsorted candidate rows
+//!                                      (for RobustPrune)
+//! ```
+//!
+//! Each source row retains at most one neighbor per relative hash bucket:
+//!
+//! | Existing state | Incoming edge | Action |
+//! | --- | --- | --- |
+//! | matching hash | closer | replace that bucket |
+//! | matching hash | not closer | reject |
+//! | free bucket | any distance | append |
+//! | full | closer than cached farthest | replace farthest |
+//! | full | not closer | reject before scanning hashes |
+//!
 //! Storage is AoSoA hot/cold split:
 //! - `hot: Vec<HotSlot>` — one 16-byte slot per point (mutex + len + farthest).
 //!   Early rejection and lock acquisition only touch this slab.
@@ -127,8 +155,7 @@ impl<T: Pod> std::ops::Deref for MmapSlab<T> {
 /// Windows counterpart of the Linux mmap slab. `VirtualAlloc(MEM_RESERVE |
 /// MEM_COMMIT, PAGE_READWRITE)` reserves a zero-backed anonymous range whose
 /// pages fault in on first write — the same lazy-commit behavior as
-/// `mmap(MAP_ANONYMOUS)`, so Windows gets the same peak-RSS win instead of the
-/// eager-fault `Vec` fallback.
+/// `mmap(MAP_ANONYMOUS)`, rather than the fallback `Vec`'s eager initialization.
 #[cfg(windows)]
 mod winmem {
     // Minimal FFI to the Win32 memory API — avoids pulling in the `windows`
@@ -663,6 +690,12 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
 
 // ─── HashPrune ────────────────────────────────────────────────────────────────
 
+/// Global bounded reservoirs shared by parallel leaf workers.
+///
+/// Row `i` consists of `hot[i]` and the `i * scan_lanes` range in each cold
+/// slab. The embedded row mutex is the sole synchronization boundary: callers
+/// never hold two row locks, and sketch computation/extraction happens without
+/// a lock. Consuming extraction proves that no writer can remain.
 pub(crate) struct HashPrune {
     hot: Vec<LockedHotSlot>,
     /// AoSoA hashes slab: `npoints * scan_lanes` u16.
@@ -689,6 +722,8 @@ unsafe impl Send for HashPrune {}
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
+    /// Precompute immutable sketches and allocate one lazy-backed reservoir row
+    /// per dataset point.
     pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: &[T],
         npoints: usize,
