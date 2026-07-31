@@ -38,7 +38,9 @@ fn scalar_reference_matches_runtime_dispatch() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        for leaders in [7, 17] {
+        // Leader count controls SIMD chunking. Exercise the tail on both sides
+        // of 4-, 8-, and 16-lane boundaries, then a second 16-lane chunk.
+        for leaders in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
             let (dots, row_scales, leader_scales) = input(metric, leaders);
             let input = PartitionTopK {
                 dots: &dots,
@@ -48,7 +50,10 @@ fn scalar_reference_matches_runtime_dispatch() {
                 leader_scales: &leader_scales,
                 metric,
             };
-            for fanout in [1, 2, 6] {
+            for fanout in [1, 2, 6, MAX_PARTITION_FANOUT] {
+                if fanout > leaders {
+                    continue;
+                }
                 let mut expected = vec![u32::MAX; input.rows * fanout];
                 nearest_leaders(input, fanout, &mut expected).unwrap();
 

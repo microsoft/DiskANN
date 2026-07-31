@@ -5,9 +5,17 @@
 
 //! Distance and top-k kernel for partition assignment.
 //!
-//! The kernel consumes a row-major tile of point-to-leader dot products. It
-//! converts those products to metric distances while retaining only leader
-//! positions; partition recursion and cluster ownership stay with the caller.
+//! The caller gathers a point stripe and a leader matrix, then computes the
+//! row-major `points · leadersᵀ` tile with GEMM. This module performs the second
+//! half of assignment: convert each dot product to the configured metric and
+//! retain only the nearest leader positions.
+//!
+//! L2 deliberately omits the point norm because it adds the same constant to
+//! every leader in one row and cannot change their order. Cosine still needs a
+//! point scale because it divides each dot product. The fixed 16-entry tracker
+//! bounds stack use and matches the configuration fanout limit. SIMD chunks and
+//! scalar tails feed the same insertion routine; NaNs are ignored and equal
+//! distances keep the first leader encountered.
 
 use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector};

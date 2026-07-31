@@ -45,24 +45,34 @@ fn scalar_reference_matches_runtime_dispatch() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        for points in [7, 17] {
+        // Point count, rather than source-vector dimension, controls this
+        // kernel's SIMD boundaries. These values cover short rows plus the
+        // lane-1/lane/lane+1 boundaries for 4-, 8-, and 16-lane backends,
+        // then the boundary around a second 16-lane chunk.
+        for points in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
             let dots = dots(metric, points);
             let input = LeafTopK {
                 dots: &dots,
                 points,
                 metric,
             };
-            for k in [1, 2, 3, 4] {
+            for requested_k in [1, 2, 3, 4] {
+                let k = requested_k.min(points - 1);
                 let mut expected = vec![LeafNeighbor::default(); points * k];
-                nearest_leaf_neighbors(input, k, &mut expected, &mut LeafTopKWorkspace::new())
-                    .unwrap();
+                nearest_leaf_neighbors(
+                    input,
+                    requested_k,
+                    &mut expected,
+                    &mut LeafTopKWorkspace::new(),
+                )
+                .unwrap();
 
                 let mut actual = vec![LeafNeighbor::default(); points * k];
                 let mut worst = vec![f32::INFINITY; points];
                 let norms = norms(input);
                 process_pairs_scalar(input, k, &mut actual, &norms, &mut worst);
 
-                assert_eq!(actual, expected, "{metric:?}, n={points}, k={k}");
+                assert_eq!(actual, expected, "{metric:?}, n={points}, k={requested_k}");
             }
         }
     }
