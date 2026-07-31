@@ -3,7 +3,19 @@
  * Licensed under the MIT license.
  */
 
-//! Leaf construction and direct candidate accumulation.
+//! Leaf-local graph construction and candidate accumulation.
+//!
+//! Partitioning supplies leaves as global point IDs. For each leaf this module:
+//!
+//! 1. validates IDs and converts only those rows to reusable `f32` scratch;
+//! 2. computes the lower triangle of `A · Aᵀ`;
+//! 3. runs the dual-endpoint leaf top-k kernel; and
+//! 4. translates leaf-local positions back to dataset IDs.
+//!
+//! The final step merges symmetric adjacency rows under per-point locks because
+//! overlapping leaves are processed concurrently. Numeric buffers retain their
+//! high-water length; every consumer therefore receives an explicit active
+//! prefix rather than treating `Vec::len()` as the current leaf shape.
 
 use std::{
     collections::{HashSet, TryReserveError},
@@ -74,6 +86,12 @@ pub(crate) enum LeafBuildError {
     PoisonedCandidateRow { point: u32 },
 }
 
+/// Scratch leased to one Rayon job and reused for successive leaves.
+///
+/// The three numerical vectors retain their largest observed leaf shape. The
+/// adjacency rows are prepared separately because zero-k/singleton leaves never
+/// write them, and because later candidate-merging modes do not necessarily use
+/// this representation.
 #[derive(Default)]
 struct LeafBuffers {
     points: Vec<f32>,
@@ -139,6 +157,12 @@ impl LeafBuffers {
     }
 }
 
+/// Concurrent accumulator indexed by global dataset ID.
+///
+/// A point may appear in several overlapping leaves, so workers lock only the
+/// destination row long enough to append one leaf's additions. Sorting and
+/// duplicate removal are deferred until all leaves finish; doing either under
+/// the lock would lengthen the contended section for no semantic benefit.
 struct DirectCandidates {
     rows: Vec<Mutex<AdjacencyList<u32>>>,
 }
@@ -208,6 +232,12 @@ where
     candidates.into_rows()
 }
 
+/// Build and publish one leaf's symmetric nearest-neighbor rows.
+///
+/// Validation precedes all dataset indexing. Sorted partition output takes the
+/// adjacent-duplicate path, while arbitrary-order callers use `seen_ids`. The
+/// active lengths computed after `prepare` must be used for every later slice,
+/// because the reusable vectors may still be longer than this leaf.
 fn build_leaf<T>(
     data: MatrixView<'_, T>,
     leaf: usize,
