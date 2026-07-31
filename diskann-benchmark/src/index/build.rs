@@ -115,6 +115,28 @@ where
 }
 
 #[cfg(feature = "pipnn")]
+/// Run the dedicated batch lifecycle and install its result in a searchable provider.
+///
+/// Incremental Vamana interleaves provider allocation with per-point insertion.
+/// PiPNN must not use that path: its partitions and candidate graph are complete
+/// before a provider exists. The benchmark lifecycle is therefore:
+///
+/// ```text
+/// Arc<Matrix<T>> ──> PiPNN core ──> Vec<AdjacencyList<u32>>
+///       │                                      │
+///       ├──> start vectors ──> source IDs      │
+///       │                                      v
+///       └──────────────────────────────> provider installation ──> MemoryIndex
+/// ```
+///
+/// | Interval | Included in build statistics | Large owner |
+/// | --- | --- | --- |
+/// | batch graph + start computation | yes | input matrix, core stage outputs |
+/// | provider allocation | no (setup, matching incremental path) | empty provider |
+/// | vectors, edges, and start-slot installation | yes | searchable provider |
+///
+/// The returned provider is a benchmark/search adapter; provider concerns do not
+/// leak back into `diskann-pipnn`.
 pub(crate) fn pipnn_build<T>(
     data: Arc<Matrix<T>>,
     input: &IndexBuild,
@@ -150,6 +172,10 @@ where
             )
         })?;
     let distance = T::distance(metric, Some(dimensions));
+    // Provider start vectors occupy frozen slots outside the real point-ID
+    // range. Connect each slot to an identical source row when one exists;
+    // synthetic strategies fall back to the nearest real row under the build
+    // metric. `total_cmp` gives deterministic ordering for all finite/NaN bits.
     let start_sources = start_points
         .row_iter()
         .map(|start| {
@@ -170,6 +196,9 @@ where
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let degree = graph.pruned_degree().get();
+    // Seed every frozen start slot with its source point followed by that
+    // point's outgoing row. Truncation applies the same graph degree bound as
+    // real rows, and including the source guarantees entry into the real graph.
     let start_neighbors = start_sources
         .into_iter()
         .map(|source| {
@@ -193,6 +222,8 @@ where
     // Provider allocation is setup, just as it is for the incremental path;
     // BuildStats covers graph construction plus provider installation.
     let install_started = std::time::Instant::now();
+    // Install vectors before edges so a successfully returned MemoryIndex never
+    // exposes graph IDs whose source vectors are absent.
     for (id, vector) in data.row_iter().enumerate() {
         let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
         index.data_provider.base_vectors.set_element(&id, vector)?;
