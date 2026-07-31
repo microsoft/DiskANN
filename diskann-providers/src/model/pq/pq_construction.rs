@@ -341,23 +341,27 @@ where
     let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.into_dims();
 
     let full_dim: usize;
-    let mut table;
+    let table;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
         return Err(ANNError::message("ERROR: PQ k-means pivot file not found."));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        let (loaded_table, centroid) = pq_storage.load_existing_pivot_table(
-            num_pq_chunks,
-            num_centers,
-            full_dim,
+        table = pq_storage.load_pivots(
+            pq_storage.get_pivot_data_path(),
+            Some(num_pq_chunks),
             storage_provider,
         )?;
-        table = loaded_table;
 
-        // Instead of subtracting the center from each data set component, we instead
-        // add it to each center.
-        accum_row_inplace(table.view_pivots_mut(), centroid.as_slice());
+        if table.ncenters() != num_centers || table.dim() != full_dim {
+            return Err(ANNError::message(format!(
+                "PQ pivot table mismatch: file has {} centers in {} dimensions but expected {} centers in {} dimensions.",
+                table.ncenters(),
+                table.dim(),
+                num_centers,
+                full_dim
+            )));
+        }
     }
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
@@ -494,19 +498,6 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
     )
     .map_err(ANNError::new)?;
 
-    generate_pq_data_from_pivots_table(vector_data, &table, pq_out)
-}
-
-fn generate_pq_data_from_pivots_table<T, U, V>(
-    vector_data: &[T],
-    table: &diskann_quantization::product::BasicTableBase<U, V>,
-    pq_out: &mut [u8],
-) -> ANNResult<()>
-where
-    T: Copy + Into<f32>,
-    U: diskann_utils::views::DenseData<Elem = f32>,
-    V: diskann_utils::views::DenseData<Elem = usize>,
-{
     let data = vector_data
         .iter()
         .map(|x| (*x).into())
@@ -559,8 +550,11 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
     pq_out
         .par_chunks_mut(num_pq_chunks)
         .zip(vector_data.par_chunks(dim))
-        .try_for_each_in_pool(pool, |(pq_slice, vector_slice)| {
-            generate_pq_data_from_pivots_table(vector_slice, &table, pq_slice)
+        .try_for_each_in_pool(pool, |(pq_slice, vector)| {
+            let data = vector.iter().map(|x| (*x).into()).collect::<Vec<f32>>();
+            table
+                .compress_into(data.as_slice(), pq_slice)
+                .map_err(ANNError::new)
         })
 }
 

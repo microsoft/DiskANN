@@ -30,13 +30,6 @@ type FullPivotDataType = Vec<f32>;
 type CentroidType = Vec<f32>;
 type ChunkOffsetsType = Vec<usize>;
 
-#[derive(Debug)]
-struct PivotFileParts {
-    pivots: Matrix<f32>,
-    centroid: Matrix<f32>,
-    chunk_offsets: Matrix<usize>,
-}
-
 #[derive(Debug, Clone)]
 pub struct PQStorage {
     /// Pivot table path
@@ -187,8 +180,15 @@ impl PQStorage {
     where
         Storage: StorageReadProvider,
     {
-        let (table, centroid) =
-            self.load_existing_pivot_table(*num_pq_chunks, *num_centers, *dim, storage_provider)?;
+        let (pivots, centroid, chunk_offsets) = self.read_pivot_file(
+            &self.pivot_data_path,
+            Some(*num_pq_chunks),
+            Some(*num_centers),
+            Some(*dim),
+            storage_provider,
+        )?;
+        let table =
+            Self::pivot_data_into_basic_table(&self.pivot_data_path, pivots, chunk_offsets)?;
         let (pivots, chunk_offsets) = table.into_parts();
 
         Ok((
@@ -198,29 +198,31 @@ impl PQStorage {
         ))
     }
 
-    /// Load the raw pivot table and centroid from the configured pivot file.
+    /// Load the effective PQ pivot table from a pivot file.
     ///
-    /// The returned table has not had the centroid folded into its pivots.
-    pub fn load_existing_pivot_table<Storage>(
+    /// If `expected_num_pq_chunks` is `None`, the chunk count is inferred from the
+    /// file. The loader verifies the pivot file layout and folds any stored legacy
+    /// centroid into the pivots. `BasicTable::new` validates the resulting table
+    /// invariants, including chunk-offset bounds and monotonicity.
+    pub fn load_pivots<Storage: StorageReadProvider>(
         &self,
-        num_pq_chunks: usize,
-        num_centers: usize,
-        dim: usize,
+        pq_pivots: &str,
+        expected_num_pq_chunks: Option<usize>,
         storage_provider: &Storage,
-    ) -> ANNResult<(BasicTable, Matrix<f32>)>
-    where
-        Storage: StorageReadProvider,
-    {
-        let parts = self.load_pivot_file_parts(
-            &self.pivot_data_path,
-            Some(num_pq_chunks),
-            Some(num_centers),
-            Some(dim),
+    ) -> ANNResult<BasicTable> {
+        let (mut pivots, centroid, chunk_offsets) = self.read_pivot_file(
+            pq_pivots,
+            expected_num_pq_chunks,
+            None,
+            None,
             storage_provider,
         )?;
-        let centroid = parts.centroid.clone();
-        let table = Self::pivot_file_parts_into_basic_table(&self.pivot_data_path, parts)?;
-        Ok((table, centroid))
+
+        if centroid.as_slice().iter().any(|c| *c != 0.0) {
+            accum_row_inplace(pivots.as_mut_view(), centroid.as_slice())
+        }
+
+        Self::pivot_data_into_basic_table(pq_pivots, pivots, chunk_offsets)
     }
 
     /// Load the compressed pq dataset from file.
@@ -265,60 +267,30 @@ impl PQStorage {
         num_pq_chunks: usize,
         storage_provider: &Storage,
     ) -> ANNResult<FixedChunkPQTable> {
-        self.load_pq_pivots_bin_impl(
+        let table = self.load_pivots(
             pq_pivots,
             (num_pq_chunks != 0).then_some(num_pq_chunks),
             storage_provider,
-        )
-    }
-
-    /// Load pre-trained pivot table, inferring the number of chunks from the file.
-    pub fn load_pq_pivots_bin_infer_chunks<Storage: StorageReadProvider>(
-        &self,
-        pq_pivots: &str,
-        storage_provider: &Storage,
-    ) -> ANNResult<FixedChunkPQTable> {
-        self.load_pq_pivots_bin_impl(pq_pivots, None, storage_provider)
-    }
-
-    fn load_pq_pivots_bin_impl<Storage: StorageReadProvider>(
-        &self,
-        pq_pivots: &str,
-        expected_num_pq_chunks: Option<usize>,
-        storage_provider: &Storage,
-    ) -> ANNResult<FixedChunkPQTable> {
-        if !storage_provider.exists(pq_pivots) {
-            return Err(ANNError::message("ERROR: PQ k-means pivot file not found."));
-        }
-
-        info!("Loading PQ pivots from {}...", pq_pivots);
-
-        let mut parts = self.load_pivot_file_parts(
-            pq_pivots,
-            expected_num_pq_chunks,
-            None,
-            None,
-            storage_provider,
         )?;
-
-        // If the centroid is non-zero, we need to add it to the pivots to restore the
-        // numeric behavior.
-        if parts.centroid.as_slice().iter().any(|c| *c != 0.0) {
-            accum_row_inplace(parts.pivots.as_mut_view(), parts.centroid.as_slice())
-        }
-
-        let table = Self::pivot_file_parts_into_basic_table(pq_pivots, parts)?;
         Ok(FixedChunkPQTable::from_basic_table(table))
     }
 
-    fn load_pivot_file_parts<Storage: StorageReadProvider>(
+    fn read_pivot_file<Storage: StorageReadProvider>(
         &self,
         pq_pivots: &str,
         expected_num_pq_chunks: Option<usize>,
         expected_num_centers: Option<usize>,
         expected_dim: Option<usize>,
         storage_provider: &Storage,
-    ) -> ANNResult<PivotFileParts> {
+    ) -> ANNResult<(Matrix<f32>, Matrix<f32>, Matrix<usize>)> {
+        if !storage_provider.exists(pq_pivots) {
+            return Err(ANNError::message(format!(
+                "ERROR: PQ k-means pivot file not found: {pq_pivots}."
+            )));
+        }
+
+        info!("Loading PQ pivots from {}...", pq_pivots);
+
         let mut reader = storage_provider.open_reader(pq_pivots)?;
 
         // File layout: offset table(4*1) -> pivot data(num_centers*dim) ->
@@ -401,18 +373,15 @@ impl PQStorage {
         }
         let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
 
-        Ok(PivotFileParts {
-            pivots,
-            centroid,
-            chunk_offsets,
-        })
+        Ok((pivots, centroid, chunk_offsets))
     }
 
-    fn pivot_file_parts_into_basic_table(
+    fn pivot_data_into_basic_table(
         pq_pivots: &str,
-        parts: PivotFileParts,
+        pivots: Matrix<f32>,
+        chunk_offsets: Matrix<usize>,
     ) -> ANNResult<BasicTable> {
-        let offsets = ChunkOffsetsBase::new(parts.chunk_offsets.into_inner()).map_err(|err| {
+        let offsets = ChunkOffsetsBase::new(chunk_offsets.into_inner()).map_err(|err| {
             ANNError::message(format!(
                 "Error constructing chunk offsets from pq_pivots file {}: {}",
                 pq_pivots,
@@ -420,7 +389,7 @@ impl PQStorage {
             ))
         })?;
 
-        BasicTable::new(parts.pivots, offsets).map_err(|err| {
+        BasicTable::new(pivots, offsets).map_err(|err| {
             ANNError::message(format!(
                 "Error constructing PQ table from pq_pivots file {}: {}",
                 pq_pivots,
@@ -459,6 +428,10 @@ impl PQStorage {
 
     pub fn get_compressed_data_path(&self) -> &str {
         &self.compressed_data_path
+    }
+
+    pub fn get_pivot_data_path(&self) -> &str {
+        &self.pivot_data_path
     }
 }
 
@@ -637,7 +610,7 @@ mod pq_storage_tests {
             .unwrap();
 
         let table = pq_storage
-            .load_pq_pivots_bin_infer_chunks(pivot_path, &storage_provider)
+            .load_pivots(pivot_path, None, &storage_provider)
             .unwrap();
 
         assert_eq!(table.view_pivots().as_slice(), pivots);
@@ -744,7 +717,7 @@ mod pq_storage_tests {
         write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[1, 4]);
 
         let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pq_pivots_bin_infer_chunks(pivot_path, &storage_provider)
+            .load_pivots(pivot_path, None, &storage_provider)
             .unwrap_err();
 
         assert!(err.to_string().contains("offsets must begin at 0"));
@@ -792,7 +765,7 @@ mod pq_storage_tests {
         }
 
         let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pq_pivots_bin_infer_chunks(pivot_path, &storage_provider)
+            .load_pivots(pivot_path, None, &storage_provider)
             .unwrap_err();
         let message = err.to_string();
 
@@ -816,7 +789,7 @@ mod pq_storage_tests {
 
         assert!(
             PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-                .load_pq_pivots_bin_infer_chunks(pivot_path, &storage_provider)
+                .load_pivots(pivot_path, None, &storage_provider)
                 .is_err()
         );
     }
@@ -834,7 +807,7 @@ mod pq_storage_tests {
 
         assert!(
             PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-                .load_pq_pivots_bin_infer_chunks(pivot_path, &storage_provider)
+                .load_pivots(pivot_path, None, &storage_provider)
                 .is_err()
         );
     }
