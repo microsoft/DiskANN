@@ -107,6 +107,19 @@ fn pipnn_disk_build_rejects_configuration_dataset_mismatch() {
 }
 
 #[test]
+fn pipnn_graph_adapter_rejects_point_count_mismatch() {
+    let storage = VirtualStorageProvider::new_memory();
+    write_data(&storage, 2, 8);
+    let parameters = pipnn();
+    let builder = builder(&storage, 3, 8, 1.0, 1.2, parameters.clone());
+    let pool = create_thread_pool(1).unwrap();
+
+    let error = super::build_graph(&builder, pool.as_ref(), (&parameters).into()).unwrap_err();
+    assert!(format!("{error:?}").contains("configured point count 3"));
+    assert!(!storage.exists(&builder.index_writer.get_mem_index_file()));
+}
+
+#[test]
 fn pipnn_disk_build_uses_common_pipeline() {
     let storage = VirtualStorageProvider::new_memory();
     let (points, dimensions) = (256, 8);

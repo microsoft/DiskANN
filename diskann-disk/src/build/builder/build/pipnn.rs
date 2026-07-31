@@ -3,7 +3,27 @@
  * Licensed under the MIT license.
  */
 
-//! PiPNN graph adapter for the common disk-build pipeline.
+//! Adapter from provider-independent PiPNN adjacency to the common disk index format.
+//!
+//! The core crate deliberately knows nothing about dataset files, medoids, graph
+//! headers, or serialization. This adapter owns that boundary:
+//!
+//! 1. verify on-disk dataset metadata against the requested index configuration;
+//! 2. load the contiguous matrix required by batch construction;
+//! 3. run PiPNN in the caller-provided Rayon pool;
+//! 4. compute the production start node with the existing medoid policy; and
+//! 5. serialize adjacency with the same header/layout used by Vamana.
+//!
+//! ```text
+//! dataset file ──> metadata check ──> MatrixView ──> diskann-pipnn ──> adjacency
+//!      │                                                              │
+//!      └──────────────────> sampled medoid ────────────────────────────┤
+//!                                                                     v
+//!                                                        canonical graph writer
+//! ```
+//!
+//! There is no PiPNN-specific disk graph format. Keeping serialization here means
+//! search and loading cannot distinguish which builder produced the graph.
 
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_pipnn::{PiPNNBuildContext, PiPNNConfig};
@@ -16,6 +36,7 @@ use diskann_utils::io::{read_bin, Metadata};
 use super::{u32_try_from, DiskIndexBuilder};
 use crate::data_model::GraphDataType;
 
+/// Build PiPNN adjacency and persist it through the canonical disk graph writer.
 pub(super) fn build_graph<Data, StorageProvider>(
     builder: &DiskIndexBuilder<'_, Data, StorageProvider>,
     pool: RayonThreadPoolRef<'_>,
@@ -27,6 +48,8 @@ where
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
     let data_path = builder.index_writer.get_dataset_file();
+    // Validate metadata before allocating/loading the full matrix. A mismatch
+    // here otherwise turns a configuration error into a later shape failure.
     let (points, dimensions) =
         Metadata::read(&mut builder.storage_provider.open_reader(&data_path)?)?.into_dims();
     if dimensions != builder.index_configuration.dim {
@@ -42,6 +65,9 @@ where
         )));
     }
 
+    // PiPNN is a batch algorithm: materialize the matrix once, while all
+    // partition and leaf scratch stays inside the supplied pool and is released
+    // before the outer disk pipeline continues.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
     let context = PiPNNBuildContext::new(
@@ -52,6 +78,9 @@ where
     )?;
     let adjacency = diskann_pipnn::build_graph(data.as_view(), &context)?;
 
+    // Start-node policy belongs to the persisted index, not the core graph
+    // constructor. Reuse the production sampled medoid implementation so the
+    // serialized header has the same semantics as a Vamana-built index.
     let mut rng = diskann_providers::utils::create_rnd_from_optional_seed(
         builder.index_configuration.random_seed,
     );
