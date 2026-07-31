@@ -47,6 +47,8 @@ use crate::{
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("inmem2-f32", Build::<f32>::new())?;
+    registry.register("inmem2-u8", Build::<u8>::new())?;
+
     // registry.register("inmem2-f16", Build::<f16>::new())?;
     registry.register("inmem2-f32-stream", StreamingBenchmark::<f32>::new())?;
     Ok(())

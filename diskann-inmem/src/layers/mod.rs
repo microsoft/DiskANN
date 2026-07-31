@@ -33,19 +33,29 @@ use crate::{Hidden, num::Bytes, store::Store};
 mod full;
 pub use full::{Full, FullPrecision};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Available,
+    Published,
+    Retiring,
+    Frozen,
+}
+
 /// Base layer for data representations.
 pub trait Layer: Send + Sync + 'static {
-    /// Return the number of bytes needed by this layer representation.
-    ///
-    /// To be well-behaved, this function must be idempotent.
+    // /// Return the number of entries present in this layer.
+    // fn entries(&self) -> usize;
+
+    // /// Attempt to freeze entry `i`.
+    // unsafe fn freeze(&self, i: u32) -> ANNResult<()>;
+
+    // /// Attempt to delete entry `i`.
+    // unsafe fn delete(&self, i: u32) -> ANNResult<bool>;
+
     fn bytes(&self) -> Bytes;
 }
 
-/// Store an element of type `T` into a raw byte buffer.
-///
-/// Implementations may assume that `bytes.len()` is equal to [`Layer::bytes`].
 pub trait Set<T>: Layer {
-    /// Write into the stored representation.
     fn set(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
 }
 

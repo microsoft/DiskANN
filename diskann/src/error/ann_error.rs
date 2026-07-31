@@ -242,6 +242,7 @@ macro_rules! convert_error {
     ($T:ty) => {
         impl From<$T> for $crate::ANNError {
             #[track_caller]
+            #[inline]
             fn from(e: $T) -> $crate::ANNError {
                 $crate::ANNError::new(e)
             }

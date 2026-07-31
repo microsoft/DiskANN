@@ -25,6 +25,7 @@ use crate::{
     Hidden, layers,
     num::Bytes,
     store::{self, Store},
+    tag::AtomicTag,
 };
 
 /// A useful trait bound for types compatible with [`Full`].
@@ -286,7 +287,7 @@ impl<T> std::ops::Deref for Calf<'_, T> {
 /// allow `f16` queries to be pre-converted to `f32`, saving on-the-fly conversion that
 /// would otherwise be needed.
 #[derive(Debug)]
-struct QueryDistance<'a, T, U, D> {
+struct QueryDistance<'a, const PREFETCH: usize, T, U, D> {
     // The original query.
     query: Calf<'a, T>,
     // A reader into a layer's store.
@@ -297,8 +298,9 @@ struct QueryDistance<'a, T, U, D> {
     _distance: PhantomData<D>,
 }
 
-impl<'a, T, U, D> QueryDistance<'a, T, U, D> {
+impl<'a, const PREFETCH: usize, T, U, D> QueryDistance<'a, PREFETCH, T, U, D> {
     fn new(query: Calf<'a, T>, reader: store::invasive::Reader<'a>) -> Self {
+        // TODO: Check PREFETCH and `query` with the reader's size.
         Self {
             query,
             reader,
@@ -341,7 +343,7 @@ impl<'a, T, U, D> QueryDistance<'a, T, U, D> {
 const LOOKAHEAD: usize = 8;
 const BYTES: usize = 0;
 
-impl<T, U, D> layers::__ExpandBeam for QueryDistance<'_, T, U, D>
+impl<const PREFETCH: usize, T, U, D> layers::__ExpandBeam for QueryDistance<'_, PREFETCH, T, U, D>
 where
     T: Send + Sync + 'static + Debug,
     U: Send + Sync + 'static + Debug,
@@ -370,10 +372,10 @@ where
         let len = list.len();
         let lookahead = LOOKAHEAD.min(len);
 
-        let bytes = if BYTES == 0 {
+        let bytes = if PREFETCH == 0 {
             self.reader.bytes().value()
         } else {
-            BYTES + store::TAG_SIZE.value()
+            PREFETCH * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
         };
 
         for j in 0..lookahead {
@@ -441,18 +443,17 @@ struct QueryDistanceError {
 diskann::convert_error!(QueryDistanceError);
 
 macro_rules! mint {
-    // ($query:ident, $reader:ident, $T:ty => { $N:literal, $f:ident }) => {{
-    //     mint!($query, $visitor, { $T, $T } => { $N, $f })
-    // }};
-    // ($query:ident, $reader:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
-    //     let inner = Box::new(QueryDistance::<$T, $U, Specialize<$N, $f>>::new($query));
-    //     $visitor.visit_sized::<{ $N * std::mem::size_of::<$U>() }, _>(inner)
-    // }};
+    ($query:ident, $reader:ident, $T:ty => { $N:literal, $f:ident }) => {{
+        mint!($query, $reader, { $T, $T } => { $N, $f })
+    }};
+    ($query:ident, $reader:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
+        Box::new(QueryDistance::<$N, $T, $U, Specialize<$N, $f>>::new($query, $reader))
+    }};
     ($query:ident, $reader:ident, $T:ty => $f:ident) => {{
         mint!($query, $reader, { $T, $T } => $f)
     }};
     ($query:ident, $reader:ident, { $T:ty, $U:ty } => $f:ident) => {{
-        Box::new(QueryDistance::<$T, $U, $f>::new($query, $reader))
+        Box::new(QueryDistance::<0, $T, $U, $f>::new($query, $reader))
     }};
 }
 
@@ -474,11 +475,11 @@ impl FullPrecision for f32 {
 
         let output: Box<dyn layers::__ExpandBeam> = match full.metric {
             Metric::L2 => {
-                // if full.dim() == 100 {
-                //     mint!(query, visitor, f32 => { 100, SquaredL2 })
-                // } else {
-                mint!(query, reader, f32 => SquaredL2)
-                // }
+                if full.dim() == 100 {
+                    mint!(query, reader, f32 => { 100, SquaredL2 })
+                } else {
+                    mint!(query, reader, f32 => SquaredL2)
+                }
             }
             Metric::InnerProduct => {
                 mint!(query, reader, f32 => InnerProduct)
@@ -511,11 +512,11 @@ impl FullPrecision for f16 {
 
         let output: Box<dyn layers::__ExpandBeam> = match full.metric {
             Metric::L2 => {
-                // if full.dim() == 100 {
-                //     mint!(query, visitor, { f32, f16 } => { 100, SquaredL2 })
-                // } else {
-                mint!(query, reader, { f32, f16 } => SquaredL2)
-                // }
+                if full.dim() == 100 {
+                    mint!(query, reader, { f32, f16 } => { 100, SquaredL2 })
+                } else {
+                    mint!(query, reader, { f32, f16 } => SquaredL2)
+                }
             }
             Metric::InnerProduct => mint!(query, reader, { f32, f16 } => InnerProduct),
             Metric::Cosine => mint!(query, reader, { f32, f16 } => Cosine),
@@ -542,13 +543,13 @@ impl FullPrecision for u8 {
 
         let query = Calf::Borrowed(query);
 
-        let output: Box::<dyn layers::__ExpandBeam> = match full.metric {
+        let output: Box<dyn layers::__ExpandBeam> = match full.metric {
             Metric::L2 => {
-                // if full.dim() == 128 {
-                //     mint!(query, visitor, u8 => { 128, SquaredL2 })
-                // } else {
-                mint!(query, reader, u8 => SquaredL2)
-                // }
+                if full.dim() == 128 {
+                    mint!(query, reader, u8 => { 128, SquaredL2 })
+                } else {
+                    mint!(query, reader, u8 => SquaredL2)
+                }
             }
             Metric::InnerProduct => mint!(query, reader, u8 => InnerProduct),
             Metric::Cosine => mint!(query, reader, u8 => Cosine),

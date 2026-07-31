@@ -459,8 +459,10 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 
                 // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
                 // `self.buffer` is long enough to hold all the IDs.
-                let processed =
-                    unsafe { self.expand_beam.__expand_beam(&self.ids, &mut self.buffer, Hidden::new()) }?;
+                let processed = unsafe {
+                    self.expand_beam
+                        .__expand_beam(&self.ids, &mut self.buffer, Hidden::new())
+                }?;
 
                 // let processed = unsafe {
                 //     self.expand_beam
@@ -890,10 +892,10 @@ where
 // This is a utility for helping inspect the generated code for `ExpandBeam`.
 //
 pub fn test_function<'a>(
-    x: &'a Provider<layers::Full<f32>>,
+    x: &'a Provider<layers::Full<u8>>,
     strategy: &'a Strategy,
     context: &'a Context,
-    query: &'a [f32],
+    query: &'a [u8],
 ) -> ANNResult<SearchAccessor<'a>> {
     glue::SearchStrategy::search_accessor(strategy, x, context, query)
 }
