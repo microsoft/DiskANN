@@ -9,6 +9,33 @@
 //! reuses the partition kernel and dense GEMM. A stage-owned pool leases scratch
 //! to Rayon chunks and takes it back after each chunk; computation never holds
 //! the pool lock, and no thread-local cleanup protocol is required.
+//!
+//! ```text
+//! replica root IDs ──> work queue
+//!                         │
+//!                         v
+//!                  sample leaders
+//!                         │
+//!        gather stripes ─> GEMM distances ─> nearest leaders
+//!                                             │
+//!                                             v
+//!                                stable scatter by leader
+//!                                  │                   │
+//!                           size <= c_max        oversized cluster
+//!                                  │                   │
+//!                           completed leaf      next recursion level
+//!                                  └──────────┬────────┘
+//!                                             v
+//!                              global small-leaf merge
+//!                                             v
+//!                               coverage/bound validation
+//! ```
+//!
+//! | Recursion level | Assignment multiplicity |
+//! | --- | --- |
+//! | `level < fanout.len()` | `fanout[level]` nearest leaders |
+//! | later levels | one nearest leader until bounded |
+//! | replica boundary | independent deterministic seed |
 
 use std::{collections::HashSet, sync::Mutex};
 
