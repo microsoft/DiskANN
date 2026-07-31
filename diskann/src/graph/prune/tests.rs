@@ -180,6 +180,41 @@ fn list_errors_preserve_transient_and_fatal_rank() {
 }
 
 #[test]
+fn saturation_fills_from_original_pool_order_after_occlusion() {
+    let candidates = [
+        Neighbor::new(1_u32, 1.0),
+        Neighbor::new(2_u32, 2.0),
+        Neighbor::new(3_u32, 3.0),
+    ];
+
+    let mut unsaturated = Scratch::new();
+    unsaturated.candidates_mut().extend(candidates);
+    run(
+        &mut unsaturated,
+        Policy::new(3, 1.0, PruneKind::TriangleInequality, false),
+        Some,
+        |_, _| Ok::<_, std::convert::Infallible>(0.0),
+    )
+    .unwrap();
+    // A zero selected-to-candidate distance occludes every candidate after
+    // the first one, so this verifies the prune result before saturation.
+    assert_eq!(&**unsaturated.neighbors(), &[1]);
+
+    let mut saturated = Scratch::new();
+    saturated.candidates_mut().extend(candidates);
+    run(
+        &mut saturated,
+        Policy::new(3, 1.0, PruneKind::TriangleInequality, true),
+        Some,
+        |_, _| Ok::<_, std::convert::Infallible>(0.0),
+    )
+    .unwrap();
+    // Saturation walks the original source-distance ordering. AdjacencyList
+    // suppresses the already-selected first ID rather than duplicating it.
+    assert_eq!(&**saturated.neighbors(), &[1, 2, 3]);
+}
+
+#[test]
 fn robust_prune_clears_output_for_an_empty_pool() {
     let mut scratch = Scratch::new();
     scratch.candidates_mut().push(Neighbor::new(1_u32, 1.0));

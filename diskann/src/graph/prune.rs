@@ -3,6 +3,22 @@
  * Licensed under the MIT license.
  */
 
+//! Provider-independent Vamana RobustPrune state machine.
+//!
+//! Callers own data access: they provide a candidate pool already sorted by
+//! source distance, an ID-to-vector lookup, and a selected-to-candidate distance
+//! function. The kernel then:
+//!
+//! 1. resolves every usable candidate into a linear cache;
+//! 2. scans candidates in source-distance order at increasing alpha values;
+//! 3. records how many selected neighbors each candidate has already checked;
+//! 4. writes selected IDs to the output adjacency list; and
+//! 5. optionally fills unused degree slots from the original pool.
+//!
+//! Keeping lookup outside this module lets asynchronous providers fetch before
+//! entering the synchronous state machine, while in-memory builders can pass
+//! borrowed rows without copying provider policy into the algorithm.
+
 use thiserror::Error;
 
 use super::{config::PruneKind, internal::SortedNeighbors};
@@ -100,17 +116,22 @@ where
     pub(in crate::graph) neighbors: &'ctx mut AdjacencyList<I>,
 }
 
-/// Position-wise state tracking.
+/// Per-candidate state reused across alpha rounds.
 ///
-/// Refer to the inline documentation in [`DiskANNIndex::occlude_list`] for documentation
-/// on the use of these fields.
+/// `states[i]` initially describes candidate `pool[i]`. Once a candidate is
+/// selected, the prefix `states[..found]` is also used as the compact selected
+/// list: `neighbor` stores the selected candidate's index in `pool`.
+/// `last_checked` is an index into that selected prefix, not into `pool`; it lets
+/// a later alpha round resume with the first comparison not already performed.
+/// A selected or unavailable candidate receives `f32::MAX` occlusion so it is
+/// never selected a second time.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct State {
     /// The occlude factor for the pool item at the corresponding index.
     pub(in crate::graph) occlude_factor: f32,
-    /// The index of the last checked neighbor.
+    /// Number of selected-prefix entries already compared with this candidate.
     pub(in crate::graph) last_checked: u16,
-    /// The candidate index of this neighbor.
+    /// Index in the original sorted candidate pool for a selected neighbor.
     pub(in crate::graph) neighbor: u16,
 }
 
@@ -149,9 +170,18 @@ pub enum RobustPruneError<E = std::convert::Infallible> {
 
 /// Run Vamana's robust-prune state machine over an already sorted candidate pool.
 ///
-/// Data access and distance evaluation stay with the caller so providers may fetch
-/// asynchronously before entering this synchronous kernel, while in-memory builders
-/// can use contiguous vector storage and specialized distance functions.
+/// `context.pool` must be sorted by source distance. `lookup` is called once per
+/// non-excluded candidate and may return `None` for an unavailable vector. The
+/// pairwise `distance` callback is invoked only against candidates already
+/// selected as neighbors. Data access stays with the caller so providers may
+/// fetch asynchronously before entering this synchronous kernel, while
+/// in-memory builders can use contiguous rows and dimension-specialized distance
+/// functions.
+///
+/// Alpha starts at 1.0 and grows by at most 1.2x until `policy.alpha`. A candidate
+/// that fails one round retains its maximum occlusion and selected-prefix cursor;
+/// this is why `State` cannot be rebuilt on each round. Saturation, when enabled,
+/// happens only after all alpha rounds and preserves original pool order.
 pub fn robust_prune<I, V, E, L, D, X>(
     context: &mut Context<'_, I>,
     policy: Policy,
