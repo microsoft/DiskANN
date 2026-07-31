@@ -82,12 +82,16 @@ macro_rules! finite {
                     // infinity/NaN).
                     //
                     // The mantissa is allowed to be all zeros.
-                    (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
+                    (
+                        <$T as Layout>::EXPONENT_MASK | <$T as Layout>::MANTISSA_MASK,
+                        false,
+                        true,
+                    )
                 } else if weight < 95 {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
-                    (<$T>::MANTISSA_MASK, true, false)
+                    (<$T as Layout>::MANTISSA_MASK, true, false)
                 } else {
                     // Generate zero.
                     (0, true, true)
