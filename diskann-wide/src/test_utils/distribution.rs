@@ -53,7 +53,7 @@ impl Layout for f32 {
 pub struct Finite;
 
 macro_rules! finite {
-    ($T:ty, $bits:ty) => {
+    ($T:ty, $bits:ty, $twice:ty) => {
         impl Distribution<$T> for Finite {
             /// Generate floating point numbers spread more-or-less uniformly across the
             /// distribution of floating point numbers.
@@ -68,13 +68,26 @@ macro_rules! finite {
             ///
             /// This function does not generate infinities or NaNs.
             fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $T {
-                // Generate a uniformly distributed 32-bit integer
-                let mut value: $bits = StandardUniform {}.sample(rng);
+                // Generate a uniformly distributed integer.
+                //
+                // This integer is twice as large as what's actually needed to generate
+                //
+                // * the value that will be used to make the final floating point number
+                //   (the lower order bits).
+                //
+                // * a selector for the kind of floating point number we are going to
+                //   generate.
+                //
+                // Generating a number twice as big allows us to perform just a single sample
+                // from the random number generator without biasing the result.
+                let twice: $twice = StandardUniform {}.sample(rng);
+
+                let mut value = twice as $bits;
 
                 // The distribution from which we sample weights to determine the type of
                 // floating point number we are  going to generate.
-                let weight = value % 100;
-                let (mask, allow_edge_exponent, allow_zero_mantissa) = if weight < 90 {
+                let kind = (twice >> <$bits>::BITS) % 128;
+                let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < 116 {
                     // Generate a normal floating point number.
                     //
                     // All digits are fair game, but the exponent cannot be all zeros
@@ -83,7 +96,7 @@ macro_rules! finite {
                     //
                     // The mantissa is allowed to be all zeros.
                     (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
-                } else if weight < 95 {
+                } else if kind < 123 {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
@@ -117,8 +130,8 @@ macro_rules! finite {
     };
 }
 
-finite!(half::f16, u16);
-finite!(f32, u32);
+finite!(half::f16, u16, u32);
+finite!(f32, u32, u64);
 
 ///////////
 // Tests //
@@ -231,8 +244,8 @@ mod tests {
     where
         T: TestDistribution,
     {
-        let normal_weight = 90;
-        let subnormal_weight = 5;
+        let normal_weight = 116;
+        let subnormal_weight = 7;
         let zero_weight = 5;
         let total_weight = normal_weight + subnormal_weight + zero_weight;
 
