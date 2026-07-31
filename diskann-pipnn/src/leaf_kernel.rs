@@ -3,7 +3,20 @@
  * Licensed under the MIT license.
  */
 
-//! Fused nearest-neighbor kernel for a leaf's lower dot-product matrix.
+//! Fused nearest-neighbor selection over a leaf's lower dot-product matrix.
+//!
+//! `sgemm_aat_lower` writes only pair `(row, column)` with `column <= row`.
+//! This kernel therefore walks the strict lower triangle once and offers each
+//! computed distance to both endpoint rows. Keeping one top-k tracker per row
+//! avoids materializing the upper triangle or computing a symmetric distance
+//! twice.
+//!
+//! The public entry point validates every shape before dispatch. The dispatched
+//! path processes complete SIMD chunks, then a scalar tail. For `k <= 3`, const
+//! slot counts remove the dynamic insertion loop from the hot path; larger `k`
+//! uses the same ordering rules through the dynamic fallback. NaN distances are
+//! never rankable, and ties retain scan order so scalar and SIMD backends produce
+//! the same graph.
 
 use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};

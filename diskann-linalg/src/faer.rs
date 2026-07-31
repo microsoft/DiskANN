@@ -55,7 +55,12 @@ pub(super) fn sgemm_impl(
 
 /// Implements the public lower-triangular AAT operation.
 ///
-/// The caller has already validated the matrix dimensions.
+/// Leaf selection consumes each symmetric pair once and updates both endpoints,
+/// so computing or initializing the upper triangle would be wasted bandwidth.
+/// Faer's triangular block structure is the contract that prevents those stores;
+/// callers may keep unrelated values in the upper triangle. The public wrapper
+/// has already checked `a.len() == m * k`, `c.len() == m * m`, and overflow, so
+/// the unchecked matrix views below cannot escape their backing slices.
 pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, a: &[f32], c: &mut [f32]) {
     use faer::linalg::matmul::triangular::{matmul, BlockStructure};
 
