@@ -106,6 +106,13 @@ struct StripeBuffers {
     row_scales: Vec<f32>,
 }
 
+/// Stage-owned high-water scratch storage for partition assignment.
+///
+/// Rayon initializes `map_init` state per split job, not per physical worker.
+/// Large dimensions would therefore allocate and zero the point/dot buffers many
+/// times during recursive partitioning. Chunks instead take ownership of one
+/// buffer here and return it afterward. The mutex protects only the short
+/// pop/push operations; gather, GEMM, and top-k run without holding it.
 #[derive(Default)]
 struct StripeBufferPool {
     available: Mutex<Vec<StripeBuffers>>,
@@ -329,6 +336,13 @@ fn mix_seed(seed: u64, salt: u64) -> u64 {
         .wrapping_add(salt)
 }
 
+/// Assign each point to its nearest `fanout` sampled leaders.
+///
+/// Leader rows are gathered once. Point rows are processed in cache-sized
+/// stripes, while a worker chunk retains one leased scratch buffer across all of
+/// its stripes. The flat assignment matrix preserves point order and is then
+/// scattered into per-leader clusters; preserving order is required for fixed
+/// seed determinism in later recursion levels.
 fn assign_to_leaders<T>(
     data: MatrixView<'_, T>,
     points: &[u32],
@@ -486,6 +500,12 @@ where
     Ok(())
 }
 
+/// Convert the flat point-major assignment matrix into leader-major clusters.
+///
+/// Small inputs use one serial exact-capacity pass. Large inputs form at most
+/// one partial cluster set per Rayon worker, then merge each leader independently.
+/// Concatenating partials in stripe order keeps the same member order as the
+/// serial implementation while removing a large serial copy tail.
 fn scatter_assignments(
     points: &[u32],
     assignments: &[u32],
