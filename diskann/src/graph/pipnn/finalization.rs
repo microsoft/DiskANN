@@ -14,6 +14,26 @@
 //! The shared kernel owns occlusion and alpha-round semantics; this adapter owns
 //! only contiguous dataset access and distance specialization for the source
 //! representation.
+//!
+//! ```text
+//! candidate rows ──> validate row count and every global ID
+//!                                      │
+//!                         ┌────────────┴────────────┐
+//!                         v                         v
+//!                    len <= R                  len > R
+//!                  return row       source-distance candidates
+//!                                                   │
+//!                                                   v
+//!                                           shared RobustPrune
+//!                                                   │
+//!                                                   v
+//!                                           rewrite same row owner
+//! ```
+//!
+//! | Path | Distance evaluations | Allocation behavior |
+//! | --- | --- | --- |
+//! | bounded row | none | move row directly to output |
+//! | overfull row | source and occlusion distances | reuse Rayon-job workspace |
 
 use std::convert::Infallible;
 
