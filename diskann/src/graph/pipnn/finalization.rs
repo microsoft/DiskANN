@@ -3,7 +3,17 @@
  * Licensed under the MIT license.
  */
 
-//! Orders complete PiPNN candidate rows and applies shared Vamana RobustPrune.
+//! Final graph-degree enforcement through the shared Vamana RobustPrune kernel.
+//!
+//! Candidate merging may produce more than `R` IDs for a point. This stage first
+//! validates every global ID, then processes rows independently in the caller's
+//! Rayon pool. Rows already within the degree bound are returned without any
+//! distance work. Overfull rows are converted to source-distance candidates,
+//! passed through RobustPrune, and rewritten from the selected output.
+//!
+//! The shared kernel owns occlusion and alpha-round semantics; this adapter owns
+//! only contiguous dataset access and distance specialization for the source
+//! representation.
 
 use std::convert::Infallible;
 
@@ -29,12 +39,19 @@ pub(crate) enum FinalizationError {
     },
 }
 
+/// Per-Rayon-job state retained across rows.
+///
+/// `prune` owns candidate/state/output buffers. `cache` stores provider lookup
+/// results required by the shared kernel. Reusing both avoids per-node
+/// allocations, which would otherwise dominate finalization for millions of
+/// short rows.
 #[derive(Default)]
 struct Workspace {
     prune: prune::Scratch<u32>,
     cache: Vec<(f32, Option<u32>)>,
 }
 
+/// Validate candidate IDs and prune only rows whose length exceeds graph degree.
 pub(crate) fn prune_overfull<T>(
     data: MatrixView<'_, T>,
     candidates: Vec<AdjacencyList<u32>>,
@@ -56,6 +73,8 @@ where
         .into_par_iter()
         .enumerate()
         .map_init(Workspace::default, |workspace, (source, mut row)| {
+            // Candidate accumulators already enforce uniqueness. A bounded row
+            // therefore satisfies the graph policy without distance evaluation.
             if row.len() <= degree {
                 return Ok(row);
             }
@@ -71,6 +90,9 @@ where
                     distance.evaluate_similarity(source_vector, data.row(candidate as usize)),
                 )
             }));
+            // as_context sorts the active candidate prefix by source distance.
+            // The callback below is needed only for selected-to-candidate
+            // occlusion checks; dimension specialization stays in `distance`.
             let candidate_count = pool.len();
             let mut context = workspace.prune.as_context(candidate_count);
             prune::robust_prune(

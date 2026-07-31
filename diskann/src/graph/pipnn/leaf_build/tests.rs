@@ -148,30 +148,55 @@ fn global_id_translation_is_independent_of_leaf_order() {
     );
 }
 
-fn assert_source_type<T>(data: &[T])
+fn source_graph<T>(data: &[T], points: usize, dimensions: usize) -> Vec<Vec<u32>>
 where
     T: diskann::utils::VectorRepr + 'static,
 {
-    let leaves = vec![vec![0, 1, 2, 3]];
-    let graph = build(view(data, 4, 2), &leaves, 1, Metric::L2).unwrap();
-    assert_eq!(rows(graph), [vec![1], vec![0, 2], vec![1, 3], vec![2]]);
+    let leaves = vec![(0..points as u32).collect()];
+    rows(build(view(data, points, dimensions), &leaves, 2, Metric::L2).unwrap())
+}
+
+fn assert_source_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
+where
+    T: diskann::utils::VectorRepr + 'static,
+{
+    let points = 8;
+    // Source dimension controls VectorRepr conversion chunking. Cover tails on
+    // both sides of 4-, 8-, and 16-element boundaries, then a second 16-lane
+    // chunk. Input integers remain exact in every tested representation.
+    for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+        let raw: Vec<u8> = (0..points * dimensions)
+            .map(|index| {
+                let row = index / dimensions;
+                let column = index % dimensions;
+                ((row * 7 + column * 3 + row * column) % 23) as u8
+            })
+            .collect();
+        let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
+        let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
+        assert_eq!(
+            source_graph(&converted, points, dimensions),
+            source_graph(&f32_data, points, dimensions),
+            "{label} dimensions={dimensions}"
+        );
+    }
 }
 
 #[test]
-fn gathers_every_supported_source_type_without_full_dataset_conversion() {
-    assert_source_type(&[0.0_f32, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0]);
-    assert_source_type(&[0_i8, 0, 1, 0, 2, 0, 3, 0]);
-    assert_source_type(&[0_u8, 0, 1, 0, 2, 0, 3, 0]);
-    assert_source_type(&[
-        f16::from_f32(0.0),
-        f16::from_f32(0.0),
-        f16::from_f32(1.0),
-        f16::from_f32(0.0),
-        f16::from_f32(2.0),
-        f16::from_f32(0.0),
-        f16::from_f32(3.0),
-        f16::from_f32(0.0),
-    ]);
+fn f16_conversion_matches_f32_across_dimension_boundaries() {
+    assert_source_conversion_matches_f32("f16", |value| f16::from_f32(value as f32));
+}
+
+#[test]
+fn u8_conversion_matches_f32_across_dimension_boundaries() {
+    assert_source_conversion_matches_f32("u8", |value| value);
+}
+
+#[test]
+fn i8_conversion_matches_f32_across_dimension_boundaries() {
+    // Applying the same translation to every coordinate preserves L2 pair
+    // ordering while exercising signed conversion.
+    assert_source_conversion_matches_f32("i8", |value| value as i8 - 11);
 }
 
 #[test]
