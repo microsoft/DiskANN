@@ -89,7 +89,7 @@ impl PqKmeansRouterData {
             .num_representatives
             .unwrap_or_else(|| Self::default_num_representatives(num_points));
         let k = requested_k.clamp(1, num_points);
-        let default_sample_size = default_training_sample_size(k);
+        let default_sample_size = default_training_sample_size(num_points);
         let sample_size = params
             .training_sample_size
             .unwrap_or(default_sample_size)
@@ -112,7 +112,6 @@ impl PqKmeansRouterData {
         for _ in 0..params.max_iterations {
             counts.fill(0);
             sums.fill(0.0);
-
             for sample_id in &sample_ids {
                 let code = pq_data.get_compressed_vector(*sample_id)?;
                 let centroid = nearest_reconstructed_centroid(code, pq_table, &centroids, dim);
@@ -368,12 +367,8 @@ fn evenly_spaced_sample_ids(num_points: usize, sample_size: usize) -> Vec<usize>
         .collect()
 }
 
-fn default_training_sample_size(k: usize) -> usize {
-    if k >= 16_384 {
-        k
-    } else {
-        k.saturating_mul(2).min(16_384)
-    }
+fn default_training_sample_size(num_points: usize) -> usize {
+    num_points.div_ceil(10)
 }
 
 fn nearest_reconstructed_centroid(
@@ -512,8 +507,9 @@ mod tests {
     }
 
     #[test]
-    fn default_training_sample_size_handles_k_larger_than_cap() {
-        assert_eq!(default_training_sample_size(16_385), 16_385);
+    fn default_training_sample_size_uses_ten_percent_of_dataset() {
+        assert_eq!(default_training_sample_size(10_000_000), 1_000_000);
+        assert_eq!(default_training_sample_size(101), 11);
     }
 
     #[test]

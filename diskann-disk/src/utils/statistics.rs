@@ -30,6 +30,12 @@ pub struct QueryStatistics {
     /// Total number of IO operations issued.
     pub total_io_operations: u32,
 
+    /// Number of IO operations issued while traversing the graph.
+    pub traversal_io_operations: u32,
+
+    /// Number of IO operations issued during full-precision reranking.
+    pub rerank_io_operations: u32,
+
     /// Number of saved comparisons (optimization metric).
     pub comparisons_saved: u32,
 
@@ -38,6 +44,12 @@ pub struct QueryStatistics {
 
     /// Total number of vertices loaded.
     pub total_vertices_loaded: u32,
+
+    /// Number of vertices requested while traversing the graph.
+    pub traversal_vertices_loaded: u32,
+
+    /// Number of vertices requested during full-precision reranking.
+    pub rerank_vertices_loaded: u32,
 
     /// Number of hops performed during search.
     pub search_hops: u32,

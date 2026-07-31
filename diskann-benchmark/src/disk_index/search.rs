@@ -66,6 +66,11 @@ pub(super) struct DiskSearchResult {
     pub(super) p95_latency: MicroSeconds,
     pub(super) p999_latency: MicroSeconds,
     pub(super) mean_ios: f64,
+    pub(super) mean_vertices_loaded: f64,
+    pub(super) mean_traversal_ios: f64,
+    pub(super) mean_traversal_vertices_loaded: f64,
+    pub(super) mean_rerank_ios: f64,
+    pub(super) mean_rerank_vertices_loaded: f64,
     pub(super) mean_io_time: f64,
     pub(super) mean_cpu_time: f64,
     pub(super) mean_pq_preprocess_time: f64,
@@ -75,6 +80,8 @@ pub(super) struct DiskSearchResult {
     pub(super) mean_comparisons: f64,
     pub(super) mean_hops: f64,
     pub(super) cache_hit_percentage: f64,
+    pub(super) traversal_cache_hit_percentage: f64,
+    pub(super) rerank_cache_hit_percentage: f64,
     pub(super) recall: f32,
 }
 
@@ -92,11 +99,18 @@ impl DiskSearchResult {
         let total_ios = statistics::get_sum_stats(statistics, |stats| stats.total_io_operations);
         let total_vertices_loaded =
             statistics::get_sum_stats(statistics, |stats| stats.total_vertices_loaded);
-        let cache_hit_percentage = if total_vertices_loaded > 0.0 {
-            100.0 * (1.0 - (total_ios / total_vertices_loaded))
-        } else {
-            100.0
-        };
+        let traversal_ios =
+            statistics::get_sum_stats(statistics, |stats| stats.traversal_io_operations);
+        let traversal_vertices_loaded =
+            statistics::get_sum_stats(statistics, |stats| stats.traversal_vertices_loaded);
+        let rerank_ios = statistics::get_sum_stats(statistics, |stats| stats.rerank_io_operations);
+        let rerank_vertices_loaded =
+            statistics::get_sum_stats(statistics, |stats| stats.rerank_vertices_loaded);
+        let cache_hit_percentage = calculate_cache_hit_percentage(total_ios, total_vertices_loaded);
+        let traversal_cache_hit_percentage =
+            calculate_cache_hit_percentage(traversal_ios, traversal_vertices_loaded);
+        let rerank_cache_hit_percentage =
+            calculate_cache_hit_percentage(rerank_ios, rerank_vertices_loaded);
 
         let recall = if let Some(var_gt) = &gt_context.gt_ids_variable_length {
             let ours: Vec<Vec<u32>> = result_ids
@@ -152,6 +166,19 @@ impl DiskSearchResult {
                 |s| s.total_execution_time_us,
             ) as u64),
             mean_ios: statistics::get_mean_stats(statistics, |s| s.total_io_operations),
+            mean_vertices_loaded: statistics::get_mean_stats(statistics, |s| {
+                s.total_vertices_loaded
+            }),
+            mean_traversal_ios: statistics::get_mean_stats(statistics, |s| {
+                s.traversal_io_operations
+            }),
+            mean_traversal_vertices_loaded: statistics::get_mean_stats(statistics, |s| {
+                s.traversal_vertices_loaded
+            }),
+            mean_rerank_ios: statistics::get_mean_stats(statistics, |s| s.rerank_io_operations),
+            mean_rerank_vertices_loaded: statistics::get_mean_stats(statistics, |s| {
+                s.rerank_vertices_loaded
+            }),
             mean_io_time: statistics::get_mean_stats(statistics, |s| s.io_time_us as f64),
             mean_cpu_time: statistics::get_mean_stats(statistics, |stats| stats.cpu_time_us as f64),
             mean_pq_preprocess_time: statistics::get_mean_stats(statistics, |stats| {
@@ -171,8 +198,36 @@ impl DiskSearchResult {
             }),
             mean_hops: statistics::get_mean_stats(statistics, |s| s.search_hops as f64),
             cache_hit_percentage,
+            traversal_cache_hit_percentage,
+            rerank_cache_hit_percentage,
             recall,
         })
+    }
+}
+
+fn calculate_cache_hit_percentage(total_ios: f64, total_vertices_loaded: f64) -> f64 {
+    if total_vertices_loaded > 0.0 {
+        (100.0 * (1.0 - (total_ios / total_vertices_loaded))).clamp(0.0, 100.0)
+    } else {
+        100.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calculate_cache_hit_percentage;
+
+    #[test]
+    fn cache_hit_percentage_uses_physical_ios_over_requested_loads() {
+        assert_eq!(calculate_cache_hit_percentage(2.0, 5.0), 60.0);
+        assert_eq!(calculate_cache_hit_percentage(5.0, 5.0), 0.0);
+        assert_eq!(calculate_cache_hit_percentage(0.0, 5.0), 100.0);
+    }
+
+    #[test]
+    fn cache_hit_percentage_handles_empty_or_inconsistent_denominators() {
+        assert_eq!(calculate_cache_hit_percentage(0.0, 0.0), 100.0);
+        assert_eq!(calculate_cache_hit_percentage(6.0, 5.0), 0.0);
     }
 }
 
@@ -512,7 +567,7 @@ impl fmt::Display for DiskSearchStats {
         let fmt_us = |v: f64| -> String { format!("{:.1}us", v) };
         let fmt_pct = |v: f64| -> String { format!("{:.1}%", v) };
 
-        let cols: [(&str, usize); 17] = [
+        let cols: [(&str, usize); 24] = [
             ("L", 2),
             ("KNN", 3),
             ("QPS", 8),
@@ -520,6 +575,11 @@ impl fmt::Display for DiskSearchStats {
             ("95% Latency", 13),
             ("99.9 Latency", 13),
             ("IOs", 6),
+            ("Loads", 7),
+            ("Trav IOs", 8),
+            ("Trav Loads", 10),
+            ("Rerank IOs", 10),
+            ("Rerank Loads", 12),
             ("IO (us)", 10),
             ("CPU (us)", 10),
             ("PQ Preprocess (us)", 20),
@@ -529,6 +589,8 @@ impl fmt::Display for DiskSearchStats {
             ("Mean Comps", 11),
             ("Mean Hops", 10),
             ("Cache Hit %", 12),
+            ("Trav Hit %", 10),
+            ("Rerank Hit %", 12),
             ("Recall", 7),
         ];
 
@@ -572,7 +634,7 @@ impl fmt::Display for DiskSearchStats {
 
         for r in &self.search_results_per_l {
             // Prepare values as strings with numeric formatting
-            let vals: [String; 17] = [
+            let vals: [String; 24] = [
                 format!("{}", r.search_l),
                 format!("{}", self.recall_at),
                 format!("{:.1}", r.qps),
@@ -580,6 +642,11 @@ impl fmt::Display for DiskSearchStats {
                 format!("{}", r.p95_latency),
                 format!("{}", r.p999_latency),
                 format!("{:.1}", r.mean_ios),
+                format!("{:.1}", r.mean_vertices_loaded),
+                format!("{:.1}", r.mean_traversal_ios),
+                format!("{:.1}", r.mean_traversal_vertices_loaded),
+                format!("{:.1}", r.mean_rerank_ios),
+                format!("{:.1}", r.mean_rerank_vertices_loaded),
                 fmt_us(r.mean_io_time),
                 fmt_us(r.mean_cpu_time),
                 fmt_us(r.mean_pq_preprocess_time),
@@ -589,6 +656,8 @@ impl fmt::Display for DiskSearchStats {
                 format!("{:.1}", r.mean_comparisons),
                 format!("{:.1}", r.mean_hops),
                 fmt_pct(r.cache_hit_percentage),
+                fmt_pct(r.traversal_cache_hit_percentage),
+                fmt_pct(r.rerank_cache_hit_percentage),
                 format!("{:.3}", r.recall),
             ];
 

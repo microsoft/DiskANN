@@ -258,13 +258,24 @@ where
 
 // Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
 // There should be minimal to no overhead compared to using a raw reference.
+#[derive(Clone, Copy)]
+enum IOLoadPhase {
+    Traversal,
+    Rerank,
+}
+
 struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
     router_time_us: AtomicU64,
     router_scanned_codes: AtomicUsize,
     routed_start_points_count: AtomicUsize,
-    io_count: AtomicUsize,
+    total_io_count: AtomicUsize,
+    total_vertices_loaded_count: AtomicUsize,
+    traversal_io_count: AtomicUsize,
+    traversal_vertices_loaded_count: AtomicUsize,
+    rerank_io_count: AtomicUsize,
+    rerank_vertices_loaded_count: AtomicUsize,
 }
 
 impl Default for IOTracker {
@@ -275,7 +286,12 @@ impl Default for IOTracker {
             router_time_us: AtomicU64::new(0),
             router_scanned_codes: AtomicUsize::new(0),
             routed_start_points_count: AtomicUsize::new(0),
-            io_count: AtomicUsize::new(0),
+            total_io_count: AtomicUsize::new(0),
+            total_vertices_loaded_count: AtomicUsize::new(0),
+            traversal_io_count: AtomicUsize::new(0),
+            traversal_vertices_loaded_count: AtomicUsize::new(0),
+            rerank_io_count: AtomicUsize::new(0),
+            rerank_vertices_loaded_count: AtomicUsize::new(0),
         }
     }
 }
@@ -289,9 +305,25 @@ impl IOTracker {
         category.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn add_io_count(&self, count: usize) {
-        self.io_count
-            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    fn add_load_counts(&self, phase: IOLoadPhase, io_count: usize, vertices_loaded_count: usize) {
+        self.total_io_count
+            .fetch_add(io_count, std::sync::atomic::Ordering::Relaxed);
+        self.total_vertices_loaded_count
+            .fetch_add(vertices_loaded_count, std::sync::atomic::Ordering::Relaxed);
+        match phase {
+            IOLoadPhase::Traversal => {
+                self.traversal_io_count
+                    .fetch_add(io_count, std::sync::atomic::Ordering::Relaxed);
+                self.traversal_vertices_loaded_count
+                    .fetch_add(vertices_loaded_count, std::sync::atomic::Ordering::Relaxed);
+            }
+            IOLoadPhase::Rerank => {
+                self.rerank_io_count
+                    .fetch_add(io_count, std::sync::atomic::Ordering::Relaxed);
+                self.rerank_vertices_loaded_count
+                    .fetch_add(vertices_loaded_count, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
     }
 
     fn add_router_scanned_codes(&self, count: usize) {
@@ -305,8 +337,53 @@ impl IOTracker {
     }
 
     fn io_count(&self) -> usize {
-        self.io_count.load(std::sync::atomic::Ordering::Relaxed)
+        self.total_io_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    fn vertices_loaded_count(&self) -> usize {
+        self.total_vertices_loaded_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn traversal_io_count(&self) -> usize {
+        self.traversal_io_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn traversal_vertices_loaded_count(&self) -> usize {
+        self.traversal_vertices_loaded_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn rerank_io_count(&self) -> usize {
+        self.rerank_io_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn rerank_vertices_loaded_count(&self) -> usize {
+        self.rerank_vertices_loaded_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+fn record_vertex_load_counts<Data, V>(
+    io_tracker: &IOTracker,
+    phase: IOLoadPhase,
+    vertex_provider: &V,
+    before_io_operations: u32,
+    before_vertices_loaded: u32,
+) where
+    Data: GraphDataType,
+    V: VertexProvider<Data>,
+{
+    let io_count = vertex_provider
+        .io_operations()
+        .saturating_sub(before_io_operations) as usize;
+    let vertices_loaded_count = vertex_provider
+        .vertices_loaded_count()
+        .saturating_sub(before_vertices_loaded) as usize;
+    io_tracker.add_load_counts(phase, io_count, vertices_loaded_count);
 }
 
 #[derive(Clone, Copy)]
@@ -371,9 +448,11 @@ where
         let provider = accessor.provider;
 
         let mut uncached_ids = Vec::new();
+        let mut distance_cache_hits = 0;
         let mut reranked = {
             let mut process = |n: u32| {
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
+                    distance_cache_hits += 1;
                     Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
                 } else {
                     uncached_ids.push(n);
@@ -392,8 +471,27 @@ where
                     .collect::<Result<Vec<_>, _>>()?,
             }
         };
+        if distance_cache_hits > 0 {
+            accessor
+                .io_tracker
+                .add_load_counts(IOLoadPhase::Rerank, 0, distance_cache_hits);
+        }
         if !uncached_ids.is_empty() {
+            let before_io_operations = accessor.scratch.vertex_provider.io_operations();
+            let before_vertices_loaded = accessor.scratch.vertex_provider.vertices_loaded_count();
+            let timer = Instant::now();
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            IOTracker::add_time(
+                &accessor.io_tracker.io_time_us,
+                timer.elapsed().as_micros() as u64,
+            );
+            record_vertex_load_counts::<Data, VP>(
+                accessor.io_tracker,
+                IOLoadPhase::Rerank,
+                &accessor.scratch.vertex_provider,
+                before_io_operations,
+                before_vertices_loaded,
+            );
             for n in &uncached_ids {
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
                 let d = provider.distance_comparer.evaluate_similarity(query, v);
@@ -452,7 +550,21 @@ where
             return Ok(0);
         }
 
+        let before_io_operations = accessor.scratch.vertex_provider.io_operations();
+        let before_vertices_loaded = accessor.scratch.vertex_provider.vertices_loaded_count();
+        let timer = Instant::now();
         ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
+        IOTracker::add_time(
+            &accessor.io_tracker.io_time_us,
+            timer.elapsed().as_micros() as u64,
+        );
+        record_vertex_load_counts::<Data, VP>(
+            accessor.io_tracker,
+            IOLoadPhase::Rerank,
+            &accessor.scratch.vertex_provider,
+            before_io_operations,
+            before_vertices_loaded,
+        );
 
         let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
@@ -714,7 +826,10 @@ where
         F: FnMut(Self::Id, f32) + Send,
     {
         let result = (|| {
-            let io_limit = self.provider.search_io_limit - self.io_tracker.io_count();
+            let io_limit = self
+                .provider
+                .search_io_limit
+                .saturating_sub(self.io_tracker.io_count());
             let load_ids: Box<[_]> = ids.take(io_limit).collect();
 
             self.ensure_loaded(&load_ids)?;
@@ -822,13 +937,21 @@ where
             return Ok(());
         }
         let scratch = &mut self.scratch;
+        let before_io_operations = scratch.vertex_provider.io_operations();
+        let before_vertices_loaded = scratch.vertex_provider.vertices_loaded_count();
         let timer = Instant::now();
         ensure_vertex_loaded(&mut scratch.vertex_provider, ids)?;
         IOTracker::add_time(
             &self.io_tracker.io_time_us,
             timer.elapsed().as_micros() as u64,
         );
-        self.io_tracker.add_io_count(ids.len());
+        record_vertex_load_counts::<Data, VP>(
+            self.io_tracker,
+            IOLoadPhase::Traversal,
+            &scratch.vertex_provider,
+            before_io_operations,
+            before_vertices_loaded,
+        );
         for id in ids {
             let distance = self
                 .provider
@@ -1265,7 +1388,11 @@ where
         query_stats.total_execution_time_us = timer.elapsed().as_micros();
         query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
         query_stats.total_io_operations = io_tracker.io_count() as u32;
-        query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = io_tracker.vertices_loaded_count() as u32;
+        query_stats.traversal_io_operations = io_tracker.traversal_io_count() as u32;
+        query_stats.traversal_vertices_loaded = io_tracker.traversal_vertices_loaded_count() as u32;
+        query_stats.rerank_io_operations = io_tracker.rerank_io_count() as u32;
+        query_stats.rerank_vertices_loaded = io_tracker.rerank_vertices_loaded_count() as u32;
         query_stats.query_pq_preprocess_time_us =
             IOTracker::time(&io_tracker.preprocess_time_us) as u128;
         query_stats.router_time_us = IOTracker::time(&io_tracker.router_time_us) as u128;
@@ -1365,6 +1492,22 @@ mod disk_provider_tests {
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_pivots.bin";
     const TEST_PQ_COMPRESSED: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_compressed.bin";
+
+    #[test]
+    fn io_tracker_counts_physical_reads_and_logical_loads_separately() {
+        let tracker = IOTracker::default();
+
+        tracker.add_load_counts(IOLoadPhase::Traversal, 2, 5);
+        tracker.add_load_counts(IOLoadPhase::Rerank, 1, 3);
+        tracker.add_load_counts(IOLoadPhase::Rerank, 0, 4);
+
+        assert_eq!(tracker.io_count(), 3);
+        assert_eq!(tracker.vertices_loaded_count(), 12);
+        assert_eq!(tracker.traversal_io_count(), 2);
+        assert_eq!(tracker.traversal_vertices_loaded_count(), 5);
+        assert_eq!(tracker.rerank_io_count(), 1);
+        assert_eq!(tracker.rerank_vertices_loaded_count(), 7);
+    }
 
     #[test]
     fn test_disk_search_k10_l20_single_or_multi_thread_100dim() {
