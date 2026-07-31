@@ -173,54 +173,60 @@ fn replicas_cover_every_point_once_or_more_per_replica() {
     assert_valid_partition(&leaves, 72, 12, 3);
 }
 
-#[test]
-fn supported_source_types_share_partition_contract() {
-    let f32_data: Vec<f32> = (0..64 * 4).map(|value| (value % 23) as f32).collect();
-    let half_data: Vec<Half> = f32_data.iter().copied().map(Half::from_f32).collect();
-    let u8_data: Vec<u8> = f32_data.iter().map(|value| *value as u8).collect();
-    let i8_data: Vec<i8> = u8_data.iter().map(|value| *value as i8 - 11).collect();
-    let config = config(2, 16, vec![2, 1], 1);
+fn assert_partition_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
+where
+    T: diskann::utils::VectorRepr + Send + Sync,
+{
+    let points = 64;
+    // Partition gathering converts source rows before GEMM. Exercise conversion
+    // tails around 4-, 8-, and 16-element boundaries and a second 16-lane chunk.
+    for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+        let raw: Vec<u8> = (0..points * dimensions)
+            .map(|index| {
+                let row = index / dimensions;
+                let column = index % dimensions;
+                ((row * 5 + column * 7 + row * column) % 23) as u8
+            })
+            .collect();
+        let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
+        let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
+        let config = config(2, 16, vec![2, 1], 1);
+        let expected = partition(
+            MatrixView::try_from(&f32_data, points, dimensions).unwrap(),
+            config.clone(),
+            Metric::L2,
+        )
+        .unwrap();
+        let actual = partition(
+            MatrixView::try_from(&converted, points, dimensions).unwrap(),
+            config,
+            Metric::L2,
+        )
+        .unwrap_or_else(|error| panic!("{label} dimensions={dimensions}: {error}"));
 
-    let f32_leaves = partition(
-        MatrixView::try_from(f32_data.as_slice(), 64, 4).unwrap(),
-        config.clone(),
-        Metric::L2,
-    )
-    .unwrap();
-    let half_leaves = partition(
-        MatrixView::try_from(half_data.as_slice(), 64, 4).unwrap(),
-        config.clone(),
-        Metric::L2,
-    )
-    .unwrap();
-    let u8_leaves = partition(
-        MatrixView::try_from(u8_data.as_slice(), 64, 4).unwrap(),
-        config.clone(),
-        Metric::L2,
-    )
-    .unwrap();
-    let i8_leaves = partition(
-        MatrixView::try_from(i8_data.as_slice(), 64, 4).unwrap(),
-        config,
-        Metric::L2,
-    )
-    .unwrap();
-
-    for leaves in [&f32_leaves, &half_leaves, &u8_leaves, &i8_leaves] {
-        assert_valid_partition(leaves, 64, 16, 1);
+        assert_valid_partition(&actual, points, 16, 1);
+        assert_eq!(
+            sorted_memberships(&actual),
+            sorted_memberships(&expected),
+            "{label} dimensions={dimensions}"
+        );
     }
-    assert_eq!(
-        sorted_memberships(&f32_leaves),
-        sorted_memberships(&half_leaves)
-    );
-    assert_eq!(
-        sorted_memberships(&f32_leaves),
-        sorted_memberships(&u8_leaves)
-    );
-    assert_eq!(
-        sorted_memberships(&u8_leaves),
-        sorted_memberships(&i8_leaves)
-    );
+}
+
+#[test]
+fn f16_partition_matches_f32_across_dimension_boundaries() {
+    assert_partition_conversion_matches_f32("f16", |value| Half::from_f32(value as f32));
+}
+
+#[test]
+fn u8_partition_matches_f32_across_dimension_boundaries() {
+    assert_partition_conversion_matches_f32("u8", |value| value);
+}
+
+#[test]
+fn i8_partition_matches_f32_across_dimension_boundaries() {
+    // The same translation in every coordinate preserves L2 ordering.
+    assert_partition_conversion_matches_f32("i8", |value| value as i8 - 11);
 }
 
 #[test]
@@ -270,6 +276,20 @@ fn stripe_buffer_pool_reuses_returned_capacity() {
     let buffers = pool.take();
     assert_eq!(buffers.points.as_ptr(), points);
     assert_eq!(buffers.points.len(), 16);
+}
+
+#[test]
+fn stripe_buffer_pool_recovers_after_lock_poisoning() {
+    let pool = StripeBufferPool::default();
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = pool.available.lock().unwrap();
+        panic!("poison scratch pool");
+    });
+
+    let mut buffers = pool.take();
+    buffers.dots.push(1.0);
+    pool.put(buffers);
+    assert_eq!(pool.take().dots, [1.0]);
 }
 
 #[test]
