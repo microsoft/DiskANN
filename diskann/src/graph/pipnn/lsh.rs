@@ -5,13 +5,25 @@
 
 //! Random-hyperplane LSH (Locality-Sensitive Hashing) for `f32` vectors.
 //!
-//! Computes `Sketch(v) = [v · H_i for i in 0..num_planes]` where `H_i` are
-//! random unit-Gaussian hyperplanes. Callers use these sketches to derive
-//! application-specific hashes.
+//! Computes `Sketch(v) = [v · H_i for i in 0..num_planes]` where each
+//! hyperplane component is sampled from a standard normal distribution. Callers
+//! use differences between two sketch rows to derive relative hash bits.
 //!
-//! Sketches are computed in parallel via rayon, with caller-provided per-point
-//! `f32` conversion (so f16, u8, etc. don't need a full upfront f32 copy).
-//! `num_planes ≤ 16` so the result fits in `u16`.
+//! ```text
+//! seeded RNG ──> hyperplanes [planes × dimensions] (immutable)
+//!                                      │
+//! source row ──> worker f32 scratch ──> dot products ──> sketch row [planes]
+//! ```
+//!
+//! | Buffer | Shape | Lifetime |
+//! | --- | --- | --- |
+//! | hyperplanes | `num_planes × ndims` | construction call |
+//! | conversion scratch | `ndims` per Rayon job | reused across point rows |
+//! | sketches | `npoints × num_planes` | owned by `LshSketches` |
+//!
+//! Sketches are computed in parallel via Rayon, with caller-provided per-point
+//! `f32` conversion so f16, u8, and i8 storage does not require a full upfront
+//! f32 copy. `num_planes ≤ 16` keeps every relative hash in a `u16`.
 
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -115,7 +127,7 @@ impl LshSketches {
             })?;
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        // Random unit-Gaussian hyperplanes, row-major `num_planes × ndims`.
+        // Standard-normal hyperplanes, row-major `num_planes × ndims`.
         let mut hyperplanes: Vec<f32> = Vec::new();
         hyperplanes
             .try_reserve_exact(hyperplane_len)
@@ -232,6 +244,41 @@ mod tests {
             }
         }
         assert_eq!(actual.sketches(), expected);
+    }
+
+    #[test]
+    fn zero_points_produces_an_empty_sketch_without_filling() {
+        let sketches = build_pool(2)
+            .install(|| {
+                LshSketches::try_new(
+                    0,
+                    7,
+                    4,
+                    42,
+                    |_, _| -> Result<(), std::convert::Infallible> {
+                        panic!("zero points must not invoke fill_point")
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(sketches.num_planes(), 4);
+        assert!(sketches.sketches().is_empty());
+    }
+
+    #[test]
+    fn zero_dimensions_produces_zero_dot_products() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let sketches = build_pool(2)
+            .install(|| {
+                LshSketches::try_new(3, 0, 2, 42, |_, out| {
+                    assert!(out.is_empty());
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok::<_, std::convert::Infallible>(())
+                })
+            })
+            .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert_eq!(sketches.sketches(), &[0.0; 6]);
     }
 
     #[test]
