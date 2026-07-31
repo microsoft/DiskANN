@@ -18,8 +18,8 @@ use crate::{
     constant::Const,
     helpers,
     traits::{
-        SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-        SIMDSumTree, SIMDVector,
+        SIMDAbs, SIMDIsNan, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+        SIMDSelect, SIMDSumTree, SIMDVector,
     },
 };
 
@@ -37,9 +37,9 @@ helpers::unsafe_map_binary_op!(f32x8, std::ops::Add, add, _mm256_add_ps, "avx");
 helpers::unsafe_map_binary_op!(f32x8, std::ops::Sub, sub, _mm256_sub_ps, "avx");
 helpers::unsafe_map_binary_op!(f32x8, std::ops::Mul, mul, _mm256_mul_ps, "avx");
 
-impl f32x8 {
+impl SIMDIsNan for f32x8 {
     #[inline(always)]
-    fn is_nan(self) -> BitMask<8, V4> {
+    fn is_nan_simd(self) -> BitMask<8, V4> {
         // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
         // `self` with `self`, this returns `true` exactly when `self` is NaN.
         BitMask::from_underlying(
@@ -71,7 +71,7 @@ impl SIMDMinMax for f32x8 {
         // NOTE: The behavior of the non-IEEE compliant min is order dependent and thus
         // it is important that the order of the arguments is swapped.
         let min = rhs.min_simd(self);
-        self.is_nan().select(rhs, min)
+        self.is_nan_simd().select(rhs, min)
     }
 
     #[inline(always)]
@@ -84,7 +84,7 @@ impl SIMDMinMax for f32x8 {
     fn max_simd_standard(self, rhs: Self) -> Self {
         // NOTE: The behavior of the non-IEEE compliant max is order dependent.
         let max = rhs.max_simd(self);
-        self.is_nan().select(rhs, max)
+        self.is_nan_simd().select(rhs, max)
     }
 }
 
@@ -213,6 +213,7 @@ mod test_x86_f32 {
     test_utils::ops::test_cmp!(f32x8, 0x3229520775597f50, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(f32x8 => f32x4, 0x8fc0993e35ed899c, V4::new_checked_uncached());
     test_utils::ops::test_select!(f32x8, 0x45106cfb82bf69f3, V4::new_checked_uncached());
+    test_utils::ops::test_is_nan!(f32x8, 0x501644b198df82f9, V4::new_checked_uncached());
 
     // Reductions
     test_utils::ops::test_sumtree!(f32x8, 0x4e18be1451961654, V4::new_checked_uncached());

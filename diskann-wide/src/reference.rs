@@ -202,6 +202,21 @@ impl_abs!(integer, i8, i16, i32, i64);
 impl_abs!(f32, f64);
 
 /////////////////////
+// Reference IsNan //
+/////////////////////
+
+pub(crate) trait ReferenceIsNan: Copy {
+    fn reference_is_nan(self) -> bool;
+}
+
+impl ReferenceIsNan for f32 {
+    #[inline(always)]
+    fn reference_is_nan(self) -> bool {
+        self.is_nan()
+    }
+}
+
+/////////////////////
 // Reference Casts //
 /////////////////////
 

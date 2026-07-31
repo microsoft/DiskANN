@@ -659,6 +659,12 @@ pub trait SIMDCast<T>: SIMDVector {
     fn simd_cast(self) -> Self::Cast;
 }
 
+/// Return a mask recording the lanes with `self` which contain NAN values.
+pub trait SIMDIsNan: SIMDVector {
+    /// Perform the check.
+    fn is_nan_simd(self) -> Self::Mask;
+}
+
 /// A roll-up of traits required for SIMD floating point types.
 pub trait SIMDFloat:
     SIMDVector
@@ -668,7 +674,7 @@ pub trait SIMDFloat:
     + SIMDMulAdd
     + SIMDMinMax
     + SIMDPartialEq
-    + SIMDPartialOrd
+    + SIMDPartialOrd + SIMDIsNan
 {
 }
 
@@ -680,7 +686,7 @@ impl<T> SIMDFloat for T where
         + SIMDMulAdd
         + SIMDMinMax
         + SIMDPartialEq
-        + SIMDPartialOrd
+        + SIMDPartialOrd + SIMDIsNan
 {
 }
 

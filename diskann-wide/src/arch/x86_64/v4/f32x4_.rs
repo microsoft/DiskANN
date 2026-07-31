@@ -16,8 +16,8 @@ use crate::{
     constant::Const,
     helpers,
     traits::{
-        SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-        SIMDSumTree, SIMDVector,
+        SIMDAbs, SIMDIsNan, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+        SIMDSelect, SIMDSumTree, SIMDVector,
     },
 };
 
@@ -34,9 +34,9 @@ helpers::unsafe_map_binary_op!(f32x4, std::ops::Add, add, _mm_add_ps, "sse");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Sub, sub, _mm_sub_ps, "sse");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Mul, mul, _mm_mul_ps, "sse");
 
-impl f32x4 {
+impl SIMDIsNan for f32x4 {
     #[inline(always)]
-    fn is_nan(self) -> BitMask<4, V4> {
+    fn is_nan_simd(self) -> BitMask<4, V4> {
         // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
         // `self` with `self`, this returns `true` exactly when `self` is NaN.
         BitMask::from_underlying(
@@ -68,7 +68,7 @@ impl SIMDMinMax for f32x4 {
         // NOTE: The behavior of the non-IEEE compliant min is order dependent and thus
         // it is important that the order of the arguments is swapped.
         let min = rhs.min_simd(self);
-        self.is_nan().select(rhs, min)
+        self.is_nan_simd().select(rhs, min)
     }
 
     #[inline(always)]
@@ -82,7 +82,7 @@ impl SIMDMinMax for f32x4 {
         // NOTE: The behavior of the non-IEEE compliant max is order dependent and thus
         // it is important that the order of the arguments is swapped.
         let max = rhs.max_simd(self);
-        self.is_nan().select(rhs, max)
+        self.is_nan_simd().select(rhs, max)
     }
 }
 
@@ -216,6 +216,7 @@ mod test_x86_f32 {
 
     test_utils::ops::test_cmp!(f32x4, 0xc4f468b224622326, V4::new_checked_uncached());
     test_utils::ops::test_select!(f32x4, 0xdeb658b3e87755d0, V4::new_checked_uncached());
+    test_utils::ops::test_is_nan!(f32x4, 0xc5f101f607c29d77, V4::new_checked_uncached());
 
     // Reductions
     test_utils::ops::test_sumtree!(f32x4, 0x828bd890a470dc4d, V4::new_checked_uncached());

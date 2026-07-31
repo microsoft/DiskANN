@@ -225,6 +225,7 @@ mod tests {
         test_utils::ops::test_splitjoin!(f32x8 => f32x4, 0x2e301b7e12090d5c, test_neon());
         test_utils::ops::test_minmax!(f32x8, 0x6d7fc8ed6d852187, test_neon());
         test_utils::ops::test_abs!(f32x8, 0xb8f702ba85375041, test_neon());
+        test_utils::ops::test_is_nan!(f32x8, 0x66bc4eaf84830feb, test_neon());
     }
 
     mod test_f32x16 {
@@ -234,6 +235,7 @@ mod tests {
         test_utils::ops::test_splitjoin!(f32x16 => f32x8, 0x2e301b7e12090d5c, test_neon());
         test_utils::ops::test_minmax!(f32x16, 0x6d7fc8ed6d852187, test_neon());
         test_utils::ops::test_abs!(f32x16, 0xb8f702ba85375041, test_neon());
+        test_utils::ops::test_is_nan!(f32x16, 0xc627731006e736cc, test_neon());
     }
 
     // u8s

@@ -49,6 +49,10 @@ impl Layout for f32 {
     const MANTISSA_MASK: u32 = 0x007F_FFFF;
 }
 
+////////////
+// Finite //
+////////////
+
 /// A distribution for generating finite floating point numbers.
 pub struct Finite;
 
@@ -68,7 +72,7 @@ macro_rules! finite {
             ///
             /// This function does not generate infinities or NaNs.
             fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $T {
-                // Generate a uniformly distributed 32-bit integer
+                // Generate a uniformly distributed integer
                 let mut value: $bits = StandardUniform {}.sample(rng);
 
                 // The distribution from which we sample weights to determine the type of
@@ -119,6 +123,34 @@ macro_rules! finite {
 
 finite!(half::f16, u16);
 finite!(f32, u32);
+
+//////////////
+// NanHappy //
+//////////////
+
+/// A distribution where half of the values generated are from [`Finite`], and the other
+/// half are random `NaN` with occastional `+/-infinity` values.
+pub struct NanHappy;
+
+macro_rules! nan_happy {
+    ($T:ty, $bits:ty) => {
+        impl Distribution<$T> for NanHappy {
+            fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $T {
+                // Generate a uniformly distributed 32-bit integer
+                let is_nan: bool = StandardUniform {}.sample(rng);
+
+                if is_nan {
+                    let bits: $bits = StandardUniform {}.sample(rng);
+                    <$T>::from_bits(bits | <$T>::EXPONENT_MASK)
+                } else {
+                    (Finite).sample(rng)
+                }
+            }
+        }
+    };
+}
+
+nan_happy!(f32, u32);
 
 ///////////
 // Tests //

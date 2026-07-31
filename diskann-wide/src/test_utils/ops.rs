@@ -1101,6 +1101,48 @@ macro_rules! test_zipunzip {
     }
 }
 
+///////////
+// IsNan //
+///////////
+
+macro_rules! test_is_nan {
+    ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<is_nan_ $wide:lower $(_$($ps )x+)?>]() {
+                type T = $wide $(< $($ps),+>)?;
+
+                if let Some(arch) = $arch {
+                    let f = move |input: &[<T as $crate::SIMDVector>::Scalar]| {
+                        let v = <T as $crate::SIMDVector>::from_array(
+                            arch,
+                            input.try_into().unwrap(),
+                        );
+                        let mask = <T as $crate::SIMDIsNan>::is_nan_simd(v);
+                        let bitmask = <_ as $crate::SIMDMask>::bitmask(mask);
+                        let got = $crate::test_utils::common::promote_to_array(bitmask);
+
+                        $crate::test_utils::test_unary_op(
+                            &input,
+                            &got,
+                            &|x| { x.is_nan() },
+                            "is_nan",
+                        )
+                    };
+
+                    let n: usize = <T as $crate::SIMDVector>::LANES;
+                    $crate::test_utils::driver::drive_unary_with(
+                        &f,
+                        n,
+                        $seed,
+                        &$crate::test_utils::distribution::NanHappy,
+                    );
+                }
+            }
+        }
+    };
+}
+
 ///////////////////
 // Macro Exports //
 ///////////////////
@@ -1111,6 +1153,7 @@ pub(crate) use test_bitops;
 pub(crate) use test_cast;
 pub(crate) use test_cmp;
 pub(crate) use test_fma;
+pub(crate) use test_is_nan;
 pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;

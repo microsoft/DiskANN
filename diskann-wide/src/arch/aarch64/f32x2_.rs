@@ -43,6 +43,8 @@ macros::aarch64_define_cmp!(
     vcge_f32
 );
 
+macros::aarch64_define_is_nan!(f32x2);
+
 impl SIMDSumTree for f32x2 {
     #[inline(always)]
     fn sum_tree(self) -> f32 {
@@ -93,6 +95,7 @@ mod tests {
     test_utils::ops::test_fma!(f32x2, 0xcfde9d031302cf2c, test_neon());
 
     test_utils::ops::test_cmp!(f32x2, 0xc4f468b224622326, test_neon());
+    test_utils::ops::test_is_nan!(f32x2, 0xcf0477ef94f657cd, test_neon());
 
     test_utils::ops::test_sumtree!(f32x2, 0x828bd890a470dc4d, test_neon());
 }

@@ -257,8 +257,32 @@ pub(crate) type Fn1<T> = dyn Fn(&[T]);
 pub(crate) type Fn2<T, U> = dyn Fn(&[T], &[U]);
 pub(crate) type Fn3<T, U, V> = dyn Fn(&[T], &[U], &[V]);
 
+pub(crate) trait DynSample<T> {
+    fn dyn_sample(&self, rng: &mut StdRng) -> T;
+}
+
+impl<T, D> DynSample<T> for D
+where
+    D: Distribution<T>,
+{
+    fn dyn_sample(&self, rng: &mut StdRng) -> T {
+        self.sample(rng)
+    }
+}
+
 pub(crate) fn drive_unary<T>(f: &Fn1<T>, lane_count: usize, seed: u64)
 where
+    T: ScalarDriver,
+{
+    drive_unary_with(f, lane_count, seed, &T::distribution())
+}
+
+pub(crate) fn drive_unary_with<T>(
+    f: &Fn1<T>,
+    lane_count: usize,
+    seed: u64,
+    distribution: &dyn DynSample<T>,
+) where
     T: ScalarDriver,
 {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -273,7 +297,7 @@ where
     let mut arg: Box<[_]> = (0..lane_count).map(|_| T::default()).collect();
     for _ in 0..NUM_RANDOM_TRIALS {
         arg.iter_mut()
-            .for_each(|i| *i = T::distribution().sample(&mut rng));
+            .for_each(|i| *i = distribution.dyn_sample(&mut rng));
         f(&arg);
     }
 }

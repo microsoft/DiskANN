@@ -4,8 +4,8 @@
  */
 
 use crate::{
-    LoHi, SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
-    SIMDSelect, SIMDSumTree, SIMDVector, SplitJoin,
+    LoHi, SIMDAbs, SIMDDotProduct, SIMDIsNan, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq,
+    SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector, SplitJoin,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -341,6 +341,17 @@ where
     #[inline(always)]
     fn ge_simd(self, other: Self) -> Self::Mask {
         Doubled(self.0.ge_simd(other.0), self.1.ge_simd(other.1))
+    }
+}
+
+impl<T: SIMDIsNan> SIMDIsNan for Doubled<T>
+where
+    Doubled<T>: SIMDVector<Mask = Doubled<T::Mask>>,
+    Doubled<T::Mask>: SIMDMask,
+{
+    #[inline(always)]
+    fn is_nan_simd(self) -> Self::Mask {
+        Doubled(self.0.is_nan_simd(), self.1.is_nan_simd())
     }
 }
 

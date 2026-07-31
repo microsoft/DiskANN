@@ -10,9 +10,12 @@ use super::{
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
-    reference::{ReferenceAbs, ReferenceCast, ReferenceScalarOps, ReferenceShifts, TreeReduce},
+    reference::{
+        ReferenceAbs, ReferenceCast, ReferenceIsNan, ReferenceScalarOps, ReferenceShifts,
+        TreeReduce,
+    },
     traits::{
-        ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
+        ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDIsNan, SIMDMask, SIMDMinMax, SIMDMulAdd,
         SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret, SIMDSelect, SIMDSumTree, SIMDVector,
     },
 };
@@ -367,6 +370,17 @@ where
     #[inline(always)]
     fn shr(self, rhs: T) -> Self::Output {
         Self::from_arch_fn(self.1, |i| self.0[i].expected_shr_(rhs))
+    }
+}
+
+impl<T, const N: usize, A> SIMDIsNan for Emulated<T, N, A>
+where
+    T: ReferenceIsNan,
+    Self: SIMDVector,
+{
+    #[inline(always)]
+    fn is_nan_simd(self) -> Self::Mask {
+        Self::Mask::from_fn(self.arch(), |i| self.0[i].reference_is_nan())
     }
 }
 
@@ -886,6 +900,12 @@ mod test_emulated {
     test_emulated!(f32, 4);
     test_emulated!(f32, 8);
     test_emulated!(f32, 16);
+
+    test_utils::ops::test_is_nan!(Emulated<f32, 1>, 0x92565affc4565003, SC);
+    test_utils::ops::test_is_nan!(Emulated<f32, 2>, 0x8708638e73eae9b4, SC);
+    test_utils::ops::test_is_nan!(Emulated<f32, 4>, 0xbe1b4348fd5d9583, SC);
+    test_utils::ops::test_is_nan!(Emulated<f32, 8>, 0xa0bc69e129b69113, SC);
+    test_utils::ops::test_is_nan!(Emulated<f32, 16>, 0x3a8ce222a22249e6, SC);
     // test_emulated!(f64, 8);
 
     // unsigned integer

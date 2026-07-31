@@ -315,6 +315,17 @@ macro_rules! aarch64_define_cmp {
     };
 }
 
+macro_rules! aarch64_define_is_nan {
+    ($type:ty) => {
+        impl $crate::SIMDIsNan for $type {
+            #[inline(always)]
+            fn is_nan_simd(self) -> <$type as $crate::SIMDVector>::Mask {
+                <$type as $crate::SIMDPartialEq>::ne_simd(self, self)
+            }
+        }
+    };
+}
+
 /// Utility macro for defining simple operations that lower to a single intrinsic.
 ///
 /// SAFETY: It is the invoker's responsibility to ensure that the intrinsic is safe to call
@@ -564,6 +575,7 @@ macro_rules! aarch64_splitjoin {
 
 pub(crate) use aarch64_define_bitops;
 pub(crate) use aarch64_define_cmp;
+pub(crate) use aarch64_define_is_nan;
 pub(crate) use aarch64_define_fma;
 pub(crate) use aarch64_define_loadstore;
 pub(crate) use aarch64_define_register;

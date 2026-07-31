@@ -17,8 +17,8 @@ use crate::{
     constant::Const,
     helpers,
     traits::{
-        SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
-        SIMDSumTree, SIMDVector,
+        SIMDAbs, SIMDIsNan, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+        SIMDSelect, SIMDSumTree, SIMDVector,
     },
 };
 
@@ -58,9 +58,9 @@ helpers::unsafe_map_binary_op!(f32x16, std::ops::Add, add, _mm512_add_ps, "avx51
 helpers::unsafe_map_binary_op!(f32x16, std::ops::Sub, sub, _mm512_sub_ps, "avx512f");
 helpers::unsafe_map_binary_op!(f32x16, std::ops::Mul, mul, _mm512_mul_ps, "avx512f");
 
-impl f32x16 {
+impl SIMDIsNan for f32x16 {
     #[inline(always)]
-    fn is_nan(self) -> BitMask<16, V4> {
+    fn is_nan_simd(self) -> BitMask<16, V4> {
         // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
         // `self` with `self`, this returns `true` exactly when `self` is NaN.
         BitMask::from_underlying(
@@ -92,7 +92,7 @@ impl SIMDMinMax for f32x16 {
         // NOTE: The behavior of the non-IEEE compliant min is order dependent and thus
         // it is important that the order of the arguments is swapped.
         let min = rhs.min_simd(self);
-        self.is_nan().select(rhs, min)
+        self.is_nan_simd().select(rhs, min)
     }
 
     #[inline(always)]
@@ -106,7 +106,7 @@ impl SIMDMinMax for f32x16 {
         // NOTE: The behavior of the non-IEEE compliant max is order dependent and thus
         // it is important that the order of the arguments is swapped.
         let max = rhs.max_simd(self);
-        self.is_nan().select(rhs, max)
+        self.is_nan_simd().select(rhs, max)
     }
 }
 
@@ -247,6 +247,7 @@ mod test_x86_f32 {
     test_utils::ops::test_cmp!(f32x16, 0x1246278e242caecc, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(f32x16 => f32x8, 0xde4ff375903351e3, V4::new_checked_uncached());
     test_utils::ops::test_select!(f32x16, 0xcfdfd54e2088dd90, V4::new_checked_uncached());
+    test_utils::ops::test_is_nan!(f32x16, 0xbe0ca06a33cf5d0b, V4::new_checked_uncached());
 
     // Reductions
     test_utils::ops::test_sumtree!(f32x16, 0x0180a265222e3fcf, V4::new_checked_uncached());

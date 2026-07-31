@@ -61,6 +61,7 @@ mod test_x86_f32 {
     test_utils::ops::test_cmp!(f32x16, 0x1246278e242caecc, V3::new_checked_uncached());
     test_utils::ops::test_splitjoin!(f32x16 => f32x8, 0xde4ff375903351e3, V3::new_checked_uncached());
     test_utils::ops::test_select!(f32x16, 0xa4a7950ec1dc3b22, V3::new_checked_uncached());
+    test_utils::ops::test_is_nan!(f32x16, 0x2bcbfdc07df34aec, V3::new_checked_uncached());
 
     // Reductions
     test_utils::ops::test_sumtree!(f32x16, 0x0180a265222e3fcf, V3::new_checked_uncached());
