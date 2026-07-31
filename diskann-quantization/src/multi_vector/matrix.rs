@@ -865,6 +865,23 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
     }
 
+    /// A view over `count` consecutive rows starting at `start`.
+    ///
+    /// `count` is clipped to the rows available, so a walk can request a fixed tile
+    /// size and get a short final tile. Returns `None` once `start` reaches
+    /// [`num_vectors()`](Self::num_vectors), which ends such a walk.
+    #[allow(clippy::expect_used)]
+    pub fn row_range(&self, start: usize, count: usize) -> Option<Self> {
+        let count = count.min(self.num_vectors().checked_sub(start)?);
+        if count == 0 {
+            return None;
+        }
+        let k = self.vector_dim();
+        let repr =
+            Standard::<T>::new(count, k).expect("sub-view of a valid matrix cannot overflow");
+        MatRef::new(repr, &self.as_slice()[start * k..(start + count) * k]).ok()
+    }
+
     /// Return a [`MatrixView`] over the backing data.
     #[allow(clippy::expect_used)]
     #[inline]
@@ -1417,6 +1434,37 @@ mod tests {
     //////////////
     // Standard //
     //////////////
+
+    #[test]
+    fn standard_row_range_partitions_rows() {
+        let m = Mat::<Standard<u32>>::from_fn(Standard::new(7, 3).unwrap(), {
+            let mut i = 0;
+            move || {
+                i += 1;
+                i
+            }
+        });
+        let v = m.as_view();
+
+        for tile in 1..10 {
+            let mut cur = 0;
+            while let Some(t) = v.row_range(cur, tile) {
+                assert!(t.num_vectors() <= tile);
+                assert_eq!(t.vector_dim(), 3);
+                assert_eq!(
+                    t.as_slice(),
+                    &v.as_slice()[cur * 3..(cur + t.num_vectors()) * 3]
+                );
+                cur += t.num_vectors();
+            }
+            assert_eq!(cur, 7, "tile size {tile} must cover every row");
+        }
+
+        assert!(v.row_range(7, 1).is_none(), "start at the end ends a walk");
+        assert!(v.row_range(8, 1).is_none(), "start past the end");
+        assert!(v.row_range(0, 0).is_none(), "zero-row view is not lent");
+        assert_eq!(v.row_range(5, 99).unwrap().num_vectors(), 2, "count clips");
+    }
 
     #[test]
     fn standard_representation() {

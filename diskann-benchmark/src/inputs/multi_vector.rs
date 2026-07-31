@@ -233,6 +233,87 @@ impl std::fmt::Display for MultiVectorQuantOp {
 }
 
 ///////////////////////////////
+// Multi-Vector Paneled f32   //
+///////////////////////////////
+
+/// An **f32** multi-vector MaxSim A/B benchmark job: the paneled rebuild vs the
+/// production block-transposed fused V3 kernel vs the non-SIMD reference, at
+/// identical shapes over identical data.
+///
+/// Not fully apples-to-apples — the paneled path pre-materializes its doc side once
+/// at build (excluded from timing), while the fused kernel takes a `MatRef` per call.
+/// The tiler is absent by construction: it has no f32 instantiation (only 4-bit
+/// MinMax and f16).
+///
+/// Element type is f32 and the ISA is fixed to V3/AVX2, so neither is a JSON field.
+/// x86_64-only.
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MultiVectorPaneledF32Op {
+    pub(crate) runs: Vec<Run>,
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl MultiVectorPaneledF32Op {
+    pub(crate) const fn tag() -> &'static str {
+        "multi-vector-paneled-f32-op"
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl Input for MultiVectorPaneledF32Op {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        Self::tag()
+    }
+
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
+        const NUM_DOC_VECTORS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+        const DIM: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+        const LOOPS_PER_MEASUREMENT: NonZeroUsize = NonZeroUsize::new(50).unwrap();
+        const NUM_MEASUREMENTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
+
+        let runs = vec![
+            Run {
+                num_query_vectors: NonZeroUsize::new(32).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+            Run {
+                num_query_vectors: NonZeroUsize::new(64).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+        ];
+
+        Self { runs }
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl std::fmt::Display for MultiVectorPaneledF32Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Multi-Vector Paneled f32 Operation\n")?;
+        write_field!(f, "tag", Self::tag())?;
+        write_field!(f, "number of runs", self.runs.len())?;
+        Ok(())
+    }
+}
+
+///////////////////////////////
 // Multi-Vector Tiled f16 Op  //
 ///////////////////////////////
 

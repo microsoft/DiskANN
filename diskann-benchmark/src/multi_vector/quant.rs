@@ -3,16 +3,21 @@
  * Licensed under the MIT license.
  */
 
-//! A/B benchmark for **4-bit MinMax quantized** multi-vector MaxSim: the
-//! experimental *staged integer* kernel (block-transposed `i16` query + `u8`
-//! doc codes, `vpmaddwd` accumulation, metadata postprocess) vs the scalar
-//! [`MinMaxKernel`] reference — at identical shapes and identical quantization.
+//! A/B benchmark for **4-bit MinMax quantized** multi-vector MaxSim across four
+//! paths at identical shapes and identical quantization:
 //!
-//! Both paths consume the *same* random f32 multi-vectors quantized to 4-bit
-//! MinMax (Null transform, scale 1.0), so the comparison isolates the distance
-//! kernel. The build / quantize cost is excluded from the timing.
+//! - **Staged** — block-transposed `i16` query + `u8` doc codes, `vpmaddwd`
+//!   accumulation, metadata postprocess as a separate stage.
+//! - **Tiled** — the coarse tiler rebuild (accumulate → postprocess → reduce).
+//! - **Paneled** — the paneled rebuild (views own their panel decomposition; one
+//!   `Drain` seam fuses dequant + reduce).
+//! - **Reference** — the scalar [`MinMaxKernel`] baseline.
 //!
-//! x86_64 (V3/AVX2) only — the quantized staged kernel has no other backend.
+//! All four consume the *same* random f32 multi-vectors quantized to 4-bit MinMax
+//! (Null transform, scale 1.0), so the comparison isolates the distance kernel. The
+//! build / quantize cost is excluded from the timing.
+//!
+//! x86_64 (V3/AVX2) only — the quantized experimental kernels have no other backend.
 
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -26,7 +31,8 @@ use diskann_quantization::algorithms::transforms::NullTransform;
 use diskann_quantization::algorithms::Transform;
 use diskann_quantization::minmax::{MinMaxMeta, MinMaxQuantizer};
 use diskann_quantization::multi_vector::distance::{
-    QuantStagedDocs, QuantStagedQuery, QuantTiledDocs, QuantTiledQuery,
+    PaneledQuantDocs, PaneledQuantQuery, QuantStagedDocs, QuantStagedQuery, QuantTiledDocs,
+    QuantTiledQuery,
 };
 use diskann_quantization::multi_vector::{Defaulted, Mat, MatRef, MaxSim, QueryMatRef, Standard};
 use diskann_quantization::num::Positive;
@@ -86,7 +92,10 @@ impl Benchmark for QuantKernel {
         input: Option<&MultiVectorQuantOp>,
     ) -> std::fmt::Result {
         match input {
-            None => writeln!(f, "- 4-bit MinMax quantized staged MaxSim (V3/AVX2)")?,
+            None => writeln!(
+                f,
+                "- 4-bit MinMax quantized MaxSim, staged / tiled / paneled / reference (V3/AVX2)"
+            )?,
             Some(_) => {
                 if !QuantStagedQuery::is_supported() {
                     writeln!(f, "\n    - AVX2 (V3) unavailable on this CPU")?;
@@ -148,7 +157,13 @@ fn run_ab(run: &Run) -> anyhow::Result<QuantRunResult> {
         .ok_or_else(|| anyhow::anyhow!("AVX2 (V3) unavailable for the tiled quantized kernel"))?;
     let tiled_docs = QuantTiledDocs::build(data.docs.as_view());
 
-    // Path C — scalar MinMax reference over the same quantization.
+    // Path C — the paneled rebuild (views own their panel decomposition, one `Drain`
+    // seam fusing dequant + reduce).
+    let mut paneled_query = PaneledQuantQuery::build(data.queries.as_view())
+        .ok_or_else(|| anyhow::anyhow!("AVX2 (V3) unavailable for the paneled quantized kernel"))?;
+    let paneled_docs = PaneledQuantDocs::build(data.docs.as_view());
+
+    // Path D — scalar MinMax reference over the same quantization.
     let q_ref = quantize(data.queries.as_view());
     let d_ref = quantize(data.docs.as_view());
 
@@ -175,6 +190,12 @@ fn run_ab(run: &Run) -> anyhow::Result<QuantRunResult> {
         std::hint::black_box(&mut scores);
     });
 
+    let paneled = measure(run, || {
+        let docs = std::hint::black_box(&paneled_docs);
+        paneled_query.compute_max_sim(docs, &mut scores);
+        std::hint::black_box(&mut scores);
+    });
+
     let reference = measure(run, || {
         let q_ref = std::hint::black_box(&q_ref);
         let d_ref = std::hint::black_box(&d_ref);
@@ -187,6 +208,7 @@ fn run_ab(run: &Run) -> anyhow::Result<QuantRunResult> {
         run: run.clone(),
         staged,
         tiled,
+        paneled,
         reference,
     })
 }
@@ -214,12 +236,13 @@ impl Series {
     }
 }
 
-/// Staged-vs-tiled-vs-reference result for one shape.
+/// Staged-vs-tiled-vs-paneled-vs-reference result for one shape.
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct QuantRunResult {
     pub(super) run: Run,
     pub(super) staged: Series,
     pub(super) tiled: Series,
+    pub(super) paneled: Series,
     pub(super) reference: Series,
 }
 
@@ -239,20 +262,22 @@ impl std::fmt::Display for DisplayWrapper<'_, [QuantRunResult]> {
 
         writeln!(
             f,
-            "ns/IP = min time per (query, doc) inner-product call; \
-             Tiled/Staged = tiled ÷ staged (1.00 ⇒ zero abstraction overhead, \
-             >1 ⇒ tiled slower); Speedup = reference ÷ staged"
+            "ns/IP = min time per (query, doc) inner-product call. \
+             Ratios are vs Staged (1.00 ⇒ parity, >1 ⇒ slower). \
+             Speedup = reference ÷ paneled."
         )?;
 
         let header = [
             "Q",
             "D",
             "Dim",
-            "Staged (ns/IP)",
-            "Tiled (ns/IP)",
-            "Tiled/Staged",
-            "Reference (ns/IP)",
-            "Speedup",
+            "Staged",
+            "Tiled",
+            "Paneled",
+            "Tiled/St",
+            "Panel/St",
+            "Reference",
+            "Ref/Panel",
         ];
         let mut table = Table::new(header, self.len());
 
@@ -260,10 +285,11 @@ impl std::fmt::Display for DisplayWrapper<'_, [QuantRunResult]> {
             let comps = r.computations();
             let staged = r.staged.min_us() / comps * 1000.0;
             let tiled = r.tiled.min_us() / comps * 1000.0;
+            let paneled = r.paneled.min_us() / comps * 1000.0;
             let reference = r.reference.min_us() / comps * 1000.0;
-            let overhead = if staged > 0.0 { tiled / staged } else { 0.0 };
-            let speedup = if staged > 0.0 {
-                reference / staged
+            let ratio = |x: f64| if staged > 0.0 { x / staged } else { 0.0 };
+            let speedup = if paneled > 0.0 {
+                reference / paneled
             } else {
                 0.0
             };
@@ -274,9 +300,11 @@ impl std::fmt::Display for DisplayWrapper<'_, [QuantRunResult]> {
             row.insert(r.run.dim, 2);
             row.insert(format!("{:.3}", staged), 3);
             row.insert(format!("{:.3}", tiled), 4);
-            row.insert(format!("{:.2}x", overhead), 5);
-            row.insert(format!("{:.3}", reference), 6);
-            row.insert(format!("{:.2}x", speedup), 7);
+            row.insert(format!("{:.3}", paneled), 5);
+            row.insert(format!("{:.2}x", ratio(tiled)), 6);
+            row.insert(format!("{:.2}x", ratio(paneled)), 7);
+            row.insert(format!("{:.3}", reference), 8);
+            row.insert(format!("{:.2}x", speedup), 9);
         });
 
         table.fmt(f)

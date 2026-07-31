@@ -72,3 +72,9 @@ pub use kernels::{QuantTiledDocs, QuantTiledQuery};
 /// postprocess reuse the same tiled pipeline.
 #[cfg(target_arch = "x86_64")]
 pub use kernels::{QuantTiledF16Docs, QuantTiledF16Query};
+
+/// Standalone POC entries for the **paneled** rebuild (V3/AVX2 only) — views own
+/// their panel decomposition (B through the real `MatRef`), the tail is a distinct
+/// panel type, and one `Drain` seam replaces the tiler's postprocess + reduce pair.
+#[cfg(target_arch = "x86_64")]
+pub use kernels::{PaneledF32Docs, PaneledF32Query, PaneledQuantDocs, PaneledQuantQuery};

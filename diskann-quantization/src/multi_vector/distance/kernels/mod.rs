@@ -25,6 +25,10 @@ mod tiled_reduce;
 #[cfg(target_arch = "x86_64")]
 pub(super) mod tiler;
 
+// Paneled rebuild — views own their panel decomposition, one `Drain` seam (V3 only).
+#[cfg(target_arch = "x86_64")]
+pub(super) mod paneled;
+
 // Re-export the quantized staged kernel's public POC entry (x86_64 only).
 #[cfg(target_arch = "x86_64")]
 pub use staged::{QuantStagedDocs, QuantStagedQuery};
@@ -32,6 +36,10 @@ pub use staged::{QuantStagedDocs, QuantStagedQuery};
 // Re-export the coarse Tiler-based quantized POC entry (x86_64 only).
 #[cfg(target_arch = "x86_64")]
 pub use tiler::{QuantTiledDocs, QuantTiledF16Docs, QuantTiledF16Query, QuantTiledQuery};
+
+// Re-export the paneled POC entries (x86_64 only).
+#[cfg(target_arch = "x86_64")]
+pub use paneled::{PaneledF32Docs, PaneledF32Query, PaneledQuantDocs, PaneledQuantQuery};
 
 // ── Tile budget ──────────────────────────────────────────────────
 
