@@ -73,19 +73,16 @@ macro_rules! finite {
                 // This integer is twice as large as what's actually needed to generate
                 //
                 // * the value that will be used to make the final floating point number
-                //   (the lower order bits).
+                //   (the lower bits).
                 //
                 // * a selector for the kind of floating point number we are going to
-                //   generate.
+                //   generate (the upper bits).
                 //
                 // Generating a number twice as big allows us to perform just a single sample
                 // from the random number generator without biasing the result.
                 let twice: $twice = StandardUniform {}.sample(rng);
 
                 let mut value = twice as $bits;
-
-                // The distribution from which we sample weights to determine the type of
-                // floating point number we are  going to generate.
                 let kind = (twice >> <$bits>::BITS) % 128;
                 let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < 116 {
                     // Generate a normal floating point number.
