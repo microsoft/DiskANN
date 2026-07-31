@@ -93,7 +93,7 @@ macro_rules! finite {
                     //
                     // The mantissa is allowed to be all zeros.
                     (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
-                } else if kind < 123 {
+                } else if kind < 122 {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
@@ -242,8 +242,8 @@ mod tests {
         T: TestDistribution,
     {
         let normal_weight = 116;
-        let subnormal_weight = 7;
-        let zero_weight = 5;
+        let subnormal_weight = 6;
+        let zero_weight = 6;
         let total_weight = normal_weight + subnormal_weight + zero_weight;
 
         let num_trials: i64 = 1_000_000;
