@@ -1,0 +1,110 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 64,
+          "distance": "squared_l2",
+          "groundtruth": "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS/msturing-gt-10M",
+          "num_nodes_to_cache": 50000,
+          "num_threads": 4,
+          "post_processor": null,
+          "queries": "/Users/xiaoweijiang/Documents/diskann/bigann10Mdatasets/MSTuringANNS/query100K.fbin",
+          "recall_at": 100,
+          "repetitions": 5,
+          "search_io_limit": null,
+          "search_list": [
+            200
+          ],
+          "search_mode": {
+            "adaptive_l": null,
+            "is_flat_search": false
+          },
+          "start_point_router": {
+            "artifact": "/private/tmp/diskann-pq-kmeans-bfs-cache-router/outputs/msturingann10m_user_m59_l80_sq1_pq64.pq_kmeans_router_k256_geometry.bin",
+            "max_start_points": 8,
+            "type": "pq_kmeans"
+          },
+          "vector_filters_file": null,
+          "warmup_runs": 2
+        },
+        "source": {
+          "data_type": "float32",
+          "disk-index-source": "Load",
+          "load_path": "outputs/msturingann10m_user_m59_l80_sq1_pq64_index"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 64,
+        "distance": "squared_l2",
+        "is_flat_search": false,
+        "num_nodes_to_cache": 50000,
+        "num_threads": 4,
+        "recall_at": 100,
+        "repetitions": 5,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 45.6145936284736,
+            "mean_comparisons": 19714.61812,
+            "mean_cpu_time": 927.004052,
+            "mean_hops": 432.10784,
+            "mean_io_time": 211.129278,
+            "mean_ios": 348.12525,
+            "mean_latency": 1176.939512,
+            "mean_pq_preprocess_time": 2.162378,
+            "mean_rerank_ios": 0.0,
+            "mean_rerank_vertices_loaded": 208.0,
+            "mean_routed_start_points": 8.0,
+            "mean_router_scanned_codes": 256.0,
+            "mean_router_time": 36.643804,
+            "mean_traversal_ios": 348.12525,
+            "mean_traversal_vertices_loaded": 432.10784,
+            "mean_vertices_loaded": 640.10784,
+            "p95_latency": 1572,
+            "p999_latency": 3443,
+            "qps": 3391.687255859375,
+            "recall": 73.63562774658203,
+            "rerank_cache_hit_percentage": 100.0,
+            "search_l": 200,
+            "traversal_cache_hit_percentage": 19.435562659543503
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 0.0,
+                "duration_seconds": 3.473727291,
+                "elapsed_cycles": 0.0,
+                "peak_memory_usage": 7.2097015380859375
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 216.458419
+              },
+              "span_name": "search-with-L=200-bw=64"
+            },
+            {
+              "metrics": {
+                "cpu_time": 0.0,
+                "duration_seconds": 216.455132083,
+                "elapsed_cycles": 0.0,
+                "peak_memory_usage": 26.291229248046875
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "start_point_router": "pq_kmeans",
+        "uses_vector_filters": false,
+        "warmup_runs": 2
+      }
+    }
+  }
+]

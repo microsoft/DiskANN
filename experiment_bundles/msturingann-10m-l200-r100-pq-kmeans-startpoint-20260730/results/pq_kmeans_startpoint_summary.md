@@ -10,62 +10,81 @@ Working directory:
 
 ## Summary
 
-The original PQ-kmeans experiment had a correctness bug: it clustered and scored PQ label IDs as if label ordinals were coordinates. That is not valid, because PQ centroid ID order has no geometric meaning.
-
-The fixed implementation now uses PQ/codebook geometry:
+This rerun measures the fixed PQ-kmeans start-point router on MSTuringANN 10M with corrected IO accounting. The original PQ-kmeans implementation was invalid because it clustered and scored PQ label IDs as if label ordinals were coordinates. The fixed implementation uses PQ/codebook geometry instead:
 
 - Build-time k-means inflates PQ codes back to reconstructed vectors, keeps centroids in original `f32` vector space, assigns compressed points to centroids with `FixedChunkPQTable::l2_distance`, and chooses representative samples by the same geometry.
 - Query-time routing uses ADC-style scoring: `populate_chunk_distances(query)` plus `pq_dist_lookup_single(representative_code)`.
 - The BFS cache design is still multi-source: `num_nodes_to_cache=50000` is spread from the routed candidate starts instead of only the single baseline medoid.
 
-After the fix, the useful result is stronger than the old invalid label-ID result on traversal and latency. On MSTuringANN, k=1024/top8 is the best fixed-geometry row: recall improves by +0.574 pp, hops/IOs drop by 21.1%, comparisons drop by 23.2%, and mean latency drops by 13.8% versus the rerun baseline.
+The useful readout changed after the IO counter fix: physical disk IOs and logical vertex loads are now reported separately. On MSTuringANN 10M, `k=1024, max_start_points=8` is the strongest row in this rerun: versus baseline it improves recall by +0.171 pp, improves QPS by +26.99%, lowers mean latency by -21.21%, lowers physical mean IOs by -2.04%, lowers traversal logical loads / hops by -19.51%, and lowers comparisons by -23.15%.
 
-All valid search rows below use search L=200, K=100, beam width=64, 4 threads, `num_nodes_to_cache=50000`, 2 warmup runs, 5 measured repetitions, squared L2 distance, and no vector filters.
+All search rows below use search L=200, K=100, beam width=64, 4 threads, `num_nodes_to_cache=50000`, 2 warmup runs, 5 measured repetitions, squared L2 distance, and no vector filters.
 
-## MSTuringANN 10M fixed-geometry rerun
+## MSTuringANN 10M 10%-training-sample rerun
+
+Scope and router settings:
+
+| Setting | Value |
+| --- | ---: |
+| Dataset size | N=10,000,000 |
+| Router training_sample_size | 1,000,000 (10%N) |
+| Router max_start_points | 8 |
+| Search L | 200 |
+| recall@K | 100 |
+| beam width | 64 |
+| threads | 4 |
+| num_nodes_to_cache | 50,000 |
+| warmup runs | 2 |
+| measured repetitions | 5 |
 
 Current baseline:
 
-`results/search_baseline_after_geometry_fix_output.json`
+`results/search_baseline_10pct_iometrics_output.json`
 
-Fixed-geometry router rows:
+Fixed-geometry 10%-sample router rows:
 
-- `results/search_pq_kmeans_k256_msp8_geometry_output.json`
-- `results/search_pq_kmeans_k512_msp8_geometry_output.json`
-- `results/search_pq_kmeans_k1024_msp8_geometry_output.json`
+- `results/search_pq_kmeans_k256_msp8_geometry_10pct_iometrics_output.json`
+- `results/search_pq_kmeans_k512_msp8_geometry_10pct_iometrics_output.json`
+- `results/search_pq_kmeans_k1024_msp8_geometry_10pct_iometrics_output.json`
+
+Build artifacts for these search rows were produced by the matching `build_pq_kmeans_router_k{256,512,1024}_geometry_10pct_iometrics_output.json` runs.
 
 ### Absolute metrics
 
-| Variant | k | Start points | Recall@100 | QPS | Mean latency | P95 | P99.9 | Hops / IOs | Comparisons | Router time | Scanned codes | Artifact bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Baseline | — | 1 | 73.4835 | 3212.43 | 1243.59 us | 1569 us | 2519 us | 491.183 | 23360.0 | 0.0 us | 0 | — |
-| PQ-geometry k=256 top8 | 256 | 8 | 74.3409 | 3506.10 | 1138.69 us | 1441 us | 2549 us | 404.977 | 19138.7 | 36.7 us | 256 | 17,445 |
-| PQ-geometry k=512 top8 | 512 | 8 | 74.1320 | 3614.01 | 1104.49 us | 1418 us | 2720 us | 397.728 | 18591.4 | 44.6 us | 512 | 34,853 |
-| PQ-geometry k=1024 top8 | 1,024 | 8 | 74.0571 | 3725.45 | 1071.73 us | 1381 us | 1761 us | 387.552 | 17936.1 | 58.6 us | 1024 | 69,669 |
+`Mean IOs` is the corrected physical disk IO count. `Mean loads` is the total logical vertices loaded, including traversal plus rerank. Traversal and rerank metrics are shown separately to make the corrected accounting explicit.
+
+| Variant | k | Start points | Recall@100 | QPS | Mean latency | P95 | P99.9 | Mean IOs | Mean loads | Cache hit | Trav IOs | Trav loads | Trav hit | Rerank IOs | Rerank loads | Rerank hit | Hops | Comparisons | Router time | Router codes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline | — | 1 | 73.4835 | 2929.19 | 1362.45 us | 1737 us | 13013 us | 336.243 | 692.183 | 51.42% | 336.243 | 491.183 | 31.54% | 0.000 | 201.000 | 100.00% | 491.183 | 23360.0 | 0.00 us | 0 |
+| PQ-geometry k=256 top8 | 256 | 8 | 73.6356 | 3391.69 | 1176.94 us | 1572 us | 3443 us | 348.125 | 640.108 | 45.61% | 348.125 | 432.108 | 19.44% | 0.000 | 208.000 | 100.00% | 432.108 | 19714.6 | 36.64 us | 256 |
+| PQ-geometry k=512 top8 | 512 | 8 | 73.6069 | 3488.05 | 1143.81 us | 1546 us | 3481 us | 336.109 | 624.177 | 46.15% | 336.109 | 416.177 | 19.24% | 0.000 | 208.000 | 100.00% | 416.177 | 18919.2 | 43.90 us | 512 |
+| PQ-geometry k=1024 top8 | 1,024 | 8 | 73.6540 | 3719.83 | 1073.47 us | 1442 us | 1858 us | 329.393 | 603.332 | 45.40% | 329.393 | 395.332 | 16.68% | 0.000 | 208.000 | 100.00% | 395.332 | 17952.1 | 58.21 us | 1024 |
 
 ### Delta vs baseline
 
-| Variant | Recall delta | QPS delta | Mean latency delta | P95 delta | P99.9 delta | Hops / IOs delta | Comparisons delta | Router-time delta |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| PQ-geometry k=256 top8 | +0.857 pp | +293.67 (+9.14%) | -104.89 us (-8.43%) | -128 us (-8.16%) | +30 us (+1.19%) | -86.207 (-17.55%) | -4221.4 (-18.07%) | +36.7 us |
-| PQ-geometry k=512 top8 | +0.649 pp | +401.58 (+12.50%) | -139.10 us (-11.18%) | -151 us (-9.62%) | +201 us (+7.98%) | -93.455 (-19.03%) | -4768.6 (-20.41%) | +44.6 us |
-| PQ-geometry k=1024 top8 | +0.574 pp | +513.02 (+15.97%) | -171.86 us (-13.82%) | -188 us (-11.98%) | -758 us (-30.09%) | -103.632 (-21.10%) | -5423.9 (-23.22%) | +58.6 us |
+Percentages in parentheses are relative to the baseline metric. Percentage-point deltas are used for recall and cache-hit rates.
+
+| Variant | Recall delta | QPS delta | Mean latency delta | P95 delta | P99.9 delta | Mean IOs delta | Mean loads delta | Cache hit delta | Trav IOs delta | Trav loads / hops delta | Trav hit delta | Rerank loads delta | Comparisons delta | Router-time delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PQ-geometry k=256 top8 | +0.152 pp (+0.21%) | +462.50 (+15.79%) | -185.51 us (-13.62%) | -165 us (-9.50%) | -9570 us (-73.54%) | +11.883 (+3.53%) | -52.076 (-7.52%) | -5.81 pp (-11.30%) | +11.883 (+3.53%) | -59.076 (-12.03%) | -12.11 pp (-38.39%) | +7.000 (+3.48%) | -3645.4 (-15.60%) | +36.64 us |
+| PQ-geometry k=512 top8 | +0.123 pp (+0.17%) | +558.86 (+19.08%) | -218.64 us (-16.05%) | -191 us (-11.00%) | -9532 us (-73.25%) | -0.133 (-0.04%) | -68.007 (-9.82%) | -5.27 pp (-10.25%) | -0.133 (-0.04%) | -75.007 (-15.27%) | -12.31 pp (-39.01%) | +7.000 (+3.48%) | -4440.8 (-19.01%) | +43.90 us |
+| PQ-geometry k=1024 top8 | +0.171 pp (+0.23%) | +790.65 (+26.99%) | -288.98 us (-21.21%) | -295 us (-16.98%) | -11155 us (-85.72%) | -6.850 (-2.04%) | -88.852 (-12.84%) | -6.02 pp (-11.70%) | -6.850 (-2.04%) | -95.852 (-19.51%) | -14.86 pp (-47.13%) | +7.000 (+3.48%) | -5407.9 (-23.15%) | +58.21 us |
 
 ### MSTuringANN readout
 
-- k=1024/top8 is the strongest fixed-geometry point in this rerun: it has the lowest latency, lowest hops/IOs, lowest comparisons, best QPS, and no recall regression.
-- k=256 and k=512 are still useful if the priority is even smaller router metadata. They already capture most of the traversal reduction, with only 17 KB and 35 KB artifacts.
-- Router CPU cost is now higher than the old label-ID implementation because ADC computes/query-loads codebook distances instead of doing ordinal byte subtraction. The traversal reduction more than pays for it at k=1024.
+- `k=1024/top8` is the best row in this 10%N rerun by QPS, mean latency, tail latency, corrected physical mean IOs, total logical loads, traversal loads / hops, and comparisons. Recall is also slightly above baseline.
+- `k=256/top8` still improves latency and logical traversal, but its corrected physical mean IOs are higher than baseline (+3.53%). This would have been hidden by the old logical-load-only counter.
+- `k=512/top8` is close to baseline on corrected physical mean IOs (-0.04%) while improving latency by -16.05% and traversal loads by -15.27%.
+- Rerank physical IOs are 0.0 for all rows because the rerank vertices are cache hits in this run. Rerank logical loads are 201 for baseline and 208 for routed rows.
+- Overall and traversal cache-hit percentages are lower in the routed rows even though latency and traversal work improve. The routed searches load fewer traversal vertices but touch a different vertex mix, so cache-hit percentage alone is not the optimization objective.
 
 ## Old label-ID results are invalid reference rows
 
-These rows are retained only to explain earlier discrepancies. They should not be used as the final experiment result because they treated PQ label IDs as geometric coordinates.
+Old rows that treated PQ label IDs as geometric coordinates are retained only as invalid historical reference. They should not be used as final experiment evidence.
 
-| Dataset | Invalid variant | Recall@100 | Mean latency | Hops / IOs | Comparisons | Router time | Why invalid |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| MSTuringANN | old label-ID k=1024/top8 | 74.6721 | 1264.76 us | 447.408 | 21828.8 | 6.64 us | clustered/scored PQ label ordinals |
-
-The old label-ID router looked cheaper because it only did byte-level ordinal distance. The fixed router is semantically correct but spends more time in ADC scoring. The fixed MSTuring row nevertheless has much better latency and traversal because its start points are selected in PQ codebook geometry.
+| Dataset | Invalid variant | Why invalid |
+| --- | --- | --- |
+| MSTuringANN | old label-ID k=1024/top8 | clustered/scored PQ label ordinals, whose ID order has no geometric meaning |
 
 ## Blocked datasets
 
@@ -87,19 +106,16 @@ The file header says `35000000 x 768`, but the file size is only 8,725,200,896 b
 
 Blocked locally: no Enron base vectors, query file, groundtruth, or prebuilt DiskANN index triplet were found under the searched local data/output roots.
 
-## Caveats
-
-- The reported `cache_hit_percentage` remains 0.0% in these outputs. The BFS cache path is implemented as multi-source cache population, but the benchmark counter currently does not expose meaningful physical cache-hit attribution for this path. Use hops/IOs/comparisons/latency as the practical effect metrics for this experiment.
-- The benchmark's `mean_ios` and `mean_hops` are identical in these runs, so the IO number should be read as logical traversal/load count, not verified storage-device misses.
-- Router metadata memory remains tiny: 69,669 bytes for MSTuring k=1024. The additional retained PQ geometry table is also small because it is just the PQ codebook/pivots, not per-point vectors.
-
 ## Verification snapshot
 
-Commands run after the geometry fix:
+The final verification suite is run after this report update:
 
 ```bash
-cargo build -p diskann-benchmark --release --features disk-index
 cargo test -p diskann-disk pq_kmeans_router
+cargo test -p diskann-disk io_tracker_counts_physical_reads_and_logical_loads_separately
+cargo test -p diskann-benchmark --features disk-index cache_hit_percentage
+cargo check -p diskann-benchmark --features disk-index
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+git diff --check
 ```
-
-The full final verification set is recorded in the PR/update handoff, including format, tests, benchmark check, and clippy.
