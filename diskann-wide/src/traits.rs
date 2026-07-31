@@ -674,7 +674,8 @@ pub trait SIMDFloat:
     + SIMDMulAdd
     + SIMDMinMax
     + SIMDPartialEq
-    + SIMDPartialOrd + SIMDIsNan
+    + SIMDPartialOrd
+    + SIMDIsNan
 {
 }
 
@@ -686,7 +687,8 @@ impl<T> SIMDFloat for T where
         + SIMDMulAdd
         + SIMDMinMax
         + SIMDPartialEq
-        + SIMDPartialOrd + SIMDIsNan
+        + SIMDPartialOrd
+        + SIMDIsNan
 {
 }
 
