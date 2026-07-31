@@ -359,8 +359,12 @@ where
                 let nnbrs: u32 = std::cmp::min(final_nbrs.len() as u32, max_degree);
                 merged_vamana_cached_writer.write(&nnbrs.to_le_bytes())?;
 
-                merged_vamana_cached_writer
-                    .write(bytemuck::must_cast_slice(&final_nbrs[..nnbrs as usize]))?;
+                let bytes = final_nbrs
+                    .iter()
+                    .take(nnbrs as usize)
+                    .flat_map(|x| x.to_le_bytes())
+                    .collect::<Vec<u8>>();
+                merged_vamana_cached_writer.write(&bytes)?;
 
                 merged_index_size += (size_of::<u32>() + nnbrs as usize * size_of::<u32>()) as u64;
                 cur_id = node_id;
@@ -400,8 +404,12 @@ where
         let nnbrs: u32 = std::cmp::min(final_nbrs.len() as u32, max_degree);
         merged_vamana_cached_writer.write(&nnbrs.to_le_bytes())?;
 
-        merged_vamana_cached_writer
-            .write(bytemuck::must_cast_slice(&final_nbrs[..nnbrs as usize]))?;
+        let bytes = final_nbrs
+            .iter()
+            .take(nnbrs as usize)
+            .flat_map(|x| x.to_le_bytes())
+            .collect::<Vec<u8>>();
+        merged_vamana_cached_writer.write(&bytes)?;
 
         merged_index_size += (size_of::<u32>() + nnbrs as usize * size_of::<u32>()) as u64;
 
