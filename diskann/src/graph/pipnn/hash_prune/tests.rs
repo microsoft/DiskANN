@@ -336,6 +336,22 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
 }
 
 #[test]
+fn test_add_leaf_edges_grows_and_then_reuses_sketch_scratch() {
+    let data = [0.0_f32, 1.0, 2.0, 3.0];
+    let hp = HashPrune::new(&data, 4, 1, 8, 4, 42).unwrap();
+    let mut scratch = vec![99.0; 1];
+
+    hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
+    assert_eq!(scratch.len(), 16);
+    let capacity = scratch.capacity();
+
+    hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
+    assert_eq!(scratch.len(), 16);
+    assert_eq!(scratch.capacity(), capacity);
+    assert!(hp.into_candidate_lists().iter().all(|row| row.len() == 1));
+}
+
+#[test]
 fn test_reservoir_basic() {
     let mut reservoir = Reservoir::new(3);
     assert!(reservoir.is_empty());

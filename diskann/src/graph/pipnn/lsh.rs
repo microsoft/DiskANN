@@ -247,6 +247,23 @@ mod tests {
     }
 
     #[test]
+    fn worker_conversion_scratch_grows_across_point_rows() {
+        let lengths = std::sync::Mutex::new(Vec::new());
+        let sketches = build_pool(1)
+            .install(|| {
+                LshSketches::try_new(2, 5, 1, 42, |i, out| {
+                    lengths.lock().unwrap().push(out.len());
+                    out.fill((i + 1) as f32);
+                    Ok::<_, std::convert::Infallible>(())
+                })
+            })
+            .unwrap();
+        assert_eq!(*lengths.lock().unwrap(), [5, 5]);
+        assert_eq!(sketches.sketches().len(), 2);
+        assert_ne!(sketches.sketches()[0], sketches.sketches()[1]);
+    }
+
+    #[test]
     fn zero_points_produces_an_empty_sketch_without_filling() {
         let sketches = build_pool(2)
             .install(|| {
