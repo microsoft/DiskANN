@@ -202,7 +202,7 @@ mod tests {
         let builder = builder(&storage, 3, 8, 1.0, 1.2, parameters.clone());
         let pool = create_thread_pool(1).unwrap();
 
-        let error = super::build_graph(&builder, pool.as_ref(), (&parameters).into()).unwrap_err();
+        let error = super::build_graph(&builder, pool.as_ref(), &parameters).unwrap_err();
         assert!(format!("{error:?}").contains("configured point count 3"));
         assert!(!storage.exists(&builder.index_writer.get_mem_index_file()));
     }
@@ -216,7 +216,7 @@ mod tests {
         let builder = builder(&storage, points, dimensions, 1.0, 1.2, parameters.clone());
         let pool = create_thread_pool(1).unwrap();
 
-        super::build_graph(&builder, pool.as_ref(), (&parameters).into()).unwrap();
+        super::build_graph(&builder, pool.as_ref(), &parameters).unwrap();
 
         let mut header = [0_u8; 24];
         std::io::Read::read_exact(
