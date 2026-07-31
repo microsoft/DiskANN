@@ -30,43 +30,55 @@ fn input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     (dots, row_scales, leader_scales)
 }
 
-#[test]
-fn scalar_reference_matches_runtime_dispatch() {
-    for metric in [
-        Metric::L2,
-        Metric::Cosine,
-        Metric::CosineNormalized,
-        Metric::InnerProduct,
-    ] {
-        // Leader count controls SIMD chunking. Exercise the tail on both sides
-        // of 4-, 8-, and 16-lane boundaries, then a second 16-lane chunk.
-        for leaders in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
-            let (dots, row_scales, leader_scales) = input(metric, leaders);
-            let input = PartitionTopK {
-                dots: &dots,
-                rows: 2,
-                leaders,
-                row_scales: &row_scales,
-                leader_scales: &leader_scales,
-                metric,
-            };
-            for fanout in [1, 2, 6, MAX_PARTITION_FANOUT] {
-                if fanout > leaders {
-                    continue;
-                }
-                let mut expected = vec![u32::MAX; input.rows * fanout];
-                nearest_leaders(input, fanout, &mut expected).unwrap();
-
-                let mut actual = vec![u32::MAX; input.rows * fanout];
-                process_rows_scalar(input, fanout, &mut actual);
-
-                assert_eq!(
-                    actual, expected,
-                    "{metric:?}, leaders={leaders}, k={fanout}"
-                );
+fn assert_scalar_reference_matches_runtime_dispatch(metric: Metric) {
+    // Leader count controls SIMD chunking. Exercise the tail on both sides of
+    // 4-, 8-, and 16-lane boundaries, then a second 16-lane chunk.
+    for leaders in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+        let (dots, row_scales, leader_scales) = input(metric, leaders);
+        let input = PartitionTopK {
+            dots: &dots,
+            rows: 2,
+            leaders,
+            row_scales: &row_scales,
+            leader_scales: &leader_scales,
+            metric,
+        };
+        for fanout in [1, 2, 6, MAX_PARTITION_FANOUT] {
+            if fanout > leaders {
+                continue;
             }
+            let mut expected = vec![u32::MAX; input.rows * fanout];
+            nearest_leaders(input, fanout, &mut expected).unwrap();
+
+            let mut actual = vec![u32::MAX; input.rows * fanout];
+            process_rows_scalar(input, fanout, &mut actual);
+
+            assert_eq!(
+                actual, expected,
+                "{metric:?}, leaders={leaders}, k={fanout}"
+            );
         }
     }
+}
+
+#[test]
+fn l2_scalar_reference_matches_runtime_dispatch_at_lane_boundaries() {
+    assert_scalar_reference_matches_runtime_dispatch(Metric::L2);
+}
+
+#[test]
+fn cosine_scalar_reference_matches_runtime_dispatch_at_lane_boundaries() {
+    assert_scalar_reference_matches_runtime_dispatch(Metric::Cosine);
+}
+
+#[test]
+fn normalized_cosine_scalar_reference_matches_runtime_dispatch_at_lane_boundaries() {
+    assert_scalar_reference_matches_runtime_dispatch(Metric::CosineNormalized);
+}
+
+#[test]
+fn inner_product_scalar_reference_matches_runtime_dispatch_at_lane_boundaries() {
+    assert_scalar_reference_matches_runtime_dispatch(Metric::InnerProduct);
 }
 
 #[test]
