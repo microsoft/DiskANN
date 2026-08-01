@@ -7,9 +7,10 @@
 //! into output it owns. [`Scratch`] is the write-side mirror of [`Paneled`], so the
 //! driver assumes no layout on either side.
 //!
-//! Panel widths are const parameters (`R` = A rows, `N` = B rows) carried by the panel
-//! types; a kernel relays them into its leaf rather than declaring them. Literals in
-//! [`views`]. Instantiated for f32 ([`float`]) and 4-bit MinMax ([`minmax`]).
+//! Panel widths are geometry, so they live with the leaves that impose them
+//! ([`leaves::A_PANEL`], [`leaves::B_PANEL`]); the panel and accumulator types carry
+//! them as const parameters (`R` = A rows, `N` = B rows) so the driver stays width-
+//! agnostic. Instantiated for f32 ([`float`]) and 4-bit MinMax ([`minmax`]).
 //!
 //! Sibling to [`tiler`](super::tiler), which keeps postprocess and reduce separate.
 
@@ -22,7 +23,7 @@ mod minmax;
 mod strip;
 mod views;
 
-pub(crate) use strip::{Block, Short, Strip, StripRef};
+pub(crate) use strip::{Block, Strip, StripRef};
 
 pub use float::{PaneledF32Docs, PaneledF32Query};
 pub use minmax::{PaneledQuantDocs, PaneledQuantQuery};
@@ -62,6 +63,8 @@ pub(crate) trait ScratchAt<'a, B: sealed::Sealed = sealed::Bounds<&'a mut Self>>
     type Block;
     /// Short trailing slot; a distinct type so it selects its own [`Accumulate`] impl.
     type Short;
+    /// Named so `Block`/`Short` reach bounds without a nested projection.
+    type Blocks: TailIterator<Item = Self::Block, Tail = Self::Short>;
     /// What [`Drain`] reads.
     type Ref;
 }
@@ -73,14 +76,8 @@ pub(crate) trait ScratchAt<'a, B: sealed::Sealed = sealed::Bounds<&'a mut Self>>
 /// Allocation stays on the concrete type.
 pub(crate) trait Scratch: for<'a> ScratchAt<'a> {
     /// Carve the live `cols` columns into one slot per B-panel plus the short trailer,
-    /// which must come from the same call to be provably disjoint.
-    fn split(
-        &mut self,
-        cols: usize,
-    ) -> (
-        impl Iterator<Item = <Self as ScratchAt<'_>>::Block>,
-        Option<<Self as ScratchAt<'_>>::Short>,
-    );
+    /// which comes off the same cursor and so is provably disjoint.
+    fn blocks(&mut self, cols: usize) -> <Self as ScratchAt<'_>>::Blocks;
 
     fn as_ref(&self, cols: usize) -> <Self as ScratchAt<'_>>::Ref;
 }
@@ -117,16 +114,26 @@ pub(crate) struct Tile<V> {
     pub(crate) at: usize,
 }
 
+/// An iterator whose short trailing element has its own type. `tail` consumes the
+/// exhausted iterator, so the trailer comes off the cursor the loop was already
+/// advancing instead of being recomputed from the source.
+pub(crate) trait TailIterator: ExactSizeIterator {
+    type Tail;
+    fn tail(self) -> Option<Self::Tail>;
+}
+
 /// A view that knows how it breaks into panels. `Tail` is distinct from `Panel` so the
 /// short trailing panel selects its own [`Accumulate`] impl; a view that cannot tail
 /// says [`NoTail`].
 pub(crate) trait Paneled {
     type Panel: Copy;
     type Tail: Copy;
+    /// Named so it carries `ExactSizeIterator` and the tail type into bounds, and so a
+    /// k-fracturing driver could hold one across an outer loop.
+    type Panels: TailIterator<Item = Self::Panel, Tail = Self::Tail>;
 
     fn rows(&self) -> usize;
-    fn panels(&self) -> impl Iterator<Item = Self::Panel> + '_;
-    fn tail(&self) -> Option<Self::Tail>;
+    fn panels(&self) -> Self::Panels;
 }
 
 /// `Tail` for a view padded to whole panels. Uninhabited, so `tail()` provably
@@ -145,6 +152,7 @@ pub(crate) trait Accumulate<Arch, A, B, O> {
 /// [`NoTail`] is uninhabited, so this one impl discharges the driver's A-tail bounds
 /// for every kernel.
 impl<Arch, B, O, K> Accumulate<Arch, NoTail, B, O> for K {
+    #[inline(always)]
     fn accumulate(&self, _: Arch, a: NoTail, _: B, _: O) {
         match a {}
     }
@@ -187,11 +195,16 @@ where
     K: for<'x> Accumulate<Arch, A, BV::Panel, BlockOf<'x, S>>
         + for<'x> Accumulate<Arch, A, BV::Tail, ShortOf<'x, S>>,
 {
-    let (blocks, acc_tail) = scratch.split(cols);
-    for (b, out) in b_view.panels().zip(blocks) {
+    let mut panels = b_view.panels();
+    let mut blocks = scratch.blocks(cols);
+    // What [`TailIterator`]'s `ExactSizeIterator` bound is for: `zip` stops on the
+    // shorter side and silently drops the longer side's pending item, which would leave
+    // both cursors at zero and slip past the tail check below.
+    debug_assert_eq!(panels.len(), blocks.len(), "B view and accumulator desync");
+    for (b, out) in panels.by_ref().zip(blocks.by_ref()) {
         kernel.accumulate(arch, a, b, out);
     }
-    match (b_view.tail(), acc_tail) {
+    match (panels.tail(), blocks.tail()) {
         (Some(b), Some(out)) => kernel.accumulate(arch, a, b, out),
         (None, None) => {}
         _ => unreachable!("B view and accumulator disagree on tail"),
@@ -231,12 +244,13 @@ pub(super) fn drive<Arch, AW, BW, K, S, D>(
                 b_row: b_tile.at,
             };
 
-            for a in a_tile.view.panels() {
+            let mut a_panels = a_tile.view.panels();
+            for a in a_panels.by_ref() {
                 fill(arch, kernel, a, &b_tile.view, scratch, cols);
                 drain.drain(arch, scratch.as_ref(cols), at);
                 at.a_panel += 1;
             }
-            if let Some(a) = a_tile.view.tail() {
+            if let Some(a) = a_panels.tail() {
                 fill(arch, kernel, a, &b_tile.view, scratch, cols);
                 drain.drain(arch, scratch.as_ref(cols), at);
             }

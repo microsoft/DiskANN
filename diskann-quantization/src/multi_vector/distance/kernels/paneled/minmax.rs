@@ -12,14 +12,14 @@ use diskann_utils::ReborrowMut;
 use diskann_wide::arch::x86_64::V3;
 
 use super::arena::ResettableArena;
-use super::views::{A_PANEL, B_PANEL, DPanel, DTail, DocWalk, QPanel, QueryWalk};
-use super::{
-    Accumulate, At, Block, Drain, Plan, Short, Strip, StripRef, TileBudget, drive, leaves,
-};
+use super::leaves::{A_PANEL, B_PANEL};
+use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
+use super::{Accumulate, At, Block, Drain, Plan, Strip, StripRef, TileBudget, drive, leaves};
 use crate::CompressInto;
 use crate::algorithms::Transform;
 use crate::algorithms::transforms::NullTransform;
 use crate::alloc::{Poly, ScopedAllocator};
+use crate::bits::{Dynamic, Static};
 use crate::minmax::{MinMaxCompensation, MinMaxMeta, MinMaxQuantizer};
 use crate::multi_vector::{BlockTransposed, Defaulted, Mat, MatRef, Standard};
 use crate::num::Positive;
@@ -28,20 +28,26 @@ use crate::num::Positive;
 
 pub(crate) struct I8Kernel;
 
-impl<'a, 'b, 'x, const R: usize, const N: usize>
-    Accumulate<V3, QPanel<'a, i16, R>, DPanel<'b, u8, N>, Block<'x, i32, R, N>> for I8Kernel
+impl<'a, 'b, 'x>
+    Accumulate<
+        V3,
+        QPanel<'a, i16, A_PANEL>,
+        DPanel<'b, u8, B_PANEL, Static<B_PANEL>>,
+        Block<'x, i32, A_PANEL, B_PANEL, Static<B_PANEL>>,
+    > for I8Kernel
 {
+    #[inline(always)]
     fn accumulate(
         &self,
         arch: V3,
-        a: QPanel<'a, i16, R>,
-        b: DPanel<'b, u8, N>,
-        mut out: Block<'x, i32, R, N>,
+        a: QPanel<'a, i16, A_PANEL>,
+        b: DPanel<'b, u8, B_PANEL, Static<B_PANEL>>,
+        mut out: Block<'x, i32, A_PANEL, B_PANEL, Static<B_PANEL>>,
     ) {
-        // SAFETY: `a` is an R×k block-transposed i16 block; `b` is N rows of k u8;
-        // `out` is N columns of R i32 at stride R (`k` even).
+        // SAFETY: `a` is an A_PANEL×k block-transposed i16 block; `b` is B_PANEL rows
+        // of k u8; `out` is B_PANEL columns of A_PANEL i32 at stride A_PANEL (`k` even).
         unsafe {
-            leaves::int_store_microkernel::<N, R>(
+            leaves::int_store_microkernel::<B_PANEL>(
                 arch,
                 a.as_ptr(),
                 b.as_ptr(),
@@ -52,25 +58,32 @@ impl<'a, 'b, 'x, const R: usize, const N: usize>
     }
 }
 
-impl<'a, 'b, 'x, const R: usize, const N: usize>
-    Accumulate<V3, QPanel<'a, i16, R>, DTail<'b, u8>, Short<Block<'x, i32, R, N>>> for I8Kernel
+impl<'a, 'b, 'x>
+    Accumulate<
+        V3,
+        QPanel<'a, i16, A_PANEL>,
+        DPanel<'b, u8, B_PANEL, Dynamic>,
+        Block<'x, i32, A_PANEL, B_PANEL, Dynamic>,
+    > for I8Kernel
 {
+    #[inline(always)]
     fn accumulate(
         &self,
         arch: V3,
-        a: QPanel<'a, i16, R>,
-        b: DTail<'b, u8>,
-        mut out: Short<Block<'x, i32, R, N>>,
+        a: QPanel<'a, i16, A_PANEL>,
+        b: DPanel<'b, u8, B_PANEL, Dynamic>,
+        mut out: Block<'x, i32, A_PANEL, B_PANEL, Dynamic>,
     ) {
-        debug_assert_eq!(out.0.cols(), b.rows());
-        let (ap, bp, op, k) = (a.as_ptr(), b.as_ptr(), out.0.as_mut_ptr(), a.k());
-        // SAFETY: as the full-width impl, with a runtime width in 1..N.
+        debug_assert_eq!(out.cols(), b.rows());
+        debug_assert!(b.rows() < B_PANEL);
+        let (ap, bp, op, k) = (a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), a.k());
+        // SAFETY: as the full-width impl, with a runtime width in 1..B_PANEL.
         unsafe {
             match b.rows() {
-                3 => leaves::int_store_microkernel::<3, R>(arch, ap, bp, k, op),
-                2 => leaves::int_store_microkernel::<2, R>(arch, ap, bp, k, op),
-                1 => leaves::int_store_microkernel::<1, R>(arch, ap, bp, k, op),
-                other => unreachable!("tail width {other} out of 1..{N}"),
+                3 => leaves::int_store_microkernel::<3>(arch, ap, bp, k, op),
+                2 => leaves::int_store_microkernel::<2>(arch, ap, bp, k, op),
+                1 => leaves::int_store_microkernel::<1>(arch, ap, bp, k, op),
+                other => unreachable!("tail width {other} out of 1..{B_PANEL}"),
             }
         }
     }
@@ -105,18 +118,19 @@ impl<'m, 'o> MinMaxMax<'m, 'o> {
     }
 }
 
-impl<const R: usize, const N: usize> Drain<V3, Strip<'_, i32, R, N>> for MinMaxMax<'_, '_> {
-    fn drain(&mut self, arch: V3, acc: StripRef<'_, i32, R>, at: At) {
+impl Drain<V3, Strip<'_, i32, A_PANEL, B_PANEL>> for MinMaxMax<'_, '_> {
+    #[inline(always)]
+    fn drain(&mut self, arch: V3, acc: StripRef<'_, i32, A_PANEL>, at: At) {
         let cols = acc.cols();
-        let lo = at.a_panel * R;
-        let q = &self.query_meta[lo..lo + R];
+        let lo = at.a_panel * A_PANEL;
+        let q = &self.query_meta[lo..lo + A_PANEL];
         let d = &self.doc_meta[at.b_row..at.b_row + cols];
         let dim = self.dim;
-        let out = &mut self.out[lo..][..R];
-        // SAFETY: `acc` is `cols` columns of R i32; `out` is R writable f32;
-        // `q.len() == R`; `d.len() == cols`.
+        let out = &mut self.out[lo..][..A_PANEL];
+        // SAFETY: `acc` is `cols` columns of A_PANEL i32; `out` is A_PANEL writable
+        // f32; `q.len() == A_PANEL`; `d.len() == cols`.
         unsafe {
-            leaves::score_fold_strip::<R>(arch, acc.as_ptr(), out.as_mut_ptr(), cols, q, d, dim);
+            leaves::score_fold_strip(arch, acc.as_ptr(), out.as_mut_ptr(), cols, q, d, dim);
         }
     }
 }

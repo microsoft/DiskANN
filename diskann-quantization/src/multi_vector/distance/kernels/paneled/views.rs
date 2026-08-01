@@ -6,32 +6,28 @@
 //! row-major matrix doesn't imply a panel height). Each sub-views itself, so a walk is
 //! a cursor and nothing else.
 
-use super::{NoTail, Paneled, Tile, TileAt, TileWalk};
-use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
+use core::marker::PhantomData;
 
-/// Rows per A-panel (the block-transposed group and the drain's state block).
-pub(crate) const A_PANEL: usize = 16;
-/// Rows per full B-panel (the kernel's micro-panel / max unroll).
-pub(crate) const B_PANEL: usize = 4;
+use super::{NoTail, Paneled, TailIterator, Tile, TileAt, TileWalk};
+use crate::bits::{Dynamic, Length, Static};
+use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
 // ── Panels ───────────────────────────────────────────────────────
 
 /// One block-transposed A block: `R` rows × `k` `T`.
 pub(crate) struct QPanel<'a, T, const R: usize> {
-    data: &'a [T],
+    ptr: *const T,
     k: usize,
+    _lifetime: PhantomData<&'a [T]>,
 }
-/// One row-major B panel: exactly `N` rows × `k` `T`. `k` travels with the A panel,
-/// and the row count is `N` by construction, so neither is stored.
-pub(crate) struct DPanel<'a, T, const N: usize> {
-    data: &'a [T],
-}
-/// The short trailing B panel: `rows` in `1..N`. Distinct from [`DPanel`] so it
-/// selects its own [`Accumulate`](super::Accumulate) impl, and so a full panel carries
-/// no runtime row count.
-pub(crate) struct DTail<'a, T> {
-    data: &'a [T],
-    rows: usize,
+
+/// One row-major B panel: `L` rows × `k` `T`, where `L.value() <= N`. `k` travels with
+/// the A panel, so it is not stored. A full panel is `Static<N>` — a ZST, so the whole
+/// handle is one pointer; the trailing panel is `Dynamic` in `1..N`.
+pub(crate) struct DPanel<'a, T, const N: usize, L: Length> {
+    ptr: *const T,
+    rows: L,
+    _lifetime: PhantomData<&'a [T]>,
 }
 
 impl<T, const R: usize> Clone for QPanel<'_, T, R> {
@@ -40,38 +36,141 @@ impl<T, const R: usize> Clone for QPanel<'_, T, R> {
     }
 }
 impl<T, const R: usize> Copy for QPanel<'_, T, R> {}
-impl<T, const N: usize> Clone for DPanel<'_, T, N> {
+impl<T, const N: usize, L: Length> Clone for DPanel<'_, T, N, L> {
     fn clone(&self) -> Self {
         *self
     }
 }
-impl<T, const N: usize> Copy for DPanel<'_, T, N> {}
-impl<T> Clone for DTail<'_, T> {
-    fn clone(&self) -> Self {
-        *self
+impl<T, const N: usize, L: Length> Copy for DPanel<'_, T, N, L> {}
+
+impl<'a, T, const R: usize> QPanel<'a, T, R> {
+    /// # Safety
+    ///
+    /// `ptr` must be valid for reads of `R * k` `T` for `'a`.
+    unsafe fn new(ptr: *const T, k: usize) -> Self {
+        Self {
+            ptr,
+            k,
+            _lifetime: PhantomData,
+        }
     }
 }
-impl<T> Copy for DTail<'_, T> {}
+
+impl<'a, T, const N: usize, L: Length> DPanel<'a, T, N, L> {
+    /// # Safety
+    ///
+    /// `ptr` must be valid for reads of `rows.value() * k` `T` for `'a`, where `k` is
+    /// the contraction length carried by the A panel it is paired with, and
+    /// `rows.value()` must be at most `N`.
+    unsafe fn new(ptr: *const T, rows: L) -> Self {
+        debug_assert!(rows.value() <= N, "panel taller than its type claims");
+        Self {
+            ptr,
+            rows,
+            _lifetime: PhantomData,
+        }
+    }
+}
 
 impl<T, const R: usize> QPanel<'_, T, R> {
     pub(crate) fn as_ptr(&self) -> *const T {
-        self.data.as_ptr()
+        self.ptr
     }
     pub(crate) fn k(&self) -> usize {
         self.k
     }
 }
-impl<T, const N: usize> DPanel<'_, T, N> {
+impl<T, const N: usize, L: Length> DPanel<'_, T, N, L> {
     pub(crate) fn as_ptr(&self) -> *const T {
-        self.data.as_ptr()
-    }
-}
-impl<T> DTail<'_, T> {
-    pub(crate) fn as_ptr(&self) -> *const T {
-        self.data.as_ptr()
+        self.ptr
     }
     pub(crate) fn rows(&self) -> usize {
-        self.rows
+        self.rows.value()
+    }
+}
+
+// ── Panel iterators ──────────────────────────────────────────────
+
+/// Walks a block-transposed matrix' blocks. The remainder block is zero-padded to a
+/// full `R` rows, so there is no tail.
+pub(crate) struct QPanelIter<'a, T: Copy, const R: usize, const P: usize> {
+    view: BlockTransposedRef<'a, T, R, P>,
+    k: usize,
+    cur: usize,
+    end: usize,
+}
+
+impl<'a, T: Copy, const R: usize, const P: usize> Iterator for QPanelIter<'a, T, R, P> {
+    type Item = QPanel<'a, T, R>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let data = self.view.block_slice(self.cur)?;
+        self.cur += 1;
+        // SAFETY: `block_slice` returns a checked `R * k` slice borrowed from the view.
+        Some(unsafe { QPanel::new(data.as_ptr(), self.k) })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.end - self.cur;
+        (n, Some(n))
+    }
+}
+
+impl<T: Copy, const R: usize, const P: usize> ExactSizeIterator for QPanelIter<'_, T, R, P> {}
+
+impl<T: Copy, const R: usize, const P: usize> TailIterator for QPanelIter<'_, T, R, P> {
+    type Tail = NoTail;
+    fn tail(self) -> Option<NoTail> {
+        None
+    }
+}
+
+/// Walks a row-major matrix' full `N`-row panels; [`TailIterator::tail`] hands back the
+/// short trailer from the same cursor.
+///
+/// # Safety invariants
+///
+/// `ptr` is valid for reads of `(full * N + tail_rows) * k` `T` for `'a`, and only ever
+/// advances.
+pub(crate) struct DPanelIter<'a, T, const N: usize> {
+    ptr: *const T,
+    k: usize,
+    full: usize,
+    tail_rows: usize,
+    _lifetime: PhantomData<&'a [T]>,
+}
+
+impl<'a, T, const N: usize> Iterator for DPanelIter<'a, T, N> {
+    type Item = DPanel<'a, T, N, Static<N>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.full == 0 {
+            return None;
+        }
+        let ptr = self.ptr;
+        // SAFETY: the invariant covers `full` more panels of `N * k`, so the bump stays
+        // inside the allocation.
+        self.ptr = unsafe { self.ptr.add(N * self.k) };
+        self.full -= 1;
+        // SAFETY: as above — `ptr` covers exactly `N * k` readable `T`.
+        Some(unsafe { DPanel::new(ptr, Static) })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.full, Some(self.full))
+    }
+}
+
+impl<T, const N: usize> ExactSizeIterator for DPanelIter<'_, T, N> {}
+
+impl<'a, T, const N: usize> TailIterator for DPanelIter<'a, T, N> {
+    type Tail = DPanel<'a, T, N, Dynamic>;
+
+    fn tail(self) -> Option<Self::Tail> {
+        debug_assert_eq!(self.full, 0, "tail taken before the panels are exhausted");
+        // SAFETY: the panels are exhausted, so the cursor sits on the trailer, which
+        // the invariant covers for `tail_rows * k` readable `T`.
+        (self.tail_rows > 0).then(|| unsafe { DPanel::new(self.ptr, Dynamic(self.tail_rows)) })
     }
 }
 
@@ -84,21 +183,18 @@ impl<T> DTail<'_, T> {
 impl<'a, T: Copy, const R: usize, const P: usize> Paneled for BlockTransposedRef<'a, T, R, P> {
     type Panel = QPanel<'a, T, R>;
     type Tail = NoTail;
+    type Panels = QPanelIter<'a, T, R, P>;
 
     fn rows(&self) -> usize {
         self.nrows()
     }
-    fn panels(&self) -> impl Iterator<Item = QPanel<'a, T, R>> + '_ {
-        let (v, k) = (*self, self.padded_ncols());
-        (0..self.num_blocks()).filter_map(move |b| {
-            Some(QPanel {
-                data: v.block_slice(b)?,
-                k,
-            })
-        })
-    }
-    fn tail(&self) -> Option<NoTail> {
-        None
+    fn panels(&self) -> QPanelIter<'a, T, R, P> {
+        QPanelIter {
+            view: *self,
+            k: self.padded_ncols(),
+            cur: 0,
+            end: self.num_blocks(),
+        }
     }
 }
 
@@ -106,25 +202,23 @@ impl<'a, T: Copy, const R: usize, const P: usize> Paneled for BlockTransposedRef
 pub(crate) struct Rows<const N: usize, V>(pub(crate) V);
 
 impl<'a, const N: usize, T: Copy> Paneled for Rows<N, MatRef<'a, Standard<T>>> {
-    type Panel = DPanel<'a, T, N>;
-    type Tail = DTail<'a, T>;
+    type Panel = DPanel<'a, T, N, Static<N>>;
+    type Tail = DPanel<'a, T, N, Dynamic>;
+    type Panels = DPanelIter<'a, T, N>;
 
     fn rows(&self) -> usize {
         self.0.num_vectors()
     }
-    fn panels(&self) -> impl Iterator<Item = DPanel<'a, T, N>> + '_ {
-        let (data, k) = (self.0.as_slice(), self.0.vector_dim());
-        (0..self.rows() / N).map(move |p| DPanel {
-            data: &data[p * N * k..(p + 1) * N * k],
-        })
-    }
-    fn tail(&self) -> Option<DTail<'a, T>> {
-        let (data, k, n) = (self.0.as_slice(), self.0.vector_dim(), self.rows());
-        let rem = n % N;
-        (rem > 0).then(|| DTail {
-            data: &data[(n - rem) * k..],
-            rows: rem,
-        })
+    fn panels(&self) -> DPanelIter<'a, T, N> {
+        let (n, k) = (self.rows(), self.0.vector_dim());
+        // The checked slice is what establishes `DPanelIter`'s invariant.
+        DPanelIter {
+            ptr: self.0.as_slice().as_ptr(),
+            k,
+            full: n / N,
+            tail_rows: n % N,
+            _lifetime: PhantomData,
+        }
     }
 }
 

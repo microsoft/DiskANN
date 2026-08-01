@@ -9,31 +9,37 @@ use core::mem::size_of;
 use diskann_wide::arch::x86_64::V3;
 
 use super::arena::ResettableArena;
-use super::views::{A_PANEL, B_PANEL, DPanel, DTail, DocWalk, QPanel, QueryWalk};
-use super::{
-    Accumulate, At, Block, Drain, Plan, Short, Strip, StripRef, TileBudget, drive, leaves,
-};
+use super::leaves::{A_PANEL, B_PANEL};
+use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
+use super::{Accumulate, At, Block, Drain, Plan, Strip, StripRef, TileBudget, drive, leaves};
 use crate::alloc::{Poly, ScopedAllocator};
+use crate::bits::{Dynamic, Static};
 use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
 
 // ── Kernel ───────────────────────────────────────────────────────
 
 pub(crate) struct F32Kernel;
 
-impl<'a, 'b, 'x, const R: usize, const N: usize>
-    Accumulate<V3, QPanel<'a, f32, R>, DPanel<'b, f32, N>, Block<'x, f32, R, N>> for F32Kernel
+impl<'a, 'b, 'x>
+    Accumulate<
+        V3,
+        QPanel<'a, f32, A_PANEL>,
+        DPanel<'b, f32, B_PANEL, Static<B_PANEL>>,
+        Block<'x, f32, A_PANEL, B_PANEL, Static<B_PANEL>>,
+    > for F32Kernel
 {
+    #[inline(always)]
     fn accumulate(
         &self,
         arch: V3,
-        a: QPanel<'a, f32, R>,
-        b: DPanel<'b, f32, N>,
-        mut out: Block<'x, f32, R, N>,
+        a: QPanel<'a, f32, A_PANEL>,
+        b: DPanel<'b, f32, B_PANEL, Static<B_PANEL>>,
+        mut out: Block<'x, f32, A_PANEL, B_PANEL, Static<B_PANEL>>,
     ) {
-        // SAFETY: `a` is an R×k block-transposed f32 block; `b` is N rows of k f32;
-        // `out` is N columns of R f32 at stride R.
+        // SAFETY: `a` is an A_PANEL×k block-transposed f32 block; `b` is B_PANEL rows
+        // of k f32; `out` is B_PANEL columns of A_PANEL f32 at stride A_PANEL.
         unsafe {
-            leaves::f32_store_microkernel::<N, R>(
+            leaves::f32_store_microkernel::<B_PANEL>(
                 arch,
                 a.as_ptr(),
                 b.as_ptr(),
@@ -44,25 +50,32 @@ impl<'a, 'b, 'x, const R: usize, const N: usize>
     }
 }
 
-impl<'a, 'b, 'x, const R: usize, const N: usize>
-    Accumulate<V3, QPanel<'a, f32, R>, DTail<'b, f32>, Short<Block<'x, f32, R, N>>> for F32Kernel
+impl<'a, 'b, 'x>
+    Accumulate<
+        V3,
+        QPanel<'a, f32, A_PANEL>,
+        DPanel<'b, f32, B_PANEL, Dynamic>,
+        Block<'x, f32, A_PANEL, B_PANEL, Dynamic>,
+    > for F32Kernel
 {
+    #[inline(always)]
     fn accumulate(
         &self,
         arch: V3,
-        a: QPanel<'a, f32, R>,
-        b: DTail<'b, f32>,
-        mut out: Short<Block<'x, f32, R, N>>,
+        a: QPanel<'a, f32, A_PANEL>,
+        b: DPanel<'b, f32, B_PANEL, Dynamic>,
+        mut out: Block<'x, f32, A_PANEL, B_PANEL, Dynamic>,
     ) {
-        debug_assert_eq!(out.0.cols(), b.rows());
-        let (ap, bp, op, k) = (a.as_ptr(), b.as_ptr(), out.0.as_mut_ptr(), a.k());
-        // SAFETY: as the full-width impl, with a runtime width in 1..N.
+        debug_assert_eq!(out.cols(), b.rows());
+        debug_assert!(b.rows() < B_PANEL);
+        let (ap, bp, op, k) = (a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), a.k());
+        // SAFETY: as the full-width impl, with a runtime width in 1..B_PANEL.
         unsafe {
             match b.rows() {
-                3 => leaves::f32_store_microkernel::<3, R>(arch, ap, bp, k, op),
-                2 => leaves::f32_store_microkernel::<2, R>(arch, ap, bp, k, op),
-                1 => leaves::f32_store_microkernel::<1, R>(arch, ap, bp, k, op),
-                other => unreachable!("tail width {other} out of 1..{N}"),
+                3 => leaves::f32_store_microkernel::<3>(arch, ap, bp, k, op),
+                2 => leaves::f32_store_microkernel::<2>(arch, ap, bp, k, op),
+                1 => leaves::f32_store_microkernel::<1>(arch, ap, bp, k, op),
+                other => unreachable!("tail width {other} out of 1..{B_PANEL}"),
             }
         }
     }
@@ -82,11 +95,12 @@ impl<'o> RawMax<'o> {
     }
 }
 
-impl<const R: usize, const N: usize> Drain<V3, Strip<'_, f32, R, N>> for RawMax<'_> {
-    fn drain(&mut self, arch: V3, acc: StripRef<'_, f32, R>, at: At) {
-        let out = &mut self.out[at.a_panel * R..][..R];
-        // SAFETY: `out` is R f32; `acc` is `cols` columns of R f32.
-        unsafe { leaves::fold_strip::<R>(arch, out.as_mut_ptr(), acc.as_ptr(), acc.cols()) }
+impl Drain<V3, Strip<'_, f32, A_PANEL, B_PANEL>> for RawMax<'_> {
+    #[inline(always)]
+    fn drain(&mut self, arch: V3, acc: StripRef<'_, f32, A_PANEL>, at: At) {
+        let out = &mut self.out[at.a_panel * A_PANEL..][..A_PANEL];
+        // SAFETY: `out` is A_PANEL f32; `acc` is `cols` columns of A_PANEL f32.
+        unsafe { leaves::fold_strip(arch, out.as_mut_ptr(), acc.as_ptr(), acc.cols()) }
     }
 }
 
