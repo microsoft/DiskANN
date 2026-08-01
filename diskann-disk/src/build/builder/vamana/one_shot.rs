@@ -115,12 +115,8 @@ where
         Self::log_build_stats(&index).await?;
 
         Self::run_final_prune(&index, num_tasks).await?;
-        index
-            .save_graph(
-                storage_provider,
-                &(start_point, DiskGraphOnly::new(&save_path)),
-            )
-            .await?;
+        let graph_output = (start_point, DiskGraphOnly::new(save_path));
+        index.save_graph(storage_provider, &graph_output).await?;
 
         Ok(())
     }

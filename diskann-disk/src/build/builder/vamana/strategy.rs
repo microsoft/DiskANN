@@ -79,10 +79,12 @@ pub(in crate::build::builder) fn determine_build_strategy<Data: GraphDataType>(
 
 #[cfg(test)]
 mod ram_estimation_tests {
+    use diskann::{graph::config, utils::ONE};
+    use diskann_vector::distance::Metric::L2;
     use rstest::rstest;
 
     use super::*;
-    use crate::QuantizationType;
+    use crate::{test_utils::GraphDataF32VectorUnitData, QuantizationType};
 
     #[rstest]
     #[case(QuantizationType::FP)]
@@ -117,5 +119,51 @@ mod ram_estimation_tests {
         );
 
         assert_eq!(actual_ram_usage, expected_ram_usage);
+    }
+
+    #[test]
+    fn selects_one_shot_when_index_fits_memory_budget() {
+        let index_configuration = index_configuration();
+
+        let strategy = determine_build_strategy::<GraphDataF32VectorUnitData>(
+            &index_configuration,
+            f64::INFINITY,
+            &QuantizationType::FP,
+        );
+
+        assert!(matches!(strategy, IndexBuildStrategy::OneShot));
+    }
+
+    #[test]
+    fn selects_merged_when_index_meets_memory_budget() {
+        let index_configuration = index_configuration();
+        let estimated_usage = estimate_build_index_ram_usage(
+            index_configuration.max_points as u64,
+            index_configuration.dim as u64,
+            std::mem::size_of::<f32>() as u64,
+            index_configuration.config.max_degree().get() as u64,
+            &QuantizationType::FP,
+        );
+
+        let strategy = determine_build_strategy::<GraphDataF32VectorUnitData>(
+            &index_configuration,
+            estimated_usage,
+            &QuantizationType::FP,
+        );
+
+        assert!(matches!(strategy, IndexBuildStrategy::Merged));
+    }
+
+    fn index_configuration() -> IndexConfiguration {
+        IndexConfiguration::new(
+            L2,
+            128,
+            1000,
+            ONE,
+            1,
+            config::Builder::new(16, config::MaxDegree::default_slack(), 64, L2.into())
+                .build()
+                .unwrap(),
+        )
     }
 }
