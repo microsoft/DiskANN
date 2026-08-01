@@ -5,11 +5,13 @@
 
 //! Disk index builders and related functionality.
 pub mod build;
-pub mod core;
 pub mod quantizer;
 
-pub mod inmem_builder;
 pub mod tokio;
+mod vamana;
+
+#[cfg(test)]
+pub(crate) use vamana::tests::disk_index_builder_tests;
 
 #[cfg(test)]
 mod tests;

@@ -24,7 +24,7 @@ mod scenario {
 #[derive(Debug)]
 pub enum DiskIndexBuildCheckpoint {
     PqConstruction,
-    InmemIndexBuild,
+    VamanaIndexBuild,
     DiskLayout,
 }
 
@@ -185,7 +185,7 @@ mod perf_logger_tests {
         assert!(logger.log_enabled());
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
         logger.start();
-        logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::VamanaIndexBuild);
     }
 
     #[test]
@@ -195,6 +195,6 @@ mod perf_logger_tests {
         assert!(!logger.log_enabled());
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
         logger.start();
-        logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::VamanaIndexBuild);
     }
 }
