@@ -256,11 +256,11 @@ impl<'a> PiPNNBuildContext<'a> {
     }
 }
 
-/// Build PiPNN adjacency for real rows in `data`.
+/// Build PiPNN adjacency for real points in `data`.
 ///
 /// This is the core algorithm boundary. Search entry-point selection, frozen nodes,
 /// providers, serialization, and index writers belong to the outer build pipelines.
-/// For raw `u8` and `i8` rows, `CosineNormalized` is evaluated as `Cosine` because
+/// For raw `u8` and `i8` vectors, `CosineNormalized` is evaluated as `Cosine` because
 /// those representations are converted to f32 scratch but are not unit-normalized.
 pub fn build_graph<T>(
     data: MatrixView<'_, T>,
@@ -281,7 +281,7 @@ where
 {
     if data.nrows() == 0 {
         return Err(ANNError::log_dimension_mismatch_error(
-            "PiPNN requires at least one data row".into(),
+            "PiPNN requires at least one data point".into(),
         ));
     }
     if data.ncols() == 0 {
@@ -291,7 +291,7 @@ where
     }
     if data.nrows() > u32::MAX as usize {
         return Err(config_error(format!(
-            "dataset row count ({}) exceeds the u32 graph ID limit",
+            "dataset point count ({}) exceeds the u32 graph ID limit",
             data.nrows()
         )));
     }
@@ -302,19 +302,19 @@ where
             data.ncols()
         ))
     })?;
-    // Integer source rows are not guaranteed unit-normalized after conversion,
+    // Integer source vectors are not guaranteed unit-normalized after conversion,
     // so their normalized-cosine request must use the norm-aware formula.
     let metric = effective_metric::<T>(context.metric);
 
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition(data, context.config.clone(), metric))?;
-    // `leaves` is consumed here. Workers borrow individual ID rows during the
+    // `leaves` is consumed here. Workers borrow individual ID lists during the
     // parallel pass, and the complete partition allocation drops on return.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
         leaf_build::build_leaf_candidates(data, leaves, context.config.k, metric)
             .map_err(ANNError::opaque)
     })?;
-    // Finalization consumes candidate rows and reuses their allocations for the
+    // Finalization consumes candidate lists and reuses their allocations for the
     // resulting adjacency where possible.
     tracing::info_span!("pipnn.finalization")
         .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
