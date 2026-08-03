@@ -166,7 +166,7 @@ impl PQStorage {
         storage_provider: &Storage,
     ) -> ANNResult<BasicTable> {
         let (mut pivots, centroid, chunk_offsets) =
-            self.read_pivot_file(&self.pivot_data_path, None, None, storage_provider)?;
+            self.read_pivot_file(&self.pivot_data_path, storage_provider)?;
 
         if centroid.as_slice().iter().any(|c| *c != 0.0) {
             accum_row_inplace(pivots.as_mut_view(), centroid.as_slice())
@@ -213,8 +213,6 @@ impl PQStorage {
     fn read_pivot_file<Storage: StorageReadProvider>(
         &self,
         pq_pivots: &str,
-        expected_num_centers: Option<usize>,
-        expected_dim: Option<usize>,
         storage_provider: &Storage,
     ) -> ANNResult<(Matrix<f32>, Matrix<f32>, Matrix<usize>)> {
         if !storage_provider.exists(pq_pivots) {
@@ -248,32 +246,12 @@ impl PQStorage {
         info!(" Offset data: {:?}", file_offset_data.as_slice());
 
         let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
-        if let Some(num_centers) = expected_num_centers {
-            if pivots.nrows() != num_centers {
-                return Err(ANNError::message(format!(
-                    "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
-                    pq_pivots,
-                    pivots.nrows(),
-                    num_centers
-                )));
-            }
-        } else if pivots.nrows() > NUM_PQ_CENTROIDS {
+        if pivots.nrows() > NUM_PQ_CENTROIDS {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
                 pq_pivots,
                 pivots.nrows(),
                 NUM_PQ_CENTROIDS
-            )));
-        }
-
-        if let Some(dim) = expected_dim
-            && pivots.ncols() != dim
-        {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file {}. file_dim = {} but expecting {} dimensions.",
-                pq_pivots,
-                pivots.ncols(),
-                dim
             )));
         }
 

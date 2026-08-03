@@ -105,11 +105,6 @@ where
     pub fn dim(&self) -> usize {
         self.pivots.ncols()
     }
-
-    /// Consume this table and return the underlying pivots and offsets.
-    pub fn into_parts(self) -> (MatrixBase<T>, ChunkOffsetsBase<U>) {
-        (self.pivots, self.offsets)
-    }
 }
 
 #[derive(Error, Debug)]

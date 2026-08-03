@@ -253,8 +253,7 @@ impl FastMemoryQuantVectorProviderAsync {
                     pq_bytes
                 )));
             }
-            let table: FixedChunkPQTable = table.into();
-            Ok(Self::new(metric, num_points, table))
+            Ok(Self::new(metric, num_points, table.into()))
         })
     }
 

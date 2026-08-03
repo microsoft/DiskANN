@@ -211,11 +211,6 @@ where
     pub fn as_slice(&self) -> &[usize] {
         self.offsets.as_slice()
     }
-
-    /// Consume the offsets, returning the inner representation.
-    pub fn into_inner(self) -> T {
-        self.offsets
-    }
 }
 
 pub type ChunkOffsetsView<'a> = ChunkOffsetsBase<&'a [usize]>;
