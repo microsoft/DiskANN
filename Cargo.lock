@@ -684,8 +684,7 @@ dependencies = [
 name = "diskann-pipnn"
 version = "0.55.0"
 dependencies = [
- "criterion",
- "diskann-linalg",
+ "diskann-utils",
  "diskann-vector",
  "diskann-wide",
  "thiserror 2.0.17",
