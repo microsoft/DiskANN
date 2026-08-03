@@ -3,12 +3,15 @@
  * Licensed under the MIT license.
  */
 
-//! Numerical kernels used by PiPNN graph construction.
+//! Provider-independent PiPNN graph construction.
 //!
-//! PiPNN first partitions points around sampled leaders, then builds local
-//! neighbor candidates inside each leaf. This crate owns the numerical seams
-//! of those stages while callers retain dataset storage, GEMM workspaces, graph
-//! policy, and scheduling:
+//! The crate owns overlapping partition generation, leaf-local nearest-neighbor
+//! construction, candidate merging, and optional graph-degree finalization. The
+//! caller supplies contiguous data, DiskANN graph policy, and the Rayon pool.
+//! Providers, start/frozen points, quantization, persistence, and search remain
+//! outside this algorithm seam.
+//!
+//! Numerical kernels include:
 //!
 //! - [`partition_kernel::PartitionKernel`] converts point-by-leader dot-product
 //!   tiles into nearest leader positions.
