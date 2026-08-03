@@ -36,7 +36,7 @@ use diskann_wide::{
     Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
 };
 
-use crate::kernel_metric::{erase_metric, EraseMetric, KernelMetric};
+use crate::kernel_metric::{visit_metric, KernelMetric, MetricVisitor};
 
 /// One leaf-local neighbor and its metric distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -256,7 +256,7 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     fn run(self, arch: A, metric: Metric) -> LeafKernel {
-        erase_metric(
+        visit_metric(
             metric,
             BuildLeaf {
                 arch,
@@ -268,8 +268,8 @@ where
 
 /// BYO-type-erasure visitor holding a concrete architecture.
 ///
-/// `erase<M>` receives a concrete metric marker, then combines `A`, `M`, and
-/// the requested width before erasing the result into exactly one `Dispatched1`.
+/// `visit<M>` receives a concrete metric marker, then combines `A`, `M`, and
+/// the requested width into exactly one `Dispatched1`.
 struct BuildLeaf<A> {
     arch: A,
     requested_k: usize,
@@ -292,7 +292,7 @@ where
     }
 }
 
-impl<A> EraseMetric for BuildLeaf<A>
+impl<A> MetricVisitor for BuildLeaf<A>
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
@@ -301,7 +301,7 @@ where
 {
     type Output = LeafKernel;
 
-    fn erase<M: KernelMetric>(self) -> Self::Output {
+    fn visit<M: KernelMetric>(self) -> Self::Output {
         match KValue::from_requested(self.requested_k) {
             KValue::One => self.build::<M, FixedSelection<1>>(),
             KValue::Two => self.build::<M, FixedSelection<2>>(),
