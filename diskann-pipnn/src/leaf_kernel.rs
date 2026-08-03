@@ -11,6 +11,20 @@
 //! requested neighbor count, and runtime CPU; repeated leaves call a direct
 //! `diskann-wide` function pointer without ISA or metric dispatch in the loop.
 //! NaN distances are not rankable, and equal distances retain pair scan order.
+//!
+//! ```text
+//! metric + requested k + runtime architecture
+//!                 │
+//!                 v
+//!       prepared Dispatched1 handle
+//!                 │ reused for every leaf
+//!                 v
+//! shape validation -> scale scratch -> strict-lower scan -> sorted row slots
+//! ```
+//!
+//! `workspace.worst[row]` always mirrors the last (worst) retained slot for that
+//! row. The SIMD loop may update both endpoints of a pair, so this mirror is the
+//! threshold shared by row and column candidate masks.
 
 use std::marker::PhantomData;
 
@@ -144,6 +158,11 @@ pub fn leaf_output_len(points: usize, k: usize) -> Result<usize, LeafKernelError
     checked_area("output", points, k.min(points.saturating_sub(1)))
 }
 
+/// One invocation bundled for `Dispatched1`.
+///
+/// `AddLifetime` can attach one lifetime to this aggregate, allowing the direct
+/// function-pointer interface to carry the input view, exclusive output view,
+/// and exclusive scratch lease without storing any of them in `LeafKernel`.
 #[derive(Debug)]
 struct LeafCall<'a> {
     input: LeafTopK<'a>,
@@ -197,6 +216,10 @@ impl LeafKernel {
     }
 }
 
+/// Requested-width dispatch selected once while preparing the kernel.
+///
+/// Widths one through three receive fixed array rows. Larger widths retain one
+/// dynamic implementation instead of multiplying code size by every possible k.
 #[derive(Clone, Copy, Debug)]
 enum KValue {
     One,
@@ -216,6 +239,11 @@ impl KValue {
     }
 }
 
+/// First dispatch stage: choose the runtime architecture once.
+///
+/// The factory itself uses `dispatch1_no_features`; only the returned leaf entry
+/// needs target features, so architecture-specific code remains behind the final
+/// direct function pointer.
 struct PrepareLeaf {
     requested_k: usize,
 }
@@ -238,6 +266,10 @@ where
     }
 }
 
+/// BYO-type-erasure visitor holding a concrete architecture.
+///
+/// `erase<M>` receives a concrete metric marker, then combines `A`, `M`, and
+/// the requested width before erasing the result into exactly one `Dispatched1`.
 struct BuildLeaf<A> {
     arch: A,
     requested_k: usize,
@@ -279,6 +311,10 @@ where
     }
 }
 
+/// Architecture/metric/width-specialized function-pointer destination.
+///
+/// This type is zero-sized. All per-leaf state arrives through `LeafCall`; the
+/// entry validates and initializes that state before reaching pointer-based SIMD.
 struct LeafEntry<M, S>(PhantomData<(M, S)>);
 
 impl<A, M, S> FTarget1<A, Result<usize, LeafKernelError>, LeafCall<'_>> for LeafEntry<M, S>
@@ -291,11 +327,15 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     fn run(arch: A, mut call: LeafCall<'_>) -> Result<usize, LeafKernelError> {
+        // Validation establishes every shape and active-prefix invariant used by
+        // unchecked loads below. No output or scratch mutation occurs on error.
         let actual_k = validate(call.input, call.requested_k, &call.output)?;
         if actual_k == 0 {
             return Ok(0);
         }
 
+        // Norm and threshold scratch are reset for this leaf, while Vec capacity
+        // remains reusable by the worker that owns the workspace.
         prepare_workspace::<M>(call.input, call.workspace)?;
         call.output.as_mut_slice().fill(LeafNeighbor::default());
         call.workspace.worst.fill(f32::INFINITY);
@@ -323,6 +363,11 @@ where
     }
 }
 
+/// Validate the complete safety contract before dispatched SIMD executes.
+///
+/// Matrix views are rechecked with `checked_mul` because the hot loop performs
+/// unchecked contiguous loads. Output columns must equal the clamped effective
+/// k so fixed-row conversion cannot expose a partial row.
 fn validate(
     input: LeafTopK<'_>,
     k: usize,
@@ -357,6 +402,11 @@ fn validate(
     Ok(actual_k)
 }
 
+/// Prepare metric-specific scale and threshold scratch.
+///
+/// L2 stores diagonal squared norms; cosine converts diagonals to norms using
+/// DiskANN's zero threshold. Normalized cosine and inner product skip the norm
+/// allocation entirely. `worst` is reset separately after allocation succeeds.
 fn prepare_workspace<M: KernelMetric>(
     input: LeafTopK<'_>,
     workspace: &mut LeafTopKWorkspace,
@@ -413,6 +463,11 @@ fn check_length(
     }
 }
 
+/// Prepared requested-width policy.
+///
+/// The actual width can be smaller for singleton/tiny leaves, so each policy
+/// performs one pre-loop clamp dispatch while keeping width selection out of the
+/// pair scan.
 trait SlotSelection: Send + Sync + 'static {
     fn process<F, M>(
         arch: F::Arch,
@@ -468,6 +523,10 @@ impl SlotSelection for DynamicSelection {
     }
 }
 
+/// Convert effective k into one fixed row representation or the dynamic fallback.
+///
+/// This branch runs once per leaf. Fixed conversion uses `as_chunks_mut` once,
+/// avoiding per-candidate slice-to-array checks while retaining safe insertion.
 fn process_selected<F, M>(
     arch: F::Arch,
     input: LeafTopK<'_>,
@@ -515,6 +574,11 @@ fn process_fixed<F, M, const N: usize>(
     process_pairs::<F, M, _>(arch, input, FixedRows(rows), norms, worst);
 }
 
+/// Mutable row adapter used by the shared pair traversal.
+///
+/// Implementations own the exclusive output borrow for the whole scan. Each
+/// insertion borrows one row briefly, so updates to the current row and earlier
+/// endpoint rows cannot alias simultaneously.
 trait NeighborRows {
     fn len(&self) -> usize;
     fn insert(&mut self, row: usize, position: u32, distance: f32) -> f32;
@@ -555,10 +619,23 @@ impl NeighborRows for DynamicRows<'_> {
     }
 }
 
-/// Scan the strict lower triangle and update both endpoint rows.
+/// Scan the strict lower triangle once and update both endpoint rows.
 ///
-/// `M` fixes metric arithmetic before type erasure. `R` presents either
-/// fixed-width array rows or the uncommon run-time-width rows.
+/// Invariants on entry:
+///
+/// - `dots` is a validated square row-major matrix;
+/// - `output` has one sorted ascending-distance row per point;
+/// - `worst[row]` equals that row's last slot;
+/// - `norms` has one value per point exactly when `M` requires scales.
+///
+/// Each SIMD chunk computes both endpoint eligibility masks before mutation.
+/// Multiple lanes compete for the current row, so row candidates recheck its
+/// live cached threshold. Every column lane targets a distinct earlier row and
+/// can use the precomputed mask directly. Scalar tails call the matching scalar
+/// metric operation to preserve established rounding semantics.
+///
+/// `M` is concrete before type erasure. `R` presents fixed array rows for common
+/// widths or safe dynamic slices for the uncommon fallback.
 #[inline(never)]
 fn process_pairs<F, M, R>(
     arch: F::Arch,
@@ -599,6 +676,9 @@ fn process_pairs<F, M, R>(
                 F::default(arch)
             };
             let distances = M::leaf_distance(arch, pair_dots, row_norm, column_norms);
+            // Every pair may improve the current row and its earlier endpoint.
+            // Derive both masks from the same distance vector before either side
+            // mutates its threshold.
             let row_eligible = distances.lt_simd(F::splat(arch, row_worst));
             // SAFETY: the full chunk lies below `row`, so it is inside `worst`.
             let column_worst = unsafe { F::load_simd(arch, worst_ptr.add(column)) };
@@ -701,7 +781,11 @@ fn insert_scalar(
     worst[row] = insert_dynamic(&mut output[row * k..(row + 1) * k], position, distance);
 }
 
-/// Insert into a production row whose width is known at dispatch.
+/// Insert into a fixed-width row and return its new worst distance.
+///
+/// Production widths one through three use straight-line shifts. Strict `<`
+/// comparisons preserve scan order for ties; callers already rejected NaN via
+/// the eligibility comparison.
 #[inline(always)]
 fn insert_fixed<const N: usize>(row: &mut [LeafNeighbor; N], position: u32, distance: f32) -> f32 {
     let entry = LeafNeighbor::new(position, distance);
@@ -740,6 +824,10 @@ fn insert_fixed<const N: usize>(row: &mut [LeafNeighbor; N], position: u32, dist
     }
 }
 
+/// Insert into a run-time-width row using the same stable ordering contract.
+///
+/// The candidate replaces the last slot, then bubbles toward the front. This
+/// path is used only for k greater than three.
 #[inline(always)]
 fn insert_dynamic(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
     let last = row.len() - 1;
