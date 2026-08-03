@@ -3,22 +3,29 @@
  * Licensed under the MIT license.
  */
 
-//! Distance and top-k kernel for partition assignment.
+//! Prepared distance and top-k kernels for partition assignment.
 //!
-//! The caller gathers a point stripe and a leader matrix, then computes the
-//! row-major `points · leadersᵀ` tile with GEMM. This module performs the second
-//! half of assignment: convert each dot product to the configured metric and
-//! retain only the nearest leader positions.
+//! The caller computes a row-major `points · leadersᵀ` tile with GEMM, then
+//! passes it to a [`PartitionKernel`] prepared once for the build metric. Kernel
+//! preparation selects the runtime architecture and concrete metric type once;
+//! repeated stripes call a direct `diskann-wide` function pointer with no ISA or
+//! metric branch in the row loop.
 //!
-//! L2 deliberately omits the point norm because it adds the same constant to
-//! every leader in one row and cannot change their order. Cosine still needs a
-//! point scale because it divides each dot product. The fixed 16-entry tracker
-//! bounds stack use and matches the configuration fanout limit. SIMD chunks and
-//! scalar tails feed the same insertion routine; NaNs are ignored and equal
-//! distances keep the first leader encountered.
+//! L2 deliberately omits the point norm because it is constant across every
+//! leader in one row. Cosine consumes squared point norms and leader norms. NaN
+//! distances are not rankable, and equal distances retain leader scan order.
 
+use std::marker::PhantomData;
+
+use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
-use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector};
+use diskann_wide::{
+    arch::{self, Dispatched2, FTarget2},
+    lifetime::AddLifetime,
+    Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
+};
+
+use crate::kernel_metric::{erase_metric, EraseMetric, KernelMetric, ScaleKind};
 
 /// Maximum number of leaders retained for one point.
 ///
@@ -29,37 +36,38 @@ pub const MAX_PARTITION_FANOUT: usize = 16;
 
 type TopK = [(u32, f32); MAX_PARTITION_FANOUT];
 
-/// One row-major point-by-leader dot-product tile and its normalization terms.
-///
-/// The scale slices are deliberately metric-specific:
-///
-/// | metric | `row_scales` | `leader_scales` |
-/// |---|---|---|
-/// | [`Metric::L2`] | empty | squared leader norms |
-/// | [`Metric::Cosine`] | squared point norms | leader norms |
-/// | [`Metric::CosineNormalized`] / [`Metric::InnerProduct`] | empty | empty |
-///
-/// [`nearest_leaders`] validates every declared shape before dispatch.
+/// Metric-specific normalization inputs for one partition tile.
 #[derive(Clone, Copy, Debug)]
-pub struct PartitionTopK<'a> {
-    /// Row-major `rows * leaders` point-to-leader dot products.
-    pub dots: &'a [f32],
-    /// Number of points represented by `dots`.
-    pub rows: usize,
-    /// Number of leaders represented by each row.
-    pub leaders: usize,
-    /// Metric-specific point normalization terms described in the type table.
-    pub row_scales: &'a [f32],
-    /// Metric-specific leader normalization terms described in the type table.
-    pub leader_scales: &'a [f32],
-    /// Distance metric used to rank leaders.
-    pub metric: Metric,
+pub enum PartitionScales<'a> {
+    /// L2 needs only squared leader norms; the point norm cannot affect ranking.
+    L2 {
+        /// Squared norm for every leader column.
+        leader_squared_norms: &'a [f32],
+    },
+    /// Unnormalized cosine needs squared point norms and leader norms.
+    Cosine {
+        /// Squared norm for every point row.
+        row_squared_norms: &'a [f32],
+        /// Norm for every leader column.
+        leader_norms: &'a [f32],
+    },
+    /// Normalized cosine and inner product need no normalization inputs.
+    None,
 }
 
-/// Validation error returned by [`nearest_leaders`].
+/// One row-major point-by-leader dot-product tile.
+#[derive(Clone, Copy, Debug)]
+pub struct PartitionTopK<'a> {
+    /// Point rows by leader columns.
+    pub dots: MatrixView<'a, f32>,
+    /// Normalization inputs matching the prepared metric.
+    pub scales: PartitionScales<'a>,
+}
+
+/// Validation error returned by [`PartitionKernel::nearest_leaders`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PartitionKernelError {
-    /// A declared matrix or output shape overflowed `usize`.
+    /// A declared matrix shape overflowed `usize`.
     #[error("{buffer} shape {rows} x {cols} overflows usize")]
     ShapeOverflow {
         /// Name of the buffer whose shape overflowed.
@@ -69,15 +77,33 @@ pub enum PartitionKernelError {
         /// Declared column count.
         cols: usize,
     },
-    /// A supplied slice did not match its declared shape.
+    /// The output matrix does not match the input row count.
+    #[error(
+        "invalid output shape: expected {expected_rows} rows, got {actual_rows} rows and {actual_cols} columns"
+    )]
+    InvalidOutputShape {
+        /// Required row count.
+        expected_rows: usize,
+        /// Supplied row count.
+        actual_rows: usize,
+        /// Supplied column count.
+        actual_cols: usize,
+    },
+    /// A metric-specific scale slice has the wrong length.
     #[error("invalid {buffer} length: expected {expected}, got {actual}")]
     InvalidBufferLength {
-        /// Name of the invalid buffer.
+        /// Name of the invalid scale buffer.
         buffer: &'static str,
         /// Required length.
         expected: usize,
         /// Supplied length.
         actual: usize,
+    },
+    /// Scale inputs do not match the metric used to prepare the kernel.
+    #[error("partition scales do not match prepared {expected} metric")]
+    InvalidScales {
+        /// Expected scale layout.
+        expected: &'static str,
     },
     /// The requested fanout cannot be represented by the fixed top-k tracker.
     #[error(
@@ -104,66 +130,219 @@ pub enum PartitionKernelError {
     },
 }
 
-/// Select the nearest `fanout` leader positions for every input row.
-///
-/// Results for each row are ordered by ascending distance. Equal distances do
-/// not replace or move an already retained entry, so leader scan order breaks
-/// ties. A zero fanout is a validated no-op.
-///
-/// For L2, the point's squared norm is omitted because it is constant across
-/// every leader in a row and cannot change the ranking.
-pub fn nearest_leaders(
-    input: PartitionTopK<'_>,
-    fanout: usize,
-    output: &mut [u32],
-) -> Result<(), PartitionKernelError> {
-    validate(input, fanout, output)?;
-    if fanout == 0 || input.rows == 0 {
-        return Ok(());
-    }
+#[derive(Debug)]
+struct PartitionInput;
 
-    diskann_wide::arch::dispatch(PartitionKernel {
-        input,
-        fanout,
-        output,
-    });
-    if let Some(row) = output
-        .chunks_exact(fanout)
-        .position(|leaders| leaders[fanout - 1] == u32::MAX)
-    {
-        return Err(PartitionKernelError::InsufficientRankableDistances { row, fanout });
-    }
-    Ok(())
+impl AddLifetime for PartitionInput {
+    type Of<'a> = PartitionTopK<'a>;
 }
 
-fn validate(
-    input: PartitionTopK<'_>,
-    fanout: usize,
-    output: &[u32],
-) -> Result<(), PartitionKernelError> {
-    if input.leaders > u32::MAX as usize {
-        return Err(PartitionKernelError::TooManyLeaders(input.leaders));
+#[derive(Debug)]
+struct PartitionOutput;
+
+impl AddLifetime for PartitionOutput {
+    type Of<'a> = MutMatrixView<'a, u32>;
+}
+
+type PartitionFn = Dispatched2<Result<(), PartitionKernelError>, PartitionInput, PartitionOutput>;
+
+/// A partition kernel prepared for one metric and the current CPU.
+///
+/// Construct this once with [`PartitionKernel::new`] and reuse it for every
+/// point stripe. The handle is a direct function pointer and is `Copy`, `Send`,
+/// and `Sync`.
+#[derive(Clone, Copy, Debug)]
+pub struct PartitionKernel {
+    run: PartitionFn,
+}
+
+impl PartitionKernel {
+    /// Prepare a partition kernel for `metric` and the current CPU.
+    pub fn new(metric: Metric) -> Self {
+        diskann_wide::arch::dispatch1_no_features(PreparePartition, metric)
     }
-    if fanout > MAX_PARTITION_FANOUT || fanout > input.leaders {
+
+    /// Select the nearest leader positions for every input row.
+    ///
+    /// `output.nrows()` must equal `input.dots.nrows()`; its column count is the
+    /// requested fanout. Results are ordered by ascending distance. For L2, the
+    /// score omits the point norm because it cannot affect within-row ranking.
+    pub fn nearest_leaders(
+        &self,
+        input: PartitionTopK<'_>,
+        output: MutMatrixView<'_, u32>,
+    ) -> Result<(), PartitionKernelError> {
+        self.run.call(input, output)
+    }
+}
+
+struct PreparePartition;
+
+impl<A> arch::Target1<A, PartitionKernel, Metric> for PreparePartition
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn run(self, arch: A, metric: Metric) -> PartitionKernel {
+        erase_metric(metric, BuildPartition(arch))
+    }
+}
+
+struct BuildPartition<A>(A);
+
+impl<A> EraseMetric for BuildPartition<A>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    type Output = PartitionKernel;
+
+    fn erase<M: KernelMetric>(self) -> Self::Output {
+        PartitionKernel {
+            run: self.0.dispatch2::<
+                PartitionEntry<M>,
+                Result<(), PartitionKernelError>,
+                PartitionInput,
+                PartitionOutput,
+            >(),
+        }
+    }
+}
+
+struct PartitionEntry<M>(PhantomData<M>);
+
+impl<A, M> FTarget2<A, Result<(), PartitionKernelError>, PartitionTopK<'_>, MutMatrixView<'_, u32>>
+    for PartitionEntry<M>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
+{
+    fn run(
+        arch: A,
+        input: PartitionTopK<'_>,
+        mut output: MutMatrixView<'_, u32>,
+    ) -> Result<(), PartitionKernelError> {
+        let scales = validate::<M>(input, &output)?;
+        let fanout = output.ncols();
+        if fanout == 0 || input.dots.nrows() == 0 {
+            return Ok(());
+        }
+
+        process_rows::<A::f32x16, M>(arch, input.dots, scales, fanout, output.as_mut_slice());
+        if let Some(row) = output
+            .as_slice()
+            .chunks_exact(fanout)
+            .position(|leaders| leaders[fanout - 1] == u32::MAX)
+        {
+            return Err(PartitionKernelError::InsufficientRankableDistances { row, fanout });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ScaleSlices<'a> {
+    rows: &'a [f32],
+    leaders: &'a [f32],
+}
+
+fn validate<'a, M: KernelMetric>(
+    input: PartitionTopK<'a>,
+    output: &MutMatrixView<'_, u32>,
+) -> Result<ScaleSlices<'a>, PartitionKernelError> {
+    let rows = input.dots.nrows();
+    let leaders = input.dots.ncols();
+    let fanout = output.ncols();
+
+    let dots_len = checked_area("dot-product tile", rows, leaders)?;
+    check_length("dot-product tile", input.dots.as_slice().len(), dots_len)?;
+    let output_len = checked_area("output", output.nrows(), fanout)?;
+    check_length("output", output.as_slice().len(), output_len)?;
+
+    if output.nrows() != rows {
+        return Err(PartitionKernelError::InvalidOutputShape {
+            expected_rows: rows,
+            actual_rows: output.nrows(),
+            actual_cols: output.ncols(),
+        });
+    }
+    if leaders > u32::MAX as usize {
+        return Err(PartitionKernelError::TooManyLeaders(leaders));
+    }
+    if fanout > MAX_PARTITION_FANOUT || fanout > leaders {
         return Err(PartitionKernelError::InvalidFanout {
             fanout,
-            leaders: input.leaders,
+            leaders,
             maximum: MAX_PARTITION_FANOUT,
         });
     }
 
-    let expected_dots = checked_area("dot-product tile", input.rows, input.leaders)?;
-    check_length("dot-product tile", input.dots.len(), expected_dots)?;
-    let expected_output = checked_area("output", input.rows, fanout)?;
-    check_length("output", output.len(), expected_output)?;
-
-    let (row_scales, leader_scales) = match input.metric {
-        Metric::Cosine => (input.rows, input.leaders),
-        Metric::L2 => (0, input.leaders),
-        Metric::CosineNormalized | Metric::InnerProduct => (0, 0),
+    let scales = match (M::METRIC, input.scales) {
+        (
+            Metric::L2,
+            PartitionScales::L2 {
+                leader_squared_norms,
+            },
+        ) => ScaleSlices {
+            rows: &[],
+            leaders: leader_squared_norms,
+        },
+        (
+            Metric::Cosine,
+            PartitionScales::Cosine {
+                row_squared_norms,
+                leader_norms,
+            },
+        ) => ScaleSlices {
+            rows: row_squared_norms,
+            leaders: leader_norms,
+        },
+        (Metric::CosineNormalized | Metric::InnerProduct, PartitionScales::None) => ScaleSlices {
+            rows: &[],
+            leaders: &[],
+        },
+        (Metric::L2, _) => return Err(PartitionKernelError::InvalidScales { expected: "L2" }),
+        (Metric::Cosine, _) => {
+            return Err(PartitionKernelError::InvalidScales { expected: "cosine" });
+        }
+        (Metric::CosineNormalized, _) => {
+            return Err(PartitionKernelError::InvalidScales {
+                expected: "normalized cosine",
+            });
+        }
+        (Metric::InnerProduct, _) => {
+            return Err(PartitionKernelError::InvalidScales {
+                expected: "inner product",
+            });
+        }
     };
-    check_length("row scales", input.row_scales.len(), row_scales)?;
-    check_length("leader scales", input.leader_scales.len(), leader_scales)
+
+    check_length(
+        "row scales",
+        scales.rows.len(),
+        expected_scale_len(M::PARTITION_ROW_SCALE, rows),
+    )?;
+    check_length(
+        "leader scales",
+        scales.leaders.len(),
+        expected_scale_len(M::PARTITION_LEADER_SCALE, leaders),
+    )?;
+    Ok(scales)
+}
+
+const fn expected_scale_len(kind: ScaleKind, count: usize) -> usize {
+    if kind.is_some() {
+        count
+    } else {
+        0
+    }
 }
 
 fn checked_area(
@@ -191,223 +370,102 @@ fn check_length(
     }
 }
 
-struct PartitionKernel<'a, 'o> {
-    input: PartitionTopK<'a>,
+fn process_rows<F, M>(
+    arch: F::Arch,
+    dots: MatrixView<'_, f32>,
+    scales: ScaleSlices<'_>,
     fanout: usize,
-    output: &'o mut [u32],
-}
-
-impl PartitionKernel<'_, '_> {
-    fn run_simd<F>(self, arch: F::Arch)
-    where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>,
-        u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    {
-        process_rows_simd::<F>(arch, self.input, self.fanout, self.output);
-    }
-}
-
-impl<A> diskann_wide::arch::Target<A, ()> for PartitionKernel<'_, '_>
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    output: &mut [u32],
+) where
+    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F::Mask: SIMDSelect<F>,
+    M: KernelMetric,
+    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    #[inline(always)]
-    fn run(self, arch: A) {
-        self.run_simd::<A::f32x16>(arch);
-    }
-}
-
-#[cfg(test)]
-fn process_rows_scalar(input: PartitionTopK<'_>, fanout: usize, output: &mut [u32]) {
-    for (row_index, (dot_row, output_row)) in input
-        .dots
-        .chunks_exact(input.leaders)
+    let leaders = dots.ncols();
+    for (row, (dot_row, output_row)) in dots
+        .as_slice()
+        .chunks_exact(leaders)
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
+        let row_scale = if M::PARTITION_ROW_SCALE.is_some() {
+            M::PARTITION_ROW_SCALE.transform(scales.rows[row])
+        } else {
+            0.0
+        };
+        let row_scale_vector = F::splat(arch, row_scale);
         let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
-        let row_scale = input.row_scales.get(row_index).copied().unwrap_or(0.0);
-        for (leader, &dot) in dot_row.iter().enumerate() {
-            let leader_scale = input.leader_scales.get(leader).copied().unwrap_or(0.0);
+        let full = leaders / F::LANES * F::LANES;
+
+        for base in (0..full).step_by(F::LANES) {
+            // SAFETY: `base + F::LANES <= full <= dot_row.len()`.
+            let dots = unsafe { F::load_simd(arch, dot_row.as_ptr().add(base)) };
+            let leader_scales = if M::PARTITION_LEADER_SCALE.is_some() {
+                // SAFETY: validation requires one leader scale per dot-product column.
+                unsafe { F::load_simd(arch, scales.leaders.as_ptr().add(base)) }
+            } else {
+                F::default(arch)
+            };
+            insert_lanes(
+                M::partition_distance(arch, dots, row_scale_vector, leader_scales),
+                base,
+                &mut top,
+                fanout,
+            );
+        }
+
+        for (leader, &dot) in dot_row.iter().enumerate().skip(full) {
+            let leader_scale = if M::PARTITION_LEADER_SCALE.is_some() {
+                M::PARTITION_LEADER_SCALE.transform(scales.leaders[leader])
+            } else {
+                0.0
+            };
             insert_topk(
                 &mut top,
                 fanout,
                 leader as u32,
-                distance(input.metric, dot, row_scale, leader_scale),
+                M::partition_distance_scalar(dot, row_scale, leader_scale),
             );
         }
         copy_ids(&top, output_row);
     }
 }
 
-fn process_rows_simd<F>(arch: F::Arch, input: PartitionTopK<'_>, fanout: usize, output: &mut [u32])
-where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    match input.metric {
-        Metric::L2 => process_rows(input, fanout, output, |_, dot_row, top| {
-            process_binary::<F, _, _>(
-                arch,
-                dot_row,
-                input.leader_scales,
-                top,
-                fanout,
-                |dot, norm| F::splat(arch, -2.0).mul_add_simd(dot, norm),
-                |dot, norm| norm - 2.0 * dot,
-            );
-        }),
-        Metric::CosineNormalized => process_rows(input, fanout, output, |_, dot_row, top| {
-            process_unary::<F, _>(arch, dot_row, top, fanout, |dot| F::splat(arch, 1.0) - dot);
-        }),
-        Metric::InnerProduct => process_rows(input, fanout, output, |_, dot_row, top| {
-            process_unary::<F, _>(arch, dot_row, top, fanout, |dot| F::default(arch) - dot);
-        }),
-        Metric::Cosine => process_rows(input, fanout, output, |row, dot_row, top| {
-            process_cosine::<F>(
-                arch,
-                dot_row,
-                input.row_scales[row],
-                input.leader_scales,
-                top,
-                fanout,
-            );
-        }),
-    }
-}
-
-#[inline(always)]
-fn process_rows(
-    input: PartitionTopK<'_>,
+#[cfg(test)]
+fn process_rows_scalar<M: KernelMetric>(
+    dots: MatrixView<'_, f32>,
+    scales: ScaleSlices<'_>,
     fanout: usize,
     output: &mut [u32],
-    mut process: impl FnMut(usize, &[f32], &mut TopK),
 ) {
-    for (row, (dot_row, output_row)) in input
-        .dots
-        .chunks_exact(input.leaders)
+    let leaders = dots.ncols();
+    for (row, (dot_row, output_row)) in dots
+        .as_slice()
+        .chunks_exact(leaders)
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
+        let row_scale = if M::PARTITION_ROW_SCALE.is_some() {
+            M::PARTITION_ROW_SCALE.transform(scales.rows[row])
+        } else {
+            0.0
+        };
         let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
-        process(row, dot_row, &mut top);
-        copy_ids(&top, output_row);
-    }
-}
-
-#[inline(always)]
-fn cosine_distance(row_norm_squared: f32, leader_norm: f32, dot: f32) -> f32 {
-    let row_norm = if row_norm_squared < f32::MIN_POSITIVE {
-        0.0
-    } else {
-        row_norm_squared.sqrt()
-    };
-    let leader_norm = if leader_norm < f32::MIN_POSITIVE.sqrt() {
-        0.0
-    } else {
-        leader_norm
-    };
-    if row_norm == 0.0 || leader_norm == 0.0 {
-        1.0
-    } else {
-        1.0 - dot / (row_norm * leader_norm)
-    }
-}
-
-fn process_cosine<F>(
-    arch: F::Arch,
-    dots: &[f32],
-    row_norm_squared: f32,
-    leader_norms: &[f32],
-    top: &mut TopK,
-    fanout: usize,
-) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    let row_norm = if row_norm_squared < f32::MIN_POSITIVE {
-        0.0
-    } else {
-        row_norm_squared.sqrt()
-    };
-    let row_norm = F::splat(arch, row_norm);
-    let one = F::splat(arch, 1.0);
-    let minimum_norm = F::splat(arch, f32::MIN_POSITIVE.sqrt());
-    process_binary::<F, _, _>(
-        arch,
-        dots,
-        leader_norms,
-        top,
-        fanout,
-        |dot, leader_norm| {
-            let row_zero = row_norm.lt_simd(minimum_norm);
-            let leader_zero = leader_norm.lt_simd(minimum_norm);
-            let denominator = row_norm * leader_norm;
-            let safe_denominator = row_zero.select(one, leader_zero.select(one, denominator));
-            let cosine = row_zero.select(
-                F::default(arch),
-                leader_zero.select(F::default(arch), dot / safe_denominator),
+        for (leader, &dot) in dot_row.iter().enumerate() {
+            let leader_scale = if M::PARTITION_LEADER_SCALE.is_some() {
+                M::PARTITION_LEADER_SCALE.transform(scales.leaders[leader])
+            } else {
+                0.0
+            };
+            insert_topk(
+                &mut top,
+                fanout,
+                leader as u32,
+                M::partition_distance_scalar(dot, row_scale, leader_scale),
             );
-            one - cosine
-        },
-        |dot, leader_norm| cosine_distance(row_norm_squared, leader_norm, dot),
-    );
-}
-
-fn process_unary<F, Transform>(
-    arch: F::Arch,
-    dots: &[f32],
-    top: &mut TopK,
-    fanout: usize,
-    transform: Transform,
-) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat,
-    Transform: Fn(F) -> F,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    let full = dots.len() / F::LANES * F::LANES;
-    for base in (0..full).step_by(F::LANES) {
-        // SAFETY: `base + F::LANES <= full <= dots.len()`.
-        let dots = unsafe { F::load_simd(arch, dots.as_ptr().add(base)) };
-        insert_lanes(transform(dots), base, top, fanout);
-    }
-    for (offset, &dot) in dots[full..].iter().enumerate() {
-        let value = transform(F::splat(arch, dot)).to_array();
-        insert_topk(top, fanout, (full + offset) as u32, value.as_ref()[0]);
-    }
-}
-
-fn process_binary<F, Transform, ScalarTransform>(
-    arch: F::Arch,
-    dots: &[f32],
-    scales: &[f32],
-    top: &mut TopK,
-    fanout: usize,
-    transform: Transform,
-    scalar_transform: ScalarTransform,
-) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat,
-    Transform: Fn(F, F) -> F,
-    ScalarTransform: Fn(f32, f32) -> f32,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    let full = dots.len() / F::LANES * F::LANES;
-    for base in (0..full).step_by(F::LANES) {
-        // SAFETY: both slices contain the full SIMD chunk at `base`.
-        let dots = unsafe { F::load_simd(arch, dots.as_ptr().add(base)) };
-        // SAFETY: shape validation guarantees `scales.len() == dots.len()`.
-        let scales = unsafe { F::load_simd(arch, scales.as_ptr().add(base)) };
-        insert_lanes(transform(dots, scales), base, top, fanout);
-    }
-    for offset in 0..dots.len() - full {
-        let value = scalar_transform(dots[full + offset], scales[full + offset]);
-        insert_topk(top, fanout, (full + offset) as u32, value);
+        }
+        copy_ids(&top, output_row);
     }
 }
 
@@ -433,17 +491,6 @@ where
 }
 
 #[inline(always)]
-#[cfg(test)]
-fn distance(metric: Metric, dot: f32, row_scale: f32, leader_scale: f32) -> f32 {
-    match metric {
-        Metric::L2 => (-2.0f32).mul_add(dot, leader_scale),
-        Metric::CosineNormalized => 1.0 - dot,
-        Metric::InnerProduct => -dot,
-        Metric::Cosine => cosine_distance(row_scale, leader_scale, dot),
-    }
-}
-
-#[inline(always)]
 fn insert_topk(top: &mut TopK, fanout: usize, leader: u32, distance: f32) {
     let threshold = fanout - 1;
     if distance.partial_cmp(&top[threshold].1) != Some(std::cmp::Ordering::Less) {
@@ -465,4 +512,216 @@ fn copy_ids(top: &TopK, output: &mut [u32]) {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use crate::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
+
+    use super::*;
+
+    fn data(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        let dots = (0..2 * leaders)
+            .map(|index| (((index * 13 + 7) % 29) as f32 - 14.0) * 0.125)
+            .collect();
+        let row_scales = if metric == Metric::Cosine {
+            vec![0.0, 16.0]
+        } else {
+            Vec::new()
+        };
+        let leader_scales = match metric {
+            Metric::L2 => (0..leaders)
+                .map(|leader| ((leader + 1) as f32).powi(2))
+                .collect(),
+            Metric::Cosine => (0..leaders)
+                .map(|leader| {
+                    if leader == 0 {
+                        0.0
+                    } else {
+                        (leader + 1) as f32
+                    }
+                })
+                .collect(),
+            Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
+        };
+        (dots, row_scales, leader_scales)
+    }
+
+    fn input<'a>(
+        metric: Metric,
+        dots: &'a [f32],
+        rows: usize,
+        leaders: usize,
+        row_scales: &'a [f32],
+        leader_scales: &'a [f32],
+    ) -> PartitionTopK<'a> {
+        let scales = match metric {
+            Metric::L2 => PartitionScales::L2 {
+                leader_squared_norms: leader_scales,
+            },
+            Metric::Cosine => PartitionScales::Cosine {
+                row_squared_norms: row_scales,
+                leader_norms: leader_scales,
+            },
+            Metric::CosineNormalized | Metric::InnerProduct => PartitionScales::None,
+        };
+        PartitionTopK {
+            dots: MatrixView::try_from(dots, rows, leaders).unwrap(),
+            scales,
+        }
+    }
+
+    fn scalar<M: KernelMetric>(input: PartitionTopK<'_>, fanout: usize, output: &mut [u32]) {
+        let scales = match input.scales {
+            PartitionScales::L2 {
+                leader_squared_norms,
+            } => ScaleSlices {
+                rows: &[],
+                leaders: leader_squared_norms,
+            },
+            PartitionScales::Cosine {
+                row_squared_norms,
+                leader_norms,
+            } => ScaleSlices {
+                rows: row_squared_norms,
+                leaders: leader_norms,
+            },
+            PartitionScales::None => ScaleSlices {
+                rows: &[],
+                leaders: &[],
+            },
+        };
+        process_rows_scalar::<M>(input.dots, scales, fanout, output);
+    }
+
+    fn scalar_for_metric(
+        metric: Metric,
+        input: PartitionTopK<'_>,
+        fanout: usize,
+        output: &mut [u32],
+    ) {
+        match metric {
+            Metric::L2 => scalar::<L2>(input, fanout, output),
+            Metric::Cosine => scalar::<Cosine>(input, fanout, output),
+            Metric::CosineNormalized => scalar::<CosineNormalized>(input, fanout, output),
+            Metric::InnerProduct => scalar::<InnerProduct>(input, fanout, output),
+        }
+    }
+
+    fn assert_scalar_reference_matches_prepared_dispatch(metric: Metric) {
+        // Leader count controls SIMD chunking. Exercise both sides of 4-, 8-, and
+        // 16-lane boundaries, then a second 16-lane chunk.
+        for leaders in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+            let (dots, row_scales, leader_scales) = data(metric, leaders);
+            let input = input(metric, &dots, 2, leaders, &row_scales, &leader_scales);
+            let kernel = PartitionKernel::new(metric);
+            for fanout in [1, 2, 6, MAX_PARTITION_FANOUT] {
+                if fanout > leaders {
+                    continue;
+                }
+                let mut expected = vec![u32::MAX; 2 * fanout];
+                kernel
+                    .nearest_leaders(
+                        input,
+                        MutMatrixView::try_from(expected.as_mut_slice(), 2, fanout).unwrap(),
+                    )
+                    .unwrap();
+
+                let mut actual = vec![u32::MAX; 2 * fanout];
+                scalar_for_metric(metric, input, fanout, &mut actual);
+                assert_eq!(
+                    actual, expected,
+                    "{metric:?}, leaders={leaders}, k={fanout}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn l2_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::L2);
+    }
+
+    #[test]
+    fn cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::Cosine);
+    }
+
+    #[test]
+    fn normalized_cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::CosineNormalized);
+    }
+
+    #[test]
+    fn inner_product_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::InnerProduct);
+    }
+
+    #[test]
+    fn scalar_distance_matches_metric_contract() {
+        assert_eq!(L2::partition_distance_scalar(2.0, 0.0, 9.0), 5.0);
+        assert_eq!(
+            CosineNormalized::partition_distance_scalar(0.25, 0.0, 0.0),
+            0.75
+        );
+        assert_eq!(InnerProduct::partition_distance_scalar(3.0, 0.0, 0.0), -3.0);
+        assert_eq!(Cosine::partition_distance_scalar(4.0, 2.0, 4.0), 0.5);
+        assert_eq!(Cosine::partition_distance_scalar(4.0, 0.0, 4.0), 1.0);
+        assert!(Cosine::partition_distance_scalar(1.0, f32::NAN, 1.0).is_nan());
+    }
+
+    #[test]
+    fn cosine_special_norms_match_scalar_and_prepared_dispatch() {
+        let leaders = 17;
+        let dots = vec![1.0; 4 * leaders];
+        let row_scales = [0.0, f32::MIN_POSITIVE / 2.0, f32::MIN_POSITIVE, f32::NAN];
+        let mut leader_scales = vec![1.0; leaders];
+        leader_scales[..4].copy_from_slice(&[
+            0.0,
+            f32::MIN_POSITIVE.sqrt() / 2.0,
+            f32::MIN_POSITIVE.sqrt(),
+            f32::NAN,
+        ]);
+        let input = input(
+            Metric::Cosine,
+            &dots,
+            row_scales.len(),
+            leaders,
+            &row_scales,
+            &leader_scales,
+        );
+        let mut expected = vec![u32::MAX; row_scales.len() * 2];
+        scalar::<Cosine>(input, 2, &mut expected);
+        let mut actual = vec![u32::MAX; row_scales.len() * 2];
+        PartitionKernel::new(Metric::Cosine)
+            .nearest_leaders(
+                input,
+                MutMatrixView::try_from(actual.as_mut_slice(), row_scales.len(), 2).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(&actual[..4], &[0, 1, 0, 1]);
+        assert_eq!(&actual[6..], &[0, 1]);
+    }
+
+    #[test]
+    fn matrix_area_overflow_is_rejected_before_kernel_access() {
+        assert_eq!(
+            checked_area("dot-product tile", usize::MAX, 2),
+            Err(PartitionKernelError::ShapeOverflow {
+                buffer: "dot-product tile",
+                rows: usize::MAX,
+                cols: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn scalar_topk_orders_candidates_and_preserves_ties() {
+        let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
+        for (leader, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 1.0)] {
+            insert_topk(&mut top, 4, leader, distance);
+        }
+        insert_topk(&mut top, 4, 5, f32::NAN);
+
+        assert_eq!(top[..4], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
+    }
+}
