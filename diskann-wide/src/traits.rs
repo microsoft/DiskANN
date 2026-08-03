@@ -262,7 +262,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// The argument `arch` provides a "proof of compatibility" as `A` can only be safely
     /// instantiated when all the requirements for the architecture are met.
     fn from_array(arch: Self::Arch, x: <Self::ConstLanes as ArrayType<Self::Scalar>>::Type)
-        -> Self;
+    -> Self;
 
     /// Broadcast the provided scalar across all lanes.
     ///
@@ -906,16 +906,16 @@ impl_simd_mask_for_bitmask!(64, u64, u64::MAX);
 #[cfg(test)]
 mod test_traits {
     use rand::{
+        SeedableRng,
         distr::{Distribution, StandardUniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;
     use crate::{
-        arch,
+        ARCH, arch,
         splitjoin::{LoHi, SplitJoin},
-        test_utils, ARCH,
+        test_utils,
     };
 
     // Allow unsigned 128-bit integers to be converted to narrow types.
