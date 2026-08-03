@@ -5,8 +5,6 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-#[cfg(feature = "pipnn")]
-use diskann::graph::AdjacencyList;
 use diskann::{
     graph::{DiskANNIndex, StartPointStrategy},
     provider::{self, DataProvider, DefaultContext},
@@ -195,21 +193,14 @@ where
                 .context("PiPNN cannot connect a start point to an empty dataset")
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let degree = graph.pruned_degree().get();
-    // Seed every frozen start slot with its source point followed by that
-    // point's outgoing row. Truncation applies the same graph degree bound as
-    // real rows, and including the source guarantees entry into the real graph.
-    let start_neighbors = start_sources
+    // A frozen start slot carries the chosen source vector, so expanding it
+    // must expose exactly that real source's outgoing row. Prepending the source
+    // ID would consume one degree slot and discard a graph edge, changing every
+    // search from the graph produced by the core builder.
+    let start_neighbors: Vec<_> = start_sources
         .into_iter()
-        .map(|source| {
-            let source_id = u32::try_from(source).context("PiPNN start source exceeds u32::MAX")?;
-            let mut neighbors = AdjacencyList::with_capacity(degree);
-            neighbors.push(source_id);
-            neighbors.extend_from_slice(&adjacency[source]);
-            neighbors.truncate(degree);
-            Ok(neighbors)
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .map(|source| adjacency[source].clone())
+        .collect();
     let batch_elapsed = started.elapsed();
 
     // Unlike incremental insertion, PiPNN finishes all batch-build scratch
@@ -453,6 +444,7 @@ where
 #[cfg(all(test, feature = "pipnn"))]
 mod pipnn_tests {
     use super::*;
+    use diskann::graph::AdjacencyList;
 
     #[test]
     fn dedicated_pipeline_respects_the_requested_start_strategy() {
@@ -505,9 +497,12 @@ mod pipnn_tests {
             .neighbors()
             .get_neighbors_sync(starts[0] as usize, &mut neighbors)
             .unwrap();
-        assert!(
-            neighbors.contains(0),
-            "start slot must enter the real graph"
-        );
+        let mut source_neighbors = AdjacencyList::new();
+        index
+            .provider()
+            .neighbors()
+            .get_neighbors_sync(0, &mut source_neighbors)
+            .unwrap();
+        assert_eq!(neighbors, source_neighbors);
     }
 }
