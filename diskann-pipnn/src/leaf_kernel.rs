@@ -741,46 +741,6 @@ fn process_pairs<F, M, R>(
     debug_assert_eq!(output.len(), points);
 }
 
-#[cfg(test)]
-fn process_pairs_scalar<M: KernelMetric>(
-    input: LeafTopK<'_>,
-    k: usize,
-    output: &mut [LeafNeighbor],
-    norms: &[f32],
-    worst: &mut [f32],
-) {
-    let points = input.dots.nrows();
-    let uses_norms = M::LEAF_SCALE.is_some();
-    for row in 1..points {
-        for column in 0..row {
-            let (row_norm, column_norm) = if uses_norms {
-                (norms[row], norms[column])
-            } else {
-                (0.0, 0.0)
-            };
-            let distance =
-                M::leaf_distance_scalar(input.dots[(row, column)], row_norm, column_norm);
-            insert_scalar(output, worst, k, row, column as u32, distance);
-            insert_scalar(output, worst, k, column, row as u32, distance);
-        }
-    }
-}
-
-#[cfg(test)]
-fn insert_scalar(
-    output: &mut [LeafNeighbor],
-    worst: &mut [f32],
-    k: usize,
-    row: usize,
-    position: u32,
-    distance: f32,
-) {
-    if distance.partial_cmp(&worst[row]) != Some(std::cmp::Ordering::Less) {
-        return;
-    }
-    worst[row] = insert_dynamic(&mut output[row * k..(row + 1) * k], position, distance);
-}
-
 /// Insert into a fixed-width row and return its new worst distance.
 ///
 /// Production widths one through three use straight-line shifts. Strict `<`
@@ -868,13 +828,47 @@ mod tests {
         }
     }
 
-    fn scalar<M: KernelMetric>(input: LeafTopK<'_>, k: usize, output: &mut [LeafNeighbor]) {
+    // Differential oracle for traversal and dispatch only. It intentionally
+    // shares `M::leaf_distance_scalar`; public API tests independently spell
+    // out metric formulas and full sorting behavior.
+    fn scalar_traversal_reference<M: KernelMetric>(
+        input: LeafTopK<'_>,
+        k: usize,
+        output: &mut [LeafNeighbor],
+    ) {
         let points = input.dots.nrows();
         let norms: Vec<_> = (0..points)
             .map(|row| M::LEAF_SCALE.transform(input.dots[(row, row)]))
             .collect();
         let mut worst = vec![f32::INFINITY; points];
-        process_pairs_scalar::<M>(input, k, output, &norms, &mut worst);
+        let uses_norms = M::LEAF_SCALE.is_some();
+        for row in 1..points {
+            for column in 0..row {
+                let (row_norm, column_norm) = if uses_norms {
+                    (norms[row], norms[column])
+                } else {
+                    (0.0, 0.0)
+                };
+                let distance =
+                    M::leaf_distance_scalar(input.dots[(row, column)], row_norm, column_norm);
+                insert_reference(output, &mut worst, k, row, column as u32, distance);
+                insert_reference(output, &mut worst, k, column, row as u32, distance);
+            }
+        }
+    }
+
+    fn insert_reference(
+        output: &mut [LeafNeighbor],
+        worst: &mut [f32],
+        k: usize,
+        row: usize,
+        position: u32,
+        distance: f32,
+    ) {
+        if distance.partial_cmp(&worst[row]) != Some(std::cmp::Ordering::Less) {
+            return;
+        }
+        worst[row] = insert_dynamic(&mut output[row * k..(row + 1) * k], position, distance);
     }
 
     fn scalar_for_metric(
@@ -884,10 +878,12 @@ mod tests {
         output: &mut [LeafNeighbor],
     ) {
         match metric {
-            Metric::L2 => scalar::<L2>(input, k, output),
-            Metric::Cosine => scalar::<Cosine>(input, k, output),
-            Metric::CosineNormalized => scalar::<CosineNormalized>(input, k, output),
-            Metric::InnerProduct => scalar::<InnerProduct>(input, k, output),
+            Metric::L2 => scalar_traversal_reference::<L2>(input, k, output),
+            Metric::Cosine => scalar_traversal_reference::<Cosine>(input, k, output),
+            Metric::CosineNormalized => {
+                scalar_traversal_reference::<CosineNormalized>(input, k, output)
+            }
+            Metric::InnerProduct => scalar_traversal_reference::<InnerProduct>(input, k, output),
         }
     }
 
@@ -943,9 +939,9 @@ mod tests {
         let mut worst = [f32::INFINITY];
 
         for (position, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 0.5)] {
-            insert_scalar(&mut output, &mut worst, 4, 0, position, distance);
+            insert_reference(&mut output, &mut worst, 4, 0, position, distance);
         }
-        insert_scalar(&mut output, &mut worst, 4, 0, 5, f32::NAN);
+        insert_reference(&mut output, &mut worst, 4, 0, 5, f32::NAN);
 
         assert_eq!(
             output,
