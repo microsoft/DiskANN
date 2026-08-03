@@ -38,7 +38,7 @@ use diskann_wide::{
     Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
 };
 
-use crate::kernel_metric::{erase_metric, EraseMetric, KernelMetric, ScaleKind};
+use crate::kernel_metric::{visit_metric, KernelMetric, MetricVisitor, ScaleKind};
 
 /// Maximum number of leaders retained for one point.
 ///
@@ -207,17 +207,17 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     fn run(self, arch: A, metric: Metric) -> PartitionKernel {
-        erase_metric(metric, BuildPartition(arch))
+        visit_metric(metric, BuildPartition(arch))
     }
 }
 
 /// BYO-type-erasure visitor holding a concrete architecture.
 ///
-/// `erase<M>` combines architecture `A` and concrete metric `M`, then produces
+/// `visit<M>` combines architecture `A` and concrete metric `M`, then produces
 /// one direct function pointer. No nested metric trait object remains at runtime.
 struct BuildPartition<A>(A);
 
-impl<A> EraseMetric for BuildPartition<A>
+impl<A> MetricVisitor for BuildPartition<A>
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
@@ -226,7 +226,7 @@ where
 {
     type Output = PartitionKernel;
 
-    fn erase<M: KernelMetric>(self) -> Self::Output {
+    fn visit<M: KernelMetric>(self) -> Self::Output {
         PartitionKernel {
             run: self.0.dispatch2::<
                 PartitionEntry<M>,

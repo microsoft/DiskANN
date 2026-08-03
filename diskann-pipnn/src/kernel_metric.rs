@@ -303,21 +303,21 @@ impl KernelMetric for InnerProduct {
 /// The visitor receives concrete `M`, allowing architecture and width wrappers
 /// to compose with metric arithmetic before producing the final function pointer.
 /// This avoids a nested metric trait object inside architecture dispatch.
-pub(crate) trait EraseMetric {
+pub(crate) trait MetricVisitor {
     /// Final caller-selected erased representation.
     type Output;
 
     /// Consume the visitor with one concrete metric marker.
-    fn erase<M: KernelMetric>(self) -> Self::Output;
+    fn visit<M: KernelMetric>(self) -> Self::Output;
 }
 
 /// Visit the concrete marker represented by a runtime metric tag.
-pub(crate) fn erase_metric<E: EraseMetric>(metric: Metric, erase: E) -> E::Output {
+pub(crate) fn visit_metric<V: MetricVisitor>(metric: Metric, visitor: V) -> V::Output {
     match metric {
-        Metric::L2 => erase.erase::<L2>(),
-        Metric::Cosine => erase.erase::<Cosine>(),
-        Metric::CosineNormalized => erase.erase::<CosineNormalized>(),
-        Metric::InnerProduct => erase.erase::<InnerProduct>(),
+        Metric::L2 => visitor.visit::<L2>(),
+        Metric::Cosine => visitor.visit::<Cosine>(),
+        Metric::CosineNormalized => visitor.visit::<CosineNormalized>(),
+        Metric::InnerProduct => visitor.visit::<InnerProduct>(),
     }
 }
 
