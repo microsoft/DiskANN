@@ -435,9 +435,8 @@ where
     // so their normalized-cosine request must use the norm-aware formula.
     let metric = effective_metric::<T>(context.metric);
 
-    let partition = partitioning::PartitionConfig::from(&context.config);
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition(data, partition, metric))?;
+        .in_scope(|| partitioning::partition(data, context.config.clone(), metric))?;
     // `leaves` is consumed here. Workers borrow individual ID rows during the
     // parallel pass, and the complete partition allocation drops on return.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {

@@ -8,12 +8,13 @@ use diskann_vector::{distance::Metric, Half};
 
 use super::*;
 
-fn config(c_min: usize, c_max: usize, fanout: Vec<usize>, replicas: usize) -> PartitionConfig {
-    PartitionConfig {
+fn config(c_min: usize, c_max: usize, fanout: Vec<usize>, replicas: usize) -> PiPNNConfig {
+    PiPNNConfig {
         c_max,
         c_min,
         p_samp: 0.25,
         fanout,
+        k: 1,
         replicas,
     }
 }
@@ -230,6 +231,44 @@ fn i8_partition_matches_f32_across_dimension_boundaries() {
 }
 
 #[test]
+fn l2_leader_norms_preserve_scalar_reduction_order() {
+    fn next(state: &mut u64) -> f32 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        (((*state >> 40) as f32 / 8_388_608.0) - 1.0) * 1_000.0
+    }
+
+    // This fixed case sits on opposite sides of the top-1 boundary depending
+    // on whether leader norms use the original scalar reduction or a SIMD
+    // reassociation. Point/leader dot products still go through the production
+    // GEMM; only the setup norm calculation is under test.
+    let dimensions = 129;
+    let mut state = 0x3a85_f952_c718_6e49;
+    let point: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
+    let leader_zero: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
+    let leader_one: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
+    let data: Vec<f32> = leader_zero
+        .into_iter()
+        .chain(leader_one)
+        .chain(point)
+        .collect();
+    let data = MatrixView::try_from(data.as_slice(), 3, dimensions).unwrap();
+
+    let clusters = assign_to_leaders(
+        data,
+        &[2],
+        &[0, 1],
+        1,
+        Metric::L2,
+        &StripeBufferPool::new((), 0, None),
+    )
+    .unwrap();
+
+    assert_eq!(clusters, [vec![], vec![2]]);
+}
+
+#[test]
 fn all_metrics_produce_valid_partitions() {
     let data = directional_data(64, 8);
     let config = config(2, 20, vec![2], 1);
@@ -267,29 +306,16 @@ fn assignment_stripes_use_power_of_two_row_counts() {
 
 #[test]
 fn stripe_buffer_pool_reuses_returned_capacity() {
-    let pool = StripeBufferPool::default();
-    let mut buffers = pool.take();
-    buffers.points.resize(16, 0.0);
-    let points = buffers.points.as_ptr();
-    pool.put(buffers);
+    let pool = StripeBufferPool::new((), 0, None);
+    let points = {
+        let mut buffers = pool.get_ref(());
+        buffers.points.resize(16, 0.0);
+        buffers.points.as_ptr()
+    };
 
-    let buffers = pool.take();
+    let buffers = pool.get_ref(());
     assert_eq!(buffers.points.as_ptr(), points);
     assert_eq!(buffers.points.len(), 16);
-}
-
-#[test]
-fn stripe_buffer_pool_recovers_after_lock_poisoning() {
-    let pool = StripeBufferPool::default();
-    let _ = std::panic::catch_unwind(|| {
-        let _guard = pool.available.lock().unwrap();
-        panic!("poison scratch pool");
-    });
-
-    let mut buffers = pool.take();
-    buffers.dots.push(1.0);
-    pool.put(buffers);
-    assert_eq!(pool.take().dots, [1.0]);
 }
 
 #[test]
@@ -305,7 +331,7 @@ fn leader_assignment_handles_multiple_stripes() {
         &[0, 2_047],
         1,
         Metric::L2,
-        &StripeBufferPool::default(),
+        &StripeBufferPool::new((), 0, None),
     )
     .unwrap();
 
