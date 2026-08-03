@@ -47,9 +47,10 @@
 //!
 //! # Numerical behavior
 //!
-//! Subnormal norms are treated as zero before cosine division. A zero-norm
-//! cosine endpoint forces zero similarity and distance `1.0`, even when the
-//! other endpoint or dot is NaN. Otherwise NaN remains NaN, allowing strict
+//! Squared norms below [`f32::MIN_POSITIVE`], and norms below
+//! `sqrt(f32::MIN_POSITIVE)`, are treated as zero before cosine division. A
+//! zero-threshold endpoint forces zero similarity and distance `1.0`, even when
+//! the other endpoint or dot is NaN. Otherwise NaN remains NaN, allowing strict
 //! top-k comparisons to reject it. L2 scalar partition tails retain historical
 //! non-fused operation order because rounding can change leader assignment at
 //! near ties.
@@ -82,9 +83,10 @@ pub(crate) enum ScaleKind {
 impl ScaleKind {
     /// Convert stored scale to the arithmetic form required by a kernel.
     ///
-    /// DiskANN treats subnormal squared norms, and corresponding subnormal
-    /// norms, as zero before division. Ordered comparisons intentionally leave
-    /// NaN unchanged so later distance comparisons keep it non-rankable.
+    /// DiskANN treats squared norms below `f32::MIN_POSITIVE`, and norms below
+    /// `sqrt(f32::MIN_POSITIVE)`, as zero before division. Ordered comparisons
+    /// intentionally leave NaN unchanged so later distance comparisons keep it
+    /// non-rankable.
     ///
     /// `stored` is interpreted according to `self`. The return value is zero,
     /// the original norm, the original squared norm, or its square root. This
