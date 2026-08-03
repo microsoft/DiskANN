@@ -7,18 +7,18 @@
 //!
 //! Computes `Sketch(v) = [v · H_i for i in 0..num_planes]` where each
 //! hyperplane component is sampled from a standard normal distribution. Callers
-//! use differences between two sketch rows to derive relative hash bits.
+//! use differences between two point sketches to derive relative hash bits.
 //!
 //! ```text
 //! seeded RNG ──> hyperplanes [planes × dimensions] (immutable)
 //!                                      │
-//! source row ──> worker f32 scratch ──> dot products ──> sketch row [planes]
+//! source vector ──> worker f32 scratch ──> dot products ──> point sketch [planes]
 //! ```
 //!
 //! | Buffer | Shape | Lifetime |
 //! | --- | --- | --- |
 //! | hyperplanes | `num_planes × ndims` | construction call |
-//! | conversion scratch | `ndims` per Rayon job | reused across point rows |
+//! | conversion scratch | `ndims` per Rayon job | reused across points |
 //! | sketches | `npoints × num_planes` | owned by `LshSketches` |
 //!
 //! Sketches are computed in parallel via Rayon, with caller-provided per-point
