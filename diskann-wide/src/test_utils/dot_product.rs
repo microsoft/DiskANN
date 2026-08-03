@@ -297,7 +297,7 @@ mod tests {
             for right in b {
                 let dot: i32 = (*left)
                     .into_iter()
-                    .zip((*right).into_iter())
+                    .zip(*right)
                     .map(|(l, r)| (l as i32) * (r as i32))
                     .sum();
                 for b in bases {
@@ -333,7 +333,7 @@ mod tests {
             for right in a {
                 let dot: i32 = (*left)
                     .into_iter()
-                    .zip((*right).into_iter())
+                    .zip(*right)
                     .map(|(l, r)| (l as i32) * (r as i32))
                     .sum();
                 for b in bases {
@@ -370,7 +370,7 @@ mod tests {
             for right in a {
                 let dot: u32 = (*left)
                     .into_iter()
-                    .zip((*right).into_iter())
+                    .zip(*right)
                     .map(|(l, r)| (l as u32) * (r as u32))
                     .sum();
                 for b in bases {

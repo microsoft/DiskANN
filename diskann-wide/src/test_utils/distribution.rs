@@ -97,7 +97,7 @@ macro_rules! finite {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
-                    (<$T>::MANTISSA_MASK, true, false)
+                    (<$T as Layout>::MANTISSA_MASK, true, false)
                 } else {
                     // Generate zero.
                     (0, true, true)

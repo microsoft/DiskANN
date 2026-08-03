@@ -452,15 +452,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
         };
 
         let quantizer = match &self.quantizer {
-            Some(q) => {
-                if !q.is_trained() {
-                    q
-                } else {
-                    // Quantizer already trained, bail.
-                    return false;
-                }
-            }
+            Some(q) if !q.is_trained() => q,
             None => return false,
+            Some(_) => return false,
         };
 
         let rows = quantizer.required_vectors();
