@@ -21,9 +21,6 @@
 use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
 
-/// Widest f32 SIMD lane count DiskANN dispatches to, used to size lane scratch.
-const MAX_LANES: usize = 16;
-
 const L2: u8 = 0;
 const COSINE_NORMALIZED: u8 = 1;
 const INNER_PRODUCT: u8 = 2;
@@ -378,9 +375,8 @@ fn process_pairs_simd_dynamic<F>(
             let row_bits = u64::from(row_eligible.bitmask().to_underlying());
             let column_bits = u64::from(column_eligible.bitmask().to_underlying());
             if row_bits | column_bits != 0 {
-                let mut values = [0.0f32; MAX_LANES];
-                // SAFETY: the array covers every f32 SIMD width DiskANN exposes.
-                unsafe { distances.store_simd(values.as_mut_ptr()) };
+                let values = distances.to_array();
+                let values = values.as_ref();
                 let mut row_bits = row_bits;
                 while row_bits != 0 {
                     let lane = row_bits.trailing_zeros() as usize;
@@ -479,9 +475,8 @@ fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
             let row_bits = u64::from(row_eligible.bitmask().to_underlying());
             let column_bits = u64::from(column_eligible.bitmask().to_underlying());
             if row_bits | column_bits != 0 {
-                let mut values = [0.0f32; MAX_LANES];
-                // SAFETY: the array covers every f32 SIMD width DiskANN exposes.
-                unsafe { distances.store_simd(values.as_mut_ptr()) };
+                let values = distances.to_array();
+                let values = values.as_ref();
                 let mut row_bits = row_bits;
                 while row_bits != 0 {
                     let lane = row_bits.trailing_zeros() as usize;

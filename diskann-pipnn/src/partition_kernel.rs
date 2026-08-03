@@ -242,13 +242,14 @@ where
     {
         let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
         match input.metric {
-            Metric::L2 => process_binary::<F, _>(
+            Metric::L2 => process_binary::<F, _, _>(
                 arch,
                 dot_row,
                 input.leader_scales,
                 &mut top,
                 fanout,
                 |dot, norm| F::splat(arch, -2.0).mul_add_simd(dot, norm),
+                |dot, norm| norm - 2.0 * dot,
             ),
             Metric::CosineNormalized => {
                 process_unary::<F, _>(arch, dot_row, &mut top, fanout, |dot| {
@@ -286,13 +287,29 @@ fn process_cosine<F>(
     let row_norm = F::splat(arch, row_norm_squared.sqrt());
     let one = F::splat(arch, 1.0);
     let zero = F::default(arch);
-    process_binary::<F, _>(arch, dots, leader_norms, top, fanout, |dot, leader_norm| {
-        let denominator = row_norm * leader_norm;
-        let valid = denominator.gt_simd(zero);
-        let safe_denominator = valid.select(denominator, one);
-        let cosine = valid.select(dot / safe_denominator, zero);
-        one - cosine
-    });
+    process_binary::<F, _, _>(
+        arch,
+        dots,
+        leader_norms,
+        top,
+        fanout,
+        |dot, leader_norm| {
+            let denominator = row_norm * leader_norm;
+            let valid = denominator.gt_simd(zero);
+            let safe_denominator = valid.select(denominator, one);
+            let cosine = valid.select(dot / safe_denominator, zero);
+            one - cosine
+        },
+        |dot, leader_norm| {
+            let denominator = row_norm_squared.sqrt() * leader_norm;
+            let cosine = if denominator > 0.0 {
+                dot / denominator
+            } else {
+                0.0
+            };
+            1.0 - cosine
+        },
+    );
 }
 
 fn process_unary<F, Transform>(
@@ -313,24 +330,23 @@ fn process_unary<F, Transform>(
         insert_lanes(transform(dots), base, top, fanout);
     }
     for (offset, &dot) in dots[full..].iter().enumerate() {
-        let mut lane = [0.0f32; 16];
-        let value = transform(F::splat(arch, dot));
-        // SAFETY: `lane` has capacity for every supported `F`.
-        unsafe { value.store_simd(lane.as_mut_ptr()) };
-        insert_topk(top, fanout, (full + offset) as u32, lane[0]);
+        let value = transform(F::splat(arch, dot)).to_array();
+        insert_topk(top, fanout, (full + offset) as u32, value.as_ref()[0]);
     }
 }
 
-fn process_binary<F, Transform>(
+fn process_binary<F, Transform, ScalarTransform>(
     arch: F::Arch,
     dots: &[f32],
     scales: &[f32],
     top: &mut TopK,
     fanout: usize,
     transform: Transform,
+    scalar_transform: ScalarTransform,
 ) where
     F: SIMDVector<Scalar = f32> + SIMDFloat,
     Transform: Fn(F, F) -> F,
+    ScalarTransform: Fn(f32, f32) -> f32,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let full = dots.len() / F::LANES * F::LANES;
@@ -342,14 +358,8 @@ fn process_binary<F, Transform>(
         insert_lanes(transform(dots, scales), base, top, fanout);
     }
     for offset in 0..dots.len() - full {
-        let mut lane = [0.0f32; 16];
-        let value = transform(
-            F::splat(arch, dots[full + offset]),
-            F::splat(arch, scales[full + offset]),
-        );
-        // SAFETY: `lane` has capacity for every supported `F`.
-        unsafe { value.store_simd(lane.as_mut_ptr()) };
-        insert_topk(top, fanout, (full + offset) as u32, lane[0]);
+        let value = scalar_transform(dots[full + offset], scales[full + offset]);
+        insert_topk(top, fanout, (full + offset) as u32, value);
     }
 }
 
@@ -364,9 +374,8 @@ where
         return;
     }
 
-    let mut values = [0.0f32; 16];
-    // SAFETY: `values` has capacity for every f32 SIMD width DiskANN exposes.
-    unsafe { distances.store_simd(values.as_mut_ptr()) };
+    let values = distances.to_array();
+    let values = values.as_ref();
     let mut lanes = u64::from(eligible.bitmask().to_underlying());
     while lanes != 0 {
         let lane = lanes.trailing_zeros() as usize;
