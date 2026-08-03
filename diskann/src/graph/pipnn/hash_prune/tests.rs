@@ -17,7 +17,7 @@ struct Reservoir {
 impl Reservoir {
     fn new(l_max: usize) -> Self {
         assert!(l_max <= MAX_RESERVOIR_LEN);
-        let scan_lanes = round_up_to_32(l_max).max(32);
+        let scan_lanes = l_max.next_multiple_of(32).max(32);
         Self {
             hot: HotSlot::new_empty(),
             hashes: vec![0; scan_lanes],
@@ -201,8 +201,8 @@ fn test_find_hash_handles_padded_boundaries_and_all_bit_patterns() {
     let dispatched = select_find_hash();
 
     for target in [0, 0xF00D] {
-        for len in [0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 254, 255] {
-            let scan_lanes = round_up_to_32(len.max(1));
+        for len in [0usize, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 254, 255] {
+            let scan_lanes = len.max(1).next_multiple_of(32);
             let mut hashes = vec![target; scan_lanes];
             hashes[..len].fill(0x8001);
             let args = |hashes: &[u16]| FindHashArgs {
@@ -231,14 +231,6 @@ fn test_slab_is_zeroed_and_reports_its_bytes() {
     assert_eq!(slab.len(), 4);
     assert!(!slab.as_ptr().is_null());
     assert_eq!(&*slab, &[0; 4]);
-}
-
-#[test]
-fn test_round_up_to_32_boundaries() {
-    assert_eq!(round_up_to_32(0), 0);
-    assert_eq!(round_up_to_32(1), 32);
-    assert_eq!(round_up_to_32(32), 32);
-    assert_eq!(round_up_to_32(33), 64);
 }
 
 #[test]
@@ -451,6 +443,43 @@ fn test_reservoir_all_same_distance() {
     res.insert(1, 2, 1.0);
     res.insert(2, 3, 1.0);
     assert_eq!(res.len(), 3);
+    assert_eq!(res.neighbors(), [(1, 1.0), (2, 1.0), (3, 1.0)]);
+}
+
+#[test]
+fn same_hash_bf16_ties_are_history_independent() {
+    for order in [[0, 1], [1, 0]] {
+        let candidates = [(7, 20, 1.0), (7, 10, 1.0)];
+        let mut reservoir = Reservoir::new(2);
+        for index in order {
+            let (hash, neighbor, distance) = candidates[index];
+            reservoir.insert(hash, neighbor, distance);
+        }
+        assert_eq!(reservoir.neighbors(), [(10, 1.0)], "order={order:?}");
+    }
+}
+
+#[test]
+fn full_reservoir_bf16_ties_are_history_independent() {
+    let permutations = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let candidates = [(1, 30, 1.0), (2, 10, 1.0), (3, 20, 1.0)];
+    for order in permutations {
+        let mut reservoir = Reservoir::new(2);
+        for index in order {
+            let (hash, neighbor, distance) = candidates[index];
+            reservoir.insert(hash, neighbor, distance);
+        }
+        let mut actual = reservoir.neighbors();
+        actual.sort_unstable_by_key(|&(neighbor, _)| neighbor);
+        assert_eq!(actual, [(10, 1.0), (30, 1.0)], "order={order:?}");
+    }
 }
 
 #[test]
