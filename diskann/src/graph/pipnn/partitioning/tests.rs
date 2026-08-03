@@ -24,10 +24,10 @@ fn clustered_data(points: usize, dimensions: usize) -> Matrix<f32> {
         diskann_utils::views::Init({
             let mut position = 0usize;
             move || {
-                let row = position / dimensions;
-                let column = position % dimensions;
+                let point = position / dimensions;
+                let dimension = position % dimensions;
                 position += 1;
-                (row / 8) as f32 * 10.0 + column as f32 * 0.01 + row as f32 * 0.001
+                (point / 8) as f32 * 10.0 + dimension as f32 * 0.01 + point as f32 * 0.001
             }
         }),
         points,
@@ -40,11 +40,11 @@ fn directional_data(points: usize, dimensions: usize) -> Matrix<f32> {
         diskann_utils::views::Init({
             let mut position = 0usize;
             move || {
-                let row = position / dimensions;
-                let column = position % dimensions;
+                let point = position / dimensions;
+                let dimension = position % dimensions;
                 position += 1;
-                let angle = std::f32::consts::TAU * row as f32 / points as f32;
-                match column {
+                let angle = std::f32::consts::TAU * point as f32 / points as f32;
+                match dimension {
                     0 => angle.cos(),
                     1 => angle.sin(),
                     _ => 0.0,
@@ -179,14 +179,14 @@ where
     T: diskann::utils::VectorRepr + Send + Sync,
 {
     let points = 64;
-    // Partition gathering converts source rows before GEMM. Exercise conversion
+    // Partition gathering converts source vectors before GEMM. Exercise conversion
     // tails around 4-, 8-, and 16-element boundaries and a second 16-lane chunk.
     for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
         let raw: Vec<u8> = (0..points * dimensions)
             .map(|index| {
-                let row = index / dimensions;
-                let column = index % dimensions;
-                ((row * 5 + column * 7 + row * column) % 23) as u8
+                let point = index / dimensions;
+                let dimension = index % dimensions;
+                ((point * 5 + dimension * 7 + point * dimension) % 23) as u8
             })
             .collect();
         let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
@@ -261,6 +261,7 @@ fn l2_leader_norms_preserve_scalar_reduction_order() {
         &[0, 1],
         1,
         Metric::L2,
+        &PartitionKernel::new(Metric::L2),
         &StripeBufferPool::new((), 0, None),
     )
     .unwrap();
@@ -298,10 +299,13 @@ fn replica_seed_derivation_is_stable_and_distinct() {
 }
 
 #[test]
-fn assignment_stripes_use_power_of_two_row_counts() {
-    assert_eq!(assignment_stripe_rows(1_000), 128);
-    assert_eq!(assignment_stripe_rows(256), 512);
-    assert_eq!(assignment_stripe_rows(1), MAX_ASSIGNMENT_STRIPE_ROWS);
+fn assignment_stripes_use_power_of_two_point_counts() {
+    assert_eq!(assignment_stripe_point_count(1_000), 128);
+    assert_eq!(assignment_stripe_point_count(256), 512);
+    assert_eq!(
+        assignment_stripe_point_count(1),
+        MAX_ASSIGNMENT_STRIPE_POINTS
+    );
 }
 
 #[test]
@@ -331,6 +335,7 @@ fn leader_assignment_handles_multiple_stripes() {
         &[0, 2_047],
         1,
         Metric::L2,
+        &PartitionKernel::new(Metric::L2),
         &StripeBufferPool::new((), 0, None),
     )
     .unwrap();
@@ -378,7 +383,7 @@ fn rejects_zero_dimensions() {
 #[test]
 fn rejects_invalid_gather_output_length() {
     let data = Matrix::<f32>::new(0.0, 2, 2);
-    let error = gather_rows(data.as_view(), &[0, 1], &mut [0.0; 3]).unwrap_err();
+    let error = gather_vectors(data.as_view(), &[0, 1], &mut [0.0; 3]).unwrap_err();
 
     assert_eq!(
         error.downcast::<PartitionError>().unwrap(),

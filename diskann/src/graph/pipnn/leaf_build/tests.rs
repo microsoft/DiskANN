@@ -9,8 +9,8 @@ use half::f16;
 use std::collections::BTreeSet;
 
 use super::{
-    add_symmetric_edges, allocation_error, build_leaf_candidates, DirectCandidates, LeafBuffers,
-    LeafBuildError,
+    add_symmetric_neighbors, allocation_error, build_leaf_candidates, DirectCandidates,
+    LeafBuffers, LeafBuildError,
 };
 
 fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
@@ -36,7 +36,7 @@ where
     pool().install(|| build_leaf_candidates(data, leaves.to_vec(), k, metric))
 }
 
-fn rows(graph: Vec<diskann::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
+fn adjacency_lists(graph: Vec<diskann::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
     graph.into_iter().map(Vec::from).collect()
 }
 
@@ -84,7 +84,7 @@ fn leaf_adjacency_matches_an_independent_all_pairs_reference() {
     ];
     let flat: Vec<_> = points.into_iter().flatten().collect();
 
-    let actual = rows(
+    let actual = adjacency_lists(
         build(
             view(&flat, points.len(), 2),
             &[(0..points.len() as u32).collect()],
@@ -105,7 +105,7 @@ fn retains_and_deduplicates_candidates_from_overlapping_leaves() {
     let graph = build(view(&data, 4, 1), &leaves, 2, Metric::L2).unwrap();
 
     assert_eq!(
-        rows(graph),
+        adjacency_lists(graph),
         [vec![1, 2, 3], vec![0, 2], vec![0, 1, 3], vec![0, 2]]
     );
 }
@@ -114,8 +114,8 @@ fn retains_and_deduplicates_candidates_from_overlapping_leaves() {
 fn symmetric_knn_can_give_one_point_more_than_two_k_candidates() {
     let dimensions = 9;
     let mut data = vec![0.0_f32; 10 * dimensions];
-    for row in 1..10 {
-        data[row * dimensions + row - 1] = 1.0;
+    for source in 1..10 {
+        data[source * dimensions + source - 1] = 1.0;
     }
 
     let graph = build(
@@ -143,7 +143,7 @@ fn global_id_translation_is_independent_of_leaf_order() {
     let graph = build(view(&data, 5, 1), &leaves, 2, Metric::L2).unwrap();
 
     assert_eq!(
-        rows(graph),
+        adjacency_lists(graph),
         [vec![], vec![3, 4], vec![], vec![1, 4], vec![1, 3]]
     );
 }
@@ -153,7 +153,7 @@ where
     T: diskann::utils::VectorRepr + 'static,
 {
     let leaves = vec![(0..points as u32).collect()];
-    rows(build(view(data, points, dimensions), &leaves, 2, Metric::L2).unwrap())
+    adjacency_lists(build(view(data, points, dimensions), &leaves, 2, Metric::L2).unwrap())
 }
 
 fn assert_source_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
@@ -167,9 +167,9 @@ where
     for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
         let raw: Vec<u8> = (0..points * dimensions)
             .map(|index| {
-                let row = index / dimensions;
-                let column = index % dimensions;
-                ((row * 7 + column * 3 + row * column) % 23) as u8
+                let source = index / dimensions;
+                let dimension = index % dimensions;
+                ((source * 7 + dimension * 3 + source * dimension) % 23) as u8
             })
             .collect();
         let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
@@ -288,25 +288,28 @@ fn singleton_and_zero_k_leaves_add_no_candidates() {
     )
     .unwrap();
     let zero_k = build(view(&data, 3, 1), &[vec![0, 1, 2]], 0, Metric::L2).unwrap();
-    assert!(singleton.iter().chain(&zero_k).all(|row| row.is_empty()));
+    assert!(singleton
+        .iter()
+        .chain(&zero_k)
+        .all(|candidates| candidates.is_empty()));
 }
 
 #[test]
 fn reuses_worker_buffers_for_smaller_leaves() {
     let mut buffers = LeafBuffers::default();
     buffers.prepare(0, 64, 128, 2).unwrap();
-    let points = buffers.points.as_ptr();
+    let point_values = buffers.point_values.as_ptr();
     let dots = buffers.dots.as_ptr();
-    let nearest = buffers.nearest.as_ptr();
+    let neighbors = buffers.neighbors.as_ptr();
 
     buffers.prepare(1, 8, 128, 2).unwrap();
 
-    assert_eq!(buffers.points.as_ptr(), points);
+    assert_eq!(buffers.point_values.as_ptr(), point_values);
     assert_eq!(buffers.dots.as_ptr(), dots);
-    assert_eq!(buffers.nearest.as_ptr(), nearest);
-    assert_eq!(buffers.points.len(), 64 * 128);
+    assert_eq!(buffers.neighbors.as_ptr(), neighbors);
+    assert_eq!(buffers.point_values.len(), 64 * 128);
     assert_eq!(buffers.dots.len(), 64 * 64);
-    assert_eq!(buffers.nearest.len(), 64 * 2);
+    assert_eq!(buffers.neighbors.len(), 64 * 2);
 }
 
 #[test]
@@ -321,7 +324,7 @@ fn reports_shape_overflow_before_allocating() {
 #[test]
 fn rejects_an_invalid_kernel_position() {
     let mut graph = vec![diskann::graph::AdjacencyList::new(); 2];
-    let error = add_symmetric_edges(
+    let error = add_symmetric_neighbors(
         &[10, 20],
         1,
         &[
@@ -333,8 +336,8 @@ fn rejects_an_invalid_kernel_position() {
     .unwrap_err();
     assert!(matches!(
         error,
-        LeafBuildError::InvalidLocalPosition {
-            position: 9,
+        LeafBuildError::InvalidLocalTarget {
+            target: 9,
             points: 2
         }
     ));
@@ -343,7 +346,7 @@ fn rejects_an_invalid_kernel_position() {
 #[test]
 fn skips_duplicate_global_ids_without_self_edges() {
     let mut graph = vec![diskann::graph::AdjacencyList::new(); 2];
-    add_symmetric_edges(
+    add_symmetric_neighbors(
         &[7, 7],
         1,
         &[
@@ -353,23 +356,23 @@ fn skips_duplicate_global_ids_without_self_edges() {
         &mut graph,
     )
     .unwrap();
-    assert!(graph.iter().all(|row| row.is_empty()));
+    assert!(graph.iter().all(|neighbors| neighbors.is_empty()));
 }
 
 #[test]
-fn poisoned_candidate_rows_return_errors() {
+fn poisoned_candidate_lists_return_errors() {
     let candidates = DirectCandidates::new(1).unwrap();
     let _ = std::panic::catch_unwind(|| {
-        let _guard = candidates.rows[0].lock().unwrap();
-        panic!("poison candidate row");
+        let _guard = candidates.lists[0].lock().unwrap();
+        panic!("poison candidate list");
     });
     assert!(matches!(
         candidates.add_leaf(&[0], &[diskann::graph::AdjacencyList::new()]),
-        Err(LeafBuildError::PoisonedCandidateRow { point: 0 })
+        Err(LeafBuildError::PoisonedCandidateList { point: 0 })
     ));
     assert!(matches!(
-        candidates.into_rows(),
-        Err(LeafBuildError::PoisonedCandidateRow { point: 0 })
+        candidates.into_lists(),
+        Err(LeafBuildError::PoisonedCandidateList { point: 0 })
     ));
 }
 
@@ -400,5 +403,8 @@ fn direct_candidate_accumulator_keeps_unique_sorted_rows() {
             ],
         )
         .unwrap();
-    assert_eq!(rows(candidates.into_rows().unwrap()), [vec![1], vec![0]]);
+    assert_eq!(
+        adjacency_lists(candidates.into_lists().unwrap()),
+        [vec![1], vec![0]]
+    );
 }
