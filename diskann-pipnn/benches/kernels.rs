@@ -54,7 +54,7 @@ fn lower_dots(points: usize, metric: Metric) -> Vec<f32> {
         normalize_rows(&mut data, BIGANN_DIMENSIONS);
     }
     let mut dots = vec![0.0; points * points];
-    sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
+    sgemm_aat_lower(points, BIGANN_DIMENSIONS, &data, &mut dots).unwrap();
     dots
 }
 
@@ -120,7 +120,7 @@ fn benchmark_lower_aat(c: &mut Criterion) {
             BenchmarkId::new("f32", format!("{points}x{BIGANN_DIMENSIONS}")),
             |bencher| {
                 bencher.iter(|| {
-                    sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
+                    sgemm_aat_lower(points, BIGANN_DIMENSIONS, &data, &mut dots).unwrap();
                     black_box(&dots);
                 });
             },
@@ -170,7 +170,7 @@ fn benchmark_full_leaf(c: &mut Criterion) {
             let mut dots = vec![0.0; points * points];
             let mut output = vec![LeafNeighbor::default(); points * leaf_k];
             let mut workspace = LeafTopKWorkspace::new();
-            sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
+            sgemm_aat_lower(points, BIGANN_DIMENSIONS, &data, &mut dots).unwrap();
             nearest_leaf_neighbors(
                 LeafTopK {
                     dots: &dots,
@@ -188,7 +188,7 @@ fn benchmark_full_leaf(c: &mut Criterion) {
                 BenchmarkId::new("l2", format!("{points}x{BIGANN_DIMENSIONS}/k{leaf_k}")),
                 |bencher| {
                     bencher.iter(|| {
-                        sgemm_aat_lower(&data, points, BIGANN_DIMENSIONS, &mut dots).unwrap();
+                        sgemm_aat_lower(points, BIGANN_DIMENSIONS, &data, &mut dots).unwrap();
                         nearest_leaf_neighbors(
                             LeafTopK {
                                 dots: &dots,

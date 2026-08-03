@@ -16,7 +16,7 @@ fn computes_lower_triangle_and_preserves_upper_triangle() {
     let untouched = -123.0;
     let mut c = [untouched; 9];
 
-    sgemm_aat_lower(&a, 3, 2, &mut c).unwrap();
+    sgemm_aat_lower(3, 2, &a, &mut c).unwrap();
 
     #[rustfmt::skip]
     assert_eq!(c, [
@@ -28,7 +28,7 @@ fn computes_lower_triangle_and_preserves_upper_triangle() {
 
 #[test]
 fn accepts_a_matrix_with_no_rows() {
-    sgemm_aat_lower(&[], 0, 3, &mut []).unwrap();
+    sgemm_aat_lower(0, 3, &[], &mut []).unwrap();
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn zero_inner_dimension_zeros_only_the_lower_triangle() {
     let untouched = -123.0;
     let mut c = [untouched; 9];
 
-    sgemm_aat_lower(&[], 3, 0, &mut c).unwrap();
+    sgemm_aat_lower(3, 0, &[], &mut c).unwrap();
 
     #[rustfmt::skip]
     assert_eq!(c, [
@@ -50,7 +50,7 @@ fn zero_inner_dimension_zeros_only_the_lower_triangle() {
 fn rejects_invalid_input_dimensions() {
     let mut c = [0.0; 4];
 
-    let error = sgemm_aat_lower(&[0.0; 3], 2, 2, &mut c).unwrap_err();
+    let error = sgemm_aat_lower(2, 2, &[0.0; 3], &mut c).unwrap_err();
 
     assert_eq!(
         error,
@@ -67,7 +67,7 @@ fn rejects_invalid_input_dimensions() {
 fn rejects_invalid_output_dimensions() {
     let mut c = [0.0; 3];
 
-    let error = sgemm_aat_lower(&[0.0; 4], 2, 2, &mut c).unwrap_err();
+    let error = sgemm_aat_lower(2, 2, &[0.0; 4], &mut c).unwrap_err();
 
     assert_eq!(
         error,
@@ -82,7 +82,7 @@ fn rejects_invalid_output_dimensions() {
 
 #[test]
 fn rejects_input_size_overflow() {
-    let error = sgemm_aat_lower(&[], usize::MAX, 2, &mut []).unwrap_err();
+    let error = sgemm_aat_lower(usize::MAX, 2, &[], &mut []).unwrap_err();
 
     assert_eq!(
         error,
@@ -96,7 +96,7 @@ fn rejects_input_size_overflow() {
 
 #[test]
 fn rejects_output_size_overflow() {
-    let error = sgemm_aat_lower(&[], usize::MAX, 0, &mut []).unwrap_err();
+    let error = sgemm_aat_lower(usize::MAX, 0, &[], &mut []).unwrap_err();
 
     assert_eq!(
         error,

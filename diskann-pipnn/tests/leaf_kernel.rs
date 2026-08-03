@@ -9,24 +9,36 @@ use diskann_pipnn::leaf_kernel::{
 use diskann_vector::distance::Metric;
 use std::cmp::Ordering;
 
+const SIMD_BOUNDARY_POINTS: [usize; 9] = [7, 8, 9, 15, 16, 17, 64, 256, 512];
+const ZERO_NORM_POSITION: usize = 0;
+const DISTINCT_NORM_POSITION: usize = 2;
+const NORM_PERIOD: usize = 5;
+const ROW_MIXER: usize = 17;
+const COLUMN_MIXER: usize = 11;
+const MIX_MODULUS: usize = 23;
+const MIX_CENTER: f32 = 11.0;
+const DOT_SCALE: f32 = 1.0 / 32.0;
+const TIED_COLUMNS: [usize; 2] = [1, 2];
+
 fn differential_input(metric: Metric, points: usize) -> Vec<f32> {
     let mut dots = vec![f32::NAN; points * points];
     for row in 0..points {
-        dots[row * points + row] = if metric == Metric::Cosine && row == 0 {
+        dots[row * points + row] = if metric == Metric::Cosine && row == ZERO_NORM_POSITION {
             0.0
-        } else if row == 2 {
+        } else if row == DISTINCT_NORM_POSITION {
             2.0
         } else {
-            1.0 + (row % 5) as f32
+            1.0 + (row % NORM_PERIOD) as f32
         };
         for column in 0..row {
-            let pair = ((row * 17 + column * 11) % 23) as f32 - 11.0;
+            let pair =
+                ((row * ROW_MIXER + column * COLUMN_MIXER) % MIX_MODULUS) as f32 - MIX_CENTER;
             dots[row * points + column] = if row == points - 1 && column == 0 {
                 f32::NAN
-            } else if column == 1 || column == 2 {
+            } else if TIED_COLUMNS.contains(&column) {
                 0.5
             } else {
-                pair * 0.03125
+                pair * DOT_SCALE
             };
         }
     }
@@ -111,7 +123,8 @@ fn dispatch_matches_reference_across_simd_width_boundaries() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        for points in [7, 8, 9, 15, 16, 17, 64, 256, 512] {
+        // Straddle the 8- and 16-lane boundaries, then cover production leaf sizes.
+        for points in SIMD_BOUNDARY_POINTS {
             let dots = differential_input(metric, points);
             let input = LeafTopK {
                 dots: &dots,

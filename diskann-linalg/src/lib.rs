@@ -82,6 +82,30 @@ impl fmt::Display for SgemmError {
 
 impl std::error::Error for SgemmError {}
 
+fn check_matrix(
+    matrix_name: MatrixName,
+    actual_len: usize,
+    rows: usize,
+    cols: usize,
+) -> Result<(), SgemmError> {
+    let expected_len = rows
+        .checked_mul(cols)
+        .ok_or(SgemmError::DimensionOverflow {
+            matrix_name,
+            rows,
+            cols,
+        })?;
+    if actual_len != expected_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name,
+            expected_rows: rows,
+            expected_cols: cols,
+            actual_len,
+        });
+    }
+    Ok(())
+}
+
 // Make the reference implementation available for internal testing.
 #[cfg(test)]
 mod reference;
@@ -156,51 +180,9 @@ pub fn sgemm(
     beta: Option<f32>,
     c: &mut [f32],
 ) -> Result<(), SgemmError> {
-    // Check size requirements with overflow protection.
-    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::A,
-        rows: m,
-        cols: k,
-    })?;
-
-    if a.len() != expected_a_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::A,
-            expected_rows: m,
-            expected_cols: k,
-            actual_len: a.len(),
-        });
-    }
-
-    let expected_b_len = k.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::B,
-        rows: k,
-        cols: n,
-    })?;
-
-    if b.len() != expected_b_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::B,
-            expected_rows: k,
-            expected_cols: n,
-            actual_len: b.len(),
-        });
-    }
-
-    let expected_c_len = m.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::C,
-        rows: m,
-        cols: n,
-    })?;
-
-    if c.len() != expected_c_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::C,
-            expected_rows: m,
-            expected_cols: n,
-            actual_len: c.len(),
-        });
-    }
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::B, b.len(), k, n)?;
+    check_matrix(MatrixName::C, c.len(), m, n)?;
 
     // Invoke the actual implementation.
     sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
@@ -217,34 +199,9 @@ pub fn sgemm(
 ///
 /// Returns an error if a matrix-size calculation overflows or either slice does
 /// not match its declared dimensions.
-pub fn sgemm_aat_lower(a: &[f32], m: usize, k: usize, c: &mut [f32]) -> Result<(), SgemmError> {
-    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::A,
-        rows: m,
-        cols: k,
-    })?;
-    if a.len() != expected_a_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::A,
-            expected_rows: m,
-            expected_cols: k,
-            actual_len: a.len(),
-        });
-    }
-
-    let expected_c_len = m.checked_mul(m).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::C,
-        rows: m,
-        cols: m,
-    })?;
-    if c.len() != expected_c_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::C,
-            expected_rows: m,
-            expected_cols: m,
-            actual_len: c.len(),
-        });
-    }
+pub fn sgemm_aat_lower(m: usize, k: usize, a: &[f32], c: &mut [f32]) -> Result<(), SgemmError> {
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::C, c.len(), m, m)?;
 
     faer::sgemm_aat_lower_impl(m, k, a, c);
     Ok(())
