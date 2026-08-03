@@ -487,43 +487,6 @@ fn process_rows<F, M>(
     }
 }
 
-#[cfg(test)]
-fn process_rows_scalar<M: KernelMetric>(
-    dots: MatrixView<'_, f32>,
-    scales: ScaleSlices<'_>,
-    fanout: usize,
-    output: &mut [u32],
-) {
-    let leaders = dots.ncols();
-    for (row, (dot_row, output_row)) in dots
-        .as_slice()
-        .chunks_exact(leaders)
-        .zip(output.chunks_exact_mut(fanout))
-        .enumerate()
-    {
-        let row_scale = if M::PARTITION_ROW_SCALE.is_some() {
-            M::PARTITION_ROW_SCALE.transform(scales.rows[row])
-        } else {
-            0.0
-        };
-        let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
-        for (leader, &dot) in dot_row.iter().enumerate() {
-            let leader_scale = if M::PARTITION_LEADER_SCALE.is_some() {
-                M::PARTITION_LEADER_SCALE.transform(scales.leaders[leader])
-            } else {
-                0.0
-            };
-            insert_topk(
-                &mut top,
-                fanout,
-                leader as u32,
-                M::partition_distance_scalar(dot, row_scale, leader_scale),
-            );
-        }
-        copy_ids(&top, output_row);
-    }
-}
-
 /// Offer competitive SIMD lanes to a row tracker in increasing leader order.
 ///
 /// The broadcast threshold avoids materializing lanes when none can improve the
@@ -634,7 +597,14 @@ mod tests {
         }
     }
 
-    fn scalar<M: KernelMetric>(input: PartitionTopK<'_>, fanout: usize, output: &mut [u32]) {
+    // Differential oracle for SIMD chunking, scalar tails, and tracker order.
+    // It intentionally shares `M::partition_distance_scalar`; public API tests
+    // independently spell out ranking formulas and full sorting behavior.
+    fn scalar_traversal_reference<M: KernelMetric>(
+        input: PartitionTopK<'_>,
+        fanout: usize,
+        output: &mut [u32],
+    ) {
         let scales = match input.scales {
             PartitionScales::L2 {
                 leader_squared_norms,
@@ -654,7 +624,35 @@ mod tests {
                 leaders: &[],
             },
         };
-        process_rows_scalar::<M>(input.dots, scales, fanout, output);
+        let leaders = input.dots.ncols();
+        for (row, (dot_row, output_row)) in input
+            .dots
+            .as_slice()
+            .chunks_exact(leaders)
+            .zip(output.chunks_exact_mut(fanout))
+            .enumerate()
+        {
+            let row_scale = if M::PARTITION_ROW_SCALE.is_some() {
+                M::PARTITION_ROW_SCALE.transform(scales.rows[row])
+            } else {
+                0.0
+            };
+            let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
+            for (leader, &dot) in dot_row.iter().enumerate() {
+                let leader_scale = if M::PARTITION_LEADER_SCALE.is_some() {
+                    M::PARTITION_LEADER_SCALE.transform(scales.leaders[leader])
+                } else {
+                    0.0
+                };
+                insert_topk(
+                    &mut top,
+                    fanout,
+                    leader as u32,
+                    M::partition_distance_scalar(dot, row_scale, leader_scale),
+                );
+            }
+            copy_ids(&top, output_row);
+        }
     }
 
     fn scalar_for_metric(
@@ -664,10 +662,14 @@ mod tests {
         output: &mut [u32],
     ) {
         match metric {
-            Metric::L2 => scalar::<L2>(input, fanout, output),
-            Metric::Cosine => scalar::<Cosine>(input, fanout, output),
-            Metric::CosineNormalized => scalar::<CosineNormalized>(input, fanout, output),
-            Metric::InnerProduct => scalar::<InnerProduct>(input, fanout, output),
+            Metric::L2 => scalar_traversal_reference::<L2>(input, fanout, output),
+            Metric::Cosine => scalar_traversal_reference::<Cosine>(input, fanout, output),
+            Metric::CosineNormalized => {
+                scalar_traversal_reference::<CosineNormalized>(input, fanout, output)
+            }
+            Metric::InnerProduct => {
+                scalar_traversal_reference::<InnerProduct>(input, fanout, output)
+            }
         }
     }
 
@@ -754,7 +756,7 @@ mod tests {
             &leader_scales,
         );
         let mut expected = vec![u32::MAX; row_scales.len() * 2];
-        scalar::<Cosine>(input, 2, &mut expected);
+        scalar_traversal_reference::<Cosine>(input, 2, &mut expected);
         let mut actual = vec![u32::MAX; row_scales.len() * 2];
         PartitionKernel::new(Metric::Cosine)
             .nearest_leaders(
