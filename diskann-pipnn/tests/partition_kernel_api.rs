@@ -4,58 +4,58 @@
  */
 
 use diskann_pipnn::partition_kernel::{
-    PartitionKernel, PartitionKernelError, PartitionScales, PartitionTopK, MAX_PARTITION_FANOUT,
+    PartitionInput, PartitionKernel, PartitionKernelError, PartitionScales, MAX_PARTITION_FANOUT,
 };
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 
-fn input<'a>(
+fn test_input<'a>(
     metric: Metric,
     dots: &'a [f32],
-    rows: usize,
-    leaders: usize,
-    row_scales: &'a [f32],
+    point_count: usize,
+    leader_count: usize,
+    point_scales: &'a [f32],
     leader_scales: &'a [f32],
-) -> PartitionTopK<'a> {
+) -> PartitionInput<'a> {
     let scales = match metric {
         Metric::L2 => PartitionScales::L2 {
             leader_squared_norms: leader_scales,
         },
         Metric::Cosine => PartitionScales::Cosine {
-            row_squared_norms: row_scales,
+            point_squared_norms: point_scales,
             leader_norms: leader_scales,
         },
         Metric::CosineNormalized | Metric::InnerProduct => PartitionScales::None,
     };
-    PartitionTopK {
-        dots: MatrixView::try_from(dots, rows, leaders).unwrap(),
+    PartitionInput {
+        dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
         scales,
     }
 }
 
-fn reference(input: PartitionTopK<'_>, fanout: usize, metric: Metric) -> Vec<u32> {
-    let rows = input.dots.nrows();
-    let leaders = input.dots.ncols();
-    let (row_scales, leader_scales) = match input.scales {
+fn brute_force_reference(input: PartitionInput<'_>, fanout: usize, metric: Metric) -> Vec<u32> {
+    let point_count = input.dots.nrows();
+    let leader_count = input.dots.ncols();
+    let (point_scales, leader_scales) = match input.scales {
         PartitionScales::L2 {
             leader_squared_norms,
         } => (&[][..], leader_squared_norms),
         PartitionScales::Cosine {
-            row_squared_norms,
+            point_squared_norms,
             leader_norms,
-        } => (row_squared_norms, leader_norms),
+        } => (point_squared_norms, leader_norms),
         PartitionScales::None => (&[][..], &[][..]),
     };
-    let mut output = vec![u32::MAX; rows * fanout];
-    for (row, (dots, output)) in input
+    let mut assignments = vec![u32::MAX; point_count * fanout];
+    for (point, (point_dots, point_assignments)) in input
         .dots
         .as_slice()
-        .chunks_exact(leaders)
-        .zip(output.chunks_exact_mut(fanout))
+        .chunks_exact(leader_count)
+        .zip(assignments.chunks_exact_mut(fanout))
         .enumerate()
     {
-        let row_scale = row_scales.get(row).copied().unwrap_or(0.0);
-        let mut candidates: Vec<_> = dots
+        let point_scale = point_scales.get(point).copied().unwrap_or(0.0);
+        let mut candidates: Vec<_> = point_dots
             .iter()
             .enumerate()
             .filter_map(|(leader, &dot)| {
@@ -65,15 +65,15 @@ fn reference(input: PartitionTopK<'_>, fanout: usize, metric: Metric) -> Vec<u32
                     Metric::CosineNormalized => 1.0 - dot,
                     Metric::InnerProduct => -dot,
                     Metric::Cosine => {
-                        let row_norm = if row_scale < f32::MIN_POSITIVE {
+                        let point_norm = if point_scale < f32::MIN_POSITIVE {
                             0.0
                         } else {
-                            row_scale.sqrt()
+                            point_scale.sqrt()
                         };
-                        1.0 - if row_norm == 0.0 || leader_scale == 0.0 {
+                        1.0 - if point_norm == 0.0 || leader_scale == 0.0 {
                             0.0
                         } else {
-                            dot / (row_norm * leader_scale)
+                            dot / (point_norm * leader_scale)
                         }
                     }
                 };
@@ -82,35 +82,35 @@ fn reference(input: PartitionTopK<'_>, fanout: usize, metric: Metric) -> Vec<u32
             })
             .collect();
         candidates.sort_by(|left, right| left.1.partial_cmp(&right.1).unwrap());
-        for (destination, (leader, _)) in output.iter_mut().zip(candidates) {
+        for (destination, (leader, _)) in point_assignments.iter_mut().zip(candidates) {
             *destination = leader;
         }
     }
-    output
+    assignments
 }
 
-fn differential_input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-    let dots = (0..2 * leaders)
+fn differential_data(metric: Metric, leader_count: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let dots = (0..2 * leader_count)
         .map(|index| {
-            let leader = index % leaders;
-            let row = index / leaders;
-            let base = ((leader * 13 + row * 7) % 19) as f32 - 9.0;
+            let leader = index % leader_count;
+            let point = index / leader_count;
+            let base = ((leader * 13 + point * 7) % 19) as f32 - 9.0;
             if leader == 2 || leader == 3 {
                 1.0
-            } else if leader + 1 == leaders {
+            } else if leader + 1 == leader_count {
                 f32::NAN
             } else {
                 base * 0.25
             }
         })
         .collect();
-    let row_scales = if metric == Metric::Cosine {
+    let point_scales = if metric == Metric::Cosine {
         vec![0.0, 16.0]
     } else {
         Vec::new()
     };
     let leader_scales = match metric {
-        Metric::Cosine => (0..leaders)
+        Metric::Cosine => (0..leader_count)
             .map(|leader| {
                 if leader == 1 {
                     0.0
@@ -121,7 +121,7 @@ fn differential_input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Ve
                 }
             })
             .collect(),
-        Metric::L2 => (0..leaders)
+        Metric::L2 => (0..leader_count)
             .map(|leader| {
                 let norm = if leader == 2 || leader == 3 {
                     3.0
@@ -133,12 +133,12 @@ fn differential_input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Ve
             .collect(),
         Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
     };
-    (dots, row_scales, leader_scales)
+    (dots, point_scales, leader_scales)
 }
 
 fn run(
     metric: Metric,
-    input: PartitionTopK<'_>,
+    input: PartitionInput<'_>,
     fanout: usize,
 ) -> Result<Vec<u32>, PartitionKernelError> {
     let mut output = vec![u32::MAX; input.dots.nrows() * fanout];
@@ -157,17 +157,24 @@ fn prepared_dispatch_matches_reference_across_simd_width_boundaries() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        for leaders in [7, 8, 9, 15, 16, 17] {
-            let (dots, row_scales, leader_scales) = differential_input(metric, leaders);
-            let input = input(metric, &dots, 2, leaders, &row_scales, &leader_scales);
+        for leader_count in [7, 8, 9, 15, 16, 17] {
+            let (dots, point_scales, leader_scales) = differential_data(metric, leader_count);
+            let input = test_input(
+                metric,
+                &dots,
+                2,
+                leader_count,
+                &point_scales,
+                &leader_scales,
+            );
             for fanout in [1, 2, 16] {
-                if fanout >= leaders {
+                if fanout >= leader_count {
                     continue;
                 }
                 assert_eq!(
                     run(metric, input, fanout).unwrap(),
-                    reference(input, fanout, metric),
-                    "{metric:?}, leaders={leaders}, k={fanout}"
+                    brute_force_reference(input, fanout, metric),
+                    "{metric:?}, leaders={leader_count}, k={fanout}"
                 );
             }
         }
@@ -184,7 +191,12 @@ fn l2_keeps_the_first_leader_when_boundary_distances_tie() {
     let norms = [0.0, 1.0, 4.0, 9.0];
 
     assert_eq!(
-        run(Metric::L2, input(Metric::L2, &dots, 2, 4, &[], &norms), 2).unwrap(),
+        run(
+            Metric::L2,
+            test_input(Metric::L2, &dots, 2, 4, &[], &norms),
+            2
+        )
+        .unwrap(),
         [0, 1, 2, 1]
     );
 }
@@ -196,7 +208,7 @@ fn supports_every_partition_metric() {
         1.0, 0.0, -1.0,
         2.0, 6.0, 0.0,
     ];
-    for (metric, rows, leaders, expected) in [
+    for (metric, point_scales, leader_scales, expected) in [
         (Metric::L2, &[][..], &[1.0, 4.0, 9.0][..], [0, 1, 1, 0]),
         (
             Metric::Cosine,
@@ -208,7 +220,12 @@ fn supports_every_partition_metric() {
         (Metric::InnerProduct, &[][..], &[][..], [0, 1, 1, 0]),
     ] {
         assert_eq!(
-            run(metric, input(metric, &dots, 2, 3, rows, leaders), 2).unwrap(),
+            run(
+                metric,
+                test_input(metric, &dots, 2, 3, point_scales, leader_scales),
+                2,
+            )
+            .unwrap(),
             expected,
             "metric {metric:?}"
         );
@@ -220,7 +237,7 @@ fn cosine_treats_a_zero_norm_as_zero_similarity() {
     assert_eq!(
         run(
             Metric::Cosine,
-            input(Metric::Cosine, &[100.0, -100.0], 1, 2, &[0.0], &[1.0, 1.0]),
+            test_input(Metric::Cosine, &[100.0, -100.0], 1, 2, &[0.0], &[1.0, 1.0]),
             2,
         )
         .unwrap(),
@@ -235,7 +252,7 @@ fn finite_max_distance_fills_the_final_simd_slot() {
     assert_eq!(
         run(
             Metric::InnerProduct,
-            input(Metric::InnerProduct, &dots, 1, 8, &[], &[]),
+            test_input(Metric::InnerProduct, &dots, 1, 8, &[], &[]),
             8
         )
         .unwrap(),
@@ -248,7 +265,7 @@ fn ignores_nan_distances_without_displacing_finite_leaders() {
     assert_eq!(
         run(
             Metric::InnerProduct,
-            input(Metric::InnerProduct, &[f32::NAN, 3.0, 2.0], 1, 3, &[], &[]),
+            test_input(Metric::InnerProduct, &[f32::NAN, 3.0, 2.0], 1, 3, &[], &[]),
             2,
         )
         .unwrap(),
@@ -257,34 +274,37 @@ fn ignores_nan_distances_without_displacing_finite_leaders() {
 }
 
 #[test]
-fn rejects_rows_with_too_few_rankable_distances() {
+fn rejects_points_with_too_few_rankable_leaders() {
     assert_eq!(
         run(
             Metric::InnerProduct,
-            input(Metric::InnerProduct, &[f32::NAN, 3.0], 1, 2, &[], &[]),
+            test_input(Metric::InnerProduct, &[f32::NAN, 3.0], 1, 2, &[], &[]),
             2,
         ),
-        Err(PartitionKernelError::InsufficientRankableDistances { row: 0, fanout: 2 })
+        Err(PartitionKernelError::InsufficientRankableLeaders {
+            point: 0,
+            fanout: 2,
+        })
     );
 }
 
 #[test]
-fn accepts_empty_rows_zero_fanout_and_largest_leader_id() {
+fn accepts_empty_points_zero_fanout_and_largest_leader_id() {
     run(
         Metric::InnerProduct,
-        input(Metric::InnerProduct, &[], 0, 3, &[], &[]),
+        test_input(Metric::InnerProduct, &[], 0, 3, &[], &[]),
         2,
     )
     .unwrap();
     run(
         Metric::InnerProduct,
-        input(Metric::InnerProduct, &[1.0, 2.0, 3.0], 1, 3, &[], &[]),
+        test_input(Metric::InnerProduct, &[1.0, 2.0, 3.0], 1, 3, &[], &[]),
         0,
     )
     .unwrap();
     run(
         Metric::InnerProduct,
-        input(Metric::InnerProduct, &[], 0, u32::MAX as usize, &[], &[]),
+        test_input(Metric::InnerProduct, &[], 0, u32::MAX as usize, &[], &[]),
         0,
     )
     .unwrap();
@@ -293,7 +313,7 @@ fn accepts_empty_rows_zero_fanout_and_largest_leader_id() {
     assert_eq!(
         run(
             Metric::InnerProduct,
-            input(
+            test_input(
                 Metric::InnerProduct,
                 &[],
                 0,
@@ -310,7 +330,7 @@ fn accepts_empty_rows_zero_fanout_and_largest_leader_id() {
 #[test]
 fn rejects_wrong_output_scales_and_fanout() {
     let dots = [0.0; 6];
-    let valid_input = input(Metric::InnerProduct, &dots, 2, 3, &[], &[]);
+    let valid_input = test_input(Metric::InnerProduct, &dots, 2, 3, &[], &[]);
     let mut wrong_output = [u32::MAX; 3];
     assert_eq!(
         PartitionKernel::new(Metric::InnerProduct).nearest_leaders(
@@ -324,7 +344,7 @@ fn rejects_wrong_output_scales_and_fanout() {
         })
     );
 
-    let wrong_scales = PartitionTopK {
+    let wrong_scales = PartitionInput {
         dots: MatrixView::try_from(&dots[..], 2, 3).unwrap(),
         scales: PartitionScales::None,
     };
@@ -337,7 +357,7 @@ fn rejects_wrong_output_scales_and_fanout() {
         run(Metric::InnerProduct, valid_input, MAX_PARTITION_FANOUT + 1,),
         Err(PartitionKernelError::InvalidFanout {
             fanout: MAX_PARTITION_FANOUT + 1,
-            leaders: 3,
+            leader_count: 3,
             maximum: MAX_PARTITION_FANOUT,
         })
     );
@@ -346,12 +366,12 @@ fn rejects_wrong_output_scales_and_fanout() {
     assert_eq!(
         run(
             Metric::InnerProduct,
-            input(Metric::InnerProduct, &one, 1, 1, &[], &[]),
+            test_input(Metric::InnerProduct, &one, 1, 1, &[], &[]),
             2,
         ),
         Err(PartitionKernelError::InvalidFanout {
             fanout: 2,
-            leaders: 1,
+            leader_count: 1,
             maximum: MAX_PARTITION_FANOUT,
         })
     );
