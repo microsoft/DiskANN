@@ -84,8 +84,9 @@
 //! | inner product | `-(source·target)` |
 //!
 //! `CosineNormalized` assumes leaf vectors were normalized before GEMM. For
-//! unnormalized cosine, a zero/subnormal norm gives zero similarity. NaN scores
-//! never enter output because selection uses strict ordered comparisons.
+//! unnormalized cosine, a norm below `sqrt(f32::MIN_POSITIVE)` gives zero
+//! similarity. NaN scores never enter output because selection uses strict
+//! ordered comparisons.
 //!
 //! # Core flow
 //!
