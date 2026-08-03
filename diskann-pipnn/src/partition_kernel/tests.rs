@@ -15,7 +15,9 @@ fn input(metric: Metric, leaders: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
         Vec::new()
     };
     let leader_scales = match metric {
-        Metric::L2 => (0..leaders).map(|leader| (leader + 1) as f32).collect(),
+        Metric::L2 => (0..leaders)
+            .map(|leader| ((leader + 1) as f32).powi(2))
+            .collect(),
         Metric::Cosine => (0..leaders)
             .map(|leader| {
                 if leader == 0 {
@@ -88,6 +90,50 @@ fn scalar_distance_matches_metric_contract() {
     assert_eq!(distance(Metric::InnerProduct, 3.0, 99.0, 99.0), -3.0);
     assert_eq!(distance(Metric::Cosine, 4.0, 4.0, 4.0), 0.5);
     assert_eq!(distance(Metric::Cosine, 4.0, 0.0, 4.0), 1.0);
+    assert_eq!(
+        distance(Metric::Cosine, 1.0, f32::MIN_POSITIVE / 2.0, 1.0),
+        1.0
+    );
+    assert_eq!(
+        distance(
+            Metric::Cosine,
+            f32::MIN_POSITIVE,
+            f32::MIN_POSITIVE,
+            f32::MIN_POSITIVE.sqrt()
+        ),
+        0.0
+    );
+    assert!(distance(Metric::Cosine, 1.0, f32::NAN, 1.0).is_nan());
+}
+
+#[test]
+fn cosine_special_norms_match_scalar_and_runtime_dispatch() {
+    let leaders = 17;
+    let dots = vec![1.0; 4 * leaders];
+    let row_scales = [0.0, f32::MIN_POSITIVE / 2.0, f32::MIN_POSITIVE, f32::NAN];
+    let mut leader_scales = vec![1.0; leaders];
+    leader_scales[..4].copy_from_slice(&[
+        0.0,
+        f32::MIN_POSITIVE.sqrt() / 2.0,
+        f32::MIN_POSITIVE.sqrt(),
+        f32::NAN,
+    ]);
+    let input = PartitionTopK {
+        dots: &dots,
+        rows: row_scales.len(),
+        leaders,
+        row_scales: &row_scales,
+        leader_scales: &leader_scales,
+        metric: Metric::Cosine,
+    };
+    let mut expected = vec![u32::MAX; input.rows * 2];
+    process_rows_scalar(input, 2, &mut expected);
+    let mut actual = vec![u32::MAX; input.rows * 2];
+    nearest_leaders(input, 2, &mut actual).unwrap();
+
+    assert_eq!(actual, expected);
+    assert_eq!(&actual[..4], &[0, 1, 0, 1]);
+    assert_eq!(&actual[6..], &[0, 1]);
 }
 
 #[test]

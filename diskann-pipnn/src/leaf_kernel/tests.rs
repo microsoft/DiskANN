@@ -112,6 +112,17 @@ fn scalar_insertion_orders_candidates_and_rejects_nan() {
 }
 
 #[test]
+fn output_length_clamps_to_non_self_neighbors() {
+    assert_eq!(leaf_output_len(0, 3).unwrap(), 0);
+    assert_eq!(leaf_output_len(1, 3).unwrap(), 0);
+    assert_eq!(leaf_output_len(4, 9).unwrap(), 12);
+    assert_eq!(
+        leaf_output_len(u32::MAX as usize + 1, 1),
+        Err(LeafKernelError::TooManyPoints(u32::MAX as usize + 1))
+    );
+}
+
+#[test]
 fn workspace_can_shrink_and_grow_between_calls() {
     let mut workspace = LeafTopKWorkspace::new();
     for points in [17, 7, 17] {
