@@ -5,6 +5,25 @@
 
 //! Prepared nearest-neighbor kernels over a leaf's lower dot-product matrix.
 //!
+//! PiPNN partitioning produces small, overlapping groups of dataset points
+//! called *leaves*. Points sharing a leaf are treated as likely neighbors. For
+//! each leaf, the builder gathers its vectors into a matrix `A` (one vector per
+//! row). `sgemm_aat_lower` computes the lower triangle of the Gram matrix
+//! `A · Aᵀ`, so entry `(i, j)` is the dot product of leaf points `i` and `j`.
+//! This module consumes that result and picks each point's `k` nearest non-self
+//! points in the leaf.
+//!
+//! This module does not gather vectors, run GEMM, translate dataset IDs, merge
+//! candidates from overlapping leaves, or prune final graph degree. Its output
+//! uses leaf-local positions. The caller maps those positions back through the
+//! leaf's dataset-ID array and normally offers each selected pair in both graph
+//! directions before cross-leaf merge/pruning.
+//!
+//! Here *source* means the point whose `k`-neighbor output list is being built;
+//! *target* means another point in the same leaf. Pair distance is symmetric, so
+//! one strict-lower matrix entry is evaluated once and offered independently to
+//! both endpoint source lists.
+//!
 //! `sgemm_aat_lower` writes pair `(source, target)` only when `target <= source`.
 //! The kernel scans that strict lower triangle once and offers each distance to
 //! both endpoint points. A [`LeafKernel`] is prepared once for the build metric
@@ -23,9 +42,97 @@
 //! shape validation -> scale scratch -> strict-lower scan -> sorted neighbor slots
 //! ```
 //!
-//! `workspace.worst[source]` always mirrors the last retained slot for that
-//! source point. The SIMD loop may update both endpoints of a pair, so this
-//! mirror is the threshold shared by source and target candidate masks.
+//! Between source iterations, `workspace.worst[point]` mirrors that point's last
+//! retained slot. While one source is scanned, its threshold lives in local
+//! `source_worst`; thresholds for earlier target points are updated in the
+//! workspace immediately. The SIMD loop snapshots both endpoint thresholds
+//! before either list changes, then writes the current source threshold back
+//! after its strict-lower prefix is complete.
+//!
+//! # Main structures
+//!
+//! - [`LeafKernel`] is the reusable public handle containing one prepared direct
+//!   function pointer.
+//! - [`LeafInput`] identifies the borrowed lower-triangular dot matrix.
+//! - [`LeafKernelWorkspace`] owns norm and rejection-threshold scratch and is
+//!   reused by one worker across leaves.
+//! - [`LeafNeighbor`] is one output slot containing leaf-local target position
+//!   plus distance.
+//! - `process_neighbor_width` chooses fixed storage for widths one through three
+//!   or dynamic storage for larger widths.
+//! - `process_pairs` is the shared SIMD/scalar strict-lower traversal;
+//!   `insert_fixed_neighbor` and `insert_dynamic_neighbor` maintain stable sorted
+//!   output for both endpoints.
+//!
+//! # Inputs and output
+//!
+//! For `n` leaf points, [`LeafInput::dots`] is an `n × n` row-major matrix from
+//! `sgemm_aat_lower`. Diagonal entries provide norms when the metric needs them;
+//! only strict-lower entries `(source, target)` with `target < source` provide
+//! pair dots. Output is an `n × k` [`LeafNeighbor`] matrix. Every output row is
+//! sorted by ascending distance and stores leaf-local target positions, not
+//! dataset IDs.
+//!
+//! Distances are reconstructed from one pair dot and, when required, diagonal
+//! entries of the Gram matrix. Smaller is better:
+//!
+//! | Prepared metric | Leaf distance |
+//! | --- | --- |
+//! | squared L2 | `max(0, ‖source‖² + ‖target‖² - 2(source·target))` |
+//! | cosine | `max(0, 1 - (source·target)/(‖source‖‖target‖))` |
+//! | normalized cosine | `max(0, 1 - source·target)` |
+//! | inner product | `-(source·target)` |
+//!
+//! `CosineNormalized` assumes leaf vectors were normalized before GEMM. For
+//! unnormalized cosine, a zero/subnormal norm gives zero similarity. NaN scores
+//! never enter output because selection uses strict ordered comparisons.
+//!
+//! # Core flow
+//!
+//! 1. Validate matrix areas, backing lengths, point IDs, and output width.
+//! 2. Build metric scales from diagonal dots and reset per-source thresholds.
+//! 3. Scan every strict-lower pair once in SIMD groups plus scalar tails.
+//! 4. Offer that distance to both pair endpoints using stable top-k insertion.
+//! 5. Reject any source whose final slot remains unfilled.
+//!
+//! # Performance
+//!
+//! With `k > 0`, the kernel evaluates exactly `n(n - 1) / 2` pair distances;
+//! `k = 0` returns before traversal. Widths `k = 1, 2, 3` use fixed arrays and
+//! straight-line insertion, giving `O(n²)` work.
+//! Larger widths use `O(k)` insertion, giving `O(n²k)` worst-case work. Scratch
+//! is `O(n)` (`worst`, plus norms only when required); output is `O(nk)`. No
+//! allocation occurs after a worker workspace has sufficient capacity. Runtime
+//! architecture and metric selection happen once in [`LeafKernel::new`].
+//!
+//! # Example
+//!
+//! ```
+//! use diskann_pipnn::leaf_kernel::{
+//!     leaf_output_len, LeafInput, LeafKernel, LeafKernelWorkspace, LeafNeighbor,
+//! };
+//! use diskann_utils::views::{MatrixView, MutMatrixView};
+//! use diskann_vector::distance::Metric;
+//!
+//! // Only the diagonal and strict lower triangle are consumed.
+//! let dots = [
+//!     1.0, f32::NAN, f32::NAN,
+//!     0.9, 1.0,      f32::NAN,
+//!     0.1, 0.2,      1.0,
+//! ];
+//! let input = LeafInput {
+//!     dots: MatrixView::try_from(&dots[..], 3, 3).unwrap(),
+//! };
+//! let mut neighbors = vec![LeafNeighbor::default(); leaf_output_len(3, 1).unwrap()];
+//! let output = MutMatrixView::try_from(&mut neighbors[..], 3, 1).unwrap();
+//! let mut workspace = LeafKernelWorkspace::new();
+//!
+//! LeafKernel::new(Metric::CosineNormalized)
+//!     .nearest_neighbors(input, output, &mut workspace)
+//!     .unwrap();
+//!
+//! assert_eq!(neighbors.iter().map(|neighbor| neighbor.target).collect::<Vec<_>>(), [1, 0, 1]);
+//! ```
 
 use std::marker::PhantomData;
 
@@ -50,6 +157,9 @@ pub struct LeafNeighbor {
 
 impl LeafNeighbor {
     /// Construct a leaf-local neighbor.
+    ///
+    /// `target` is a position in the current leaf and `distance` is its score
+    /// from the source represented by the containing output row.
     pub const fn new(target: u32, distance: f32) -> Self {
         Self { target, distance }
     }
@@ -77,6 +187,9 @@ pub struct LeafKernelWorkspace {
 
 impl LeafKernelWorkspace {
     /// Construct an empty workspace.
+    ///
+    /// This does not allocate. First use grows buffers to the leaf point count;
+    /// later calls reuse capacity owned by the same worker.
     pub const fn new() -> Self {
         Self {
             norms: Vec::new(),
@@ -158,6 +271,19 @@ pub enum LeafKernelError {
 }
 
 /// Return the usable non-self neighbor count for one leaf.
+///
+/// `points` is the leaf point count and `requested_k` is the build-wide target.
+/// The returned width is `min(requested_k, points - 1)`, allowing empty,
+/// singleton, and small leaves without a second effective-k state.
+///
+/// # Errors
+///
+/// Returns [`LeafKernelError::TooManyPoints`] when leaf-local positions cannot
+/// fit in `u32`.
+///
+/// # Performance
+///
+/// Constant-time and allocation-free.
 pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
     if points > u32::MAX as usize {
         return Err(LeafKernelError::TooManyPoints(points));
@@ -166,6 +292,18 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
 }
 
 /// Return the required output length for [`LeafKernel::nearest_neighbors`].
+///
+/// `points` and `requested_k` have the same meaning as in
+/// [`leaf_neighbor_count`]. The return value is `points * effective_k`.
+///
+/// # Errors
+///
+/// Returns [`LeafKernelError::TooManyPoints`] or
+/// [`LeafKernelError::ShapeOverflow`] instead of wrapping the output area.
+///
+/// # Performance
+///
+/// Constant-time and allocation-free.
 pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
     checked_area("output", points, leaf_neighbor_count(points, requested_k)?)
 }
@@ -195,6 +333,9 @@ type LeafFn = Dispatched1<Result<(), LeafKernelError>, LeafCallArg>;
 ///
 /// Construct this once with [`LeafKernel::new`] and share it across leaf workers.
 /// Each output view carries its leaf-specific neighbor width.
+///
+/// The handle stores only one direct function pointer. It borrows no leaf data
+/// or workspace and is therefore `Copy`, `Send`, and `Sync`.
 #[derive(Clone, Copy, Debug)]
 pub struct LeafKernel {
     run: LeafFn,
@@ -202,6 +343,14 @@ pub struct LeafKernel {
 
 impl LeafKernel {
     /// Prepare a leaf kernel for `metric` and the current CPU.
+    ///
+    /// The returned handle contains one architecture/metric-specialized function
+    /// pointer and can process any valid leaf size or neighbor width.
+    ///
+    /// # Performance
+    ///
+    /// Performs runtime architecture detection and one metric match once.
+    /// Reusing the handle keeps both decisions out of per-leaf hot loops.
     pub fn new(metric: Metric) -> Self {
         diskann_wide::arch::dispatch1_no_features(PrepareLeaf, metric)
     }
@@ -211,6 +360,30 @@ impl LeafKernel {
     /// `output` must have one row per input point. Its column count is the
     /// neighbor count for this leaf and must not exceed `point_count - 1`.
     /// Equal distances retain pair scan order.
+    ///
+    /// `input` supplies the square lower-triangular dot matrix. `output` is
+    /// overwritten with sorted leaf-local neighbors. `workspace` is an exclusive
+    /// worker-owned scratch lease whose capacity is retained after return.
+    /// Successful return guarantees every source has exactly `output.ncols()`
+    /// rankable, non-self neighbors.
+    ///
+    /// # Core flow
+    ///
+    /// The prepared entry validates every view before mutation, prepares scales,
+    /// clears output and thresholds, scans the strict lower triangle once, then
+    /// verifies the final slot of every source. Each pair updates both endpoints.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LeafKernelError`] for invalid or overflowing shapes, excessive
+    /// point/neighbor counts, scratch allocation failure, or an underfilled
+    /// source caused by non-rankable distances. Validation errors leave output
+    /// and workspace contents unchanged.
+    ///
+    /// # Performance
+    ///
+    /// See module-level complexity. This call uses the prepared direct function
+    /// pointer; it performs no runtime ISA or metric dispatch.
     pub fn nearest_neighbors(
         &self,
         input: LeafInput<'_>,
@@ -272,6 +445,11 @@ where
 ///
 /// This type is zero-sized. All per-leaf state, including output width, arrives
 /// through `LeafCall`; validation completes before pointer-based SIMD executes.
+///
+/// Call order is fixed: validate without mutation, allocate/reset scratch,
+/// initialize output, execute one specialized traversal, then verify fill state.
+/// Keeping those phases in the dispatched destination makes every unchecked
+/// load depend on one visible validation gate.
 struct LeafEntry<M>(PhantomData<M>);
 
 impl<A, M> FTarget1<A, Result<(), LeafKernelError>, LeafCall<'_>> for LeafEntry<M>
@@ -287,6 +465,8 @@ where
         // unchecked loads below. No output or scratch mutation occurs on error.
         validate(call.input, &call.output)?;
         let neighbor_count = call.output.ncols();
+        // Empty or singleton leaves request zero columns. Avoid touching scratch
+        // or output so this path remains allocation-free.
         if neighbor_count == 0 {
             return Ok(());
         }
@@ -297,6 +477,8 @@ where
         call.output.as_mut_slice().fill(LeafNeighbor::default());
         call.workspace.worst.fill(f32::INFINITY);
 
+        // Width dispatch happens once per leaf. Common production widths become
+        // fixed arrays; uncommon widths retain the same traversal through slices.
         process_neighbor_width::<A::f32x16, M>(
             arch,
             call.input,
@@ -305,6 +487,8 @@ where
             &call.workspace.norms,
             &mut call.workspace.worst,
         );
+        // Sorted lists use the last slot as both worst-distance threshold and
+        // underfill sentinel, so one slot check per source proves full output.
         if let Some(source) = call
             .output
             .as_slice()
@@ -325,6 +509,12 @@ where
 /// Matrix views are rechecked with `checked_mul` because the hot loop performs
 /// unchecked contiguous loads. Output columns are the leaf-specific neighbor
 /// width and cannot exceed the number of non-self points.
+///
+/// `input` and `output` are borrowed only for inspection. Success returns no
+/// value; it establishes square dots, exact backing lengths, representable local
+/// IDs, and valid output width. Failure returns [`LeafKernelError`] before any
+/// output or workspace mutation. Runtime is constant apart from view metadata
+/// checks; matrix contents are not scanned.
 fn validate(
     input: LeafInput<'_>,
     output: &MutMatrixView<'_, LeafNeighbor>,
@@ -373,6 +563,11 @@ fn validate(
 /// L2 stores diagonal squared norms; cosine converts diagonals to norms using
 /// DiskANN's zero threshold. Normalized cosine and inner product skip the norm
 /// allocation entirely. `worst` is reset separately after allocation succeeds.
+///
+/// `input` supplies diagonal dots and `workspace` owns reusable vectors. Success
+/// prepares one scale and one threshold per point when needed; allocation failure
+/// is returned without entering SIMD traversal. Work is `O(n)`, with at most
+/// `O(n)` retained capacity per buffer.
 fn prepare_workspace<M: KernelMetric>(
     input: LeafInput<'_>,
     workspace: &mut LeafKernelWorkspace,
@@ -433,6 +628,12 @@ fn check_length(
 ///
 /// This branch runs once per leaf. Fixed conversion uses `as_chunks_mut` once,
 /// avoiding per-candidate slice-to-array checks while retaining safe insertion.
+///
+/// `output` contains `point_count * neighbor_count` initialized slots; `norms`
+/// and `worst` satisfy the invariants established by `prepare_workspace`. The
+/// function writes output and thresholds in place and returns no value. Widths
+/// one through three take the fixed path; all others pay one division per source
+/// insertion to locate its dynamic slice.
 fn process_neighbor_width<F, M>(
     arch: F::Arch,
     input: LeafInput<'_>,
@@ -463,6 +664,11 @@ fn process_neighbor_width<F, M>(
     }
 }
 
+/// Reinterpret validated output as one fixed array per source, then run shared
+/// pair traversal.
+///
+/// `N` is one, two, or three. `as_chunks_mut` performs one safe shape split per
+/// leaf, keeping array conversion out of candidate insertion.
 fn process_fixed_width<F, M, const N: usize>(
     arch: F::Arch,
     input: LeafInput<'_>,
@@ -492,7 +698,10 @@ fn process_fixed_width<F, M, const N: usize>(
 /// insertion borrows one source list briefly, so updates to the current source
 /// and earlier targets cannot alias simultaneously.
 trait NeighborStorage {
+    /// Number of source neighbor lists owned by this adapter.
     fn source_count(&self) -> usize;
+
+    /// Insert one source-target candidate and return that source's new threshold.
     fn insert(&mut self, source: usize, target: u32, distance: f32) -> f32;
 }
 
@@ -548,6 +757,14 @@ impl NeighborStorage for DynamicNeighborStorage<'_> {
 ///
 /// `M` is concrete before type erasure. `R` presents fixed neighbor arrays for
 /// common counts or safe dynamic slices for the uncommon fallback.
+///
+/// `input` supplies `n × n` dots, `output` owns `n` sorted lists, `norms` holds
+/// metric scales when required, and `worst` mirrors every list's final distance.
+/// The function mutates output and thresholds in place and returns no value.
+/// It evaluates exactly `n(n - 1) / 2` pairs. SIMD computes up to `F::LANES`
+/// distances together; accepted candidates still insert in scan order to keep
+/// deterministic ties. Fixed widths cost constant work per accepted endpoint;
+/// dynamic widths cost `O(k)` per insertion.
 #[inline(never)]
 fn process_pairs<F, M, R>(
     arch: F::Arch,
@@ -567,8 +784,12 @@ fn process_pairs<F, M, R>(
     let uses_norms = M::LEAF_SCALE.is_some();
     let worst_ptr = worst.as_mut_ptr();
 
+    // `source` starts at one because source zero has no strict-lower targets;
+    // later sources still offer their pair back to source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
+        // `uses_norms` comes from a metric associated constant. Specialization
+        // removes both branch and scale memory traffic for scale-free metrics.
         let source_scale = if uses_norms {
             F::splat(arch, norms[source])
         } else {
@@ -657,6 +878,11 @@ fn process_pairs<F, M, R>(
 /// Production widths one through three use straight-line shifts. Strict `<`
 /// comparisons preserve scan order for ties; callers already rejected NaN via
 /// the eligibility comparison.
+///
+/// `neighbors` is the sorted list for one source. `target` and `distance` are a
+/// candidate already known to beat its final slot. The return value is the new
+/// final-slot distance. Insertion is allocation-free and constant-time because
+/// `N <= 3`.
 #[inline(always)]
 fn insert_fixed_neighbor<const N: usize>(
     neighbors: &mut [LeafNeighbor; N],
@@ -703,6 +929,10 @@ fn insert_fixed_neighbor<const N: usize>(
 ///
 /// The candidate replaces the last slot, then bubbles toward the front. This
 /// path is used only for neighbor counts greater than three.
+///
+/// `neighbors` is one non-empty sorted source list. `target` and `distance` are
+/// already known to beat its final slot. The return value is the new final-slot
+/// distance. Work is `O(k)` worst-case and allocation-free.
 #[inline(always)]
 fn insert_dynamic_neighbor(neighbors: &mut [LeafNeighbor], target: u32, distance: f32) -> f32 {
     let last = neighbors.len() - 1;
