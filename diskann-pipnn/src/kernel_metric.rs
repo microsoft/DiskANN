@@ -12,15 +12,28 @@
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
+/// Stored scale representation consumed by one kernel position.
+///
+/// Associated constants on `KernelMetric` let the compiler remove unused scale
+/// loads and allocations after metric selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScaleKind {
+    /// Metric does not read this scale position.
     None,
+    /// Stored value is already a squared norm.
     SquaredNorm,
+    /// Stored value is a squared norm that must become a norm.
     NormFromSquared,
+    /// Stored value is already a norm.
     Norm,
 }
 
 impl ScaleKind {
+    /// Convert stored scale to the arithmetic form required by a kernel.
+    ///
+    /// DiskANN treats subnormal squared norms, and corresponding subnormal
+    /// norms, as zero before division. Ordered comparisons intentionally leave
+    /// NaN unchanged so later distance comparisons keep it non-rankable.
     #[inline(always)]
     pub(crate) fn transform(self, stored: f32) -> f32 {
         match self {
@@ -48,27 +61,42 @@ impl ScaleKind {
     }
 }
 
+/// Concrete metric contract shared by leaf and partition hot loops.
+///
+/// Runtime `Metric` is converted to one implementor before final type erasure.
+/// Generic methods then inline metric arithmetic into the architecture-specific
+/// function pointer. Leaf and partition operations remain separate because L2
+/// partition ranking deliberately omits the row norm.
 pub(crate) trait KernelMetric: Send + Sync + 'static {
+    /// Runtime tag represented by this marker.
     const METRIC: Metric;
+    /// Diagonal scale representation used by the leaf kernel.
     const LEAF_SCALE: ScaleKind;
+    /// Point-row scale representation used by partition assignment.
     const PARTITION_ROW_SCALE: ScaleKind;
+    /// Leader-column scale representation used by partition assignment.
     const PARTITION_LEADER_SCALE: ScaleKind;
 
+    /// SIMD distance for one leaf row against a lane group of earlier points.
     fn leaf_distance<F>(arch: F::Arch, dot: F, row_scale: F, column_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
+    /// Scalar-tail equivalent of `leaf_distance`.
     fn leaf_distance_scalar(dot: f32, row_scale: f32, column_scale: f32) -> f32;
 
+    /// SIMD ranking score for one point row against a lane group of leaders.
     fn partition_distance<F>(arch: F::Arch, dot: F, row_scale: F, leader_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
+    /// Scalar-tail equivalent of `partition_distance`.
     fn partition_distance_scalar(dot: f32, row_scale: f32, leader_scale: f32) -> f32;
 }
 
+/// Zero-sized metric markers used only for monomorphization.
 pub(crate) struct L2;
 pub(crate) struct Cosine;
 pub(crate) struct CosineNormalized;
@@ -97,6 +125,11 @@ fn clamp_nonnegative_scalar(distance: f32) -> f32 {
     }
 }
 
+/// Compute cosine distance while preserving DiskANN zero/NaN semantics.
+///
+/// Zero lanes divide by one only to keep the operation defined, then explicitly
+/// select zero similarity. NaN norms fail the zero comparison and propagate
+/// through division, leaving the final distance non-rankable.
 #[inline(always)]
 fn cosine_distance<F>(arch: F::Arch, dot: F, row_norm: F, column_norm: F) -> F
 where
@@ -265,12 +298,20 @@ impl KernelMetric for InnerProduct {
     }
 }
 
+/// BYO-type-erasure visitor for runtime metric selection.
+///
+/// The visitor receives concrete `M`, allowing architecture and width wrappers
+/// to compose with metric arithmetic before producing the final function pointer.
+/// This avoids a nested metric trait object inside architecture dispatch.
 pub(crate) trait EraseMetric {
+    /// Final caller-selected erased representation.
     type Output;
 
+    /// Consume the visitor with one concrete metric marker.
     fn erase<M: KernelMetric>(self) -> Self::Output;
 }
 
+/// Visit the concrete marker represented by a runtime metric tag.
 pub(crate) fn erase_metric<E: EraseMetric>(metric: Metric, erase: E) -> E::Output {
     match metric {
         Metric::L2 => erase.erase::<L2>(),
