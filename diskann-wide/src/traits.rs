@@ -28,7 +28,7 @@ use super::{
 /// - <https://users.rust-lang.org/t/limitation-of-associated-const-in-traits/73491/2>
 /// - <https://github.com/rust-lang/rust/issues/76560>
 pub trait ArrayType<T>: SupportedLaneCount {
-    type Type;
+    type Type: AsRef<[T]> + AsMut<[T]>;
 }
 
 /// Map scalar + lengths to arrays.
@@ -262,7 +262,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// The argument `arch` provides a "proof of compatibility" as `A` can only be safely
     /// instantiated when all the requirements for the architecture are met.
     fn from_array(arch: Self::Arch, x: <Self::ConstLanes as ArrayType<Self::Scalar>>::Type)
-    -> Self;
+        -> Self;
 
     /// Broadcast the provided scalar across all lanes.
     ///
@@ -906,16 +906,16 @@ impl_simd_mask_for_bitmask!(64, u64, u64::MAX);
 #[cfg(test)]
 mod test_traits {
     use rand::{
-        SeedableRng,
         distr::{Distribution, StandardUniform},
         rngs::StdRng,
+        SeedableRng,
     };
 
     use super::*;
     use crate::{
-        ARCH, arch,
+        arch,
         splitjoin::{LoHi, SplitJoin},
-        test_utils,
+        test_utils, ARCH,
     };
 
     // Allow unsigned 128-bit integers to be converted to narrow types.
