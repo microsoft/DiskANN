@@ -183,17 +183,22 @@ type LeafFn = Dispatched1<Result<usize, LeafKernelError>, LeafCallArg>;
 /// A leaf kernel prepared for one metric, neighbor count, and the current CPU.
 ///
 /// Construct this once with [`LeafKernel::new`] and share it across leaf workers.
-/// The handle stores only a direct function pointer and the requested `k`.
+/// The handle stores only a direct function pointer and the requested-width mode.
 #[derive(Clone, Copy, Debug)]
 pub struct LeafKernel {
     run: LeafFn,
-    requested_k: usize,
+    k: KValue,
 }
 
 impl LeafKernel {
     /// Prepare a leaf kernel for `metric`, `k`, and the current CPU.
     pub fn new(metric: Metric, k: usize) -> Self {
-        diskann_wide::arch::dispatch1_no_features(PrepareLeaf { requested_k: k }, metric)
+        diskann_wide::arch::dispatch1_no_features(
+            PrepareLeaf {
+                k: KValue::from_requested(k),
+            },
+            metric,
+        )
     }
 
     /// Select the nearest non-self leaf positions for every row.
@@ -211,30 +216,42 @@ impl LeafKernel {
             input,
             output,
             workspace,
-            requested_k: self.requested_k,
+            requested_k: self.k.requested(),
         })
     }
 }
 
 /// Requested-width dispatch selected once while preparing the kernel.
 ///
-/// Widths one through three receive fixed array rows. Larger widths retain one
-/// dynamic implementation instead of multiplying code size by every possible k.
-#[derive(Clone, Copy, Debug)]
+/// Widths one through three receive fixed array rows. Zero is a validated no-op;
+/// larger values carry their requested width into the dynamic implementation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KValue {
+    Zero,
     One,
     Two,
     Three,
-    Large,
+    Dynamic(usize),
 }
 
 impl KValue {
     const fn from_requested(k: usize) -> Self {
         match k {
+            0 => Self::Zero,
             1 => Self::One,
             2 => Self::Two,
             3 => Self::Three,
-            _ => Self::Large,
+            width => Self::Dynamic(width),
+        }
+    }
+
+    const fn requested(self) -> usize {
+        match self {
+            Self::Zero => 0,
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+            Self::Dynamic(width) => width,
         }
     }
 }
@@ -245,7 +262,7 @@ impl KValue {
 /// needs target features, so architecture-specific code remains behind the final
 /// direct function pointer.
 struct PrepareLeaf {
-    requested_k: usize,
+    k: KValue,
 }
 
 impl<A> arch::Target1<A, LeafKernel, Metric> for PrepareLeaf
@@ -256,13 +273,7 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     fn run(self, arch: A, metric: Metric) -> LeafKernel {
-        visit_metric(
-            metric,
-            BuildLeaf {
-                arch,
-                requested_k: self.requested_k,
-            },
-        )
+        visit_metric(metric, BuildLeaf { arch, k: self.k })
     }
 }
 
@@ -272,7 +283,7 @@ where
 /// the requested width into exactly one `Dispatched1`.
 struct BuildLeaf<A> {
     arch: A,
-    requested_k: usize,
+    k: KValue,
 }
 
 impl<A> BuildLeaf<A>
@@ -287,7 +298,7 @@ where
             run: self
                 .arch
                 .dispatch1::<LeafEntry<M, S>, Result<usize, LeafKernelError>, LeafCallArg>(),
-            requested_k: self.requested_k,
+            k: self.k,
         }
     }
 }
@@ -302,11 +313,12 @@ where
     type Output = LeafKernel;
 
     fn visit<M: KernelMetric>(self) -> Self::Output {
-        match KValue::from_requested(self.requested_k) {
+        match self.k {
+            KValue::Zero => self.build::<M, ZeroSelection>(),
             KValue::One => self.build::<M, FixedSelection<1>>(),
             KValue::Two => self.build::<M, FixedSelection<2>>(),
             KValue::Three => self.build::<M, FixedSelection<3>>(),
-            KValue::Large => self.build::<M, DynamicSelection>(),
+            KValue::Dynamic(_) => self.build::<M, DynamicSelection>(),
         }
     }
 }
@@ -483,8 +495,27 @@ trait SlotSelection: Send + Sync + 'static {
         u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>;
 }
 
+struct ZeroSelection;
 struct FixedSelection<const N: usize>;
 struct DynamicSelection;
+
+impl SlotSelection for ZeroSelection {
+    fn process<F, M>(
+        _arch: F::Arch,
+        _input: LeafTopK<'_>,
+        actual_k: usize,
+        _output: &mut [LeafNeighbor],
+        _norms: &[f32],
+        _worst: &mut [f32],
+    ) where
+        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+        F::Mask: SIMDSelect<F>,
+        M: KernelMetric,
+        u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    {
+        debug_assert_eq!(actual_k, 0);
+    }
+}
 
 impl<const N: usize> SlotSelection for FixedSelection<N> {
     fn process<F, M>(
@@ -825,6 +856,21 @@ mod tests {
     fn input(dots: &[f32], points: usize) -> LeafTopK<'_> {
         LeafTopK {
             dots: MatrixView::try_from(dots, points, points).unwrap(),
+        }
+    }
+
+    #[test]
+    fn k_value_preserves_requested_width() {
+        for (requested, value) in [
+            (0, KValue::Zero),
+            (1, KValue::One),
+            (2, KValue::Two),
+            (3, KValue::Three),
+            (4, KValue::Dynamic(4)),
+            (17, KValue::Dynamic(17)),
+        ] {
+            assert_eq!(KValue::from_requested(requested), value);
+            assert_eq!(value.requested(), requested);
         }
     }
 
