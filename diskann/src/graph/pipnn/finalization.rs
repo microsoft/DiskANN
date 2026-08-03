@@ -132,8 +132,11 @@ where
             )
             .map_err(ANNError::opaque)?;
 
-            row.clear();
-            row.extend_from_slice(workspace.prune.neighbors());
+            // RobustPrune selects distinct candidate positions, so its output IDs
+            // are unique by construction. `extend_from_slice` would re-derive that
+            // with an O(degree^2) membership scan per row; the trusted overwrite is
+            // a copy and still verifies uniqueness under debug assertions.
+            row.overwrite_trusted(workspace.prune.neighbors());
             Ok(row)
         })
         .collect()

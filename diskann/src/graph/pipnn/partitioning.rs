@@ -37,11 +37,14 @@
 //! | later levels | one nearest leader until bounded |
 //! | replica boundary | independent deterministic seed |
 
-use std::{collections::HashSet, sync::Mutex};
+use std::collections::HashSet;
 
 use crate::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_linalg::Transpose;
-use diskann_utils::views::MatrixView;
+use diskann_utils::{
+    object_pool::{AsPooled, ObjectPool},
+    views::MatrixView,
+};
 use diskann_vector::{distance::Metric, norm::FastL2NormSquared, Norm};
 use rand::{prelude::IndexedRandom, SeedableRng};
 use rayon::prelude::*;
@@ -60,29 +63,6 @@ const MIN_ASSIGNMENT_STRIPE_ROWS: usize = 32;
 const MAX_ASSIGNMENT_STRIPE_ROWS: usize = 1_024;
 const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
 const MAX_PARTITION_ITERATIONS: usize = 30;
-
-/// Policy owned by the partition stage. Leaf-neighbor and merge settings do
-/// not cross this boundary.
-#[derive(Clone, Debug)]
-pub(crate) struct PartitionConfig {
-    c_max: usize,
-    c_min: usize,
-    p_samp: f64,
-    fanout: Vec<usize>,
-    replicas: usize,
-}
-
-impl From<&PiPNNConfig> for PartitionConfig {
-    fn from(config: &PiPNNConfig) -> Self {
-        Self {
-            c_max: config.c_max,
-            c_min: config.c_min,
-            p_samp: config.p_samp,
-            fanout: config.fanout.clone(),
-            replicas: config.replicas,
-        }
-    }
-}
 
 /// A partition failure with enough context to diagnose non-progressing input.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -133,34 +113,23 @@ struct StripeBuffers {
     row_scales: Vec<f32>,
 }
 
+impl AsPooled<()> for StripeBuffers {
+    fn create(_: ()) -> Self {
+        Self::default()
+    }
+
+    fn modify(&mut self, _: ()) {
+        // Scratch retains its high-water allocation across leases; active
+        // prefixes are established by `assign_stripe` before every read.
+    }
+}
+
 /// Stage-owned high-water scratch storage for partition assignment.
 ///
-/// Rayon initializes `map_init` state per split job, not per physical worker.
-/// Large dimensions would therefore allocate and zero the point/dot buffers many
-/// times during recursive partitioning. Chunks instead take ownership of one
-/// buffer here and return it afterward. The mutex protects only the short
-/// pop/push operations; gather, GEMM, and top-k run without holding it.
-#[derive(Default)]
-struct StripeBufferPool {
-    available: Mutex<Vec<StripeBuffers>>,
-}
-
-impl StripeBufferPool {
-    fn take(&self) -> StripeBuffers {
-        self.available
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .pop()
-            .unwrap_or_default()
-    }
-
-    fn put(&self, buffers: StripeBuffers) {
-        self.available
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(buffers);
-    }
-}
+/// `ObjectPool` owns the short pop/push lock and returns leases through RAII,
+/// including error and panic paths. Gather, GEMM, and top-k run while only the
+/// leased `StripeBuffers` is held.
+type StripeBufferPool = ObjectPool<StripeBuffers>;
 
 /// Partition every configured replica into overlapping bounded leaves.
 ///
@@ -172,7 +141,7 @@ impl StripeBufferPool {
 /// covered once per replica. The caller installs the operation in its pool.
 pub(crate) fn partition<T>(
     data: MatrixView<'_, T>,
-    config: PartitionConfig,
+    config: PiPNNConfig,
     metric: Metric,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
@@ -190,7 +159,7 @@ where
     }
 
     let mut leaves = Vec::new();
-    let stripe_buffers = StripeBufferPool::default();
+    let stripe_buffers = StripeBufferPool::new((), 0, None);
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves = partition_replica(data, &config, metric, seed, &stripe_buffers)?;
@@ -205,7 +174,7 @@ where
 
 fn partition_replica<T>(
     data: MatrixView<'_, T>,
-    config: &PartitionConfig,
+    config: &PiPNNConfig,
     metric: Metric,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
@@ -287,7 +256,7 @@ where
 
 fn partition_one_level<T>(
     data: MatrixView<'_, T>,
-    config: &PartitionConfig,
+    config: &PiPNNConfig,
     metric: Metric,
     item: WorkItem,
     stripe_buffers: &StripeBufferPool,
@@ -395,7 +364,11 @@ where
         .iter_mut()
         .zip(leader_values.chunks_exact(dimensions))
     {
-        *scale = FastL2NormSquared.evaluate(row);
+        // Leader norms participate in the top-k ordering. Preserve the original
+        // scalar reduction order: reassociating this short setup pass through a
+        // SIMD norm changes low bits and can send near-tied points down different
+        // recursive partition paths.
+        *scale = row.iter().map(|value| value * value).sum();
         if metric == Metric::Cosine {
             *scale = scale.sqrt();
         }
@@ -418,27 +391,23 @@ where
         .par_chunks_mut(worker_assignment)
         .enumerate()
         .try_for_each(|(worker, worker_output)| {
-            let mut buffers = stripe_buffers.take();
-            let result = (|| -> ANNResult<()> {
-                let worker_first = worker * worker_rows;
-                for (stripe, output) in worker_output.chunks_mut(assignment_stripe).enumerate() {
-                    let first = worker_first + stripe * stripe_rows;
-                    let rows = output.len() / fanout;
-                    assign_stripe(
-                        data,
-                        &points[first..first + rows],
-                        &leader_values,
-                        &leader_scales,
-                        metric,
-                        fanout,
-                        &mut buffers,
-                        output,
-                    )?;
-                }
-                Ok(())
-            })();
-            stripe_buffers.put(buffers);
-            result
+            let mut buffers = stripe_buffers.get_ref(());
+            let worker_first = worker * worker_rows;
+            for (stripe, output) in worker_output.chunks_mut(assignment_stripe).enumerate() {
+                let first = worker_first + stripe * stripe_rows;
+                let rows = output.len() / fanout;
+                assign_stripe(
+                    data,
+                    &points[first..first + rows],
+                    &leader_values,
+                    &leader_scales,
+                    metric,
+                    fanout,
+                    &mut buffers,
+                    output,
+                )?;
+            }
+            Ok::<(), ANNError>(())
         })?;
 
     scatter_assignments(points, &assignments, fanout, leaders.len())
@@ -464,9 +433,23 @@ where
     let leaders = leader_values.len() / dimensions;
     let point_values_len = checked_area("point stripe", rows, dimensions)?;
     let dots_len = checked_area("dot-product stripe", rows, leaders)?;
-    resize_fallible(&mut buffers.points, point_values_len, 0.0)?;
-    resize_fallible(&mut buffers.dots, dots_len, 0.0)?;
-    gather_rows(data, points, &mut buffers.points)?;
+    // Scratch keeps its high-water length and every consumer receives an
+    // explicit active prefix. Resizing to the exact stripe shape would be
+    // correct but re-zeroes the buffer whenever a pooled value moves between
+    // work items with different leader counts: `stripe_rows` is derived from
+    // `leaders`, so the point buffer swings between roughly 768 KiB and 6 MiB
+    // and `Vec::resize` only truncates on the way down, then memsets the whole
+    // delta on the way back up.
+    grow_fallible(&mut buffers.points, point_values_len, 0.0)?;
+    grow_fallible(&mut buffers.dots, dots_len, 0.0)?;
+    let StripeBuffers {
+        points: point_buffer,
+        dots: dot_buffer,
+        row_scales: row_scale_buffer,
+    } = buffers;
+    let point_values = &mut point_buffer[..point_values_len];
+    let dots = &mut dot_buffer[..dots_len];
+    gather_rows(data, points, point_values)?;
     diskann_linalg::sgemm(
         Transpose::None,
         Transpose::Ordinary,
@@ -474,29 +457,29 @@ where
         leaders,
         dimensions,
         1.0,
-        &buffers.points,
+        point_values,
         leader_values,
         None,
-        &mut buffers.dots,
+        dots,
     )
     .map_err(ANNError::opaque)?;
 
     let row_scales = if metric == Metric::Cosine {
-        resize_fallible(&mut buffers.row_scales, rows, 0.0)?;
-        for (scale, row) in buffers
-            .row_scales
+        grow_fallible(row_scale_buffer, rows, 0.0)?;
+        let row_scales = &mut row_scale_buffer[..rows];
+        for (scale, row) in row_scales
             .iter_mut()
-            .zip(buffers.points.chunks_exact(dimensions))
+            .zip(point_values.chunks_exact(dimensions))
         {
             *scale = FastL2NormSquared.evaluate(row);
         }
-        buffers.row_scales.as_slice()
+        &*row_scales
     } else {
         &[]
     };
     nearest_leaders(
         PartitionTopK {
-            dots: &buffers.dots,
+            dots,
             rows,
             leaders,
             row_scales,
@@ -755,9 +738,17 @@ fn filled_vec<T: Clone>(len: usize, value: T) -> ANNResult<Vec<T>> {
     Ok(values)
 }
 
-fn resize_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
+/// Grow `values` to at least `len` elements, never shrinking it.
+///
+/// Callers slice the active prefix themselves. Shrinking would force the next
+/// larger stripe to re-zero the reclaimed tail, which is the dominant cost when
+/// one pooled buffer serves work items with different stripe shapes.
+fn grow_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
+    if values.len() >= len {
+        return Ok(());
+    }
     values
-        .try_reserve(len.saturating_sub(values.len()))
+        .try_reserve(len - values.len())
         .map_err(ANNError::opaque)?;
     values.resize(len, value);
     Ok(())
