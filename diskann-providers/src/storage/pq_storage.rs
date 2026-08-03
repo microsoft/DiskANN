@@ -19,16 +19,11 @@ use tracing::info;
 
 use crate::{
     model::{
-        FixedChunkPQTable, NUM_PQ_CENTROIDS,
+        NUM_PQ_CENTROIDS,
         pq::{METADATA_SIZE, accum_row_inplace},
     },
     utils::{gen_random_slice, read_bin_from, write_bin_from},
 };
-
-// Create types to make return values easier to understand
-type FullPivotDataType = Vec<f32>;
-type CentroidType = Vec<f32>;
-type ChunkOffsetsType = Vec<usize>;
 
 #[derive(Debug, Clone)]
 pub struct PQStorage {
@@ -160,69 +155,24 @@ impl PQStorage {
         Ok(Metadata::read(reader)?.into_dims())
     }
 
-    /// Load the raw pivot data, centroid, and chunk offsets from a pivot file.
-    ///
-    /// Unlike [`Self::load_pq_pivots_bin`], this method returns the centroid
-    /// separately without folding it into the pivot data. Callers that need the
-    /// effective (centroid-adjusted) pivots must apply the centroid themselves,
-    /// e.g. via [`accum_row_inplace`](crate::model::pq::accum_row_inplace).
-    ///
-    /// For files written without legacy centering (`centroid = None` in
-    /// [`Self::write_pivot_data`]), the returned centroid will be all zeros and
-    /// can safely be accumulated as a no-op.
-    pub fn load_existing_pivot_data<Storage>(
-        &self,
-        num_pq_chunks: &usize,
-        num_centers: &usize,
-        dim: &usize,
-        storage_provider: &Storage,
-    ) -> ANNResult<(FullPivotDataType, CentroidType, ChunkOffsetsType)>
-    where
-        Storage: StorageReadProvider,
-    {
-        let (pivots, centroid, chunk_offsets) = self.read_pivot_file(
-            &self.pivot_data_path,
-            Some(*num_pq_chunks),
-            Some(*num_centers),
-            Some(*dim),
-            storage_provider,
-        )?;
-        let table =
-            Self::pivot_data_into_basic_table(&self.pivot_data_path, pivots, chunk_offsets)?;
-        let (pivots, chunk_offsets) = table.into_parts();
-
-        Ok((
-            pivots.into_inner().into_vec(),
-            centroid.into_inner().into_vec(),
-            chunk_offsets.into_inner().into_vec(),
-        ))
-    }
-
     /// Load the effective PQ pivot table from a pivot file.
     ///
-    /// If `expected_num_pq_chunks` is `None`, the chunk count is inferred from the
-    /// file. The loader verifies the pivot file layout and folds any stored legacy
-    /// centroid into the pivots. `BasicTable::new` validates the resulting table
-    /// invariants, including chunk-offset bounds and monotonicity.
+    /// The loader validates internal consistency: file layout,
+    /// centroid/pivot dimensions, offset monotonicity and bounds, and
+    /// `BasicTable` invariants. Callers are responsible for validating that the
+    /// resulting table is compatible with their build or search configuration.
     pub fn load_pivots<Storage: StorageReadProvider>(
         &self,
-        pq_pivots: &str,
-        expected_num_pq_chunks: Option<usize>,
         storage_provider: &Storage,
     ) -> ANNResult<BasicTable> {
-        let (mut pivots, centroid, chunk_offsets) = self.read_pivot_file(
-            pq_pivots,
-            expected_num_pq_chunks,
-            None,
-            None,
-            storage_provider,
-        )?;
+        let (mut pivots, centroid, chunk_offsets) =
+            self.read_pivot_file(&self.pivot_data_path, None, None, storage_provider)?;
 
         if centroid.as_slice().iter().any(|c| *c != 0.0) {
             accum_row_inplace(pivots.as_mut_view(), centroid.as_slice())
         }
 
-        Self::pivot_data_into_basic_table(pq_pivots, pivots, chunk_offsets)
+        Self::pivot_data_into_basic_table(&self.pivot_data_path, pivots, chunk_offsets)
     }
 
     /// Load the compressed pq dataset from file.
@@ -260,25 +210,9 @@ impl PQStorage {
         Ok(data)
     }
 
-    /// Load pre-trained pivot table
-    pub fn load_pq_pivots_bin<Storage: StorageReadProvider>(
-        &self,
-        pq_pivots: &str,
-        num_pq_chunks: usize,
-        storage_provider: &Storage,
-    ) -> ANNResult<FixedChunkPQTable> {
-        let table = self.load_pivots(
-            pq_pivots,
-            (num_pq_chunks != 0).then_some(num_pq_chunks),
-            storage_provider,
-        )?;
-        Ok(FixedChunkPQTable::from_basic_table(table))
-    }
-
     fn read_pivot_file<Storage: StorageReadProvider>(
         &self,
         pq_pivots: &str,
-        expected_num_pq_chunks: Option<usize>,
         expected_num_centers: Option<usize>,
         expected_dim: Option<usize>,
         storage_provider: &Storage,
@@ -356,15 +290,6 @@ impl PQStorage {
         }
 
         let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
-        if let Some(num_pq_chunks) = expected_num_pq_chunks
-            && chunk_offsets_m.nrows() != num_pq_chunks + 1
-        {
-            return Err(ANNError::message(format!(
-                "Error reading pq_pivots file at chunk offsets; file has nr={}, but expecting nr={}.",
-                chunk_offsets_m.nrows(),
-                num_pq_chunks + 1
-            )));
-        }
         if chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::message(format!(
                 "Error reading pq_pivots file at chunk offsets; file has nc={}, but expecting nc=1.",
@@ -428,10 +353,6 @@ impl PQStorage {
 
     pub fn get_compressed_data_path(&self) -> &str {
         &self.compressed_data_path
-    }
-
-    pub fn get_pivot_data_path(&self) -> &str {
-        &self.pivot_data_path
     }
 }
 
@@ -530,18 +451,15 @@ mod pq_storage_tests {
     fn load_pivot_data_test() {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
-        let (pq_pivot_data, centroids, chunk_offsets) = result
-            .load_existing_pivot_data(&1, &256, &128, &storage_provider)
-            .unwrap();
+        let table = result.load_pivots(&storage_provider).unwrap();
 
-        assert_eq!(pq_pivot_data.len(), 256 * 128);
-        assert_eq!(centroids.len(), 128);
-        assert_eq!(chunk_offsets.len(), 2);
+        assert_eq!(table.view_pivots().as_slice().len(), 256 * 128);
+        assert_eq!(table.dim(), 128);
+        assert_eq!(table.nchunks(), 1);
     }
 
-    /// Write pivot data with `centroid = None`, read it back via
-    /// `load_existing_pivot_data`, and verify the pivots are unchanged and the
-    /// centroid is all zeros.
+    /// Write pivot data with `centroid = None`, read it back, and verify the
+    /// effective pivots are unchanged.
     #[test]
     fn write_read_roundtrip_no_centroid() {
         let storage_provider = VirtualStorageProvider::new_memory();
@@ -565,26 +483,11 @@ mod pq_storage_tests {
             )
             .unwrap();
 
-        let (loaded_pivots, loaded_centroid, loaded_offsets) = pq_storage
-            .load_existing_pivot_data(&num_pq_chunks, &num_centers, &dim, &storage_provider)
-            .unwrap();
+        let table = pq_storage.load_pivots(&storage_provider).unwrap();
 
-        assert_eq!(
-            loaded_pivots, pivots,
-            "pivots should survive the round-trip unchanged"
-        );
-        assert!(
-            loaded_centroid.iter().all(|&c| c == 0.0),
-            "centroid should be all zeros when written with None"
-        );
-        assert_eq!(loaded_offsets, chunk_offsets);
-
-        // Check that `load_pq_pivots_bin` correctly loads the pivots.
-        let table = pq_storage
-            .load_pq_pivots_bin(pivot_path, num_pq_chunks, &storage_provider)
-            .unwrap();
-
-        assert_eq!(loaded_pivots, table.view_pivots().as_slice());
+        assert_eq!(table.view_pivots().as_slice(), pivots);
+        assert_eq!(table.view_offsets().as_slice(), chunk_offsets);
+        assert_eq!(table.nchunks(), num_pq_chunks);
     }
 
     #[test]
@@ -609,9 +512,7 @@ mod pq_storage_tests {
             )
             .unwrap();
 
-        let table = pq_storage
-            .load_pivots(pivot_path, None, &storage_provider)
-            .unwrap();
+        let table = pq_storage.load_pivots(&storage_provider).unwrap();
 
         assert_eq!(table.view_pivots().as_slice(), pivots);
     }
@@ -627,34 +528,14 @@ mod pq_storage_tests {
             .unwrap();
 
         let table = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pq_pivots_bin(pivot_path, 0, &storage_provider)
+            .load_pivots(&storage_provider)
             .unwrap();
 
         assert_eq!(table.view_pivots().as_slice(), pivots);
     }
 
     #[test]
-    fn load_pivot_data_rejects_mismatched_shape() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/mismatched_shape_pivots.bin";
-
-        write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[0, 2, 4]);
-        let pq_storage = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None);
-
-        assert!(
-            pq_storage
-                .load_existing_pivot_data(&2, &4, &4, &storage_provider)
-                .is_err()
-        );
-        assert!(
-            pq_storage
-                .load_existing_pivot_data(&2, &3, &5, &storage_provider)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn load_pivot_data_rejects_invalid_centroid_and_chunk_count() {
+    fn load_pq_pivots_rejects_invalid_centroid() {
         let storage_provider = VirtualStorageProvider::new_memory();
 
         let wrong_centroid_path = "/wrong_centroid_pivots.bin";
@@ -668,15 +549,7 @@ mod pq_storage_tests {
         );
         assert!(
             PQStorage::new(wrong_centroid_path, PQ_COMPRESSED_PATH, None)
-                .load_existing_pivot_data(&2, &3, &4, &storage_provider)
-                .is_err()
-        );
-
-        let wrong_count_path = "/wrong_chunk_count_pivots.bin";
-        write_test_pivots(&storage_provider, wrong_count_path, 3, 4, None, &[0, 4]);
-        assert!(
-            PQStorage::new(wrong_count_path, PQ_COMPRESSED_PATH, None)
-                .load_existing_pivot_data(&2, &3, &4, &storage_provider)
+                .load_pivots(&storage_provider)
                 .is_err()
         );
     }
@@ -689,7 +562,7 @@ mod pq_storage_tests {
         write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[1, 4]);
 
         let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_existing_pivot_data(&1, &3, &4, &storage_provider)
+            .load_pivots(&storage_provider)
             .unwrap_err();
 
         assert!(err.to_string().contains("offsets must begin at 0"));
@@ -703,7 +576,7 @@ mod pq_storage_tests {
         write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[0, 2, 3]);
 
         let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_existing_pivot_data(&2, &3, &4, &storage_provider)
+            .load_pivots(&storage_provider)
             .unwrap_err();
 
         assert!(err.to_string().contains("offsets expect 3"));
@@ -717,7 +590,7 @@ mod pq_storage_tests {
         write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[1, 4]);
 
         let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pivots(pivot_path, None, &storage_provider)
+            .load_pivots(&storage_provider)
             .unwrap_err();
 
         assert!(err.to_string().contains("offsets must begin at 0"));
@@ -765,7 +638,7 @@ mod pq_storage_tests {
         }
 
         let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pivots(pivot_path, None, &storage_provider)
+            .load_pivots(&storage_provider)
             .unwrap_err();
         let message = err.to_string();
 
@@ -789,7 +662,7 @@ mod pq_storage_tests {
 
         assert!(
             PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-                .load_pivots(pivot_path, None, &storage_provider)
+                .load_pivots(&storage_provider)
                 .is_err()
         );
     }
@@ -807,19 +680,15 @@ mod pq_storage_tests {
 
         assert!(
             PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-                .load_pivots(pivot_path, None, &storage_provider)
+                .load_pivots(&storage_provider)
                 .is_err()
         );
     }
 
     /// Write pivot data with a non-zero centroid, read it back, and verify that
-    /// folding the centroid via `accum_row_inplace` produces the expected
-    /// adjusted pivots.
+    /// loading folds the centroid into the effective pivots.
     #[test]
     fn write_read_roundtrip_with_legacy_centroid() {
-        use crate::model::pq::accum_row_inplace;
-        use diskann_utils::views::MutMatrixView;
-
         let storage_provider = VirtualStorageProvider::new_memory();
         let pivot_path = "/roundtrip_legacy_centroid_pivots.bin";
 
@@ -842,42 +711,22 @@ mod pq_storage_tests {
             )
             .unwrap();
 
-        let (mut loaded_pivots, loaded_centroid, loaded_offsets) = pq_storage
-            .load_existing_pivot_data(&num_pq_chunks, &num_centers, &dim, &storage_provider)
-            .unwrap();
-
-        assert_eq!(
-            loaded_pivots, pivots,
-            "raw pivots should match what was written"
-        );
-        assert_eq!(
-            loaded_centroid, centroid,
-            "centroid should round-trip exactly"
-        );
-        assert_eq!(loaded_offsets, chunk_offsets);
-
-        // Fold the centroid into the pivots — this is what production callers do.
-        let mut pivot_mat =
-            MutMatrixView::try_from(loaded_pivots.as_mut_slice(), num_centers, dim).unwrap();
-        accum_row_inplace(pivot_mat.as_mut_view(), &loaded_centroid);
+        let table = pq_storage.load_pivots(&storage_provider).unwrap();
+        let pivot_view = table.view_pivots();
+        let loaded_pivots = pivot_view.as_slice();
 
         // Each pivot row should have the centroid added element-wise.
-        for (idx, (pivot, &orig)) in loaded_pivots.iter().zip(pivots.iter()).enumerate() {
+        for (idx, (&pivot, &orig)) in loaded_pivots.iter().zip(pivots.iter()).enumerate() {
             let d = idx % dim;
             let expected = orig + centroid[d];
             assert_eq!(
-                *pivot, expected,
+                pivot, expected,
                 "pivot[{}]: expected {expected}, got {pivot}",
                 idx
             );
         }
-
-        // Check that `load_pq_pivots_bin` correctly does the centroid folding.
-        let table = pq_storage
-            .load_pq_pivots_bin(pivot_path, num_pq_chunks, &storage_provider)
-            .unwrap();
-
-        assert_eq!(loaded_pivots, table.view_pivots().as_slice());
+        assert_eq!(table.view_offsets().as_slice(), chunk_offsets);
+        assert_eq!(table.nchunks(), num_pq_chunks);
     }
 
     #[test]

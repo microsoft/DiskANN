@@ -111,18 +111,19 @@ where
             .read_existing_pivot_metadata(context.storage_provider)?;
 
         let num_chunks = context.num_chunks;
-        let table = context.pq_storage.load_pivots(
-            context.pq_storage.get_pivot_data_path(),
-            Some(num_chunks),
-            context.storage_provider,
-        )?;
+        let table = context.pq_storage.load_pivots(context.storage_provider)?;
 
-        if table.ncenters() != context.num_centers || table.dim() != full_dim {
+        if table.nchunks() != num_chunks
+            || table.ncenters() != context.num_centers
+            || table.dim() != full_dim
+        {
             return Err(diskann_error!(
                 ErrorKind::PQError,
-                "PQ pivot table mismatch: file has {} centers in {} dimensions but expected {} centers in {} dimensions.",
+                "PQ pivot table mismatch: file has {} chunks, {} centers in {} dimensions but expected {} chunks, {} centers in {} dimensions.",
+                table.nchunks(),
                 table.ncenters(),
                 table.dim(),
+                num_chunks,
                 context.num_centers,
                 full_dim
             ));

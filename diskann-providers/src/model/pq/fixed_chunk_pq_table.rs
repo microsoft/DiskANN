@@ -144,11 +144,6 @@ impl FixedChunkPQTable {
         Ok(Self { table })
     }
 
-    /// Wrap an already-validated basic PQ table.
-    pub fn from_basic_table(table: BasicTable) -> Self {
-        Self { table }
-    }
-
     /// Get chunk number.
     pub fn get_num_chunks(&self) -> usize {
         self.table.nchunks()
@@ -435,6 +430,12 @@ impl FixedChunkPQTable {
     }
 }
 
+impl From<BasicTable> for FixedChunkPQTable {
+    fn from(table: BasicTable) -> Self {
+        Self { table }
+    }
+}
+
 // This goes against Rust's Orphan rule, so we cannot implement it directly.
 // However, we can use a wrapper type to implement the conversion.
 // This is a workaround to allow the conversion from `product::TableCompressionError` to
@@ -698,8 +699,9 @@ mod fixed_chunk_pq_table_test {
     fn load_test_pivots() -> FixedChunkPQTable {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         PQStorage::new(PQ_PIVOTS_PATH, "", None)
-            .load_pq_pivots_bin(PQ_PIVOTS_PATH, 1, &storage_provider)
+            .load_pivots(&storage_provider)
             .unwrap()
+            .into()
     }
 
     #[test]

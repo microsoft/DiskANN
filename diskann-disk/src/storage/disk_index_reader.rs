@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{storage::PQStorage, utils::load_metadata_from_file};
+use diskann_providers::{
+    model::FixedChunkPQTable, storage::PQStorage, utils::load_metadata_from_file,
+};
 
 use crate::search::pq::PQData;
 use tracing::info;
@@ -29,11 +31,7 @@ impl DiskIndexReader {
         storage_provider: &Storage,
     ) -> ANNResult<Self> {
         let pq_storage = PQStorage::new(&pq_pivot_path, &pq_compressed_data_path, None);
-        let pq_pivot_table = pq_storage.load_pq_pivots_bin::<Storage>(
-            &pq_pivot_path,
-            0, // Use 0 to infer num_pq_chunks from the file
-            storage_provider,
-        )?;
+        let pq_pivot_table: FixedChunkPQTable = pq_storage.load_pivots(storage_provider)?.into();
 
         // Auto-detect number of points from compressed PQ file metadata
         let metadata = load_metadata_from_file(storage_provider, &pq_compressed_data_path)?;
