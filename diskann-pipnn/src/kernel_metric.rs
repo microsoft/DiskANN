@@ -7,7 +7,7 @@
 //!
 //! Runtime metric selection happens only while preparing a dispatched kernel.
 //! The hot loops receive a concrete marker type, allowing metric arithmetic and
-//! scale handling to inline without a per-row or per-chunk enum match.
+//! scale handling to inline without a per-point or per-chunk enum match.
 
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
@@ -66,34 +66,34 @@ impl ScaleKind {
 /// Runtime `Metric` is converted to one implementor before final type erasure.
 /// Generic methods then inline metric arithmetic into the architecture-specific
 /// function pointer. Leaf and partition operations remain separate because L2
-/// partition ranking deliberately omits the row norm.
+/// partition ranking deliberately omits the point norm.
 pub(crate) trait KernelMetric: Send + Sync + 'static {
     /// Runtime tag represented by this marker.
     const METRIC: Metric;
     /// Diagonal scale representation used by the leaf kernel.
     const LEAF_SCALE: ScaleKind;
-    /// Point-row scale representation used by partition assignment.
-    const PARTITION_ROW_SCALE: ScaleKind;
+    /// Point scale representation used by partition assignment.
+    const PARTITION_POINT_SCALE: ScaleKind;
     /// Leader-column scale representation used by partition assignment.
     const PARTITION_LEADER_SCALE: ScaleKind;
 
-    /// SIMD distance for one leaf row against a lane group of earlier points.
-    fn leaf_distance<F>(arch: F::Arch, dot: F, row_scale: F, column_scale: F) -> F
+    /// SIMD distance for one leaf source against a lane group of earlier targets.
+    fn leaf_distance<F>(arch: F::Arch, dot: F, source_scale: F, target_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
     /// Scalar-tail equivalent of `leaf_distance`.
-    fn leaf_distance_scalar(dot: f32, row_scale: f32, column_scale: f32) -> f32;
+    fn leaf_distance_scalar(dot: f32, source_scale: f32, target_scale: f32) -> f32;
 
-    /// SIMD ranking score for one point row against a lane group of leaders.
-    fn partition_distance<F>(arch: F::Arch, dot: F, row_scale: F, leader_scale: F) -> F
+    /// SIMD ranking score for one point against a lane group of leaders.
+    fn partition_distance<F>(arch: F::Arch, dot: F, point_scale: F, leader_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
     /// Scalar-tail equivalent of `partition_distance`.
-    fn partition_distance_scalar(dot: f32, row_scale: f32, leader_scale: f32) -> f32;
+    fn partition_distance_scalar(dot: f32, point_scale: f32, leader_scale: f32) -> f32;
 }
 
 /// Zero-sized metric markers used only for monomorphization.
@@ -131,7 +131,7 @@ fn clamp_nonnegative_scalar(distance: f32) -> f32 {
 /// select zero similarity. NaN norms fail the zero comparison and propagate
 /// through division, leaving the final distance non-rankable.
 #[inline(always)]
-fn cosine_distance<F>(arch: F::Arch, dot: F, row_norm: F, column_norm: F) -> F
+fn cosine_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
 where
     F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
@@ -139,41 +139,44 @@ where
     let zero = F::default(arch);
     let one = F::splat(arch, 1.0);
     let minimum_norm = F::splat(arch, f32::MIN_POSITIVE.sqrt());
-    let row_zero = row_norm.lt_simd(minimum_norm);
-    let column_zero = column_norm.lt_simd(minimum_norm);
-    let denominator = row_norm * column_norm;
-    let safe_denominator = row_zero.select(one, column_zero.select(one, denominator));
-    let cosine = row_zero.select(zero, column_zero.select(zero, dot / safe_denominator));
+    let source_zero = source_norm.lt_simd(minimum_norm);
+    let target_zero = target_norm.lt_simd(minimum_norm);
+    let denominator = source_norm * target_norm;
+    let safe_denominator = source_zero.select(one, target_zero.select(one, denominator));
+    let cosine = source_zero.select(zero, target_zero.select(zero, dot / safe_denominator));
     one - cosine
 }
 
 #[inline(always)]
-fn cosine_distance_scalar(dot: f32, row_norm: f32, column_norm: f32) -> f32 {
-    if row_norm < f32::MIN_POSITIVE.sqrt() || column_norm < f32::MIN_POSITIVE.sqrt() {
+fn cosine_distance_scalar(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
+    if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {
         1.0
     } else {
-        1.0 - dot / (row_norm * column_norm)
+        1.0 - dot / (source_norm * target_norm)
     }
 }
 
 impl KernelMetric for L2 {
     const METRIC: Metric = Metric::L2;
     const LEAF_SCALE: ScaleKind = ScaleKind::SquaredNorm;
-    const PARTITION_ROW_SCALE: ScaleKind = ScaleKind::None;
+    const PARTITION_POINT_SCALE: ScaleKind = ScaleKind::None;
     const PARTITION_LEADER_SCALE: ScaleKind = ScaleKind::SquaredNorm;
 
     #[inline(always)]
-    fn leaf_distance<F>(arch: F::Arch, dot: F, row_scale: F, column_scale: F) -> F
+    fn leaf_distance<F>(arch: F::Arch, dot: F, source_scale: F, target_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        clamp_nonnegative(arch, row_scale + column_scale - F::splat(arch, 2.0) * dot)
+        clamp_nonnegative(
+            arch,
+            source_scale + target_scale - F::splat(arch, 2.0) * dot,
+        )
     }
 
     #[inline(always)]
-    fn leaf_distance_scalar(dot: f32, row_scale: f32, column_scale: f32) -> f32 {
-        clamp_nonnegative_scalar(row_scale + column_scale - 2.0 * dot)
+    fn leaf_distance_scalar(dot: f32, source_scale: f32, target_scale: f32) -> f32 {
+        clamp_nonnegative_scalar(source_scale + target_scale - 2.0 * dot)
     }
 
     #[inline(always)]
@@ -196,42 +199,42 @@ impl KernelMetric for L2 {
 impl KernelMetric for Cosine {
     const METRIC: Metric = Metric::Cosine;
     const LEAF_SCALE: ScaleKind = ScaleKind::NormFromSquared;
-    const PARTITION_ROW_SCALE: ScaleKind = ScaleKind::NormFromSquared;
+    const PARTITION_POINT_SCALE: ScaleKind = ScaleKind::NormFromSquared;
     const PARTITION_LEADER_SCALE: ScaleKind = ScaleKind::Norm;
 
     #[inline(always)]
-    fn leaf_distance<F>(arch: F::Arch, dot: F, row_scale: F, column_scale: F) -> F
+    fn leaf_distance<F>(arch: F::Arch, dot: F, source_scale: F, target_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        clamp_nonnegative(arch, cosine_distance(arch, dot, row_scale, column_scale))
+        clamp_nonnegative(arch, cosine_distance(arch, dot, source_scale, target_scale))
     }
 
     #[inline(always)]
-    fn leaf_distance_scalar(dot: f32, row_scale: f32, column_scale: f32) -> f32 {
-        clamp_nonnegative_scalar(cosine_distance_scalar(dot, row_scale, column_scale))
+    fn leaf_distance_scalar(dot: f32, source_scale: f32, target_scale: f32) -> f32 {
+        clamp_nonnegative_scalar(cosine_distance_scalar(dot, source_scale, target_scale))
     }
 
     #[inline(always)]
-    fn partition_distance<F>(arch: F::Arch, dot: F, row_scale: F, leader_scale: F) -> F
+    fn partition_distance<F>(arch: F::Arch, dot: F, point_scale: F, leader_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        cosine_distance(arch, dot, row_scale, leader_scale)
+        cosine_distance(arch, dot, point_scale, leader_scale)
     }
 
     #[inline(always)]
-    fn partition_distance_scalar(dot: f32, row_scale: f32, leader_scale: f32) -> f32 {
-        cosine_distance_scalar(dot, row_scale, leader_scale)
+    fn partition_distance_scalar(dot: f32, point_scale: f32, leader_scale: f32) -> f32 {
+        cosine_distance_scalar(dot, point_scale, leader_scale)
     }
 }
 
 impl KernelMetric for CosineNormalized {
     const METRIC: Metric = Metric::CosineNormalized;
     const LEAF_SCALE: ScaleKind = ScaleKind::None;
-    const PARTITION_ROW_SCALE: ScaleKind = ScaleKind::None;
+    const PARTITION_POINT_SCALE: ScaleKind = ScaleKind::None;
     const PARTITION_LEADER_SCALE: ScaleKind = ScaleKind::None;
 
     #[inline(always)]
@@ -266,7 +269,7 @@ impl KernelMetric for CosineNormalized {
 impl KernelMetric for InnerProduct {
     const METRIC: Metric = Metric::InnerProduct;
     const LEAF_SCALE: ScaleKind = ScaleKind::None;
-    const PARTITION_ROW_SCALE: ScaleKind = ScaleKind::None;
+    const PARTITION_POINT_SCALE: ScaleKind = ScaleKind::None;
     const PARTITION_LEADER_SCALE: ScaleKind = ScaleKind::None;
 
     #[inline(always)]

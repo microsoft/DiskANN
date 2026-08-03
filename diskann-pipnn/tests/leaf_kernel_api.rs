@@ -6,7 +6,8 @@
 use std::cmp::Ordering;
 
 use diskann_pipnn::leaf_kernel::{
-    leaf_output_len, LeafKernel, LeafKernelError, LeafNeighbor, LeafTopK, LeafTopKWorkspace,
+    leaf_neighbor_count, leaf_output_len, LeafInput, LeafKernel, LeafKernelError,
+    LeafKernelWorkspace, LeafNeighbor,
 };
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
@@ -15,29 +16,30 @@ const SIMD_BOUNDARY_POINTS: [usize; 9] = [7, 8, 9, 15, 16, 17, 64, 256, 512];
 const ZERO_NORM_POSITION: usize = 0;
 const DISTINCT_NORM_POSITION: usize = 2;
 const NORM_PERIOD: usize = 5;
-const ROW_MIXER: usize = 17;
-const COLUMN_MIXER: usize = 11;
+const SOURCE_MIXER: usize = 17;
+const TARGET_MIXER: usize = 11;
 const MIX_MODULUS: usize = 23;
 const MIX_CENTER: f32 = 11.0;
 const DOT_SCALE: f32 = 1.0 / 32.0;
-const TIED_COLUMNS: [usize; 2] = [1, 2];
+const TIED_TARGETS: [usize; 2] = [1, 2];
 
-fn differential_input(metric: Metric, points: usize) -> Vec<f32> {
+fn differential_dots(metric: Metric, points: usize) -> Vec<f32> {
     let mut dots = vec![f32::NAN; points * points];
-    for row in 0..points {
-        dots[row * points + row] = if metric == Metric::Cosine && row == ZERO_NORM_POSITION {
+    for source in 0..points {
+        dots[source * points + source] = if metric == Metric::Cosine && source == ZERO_NORM_POSITION
+        {
             0.0
-        } else if row == DISTINCT_NORM_POSITION {
+        } else if source == DISTINCT_NORM_POSITION {
             2.0
         } else {
-            1.0 + (row % NORM_PERIOD) as f32
+            1.0 + (source % NORM_PERIOD) as f32
         };
-        for column in 0..row {
+        for target in 0..source {
             let pair =
-                ((row * ROW_MIXER + column * COLUMN_MIXER) % MIX_MODULUS) as f32 - MIX_CENTER;
-            dots[row * points + column] = if row == points - 1 && column == 0 {
+                ((source * SOURCE_MIXER + target * TARGET_MIXER) % MIX_MODULUS) as f32 - MIX_CENTER;
+            dots[source * points + target] = if source == points - 1 && target == 0 {
                 f32::NAN
-            } else if TIED_COLUMNS.contains(&column) {
+            } else if TIED_TARGETS.contains(&target) {
                 0.5
             } else {
                 pair * DOT_SCALE
@@ -47,22 +49,27 @@ fn differential_input(metric: Metric, points: usize) -> Vec<f32> {
     dots
 }
 
-fn input(dots: &[f32], points: usize) -> LeafTopK<'_> {
-    LeafTopK {
+fn test_input(dots: &[f32], points: usize) -> LeafInput<'_> {
+    LeafInput {
         dots: MatrixView::try_from(dots, points, points).unwrap(),
     }
 }
 
-fn reference(dots: &[f32], points: usize, requested_k: usize, metric: Metric) -> Vec<LeafNeighbor> {
-    let k = requested_k.min(points.saturating_sub(1));
-    let mut output = vec![LeafNeighbor::default(); points * k];
-    if k == 0 {
+fn brute_force_reference(
+    dots: &[f32],
+    points: usize,
+    requested_k: usize,
+    metric: Metric,
+) -> Vec<LeafNeighbor> {
+    let leaf_k = requested_k.min(points.saturating_sub(1));
+    let mut output = vec![LeafNeighbor::default(); points * leaf_k];
+    if leaf_k == 0 {
         return output;
     }
 
     let norms: Vec<_> = (0..points)
-        .map(|row| {
-            let diagonal = dots[row * points + row];
+        .map(|source| {
+            let diagonal = dots[source * points + source];
             if metric == Metric::Cosine {
                 if diagonal < f32::MIN_POSITIVE {
                     0.0
@@ -75,25 +82,25 @@ fn reference(dots: &[f32], points: usize, requested_k: usize, metric: Metric) ->
         })
         .collect();
 
-    for row in 0..points {
+    for source in 0..points {
         let mut candidates = Vec::with_capacity(points - 1);
-        for position in 0..points {
-            if position == row {
+        for target in 0..points {
+            if target == source {
                 continue;
             }
-            let (lower_row, lower_column) = if row > position {
-                (row, position)
+            let (lower_source, lower_target) = if source > target {
+                (source, target)
             } else {
-                (position, row)
+                (target, source)
             };
-            let dot = dots[lower_row * points + lower_column];
+            let dot = dots[lower_source * points + lower_target];
             let clamp = |distance: f32| if distance < 0.0 { 0.0 } else { distance };
             let distance = match metric {
-                Metric::L2 => clamp(norms[row] + norms[position] - 2.0 * dot),
+                Metric::L2 => clamp(norms[source] + norms[target] - 2.0 * dot),
                 Metric::CosineNormalized => clamp(1.0 - dot),
                 Metric::InnerProduct => -dot,
                 Metric::Cosine => {
-                    let denominator = norms[row] * norms[position];
+                    let denominator = norms[source] * norms[target];
                     let similarity = if denominator == 0.0 {
                         0.0
                     } else {
@@ -103,7 +110,7 @@ fn reference(dots: &[f32], points: usize, requested_k: usize, metric: Metric) ->
                 }
             };
             if distance.partial_cmp(&f32::INFINITY) == Some(Ordering::Less) {
-                candidates.push(LeafNeighbor::new(position as u32, distance));
+                candidates.push(LeafNeighbor::new(target as u32, distance));
             }
         }
         candidates.sort_by(|left, right| {
@@ -111,24 +118,28 @@ fn reference(dots: &[f32], points: usize, requested_k: usize, metric: Metric) ->
                 .partial_cmp(&right.distance)
                 .expect("NaN distances were filtered")
         });
-        let count = candidates.len().min(k);
-        output[row * k..row * k + count].copy_from_slice(&candidates[..count]);
+        let count = candidates.len().min(leaf_k);
+        output[source * leaf_k..source * leaf_k + count].copy_from_slice(&candidates[..count]);
     }
     output
 }
 
-fn run(dots: &[f32], points: usize, k: usize, metric: Metric) -> (usize, Vec<LeafNeighbor>) {
-    let actual_k = k.min(points.saturating_sub(1));
-    let mut output = vec![LeafNeighbor::default(); points * actual_k];
-    let returned_k = LeafKernel::new(metric, k)
+fn run_kernel(
+    dots: &[f32],
+    points: usize,
+    requested_k: usize,
+    metric: Metric,
+) -> (usize, Vec<LeafNeighbor>) {
+    let leaf_k = leaf_neighbor_count(points, requested_k).unwrap();
+    let mut output = vec![LeafNeighbor::default(); points * leaf_k];
+    LeafKernel::new(metric)
         .nearest_neighbors(
-            input(dots, points),
-            MutMatrixView::try_from(output.as_mut_slice(), points, actual_k).unwrap(),
-            &mut LeafTopKWorkspace::new(),
+            test_input(dots, points),
+            MutMatrixView::try_from(output.as_mut_slice(), points, leaf_k).unwrap(),
+            &mut LeafKernelWorkspace::new(),
         )
         .unwrap();
-    assert_eq!(returned_k, actual_k);
-    (returned_k, output)
+    (leaf_k, output)
 }
 
 #[test]
@@ -140,10 +151,10 @@ fn prepared_dispatch_matches_reference_across_simd_width_boundaries() {
         Metric::InnerProduct,
     ] {
         for points in SIMD_BOUNDARY_POINTS {
-            let dots = differential_input(metric, points);
+            let dots = differential_dots(metric, points);
             for requested_k in [1, 2, 3, 4, 5] {
-                let expected = reference(&dots, points, requested_k, metric);
-                let actual = run(&dots, points, requested_k, metric).1;
+                let expected = brute_force_reference(&dots, points, requested_k, metric);
+                let actual = run_kernel(&dots, points, requested_k, metric).1;
                 assert_eq!(actual, expected, "{metric:?}, n={points}, k={requested_k}");
             }
         }
@@ -161,7 +172,7 @@ fn l2_scans_only_the_lower_triangle_and_breaks_ties_by_position() {
     ];
 
     assert_eq!(
-        run(&dots, 4, 2, Metric::L2).1,
+        run_kernel(&dots, 4, 2, Metric::L2).1,
         [
             LeafNeighbor::new(1, 1.0),
             LeafNeighbor::new(2, 1.0),
@@ -189,10 +200,10 @@ fn supports_every_leaf_metric() {
         (Metric::CosineNormalized, [1, 2, 1]),
         (Metric::InnerProduct, [1, 2, 1]),
     ] {
-        let positions: Vec<_> = run(&dots, 3, 1, metric)
+        let positions: Vec<_> = run_kernel(&dots, 3, 1, metric)
             .1
             .iter()
-            .map(|neighbor| neighbor.position)
+            .map(|neighbor| neighbor.target)
             .collect();
         assert_eq!(positions, expected, "metric {metric:?}");
     }
@@ -207,7 +218,7 @@ fn cosine_treats_zero_norm_as_zero_similarity() {
         0.0,  0.0,  1.0,
     ];
 
-    let output = run(&dots, 3, 2, Metric::Cosine).1;
+    let output = run_kernel(&dots, 3, 2, Metric::Cosine).1;
     assert_eq!(output[0], LeafNeighbor::new(1, 1.0));
     assert_eq!(output[1], LeafNeighbor::new(2, 1.0));
 }
@@ -216,23 +227,35 @@ fn cosine_treats_zero_norm_as_zero_similarity() {
 fn preserves_pipnn_metric_edge_semantics() {
     #[rustfmt::skip]
     let out_of_range = [1.0, 0.0, 2.0, 1.0];
-    assert_eq!(run(&out_of_range, 2, 1, Metric::L2).1[0].distance, 0.0);
     assert_eq!(
-        run(&out_of_range, 2, 1, Metric::CosineNormalized).1[0].distance,
+        run_kernel(&out_of_range, 2, 1, Metric::L2).1[0].distance,
         0.0
     );
-    assert_eq!(run(&out_of_range, 2, 1, Metric::Cosine).1[0].distance, 0.0);
+    assert_eq!(
+        run_kernel(&out_of_range, 2, 1, Metric::CosineNormalized).1[0].distance,
+        0.0
+    );
+    assert_eq!(
+        run_kernel(&out_of_range, 2, 1, Metric::Cosine).1[0].distance,
+        0.0
+    );
 
     #[rustfmt::skip]
     let opposite = [1.0, 0.0, -2.0, 1.0];
-    assert_eq!(run(&opposite, 2, 1, Metric::Cosine).1[0].distance, 3.0);
+    assert_eq!(
+        run_kernel(&opposite, 2, 1, Metric::Cosine).1[0].distance,
+        3.0
+    );
 
     let subnormal = [f32::MIN_POSITIVE / 2.0, 0.0, 1.0, 1.0];
-    assert_eq!(run(&subnormal, 2, 1, Metric::Cosine).1[0].distance, 1.0);
+    assert_eq!(
+        run_kernel(&subnormal, 2, 1, Metric::Cosine).1[0].distance,
+        1.0
+    );
 
     let minimum_normal = [f32::MIN_POSITIVE, 0.0, f32::MIN_POSITIVE.sqrt(), 1.0];
     assert_eq!(
-        run(&minimum_normal, 2, 1, Metric::Cosine).1[0].distance,
+        run_kernel(&minimum_normal, 2, 1, Metric::Cosine).1[0].distance,
         0.0
     );
 }
@@ -243,10 +266,10 @@ fn finite_max_distance_fills_the_final_simd_slot() {
     let mut dots = vec![0.0; points * points];
     dots[8 * points] = -f32::MAX;
 
-    let (actual_k, output) = run(&dots, points, points - 1, Metric::InnerProduct);
-    assert_eq!(actual_k, 8);
+    let (leaf_k, output) = run_kernel(&dots, points, points - 1, Metric::InnerProduct);
+    assert_eq!(leaf_k, 8);
     assert_eq!(
-        output[8 * actual_k + actual_k - 1],
+        output[8 * leaf_k + leaf_k - 1],
         LeafNeighbor::new(0, f32::MAX)
     );
 }
@@ -266,28 +289,28 @@ fn every_metric_ignores_nan_pairs() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        let output = run(&dots, 3, 1, metric).1;
-        assert_eq!(output[0].position, 2, "metric {metric:?}");
-        assert_eq!(output[1].position, 2, "metric {metric:?}");
+        let output = run_kernel(&dots, 3, 1, metric).1;
+        assert_eq!(output[0].target, 2, "metric {metric:?}");
+        assert_eq!(output[1].target, 2, "metric {metric:?}");
     }
 }
 
 #[test]
-fn rejects_incomplete_neighbor_rows() {
+fn rejects_sources_with_too_few_rankable_neighbors() {
     let dots = [1.0, 0.0, f32::NAN, 1.0];
     let mut output = [LeafNeighbor::default(); 2];
-    let error = LeafKernel::new(Metric::L2, 1)
+    let error = LeafKernel::new(Metric::L2)
         .nearest_neighbors(
-            input(&dots, 2),
+            test_input(&dots, 2),
             MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
-            &mut LeafTopKWorkspace::new(),
+            &mut LeafKernelWorkspace::new(),
         )
         .unwrap_err();
 
     assert_eq!(
         error,
         LeafKernelError::InsufficientRankableNeighbors {
-            row: 0,
+            source_index: 0,
             neighbors: 1
         }
     );
@@ -301,57 +324,70 @@ fn clamps_k_to_available_non_self_neighbors() {
         0.0, 1.0, 3.0,
         0.0, 0.0, 1.0,
     ];
-    let (actual_k, output) = run(&dots, 3, 99, Metric::L2);
+    let (leaf_k, output) = run_kernel(&dots, 3, 99, Metric::L2);
 
-    assert_eq!(actual_k, 2);
-    for (row, neighbors) in output.chunks_exact(actual_k).enumerate() {
+    assert_eq!(leaf_k, 2);
+    for (source, neighbors) in output.chunks_exact(leaf_k).enumerate() {
         assert!(neighbors
             .iter()
-            .all(|neighbor| neighbor.position as usize != row));
+            .all(|neighbor| neighbor.target as usize != source));
     }
 }
 
 #[test]
 fn accepts_empty_singleton_and_zero_k_inputs() {
-    for (dots, points, k, metric) in [
+    for (dots, points, requested_k, metric) in [
         (&[][..], 0, 2, Metric::L2),
         (&[4.0][..], 1, 2, Metric::Cosine),
         (&[1.0, 0.0, 0.0, 1.0][..], 2, 0, Metric::InnerProduct),
     ] {
-        assert_eq!(run(dots, points, k, metric).0, 0);
+        assert_eq!(run_kernel(dots, points, requested_k, metric).0, 0);
     }
 }
 
 #[test]
-fn rejects_non_square_input_and_wrong_output_shape() {
+fn rejects_non_square_input_and_invalid_output_dimensions() {
     let dots = [0.0; 6];
-    let non_square = LeafTopK {
+    let non_square = LeafInput {
         dots: MatrixView::try_from(&dots[..], 2, 3).unwrap(),
     };
     let mut output = [LeafNeighbor::default(); 2];
-    let kernel = LeafKernel::new(Metric::L2, 1);
+    let kernel = LeafKernel::new(Metric::L2);
     assert_eq!(
         kernel.nearest_neighbors(
             non_square,
             MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
-            &mut LeafTopKWorkspace::new(),
+            &mut LeafKernelWorkspace::new(),
         ),
         Err(LeafKernelError::NonSquareDots { rows: 2, cols: 3 })
     );
 
     let square = [0.0; 9];
-    let mut wrong = [LeafNeighbor::default(); 3];
+    let mut wrong_rows = [LeafNeighbor::default(); 2];
     assert_eq!(
-        LeafKernel::new(Metric::L2, 2).nearest_neighbors(
-            input(&square, 3),
-            MutMatrixView::try_from(&mut wrong[..], 3, 1).unwrap(),
-            &mut LeafTopKWorkspace::new(),
+        kernel.nearest_neighbors(
+            test_input(&square, 3),
+            MutMatrixView::try_from(&mut wrong_rows[..], 2, 1).unwrap(),
+            &mut LeafKernelWorkspace::new(),
         ),
-        Err(LeafKernelError::InvalidOutputShape {
-            expected_rows: 3,
-            expected_cols: 2,
-            actual_rows: 3,
-            actual_cols: 1,
+        Err(LeafKernelError::InvalidOutputRows {
+            expected: 3,
+            actual: 2,
+            columns: 1,
+        })
+    );
+
+    let mut too_many = [LeafNeighbor::default(); 9];
+    assert_eq!(
+        kernel.nearest_neighbors(
+            test_input(&square, 3),
+            MutMatrixView::try_from(&mut too_many[..], 3, 3).unwrap(),
+            &mut LeafKernelWorkspace::new(),
+        ),
+        Err(LeafKernelError::InvalidNeighborCount {
+            points: 3,
+            neighbors: 3,
+            maximum: 2,
         })
     );
 }
@@ -360,16 +396,16 @@ fn rejects_non_square_input_and_wrong_output_shape() {
 fn cosine_zero_norm_masks_nan_norm_at_simd_boundaries() {
     for points in [9, 17] {
         let mut dots = vec![0.0; points * points];
-        for row in 1..points {
-            dots[row * points + row] = f32::NAN;
+        for source in 1..points {
+            dots[source * points + source] = f32::NAN;
         }
 
-        let output = run(&dots, points, 1, Metric::Cosine).1;
-        for (row, neighbor) in output.iter().enumerate().skip(1) {
+        let output = run_kernel(&dots, points, 1, Metric::Cosine).1;
+        for (source, neighbor) in output.iter().enumerate().skip(1) {
             assert_eq!(
                 *neighbor,
                 LeafNeighbor::new(0, 1.0),
-                "n={points}, row={row}"
+                "n={points}, source={source}"
             );
         }
     }
