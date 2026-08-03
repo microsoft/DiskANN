@@ -391,11 +391,6 @@ struct ColdSlotPtrs {
     scan_lanes: usize,
 }
 
-#[inline(always)]
-fn round_up_to_32(n: usize) -> usize {
-    n.div_ceil(32) * 32
-}
-
 // ─── find_hash SIMD: 32-way u16 compare ───────────────────────────────────────
 
 #[derive(Clone, Copy)]
@@ -556,17 +551,29 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
         hot.farthest_idx = 0;
         return;
     }
-    let mut max_dist: u16 = 0;
+    // Distance is stored as bf16, so distinct candidates frequently tie after
+    // quantization. The residual hash is already a seeded, ID-order-independent
+    // discriminator; the neighbor ID is only the final total-order fallback.
+    // This preserves the paper's history-independence guarantee under ties
+    // without systematically favoring low dataset IDs.
     let mut max_idx: u8 = 0;
-    for i in 0..hot.len as usize {
+    // SAFETY: `hot.len > 0` and all active slots are initialized.
+    let mut max_key = unsafe { (*cold.distances, *cold.hashes, *cold.neighbors) };
+    for i in 1..hot.len as usize {
         // SAFETY: guaranteed by this function's contract.
-        let d = unsafe { *cold.distances.add(i) };
-        if d > max_dist {
-            max_dist = d;
+        let key = unsafe {
+            (
+                *cold.distances.add(i),
+                *cold.hashes.add(i),
+                *cold.neighbors.add(i),
+            )
+        };
+        if key > max_key {
+            max_key = key;
             max_idx = i as u8;
         }
     }
-    hot.farthest_dist = max_dist;
+    hot.farthest_dist = max_key.0;
     hot.farthest_idx = max_idx;
 }
 
@@ -584,8 +591,19 @@ unsafe fn insert_locked(
 ) -> bool {
     let dist_key = ordered_key(distance);
 
-    if hot.len >= l_max && dist_key >= hot.farthest_dist {
-        return false;
+    if hot.len >= l_max {
+        let farthest = hot.farthest_idx as usize;
+        // SAFETY: a full reservoir has `farthest < hot.len` initialized slots.
+        let farthest_key = unsafe {
+            (
+                hot.farthest_dist,
+                *cold.hashes.add(farthest),
+                *cold.neighbors.add(farthest),
+            )
+        };
+        if (dist_key, hash, neighbor) >= farthest_key {
+            return false;
+        }
     }
 
     if let Some(idx) = find_hash.call(FindHashArgs {
@@ -595,7 +613,8 @@ unsafe fn insert_locked(
         target: hash,
     }) {
         // SAFETY: `idx < hot.len <= cold.scan_lanes`.
-        if dist_key < unsafe { *cold.distances.add(idx) } {
+        let current_key = unsafe { (*cold.distances.add(idx), *cold.neighbors.add(idx)) };
+        if (dist_key, neighbor) < current_key {
             let was_farthest = idx == hot.farthest_idx as usize;
             // SAFETY: as above; the caller holds the slot lock.
             unsafe {
@@ -613,6 +632,20 @@ unsafe fn insert_locked(
 
     if hot.len < l_max {
         let new_idx = hot.len as usize;
+        let becomes_farthest = if hot.len == 0 {
+            true
+        } else {
+            let farthest = hot.farthest_idx as usize;
+            // SAFETY: `farthest < hot.len` identifies an initialized slot.
+            let farthest_key = unsafe {
+                (
+                    hot.farthest_dist,
+                    *cold.hashes.add(farthest),
+                    *cold.neighbors.add(farthest),
+                )
+            };
+            (dist_key, hash, neighbor) > farthest_key
+        };
         // SAFETY: `new_idx < l_max <= cold.scan_lanes`; the caller holds the lock.
         unsafe {
             *cold.hashes.add(new_idx) = hash;
@@ -620,25 +653,24 @@ unsafe fn insert_locked(
             *cold.neighbors.add(new_idx) = neighbor;
         }
         hot.len += 1;
-        if dist_key >= hot.farthest_dist {
+        if becomes_farthest {
             hot.farthest_dist = dist_key;
             hot.farthest_idx = new_idx as u8;
         }
         return true;
     }
 
-    if dist_key < hot.farthest_dist {
-        let idx = hot.farthest_idx as usize;
-        // SAFETY: `idx < hot.len <= cold.scan_lanes`; the caller holds the lock.
-        unsafe {
-            *cold.hashes.add(idx) = hash;
-            *cold.distances.add(idx) = dist_key;
-            *cold.neighbors.add(idx) = neighbor;
-            update_farthest(hot, cold);
-        }
-        return true;
+    // The full-reservoir early rejection above proved that the incoming
+    // `(distance, residual hash, ID)` key is better than the cached farthest key.
+    let idx = hot.farthest_idx as usize;
+    // SAFETY: `idx < hot.len <= cold.scan_lanes`; the caller holds the lock.
+    unsafe {
+        *cold.hashes.add(idx) = hash;
+        *cold.distances.add(idx) = dist_key;
+        *cold.neighbors.add(idx) = neighbor;
+        update_farthest(hot, cold);
     }
-    false
+    true
 }
 
 /// Collect the reservoir's entries sorted by distance, truncated to `cap`.
@@ -661,7 +693,7 @@ unsafe fn collect_sorted_neighbors(
         // SAFETY: guaranteed by this function's contract.
         scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
     }
-    scratch.sort_unstable_by_key(|&(_, d)| d);
+    scratch.sort_unstable_by_key(|&(id, distance)| (distance, id));
     let out_len = n.min(cap);
     let mut out = Vec::with_capacity(out_len);
     for &(id, d) in &scratch[..out_len] {
@@ -704,7 +736,7 @@ pub(crate) struct HashPrune {
     cold_distances: MmapSlab<u16>,
     /// AoSoA neighbors slab: `npoints * scan_lanes` u32.
     cold_neighbors: MmapSlab<u32>,
-    /// Per-slot stride. Equals `round_up_to_32(l_max).max(32)`. Always a
+    /// Per-slot stride. Equals `l_max.next_multiple_of(32).max(32)`. Always a
     /// multiple of 32 so the AVX-512 / AVX-2 find_hash scan stays aligned.
     scan_lanes: usize,
     sketches: LshSketches,
@@ -745,7 +777,7 @@ impl HashPrune {
             "sketch computation"
         );
         let t1 = std::time::Instant::now();
-        let scan_lanes = round_up_to_32(l_max).max(32);
+        let scan_lanes = l_max.next_multiple_of(32).max(32);
 
         // Hot slab: one HotSlot per point, contiguous.
         let mut hot: Vec<LockedHotSlot> = Vec::new();
