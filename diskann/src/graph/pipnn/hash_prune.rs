@@ -6,7 +6,7 @@
 //! HashPrune: LSH-based online pruning for merging edges from overlapping partitions.
 //!
 //! ```text
-//! dataset ──> random-hyperplane sketches (one row per point)
+//! dataset ──> random-hyperplane sketches (one sketch per point)
 //!                                  │
 //! leaf-local symmetric CSR ──> gather leaf sketches
 //!                                  │
@@ -14,16 +14,16 @@
 //!                     relative hash(source, target)
 //!                                  │
 //!                                  v
-//!                 lock source row ──> update bounded reservoir
+//!              lock source reservoir ──> update bounded candidates
 //!                                  │
 //!                    consume HashPrune at stage exit
 //!                       ┌──────────┴──────────┐
 //!                       v                     v
-//!               nearest rows          unsorted candidate rows
+//!              nearest lists         unsorted candidate lists
 //!                                      (for RobustPrune)
 //! ```
 //!
-//! Each source row retains at most one neighbor per relative hash bucket:
+//! Each source reservoir retains at most one neighbor per relative hash bucket:
 //!
 //! | Existing state | Incoming edge | Action |
 //! | --- | --- | --- |
@@ -79,11 +79,11 @@ struct MmapSlab<T: Pod> {
 
 #[cfg(target_os = "linux")]
 // SAFETY: the allocation contains only `Pod` values and ownership transfers
-// with the slab; mutation is synchronized by HashPrune's per-row locks.
+// with the slab; mutation is synchronized by HashPrune's per-point locks.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(target_os = "linux")]
 // SAFETY: shared access exposes only immutable pointers; HashPrune synchronizes
-// every mutation to a row.
+// every mutation to a point reservoir.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(target_os = "linux")]
@@ -188,7 +188,7 @@ struct MmapSlab<T: Pod> {
 // process-owned allocation semantics.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(windows)]
-// SAFETY: shared mutation is synchronized by HashPrune's per-row locks.
+// SAFETY: shared mutation is synchronized by HashPrune's per-point locks.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(windows)]
@@ -476,7 +476,7 @@ where
     let target = F::splat(arch, args.target as i16);
     let chunks = len.div_ceil(F::LANES).min(args.scan_lanes / F::LANES);
     for chunk in 0..chunks {
-        // SAFETY: every full load stays inside the padded `scan_lanes` row.
+        // SAFETY: every full load stays inside the padded hash segment.
         let values = unsafe { F::load_simd(arch, args.hashes.add(chunk * F::LANES).cast::<i16>()) };
         if let Some(offset) = values.eq_simd(target).first() {
             let lane = chunk * F::LANES + offset;
@@ -675,7 +675,7 @@ unsafe fn insert_locked(
 
 /// Collect the reservoir's entries sorted by distance, truncated to `cap`.
 /// A Rayon-owned scratch `Vec`, sized to the reservoir's runtime fill and
-/// reused within one extraction job, avoids per-row allocation.
+/// reused within one extraction job, avoids per-reservoir allocation.
 ///
 /// SAFETY: caller holds the slot lock; `distances` and `neighbors` are valid
 /// for `hot.len` elements.
@@ -725,8 +725,8 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
 /// Global bounded reservoirs shared by parallel leaf workers.
 ///
 /// Row `i` consists of `hot[i]` and the `i * scan_lanes` range in each cold
-/// slab. The embedded row mutex is the sole synchronization boundary: callers
-/// never hold two row locks, and sketch computation/extraction happens without
+/// slab. The embedded point mutex is the sole synchronization boundary: callers
+/// never hold two point locks, and sketch computation/extraction happens without
 /// a lock. Consuming extraction proves that no writer can remain.
 pub(crate) struct HashPrune {
     hot: Vec<LockedHotSlot>,
@@ -749,12 +749,12 @@ pub(crate) struct HashPrune {
 // plain bit-pattern arrays; each per-point slot is guarded by HotSlot[i].lock.
 // Disjoint-index parallel access is safe.
 unsafe impl Send for HashPrune {}
-// SAFETY: the same per-row lock protects all mutation through shared
+// SAFETY: the same per-point lock protects all mutation through shared
 // references, and immutable sketches are safe to share.
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
-    /// Precompute immutable sketches and allocate one lazy-backed reservoir row
+    /// Precompute immutable sketches and allocate one lazy-backed reservoir
     /// per dataset point.
     pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: &[T],
@@ -783,7 +783,7 @@ impl HashPrune {
         let mut hot: Vec<LockedHotSlot> = Vec::new();
         hot.try_reserve_exact(npoints)
             .map_err(ANNError::opaque)
-            .map_err(|error| error.context(format!("reserving {npoints} HashPrune rows")))?;
+            .map_err(|error| error.context(format!("reserving {npoints} HashPrune reservoirs")))?;
         for _ in 0..npoints {
             hot.push(LockedHotSlot::new());
         }
@@ -868,7 +868,7 @@ impl HashPrune {
                 unsafe { (*self.hot_ptr).lock.unlock() };
             }
         }
-        assert!(idx < self.hot.len(), "HashPrune row index out of bounds");
+        assert!(idx < self.hot.len(), "HashPrune point index out of bounds");
         // SAFETY: idx bounds-checked above, so `idx * scan_lanes + scan_lanes`
         // is within each cold slab's capacity. UnlockOnDrop unlocks on panic.
         unsafe {
@@ -986,7 +986,7 @@ impl HashPrune {
             .into_par_iter()
             .map_init(Vec::new, |scratch, i| {
                 let off = i * scan_lanes;
-                // SAFETY: extraction owns every row, so no mutation remains.
+                // SAFETY: extraction owns every reservoir, so no mutation remains.
                 let hot = unsafe { &*hot[i].get() };
                 // SAFETY: i < hot.len() == npoints, so off + scan_lanes is
                 // within both cold slabs.
@@ -1031,9 +1031,9 @@ impl HashPrune {
             .into_par_iter()
             .map(|i| {
                 let neighbors = cold_neighbors.as_ptr().wrapping_add(i * scan_lanes);
-                // SAFETY: extraction owns every row; no mutation remains.
+                // SAFETY: extraction owns every reservoir; no mutation remains.
                 let hot = unsafe { &*hot[i].get() };
-                // SAFETY: i < hot.len() == npoints; the row spans scan_lanes
+                // SAFETY: i < hot.len() == npoints; the hash segment spans scan_lanes
                 // slots and hot.len <= l_max <= scan_lanes.
                 let ids = unsafe { collect_neighbor_ids(hot, neighbors, cap) };
                 // Reservoir slots have unique hashes, and one neighbor cannot

@@ -87,7 +87,7 @@ fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
     });
     let l_max = hp.l_max as u8;
     hp.with_locked(src, |hot, cold| {
-        // SAFETY: with_locked guards the row and supplies valid cold-slab pointers.
+        // SAFETY: with_locked guards the reservoir and supplies valid cold-slab pointers.
         unsafe { insert_locked(hot, cold, hash, dst as u32, distance, l_max, hp.find_hash) };
     });
 }
@@ -311,10 +311,11 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
             add_edge(&reference, source, target as usize, distance);
         }
     }
-    let canonicalize = |rows: Vec<diskann::graph::AdjacencyList<u32>>| {
-        rows.into_iter()
-            .map(|row| {
-                let mut ids = row.to_vec();
+    let canonicalize = |lists: Vec<diskann::graph::AdjacencyList<u32>>| {
+        lists
+            .into_iter()
+            .map(|candidates| {
+                let mut ids = candidates.to_vec();
                 ids.sort_unstable();
                 ids
             })
@@ -324,7 +325,7 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
     let expected = canonicalize(reference.into_candidate_lists());
 
     assert_eq!(actual, expected);
-    assert!(actual.iter().all(|row| !row.is_empty()));
+    assert!(actual.iter().all(|candidates| !candidates.is_empty()));
 }
 
 #[test]
@@ -340,7 +341,10 @@ fn test_add_leaf_edges_grows_and_then_reuses_sketch_scratch() {
     hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
     assert_eq!(scratch.len(), 16);
     assert_eq!(scratch.capacity(), capacity);
-    assert!(hp.into_candidate_lists().iter().all(|row| row.len() == 1));
+    assert!(hp
+        .into_candidate_lists()
+        .iter()
+        .all(|candidates| candidates.len() == 1));
 }
 
 #[test]
@@ -551,7 +555,7 @@ fn test_into_candidate_lists_returns_full_reservoir() {
         d.dedup();
         d
     };
-    assert_eq!(n0, deduped, "no duplicate ids in a reservoir row");
+    assert_eq!(n0, deduped, "no duplicate ids in a reservoir");
     assert!(
         n0.iter().all(|&id| (1..=3).contains(&id)),
         "node 0 ids must be a subset of its inserted neighbors {{1,2,3}}, got {:?}",
