@@ -3,28 +3,26 @@
  * Licensed under the MIT license.
  */
 
-//! Fused nearest-neighbor selection over a leaf's lower dot-product matrix.
+//! Prepared nearest-neighbor kernels over a leaf's lower dot-product matrix.
 //!
-//! `sgemm_aat_lower` writes only pair `(row, column)` with `column <= row`.
-//! This kernel therefore walks the strict lower triangle once and offers each
-//! computed distance to both endpoint rows. Keeping one top-k tracker per row
-//! avoids materializing the upper triangle or computing a symmetric distance
-//! twice.
-//!
-//! The public entry point validates every shape before dispatch. The dispatched
-//! path processes complete SIMD chunks, then a scalar tail. For `k <= 3`, const
-//! slot counts remove the dynamic insertion loop from the hot path; larger `k`
-//! uses the same ordering rules through the dynamic fallback. NaN distances are
-//! never rankable, and ties retain scan order so scalar and SIMD backends produce
-//! the same graph.
+//! `sgemm_aat_lower` writes pair `(row, column)` only when `column <= row`.
+//! The kernel scans that strict lower triangle once and offers each distance to
+//! both endpoint rows. A [`LeafKernel`] is prepared once for the build metric,
+//! requested neighbor count, and runtime CPU; repeated leaves call a direct
+//! `diskann-wide` function pointer without ISA or metric dispatch in the loop.
+//! NaN distances are not rankable, and equal distances retain pair scan order.
 
+use std::marker::PhantomData;
+
+use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
-use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
+use diskann_wide::{
+    arch::{self, Dispatched1, FTarget1},
+    lifetime::AddLifetime,
+    Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
+};
 
-const L2: u8 = 0;
-const COSINE_NORMALIZED: u8 = 1;
-const INNER_PRODUCT: u8 = 2;
-const COSINE: u8 = 3;
+use crate::kernel_metric::{erase_metric, EraseMetric, KernelMetric};
 
 /// One leaf-local neighbor and its metric distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,15 +46,11 @@ impl Default for LeafNeighbor {
     }
 }
 
-/// Lower-triangular dot products consumed by [`nearest_leaf_neighbors`].
+/// Square lower-triangular dot-product matrix for one leaf.
 #[derive(Clone, Copy, Debug)]
 pub struct LeafTopK<'a> {
-    /// Row-major `points * points` matrix. Only entries with `column <= row` are read.
-    pub dots: &'a [f32],
-    /// Number of points represented by the matrix.
-    pub points: usize,
-    /// Metric used to rank pairs.
-    pub metric: Metric,
+    /// Point-by-point matrix. Only entries with `column <= row` are read.
+    pub dots: MatrixView<'a, f32>,
 }
 
 /// Reusable temporary storage for leaf top-k selection.
@@ -76,13 +70,21 @@ impl LeafTopKWorkspace {
     }
 }
 
-/// Validation or allocation error returned by [`nearest_leaf_neighbors`].
+/// Validation or allocation error returned by [`LeafKernel::nearest_neighbors`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LeafKernelError {
     /// The point count cannot be represented in leaf-local `u32` positions.
     #[error("point count {0} exceeds the u32 position limit")]
     TooManyPoints(usize),
-    /// A declared shape overflowed `usize`.
+    /// The dot-product matrix is not square.
+    #[error("leaf dot-product matrix must be square, got {rows} x {cols}")]
+    NonSquareDots {
+        /// Supplied row count.
+        rows: usize,
+        /// Supplied column count.
+        cols: usize,
+    },
+    /// A declared output shape overflowed `usize`.
     #[error("{buffer} shape {rows} x {cols} overflows usize")]
     ShapeOverflow {
         /// Name of the buffer whose shape overflowed.
@@ -92,7 +94,7 @@ pub enum LeafKernelError {
         /// Declared column count.
         cols: usize,
     },
-    /// A supplied slice did not match its declared shape.
+    /// A view's backing slice does not match its declared shape.
     #[error("invalid {buffer} length: expected {expected}, got {actual}")]
     InvalidBufferLength {
         /// Name of the invalid buffer.
@@ -101,6 +103,20 @@ pub enum LeafKernelError {
         expected: usize,
         /// Supplied length.
         actual: usize,
+    },
+    /// The output matrix does not match the requested neighbor shape.
+    #[error(
+        "invalid output shape: expected {expected_rows} x {expected_cols}, got {actual_rows} x {actual_cols}"
+    )]
+    InvalidOutputShape {
+        /// Required row count.
+        expected_rows: usize,
+        /// Required column count.
+        expected_cols: usize,
+        /// Supplied row count.
+        actual_rows: usize,
+        /// Supplied column count.
+        actual_cols: usize,
     },
     /// Temporary storage could not be reserved.
     #[error("failed to reserve {additional} values for {buffer}")]
@@ -120,7 +136,7 @@ pub enum LeafKernelError {
     },
 }
 
-/// Return the required output length for [`nearest_leaf_neighbors`].
+/// Return the required output length for [`LeafKernel::nearest_neighbors`].
 pub fn leaf_output_len(points: usize, k: usize) -> Result<usize, LeafKernelError> {
     if points > u32::MAX as usize {
         return Err(LeafKernelError::TooManyPoints(points));
@@ -128,41 +144,228 @@ pub fn leaf_output_len(points: usize, k: usize) -> Result<usize, LeafKernelError
     checked_area("output", points, k.min(points.saturating_sub(1)))
 }
 
-/// Select the nearest non-self leaf positions for every row.
+#[derive(Debug)]
+struct LeafCall<'a> {
+    input: LeafTopK<'a>,
+    output: MutMatrixView<'a, LeafNeighbor>,
+    workspace: &'a mut LeafTopKWorkspace,
+    requested_k: usize,
+}
+
+#[derive(Debug)]
+struct LeafCallArg;
+
+impl AddLifetime for LeafCallArg {
+    type Of<'a> = LeafCall<'a>;
+}
+
+type LeafFn = Dispatched1<Result<usize, LeafKernelError>, LeafCallArg>;
+
+/// A leaf kernel prepared for one metric, neighbor count, and the current CPU.
 ///
-/// The strictly lower triangle is scanned once. Each pair updates both row
-/// trackers, so the upper triangle is neither read nor materialized. The
-/// returned value is `min(k, points - 1)`, and `output` contains exactly
-/// [`leaf_output_len`] entries grouped by row and ordered by ascending distance.
-/// Equal distances retain pair scan order.
-pub fn nearest_leaf_neighbors(
-    input: LeafTopK<'_>,
-    k: usize,
-    output: &mut [LeafNeighbor],
-    workspace: &mut LeafTopKWorkspace,
-) -> Result<usize, LeafKernelError> {
-    let actual_k = validate(input, k, output)?;
-    if actual_k == 0 {
-        return Ok(0);
+/// Construct this once with [`LeafKernel::new`] and share it across leaf workers.
+/// The handle stores only a direct function pointer and the requested `k`.
+#[derive(Clone, Copy, Debug)]
+pub struct LeafKernel {
+    run: LeafFn,
+    requested_k: usize,
+}
+
+impl LeafKernel {
+    /// Prepare a leaf kernel for `metric`, `k`, and the current CPU.
+    pub fn new(metric: Metric, k: usize) -> Self {
+        diskann_wide::arch::dispatch1_no_features(PrepareLeaf { requested_k: k }, metric)
     }
 
-    let uses_norms = matches!(input.metric, Metric::L2 | Metric::Cosine);
-    if uses_norms {
-        resize("norms", &mut workspace.norms, input.points, 0.0)?;
+    /// Select the nearest non-self leaf positions for every row.
+    ///
+    /// `output` must have `input.dots.nrows()` rows and
+    /// `min(k, rows - 1)` columns. The returned value is that effective column
+    /// count. Equal distances retain pair scan order.
+    pub fn nearest_neighbors(
+        &self,
+        input: LeafTopK<'_>,
+        output: MutMatrixView<'_, LeafNeighbor>,
+        workspace: &mut LeafTopKWorkspace,
+    ) -> Result<usize, LeafKernelError> {
+        self.run.call(LeafCall {
+            input,
+            output,
+            workspace,
+            requested_k: self.requested_k,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KValue {
+    One,
+    Two,
+    Three,
+    Large,
+}
+
+impl KValue {
+    const fn from_requested(k: usize) -> Self {
+        match k {
+            1 => Self::One,
+            2 => Self::Two,
+            3 => Self::Three,
+            _ => Self::Large,
+        }
+    }
+}
+
+struct PrepareLeaf {
+    requested_k: usize,
+}
+
+impl<A> arch::Target1<A, LeafKernel, Metric> for PrepareLeaf
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn run(self, arch: A, metric: Metric) -> LeafKernel {
+        erase_metric(
+            metric,
+            BuildLeaf {
+                arch,
+                requested_k: self.requested_k,
+            },
+        )
+    }
+}
+
+struct BuildLeaf<A> {
+    arch: A,
+    requested_k: usize,
+}
+
+impl<A> BuildLeaf<A>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn build<M: KernelMetric, S: SlotSelection>(self) -> LeafKernel {
+        LeafKernel {
+            run: self
+                .arch
+                .dispatch1::<LeafEntry<M, S>, Result<usize, LeafKernelError>, LeafCallArg>(),
+            requested_k: self.requested_k,
+        }
+    }
+}
+
+impl<A> EraseMetric for BuildLeaf<A>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    type Output = LeafKernel;
+
+    fn erase<M: KernelMetric>(self) -> Self::Output {
+        match KValue::from_requested(self.requested_k) {
+            KValue::One => self.build::<M, FixedSelection<1>>(),
+            KValue::Two => self.build::<M, FixedSelection<2>>(),
+            KValue::Three => self.build::<M, FixedSelection<3>>(),
+            KValue::Large => self.build::<M, DynamicSelection>(),
+        }
+    }
+}
+
+struct LeafEntry<M, S>(PhantomData<(M, S)>);
+
+impl<A, M, S> FTarget1<A, Result<usize, LeafKernelError>, LeafCall<'_>> for LeafEntry<M, S>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    M: KernelMetric,
+    S: SlotSelection,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn run(arch: A, mut call: LeafCall<'_>) -> Result<usize, LeafKernelError> {
+        let actual_k = validate(call.input, call.requested_k, &call.output)?;
+        if actual_k == 0 {
+            return Ok(0);
+        }
+
+        prepare_workspace::<M>(call.input, call.workspace)?;
+        call.output.as_mut_slice().fill(LeafNeighbor::default());
+        call.workspace.worst.fill(f32::INFINITY);
+
+        S::process::<A::f32x16, M>(
+            arch,
+            call.input,
+            actual_k,
+            call.output.as_mut_slice(),
+            &call.workspace.norms,
+            &mut call.workspace.worst,
+        );
+        if let Some(row) = call
+            .output
+            .as_slice()
+            .chunks_exact(actual_k)
+            .position(|neighbors| neighbors[actual_k - 1].position == u32::MAX)
+        {
+            return Err(LeafKernelError::InsufficientRankableNeighbors {
+                row,
+                neighbors: actual_k,
+            });
+        }
+        Ok(actual_k)
+    }
+}
+
+fn validate(
+    input: LeafTopK<'_>,
+    k: usize,
+    output: &MutMatrixView<'_, LeafNeighbor>,
+) -> Result<usize, LeafKernelError> {
+    let rows = input.dots.nrows();
+    let columns = input.dots.ncols();
+    if rows != columns {
+        return Err(LeafKernelError::NonSquareDots {
+            rows,
+            cols: columns,
+        });
+    }
+    let output_len = leaf_output_len(rows, k)?;
+    let dots_len = checked_area("leaf dot-product matrix", rows, columns)?;
+    check_length(
+        "leaf dot-product matrix",
+        input.dots.as_slice().len(),
+        dots_len,
+    )?;
+
+    let actual_k = k.min(rows.saturating_sub(1));
+    if output.nrows() != rows || output.ncols() != actual_k {
+        return Err(LeafKernelError::InvalidOutputShape {
+            expected_rows: rows,
+            expected_cols: actual_k,
+            actual_rows: output.nrows(),
+            actual_cols: output.ncols(),
+        });
+    }
+    check_length("output", output.as_slice().len(), output_len)?;
+    Ok(actual_k)
+}
+
+fn prepare_workspace<M: KernelMetric>(
+    input: LeafTopK<'_>,
+    workspace: &mut LeafTopKWorkspace,
+) -> Result<(), LeafKernelError> {
+    let points = input.dots.nrows();
+    if M::LEAF_SCALE.is_some() {
+        resize("norms", &mut workspace.norms, points, 0.0)?;
         for (row, norm) in workspace.norms.iter_mut().enumerate() {
-            let squared_norm = input.dots[row * input.points + row];
-            *norm = if input.metric == Metric::Cosine {
-                // Match diskann-vector: a finite/subnormal squared norm below this
-                // threshold is a zero vector, while NaN continues through the
-                // distance calculation as non-rankable.
-                if squared_norm < f32::MIN_POSITIVE {
-                    0.0
-                } else {
-                    squared_norm.sqrt()
-                }
-            } else {
-                squared_norm
-            };
+            *norm = M::LEAF_SCALE.transform(input.dots[(row, row)]);
         }
     } else {
         workspace.norms.clear();
@@ -170,42 +373,9 @@ pub fn nearest_leaf_neighbors(
     resize(
         "worst distances",
         &mut workspace.worst,
-        input.points,
+        points,
         f32::INFINITY,
-    )?;
-    output.fill(LeafNeighbor::default());
-    workspace.worst.fill(f32::INFINITY);
-
-    diskann_wide::arch::dispatch(LeafKernel {
-        input,
-        k: actual_k,
-        output,
-        norms: &workspace.norms,
-        worst: &mut workspace.worst,
-    });
-    if let Some(row) = output
-        .chunks_exact(actual_k)
-        .position(|neighbors| neighbors[actual_k - 1].position == u32::MAX)
-    {
-        return Err(LeafKernelError::InsufficientRankableNeighbors {
-            row,
-            neighbors: actual_k,
-        });
-    }
-    Ok(actual_k)
-}
-
-fn validate(
-    input: LeafTopK<'_>,
-    k: usize,
-    output: &[LeafNeighbor],
-) -> Result<usize, LeafKernelError> {
-    let output_len = leaf_output_len(input.points, k)?;
-    let matrix_len = checked_area("lower dot-product matrix", input.points, input.points)?;
-    check_length("lower dot-product matrix", input.dots.len(), matrix_len)?;
-    let actual_k = k.min(input.points.saturating_sub(1));
-    check_length("output", output.len(), output_len)?;
-    Ok(actual_k)
+    )
 }
 
 fn resize<T: Clone>(
@@ -243,355 +413,297 @@ fn check_length(
     }
 }
 
-struct LeafKernel<'a, 'o, 'w> {
-    input: LeafTopK<'a>,
-    k: usize,
-    output: &'o mut [LeafNeighbor],
-    norms: &'w [f32],
-    worst: &'w mut [f32],
+trait SlotSelection: Send + Sync + 'static {
+    fn process<F, M>(
+        arch: F::Arch,
+        input: LeafTopK<'_>,
+        actual_k: usize,
+        output: &mut [LeafNeighbor],
+        norms: &[f32],
+        worst: &mut [f32],
+    ) where
+        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+        F::Mask: SIMDSelect<F>,
+        M: KernelMetric,
+        u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>;
 }
 
-impl LeafKernel<'_, '_, '_> {
-    fn run_simd<F>(self, arch: F::Arch)
-    where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>,
-        u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    {
-        if self.k > 3 {
-            process_pairs_simd_dynamic::<F>(
-                arch,
-                self.input,
-                self.k,
-                self.output,
-                self.norms,
-                self.worst,
-            );
-            return;
-        }
-        match self.k {
-            1 => self.run_fused::<F, 1>(arch),
-            2 => self.run_fused::<F, 2>(arch),
-            3 => self.run_fused::<F, 3>(arch),
-            _ => unreachable!("validated non-zero leaf width"),
-        }
-    }
+struct FixedSelection<const N: usize>;
+struct DynamicSelection;
 
-    fn run_fused<F, const SLOTS: usize>(self, arch: F::Arch)
-    where
+impl<const N: usize> SlotSelection for FixedSelection<N> {
+    fn process<F, M>(
+        arch: F::Arch,
+        input: LeafTopK<'_>,
+        actual_k: usize,
+        output: &mut [LeafNeighbor],
+        norms: &[f32],
+        worst: &mut [f32],
+    ) where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
+        M: KernelMetric,
         u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
     {
-        match self.input.metric {
-            Metric::L2 => process_pairs_simd_fused::<F, L2, SLOTS>(
-                arch,
-                self.input,
-                self.output,
-                self.norms,
-                self.worst,
-            ),
-            Metric::CosineNormalized => process_pairs_simd_fused::<F, COSINE_NORMALIZED, SLOTS>(
-                arch,
-                self.input,
-                self.output,
-                self.norms,
-                self.worst,
-            ),
-            Metric::InnerProduct => process_pairs_simd_fused::<F, INNER_PRODUCT, SLOTS>(
-                arch,
-                self.input,
-                self.output,
-                self.norms,
-                self.worst,
-            ),
-            Metric::Cosine => process_pairs_simd_fused::<F, COSINE, SLOTS>(
-                arch,
-                self.input,
-                self.output,
-                self.norms,
-                self.worst,
-            ),
-        }
+        debug_assert!(actual_k <= N);
+        process_selected::<F, M>(arch, input, actual_k, output, norms, worst);
     }
 }
 
-impl<A> diskann_wide::arch::Target<A, ()> for LeafKernel<'_, '_, '_>
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+impl SlotSelection for DynamicSelection {
+    fn process<F, M>(
+        arch: F::Arch,
+        input: LeafTopK<'_>,
+        actual_k: usize,
+        output: &mut [LeafNeighbor],
+        norms: &[f32],
+        worst: &mut [f32],
+    ) where
+        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+        F::Mask: SIMDSelect<F>,
+        M: KernelMetric,
+        u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    {
+        process_selected::<F, M>(arch, input, actual_k, output, norms, worst);
+    }
+}
+
+fn process_selected<F, M>(
+    arch: F::Arch,
+    input: LeafTopK<'_>,
+    actual_k: usize,
+    output: &mut [LeafNeighbor],
+    norms: &[f32],
+    worst: &mut [f32],
+) where
+    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F::Mask: SIMDSelect<F>,
+    M: KernelMetric,
+    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    #[inline(always)]
-    fn run(self, arch: A) {
-        self.run_simd::<A::f32x16>(arch);
+    match actual_k {
+        1 => process_fixed::<F, M, 1>(arch, input, output, norms, worst),
+        2 => process_fixed::<F, M, 2>(arch, input, output, norms, worst),
+        3 => process_fixed::<F, M, 3>(arch, input, output, norms, worst),
+        width => process_pairs::<F, M, _>(
+            arch,
+            input,
+            DynamicRows {
+                values: output,
+                width,
+            },
+            norms,
+            worst,
+        ),
     }
+}
+
+fn process_fixed<F, M, const N: usize>(
+    arch: F::Arch,
+    input: LeafTopK<'_>,
+    output: &mut [LeafNeighbor],
+    norms: &[f32],
+    worst: &mut [f32],
+) where
+    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F::Mask: SIMDSelect<F>,
+    M: KernelMetric,
+    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    let (rows, remainder) = output.as_chunks_mut::<N>();
+    debug_assert!(remainder.is_empty());
+    process_pairs::<F, M, _>(arch, input, FixedRows(rows), norms, worst);
+}
+
+trait NeighborRows {
+    fn len(&self) -> usize;
+    fn insert(&mut self, row: usize, position: u32, distance: f32) -> f32;
+}
+
+struct FixedRows<'a, const N: usize>(&'a mut [[LeafNeighbor; N]]);
+
+impl<const N: usize> NeighborRows for FixedRows<'_, N> {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline(always)]
+    fn insert(&mut self, row: usize, position: u32, distance: f32) -> f32 {
+        insert_fixed(&mut self.0[row], position, distance)
+    }
+}
+
+struct DynamicRows<'a> {
+    values: &'a mut [LeafNeighbor],
+    width: usize,
+}
+
+impl NeighborRows for DynamicRows<'_> {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.values.len() / self.width
+    }
+
+    #[inline(always)]
+    fn insert(&mut self, row: usize, position: u32, distance: f32) -> f32 {
+        insert_dynamic(
+            &mut self.values[row * self.width..(row + 1) * self.width],
+            position,
+            distance,
+        )
+    }
+}
+
+/// Scan the strict lower triangle and update both endpoint rows.
+///
+/// `M` fixes metric arithmetic before type erasure. `R` presents either
+/// fixed-width array rows or the uncommon run-time-width rows.
+#[inline(never)]
+fn process_pairs<F, M, R>(
+    arch: F::Arch,
+    input: LeafTopK<'_>,
+    mut output: R,
+    norms: &[f32],
+    worst: &mut [f32],
+) where
+    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F::Mask: SIMDSelect<F>,
+    M: KernelMetric,
+    R: NeighborRows,
+    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    let points = input.dots.nrows();
+    let dots = input.dots.as_slice();
+    let uses_norms = M::LEAF_SCALE.is_some();
+    let worst_ptr = worst.as_mut_ptr();
+
+    for row in 1..points {
+        let row_start = row * points;
+        let row_norm = if uses_norms {
+            F::splat(arch, norms[row])
+        } else {
+            F::default(arch)
+        };
+        // SAFETY: `row < points == worst.len()` after validation.
+        let mut row_worst = unsafe { *worst_ptr.add(row) };
+        let mut column = 0;
+
+        while column + F::LANES <= row {
+            // SAFETY: the full chunk is contained in the strict lower row prefix.
+            let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(row_start + column)) };
+            let column_norms = if uses_norms {
+                // SAFETY: the full chunk lies below `row <= norms.len()`.
+                unsafe { F::load_simd(arch, norms.as_ptr().add(column)) }
+            } else {
+                F::default(arch)
+            };
+            let distances = M::leaf_distance(arch, pair_dots, row_norm, column_norms);
+            let row_eligible = distances.lt_simd(F::splat(arch, row_worst));
+            // SAFETY: the full chunk lies below `row`, so it is inside `worst`.
+            let column_worst = unsafe { F::load_simd(arch, worst_ptr.add(column)) };
+            let column_eligible = distances.lt_simd(column_worst);
+            let row_bits = u64::from(row_eligible.bitmask().to_underlying());
+            let column_bits = u64::from(column_eligible.bitmask().to_underlying());
+
+            if row_bits | column_bits != 0 {
+                let values = distances.to_array();
+                let values = values.as_ref();
+                let mut row_bits = row_bits;
+                while row_bits != 0 {
+                    let lane = row_bits.trailing_zeros() as usize;
+                    row_bits &= row_bits - 1;
+                    let distance = values[lane];
+                    if distance < row_worst {
+                        row_worst = output.insert(row, (column + lane) as u32, distance);
+                    }
+                }
+
+                let mut column_bits = column_bits;
+                while column_bits != 0 {
+                    let lane = column_bits.trailing_zeros() as usize;
+                    column_bits &= column_bits - 1;
+                    let target = column + lane;
+                    let new_worst = output.insert(target, row as u32, values[lane]);
+                    // SAFETY: `target < row < worst.len()`.
+                    unsafe { *worst_ptr.add(target) = new_worst };
+                }
+            }
+            column += F::LANES;
+        }
+
+        while column < row {
+            // SAFETY: the scalar tail remains in the strict lower triangle.
+            let dot = unsafe { *dots.get_unchecked(row_start + column) };
+            let (row_norm, column_norm) = if uses_norms {
+                // SAFETY: `column < row < points == norms.len()`.
+                (norms[row], unsafe { *norms.get_unchecked(column) })
+            } else {
+                (0.0, 0.0)
+            };
+            let distance = M::leaf_distance_scalar(dot, row_norm, column_norm);
+            if distance < row_worst {
+                row_worst = output.insert(row, column as u32, distance);
+            }
+            // SAFETY: `column < row < worst.len()`.
+            let column_worst = unsafe { *worst_ptr.add(column) };
+            if distance < column_worst {
+                let new_worst = output.insert(column, row as u32, distance);
+                // SAFETY: `column < row < worst.len()`.
+                unsafe { *worst_ptr.add(column) = new_worst };
+            }
+            column += 1;
+        }
+        // SAFETY: `row < worst.len()`.
+        unsafe { *worst_ptr.add(row) = row_worst };
+    }
+
+    debug_assert_eq!(output.len(), points);
 }
 
 #[cfg(test)]
-fn process_pairs_scalar(
+fn process_pairs_scalar<M: KernelMetric>(
     input: LeafTopK<'_>,
     k: usize,
     output: &mut [LeafNeighbor],
     norms: &[f32],
     worst: &mut [f32],
 ) {
-    for row in 1..input.points {
+    let points = input.dots.nrows();
+    let uses_norms = M::LEAF_SCALE.is_some();
+    for row in 1..points {
         for column in 0..row {
-            let dot = input.dots[row * input.points + column];
-            let distance = pair_distance(input.metric, dot, norms[row], norms[column]);
-            insert_row(output, worst, k, row, column as u32, distance);
-            insert_row(output, worst, k, column, row as u32, distance);
+            let (row_norm, column_norm) = if uses_norms {
+                (norms[row], norms[column])
+            } else {
+                (0.0, 0.0)
+            };
+            let distance =
+                M::leaf_distance_scalar(input.dots[(row, column)], row_norm, column_norm);
+            insert_scalar(output, worst, k, row, column as u32, distance);
+            insert_scalar(output, worst, k, column, row as u32, distance);
         }
     }
 }
 
-/// Fused dual-endpoint scan for row widths without a specialized arm.
-///
-/// Identical structure to [`process_pairs_simd_fused`], with the slot count
-/// read at run time. Wider leaves are rare, so the extra indirection is
-/// cheaper than instantiating an arm per width.
-fn process_pairs_simd_dynamic<F>(
-    arch: F::Arch,
-    input: LeafTopK<'_>,
+#[cfg(test)]
+fn insert_scalar(
+    output: &mut [LeafNeighbor],
+    worst: &mut [f32],
     k: usize,
-    output: &mut [LeafNeighbor],
-    norms: &[f32],
-    worst: &mut [f32],
-) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    let worst_ptr = worst.as_mut_ptr();
-    let uses_norms = matches!(input.metric, Metric::L2 | Metric::Cosine);
-    for row in 1..input.points {
-        let row_start = row * input.points;
-        let row_norm = if uses_norms {
-            F::splat(arch, norms[row])
-        } else {
-            F::default(arch)
-        };
-        // SAFETY: `row < input.points == worst.len()`.
-        let mut row_worst = unsafe { *worst_ptr.add(row) };
-        let mut column = 0;
-        while column + F::LANES <= row {
-            // SAFETY: the full chunk is contained in the strict lower row prefix.
-            let dots = unsafe { F::load_simd(arch, input.dots.as_ptr().add(row_start + column)) };
-            let column_norms = if uses_norms {
-                // SAFETY: `column + F::LANES <= row < input.points == norms.len()`.
-                unsafe { F::load_simd(arch, norms.as_ptr().add(column)) }
-            } else {
-                F::default(arch)
-            };
-            let distances = pair_distances::<F>(arch, input.metric, dots, row_norm, column_norms);
-            let row_eligible = distances.lt_simd(F::splat(arch, row_worst));
-            // SAFETY: the full chunk lies below `row`, so it is within `worst`.
-            let column_worst = unsafe { F::load_simd(arch, worst_ptr.add(column)) };
-            let column_eligible = distances.lt_simd(column_worst);
-            let row_bits = u64::from(row_eligible.bitmask().to_underlying());
-            let column_bits = u64::from(column_eligible.bitmask().to_underlying());
-            if row_bits | column_bits != 0 {
-                let values = distances.to_array();
-                let values = values.as_ref();
-                let mut row_bits = row_bits;
-                while row_bits != 0 {
-                    let lane = row_bits.trailing_zeros() as usize;
-                    row_bits &= row_bits - 1;
-                    let distance = values[lane];
-                    if distance < row_worst {
-                        row_worst = insert_slots(
-                            &mut output[row * k..(row + 1) * k],
-                            (column + lane) as u32,
-                            distance,
-                        );
-                    }
-                }
-                let mut column_bits = column_bits;
-                while column_bits != 0 {
-                    let lane = column_bits.trailing_zeros() as usize;
-                    column_bits &= column_bits - 1;
-                    let target = column + lane;
-                    let new_worst = insert_slots(
-                        &mut output[target * k..(target + 1) * k],
-                        row as u32,
-                        values[lane],
-                    );
-                    // SAFETY: `target < row < worst.len()`.
-                    unsafe { *worst_ptr.add(target) = new_worst };
-                }
-            }
-            column += F::LANES;
-        }
-        while column < row {
-            // SAFETY: the scalar tail remains in the strict lower triangle.
-            let dot = unsafe { *input.dots.get_unchecked(row_start + column) };
-            let (row_norm, column_norm) = if uses_norms {
-                // SAFETY: `column < row < input.points == norms.len()`.
-                (norms[row], unsafe { *norms.get_unchecked(column) })
-            } else {
-                (0.0, 0.0)
-            };
-            let distance = pair_distance(input.metric, dot, row_norm, column_norm);
-            if distance < row_worst {
-                row_worst =
-                    insert_slots(&mut output[row * k..(row + 1) * k], column as u32, distance);
-            }
-            // SAFETY: `column < row < worst.len()`.
-            let column_worst = unsafe { *worst_ptr.add(column) };
-            if distance < column_worst {
-                let new_worst = insert_slots(
-                    &mut output[column * k..(column + 1) * k],
-                    row as u32,
-                    distance,
-                );
-                // SAFETY: `column < row < worst.len()`.
-                unsafe { *worst_ptr.add(column) = new_worst };
-            }
-            column += 1;
-        }
-        // SAFETY: `row < worst.len()`.
-        unsafe { *worst_ptr.add(row) = row_worst };
+    row: usize,
+    position: u32,
+    distance: f32,
+) {
+    if distance.partial_cmp(&worst[row]) != Some(std::cmp::Ordering::Less) {
+        return;
     }
-}
-
-/// Fused dual-endpoint scan of the strict lower triangle.
-///
-/// The row's current worst distance stays in a register for the whole row, and
-/// each chunk derives both endpoint candidate masks before touching memory, so
-/// a chunk where neither endpoint can accept costs one branch. `SLOTS` is the
-/// per-row neighbor count, threaded as a const so the insert arm is selected at
-/// compile time.
-#[inline(never)]
-fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
-    arch: F::Arch,
-    input: LeafTopK<'_>,
-    output: &mut [LeafNeighbor],
-    norms: &[f32],
-    worst: &mut [f32],
-) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    let worst_ptr = worst.as_mut_ptr();
-    let uses_norms = METRIC == L2 || METRIC == COSINE;
-    for row in 1..input.points {
-        let row_start = row * input.points;
-        let row_norm = if uses_norms {
-            F::splat(arch, norms[row])
-        } else {
-            F::default(arch)
-        };
-        // SAFETY: `row < input.points == worst.len()`.
-        let mut row_worst = unsafe { *worst_ptr.add(row) };
-        let mut column = 0;
-        while column + F::LANES <= row {
-            // SAFETY: the full chunks are inside the validated matrix and norms.
-            let dots = unsafe { F::load_simd(arch, input.dots.as_ptr().add(row_start + column)) };
-            let column_norms = if uses_norms {
-                // SAFETY: `column + F::LANES <= row < input.points == norms.len()`.
-                unsafe { F::load_simd(arch, norms.as_ptr().add(column)) }
-            } else {
-                F::default(arch)
-            };
-            let distances =
-                pair_distances::<F>(arch, metric::<METRIC>(), dots, row_norm, column_norms);
-            let row_eligible = distances.lt_simd(F::splat(arch, row_worst));
-            // SAFETY: the full chunk lies below `row`, so it is within `worst`.
-            let column_worst = unsafe { F::load_simd(arch, worst_ptr.add(column)) };
-            let column_eligible = distances.lt_simd(column_worst);
-            // Test both candidate masks with a single reduction. Reducing each
-            // mask separately costs an extra cross-lane extraction per chunk,
-            // and the overwhelmingly common case is that neither end accepts.
-            let row_bits = u64::from(row_eligible.bitmask().to_underlying());
-            let column_bits = u64::from(column_eligible.bitmask().to_underlying());
-            if row_bits | column_bits != 0 {
-                let values = distances.to_array();
-                let values = values.as_ref();
-                let mut row_bits = row_bits;
-                while row_bits != 0 {
-                    let lane = row_bits.trailing_zeros() as usize;
-                    row_bits &= row_bits - 1;
-                    let distance = values[lane];
-                    // Earlier lanes in this chunk may already have tightened the
-                    // threshold, so re-check against the live value.
-                    if distance < row_worst {
-                        row_worst = insert_fixed::<SLOTS>(
-                            &mut output[row * SLOTS..(row + 1) * SLOTS],
-                            (column + lane) as u32,
-                            distance,
-                        );
-                    }
-                }
-                let mut column_bits = column_bits;
-                while column_bits != 0 {
-                    let lane = column_bits.trailing_zeros() as usize;
-                    column_bits &= column_bits - 1;
-                    let target = column + lane;
-                    let new_worst = insert_fixed::<SLOTS>(
-                        &mut output[target * SLOTS..(target + 1) * SLOTS],
-                        row as u32,
-                        values[lane],
-                    );
-                    // SAFETY: `target < row < worst.len()`.
-                    unsafe { *worst_ptr.add(target) = new_worst };
-                }
-            }
-            column += F::LANES;
-        }
-        while column < row {
-            // SAFETY: the scalar tail remains in the strict lower triangle.
-            let dot = unsafe { *input.dots.get_unchecked(row_start + column) };
-            let (row_norm, column_norm) = if uses_norms {
-                // SAFETY: `column < row < input.points == norms.len()`.
-                (norms[row], unsafe { *norms.get_unchecked(column) })
-            } else {
-                (0.0, 0.0)
-            };
-            let distance = pair_distance(metric::<METRIC>(), dot, row_norm, column_norm);
-            if distance < row_worst {
-                row_worst = insert_fixed::<SLOTS>(
-                    &mut output[row * SLOTS..(row + 1) * SLOTS],
-                    column as u32,
-                    distance,
-                );
-            }
-            // SAFETY: `column < row < worst.len()`.
-            let column_worst = unsafe { *worst_ptr.add(column) };
-            if distance < column_worst {
-                let new_worst = insert_fixed::<SLOTS>(
-                    &mut output[column * SLOTS..(column + 1) * SLOTS],
-                    row as u32,
-                    distance,
-                );
-                // SAFETY: `column < row < worst.len()`.
-                unsafe { *worst_ptr.add(column) = new_worst };
-            }
-            column += 1;
-        }
-        // SAFETY: `row < worst.len()`.
-        unsafe { *worst_ptr.add(row) = row_worst };
-    }
-}
-
-const fn metric<const METRIC: u8>() -> Metric {
-    match METRIC {
-        L2 => Metric::L2,
-        COSINE_NORMALIZED => Metric::CosineNormalized,
-        INNER_PRODUCT => Metric::InnerProduct,
-        COSINE => Metric::Cosine,
-        _ => unreachable!(),
-    }
+    worst[row] = insert_dynamic(&mut output[row * k..(row + 1) * k], position, distance);
 }
 
 /// Insert into a production row whose width is known at dispatch.
 #[inline(always)]
-fn insert_fixed<const N: usize>(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
-    let row: &mut [LeafNeighbor; N] = row
-        .try_into()
-        .expect("validated fixed-width leaf output row");
+fn insert_fixed<const N: usize>(row: &mut [LeafNeighbor; N], position: u32, distance: f32) -> f32 {
     let entry = LeafNeighbor::new(position, distance);
     match N {
         1 => {
@@ -628,9 +740,8 @@ fn insert_fixed<const N: usize>(row: &mut [LeafNeighbor], position: u32, distanc
     }
 }
 
-/// Insert into the uncommon run-time-width row (`k > 3`).
 #[inline(always)]
-fn insert_slots(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
+fn insert_dynamic(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
     let last = row.len() - 1;
     row[last] = LeafNeighbor::new(position, distance);
     let mut index = last;
@@ -641,103 +752,164 @@ fn insert_slots(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
     row[last].distance
 }
 
-#[inline(always)]
-fn pair_distances<F>(arch: F::Arch, metric: Metric, dot: F, row_norm: F, column_norm: F) -> F
-where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-{
-    let zero = F::default(arch);
-    let clamp_nonnegative = |distance: F| {
-        // SIMD max has ISA-specific NaN behavior. Select the original NaN
-        // explicitly so it remains non-rankable on every backend.
-        distance
-            .eq_simd(distance)
-            .select(zero.max_simd(distance), distance)
-    };
-    match metric {
-        Metric::L2 => {
-            let distance = row_norm + column_norm - F::splat(arch, 2.0) * dot;
-            clamp_nonnegative(distance)
-        }
-        Metric::CosineNormalized => {
-            let distance = F::splat(arch, 1.0) - dot;
-            clamp_nonnegative(distance)
-        }
-        Metric::InnerProduct => zero - dot,
-        Metric::Cosine => {
-            let one = F::splat(arch, 1.0);
-            let row_zero = row_norm.eq_simd(zero);
-            let column_zero = column_norm.eq_simd(zero);
-            let denominator = row_norm * column_norm;
-            let safe_denominator = row_zero.select(one, column_zero.select(one, denominator));
-            let cosine = row_zero.select(zero, column_zero.select(zero, dot / safe_denominator));
-            clamp_nonnegative(one - cosine)
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use crate::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
 
-#[inline(always)]
-fn pair_distance(metric: Metric, dot: f32, row_norm: f32, column_norm: f32) -> f32 {
-    match metric {
-        Metric::L2 => {
-            let distance = row_norm + column_norm - 2.0 * dot;
-            if distance < 0.0 {
+    use super::*;
+
+    fn dots(metric: Metric, points: usize) -> Vec<f32> {
+        let mut dots = vec![f32::NAN; points * points];
+        for row in 0..points {
+            dots[row * points + row] = if metric == Metric::Cosine && row == 0 {
                 0.0
             } else {
-                distance
-            }
-        }
-        Metric::CosineNormalized => {
-            let distance = 1.0 - dot;
-            if distance < 0.0 {
-                0.0
-            } else {
-                distance
-            }
-        }
-        Metric::InnerProduct => -dot,
-        Metric::Cosine => {
-            let denominator = row_norm * column_norm;
-            let cosine = if row_norm != 0.0 && column_norm != 0.0 {
-                dot / denominator
-            } else {
-                0.0
+                1.0 + (row % 5) as f32
             };
-            let distance = 1.0 - cosine;
-            if distance < 0.0 {
-                0.0
-            } else {
-                distance
+            for column in 0..row {
+                dots[row * points + column] =
+                    (((row * 17 + column * 11) % 23) as f32 - 11.0) * 0.03125;
+            }
+        }
+        dots
+    }
+
+    fn input(dots: &[f32], points: usize) -> LeafTopK<'_> {
+        LeafTopK {
+            dots: MatrixView::try_from(dots, points, points).unwrap(),
+        }
+    }
+
+    fn scalar<M: KernelMetric>(input: LeafTopK<'_>, k: usize, output: &mut [LeafNeighbor]) {
+        let points = input.dots.nrows();
+        let norms: Vec<_> = (0..points)
+            .map(|row| M::LEAF_SCALE.transform(input.dots[(row, row)]))
+            .collect();
+        let mut worst = vec![f32::INFINITY; points];
+        process_pairs_scalar::<M>(input, k, output, &norms, &mut worst);
+    }
+
+    fn scalar_for_metric(
+        metric: Metric,
+        input: LeafTopK<'_>,
+        k: usize,
+        output: &mut [LeafNeighbor],
+    ) {
+        match metric {
+            Metric::L2 => scalar::<L2>(input, k, output),
+            Metric::Cosine => scalar::<Cosine>(input, k, output),
+            Metric::CosineNormalized => scalar::<CosineNormalized>(input, k, output),
+            Metric::InnerProduct => scalar::<InnerProduct>(input, k, output),
+        }
+    }
+
+    fn assert_scalar_reference_matches_prepared_dispatch(metric: Metric) {
+        // Point count controls SIMD chunking. Cover both sides of 4-, 8-, and
+        // 16-lane boundaries, then the boundary around a second 16-lane chunk.
+        for points in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+            let dots = dots(metric, points);
+            let input = input(&dots, points);
+            for requested_k in [1, 2, 3, 4] {
+                let k = requested_k.min(points - 1);
+                let kernel = LeafKernel::new(metric, requested_k);
+                let mut expected = vec![LeafNeighbor::default(); points * k];
+                kernel
+                    .nearest_neighbors(
+                        input,
+                        MutMatrixView::try_from(expected.as_mut_slice(), points, k).unwrap(),
+                        &mut LeafTopKWorkspace::new(),
+                    )
+                    .unwrap();
+
+                let mut actual = vec![LeafNeighbor::default(); points * k];
+                scalar_for_metric(metric, input, k, &mut actual);
+
+                assert_eq!(actual, expected, "{metric:?}, n={points}, k={requested_k}");
             }
         }
     }
-}
 
-#[inline(always)]
-#[cfg(test)]
-fn insert_row(
-    output: &mut [LeafNeighbor],
-    worst: &mut [f32],
-    k: usize,
-    row: usize,
-    position: u32,
-    distance: f32,
-) {
-    if distance.partial_cmp(&worst[row]) != Some(std::cmp::Ordering::Less) {
-        return;
+    #[test]
+    fn l2_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::L2);
     }
 
-    let start = row * k;
-    let row_output = &mut output[start..start + k];
-    row_output[k - 1] = LeafNeighbor::new(position, distance);
-    let mut index = k - 1;
-    while index > 0 && row_output[index].distance < row_output[index - 1].distance {
-        row_output.swap(index, index - 1);
-        index -= 1;
+    #[test]
+    fn cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::Cosine);
     }
-    worst[row] = row_output[k - 1].distance;
-}
 
-#[cfg(test)]
-mod tests;
+    #[test]
+    fn normalized_cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::CosineNormalized);
+    }
+
+    #[test]
+    fn inner_product_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
+        assert_scalar_reference_matches_prepared_dispatch(Metric::InnerProduct);
+    }
+
+    #[test]
+    fn scalar_insertion_orders_candidates_and_rejects_nan() {
+        let mut output = [LeafNeighbor::default(); 4];
+        let mut worst = [f32::INFINITY];
+
+        for (position, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 0.5)] {
+            insert_scalar(&mut output, &mut worst, 4, 0, position, distance);
+        }
+        insert_scalar(&mut output, &mut worst, 4, 0, 5, f32::NAN);
+
+        assert_eq!(
+            output,
+            [
+                LeafNeighbor::new(4, 0.5),
+                LeafNeighbor::new(1, 1.0),
+                LeafNeighbor::new(3, 2.0),
+                LeafNeighbor::new(2, 3.0),
+            ]
+        );
+        assert_eq!(worst, [3.0]);
+    }
+
+    #[test]
+    fn output_length_clamps_to_non_self_neighbors() {
+        assert_eq!(leaf_output_len(0, 3).unwrap(), 0);
+        assert_eq!(leaf_output_len(1, 3).unwrap(), 0);
+        assert_eq!(leaf_output_len(4, 9).unwrap(), 12);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            leaf_output_len(u32::MAX as usize + 1, 1),
+            Err(LeafKernelError::TooManyPoints(u32::MAX as usize + 1))
+        );
+    }
+
+    #[test]
+    fn matrix_area_overflow_is_rejected_before_kernel_access() {
+        assert_eq!(
+            checked_area("leaf dot-product matrix", usize::MAX, 2),
+            Err(LeafKernelError::ShapeOverflow {
+                buffer: "leaf dot-product matrix",
+                rows: usize::MAX,
+                cols: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn workspace_can_shrink_and_grow_between_calls() {
+        let kernel = LeafKernel::new(Metric::L2, 2);
+        let mut workspace = LeafTopKWorkspace::new();
+        for points in [17, 7, 17] {
+            let dots = dots(Metric::L2, points);
+            let mut output = vec![LeafNeighbor::default(); points * 2];
+            kernel
+                .nearest_neighbors(
+                    input(&dots, points),
+                    MutMatrixView::try_from(output.as_mut_slice(), points, 2).unwrap(),
+                    &mut workspace,
+                )
+                .unwrap();
+            assert!(output.iter().all(|neighbor| neighbor.position != u32::MAX));
+        }
+    }
+}

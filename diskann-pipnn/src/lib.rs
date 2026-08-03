@@ -10,13 +10,18 @@
 //! of those stages while callers retain dataset storage, GEMM workspaces, graph
 //! policy, and scheduling:
 //!
-//! - [`partition_kernel`] converts a point-by-leader dot-product tile into the
-//!   nearest leader positions for each point.
-//! - [`leaf_kernel`] scans a leaf's lower-triangular dot-product matrix once and
-//!   retains nearest non-self neighbors for both endpoints.
+//! - [`partition_kernel::PartitionKernel`] converts point-by-leader dot-product
+//!   tiles into nearest leader positions.
+//! - [`leaf_kernel::LeafKernel`] scans each leaf's lower-triangular dot-product
+//!   matrix once and retains nearest non-self neighbors for both endpoints.
 //!
-//! Both modules validate slice shapes before dispatch and use `diskann-wide` for
-//! architecture selection; PiPNN does not detect or name instruction sets.
+//! Callers prepare these small handles once per build metric (and leaf `k`) and
+//! reuse them across stripes or leaves. Preparation uses `diskann-wide` to select
+//! the runtime architecture and returns a direct function pointer; repeated calls
+//! do not repeat ISA or metric dispatch. PiPNN itself never names instruction
+//! sets.
+
+mod kernel_metric;
 
 pub mod leaf_kernel;
 pub mod partition_kernel;
