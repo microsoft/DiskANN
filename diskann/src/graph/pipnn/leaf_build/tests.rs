@@ -322,7 +322,7 @@ fn reports_shape_overflow_before_allocating() {
 }
 
 #[test]
-fn rejects_an_invalid_kernel_position() {
+fn rejects_an_invalid_kernel_target() {
     let mut graph = vec![diskann::graph::AdjacencyList::new(); 2];
     let error = add_symmetric_neighbors(
         &[10, 20],
@@ -392,7 +392,7 @@ fn allocation_errors_preserve_buffer_context() {
 }
 
 #[test]
-fn direct_candidate_accumulator_keeps_unique_sorted_rows() {
+fn direct_candidate_accumulator_keeps_unique_sorted_lists() {
     let candidates = DirectCandidates::new(2).unwrap();
     candidates
         .add_leaf(
