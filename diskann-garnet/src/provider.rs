@@ -421,6 +421,22 @@ impl<T: VectorRepr> GarnetProvider<T> {
             Err(GarnetError::Write.into())
         }
     }
+
+    pub(crate) fn delete_attributes(
+        &self,
+        context: &Context,
+        id: &GarnetId,
+    ) -> Result<(), GarnetProviderError> {
+        if self
+            .callbacks
+            .delete_eid(&context.term(Term::Attributes), id)
+        {
+            Ok(())
+        } else {
+            Err(GarnetError::Delete.into())
+        }
+    }
+
     pub(crate) fn vector_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
         let iid = match self.to_internal_id(context, id) {
             Ok(iid) => iid,
