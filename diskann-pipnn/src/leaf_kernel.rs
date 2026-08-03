@@ -120,13 +120,21 @@ pub enum LeafKernelError {
     },
 }
 
+/// Return the required output length for [`nearest_leaf_neighbors`].
+pub fn leaf_output_len(points: usize, k: usize) -> Result<usize, LeafKernelError> {
+    if points > u32::MAX as usize {
+        return Err(LeafKernelError::TooManyPoints(points));
+    }
+    checked_area("output", points, k.min(points.saturating_sub(1)))
+}
+
 /// Select the nearest non-self leaf positions for every row.
 ///
 /// The strictly lower triangle is scanned once. Each pair updates both row
 /// trackers, so the upper triangle is neither read nor materialized. The
 /// returned value is `min(k, points - 1)`, and `output` contains exactly
-/// `points * returned_k` entries grouped by row and ordered by ascending
-/// distance. Equal distances retain pair scan order.
+/// [`leaf_output_len`] entries grouped by row and ordered by ascending distance.
+/// Equal distances retain pair scan order.
 pub fn nearest_leaf_neighbors(
     input: LeafTopK<'_>,
     k: usize,
@@ -138,28 +146,33 @@ pub fn nearest_leaf_neighbors(
         return Ok(0);
     }
 
-    resize("norms", &mut workspace.norms, input.points, 0.0)?;
+    let uses_norms = matches!(input.metric, Metric::L2 | Metric::Cosine);
+    if uses_norms {
+        resize("norms", &mut workspace.norms, input.points, 0.0)?;
+        for (row, norm) in workspace.norms.iter_mut().enumerate() {
+            let squared_norm = input.dots[row * input.points + row];
+            *norm = if input.metric == Metric::Cosine {
+                // Match diskann-vector: a finite/subnormal squared norm below this
+                // threshold is a zero vector, while NaN continues through the
+                // distance calculation as non-rankable.
+                if squared_norm < f32::MIN_POSITIVE {
+                    0.0
+                } else {
+                    squared_norm.sqrt()
+                }
+            } else {
+                squared_norm
+            };
+        }
+    } else {
+        workspace.norms.clear();
+    }
     resize(
         "worst distances",
         &mut workspace.worst,
         input.points,
         f32::INFINITY,
     )?;
-    for (row, norm) in workspace.norms.iter_mut().enumerate() {
-        let squared_norm = input.dots[row * input.points + row];
-        *norm = if input.metric == Metric::Cosine {
-            // Match diskann-vector: a finite/subnormal squared norm below this
-            // threshold is a zero vector, while NaN continues through the
-            // distance calculation as non-rankable.
-            if squared_norm < f32::MIN_POSITIVE {
-                0.0
-            } else {
-                squared_norm.sqrt()
-            }
-        } else {
-            squared_norm
-        };
-    }
     output.fill(LeafNeighbor::default());
     workspace.worst.fill(f32::INFINITY);
 
@@ -187,13 +200,10 @@ fn validate(
     k: usize,
     output: &[LeafNeighbor],
 ) -> Result<usize, LeafKernelError> {
-    if input.points > u32::MAX as usize {
-        return Err(LeafKernelError::TooManyPoints(input.points));
-    }
+    let output_len = leaf_output_len(input.points, k)?;
     let matrix_len = checked_area("lower dot-product matrix", input.points, input.points)?;
     check_length("lower dot-product matrix", input.dots.len(), matrix_len)?;
     let actual_k = k.min(input.points.saturating_sub(1));
-    let output_len = checked_area("output", input.points, actual_k)?;
     check_length("output", output.len(), output_len)?;
     Ok(actual_k)
 }
@@ -354,19 +364,27 @@ fn process_pairs_simd_dynamic<F>(
     F::Mask: SIMDSelect<F>,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let output_ptr = output.as_mut_ptr();
     let worst_ptr = worst.as_mut_ptr();
+    let uses_norms = matches!(input.metric, Metric::L2 | Metric::Cosine);
     for row in 1..input.points {
         let row_start = row * input.points;
-        let row_norm = F::splat(arch, norms[row]);
+        let row_norm = if uses_norms {
+            F::splat(arch, norms[row])
+        } else {
+            F::default(arch)
+        };
         // SAFETY: `row < input.points == worst.len()`.
         let mut row_worst = unsafe { *worst_ptr.add(row) };
         let mut column = 0;
         while column + F::LANES <= row {
             // SAFETY: the full chunk is contained in the strict lower row prefix.
             let dots = unsafe { F::load_simd(arch, input.dots.as_ptr().add(row_start + column)) };
-            // SAFETY: `column + F::LANES <= row < input.points == norms.len()`.
-            let column_norms = unsafe { F::load_simd(arch, norms.as_ptr().add(column)) };
+            let column_norms = if uses_norms {
+                // SAFETY: `column + F::LANES <= row < input.points == norms.len()`.
+                unsafe { F::load_simd(arch, norms.as_ptr().add(column)) }
+            } else {
+                F::default(arch)
+            };
             let distances = pair_distances::<F>(arch, input.metric, dots, row_norm, column_norms);
             let row_eligible = distances.lt_simd(F::splat(arch, row_worst));
             // SAFETY: the full chunk lies below `row`, so it is within `worst`.
@@ -383,10 +401,11 @@ fn process_pairs_simd_dynamic<F>(
                     row_bits &= row_bits - 1;
                     let distance = values[lane];
                     if distance < row_worst {
-                        // SAFETY: `row * k + k` is inside the validated output.
-                        row_worst = unsafe {
-                            insert_slots(output_ptr, row * k, k, (column + lane) as u32, distance)
-                        };
+                        row_worst = insert_slots(
+                            &mut output[row * k..(row + 1) * k],
+                            (column + lane) as u32,
+                            distance,
+                        );
                     }
                 }
                 let mut column_bits = column_bits;
@@ -394,10 +413,11 @@ fn process_pairs_simd_dynamic<F>(
                     let lane = column_bits.trailing_zeros() as usize;
                     column_bits &= column_bits - 1;
                     let target = column + lane;
-                    // SAFETY: `target < row`, so its slots are inside the output.
-                    let new_worst = unsafe {
-                        insert_slots(output_ptr, target * k, k, row as u32, values[lane])
-                    };
+                    let new_worst = insert_slots(
+                        &mut output[target * k..(target + 1) * k],
+                        row as u32,
+                        values[lane],
+                    );
                     // SAFETY: `target < row < worst.len()`.
                     unsafe { *worst_ptr.add(target) = new_worst };
                 }
@@ -407,20 +427,25 @@ fn process_pairs_simd_dynamic<F>(
         while column < row {
             // SAFETY: the scalar tail remains in the strict lower triangle.
             let dot = unsafe { *input.dots.get_unchecked(row_start + column) };
-            // SAFETY: `column < row < input.points == norms.len()`.
-            let column_norm = unsafe { *norms.get_unchecked(column) };
-            let distance = pair_distance(input.metric, dot, norms[row], column_norm);
+            let (row_norm, column_norm) = if uses_norms {
+                // SAFETY: `column < row < input.points == norms.len()`.
+                (norms[row], unsafe { *norms.get_unchecked(column) })
+            } else {
+                (0.0, 0.0)
+            };
+            let distance = pair_distance(input.metric, dot, row_norm, column_norm);
             if distance < row_worst {
-                // SAFETY: `row * k + k` is inside the validated output.
                 row_worst =
-                    unsafe { insert_slots(output_ptr, row * k, k, column as u32, distance) };
+                    insert_slots(&mut output[row * k..(row + 1) * k], column as u32, distance);
             }
             // SAFETY: `column < row < worst.len()`.
             let column_worst = unsafe { *worst_ptr.add(column) };
             if distance < column_worst {
-                // SAFETY: `column < row`, so its slots are inside the output.
-                let new_worst =
-                    unsafe { insert_slots(output_ptr, column * k, k, row as u32, distance) };
+                let new_worst = insert_slots(
+                    &mut output[column * k..(column + 1) * k],
+                    row as u32,
+                    distance,
+                );
                 // SAFETY: `column < row < worst.len()`.
                 unsafe { *worst_ptr.add(column) = new_worst };
             }
@@ -450,19 +475,27 @@ fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
     F::Mask: SIMDSelect<F>,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let output_ptr = output.as_mut_ptr();
     let worst_ptr = worst.as_mut_ptr();
+    let uses_norms = METRIC == L2 || METRIC == COSINE;
     for row in 1..input.points {
         let row_start = row * input.points;
-        let row_norm = F::splat(arch, norms[row]);
+        let row_norm = if uses_norms {
+            F::splat(arch, norms[row])
+        } else {
+            F::default(arch)
+        };
         // SAFETY: `row < input.points == worst.len()`.
         let mut row_worst = unsafe { *worst_ptr.add(row) };
         let mut column = 0;
         while column + F::LANES <= row {
             // SAFETY: the full chunks are inside the validated matrix and norms.
             let dots = unsafe { F::load_simd(arch, input.dots.as_ptr().add(row_start + column)) };
-            // SAFETY: `column + F::LANES <= row < input.points == norms.len()`.
-            let column_norms = unsafe { F::load_simd(arch, norms.as_ptr().add(column)) };
+            let column_norms = if uses_norms {
+                // SAFETY: `column + F::LANES <= row < input.points == norms.len()`.
+                unsafe { F::load_simd(arch, norms.as_ptr().add(column)) }
+            } else {
+                F::default(arch)
+            };
             let distances =
                 pair_distances::<F>(arch, metric::<METRIC>(), dots, row_norm, column_norms);
             let row_eligible = distances.lt_simd(F::splat(arch, row_worst));
@@ -485,16 +518,11 @@ fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
                     // Earlier lanes in this chunk may already have tightened the
                     // threshold, so re-check against the live value.
                     if distance < row_worst {
-                        // SAFETY: `row * SLOTS + SLOTS` is inside the validated output.
-                        row_worst = unsafe {
-                            insert_slots(
-                                output_ptr,
-                                row * SLOTS,
-                                SLOTS,
-                                (column + lane) as u32,
-                                distance,
-                            )
-                        };
+                        row_worst = insert_fixed::<SLOTS>(
+                            &mut output[row * SLOTS..(row + 1) * SLOTS],
+                            (column + lane) as u32,
+                            distance,
+                        );
                     }
                 }
                 let mut column_bits = column_bits;
@@ -502,10 +530,11 @@ fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
                     let lane = column_bits.trailing_zeros() as usize;
                     column_bits &= column_bits - 1;
                     let target = column + lane;
-                    // SAFETY: `target < row`, so its slots are inside the output.
-                    let new_worst = unsafe {
-                        insert_slots(output_ptr, target * SLOTS, SLOTS, row as u32, values[lane])
-                    };
+                    let new_worst = insert_fixed::<SLOTS>(
+                        &mut output[target * SLOTS..(target + 1) * SLOTS],
+                        row as u32,
+                        values[lane],
+                    );
                     // SAFETY: `target < row < worst.len()`.
                     unsafe { *worst_ptr.add(target) = new_worst };
                 }
@@ -515,22 +544,28 @@ fn process_pairs_simd_fused<F, const METRIC: u8, const SLOTS: usize>(
         while column < row {
             // SAFETY: the scalar tail remains in the strict lower triangle.
             let dot = unsafe { *input.dots.get_unchecked(row_start + column) };
-            // SAFETY: `column < row < input.points == norms.len()`.
-            let column_norm = unsafe { *norms.get_unchecked(column) };
-            let distance = pair_distance(metric::<METRIC>(), dot, norms[row], column_norm);
+            let (row_norm, column_norm) = if uses_norms {
+                // SAFETY: `column < row < input.points == norms.len()`.
+                (norms[row], unsafe { *norms.get_unchecked(column) })
+            } else {
+                (0.0, 0.0)
+            };
+            let distance = pair_distance(metric::<METRIC>(), dot, row_norm, column_norm);
             if distance < row_worst {
-                // SAFETY: `row * SLOTS + SLOTS` is inside the validated output.
-                row_worst = unsafe {
-                    insert_slots(output_ptr, row * SLOTS, SLOTS, column as u32, distance)
-                };
+                row_worst = insert_fixed::<SLOTS>(
+                    &mut output[row * SLOTS..(row + 1) * SLOTS],
+                    column as u32,
+                    distance,
+                );
             }
             // SAFETY: `column < row < worst.len()`.
             let column_worst = unsafe { *worst_ptr.add(column) };
             if distance < column_worst {
-                // SAFETY: `column < row`, so its slots are inside the output.
-                let new_worst = unsafe {
-                    insert_slots(output_ptr, column * SLOTS, SLOTS, row as u32, distance)
-                };
+                let new_worst = insert_fixed::<SLOTS>(
+                    &mut output[column * SLOTS..(column + 1) * SLOTS],
+                    row as u32,
+                    distance,
+                );
                 // SAFETY: `column < row < worst.len()`.
                 unsafe { *worst_ptr.add(column) = new_worst };
             }
@@ -551,94 +586,59 @@ const fn metric<const METRIC: u8>() -> Metric {
     }
 }
 
-/// Insert one candidate into a row's ascending-distance slots and return the
-/// row's new worst distance.
-///
-/// Slot counts of one, two, and three are the production leaf widths and get
-/// straight-line arms. Wider rows fall back to a bubble-up over the same
-/// layout, which produces identical results at a lower instruction count than
-/// specializing further would justify.
-///
-/// # Safety
-///
-/// `base + slots` must be within the allocation behind `output`.
+/// Insert into a production row whose width is known at dispatch.
 #[inline(always)]
-unsafe fn insert_slots(
-    output: *mut LeafNeighbor,
-    base: usize,
-    slots: usize,
-    position: u32,
-    distance: f32,
-) -> f32 {
+fn insert_fixed<const N: usize>(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
+    let row: &mut [LeafNeighbor; N] = row
+        .try_into()
+        .expect("validated fixed-width leaf output row");
     let entry = LeafNeighbor::new(position, distance);
-    match slots {
+    match N {
         1 => {
-            // SAFETY: the caller guarantees `base` is in bounds.
-            unsafe { *output.add(base) = entry };
+            row[0] = entry;
             distance
         }
         2 => {
-            // SAFETY: the caller guarantees `base` and `base + 1` are in bounds.
-            let first = unsafe { *output.add(base) };
+            let first = row[0];
             if distance < first.distance {
-                // SAFETY: as above.
-                unsafe {
-                    *output.add(base) = entry;
-                    *output.add(base + 1) = first;
-                }
+                row[0] = entry;
+                row[1] = first;
                 first.distance
             } else {
-                // SAFETY: as above.
-                unsafe { *output.add(base + 1) = entry };
+                row[1] = entry;
                 distance
             }
         }
         3 => {
-            // SAFETY: the caller guarantees `base..base + 3` is in bounds.
-            let (first, second) = unsafe { (*output.add(base), *output.add(base + 1)) };
+            let (first, second) = (row[0], row[1]);
             if distance < first.distance {
-                // SAFETY: as above.
-                unsafe {
-                    *output.add(base) = entry;
-                    *output.add(base + 1) = first;
-                    *output.add(base + 2) = second;
-                }
+                row[0] = entry;
+                row[1] = first;
+                row[2] = second;
             } else if distance < second.distance {
-                // SAFETY: as above.
-                unsafe {
-                    *output.add(base + 1) = entry;
-                    *output.add(base + 2) = second;
-                }
+                row[1] = entry;
+                row[2] = second;
             } else {
-                // SAFETY: as above.
-                unsafe { *output.add(base + 2) = entry };
+                row[2] = entry;
                 return distance;
             }
             second.distance
         }
-        _ => {
-            let last = base + slots - 1;
-            // SAFETY: the caller guarantees `base..base + slots` is in bounds.
-            unsafe { *output.add(last) = entry };
-            let mut position = last;
-            while position > base {
-                // SAFETY: `base < position <= last` stays inside the row.
-                let (current, previous) =
-                    unsafe { (*output.add(position), *output.add(position - 1)) };
-                if current.distance >= previous.distance {
-                    break;
-                }
-                // SAFETY: as above.
-                unsafe {
-                    *output.add(position) = previous;
-                    *output.add(position - 1) = current;
-                }
-                position -= 1;
-            }
-            // SAFETY: `last` is in bounds.
-            unsafe { (*output.add(last)).distance }
-        }
+        _ => unreachable!("fixed leaf widths are one through three"),
     }
+}
+
+/// Insert into the uncommon run-time-width row (`k > 3`).
+#[inline(always)]
+fn insert_slots(row: &mut [LeafNeighbor], position: u32, distance: f32) -> f32 {
+    let last = row.len() - 1;
+    row[last] = LeafNeighbor::new(position, distance);
+    let mut index = last;
+    while index > 0 && row[index].distance < row[index - 1].distance {
+        row.swap(index, index - 1);
+        index -= 1;
+    }
+    row[last].distance
 }
 
 #[inline(always)]

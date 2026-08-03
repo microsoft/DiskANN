@@ -21,11 +21,25 @@ use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 /// Maximum number of leaders retained for one point.
+///
+/// Supported PiPNN partition fanouts fit within 16. Keeping this as a fixed
+/// stack tracker bounds per-row stack use and code size; larger requests are
+/// rejected rather than silently truncated.
 pub const MAX_PARTITION_FANOUT: usize = 16;
 
 type TopK = [(u32, f32); MAX_PARTITION_FANOUT];
 
-/// Input tile and metric-specific normalization terms for partition top-k.
+/// One row-major point-by-leader dot-product tile and its normalization terms.
+///
+/// The scale slices are deliberately metric-specific:
+///
+/// | metric | `row_scales` | `leader_scales` |
+/// |---|---|---|
+/// | [`Metric::L2`] | empty | squared leader norms |
+/// | [`Metric::Cosine`] | squared point norms | leader norms |
+/// | [`Metric::CosineNormalized`] / [`Metric::InnerProduct`] | empty | empty |
+///
+/// [`nearest_leaders`] validates every declared shape before dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionTopK<'a> {
     /// Row-major `rows * leaders` point-to-leader dot products.
@@ -34,9 +48,9 @@ pub struct PartitionTopK<'a> {
     pub rows: usize,
     /// Number of leaders represented by each row.
     pub leaders: usize,
-    /// Squared point norms for cosine, otherwise empty.
+    /// Metric-specific point normalization terms described in the type table.
     pub row_scales: &'a [f32],
-    /// Leader norms for cosine, squared leader norms for L2, otherwise empty.
+    /// Metric-specific leader normalization terms described in the type table.
     pub leader_scales: &'a [f32],
     /// Distance metric used to rank leaders.
     pub metric: Metric,
@@ -66,7 +80,9 @@ pub enum PartitionKernelError {
         actual: usize,
     },
     /// The requested fanout cannot be represented by the fixed top-k tracker.
-    #[error("invalid fanout {fanout} for {leaders} leaders; maximum is {maximum}")]
+    #[error(
+        "invalid fanout {fanout}: must not exceed {leaders} leaders or kernel maximum {maximum}"
+    )]
     InvalidFanout {
         /// Requested number of leaders per row.
         fanout: usize,
@@ -113,7 +129,7 @@ pub fn nearest_leaders(
     });
     if let Some(row) = output
         .chunks_exact(fanout)
-        .position(|leaders| leaders.contains(&u32::MAX))
+        .position(|leaders| leaders[fanout - 1] == u32::MAX)
     {
         return Err(PartitionKernelError::InsufficientRankableDistances { row, fanout });
     }
@@ -234,41 +250,72 @@ where
     F::Mask: SIMDSelect<F>,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    for (row_index, (dot_row, output_row)) in input
+    match input.metric {
+        Metric::L2 => process_rows(input, fanout, output, |_, dot_row, top| {
+            process_binary::<F, _, _>(
+                arch,
+                dot_row,
+                input.leader_scales,
+                top,
+                fanout,
+                |dot, norm| F::splat(arch, -2.0).mul_add_simd(dot, norm),
+                |dot, norm| norm - 2.0 * dot,
+            );
+        }),
+        Metric::CosineNormalized => process_rows(input, fanout, output, |_, dot_row, top| {
+            process_unary::<F, _>(arch, dot_row, top, fanout, |dot| F::splat(arch, 1.0) - dot);
+        }),
+        Metric::InnerProduct => process_rows(input, fanout, output, |_, dot_row, top| {
+            process_unary::<F, _>(arch, dot_row, top, fanout, |dot| F::default(arch) - dot);
+        }),
+        Metric::Cosine => process_rows(input, fanout, output, |row, dot_row, top| {
+            process_cosine::<F>(
+                arch,
+                dot_row,
+                input.row_scales[row],
+                input.leader_scales,
+                top,
+                fanout,
+            );
+        }),
+    }
+}
+
+#[inline(always)]
+fn process_rows(
+    input: PartitionTopK<'_>,
+    fanout: usize,
+    output: &mut [u32],
+    mut process: impl FnMut(usize, &[f32], &mut TopK),
+) {
+    for (row, (dot_row, output_row)) in input
         .dots
         .chunks_exact(input.leaders)
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
         let mut top = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
-        match input.metric {
-            Metric::L2 => process_binary::<F, _, _>(
-                arch,
-                dot_row,
-                input.leader_scales,
-                &mut top,
-                fanout,
-                |dot, norm| F::splat(arch, -2.0).mul_add_simd(dot, norm),
-                |dot, norm| norm - 2.0 * dot,
-            ),
-            Metric::CosineNormalized => {
-                process_unary::<F, _>(arch, dot_row, &mut top, fanout, |dot| {
-                    F::splat(arch, 1.0) - dot
-                })
-            }
-            Metric::InnerProduct => process_unary::<F, _>(arch, dot_row, &mut top, fanout, |dot| {
-                F::default(arch) - dot
-            }),
-            Metric::Cosine => process_cosine::<F>(
-                arch,
-                dot_row,
-                input.row_scales[row_index],
-                input.leader_scales,
-                &mut top,
-                fanout,
-            ),
-        }
+        process(row, dot_row, &mut top);
         copy_ids(&top, output_row);
+    }
+}
+
+#[inline(always)]
+fn cosine_distance(row_norm_squared: f32, leader_norm: f32, dot: f32) -> f32 {
+    let row_norm = if row_norm_squared < f32::MIN_POSITIVE {
+        0.0
+    } else {
+        row_norm_squared.sqrt()
+    };
+    let leader_norm = if leader_norm < f32::MIN_POSITIVE.sqrt() {
+        0.0
+    } else {
+        leader_norm
+    };
+    if row_norm == 0.0 || leader_norm == 0.0 {
+        1.0
+    } else {
+        1.0 - dot / (row_norm * leader_norm)
     }
 }
 
@@ -284,9 +331,14 @@ fn process_cosine<F>(
     F::Mask: SIMDSelect<F>,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let row_norm = F::splat(arch, row_norm_squared.sqrt());
+    let row_norm = if row_norm_squared < f32::MIN_POSITIVE {
+        0.0
+    } else {
+        row_norm_squared.sqrt()
+    };
+    let row_norm = F::splat(arch, row_norm);
     let one = F::splat(arch, 1.0);
-    let zero = F::default(arch);
+    let minimum_norm = F::splat(arch, f32::MIN_POSITIVE.sqrt());
     process_binary::<F, _, _>(
         arch,
         dots,
@@ -294,21 +346,17 @@ fn process_cosine<F>(
         top,
         fanout,
         |dot, leader_norm| {
+            let row_zero = row_norm.lt_simd(minimum_norm);
+            let leader_zero = leader_norm.lt_simd(minimum_norm);
             let denominator = row_norm * leader_norm;
-            let valid = denominator.gt_simd(zero);
-            let safe_denominator = valid.select(denominator, one);
-            let cosine = valid.select(dot / safe_denominator, zero);
+            let safe_denominator = row_zero.select(one, leader_zero.select(one, denominator));
+            let cosine = row_zero.select(
+                F::default(arch),
+                leader_zero.select(F::default(arch), dot / safe_denominator),
+            );
             one - cosine
         },
-        |dot, leader_norm| {
-            let denominator = row_norm_squared.sqrt() * leader_norm;
-            let cosine = if denominator > 0.0 {
-                dot / denominator
-            } else {
-                0.0
-            };
-            1.0 - cosine
-        },
+        |dot, leader_norm| cosine_distance(row_norm_squared, leader_norm, dot),
     );
 }
 
@@ -391,15 +439,7 @@ fn distance(metric: Metric, dot: f32, row_scale: f32, leader_scale: f32) -> f32 
         Metric::L2 => (-2.0f32).mul_add(dot, leader_scale),
         Metric::CosineNormalized => 1.0 - dot,
         Metric::InnerProduct => -dot,
-        Metric::Cosine => {
-            let denominator = row_scale.sqrt() * leader_scale;
-            let cosine = if denominator > 0.0 {
-                dot / denominator
-            } else {
-                0.0
-            };
-            1.0 - cosine
-        }
+        Metric::Cosine => cosine_distance(row_scale, leader_scale, dot),
     }
 }
 
