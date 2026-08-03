@@ -21,10 +21,10 @@
 //!    Every point is assigned to its nearest `fanout` leaders. Assigning to more
 //!    than one leader makes child groups overlap. Oversized groups are processed
 //!    recursively until bounded groups called *leaves* remain.
-//! 2. **Pick within leaves.** Vectors in one leaf are contiguous enough for a
-//!    dense matrix multiplication to compute all pair dot products. Each point
-//!    picks its nearest leaf companions; selected pairs become candidate graph
-//!    edges.
+//! 2. **Pick within leaves.** Vectors in one leaf are contiguous enough for one
+//!    dense general matrix multiplication (GEMM) to compute all pair dot
+//!    products. Each point picks its nearest leaf companions; selected pairs
+//!    become candidate graph edges.
 //! 3. **Merge and prune.** Candidates from overlapping leaves are combined.
 //!    HashPrune can keep a bounded reservoir per source while edges stream in,
 //!    retaining the closest candidate for each residual-direction hash. The
