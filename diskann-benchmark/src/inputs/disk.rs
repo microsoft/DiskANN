@@ -98,10 +98,6 @@ impl Default for DiskSearchMode {
 }
 
 impl DiskSearchMode {
-    pub(crate) fn is_flat_search(&self) -> bool {
-        matches!(self, Self::Flat { .. })
-    }
-
     pub(crate) fn vector_filters_file(&self) -> Option<&InputFile> {
         match self {
             Self::Flat {
@@ -175,7 +171,7 @@ mod tests {
     fn flat_disk_search_deserializes_without_graph_only_fields() {
         let mode: DiskSearchMode =
             serde_json::from_str(r#"{ "mode": "flat" }"#).expect("flat mode must deserialize");
-        assert!(mode.is_flat_search());
+        assert!(matches!(mode, DiskSearchMode::Flat { .. }));
         assert!(mode.post_processor().is_none());
     }
 

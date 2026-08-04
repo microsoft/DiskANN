@@ -405,7 +405,7 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: search_params.search_mode.is_flat_search(),
+        is_flat_search: matches!(search_params.search_mode, DiskSearchMode::Flat { .. }),
         distance: search_params.distance,
         uses_vector_filters: search_params.search_mode.vector_filters_file().is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
