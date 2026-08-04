@@ -3,14 +3,15 @@
  * Licensed under the MIT license.
  */
 
-pub(crate) trait ReferenceShifts: Copy {
+pub(crate) trait ReferenceIntegerOps: Copy {
     fn expected_shr_(self, rhs: Self) -> Self;
     fn expected_shl_(self, rhs: Self) -> Self;
+    fn expected_popcount_(self) -> Self;
 }
 
-macro_rules! impl_shifts_unsigned {
+macro_rules! impl_integer_ops_unsigned {
     ($type:ty) => {
-        impl ReferenceShifts for $type {
+        impl ReferenceIntegerOps for $type {
             #[inline(always)]
             fn expected_shr_(self, rhs: Self) -> Self {
                 if (rhs as usize) >= 8 * std::mem::size_of::<Self>() {
@@ -28,13 +29,18 @@ macro_rules! impl_shifts_unsigned {
                     self << rhs
                 }
             }
+
+            #[inline(always)]
+            fn expected_popcount_(self) -> Self {
+                self.count_ones() as Self
+            }
         }
     };
 }
 
-macro_rules! impl_shifts_signed {
+macro_rules! impl_integer_ops_signed {
     ($type:ty) => {
-        impl ReferenceShifts for $type {
+        impl ReferenceIntegerOps for $type {
             #[inline(always)]
             fn expected_shr_(self, rhs: Self) -> Self {
                 if rhs < 0 || rhs >= ((8 * std::mem::size_of::<Self>()) as $type) {
@@ -52,42 +58,24 @@ macro_rules! impl_shifts_signed {
                     self << rhs
                 }
             }
+
+            #[inline(always)]
+            fn expected_popcount_(self) -> Self {
+                self.count_ones() as Self
+            }
         }
     };
 }
 
-impl_shifts_unsigned!(u8);
-impl_shifts_unsigned!(u16);
-impl_shifts_unsigned!(u32);
-impl_shifts_unsigned!(u64);
+impl_integer_ops_unsigned!(u8);
+impl_integer_ops_unsigned!(u16);
+impl_integer_ops_unsigned!(u32);
+impl_integer_ops_unsigned!(u64);
 
-impl_shifts_signed!(i8);
-impl_shifts_signed!(i16);
-impl_shifts_signed!(i32);
-impl_shifts_signed!(i64);
-
-////////////////////////
-// Reference Popcount //
-////////////////////////
-
-pub(crate) trait ReferencePopcount: Copy {
-    fn expected_popcount_(self) -> Self;
-}
-
-macro_rules! impl_popcount {
-    ($($type:ty),* $(,)?) => {
-        $(
-            impl ReferencePopcount for $type {
-                #[inline(always)]
-                fn expected_popcount_(self) -> Self {
-                    self.count_ones() as Self
-                }
-            }
-        )*
-    };
-}
-
-impl_popcount!(i8, i16, i32, i64, u8, u16, u32, u64);
+impl_integer_ops_signed!(i8);
+impl_integer_ops_signed!(i16);
+impl_integer_ops_signed!(i32);
+impl_integer_ops_signed!(i64);
 
 /// This is the ground truth for how operations behave.
 ///

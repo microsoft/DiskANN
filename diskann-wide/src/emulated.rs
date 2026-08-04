@@ -10,10 +10,7 @@ use super::{
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
-    reference::{
-        ReferenceAbs, ReferenceCast, ReferencePopcount, ReferenceScalarOps, ReferenceShifts,
-        TreeReduce,
-    },
+    reference::{ReferenceAbs, ReferenceCast, ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
     traits::{
         ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
         SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSumTree,
@@ -243,7 +240,7 @@ where
 
 impl<T, const N: usize, A> SIMDPopcount for Emulated<T, N, A>
 where
-    T: ReferencePopcount,
+    T: ReferenceIntegerOps,
 {
     #[inline(always)]
     fn popcount_simd(self) -> Self {
@@ -342,7 +339,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shl for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -353,7 +350,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shl<T> for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -364,7 +361,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shr for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -375,7 +372,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shr<T> for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]

@@ -10,7 +10,7 @@ use super::common::{self, ScalarTraits};
 use crate::{
     BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
     SplitJoin, SupportedLaneCount, ZipUnzip, arch,
-    reference::{ReferenceScalarOps, ReferenceShifts, TreeReduce},
+    reference::{ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
 };
 
 fn identity<T>(x: T) -> T {
@@ -568,7 +568,7 @@ macro_rules! test_popcount {
         paste::paste! {
             #[test]
             fn [<popcount_ $wide:lower $(_$($ps )x+)?>]() {
-                use crate::{SIMDPopcount, SIMDVector, reference::ReferencePopcount};
+                use crate::{SIMDPopcount, SIMDVector, reference::ReferenceIntegerOps};
 
                 type T = $wide $(< $($ps),+>)?;
 
@@ -807,7 +807,7 @@ impl<T> BitOps for T where
 pub(crate) fn test_bitops_impl<V, T, const N: usize, A>(arch: A, a: &[T], b: &[T])
 where
     A: arch::Sealed,
-    T: BitOps + Debug + Copy + Eq + ReferenceShifts + ScalarTraits,
+    T: BitOps + Debug + Copy + Eq + ReferenceIntegerOps + ScalarTraits,
     Const<N>: SupportedLaneCount,
     BitMask<N, A>: SIMDMask<Arch = A>,
     V: SIMDVector<Arch = A, Scalar = T, ConstLanes = Const<N>> + BitOps,
@@ -847,7 +847,7 @@ where
 pub(crate) fn test_scalar_shift_impl<V, T, const N: usize, A>(arch: A, a: &[T], b: &[T])
 where
     A: arch::Sealed,
-    T: BitOps + Debug + Copy + Eq + ReferenceShifts + ScalarTraits,
+    T: BitOps + Debug + Copy + Eq + ReferenceIntegerOps + ScalarTraits,
     Const<N>: SupportedLaneCount,
     BitMask<N, A>: SIMDMask<Arch = A>,
     V: SIMDVector<Arch = A, Scalar = T, ConstLanes = Const<N>>
