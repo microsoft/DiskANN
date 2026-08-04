@@ -5,7 +5,7 @@
 
 use diskann_utils::{
     sampling::medoid::ComputeMedoid,
-    views::{Matrix, MatrixView, MutMatrixView},
+    views::{Matrix, MatrixView, MatrixViewMut},
 };
 use half::f16;
 use serde::{Deserialize, Serialize};
@@ -281,11 +281,11 @@ pub(crate) enum Preprocess {
 }
 
 trait Apply<T> {
-    fn apply(&self, m: MutMatrixView<'_, T>);
+    fn apply(&self, m: MatrixViewMut<'_, T>);
 }
 
 impl Apply<f32> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, f32>) {
+    fn apply(&self, mut m: MatrixViewMut<'_, f32>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v *= 0.5),
             Self::Floor => m.as_mut_slice().iter_mut().for_each(|v| *v = v.floor()),
@@ -294,7 +294,7 @@ impl Apply<f32> for Preprocess {
 }
 
 impl Apply<f16> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, f16>) {
+    fn apply(&self, mut m: MatrixViewMut<'_, f16>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| {
                 *v = f16::from_f32(f32::from(*v) * 0.5);
@@ -307,7 +307,7 @@ impl Apply<f16> for Preprocess {
 }
 
 impl Apply<u8> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, u8>) {
+    fn apply(&self, mut m: MatrixViewMut<'_, u8>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v /= 2),
             Self::Floor => {}
@@ -316,7 +316,7 @@ impl Apply<u8> for Preprocess {
 }
 
 impl Apply<i8> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, i8>) {
+    fn apply(&self, mut m: MatrixViewMut<'_, i8>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v /= 2),
             Self::Floor => {}
