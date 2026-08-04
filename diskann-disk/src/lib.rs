@@ -11,6 +11,8 @@
 #[cfg(test)]
 pub(crate) mod test_utils;
 
+pub mod error;
+
 pub mod build;
 pub use build::{
     disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,

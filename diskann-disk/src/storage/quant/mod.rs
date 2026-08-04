@@ -4,11 +4,11 @@
  */
 
 mod generator;
-pub use generator::{GeneratorContext, QuantDataGenerator};
+pub use generator::QuantDataGenerator;
 
 pub(crate) mod pq;
 pub use pq::pq_generation::{PQGeneration, PQGenerationContext};
 pub use pq::PQData;
 
 mod compressor;
-pub use compressor::{CompressionStage, QuantCompressor};
+pub use compressor::QuantCompressor;

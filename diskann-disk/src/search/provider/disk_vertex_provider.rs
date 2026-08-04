@@ -12,6 +12,7 @@ use hashbrown::HashMap;
 
 use crate::{
     data_model::GraphHeader,
+    error::{diskann_error, ErrorKind},
     search::{
         provider::{
             aligned_file_reader::traits::AlignedFileReader, disk_sector_graph::DiskSectorGraph,
@@ -80,9 +81,9 @@ where
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.vector_buf
                 [local_offset.idx * self.dim..(local_offset.idx * self.dim) + self.dim]),
-            None => Err(ANNError::log_get_vertex_data_error(
-                vertex_id.to_string(),
-                "Vector".to_string(),
+            None => Err(diskann_error!(
+                ErrorKind::IndexError,
+                "vertex id {vertex_id} is out-of-bounds",
             )),
         }
     }
@@ -93,9 +94,9 @@ where
     ) -> ANNResult<&[Data::VectorIdType]> {
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.cached_adjacency_list[local_offset.vec_idx]),
-            None => Err(ANNError::log_get_vertex_data_error(
-                vertex_id.to_string(),
-                "AdjacencyList".to_string(),
+            None => Err(diskann_error!(
+                ErrorKind::IndexError,
+                "adjacency list id {vertex_id} is out-of-bounds",
             )),
         }
     }
@@ -106,9 +107,9 @@ where
     ) -> ANNResult<&Data::AssociatedDataType> {
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.cached_associated_data[local_offset.vec_idx]),
-            None => Err(ANNError::log_get_vertex_data_error(
-                vertex_id.to_string(),
-                "AssociatedData".to_string(),
+            None => Err(diskann_error!(
+                ErrorKind::IndexError,
+                "associated data id {vertex_id} is out-of-bounds",
             )),
         }
     }
@@ -152,16 +153,14 @@ where
                 self.cached_adjacency_list.push(adjacency_list);
             }
             None => {
-                return Err(ANNError::message(
-                    diskann::ANNErrorKind::SerdeError,
-                    format!(
-                        "malformed length for vertex {} \
-                       - reported neighbors is {} ({} bytes) which exceeds the buffer length {}",
-                        vertex_id,
-                        num_neighbors,
-                        4 * num_neighbors + 4,
-                        neighbor_and_data_buf.len()
-                    ),
+                return Err(diskann_error!(
+                    ErrorKind::SerdeError,
+                    "malformed length for vertex {} \
+                     - reported neighbors is {} ({} bytes) which exceeds the buffer length {}",
+                    vertex_id,
+                    num_neighbors,
+                    4 * num_neighbors + 4,
+                    neighbor_and_data_buf.len()
                 ));
             }
         }
@@ -171,9 +170,10 @@ where
             &neighbor_and_data_buf[data_end - self.associated_data_size..data_end],
         )
         .map_err(|err| {
-            ANNError::log_serde_error(
-                "Error deserializing associated data from bytes".to_string(),
-                *err,
+            diskann_error!(
+                ErrorKind::SerdeError,
+                "Error deserializing associated data from bytes: {}",
+                err,
             )
         })?;
         self.cached_associated_data.push(associated_data);

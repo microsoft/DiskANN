@@ -30,6 +30,7 @@ use diskann_quantization::{
         MinMaxCosineNormalized, MinMaxIP, MinMaxL2Squared,
     },
 };
+use diskann_utils::lazy_format;
 use diskann_vector::{PureDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -54,7 +55,8 @@ pub enum MMConvertError {
 
 impl From<MMConvertError> for ANNError {
     fn from(value: MMConvertError) -> Self {
-        ANNError::log_index_error(format_args!(
+        ANNError::message(lazy_format!(
+            move,
             "Unable to convert MinMaxElement slice, error : {:?}",
             value
         ))

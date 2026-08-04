@@ -5,12 +5,6 @@
 
 use diskann_benchmark_runner::Registry;
 
-// Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!(
-    "product-quantization",
-    inputs::graph_index::IndexPQOperation
-);
-
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     {
@@ -33,9 +27,12 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         )?;
     }
 
-    // Stub implementation
     #[cfg(not(feature = "product-quantization"))]
-    imp::register("graph-index-pq", registry)?;
+    registry.register_partially_gated::<crate::inputs::graph_index::IndexPQOperation>(
+        "graph-index-pq",
+        diskann_benchmark_runner::Features::new("product-quantization"),
+        "PQ based graph index build and search",
+    )?;
 
     Ok(())
 }
