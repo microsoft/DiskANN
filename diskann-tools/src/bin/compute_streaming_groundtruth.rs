@@ -22,7 +22,9 @@ use anyhow::Context;
 use clap::Parser;
 use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
 use diskann::utils::VectorRepr;
-use diskann_benchmark_core::streaming::executors::bigann::{FindGroundtruth, RunBook};
+use diskann_benchmark_core::streaming::executors::bigann::{
+    FindGroundtruth, RunBook, ScanDirectory,
+};
 use diskann_benchmark_core::streaming::{self, Executor};
 use diskann_providers::storage::{FileStorageProvider, StorageReadProvider};
 use diskann_tools::utils::{
@@ -32,6 +34,72 @@ use diskann_utils::io::read_bin;
 use diskann_utils::views::Matrix;
 use diskann_vector::{distance::Metric, DistanceFunction};
 use rayon::prelude::*;
+
+trait GroundtruthDistance: Send + Sync {
+    fn n_base(&self) -> usize;
+
+    fn n_queries(&self) -> usize;
+
+    fn distance(&self, query: usize, internal_id: usize) -> anyhow::Result<f32>;
+}
+
+struct MatrixDistance<'a, V: VectorRepr + Send + Sync> {
+    dataset: &'a Matrix<V>,
+    queries: &'a Matrix<V>,
+    distance_fn: V::Distance,
+}
+
+impl<'a, V> GroundtruthDistance for MatrixDistance<'a, V>
+where
+    V: VectorRepr + Send + Sync,
+{
+    fn n_base(&self) -> usize {
+        self.dataset.nrows()
+    }
+
+    fn n_queries(&self) -> usize {
+        self.queries.nrows()
+    }
+
+    fn distance(&self, query: usize, internal_id: usize) -> anyhow::Result<f32> {
+        if query >= self.n_queries() {
+            return Err(anyhow::anyhow!("query index {} out of bounds", query));
+        }
+        if internal_id >= self.n_base() {
+            return Err(anyhow::anyhow!("internal id {} out of bounds", internal_id));
+        }
+
+        let query_row = self.queries.row(query);
+        let data_row = self.dataset.row(internal_id);
+        Ok(self.distance_fn.evaluate_similarity(data_row, query_row))
+    }
+}
+
+fn compute_groundtruth_results(
+    distance: &dyn GroundtruthDistance,
+    active_entries: &[(u32, usize)],
+    recall_at: usize,
+) -> anyhow::Result<Vec<NeighborPriorityQueue<u32>>> {
+    // using the global threadpool is generally fine in diskann-tools
+    #[allow(clippy::disallowed_methods)]
+    let results = (0..distance.n_queries())
+        .into_par_iter()
+        .map(|query_id| {
+            let mut pq = NeighborPriorityQueue::new(recall_at);
+            let query_result: anyhow::Result<()> =
+                active_entries
+                    .iter()
+                    .try_for_each(|&(external_id, internal_id)| {
+                        let dist = distance.distance(query_id, internal_id)?;
+                        pq.insert(Neighbor::new(external_id, dist));
+                        Ok(())
+                    });
+            query_result.map(|()| pq)
+        })
+        .collect::<Vec<anyhow::Result<NeighborPriorityQueue<u32>>>>();
+
+    results.into_iter().collect()
+}
 
 fn main() -> CMDResult<()> {
     init_subscriber();
@@ -59,14 +127,12 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
             details: e.to_string(),
         })?;
 
-    let n_base = dataset.nrows();
-    let n_queries = queries.nrows();
     let recall_at = args.recall_at as usize;
 
     tracing::info!(
         "Dataset: {} vectors, Queries: {} vectors, dim: {}, recall@{}",
-        n_base,
-        n_queries,
+        dataset.nrows(),
+        queries.nrows(),
         dataset.ncols(),
         recall_at,
     );
@@ -88,7 +154,9 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
     }
     impl FindGroundtruth for AllowMissing {
         fn find_groundtruth(&mut self, stage: usize) -> anyhow::Result<PathBuf> {
-            Ok(self.dir.join(format!("step{}.{}", stage, self.suffix)))
+            Ok(self
+                .dir
+                .join(ScanDirectory::groundtruth_filename(stage, &self.suffix)))
         }
     }
 
@@ -112,19 +180,15 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
     })?;
 
     tracing::info!("Runbook has {} stages", runbook.len());
-    let distance_fn = V::distance(args.distance_function, Some(dataset.ncols()));
-
     let mut stream = GroundtruthStream {
         storage: &storage,
-        dataset: &dataset,
-        queries: &queries,
-        distance_fn,
-        n_base,
-        n_queries,
+        distance: Box::new(MatrixDistance {
+            dataset: &dataset,
+            queries: &queries,
+            distance_fn: V::distance(args.distance_function, Some(dataset.ncols())),
+        }),
         recall_at,
-        active: vec![false; n_base],
-        ext_id: vec![0u32; n_base],
-        ext_to_offset: HashMap::new(),
+        external_to_internal: HashMap::new(),
     };
 
     runbook
@@ -137,23 +201,21 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
     Ok(())
 }
 
-struct GroundtruthStream<'a, V: VectorRepr + Send + Sync> {
+struct GroundtruthStream<'a> {
     storage: &'a FileStorageProvider,
-    dataset: &'a Matrix<V>,
-    queries: &'a Matrix<V>,
-    distance_fn: V::Distance,
-    n_base: usize,
-    n_queries: usize,
+    distance: Box<dyn GroundtruthDistance + 'a>,
     recall_at: usize,
-    active: Vec<bool>,
-    ext_id: Vec<u32>,
-    ext_to_offset: HashMap<u32, usize>,
+    external_to_internal: HashMap<u32, usize>,
 }
 
-impl<'a, V> streaming::Stream<diskann_benchmark_core::streaming::executors::bigann::Args>
-    for GroundtruthStream<'a, V>
-where
-    V: VectorRepr + Send + Sync,
+impl<'a> GroundtruthStream<'a> {
+    fn remove_active_external_id(&mut self, external_id: u32) {
+        self.external_to_internal.remove(&external_id);
+    }
+}
+
+impl<'a> streaming::Stream<diskann_benchmark_core::streaming::executors::bigann::Args>
+    for GroundtruthStream<'a>
 {
     type Output = ();
 
@@ -162,72 +224,39 @@ where
         args: diskann_benchmark_core::streaming::executors::bigann::Search<'_>,
     ) -> anyhow::Result<Self::Output> {
         let timer = Instant::now();
-        let n_active = self.active.iter().filter(|&&b| b).count();
+        let n_active = self.external_to_internal.len();
+
+        if n_active < self.recall_at {
+            return Err(anyhow::anyhow!(
+                "{}: active set has {} vectors, which is fewer than recall_at={} required to compute groundtruth",
+                args.groundtruth.display(),
+                n_active,
+                self.recall_at,
+            ));
+        }
 
         tracing::info!(
             "Computing top-{} groundtruth for {} active vectors against {} queries",
             self.recall_at,
             n_active,
-            self.n_queries,
+            self.distance.n_queries(),
         );
 
-        let active_ids: Vec<usize> = self
-            .active
+        let active_entries: Vec<(u32, usize)> = self
+            .external_to_internal
             .iter()
-            .enumerate()
-            .filter_map(|(i, &on)| if on { Some(i) } else { None })
+            .map(|(external_id, internal_id)| (*external_id, *internal_id))
             .collect();
 
-        // it's generally find to use the global threadpool in diskann-tools
-        #[allow(clippy::disallowed_methods)]
-        let results: Vec<NeighborPriorityQueue<u32>> = (0..self.n_queries)
-            .into_par_iter()
-            .map(|qi| {
-                let query = self.queries.row(qi);
-                let mut pq = NeighborPriorityQueue::new(self.recall_at);
-                for &offset in &active_ids {
-                    let dist = self
-                        .distance_fn
-                        .evaluate_similarity(self.dataset.row(offset), query);
-                    pq.insert(Neighbor {
-                        id: self.ext_id[offset],
-                        distance: dist,
-                    });
-                }
-                pq
-            })
-            .collect();
-
-        let under_k: Vec<usize> = results
-            .iter()
-            .enumerate()
-            .filter_map(|(qi, pq)| (pq.size() < self.recall_at).then_some(qi))
-            .collect();
-        if !under_k.is_empty() {
-            let preview: Vec<usize> = under_k.iter().copied().take(20).collect();
-            let suffix = if under_k.len() > preview.len() {
-                format!(" (showing first {} query indices)", preview.len())
-            } else {
-                String::new()
-            };
-            return Err(anyhow::anyhow!(
-                "{}: {} / {} queries have fewer than {} results (active set = {}). Query indices: {:?}{}",
-                args.groundtruth.display(),
-                under_k.len(),
-                self.n_queries,
-                self.recall_at,
-                n_active,
-                preview,
-                suffix,
-            ));
-        }
+        let results =
+            compute_groundtruth_results(self.distance.as_ref(), &active_entries, self.recall_at)?;
 
         write_ground_truth::<()>(
             self.storage,
             args.groundtruth.to_str().ok_or_else(|| {
                 anyhow::anyhow!("Non-UTF8 groundtruth path: {}", args.groundtruth.display())
             })?,
-            self.n_queries,
+            self.distance.n_queries(),
             self.recall_at,
             results,
             None,
@@ -247,11 +276,10 @@ where
         &mut self,
         args: diskann_benchmark_core::streaming::executors::bigann::Insert,
     ) -> anyhow::Result<Self::Output> {
-        for id in args.offsets.clone() {
-            if id < self.n_base {
-                self.active[id] = true;
-                self.ext_id[id] = id as u32;
-                self.ext_to_offset.insert(id as u32, id);
+        for internal_id in args.offsets.clone() {
+            if internal_id < self.distance.n_base() {
+                self.external_to_internal
+                    .insert(internal_id as u32, internal_id);
             }
         }
         Ok(())
@@ -261,18 +289,14 @@ where
         &mut self,
         args: diskann_benchmark_core::streaming::executors::bigann::Replace,
     ) -> anyhow::Result<Self::Output> {
-        for eid in args.ids.clone() {
-            if let Some(&offset) = self.ext_to_offset.get(&(eid as u32)) {
-                self.active[offset] = false;
-                self.ext_to_offset.remove(&(eid as u32));
-            }
+        for external_id in args.ids.clone() {
+            self.remove_active_external_id(external_id as u32);
         }
 
-        for (offset, eid) in args.offsets.clone().zip(args.ids.clone()) {
-            if offset < self.n_base {
-                self.active[offset] = true;
-                self.ext_id[offset] = eid as u32;
-                self.ext_to_offset.insert(eid as u32, offset);
+        for (internal_id, external_id) in args.offsets.clone().zip(args.ids.clone()) {
+            if internal_id < self.distance.n_base() {
+                self.external_to_internal
+                    .insert(external_id as u32, internal_id);
             }
         }
 
@@ -283,11 +307,8 @@ where
         &mut self,
         args: diskann_benchmark_core::streaming::executors::bigann::Delete,
     ) -> anyhow::Result<Self::Output> {
-        for eid in args.ids.clone() {
-            if let Some(&offset) = self.ext_to_offset.get(&(eid as u32)) {
-                self.active[offset] = false;
-                self.ext_to_offset.remove(&(eid as u32));
-            }
+        for external_id in args.ids.clone() {
+            self.remove_active_external_id(external_id as u32);
         }
         Ok(())
     }
