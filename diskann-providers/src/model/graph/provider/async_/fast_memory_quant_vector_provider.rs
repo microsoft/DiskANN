@@ -253,7 +253,7 @@ impl FastMemoryQuantVectorProviderAsync {
                     pq_bytes
                 )));
             }
-            Ok(Self::new(metric, num_points, table.into()))
+            Ok(Self::new(metric, num_points, table.try_into()?))
         })
     }
 

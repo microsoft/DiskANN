@@ -31,7 +31,8 @@ impl DiskIndexReader {
         storage_provider: &Storage,
     ) -> ANNResult<Self> {
         let pq_storage = PQStorage::new(&pq_pivot_path, &pq_compressed_data_path, None);
-        let pq_pivot_table: FixedChunkPQTable = pq_storage.load_pivots(storage_provider)?.into();
+        let pq_pivot_table =
+            FixedChunkPQTable::try_from(pq_storage.load_pivots(storage_provider)?)?;
 
         // Auto-detect number of points from compressed PQ file metadata
         let metadata = load_metadata_from_file(storage_provider, &pq_compressed_data_path)?;

@@ -430,9 +430,19 @@ impl FixedChunkPQTable {
     }
 }
 
-impl From<BasicTable> for FixedChunkPQTable {
-    fn from(table: BasicTable) -> Self {
-        Self { table }
+impl TryFrom<BasicTable> for FixedChunkPQTable {
+    type Error = ANNError;
+
+    fn try_from(table: BasicTable) -> Result<Self, Self::Error> {
+        if table.ncenters() > NUM_PQ_CENTROIDS {
+            return Err(ANNError::message(format!(
+                "PQ pivot table mismatch: file has {} centers but supports at most {} centers.",
+                table.ncenters(),
+                NUM_PQ_CENTROIDS
+            )));
+        }
+
+        Ok(Self { table })
     }
 }
 
@@ -701,7 +711,8 @@ mod fixed_chunk_pq_table_test {
         PQStorage::new(PQ_PIVOTS_PATH, "", None)
             .load_pivots(&storage_provider)
             .unwrap()
-            .into()
+            .try_into()
+            .unwrap()
     }
 
     #[test]
@@ -760,6 +771,23 @@ mod fixed_chunk_pq_table_test {
             let chunk_offsets = Box::new([0, 1, 2, dim, dim + 1]);
             assert!(FixedChunkPQTable::new(dim, pq_table, chunk_offsets).is_err());
         }
+    }
+
+    #[test]
+    fn conversion_rejects_too_many_centers() {
+        let dim = 5;
+        let table = BasicTable::new(
+            MatrixBase::try_from(
+                vec![0.0; dim * (NUM_PQ_CENTROIDS + 1)].into_boxed_slice(),
+                NUM_PQ_CENTROIDS + 1,
+                dim,
+            )
+            .unwrap(),
+            ChunkOffsetsBase::new(vec![0, 2, dim].into_boxed_slice()).unwrap(),
+        )
+        .unwrap();
+
+        assert!(FixedChunkPQTable::try_from(table).is_err());
     }
 
     #[test]
