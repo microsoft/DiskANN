@@ -31,7 +31,7 @@ uninlined_format_args = "allow"
 cfg-if = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-trybuild = "1.0.101"
+trybuild = "1.0.120"
 rand_distr = { workspace = true }
 
 [features]
