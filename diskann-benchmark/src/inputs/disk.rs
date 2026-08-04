@@ -15,7 +15,7 @@ use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Chec
 #[cfg(feature = "disk-index")]
 use diskann_disk::search::search_mode::SearchMode;
 #[cfg(feature = "disk-index")]
-use diskann_disk::QuantizationType;
+use diskann_disk::{search::pq_kmeans_router::PqKmeansRouterMetric, QuantizationType};
 use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +79,7 @@ pub(crate) struct DiskIndexBuild {
 pub(crate) struct PqKmeansRouterBuild {
     pub(crate) load_path: String,
     pub(crate) artifact: String,
+    pub(crate) distance: SimilarityMeasure,
     #[serde(default)]
     pub(crate) num_representatives: Option<usize>,
     #[serde(default)]
@@ -90,6 +91,18 @@ pub(crate) struct PqKmeansRouterBuild {
 #[cfg(feature = "disk-index")]
 fn default_pq_kmeans_router_iterations() -> usize {
     4
+}
+
+#[cfg(feature = "disk-index")]
+impl From<SimilarityMeasure> for PqKmeansRouterMetric {
+    fn from(value: SimilarityMeasure) -> Self {
+        match value {
+            SimilarityMeasure::SquaredL2 => Self::SquaredL2,
+            SimilarityMeasure::InnerProduct => Self::InnerProduct,
+            SimilarityMeasure::Cosine => Self::Cosine,
+            SimilarityMeasure::CosineNormalized => Self::CosineNormalized,
+        }
+    }
 }
 
 #[cfg(feature = "disk-index")]
@@ -589,6 +602,7 @@ impl Example for PqKmeansRouterBuild {
         Self {
             load_path: "sample_index_l50_r32".to_string(),
             artifact: "sample_index_l50_r32.pq_kmeans_router.bin".to_string(),
+            distance: SimilarityMeasure::SquaredL2,
             num_representatives: None,
             training_sample_size: Some(16_384),
             max_iterations: 4,
@@ -602,6 +616,7 @@ impl fmt::Display for PqKmeansRouterBuild {
         writeln!(f, "PQ-kmeans Router Build")?;
         write_field!(f, "Load Path", self.load_path)?;
         write_field!(f, "Artifact", self.artifact)?;
+        write_field!(f, "Distance", self.distance)?;
         write_field!(
             f,
             "Representatives",

@@ -111,6 +111,7 @@ pub(super) fn build_pq_kmeans_router(
     let router_data = PqKmeansRouterData::build_from_pq_data(
         pq_data.as_ref(),
         PqKmeansRouterBuildParams {
+            metric: params.distance.into(),
             num_representatives: params.num_representatives,
             training_sample_size: params.training_sample_size,
             max_iterations: params.max_iterations,

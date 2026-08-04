@@ -30,10 +30,7 @@ use diskann::{
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{
-        compute_pq_distance,
-        graph::provider::{determinant_diversity, DeterminantDiversityParams},
-    },
+    model::graph::provider::{determinant_diversity, DeterminantDiversityParams},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::{
@@ -42,7 +39,7 @@ use diskann_utils::{
 };
 
 use crate::search::{
-    pq::{quantizer_preprocess, PQData, PQScratch},
+    pq::{compute_pq_distances_for_metric, quantizer_preprocess, PQData, PQScratch},
     pq_kmeans_router::PqKmeansStartPointRouter,
 };
 use diskann_vector::{distance::Metric, DistanceFunction};
@@ -771,13 +768,11 @@ where
         F: FnMut(f32, u32),
     {
         let pq_scratch = &mut self.scratch.pq_scratch;
-        compute_pq_distance(
+        compute_pq_distances_for_metric(
+            pq_scratch,
+            &self.provider.pq_data,
+            self.provider.metric,
             ids,
-            self.provider.pq_data.get_num_chunks(),
-            &pq_scratch.aligned_pqtable_dist_scratch,
-            self.provider.pq_data.pq_compressed_data().as_slice(),
-            &mut pq_scratch.aligned_pq_coord_scratch,
-            &mut pq_scratch.aligned_dist_scratch,
         )?;
 
         for (i, id) in ids.iter().enumerate() {
@@ -1610,6 +1605,7 @@ mod disk_provider_tests {
         }
         let router = PqKmeansStartPointRouter::new(
             PqKmeansRouterData {
+                metric: crate::search::pq_kmeans_router::PqKmeansRouterMetric::SquaredL2,
                 num_points: pq_data.pq_compressed_data().nrows(),
                 num_pq_chunks: pq_data.get_num_chunks(),
                 representative_ids,

@@ -11,4 +11,5 @@ pub use pq_scratch::PQScratch;
 pub(crate) use crate::storage::quant::pq::PQData;
 
 mod quantizer_preprocess;
+pub(crate) use quantizer_preprocess::compute_pq_distances_for_metric;
 pub use quantizer_preprocess::quantizer_preprocess;

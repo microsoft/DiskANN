@@ -292,9 +292,10 @@ where
         }) => {
             let router_data = PqKmeansRouterData::load_from_path(&**artifact)?;
             (
-                Some(PqKmeansStartPointRouter::new(
+                Some(PqKmeansStartPointRouter::new_for_metric(
                     router_data,
                     *max_start_points,
+                    search_params.distance.into(),
                 )?),
                 Some("pq_kmeans".to_string()),
             )

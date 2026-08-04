@@ -6,14 +6,61 @@
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashSet},
+    fmt,
     path::Path,
 };
 
 use diskann::{ANNError, ANNResult};
 use diskann_providers::model::{pq::pq_dist_lookup_single, FixedChunkPQTable};
+use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::quant::pq::PQData;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PqKmeansRouterMetric {
+    #[default]
+    SquaredL2,
+    InnerProduct,
+    Cosine,
+    CosineNormalized,
+}
+
+impl fmt::Display for PqKmeansRouterMetric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SquaredL2 => f.write_str("squared_l2"),
+            Self::InnerProduct => f.write_str("inner_product"),
+            Self::Cosine => f.write_str("cosine"),
+            Self::CosineNormalized => f.write_str("cosine_normalized"),
+        }
+    }
+}
+
+impl From<PqKmeansRouterMetric> for Metric {
+    fn from(metric: PqKmeansRouterMetric) -> Self {
+        match metric {
+            PqKmeansRouterMetric::SquaredL2 => Self::L2,
+            PqKmeansRouterMetric::InnerProduct => Self::InnerProduct,
+            PqKmeansRouterMetric::Cosine => Self::Cosine,
+            PqKmeansRouterMetric::CosineNormalized => Self::CosineNormalized,
+        }
+    }
+}
+
+type PqFpToCodeDistance = fn(&FixedChunkPQTable, &[f32], &[u8]) -> f32;
+
+impl PqKmeansRouterMetric {
+    fn fp_to_code_distance(self) -> PqFpToCodeDistance {
+        match self {
+            Self::SquaredL2 => FixedChunkPQTable::l2_distance,
+            Self::InnerProduct => FixedChunkPQTable::inner_product,
+            Self::Cosine => FixedChunkPQTable::cosine_distance,
+            Self::CosineNormalized => FixedChunkPQTable::cosine_normalized_distance,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PqKmeansRouterData {
@@ -22,10 +69,13 @@ pub struct PqKmeansRouterData {
     pub representative_ids: Vec<u32>,
     pub representative_codes: Vec<u8>,
     pub fallback_medoid: Option<u32>,
+    #[serde(default)]
+    pub metric: PqKmeansRouterMetric,
 }
 
 #[derive(Debug, Clone)]
 pub struct PqKmeansRouterBuildParams {
+    pub metric: PqKmeansRouterMetric,
     pub num_representatives: Option<usize>,
     pub training_sample_size: Option<usize>,
     pub max_iterations: usize,
@@ -34,6 +84,7 @@ pub struct PqKmeansRouterBuildParams {
 impl Default for PqKmeansRouterBuildParams {
     fn default() -> Self {
         Self {
+            metric: PqKmeansRouterMetric::SquaredL2,
             num_representatives: None,
             training_sample_size: None,
             max_iterations: 4,
@@ -97,6 +148,7 @@ impl PqKmeansRouterData {
         let sample_ids = evenly_spaced_sample_ids(num_points, sample_size);
         let pq_table = pq_data.pq_geometry_table();
         let dim = pq_data.get_dim();
+        let metric = params.metric;
 
         let mut centroids = Vec::with_capacity(k * dim);
         for centroid_idx in 0..k {
@@ -114,7 +166,8 @@ impl PqKmeansRouterData {
             sums.fill(0.0);
             for sample_id in &sample_ids {
                 let code = pq_data.get_compressed_vector(*sample_id)?;
-                let centroid = nearest_reconstructed_centroid(code, pq_table, &centroids, dim);
+                let centroid =
+                    nearest_reconstructed_centroid(code, pq_table, &centroids, dim, metric);
                 counts[centroid] += 1;
                 pq_table.inflate_vector_into(code, &mut reconstructed);
                 let sum_base = centroid * dim;
@@ -144,6 +197,7 @@ impl PqKmeansRouterData {
                 &sample_ids,
                 &centroids[centroid * dim..(centroid + 1) * dim],
                 &used,
+                metric,
             )? {
                 used.insert(sample_id);
                 representative_ids.push(sample_id as u32);
@@ -170,6 +224,7 @@ impl PqKmeansRouterData {
             representative_ids,
             representative_codes,
             fallback_medoid,
+            metric,
         };
         data.validate()?;
         Ok(data)
@@ -234,10 +289,25 @@ impl PqKmeansRouterData {
 
 impl PqKmeansStartPointRouter {
     pub fn new(data: PqKmeansRouterData, max_start_points: usize) -> ANNResult<Self> {
+        let expected_metric = data.metric;
+        Self::new_for_metric(data, max_start_points, expected_metric)
+    }
+
+    pub fn new_for_metric(
+        data: PqKmeansRouterData,
+        max_start_points: usize,
+        expected_metric: PqKmeansRouterMetric,
+    ) -> ANNResult<Self> {
         if max_start_points == 0 {
             return Err(ANNError::log_index_error(
                 "max_start_points must be greater than 0 for PQ-kmeans start-point router",
             ));
+        }
+        if data.metric != expected_metric {
+            return Err(ANNError::log_index_error(format!(
+                "PQ-kmeans router metric {} does not match expected search metric {}",
+                data.metric, expected_metric
+            )));
         }
         data.validate()?;
         Ok(Self {
@@ -278,17 +348,12 @@ impl PqKmeansStartPointRouter {
         }
 
         let pq_table = pq_data.pq_geometry_table();
-        let mut query_distances =
-            vec![0.0f32; pq_table.get_num_chunks() * pq_table.get_num_centers()];
-        pq_table.populate_chunk_distances(query, query_distances.as_mut_slice())?;
+        let scorer = PqQueryScorer::new(self.data.metric, pq_table, query)?;
 
         let mut scored = BinaryHeap::with_capacity(self.max_start_points);
         for (idx, representative_id) in self.data.representative_ids.iter().enumerate() {
             let code = self.representative_code(idx);
-            let candidate = ScoredRepresentative::new(
-                pq_dist_lookup_single(code, query_distances.as_slice(), pq_table.get_num_centers()),
-                *representative_id,
-            );
+            let candidate = ScoredRepresentative::new(scorer.score(code), *representative_id);
             if scored.len() < self.max_start_points {
                 scored.push(candidate);
             } else if scored.peek().is_some_and(|worst| candidate < *worst) {
@@ -327,6 +392,68 @@ impl PqKmeansStartPointRouter {
     fn representative_code(&self, idx: usize) -> &[u8] {
         let base = idx * self.data.num_pq_chunks;
         &self.data.representative_codes[base..base + self.data.num_pq_chunks]
+    }
+}
+
+enum PqQueryScorer<'a> {
+    Lookup {
+        distances: Vec<f32>,
+        num_centers: usize,
+    },
+    Direct {
+        pq_table: &'a FixedChunkPQTable,
+        query: &'a [f32],
+        distance: PqFpToCodeDistance,
+    },
+}
+
+impl<'a> PqQueryScorer<'a> {
+    fn new(
+        metric: PqKmeansRouterMetric,
+        pq_table: &'a FixedChunkPQTable,
+        query: &'a [f32],
+    ) -> ANNResult<Self> {
+        match metric {
+            PqKmeansRouterMetric::SquaredL2 => {
+                let mut distances =
+                    vec![0.0f32; pq_table.get_num_chunks() * pq_table.get_num_centers()];
+                pq_table.populate_chunk_distances(query, distances.as_mut_slice())?;
+                Ok(Self::Lookup {
+                    distances,
+                    num_centers: pq_table.get_num_centers(),
+                })
+            }
+            PqKmeansRouterMetric::InnerProduct => {
+                let mut distances =
+                    vec![0.0f32; pq_table.get_num_chunks() * pq_table.get_num_centers()];
+                pq_table.populate_chunk_inner_products(query, distances.as_mut_slice())?;
+                Ok(Self::Lookup {
+                    distances,
+                    num_centers: pq_table.get_num_centers(),
+                })
+            }
+            PqKmeansRouterMetric::Cosine | PqKmeansRouterMetric::CosineNormalized => {
+                Ok(Self::Direct {
+                    pq_table,
+                    query,
+                    distance: metric.fp_to_code_distance(),
+                })
+            }
+        }
+    }
+
+    fn score(&self, code: &[u8]) -> f32 {
+        match self {
+            Self::Lookup {
+                distances,
+                num_centers,
+            } => pq_dist_lookup_single(code, distances.as_slice(), *num_centers),
+            Self::Direct {
+                pq_table,
+                query,
+                distance,
+            } => distance(pq_table, query, code),
+        }
     }
 }
 
@@ -376,13 +503,15 @@ fn nearest_reconstructed_centroid(
     pq_table: &FixedChunkPQTable,
     centroids: &[f32],
     dim: usize,
+    metric: PqKmeansRouterMetric,
 ) -> usize {
+    let distance = metric.fp_to_code_distance();
     centroids
         .chunks_exact(dim)
         .enumerate()
         .min_by(|(left_idx, left), (right_idx, right)| {
-            let left_distance = pq_table.l2_distance(left, code);
-            let right_distance = pq_table.l2_distance(right, code);
+            let left_distance = distance(pq_table, left, code);
+            let right_distance = distance(pq_table, right, code);
             left_distance
                 .total_cmp(&right_distance)
                 .then_with(|| left_idx.cmp(right_idx))
@@ -396,13 +525,15 @@ fn nearest_sample_to_centroid(
     sample_ids: &[usize],
     centroid: &[f32],
     used: &HashSet<usize>,
+    metric: PqKmeansRouterMetric,
 ) -> ANNResult<Option<usize>> {
     let pq_table = pq_data.pq_geometry_table();
+    let distance_fn = metric.fp_to_code_distance();
     let mut best_unused = None;
     let mut best_any = None;
     for sample_id in sample_ids {
         let code = pq_data.get_compressed_vector(*sample_id)?;
-        let distance = pq_table.l2_distance(centroid, code);
+        let distance = distance_fn(pq_table, centroid, code);
         let candidate = (distance, *sample_id);
         if best_any.is_none_or(|best| pq_distance_candidate_lt(candidate, best)) {
             best_any = Some(candidate);
@@ -445,11 +576,30 @@ mod tests {
         PQData::new(table, codes).unwrap()
     }
 
+    fn two_dim_cosine_pq_data() -> PQData {
+        let table =
+            FixedChunkPQTable::new(2, Box::new([10.0, 0.0, 0.9, 0.1]), Box::new([0, 2])).unwrap();
+        let codes = Matrix::try_from(Box::new([0u8, 1]) as Box<[u8]>, 2, 1).unwrap();
+        PQData::new(table, codes).unwrap()
+    }
+
+    fn two_dim_ip_build_pq_data() -> PQData {
+        let table = FixedChunkPQTable::new(
+            2,
+            Box::new([1.0, 0.0, 10.0, 0.0, 0.0, 10.0]),
+            Box::new([0, 2]),
+        )
+        .unwrap();
+        let codes = Matrix::try_from(Box::new([0u8, 1, 2]) as Box<[u8]>, 3, 1).unwrap();
+        PQData::new(table, codes).unwrap()
+    }
+
     #[test]
     fn route_scans_representative_pq_codes_and_returns_nearest_start_points() {
         let pq_data = one_chunk_pq_data();
         let router = PqKmeansStartPointRouter::new(
             PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::SquaredL2,
                 num_points: 4,
                 num_pq_chunks: 1,
                 representative_ids: vec![0, 2, 3],
@@ -471,6 +621,7 @@ mod tests {
         let pq_data = non_ordinal_one_chunk_pq_data(Box::new([0u8, 1, 2]));
         let router = PqKmeansStartPointRouter::new(
             PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::SquaredL2,
                 num_points: 3,
                 num_pq_chunks: 1,
                 representative_ids: vec![0, 2],
@@ -488,12 +639,98 @@ mod tests {
     }
 
     #[test]
+    fn route_scores_representatives_with_inner_product_metric() {
+        let pq_data = one_chunk_pq_data();
+        let router = PqKmeansStartPointRouter::new(
+            PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::InnerProduct,
+                num_points: 4,
+                num_pq_chunks: 1,
+                representative_ids: vec![0, 1, 2],
+                representative_codes: vec![0, 1, 2],
+                fallback_medoid: None,
+            },
+            1,
+        )
+        .unwrap();
+
+        let result = router.route(&[1.0], &pq_data).unwrap();
+
+        assert_eq!(result.start_points, vec![2]);
+        assert_eq!(result.scanned_codes, 3);
+    }
+
+    #[test]
+    fn route_scores_representatives_with_cosine_metric() {
+        let pq_data = two_dim_cosine_pq_data();
+        let router = PqKmeansStartPointRouter::new(
+            PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::Cosine,
+                num_points: 2,
+                num_pq_chunks: 1,
+                representative_ids: vec![0, 1],
+                representative_codes: vec![0, 1],
+                fallback_medoid: None,
+            },
+            1,
+        )
+        .unwrap();
+
+        let result = router.route(&[1.0, 0.0], &pq_data).unwrap();
+
+        assert_eq!(result.start_points, vec![0]);
+        assert_eq!(result.scanned_codes, 2);
+    }
+
+    #[test]
+    fn route_scores_representatives_with_cosine_normalized_metric() {
+        let pq_data = two_dim_cosine_pq_data();
+        let router = PqKmeansStartPointRouter::new(
+            PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::CosineNormalized,
+                num_points: 2,
+                num_pq_chunks: 1,
+                representative_ids: vec![0, 1],
+                representative_codes: vec![0, 1],
+                fallback_medoid: None,
+            },
+            1,
+        )
+        .unwrap();
+
+        let result = router.route(&[1.0, 0.0], &pq_data).unwrap();
+
+        assert_eq!(result.start_points, vec![0]);
+        assert_eq!(result.scanned_codes, 2);
+    }
+
+    #[test]
+    fn router_rejects_artifact_metric_mismatch() {
+        let err = PqKmeansStartPointRouter::new_for_metric(
+            PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::SquaredL2,
+                num_points: 2,
+                num_pq_chunks: 1,
+                representative_ids: vec![0],
+                representative_codes: vec![0],
+                fallback_medoid: None,
+            },
+            1,
+            PqKmeansRouterMetric::InnerProduct,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("metric"));
+    }
+
+    #[test]
     fn build_clusters_pq_reconstructed_geometry_not_label_ids() {
         let pq_data = non_ordinal_one_chunk_pq_data(Box::new([0u8, 2, 2]));
 
         let data = PqKmeansRouterData::build_from_pq_data(
             &pq_data,
             PqKmeansRouterBuildParams {
+                metric: PqKmeansRouterMetric::SquaredL2,
                 num_representatives: Some(1),
                 training_sample_size: Some(3),
                 max_iterations: 1,
@@ -507,6 +744,26 @@ mod tests {
     }
 
     #[test]
+    fn build_selects_representative_with_inner_product_metric() {
+        let pq_data = two_dim_ip_build_pq_data();
+
+        let data = PqKmeansRouterData::build_from_pq_data(
+            &pq_data,
+            PqKmeansRouterBuildParams {
+                metric: PqKmeansRouterMetric::InnerProduct,
+                num_representatives: Some(1),
+                training_sample_size: Some(3),
+                max_iterations: 1,
+            },
+            Some(0),
+        )
+        .unwrap();
+
+        assert_eq!(data.representative_ids, vec![1]);
+        assert_eq!(data.representative_codes, vec![1]);
+    }
+
+    #[test]
     fn default_training_sample_size_uses_ten_percent_of_dataset() {
         assert_eq!(default_training_sample_size(10_000_000), 1_000_000);
         assert_eq!(default_training_sample_size(101), 11);
@@ -517,6 +774,7 @@ mod tests {
         let pq_data = one_chunk_pq_data();
         let router = PqKmeansStartPointRouter::new(
             PqKmeansRouterData {
+                metric: PqKmeansRouterMetric::SquaredL2,
                 num_points: 5,
                 num_pq_chunks: 1,
                 representative_ids: vec![4],
