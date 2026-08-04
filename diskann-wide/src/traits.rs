@@ -525,6 +525,9 @@ pub trait SIMDAbs {
 }
 
 /// Count the set bits in each lane.
+///
+/// This trait is only implemented for vector/architecture pairs that have native support
+/// for popcounts.
 pub trait SIMDPopcount {
     fn popcount_simd(self) -> Self;
 }
