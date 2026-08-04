@@ -883,11 +883,13 @@ mod test_emulated {
             test_emulated!($type, $N);
 
             test_utils::ops::test_bitops!(Emulated<$type, $N>, 0x14fc7841e66bd162, SC);
+            test_utils::ops::test_popcount!(Emulated<$type, $N>, 0x78d19fb8aac40131, SC);
         };
         (signed, $type:ty, $N:literal) => {
             test_emulated!($type, $N);
 
             test_utils::ops::test_bitops!(Emulated<$type, $N>, 0x850435f89f86f3b0, SC);
+            test_utils::ops::test_popcount!(Emulated<$type, $N>, 0x904e10c5fd2d4380, SC);
             test_utils::ops::test_abs!(Emulated<$type, $N>, 0x1842a2b86dfd9ecb, SC);
         };
     }
