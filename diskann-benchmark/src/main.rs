@@ -9,6 +9,7 @@ mod filters;
 mod flat;
 mod index;
 mod inputs;
+mod kmeans;
 mod multi_vector;
 mod utils;
 
@@ -54,6 +55,7 @@ impl Cli {
         flat::register_benchmarks(&mut registry)?;
         index::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;
+        kmeans::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
