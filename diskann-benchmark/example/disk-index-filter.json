@@ -28,7 +28,7 @@
           "recall_at": 10,
           "num_threads": 1,
           "search_mode": {
-            "is_flat_search": false,
+            "mode": "graph",
             "vector_filters_file": "disk_index_10pts_idx_uint32_range_res_r_100000.bin"
           },
           "distance": "squared_l2"
@@ -60,7 +60,7 @@
           "recall_at": 10,
           "num_threads": 1,
           "search_mode": {
-            "is_flat_search": true,
+            "mode": "flat",
             "vector_filters_file": "disk_index_10pts_idx_uint32_range_res_r_100000.bin"
           },
           "distance": "squared_l2"

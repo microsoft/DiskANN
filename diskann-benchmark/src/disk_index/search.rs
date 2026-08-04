@@ -165,42 +165,49 @@ impl DiskSearchResult {
 fn build_search_mode<'a>(
     mode: &'a DiskSearchMode,
     vector_filter: Option<&'a HashSet<u32>>,
-    post_processor: Option<&TopkPostProcessor>,
 ) -> SearchMode<'a> {
-    let adaptive_l = mode.adaptive_l.as_ref().map(|adaptive_l| {
-        graph::search::AdaptiveL::new(adaptive_l.sample_count.into(), adaptive_l.scale_factor)
-            .expect("validated adaptive L must construct")
-    });
+    match mode {
+        DiskSearchMode::Flat { .. } => match vector_filter {
+            None => SearchMode::flat(),
+            Some(vector_filter) => {
+                SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
+            }
+        },
+        DiskSearchMode::Graph {
+            adaptive_l,
+            post_processor,
+            ..
+        } => {
+            let adaptive_l = adaptive_l.as_ref().map(|adaptive_l| {
+                graph::search::AdaptiveL::new(
+                    adaptive_l.sample_count.into(),
+                    adaptive_l.scale_factor,
+                )
+                .expect("validated adaptive L must construct")
+            });
 
-    match (
-        mode.is_flat_search,
-        vector_filter,
-        post_processor,
-        adaptive_l,
-    ) {
-        (true, None, _, _) => SearchMode::flat(),
-        (true, Some(vector_filter), _, _) => {
-            SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
-        }
-        (false, None, Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
-            SearchMode::diverse_graph(*params)
-        }
-        (false, Some(vector_filter), Some(TopkPostProcessor::DeterminantDiversity(params)), _) => {
-            SearchMode::diverse_graph_filtered(
-                move |vid: &u32| vector_filter.contains(vid),
-                *params,
-            )
-        }
-        (false, None, None, Some(adaptive_l)) => {
-            SearchMode::inline_filter(|_| true, Some(adaptive_l))
-        }
-        (false, Some(vector_filter), None, Some(adaptive_l)) => SearchMode::inline_filter(
-            move |vid: &u32| vector_filter.contains(vid),
-            Some(adaptive_l),
-        ),
-        (false, None, None, None) => SearchMode::graph(),
-        (false, Some(vector_filter), None, None) => {
-            SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
+            match (post_processor, adaptive_l, vector_filter) {
+                (Some(TopkPostProcessor::DeterminantDiversity(params)), _, None) => {
+                    SearchMode::diverse_graph(*params)
+                }
+                (Some(TopkPostProcessor::DeterminantDiversity(params)), _, Some(vector_filter)) => {
+                    SearchMode::diverse_graph_filtered(
+                        move |vid: &u32| vector_filter.contains(vid),
+                        *params,
+                    )
+                }
+                (None, Some(adaptive_l), None) => {
+                    SearchMode::inline_filter(|_| true, Some(adaptive_l))
+                }
+                (None, Some(adaptive_l), Some(vector_filter)) => SearchMode::inline_filter(
+                    move |vid: &u32| vector_filter.contains(vid),
+                    Some(adaptive_l),
+                ),
+                (None, None, None) => SearchMode::graph(),
+                (None, None, Some(vector_filter)) => {
+                    SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
+                }
+            }
         }
     }
 }
@@ -232,7 +239,7 @@ where
     let num_queries = queries.nrows();
 
     // Load the vector filters
-    let vector_filters = match &search_params.search_mode.vector_filters_file {
+    let vector_filters = match search_params.search_mode.vector_filters_file() {
         Some(vector_filters_file) => {
             let vector_filters_file = vector_filters_file.to_string_lossy().to_string();
             Some(search_index_utils::load_vector_filters(
@@ -252,7 +259,7 @@ where
 
     // Prepare ground truth context
     let gt_context = prepare_ground_truth_context(
-        search_params.search_mode.vector_filters_file.is_some(),
+        search_params.search_mode.vector_filters_file().is_some(),
         &search_params.groundtruth,
         search_params.recall_at,
         storage_provider,
@@ -321,17 +328,11 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((query_index, q), id_chunk), dist_chunk), stats), rc)| {
-                // Construct the SearchMode from the JSON-driven
-                // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
-                // benchmark only supplies the per-query filter and post-processor.
                 let vector_filter = vector_filters
                     .as_ref()
                     .and_then(|filters| filters.get(query_index));
-                let mode: SearchMode<'_> = build_search_mode(
-                    &search_params.search_mode,
-                    vector_filter,
-                    search_params.search_mode.post_processor.as_ref(),
-                );
+                let mode: SearchMode<'_> =
+                    build_search_mode(&search_params.search_mode, vector_filter);
 
                 match searcher.search(
                     q,
@@ -404,9 +405,9 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: search_params.search_mode.is_flat_search,
+        is_flat_search: search_params.search_mode.is_flat_search(),
         distance: search_params.distance,
-        uses_vector_filters: search_params.search_mode.vector_filters_file.is_some(),
+        uses_vector_filters: search_params.search_mode.vector_filters_file().is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
         span_metrics,

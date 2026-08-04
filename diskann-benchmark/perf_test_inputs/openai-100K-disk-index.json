@@ -29,7 +29,7 @@
                     "beam_width": 4,
                     "recall_at": 100,
                     "num_threads": 4,
-                    "search_mode": { "is_flat_search": false },
+                    "search_mode": { "mode": "graph" },
                     "distance": "squared_l2"
                 }
             }

@@ -27,7 +27,7 @@
           "beam_width": 4,
           "recall_at": 10,
           "num_threads": 1,
-          "search_mode": { "is_flat_search": false },
+          "search_mode": { "mode": "graph" },
           "distance": "squared_l2"
         }
       }
@@ -47,7 +47,7 @@
           "beam_width": 4,
           "recall_at": 10,
           "num_threads": 1,
-          "search_mode": { "is_flat_search": true },
+          "search_mode": { "mode": "flat" },
           "distance": "squared_l2"
         }
       }
