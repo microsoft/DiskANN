@@ -155,7 +155,9 @@ impl fmt::Display for DiskSearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Flat { .. } => write!(f, "flat"),
-            Self::Graph { adaptive_l, .. } if adaptive_l.is_some() => write!(f, "graph + adaptive-l"),
+            Self::Graph { adaptive_l, .. } if adaptive_l.is_some() => {
+                write!(f, "graph + adaptive-l")
+            }
             Self::Graph { .. } => write!(f, "graph"),
         }
     }
