@@ -58,7 +58,7 @@ impl<T: VectorRepr> MemoryVectorProviderAsync<T> {
         self.num_get_calls.increment();
         match self.vectors.get(i) {
             Some(vector) => Ok(VectorGuard::from_guard(vector.load())),
-            None => Err(ANNError::log_index_error(
+            None => Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             )),
         }
@@ -72,14 +72,14 @@ impl<T: VectorRepr> MemoryVectorProviderAsync<T> {
     /// * `v.dim() != self.dim()`: The slice must have the proper length.
     pub(crate) fn set_vector_sync(&self, i: usize, v: &[T]) -> ANNResult<()> {
         if v.len() != self.dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
         let slot = match self.vectors.get(i) {
             Some(slot) => slot,
             None => {
-                return Err(ANNError::log_index_error(
+                return Err(ANNError::message(
                     "Vector id is out of boundary in the dataset.",
                 ));
             }

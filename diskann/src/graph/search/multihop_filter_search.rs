@@ -19,7 +19,7 @@ use crate::{
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::DataProvider,
     utils::VectorId,
 };
@@ -91,7 +91,7 @@ where
                     scratch
                         .best
                         .iter()
-                        .filter(|n| !ret.rejected_start_points.contains(&n.id))
+                        .filter(|n| !ret.rejected_start_points.contains(n.id()))
                         .take(self.inner.l_value().get()),
                     output,
                 )
@@ -174,7 +174,7 @@ where
             && let Some(closest_node) = scratch.best.closest_notvisited()
         {
             search_record.record(closest_node, scratch.hops, scratch.cmps);
-            scratch.beam_nodes.push(closest_node.id);
+            scratch.beam_nodes.push(*closest_node.id());
         }
 
         // compute distances from query to one-hop neighbors, and mark them visited
@@ -204,11 +204,7 @@ where
         scratch.hops += scratch.beam_nodes.len() as u32;
 
         // sort the candidates for two-hop expansion by distance to query point
-        candidates_two_hop_expansion.sort_unstable_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates_two_hop_expansion.sort_unstable_by(neighbor::ord::fast_distance);
 
         // limit the number of two-hop candidates to avoid too many expansions
         candidates_two_hop_expansion.truncate(max_degree_with_slack / 2);
@@ -216,8 +212,10 @@ where
         // Expand each two-hop candidate: if its neighbor is a match, compute its distance
         // to the query and insert into `scratch.visited`
         // If it is not a match, do nothing
-        let two_hop_expansion_candidate_ids: Vec<I> =
-            candidates_two_hop_expansion.iter().map(|n| n.id).collect();
+        let two_hop_expansion_candidate_ids: Vec<I> = candidates_two_hop_expansion
+            .iter()
+            .map(|n| *n.id())
+            .collect();
 
         accessor
             .expand_beam_accept_only(

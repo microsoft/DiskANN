@@ -5,7 +5,7 @@ use diskann_quantization::{
     CompressInto,
     algorithms::{Transform, TransformKind, transforms::NewTransformError},
     alloc::{GlobalAllocator, Poly, ScopedAllocator},
-    minmax,
+    minmax::{self, MinMaxQuantizer},
     num::POSITIVE_ONE_F32,
     spherical::{
         self, Data, PreScale, SphericalQuantizer, SupportedMetric,
@@ -241,6 +241,7 @@ impl MinMax8Bit {
             Some(d) => d,
             None => return Err(GarnetQuantizerError::ZeroDim),
         };
+
         let mut rng = rand::rng();
         let transform = Transform::new(
             TransformKind::DoubleHadamard {
@@ -256,6 +257,15 @@ impl MinMax8Bit {
             metric,
             inner: minmax::MinMaxQuantizer::new(transform, grid_scale),
         })
+    }
+
+    pub(crate) fn new_from_bytes(
+        metric: Metric,
+        bytes: &[u8],
+    ) -> Result<Self, GarnetQuantizerError> {
+        let inner = MinMaxQuantizer::try_deserialize(bytes)
+            .map_err(|e| GarnetQuantizerError::Deserialization(Box::new(e)))?;
+        Ok(Self { metric, inner })
     }
 }
 
@@ -306,7 +316,9 @@ impl GarnetQuantizer for MinMax8Bit {
     }
 
     fn serialize(&self) -> Result<Poly<[u8], GlobalAllocator>, GarnetQuantizerError> {
-        Err(GarnetQuantizerError::UnsupportedSerialization)
+        self.inner
+            .serialize(GlobalAllocator)
+            .map_err(|e| GarnetQuantizerError::Alloc(Box::new(e)))
     }
 
     fn deserialize(&self, _state: &[u8]) -> Result<(), GarnetQuantizerError> {

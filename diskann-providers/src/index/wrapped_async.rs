@@ -551,7 +551,7 @@ pub mod noawait {
         task::{Context, Poll, Waker},
     };
 
-    use diskann::{ANNErrorKind, utils::VectorId};
+    use diskann::utils::VectorId;
     use thiserror::Error;
 
     type Input = Rc<RefCell<Option<usize>>>;
@@ -622,7 +622,6 @@ pub mod noawait {
                 Some(input) => input.replace(Some(k)),
                 None => {
                     return Err(ANNError::message(
-                        ANNErrorKind::Opaque,
                         "paged searcher errored and is no longer runnable",
                     ));
                 }
@@ -654,13 +653,7 @@ pub mod noawait {
         MissingOutput,
     }
 
-    impl From<InternalInvariantViolated> for ANNError {
-        #[track_caller]
-        #[cold]
-        fn from(err: InternalInvariantViolated) -> Self {
-            Self::new(ANNErrorKind::Opaque, err)
-        }
-    }
+    diskann::convert_error!(InternalInvariantViolated);
 }
 
 #[cfg(test)]
@@ -775,7 +768,7 @@ mod tests {
         let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
         let query = train_data.row(0);
-        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let kind = graph::search::Knn::new_default(search_l).unwrap();
         let stats = loaded
             .search(kind, &FullPrecision, &DefaultContext, query, &mut output)
             .unwrap();
@@ -836,16 +829,17 @@ mod tests {
 
                 for neighbor in v {
                     assert_ne!(
-                        neighbor.id,
+                        *neighbor.id(),
                         u32::MAX,
                         "paged search should not return start point",
                     );
                     assert_eq!(
-                        neighbor.id, i,
+                        *neighbor.id(),
+                        i,
                         "monotonicity should at least hold for the 1d grid"
                     );
                     assert_eq!(
-                        neighbor.distance,
+                        *neighbor.distance(),
                         (i as f32) * (i as f32),
                         "distance was computed incorrectly!",
                     );

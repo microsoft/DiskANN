@@ -2,7 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
+use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::utils::{gen_random_slice, RayonThreadPoolRef, READ_WRITE_BLOCK_SIZE};
 
@@ -12,6 +12,7 @@ use tracing::info;
 
 use crate::{
     disk_index_build_parameter::BYTES_IN_GB,
+    error::{diskann_error, ErrorKind},
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
 };
 
@@ -254,7 +255,8 @@ where
     let num_points = dataset_reader.read_u32()?;
     let base_dim = dataset_reader.read_u32()?;
     if base_dim != dim as u32 {
-        return Err(ANNError::log_index_error(
+        return Err(diskann_error!(
+            ErrorKind::IndexError,
             "dimensions dont match for train set and base set",
         ));
     }

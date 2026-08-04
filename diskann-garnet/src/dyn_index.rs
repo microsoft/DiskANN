@@ -23,6 +23,8 @@ pub(crate) trait DynIndex: Send + Sync {
 
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
 
+    fn delete_attributes(&self, context: &Context, id: &GarnetId) -> ANNResult<()>;
+
     fn search_vector(
         &self,
         context: &Context,
@@ -87,6 +89,13 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         self.inner
             .provider()
             .set_attributes(context, id, data)
+            .map_err(|e| e.into())
+    }
+
+    fn delete_attributes(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
+        self.inner
+            .provider()
+            .delete_attributes(context, id)
             .map_err(|e| e.into())
     }
 

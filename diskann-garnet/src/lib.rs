@@ -20,6 +20,7 @@ use diskann::{
         config::{self, defaults::GRAPH_SLACK_FACTOR},
         search::{self, AdaptiveL},
     },
+    neighbor::Neighbor,
     utils::VectorRepr,
 };
 use diskann_providers::index::wrapped_async::DiskANNIndex;
@@ -126,7 +127,9 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
         Some(self.dists.len() - self.index)
     }
 
-    fn push(&mut self, id: GarnetId, distance: f32) -> diskann::graph::BufferState {
+    fn push(&mut self, neighbor: Neighbor<GarnetId>) -> diskann::graph::BufferState {
+        let (id, distance) = neighbor.as_tuple();
+
         if self.index >= self.dists.len()
             || self.id_index + mem::size_of::<u32>() + id.len() > self.ids.len()
         {
@@ -156,12 +159,12 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (GarnetId, f32)>,
+        Itr: IntoIterator<Item = Neighbor<GarnetId>>,
     {
         let initial = self.current_len();
 
-        for (id, dist) in itr {
-            if self.push(id, dist).is_full() {
+        for neighbor in itr {
+            if self.push(neighbor).is_full() {
                 break;
             }
         }
@@ -587,10 +590,17 @@ pub unsafe extern "C" fn set_attribute(
         return false;
     }
 
-    if attribute_len > 0 && !attribute_data.is_null() {
+    if !attribute_data.is_null() {
         let attr_data: &[u8] = unsafe { slice::from_raw_parts(attribute_data, attribute_len) };
-        if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-            return false;
+        if !attr_data.is_empty() {
+            if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
+                return false;
+            }
+        } else {
+            // Empty attribute string is interpreted as deletion
+            if index.inner.delete_attributes(&ctx, &id).is_err() {
+                return false;
+            }
         }
     }
 
@@ -634,11 +644,7 @@ pub unsafe extern "C" fn search_vector(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(
-        output_distances_len,
-        search_exploration_factor as usize,
-        None,
-    ) {
+    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
         Ok(params) => params,
         Err(_) => return -1,
     };
@@ -703,11 +709,7 @@ pub unsafe extern "C" fn search_element(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(
-        output_distances_len,
-        search_exploration_factor as usize,
-        None,
-    ) {
+    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
         Ok(knn) => knn,
         Err(_) => return -1,
     };
@@ -837,11 +839,15 @@ pub unsafe extern "C" fn check_external_id_valid(
 mod tests {
     use std::{mem, ptr};
 
-    use diskann::graph::{BufferState, SearchOutputBuffer};
+    use diskann::{
+        graph::{BufferState, SearchOutputBuffer},
+        neighbor::Neighbor,
+    };
     use diskann_vector::distance::Metric;
 
     use crate::{
-        Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index, garnet::GarnetId,
+        Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
+        garnet::{Context, GarnetId, Term},
         test_utils::Store,
     };
 
@@ -866,11 +872,11 @@ mod tests {
         assert_eq!(sr.size_hint(), Some(5));
 
         let test_data = [
-            (GarnetId::from(bytemuck::bytes_of(&1u32)), 1.1f32),
-            (GarnetId::from(bytemuck::bytes_of(&2u32)), 2.1),
-            (GarnetId::from(bytemuck::bytes_of(&3u32)), 3.1),
-            (GarnetId::from(bytemuck::bytes_of(&4u32)), 4.1),
-            (GarnetId::from(bytemuck::bytes_of(&5u32)), 5.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&1u32)), 1.1f32),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&2u32)), 2.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&3u32)), 3.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&4u32)), 4.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&5u32)), 5.1),
         ];
 
         assert_eq!(sr.current_len(), 0);
@@ -897,7 +903,10 @@ mod tests {
         }
 
         assert_eq!(
-            sr.push(GarnetId::from(bytemuck::bytes_of(&6u32)), 6.1f32),
+            sr.push(Neighbor::new(
+                GarnetId::from(bytemuck::bytes_of(&6u32)),
+                6.1f32
+            )),
             BufferState::Full
         );
     }
@@ -989,5 +998,75 @@ mod tests {
 
         let res = super::interpret_vector(VectorQuantType::Invalid, &ptr::null() as &*const u8, 0);
         assert!(res.is_none());
+    }
+
+    #[test]
+    fn set_and_delete_attributes() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let id = 0u32;
+        let eid = GarnetId::from(bytemuck::bytes_of(&id));
+        let metadata = b"{'foo': 0}";
+        let ctx = Context::new(0);
+        let v = [0.0f32, 0.0f32];
+
+        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+
+        assert_eq!(
+            unsafe {
+                super::insert(
+                    ctx.get(),
+                    index_ptr,
+                    eid.as_ptr(),
+                    eid.len(),
+                    bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                    v.len(),
+                    metadata.as_ptr(),
+                    metadata.len(),
+                )
+            },
+            1
+        );
+        assert_eq!(
+            store.get(ctx.term(Term::Attributes).get(), &eid),
+            Some(metadata.as_slice().to_owned())
+        );
+
+        assert!(unsafe {
+            super::set_attribute(
+                ctx.get(),
+                index_ptr,
+                eid.as_ptr(),
+                eid.len(),
+                b"".as_ptr(),
+                0,
+            )
+        });
+        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+
+        unsafe {
+            drop_index(0, index_ptr);
+        }
     }
 }

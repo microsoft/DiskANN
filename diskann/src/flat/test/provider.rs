@@ -18,7 +18,7 @@ use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use crate::{
-    ANNError, always_escalate,
+    always_escalate, convert_error,
     error::{RankedError, ToRanked, TransientError},
     flat::{DistancesUnordered, SearchStrategy},
     graph::test::synthetic::Grid,
@@ -36,12 +36,7 @@ pub enum ProviderError {
     ZeroDimension,
 }
 
-impl From<ProviderError> for ANNError {
-    #[track_caller]
-    fn from(err: ProviderError) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(ProviderError);
 
 //////////////
 // Provider //
@@ -154,13 +149,7 @@ impl ExecutionContext for Context {
 pub struct InvalidId(pub u32);
 
 always_escalate!(InvalidId);
-
-impl From<InvalidId> for ANNError {
-    #[track_caller]
-    fn from(err: InvalidId) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(InvalidId);
 
 /// Transient access error injected by [`Visitor::flaky`].
 ///
@@ -372,12 +361,7 @@ pub struct StrategyError {
     pub actual: usize,
 }
 
-impl From<StrategyError> for ANNError {
-    #[track_caller]
-    fn from(err: StrategyError) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(StrategyError);
 
 /// Factory of [`Visitor`]s that validates dimensions and optionally injects
 /// transient errors into the scan.

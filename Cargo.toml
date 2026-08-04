@@ -18,6 +18,7 @@ members = [
     "diskann-disk",
     "diskann-label-filter",
     "diskann-garnet",
+    "diskann-inmem",
     # Infrastructure
     "diskann-benchmark-runner",
     "diskann-benchmark-core",
@@ -60,6 +61,7 @@ diskann-quantization = { path = "diskann-quantization", default-features = false
 diskann = { path = "diskann", version = "0.55.0" }
 # Providers
 diskann-providers = { path = "diskann-providers", default-features = false, version = "0.55.0" }
+diskann-inmem = { path = "diskann-inmem", default-features = false, version = "0.55.0" }
 diskann-disk = { path = "diskann-disk", version = "0.55.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.55.0" }
 # Infra

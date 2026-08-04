@@ -123,3 +123,6 @@ mod diverse_search;
 
 #[cfg(feature = "experimental_diversity_search")]
 pub use diverse_search::Diverse;
+
+#[cfg(feature = "experimental_diversity_search")]
+pub use diverse_search::DiverseSearchParams;
