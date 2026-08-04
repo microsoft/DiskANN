@@ -9,7 +9,10 @@ use diskann_quantization::{
     product::{self, BasicTable},
     views::ChunkOffsetsBase,
 };
-use diskann_utils::views::{self, Matrix, MatrixView};
+use diskann_utils::{
+    lazy_format,
+    views::{self, Matrix, MatrixView},
+};
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
 
@@ -136,7 +139,7 @@ impl FixedChunkPQTable {
             Matrix::try_from(pq_table, len / dim, dim).bridge_err()?,
             ChunkOffsetsBase::new(chunk_offsets).bridge_err()?,
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(ANNError::new)?;
 
         Ok(Self { table })
     }
@@ -159,7 +162,7 @@ impl FixedChunkPQTable {
         let dim = self.get_dim();
         debug_assert_eq!(query.len(), dim);
         if aligned_pq_table_dist_scratch.len() < num_chunks * num_centers {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::message(
                 "aligned_pq_table_dist_scratch.len() should at least be num_pq_chunks * num_centers",
             ));
         }
@@ -431,11 +434,7 @@ impl FixedChunkPQTable {
 // However, we can use a wrapper type to implement the conversion.
 // This is a workaround to allow the conversion from `product::TableCompressionError` to
 // `ANNError` without violating the orphan rule.
-impl From<Bridge<product::TableCompressionError>> for ANNError {
-    fn from(value: Bridge<product::TableCompressionError>) -> ANNError {
-        ANNError::log_pq_error(diskann_quantization::error::format(&value.into_inner()))
-    }
-}
+diskann::convert_error!(Bridge<product::TableCompressionError>);
 
 impl<T> CompressInto<&[T], &mut [u8]> for FixedChunkPQTable
 where
@@ -492,9 +491,11 @@ fn pq_dist_lookup(
 
     let dists_out = match dists_out.get_mut(..n_pts) {
         None => {
-            return Err(ANNError::log_pq_error(format_args!(
+            let dists_out_len = dists_out.len();
+            return Err(ANNError::message(lazy_format!(
+                move,
                 "ERROR: dists_out length: {} is less than n_pts: {}",
-                dists_out.len(),
+                dists_out_len,
                 n_pts
             )));
         }
@@ -604,10 +605,13 @@ fn aggregate_coords(
     pq_coordinate_scratch: &mut [u8],
 ) -> ANNResult<()> {
     if pq_coordinate_scratch.len() < ids.len() * num_pq_chunks {
-        return Err(ANNError::log_pq_error(format_args!(
+        let found_len = pq_coordinate_scratch.len();
+        let expected_len = ids.len() * num_pq_chunks;
+        return Err(ANNError::message(lazy_format!(
+            move,
             "pq_coordinate_scratch doesn't have enough length. It has length {} but requires length {}",
-            pq_coordinate_scratch.len(),
-            ids.len() * num_pq_chunks
+            found_len,
+            expected_len,
         )));
     }
 
@@ -1002,7 +1006,7 @@ mod fixed_chunk_pq_table_test {
 
         let offsets = read_bin_from::<u64>(&mut reader, 0)?;
         if offsets.nrows() != 4 {
-            return Err(ANNError::log_pq_error(format_args!(
+            return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. \
                  Offsets don't contain correct metadata, \
                  # offsets = {}, but expecting 4.",
@@ -1015,7 +1019,7 @@ mod fixed_chunk_pq_table_test {
         let mut pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
 
         if pivots.nrows() != NUM_PQ_CENTROIDS {
-            return Err(ANNError::log_pq_error(format_args!(
+            return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
                 pq_pivots_path,
                 pivots.nrows(),
@@ -1026,7 +1030,7 @@ mod fixed_chunk_pq_table_test {
 
         let centroids = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
         if centroids.nrows() != dim || centroids.ncols() != 1 {
-            return Err(ANNError::log_pq_error(format_args!(
+            return Err(ANNError::message(format!(
                 "Error reading pq_pivots file {}. file_dim = {}, \
                  file_cols = {} but expecting {} entries in 1 dimension.",
                 pq_pivots_path,
@@ -1042,7 +1046,7 @@ mod fixed_chunk_pq_table_test {
 
         let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
         if chunk_offsets_m.nrows() != num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
-            return Err(ANNError::log_pq_error(format_args!(
+            return Err(ANNError::message(format!(
                 "Error reading pq_pivots file at chunk offsets; \
                  file has nr={}, nc={} but expecting nr={} and nc=1.",
                 chunk_offsets_m.nrows(),

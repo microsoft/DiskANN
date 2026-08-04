@@ -20,6 +20,7 @@ use diskann::{
         config::{self, defaults::GRAPH_SLACK_FACTOR},
         search::{self, AdaptiveL},
     },
+    neighbor::Neighbor,
     utils::VectorRepr,
 };
 use diskann_providers::index::wrapped_async::DiskANNIndex;
@@ -126,7 +127,9 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
         Some(self.dists.len() - self.index)
     }
 
-    fn push(&mut self, id: GarnetId, distance: f32) -> diskann::graph::BufferState {
+    fn push(&mut self, neighbor: Neighbor<GarnetId>) -> diskann::graph::BufferState {
+        let (id, distance) = neighbor.as_tuple();
+
         if self.index >= self.dists.len()
             || self.id_index + mem::size_of::<u32>() + id.len() > self.ids.len()
         {
@@ -156,12 +159,12 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (GarnetId, f32)>,
+        Itr: IntoIterator<Item = Neighbor<GarnetId>>,
     {
         let initial = self.current_len();
 
-        for (id, dist) in itr {
-            if self.push(id, dist).is_full() {
+        for neighbor in itr {
+            if self.push(neighbor).is_full() {
                 break;
             }
         }
@@ -634,11 +637,7 @@ pub unsafe extern "C" fn search_vector(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(
-        output_distances_len,
-        search_exploration_factor as usize,
-        None,
-    ) {
+    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
         Ok(params) => params,
         Err(_) => return -1,
     };
@@ -703,11 +702,7 @@ pub unsafe extern "C" fn search_element(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(
-        output_distances_len,
-        search_exploration_factor as usize,
-        None,
-    ) {
+    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
         Ok(knn) => knn,
         Err(_) => return -1,
     };
@@ -837,7 +832,10 @@ pub unsafe extern "C" fn check_external_id_valid(
 mod tests {
     use std::{mem, ptr};
 
-    use diskann::graph::{BufferState, SearchOutputBuffer};
+    use diskann::{
+        graph::{BufferState, SearchOutputBuffer},
+        neighbor::Neighbor,
+    };
     use diskann_vector::distance::Metric;
 
     use crate::{
@@ -866,11 +864,11 @@ mod tests {
         assert_eq!(sr.size_hint(), Some(5));
 
         let test_data = [
-            (GarnetId::from(bytemuck::bytes_of(&1u32)), 1.1f32),
-            (GarnetId::from(bytemuck::bytes_of(&2u32)), 2.1),
-            (GarnetId::from(bytemuck::bytes_of(&3u32)), 3.1),
-            (GarnetId::from(bytemuck::bytes_of(&4u32)), 4.1),
-            (GarnetId::from(bytemuck::bytes_of(&5u32)), 5.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&1u32)), 1.1f32),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&2u32)), 2.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&3u32)), 3.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&4u32)), 4.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&5u32)), 5.1),
         ];
 
         assert_eq!(sr.current_len(), 0);
@@ -897,7 +895,10 @@ mod tests {
         }
 
         assert_eq!(
-            sr.push(GarnetId::from(bytemuck::bytes_of(&6u32)), 6.1f32),
+            sr.push(Neighbor::new(
+                GarnetId::from(bytemuck::bytes_of(&6u32)),
+                6.1f32
+            )),
             BufferState::Full
         );
     }

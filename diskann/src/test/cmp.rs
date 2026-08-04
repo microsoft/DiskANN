@@ -130,7 +130,7 @@ macro_rules! impl_via_partial_eq {
         impl $crate::test::cmp::VerboseEq for $T {
             fn verbose_eq(&self, other: &Self) -> $crate::ANNResult<()> {
                 if self != other {
-                    Err($crate::ANNError::opaque(NotEq(self.clone(), other.clone())))
+                    Err($crate::ANNError::new(NotEq(self.clone(), other.clone())))
                 } else {
                     Ok(())
                 }
@@ -201,7 +201,7 @@ where
         use crate::error::ErrorContext;
 
         if self.len() != other.len() {
-            return Err(ANNError::opaque(UnequalLengths(self.len(), other.len())));
+            return Err(ANNError::new(UnequalLengths(self.len(), other.len())));
         }
 
         self.iter()
@@ -244,7 +244,7 @@ where
         match (self, other) {
             (Some(lhs), Some(rhs)) => lhs.verbose_eq(rhs),
             (None, None) => Ok(()),
-            _ => Err(ANNError::opaque(NotEq(self.clone(), other.clone()))),
+            _ => Err(ANNError::new(NotEq(self.clone(), other.clone()))),
         }
     }
 }

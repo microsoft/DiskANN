@@ -433,11 +433,7 @@ pub struct ConfigError {
     inner: ConfigErrorInner,
 }
 
-impl From<ConfigError> for crate::ANNError {
-    fn from(error: ConfigError) -> Self {
-        crate::ANNError::new(crate::ANNErrorKind::IndexConfigError, error)
-    }
-}
+crate::convert_error!(ConfigError);
 
 #[derive(Debug, Clone, Error)]
 enum ConfigErrorInner {

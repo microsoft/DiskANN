@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use diskann::{ANNError, ANNResult};
-use diskann_utils::object_pool::ObjectPool;
+use diskann_utils::{lazy_format, object_pool::ObjectPool};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 // Concrete implementations
@@ -68,10 +68,12 @@ impl<'a> QueryComputer<'a> {
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> ANNResult<Self> {
         let dim = table.get_dim();
-        if query.len() != dim {
-            return Err(ANNError::log_dimension_mismatch_error(format!(
+        let query_len = query.len();
+        if query_len != dim {
+            return Err(ANNError::message(lazy_format!(
+                move,
                 "QueryComputer::new: expected query of length {dim}, got {}",
-                query.len()
+                query_len
             )));
         }
         let result = match metric {
@@ -483,8 +485,7 @@ mod tests {
         };
         let table = test_utils::seed_pivot_table(config);
         let short_query = vec![0.0f32; config.dim - 1];
-        let err = QueryComputer::new(&table, Metric::L2, &short_query, None).unwrap_err();
-        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+        let _ = QueryComputer::new(&table, Metric::L2, &short_query, None).unwrap_err();
     }
 
     #[test]

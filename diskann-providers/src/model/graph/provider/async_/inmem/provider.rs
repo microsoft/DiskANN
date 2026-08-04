@@ -15,7 +15,7 @@ use diskann::{
     },
     utils::{IntoUsize, ONE, VectorRepr},
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, lazy_format};
 use diskann_vector::distance::Metric;
 
 use crate::{
@@ -401,11 +401,14 @@ where
         Itr: ExactSizeIterator<Item = &'a [T]> + 'a,
     {
         let start_points = self.start_points.range();
-        if itr.len() != start_points.len() {
-            return Err(ANNError::log_async_index_error(format!(
+        let num_start_points = start_points.len();
+        let itr_len = itr.len();
+        if itr_len != num_start_points {
+            return Err(ANNError::message(lazy_format!(
+                move,
                 "expected `itr` to contain `{}` items, instead it has {}",
-                start_points.len(),
-                itr.len(),
+                num_start_points,
+                itr_len,
             )));
         }
 
@@ -504,10 +507,13 @@ where
         let valid_points = npts
             .checked_sub(ctx.num_frozen_points.get())
             .ok_or_else(|| {
-                ANNError::log_index_error(format_args!(
+                let num_frozen_points = ctx.num_frozen_points.get();
+                let num_base_vectors = base_vectors.total();
+                ANNError::message(lazy_format!(
+                    move,
                     "Expected {} start points but the stored index only has {} total points",
-                    ctx.num_frozen_points.get(),
-                    base_vectors.total(),
+                    num_frozen_points,
+                    num_base_vectors,
                 ))
             })?;
         let start_points = StartPoints::new(valid_points as u32, ctx.num_frozen_points)?;
