@@ -26,11 +26,13 @@ Branch:
 codex/pq-kmeans-bfs-cache-router-clean
 ~~~
 
-Required commit:
+Required code commit:
 
 ~~~text
 dee21bac5100ee97cbc18cdf1b047a823c0145e5
 ~~~
+
+This is the last code-changing commit required by the experiment plan. Docs-only descendants on the same branch are acceptable, but every run must record the actual `git rev-parse HEAD`.
 
 Before running, verify the exact code:
 
@@ -41,7 +43,7 @@ git rev-parse HEAD
 git status --short --branch
 ~~~
 
-Accept a run only if `git rev-parse HEAD` is `dee21bac5100ee97cbc18cdf1b047a823c0145e5`, or if the report explicitly records a newer replacement commit and explains what changed.
+Accept a run only if `git rev-parse HEAD` is `dee21bac5100ee97cbc18cdf1b047a823c0145e5` or a docs-only descendant of it. If a newer code commit is used, the report must explicitly record the replacement commit and explain what changed.
 
 Build command:
 
@@ -587,7 +589,8 @@ Required artifact/build metrics:
 | `index_artifact_bytes` | `du -sb` or `du -sk` on index path |
 | `router_artifact_bytes` | file size of `.pq_kmeans_router.bin` |
 | `max_rss_mb` | `/usr/bin/time -l` on macOS or `/usr/bin/time -v` on Linux |
-| `commit` | `git rev-parse HEAD` |
+| `run_commit` | actual `git rev-parse HEAD` |
+| `required_code_commit` | `dee21bac5100ee97cbc18cdf1b047a823c0145e5` unless intentionally replaced |
 | `dataset_file_sha256` | optional but recommended for shared machines |
 
 Router artifact size sanity:
@@ -606,7 +609,8 @@ Raw run table:
 | Column | Example |
 |---|---|
 | `run_id` | `wiki10m_ip_treat_k1024_msp8_l160_rep5` |
-| `commit` | `dee21bac5100ee97cbc18cdf1b047a823c0145e5` |
+| `run_commit` | actual `git rev-parse HEAD` |
+| `required_code_commit` | `dee21bac5100ee97cbc18cdf1b047a823c0145e5` |
 | `dataset_id` | `wikipedia-10M` |
 | `N` | 10000000 |
 | `distance` | `inner_product` |
@@ -671,7 +675,7 @@ Delta table, joined by `dataset_id + search_l + cache + build params`:
 
 Expected product:
 
-- commit recorded as `dee21bac5100ee97cbc18cdf1b047a823c0145e5`
+- actual run commit recorded, with required code commit `dee21bac5100ee97cbc18cdf1b047a823c0145e5`
 - benchmark binary built
 - data header/size validation log
 - one dry-run or tiny smoke input generated
@@ -856,7 +860,8 @@ Final conclusion levels:
 Before each result row, record:
 
 ~~~text
-commit = dee21bac5100ee97cbc18cdf1b047a823c0145e5 or documented replacement
+run_commit = actual git rev-parse HEAD
+required_code_commit = dee21bac5100ee97cbc18cdf1b047a823c0145e5 or documented replacement
 dataset_id = wikipedia-1M or wikipedia-10M
 distance = inner_product at build, search, router, and GT
 dim = 768
