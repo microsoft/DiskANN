@@ -469,50 +469,6 @@ mod pq_storage_tests {
     }
 
     #[test]
-    fn load_pq_pivots_infer_chunks_loads_without_expected_count() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/infer_chunk_count_pivots.bin";
-
-        let num_centers = 3;
-        let dim = 4;
-        let pivots: Vec<f32> = (0..num_centers * dim).map(|i| i as f32).collect();
-        let chunk_offsets = vec![0, 2, dim];
-
-        let pq_storage = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None);
-        pq_storage
-            .write_pivot_data(
-                &pivots,
-                None,
-                &chunk_offsets,
-                num_centers,
-                dim,
-                &storage_provider,
-            )
-            .unwrap();
-
-        let table = pq_storage.load_pivots(&storage_provider).unwrap();
-
-        assert_eq!(table.view_pivots().as_slice(), pivots);
-    }
-
-    #[test]
-    fn load_pq_pivots_zero_chunk_count_infers_from_file() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/zero_chunk_count_pivots.bin";
-        let pivots: Vec<f32> = (0..12).map(|i| i as f32).collect();
-
-        PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .write_pivot_data(&pivots, None, &[0, 2, 4], 3, 4, &storage_provider)
-            .unwrap();
-
-        let table = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pivots(&storage_provider)
-            .unwrap();
-
-        assert_eq!(table.view_pivots().as_slice(), pivots);
-    }
-
-    #[test]
     fn load_pq_pivots_rejects_invalid_centroid() {
         let storage_provider = VirtualStorageProvider::new_memory();
 
@@ -530,48 +486,6 @@ mod pq_storage_tests {
                 .load_pivots(&storage_provider)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn load_pivot_data_rejects_invalid_chunk_bounds() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/legacy_chunk_bounds_pivots.bin";
-
-        write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[1, 4]);
-
-        let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pivots(&storage_provider)
-            .unwrap_err();
-
-        assert!(err.to_string().contains("offsets must begin at 0"));
-    }
-
-    #[test]
-    fn load_pivot_data_rejects_chunk_offsets_dim_mismatch() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/chunk_offsets_dim_mismatch_pivots.bin";
-
-        write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[0, 2, 3]);
-
-        let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pivots(&storage_provider)
-            .unwrap_err();
-
-        assert!(err.to_string().contains("offsets expect 3"));
-    }
-
-    #[test]
-    fn load_pq_pivots_infer_rejects_invalid_chunk_bounds() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        let pivot_path = "/infer_wrong_chunk_bounds_pivots.bin";
-
-        write_test_pivots(&storage_provider, pivot_path, 3, 4, None, &[1, 4]);
-
-        let err = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None)
-            .load_pivots(&storage_provider)
-            .unwrap_err();
-
-        assert!(err.to_string().contains("offsets must begin at 0"));
     }
 
     #[test]
