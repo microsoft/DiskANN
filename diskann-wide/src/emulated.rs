@@ -10,10 +10,14 @@ use super::{
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
-    reference::{ReferenceAbs, ReferenceCast, ReferenceScalarOps, ReferenceShifts, TreeReduce},
+    reference::{
+        ReferenceAbs, ReferenceCast, ReferencePopcount, ReferenceScalarOps, ReferenceShifts,
+        TreeReduce,
+    },
     traits::{
         ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
-        SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret, SIMDSelect, SIMDSumTree, SIMDVector,
+        SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSumTree,
+        SIMDVector,
     },
 };
 
@@ -234,6 +238,16 @@ where
     #[inline(always)]
     fn abs_simd(self) -> Self {
         Self::from_arch_fn(self.1, |i| self.0[i].expected_abs_())
+    }
+}
+
+impl<T, const N: usize, A> SIMDPopcount for Emulated<T, N, A>
+where
+    T: ReferencePopcount,
+{
+    #[inline(always)]
+    fn popcount_simd(self) -> Self {
+        Self::from_arch_fn(self.1, |i| self.0[i].expected_popcount_())
     }
 }
 

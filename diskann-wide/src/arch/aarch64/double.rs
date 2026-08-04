@@ -243,6 +243,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(u8x32, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(u8x32, 0xf24be4e5bc1d95b6, test_neon());
         test_utils::ops::test_splitjoin!(u8x32 => u8x16, 0x2e301b7e12090d5c, test_neon());
         test_utils::ops::test_zipunzip!(u8x32 => u8x16, 0xa1b2c3d4e5f67890, test_neon());
     }
@@ -253,6 +254,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(u8x64, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(u8x64, 0x7207f32ecac3fbf3, test_neon());
         test_utils::ops::test_splitjoin!(u8x64 => u8x32, 0x2e301b7e12090d5c, test_neon());
     }
 
@@ -299,6 +301,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i8x32, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(i8x32, 0x45f60286da125e84, test_neon());
         test_utils::ops::test_abs!(i8x32, 0xd62d8de09f82ed4e, test_neon());
         test_utils::ops::test_splitjoin!(i8x32 => i8x16, 0x2e301b7e12090d5c, test_neon());
         test_utils::ops::test_zipunzip!(i8x32 => i8x16, 0xc7e3a92f1d8b5604, test_neon());
@@ -310,6 +313,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i8x64, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(i8x64, 0x73e6c7da94a679ac, test_neon());
         test_utils::ops::test_abs!(i8x64, 0xd62d8de09f82ed4e, test_neon());
         test_utils::ops::test_splitjoin!(i8x64 => i8x32, 0x2e301b7e12090d5c, test_neon());
     }

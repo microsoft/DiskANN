@@ -524,6 +524,11 @@ pub trait SIMDAbs {
     fn abs_simd(self) -> Self;
 }
 
+/// Count the set bits in each lane.
+pub trait SIMDPopcount {
+    fn popcount_simd(self) -> Self;
+}
+
 /// A SIMD equivalent of `std::cmp::PartialEq`.
 ///
 /// Instead of a boolean, return `Self::Mask` containing the result of the element-wise

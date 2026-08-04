@@ -66,6 +66,29 @@ impl_shifts_signed!(i16);
 impl_shifts_signed!(i32);
 impl_shifts_signed!(i64);
 
+////////////////////////
+// Reference Popcount //
+////////////////////////
+
+pub(crate) trait ReferencePopcount: Copy {
+    fn expected_popcount_(self) -> Self;
+}
+
+macro_rules! impl_popcount {
+    ($($type:ty),* $(,)?) => {
+        $(
+            impl ReferencePopcount for $type {
+                #[inline(always)]
+                fn expected_popcount_(self) -> Self {
+                    self.count_ones() as Self
+                }
+            }
+        )*
+    };
+}
+
+impl_popcount!(i8, i16, i32, i64, u8, u16, u32, u64);
+
 /// This is the ground truth for how operations behave.
 ///
 /// It is expected that all SIMD backends yield the exact same results as those expressed

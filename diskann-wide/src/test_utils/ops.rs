@@ -563,6 +563,37 @@ macro_rules! test_abs {
     };
 }
 
+macro_rules! test_popcount {
+    ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<popcount_ $wide:lower $(_$($ps )x+)?>]() {
+                use crate::{SIMDPopcount, SIMDVector, reference::ReferencePopcount};
+
+                type T = $wide $(< $($ps),+>)?;
+
+                if let Some(arch) = $arch {
+                    let f = move |input: &[<T as SIMDVector>::Scalar]| {
+                        let got = <T>::from_array(
+                            arch,
+                            input.try_into().unwrap()
+                        ).popcount_simd().to_array();
+
+                        $crate::test_utils::test_unary_op(
+                            input,
+                            &got,
+                            &|x| x.expected_popcount_(),
+                            "population count",
+                        )
+                    };
+                    let n: usize = T::LANES;
+                    $crate::test_utils::driver::drive_unary(&f, n, $seed);
+                }
+            }
+        }
+    };
+}
+
 macro_rules! test_select {
     ($wide:ident $(< $($ps:tt),+ >)?, $seed:literal, $arch:expr) => {
         paste::paste! {
@@ -1114,6 +1145,7 @@ pub(crate) use test_fma;
 pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;
+pub(crate) use test_popcount;
 pub(crate) use test_select;
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;

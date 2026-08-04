@@ -4,8 +4,8 @@
  */
 
 use crate::{
-    Emulated, SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
-    constant::Const, helpers,
+    Emulated, SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDPopcount,
+    SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -30,6 +30,7 @@ helpers::unsafe_map_binary_op!(i8x8, std::ops::Add, add, vadd_s8, "neon");
 helpers::unsafe_map_binary_op!(i8x8, std::ops::Sub, sub, vsub_s8, "neon");
 helpers::unsafe_map_binary_op!(i8x8, std::ops::Mul, mul, vmul_s8, "neon");
 helpers::unsafe_map_unary_op!(i8x8, SIMDAbs, abs_simd, vabs_s8, "neon");
+helpers::unsafe_map_unary_op!(i8x8, SIMDPopcount, popcount_simd, vcnt_s8, "neon");
 macros::aarch64_define_fma!(i8x8, vmla_s8);
 
 macros::aarch64_define_cmp!(i8x8, vceq_s8, (vmvn_u8), vclt_s8, vcle_s8, vcgt_s8, vcge_s8);
@@ -92,4 +93,5 @@ mod tests {
 
     // Bit ops
     test_utils::ops::test_bitops!(i8x8, 0xd62d8de09f82ed4e, test_neon());
+    test_utils::ops::test_popcount!(i8x8, 0x46c84a6be23bc633, test_neon());
 }
