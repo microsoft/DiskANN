@@ -34,7 +34,7 @@ where
 }
 
 #[test]
-fn robust_prune_propagates_distance_failure() {
+fn propagates_distance_failure() {
     let mut scratch = Scratch::new();
     scratch
         .candidates_mut()
@@ -52,7 +52,7 @@ fn robust_prune_propagates_distance_failure() {
 }
 
 #[test]
-fn robust_prune_validates_alpha() {
+fn rejects_invalid_alpha() {
     for alpha in [f32::NAN, f32::INFINITY, 0.999] {
         let mut scratch = Scratch::<u32>::new();
         let error = run(
@@ -78,7 +78,7 @@ fn robust_prune_validates_alpha() {
 }
 
 #[test]
-fn robust_prune_rejects_more_than_u16_candidates() {
+fn rejects_candidate_count_above_u16() {
     let mut scratch = Scratch::new();
     scratch
         .candidates_mut()
@@ -112,25 +112,7 @@ fn robust_prune_rejects_more_than_u16_candidates() {
 }
 
 #[test]
-fn scratch_exposes_pruned_neighbors() {
-    let mut scratch = Scratch::new();
-    scratch
-        .candidates_mut()
-        .extend([Neighbor::new(1_u32, 1.0), Neighbor::new(2_u32, 2.0)]);
-
-    run(
-        &mut scratch,
-        Policy::new(1, 1.2, PruneKind::TriangleInequality, false),
-        Some,
-        |left, right| Ok::<_, std::convert::Infallible>(left.abs_diff(*right) as f32),
-    )
-    .unwrap();
-
-    assert_eq!(&**scratch.neighbors(), &[1]);
-}
-
-#[test]
-fn robust_prune_excludes_candidates_before_lookup() {
+fn excludes_candidates_before_lookup() {
     let mut scratch = Scratch::default();
     scratch
         .candidates_mut()
@@ -150,7 +132,7 @@ fn robust_prune_excludes_candidates_before_lookup() {
 }
 
 #[test]
-fn list_errors_preserve_transient_and_fatal_rank() {
+fn preserves_transient_and_fatal_error_rank() {
     let transient = FailedVectorRetrieval(7_u32);
     let escalated = transient.escalate("test escalation");
     assert!(escalated.to_string().contains("test escalation"));
@@ -215,7 +197,7 @@ fn saturation_fills_from_original_pool_order_after_occlusion() {
 }
 
 #[test]
-fn robust_prune_clears_output_for_an_empty_pool() {
+fn empty_pool_clears_previous_output() {
     let mut scratch = Scratch::new();
     scratch.candidates_mut().push(Neighbor::new(1_u32, 1.0));
     run(

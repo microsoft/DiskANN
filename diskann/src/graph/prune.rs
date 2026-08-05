@@ -72,7 +72,7 @@ pub(crate) struct Options {
 /// The actual object passed to the pruning algorithms is [`Context`], which allows
 /// sub-fields to be over-written as needed with local state if that is available instead.
 #[derive(Debug)]
-pub struct Scratch<I>
+pub(crate) struct Scratch<I>
 where
     I: VectorId,
 {
@@ -88,7 +88,7 @@ where
     /// Create a new empty scratch space.
     ///
     /// This function should not allocate.
-    pub fn new() -> Self {
+    pub(in crate::graph) fn new() -> Self {
         Self {
             pool: Vec::new(),
             states: Vec::new(),
@@ -98,7 +98,7 @@ where
 
     /// Convert `self` into a `Context`, truncating the internal `pool` list to a length of
     /// `max_candidates`.
-    pub fn as_context(&mut self, max_candidates: usize) -> Context<'_, I> {
+    pub(in crate::graph) fn as_context(&mut self, max_candidates: usize) -> Context<'_, I> {
         Context {
             pool: SortedNeighbors::new(&mut self.pool, max_candidates),
             states: &mut self.states,
@@ -107,12 +107,14 @@ where
     }
 
     /// Candidate buffer used by callers before pruning.
-    pub fn candidates_mut(&mut self) -> &mut Vec<Neighbor<I>> {
+    #[cfg(test)]
+    pub(in crate::graph) fn candidates_mut(&mut self) -> &mut Vec<Neighbor<I>> {
         &mut self.pool
     }
 
     /// The most recent pruned adjacency list.
-    pub fn neighbors(&self) -> &AdjacencyList<I> {
+    #[cfg(test)]
+    pub(in crate::graph) fn neighbors(&self) -> &AdjacencyList<I> {
         &self.neighbors
     }
 }
@@ -128,7 +130,7 @@ where
 
 /// Arguments passed to the lowest-level pruning algorithm.
 #[derive(Debug)]
-pub struct Context<'ctx, I>
+pub(in crate::graph) struct Context<'ctx, I>
 where
     I: VectorId,
 {
@@ -161,7 +163,7 @@ pub(crate) struct State {
 
 /// Provider-independent policy for the Vamana robust-prune algorithm.
 #[derive(Debug, Clone, Copy)]
-pub struct Policy {
+pub(in crate::graph) struct Policy {
     degree: usize,
     alpha: f32,
     prune_kind: PruneKind,
@@ -169,7 +171,12 @@ pub struct Policy {
 }
 
 impl Policy {
-    pub fn new(degree: usize, alpha: f32, prune_kind: PruneKind, saturate: bool) -> Self {
+    pub(in crate::graph) fn new(
+        degree: usize,
+        alpha: f32,
+        prune_kind: PruneKind,
+        saturate: bool,
+    ) -> Self {
         Self {
             degree,
             alpha,
@@ -181,7 +188,7 @@ impl Policy {
 
 /// Failure returned by [`robust_prune`].
 #[derive(Debug, Error)]
-pub enum RobustPruneError<E = std::convert::Infallible> {
+pub(in crate::graph) enum RobustPruneError<E = std::convert::Infallible> {
     #[error("robust prune alpha must be finite and >= 1.0, got {0}")]
     InvalidAlpha(f32),
     #[error("robust prune supports at most {max} candidates, got {actual}")]
@@ -206,7 +213,7 @@ pub enum RobustPruneError<E = std::convert::Infallible> {
 /// that fails one round retains its maximum occlusion and selected-prefix cursor;
 /// this is why `State` cannot be rebuilt on each round. Saturation, when enabled,
 /// happens only after all alpha rounds and preserves original pool order.
-pub fn robust_prune<I, V, E, L, D, X>(
+pub(in crate::graph) fn robust_prune<I, V, E, L, D, X>(
     context: &mut Context<'_, I>,
     policy: Policy,
     cache: &mut Vec<(f32, Option<V>)>,
