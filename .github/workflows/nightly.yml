@@ -20,7 +20,7 @@ env:
   DISKANN_FEATURES: >-
     virtual_storage,spherical-quantization,product-quantization,tracing,
     experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,
-    multi-vector,bftree,inmem2,integration-test
+    multi-vector,bftree,inmem2,integration-test,pipnn
 
 defaults:
   run:
@@ -142,6 +142,6 @@ jobs:
           cargo +nightly miri nextest run --locked \
             --package diskann-quantization
           cargo +nightly miri test --locked \
-            --package diskann-pipnn --lib
+            --package diskann --features pipnn --lib
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

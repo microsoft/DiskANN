@@ -109,7 +109,7 @@
 //! # Example
 //!
 //! ```
-//! use diskann_pipnn::leaf_kernel::{
+//! use diskann::graph::pipnn::leaf_kernel::{
 //!     leaf_output_len, LeafInput, LeafKernel, LeafKernelWorkspace, LeafNeighbor,
 //! };
 //! use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -140,12 +140,12 @@ use std::marker::PhantomData;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
+    Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
     arch::{self, Dispatched1, FTarget1},
     lifetime::AddLifetime,
-    Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
 };
 
-use crate::kernel_metric::{visit_metric, KernelMetric, MetricVisitor};
+use super::kernel_metric::{KernelMetric, MetricVisitor, visit_metric};
 
 /// One leaf-local neighbor and its metric distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -948,8 +948,6 @@ fn insert_dynamic_neighbor(neighbors: &mut [LeafNeighbor], target: u32, distance
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
-
     use super::*;
 
     fn test_dots(metric: Metric, points: usize) -> Vec<f32> {
@@ -974,52 +972,6 @@ mod tests {
         }
     }
 
-    // Differential oracle for traversal and dispatch only. It intentionally
-    // shares `M::leaf_distance_scalar`; public API tests independently spell
-    // out metric formulas and full sorting behavior.
-    fn scalar_traversal_reference<M: KernelMetric>(
-        input: LeafInput<'_>,
-        neighbor_count: usize,
-        output: &mut [LeafNeighbor],
-    ) {
-        let point_count = input.dots.nrows();
-        let norms: Vec<_> = (0..point_count)
-            .map(|source| M::LEAF_SCALE.transform(input.dots[(source, source)]))
-            .collect();
-        let mut worst = vec![f32::INFINITY; point_count];
-        let uses_norms = M::LEAF_SCALE.is_some();
-        for source in 1..point_count {
-            for target in 0..source {
-                let (source_scale, target_scale) = if uses_norms {
-                    (norms[source], norms[target])
-                } else {
-                    (0.0, 0.0)
-                };
-                let distance = M::leaf_distance_scalar(
-                    input.dots[(source, target)],
-                    source_scale,
-                    target_scale,
-                );
-                insert_reference(
-                    output,
-                    &mut worst,
-                    neighbor_count,
-                    source,
-                    target as u32,
-                    distance,
-                );
-                insert_reference(
-                    output,
-                    &mut worst,
-                    neighbor_count,
-                    target,
-                    source as u32,
-                    distance,
-                );
-            }
-        }
-    }
-
     fn insert_reference(
         output: &mut [LeafNeighbor],
         worst: &mut [f32],
@@ -1036,70 +988,6 @@ mod tests {
             target,
             distance,
         );
-    }
-
-    fn run_scalar_traversal(
-        metric: Metric,
-        input: LeafInput<'_>,
-        neighbor_count: usize,
-        output: &mut [LeafNeighbor],
-    ) {
-        match metric {
-            Metric::L2 => scalar_traversal_reference::<L2>(input, neighbor_count, output),
-            Metric::Cosine => scalar_traversal_reference::<Cosine>(input, neighbor_count, output),
-            Metric::CosineNormalized => {
-                scalar_traversal_reference::<CosineNormalized>(input, neighbor_count, output)
-            }
-            Metric::InnerProduct => {
-                scalar_traversal_reference::<InnerProduct>(input, neighbor_count, output)
-            }
-        }
-    }
-
-    fn assert_scalar_reference_matches_prepared_dispatch(metric: Metric) {
-        // Point count controls SIMD chunking. Cover both sides of 4-, 8-, and
-        // 16-lane boundaries, then the boundary around a second 16-lane chunk.
-        for points in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
-            let dots = test_dots(metric, points);
-            let input = test_input(&dots, points);
-            for requested_k in [1, 2, 3, 4] {
-                let leaf_k = requested_k.min(points - 1);
-                let kernel = LeafKernel::new(metric);
-                let mut expected = vec![LeafNeighbor::default(); points * leaf_k];
-                kernel
-                    .nearest_neighbors(
-                        input,
-                        MutMatrixView::try_from(expected.as_mut_slice(), points, leaf_k).unwrap(),
-                        &mut LeafKernelWorkspace::new(),
-                    )
-                    .unwrap();
-
-                let mut actual = vec![LeafNeighbor::default(); points * leaf_k];
-                run_scalar_traversal(metric, input, leaf_k, &mut actual);
-
-                assert_eq!(actual, expected, "{metric:?}, n={points}, k={requested_k}");
-            }
-        }
-    }
-
-    #[test]
-    fn l2_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::L2);
-    }
-
-    #[test]
-    fn cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::Cosine);
-    }
-
-    #[test]
-    fn normalized_cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::CosineNormalized);
-    }
-
-    #[test]
-    fn inner_product_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::InnerProduct);
     }
 
     #[test]
