@@ -114,13 +114,10 @@ fn rejects_graph_policy_for_a_different_metric() {
 }
 
 #[test]
-fn rejects_invalid_outer_alpha() {
+fn does_not_add_alpha_validation_beyond_graph_config() {
     let pool = pool();
     for alpha in [0.9, f32::NAN, f32::INFINITY] {
         let graph = graph_config(Metric::L2, alpha);
-        let error = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap_err();
-
-        assert_eq!(error.kind(), diskann::ANNErrorKind::IndexConfigError);
-        assert!(error.to_string().contains("alpha"));
+        PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
     }
 }
