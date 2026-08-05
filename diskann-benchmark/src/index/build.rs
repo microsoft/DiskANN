@@ -134,7 +134,7 @@ where
 /// | vectors, edges, and start-slot installation | yes | searchable provider |
 ///
 /// The returned provider is a benchmark/search adapter; provider concerns do not
-/// leak back into `diskann-pipnn`.
+/// leak back into `diskann::graph::pipnn`.
 pub(crate) fn pipnn_build<T>(
     data: Arc<Matrix<T>>,
     input: &IndexBuild,
@@ -156,9 +156,13 @@ where
 
     let started = std::time::Instant::now();
     let adjacency = {
-        let context =
-            diskann_pipnn::PiPNNBuildContext::new(parameters.into(), &graph, metric, &pool)?;
-        diskann_pipnn::build_graph(data.as_view(), &context)?
+        let context = diskann::graph::pipnn::PiPNNBuildContext::new(
+            parameters.into(),
+            &graph,
+            metric,
+            &pool,
+        )?;
+        diskann::graph::pipnn::build_graph(data.as_view(), &context)?
     };
     let start_points = input
         .start_point_strategy()
