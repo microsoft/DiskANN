@@ -11,7 +11,7 @@
 //!
 //! PiPNN and Vamana use the same disk graph format.
 
-use diskann::graph::pipnn::{PiPNNBuildContext, PiPNNConfig};
+use diskann::graph::pipnn::PiPNNBuildContext;
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::{
     storage::{save_adjacency_graph, StorageReadProvider, StorageWriteProvider},

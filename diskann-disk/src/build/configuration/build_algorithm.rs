@@ -58,7 +58,7 @@ impl Default for HashPruneParameters {
 }
 
 #[cfg(feature = "pipnn")]
-impl From<&HashPruneParameters> for diskann_pipnn::HashPruneConfig {
+impl From<&HashPruneParameters> for diskann::graph::pipnn::HashPruneConfig {
     fn from(config: &HashPruneParameters) -> Self {
         Self {
             num_hash_planes: config.num_hash_planes,
