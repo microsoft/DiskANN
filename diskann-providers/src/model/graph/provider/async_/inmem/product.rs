@@ -666,24 +666,33 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann::utils::VectorRepr;
+    use diskann::{graph::glue::PruneStrategy, provider::DefaultContext, utils::VectorRepr};
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
-    use super::{FastMemoryQuantVectorProviderAsync, quant_pruning_distance_computer};
+    use super::{DefaultQuant, quant_pruning_distance_computer};
     use crate::model::{
-        graph::provider::async_::distances::pq::{Hybrid, HybridComputer},
+        graph::provider::async_::{
+            FastMemoryQuantVectorProviderAsync,
+            common::{NoDeletes, NoStore, Quantized},
+            distances::pq::{Hybrid, HybridComputer},
+            inmem::{DefaultProvider, DefaultProviderParameters},
+        },
         pq::FixedChunkPQTable,
     };
 
-    #[test]
-    fn cosine_normalized_query_and_pruning_use_squared_l2() {
-        let table = FixedChunkPQTable::new(
+    fn test_table() -> FixedChunkPQTable {
+        FixedChunkPQTable::new(
             4,
             vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0].into(),
             vec![0, 2, 4].into(),
         )
-        .unwrap();
-        let provider = FastMemoryQuantVectorProviderAsync::new(Metric::CosineNormalized, 2, table);
+        .unwrap()
+    }
+
+    #[test]
+    fn cosine_normalized_query_and_hybrid_pruning_use_squared_l2() {
+        let provider =
+            FastMemoryQuantVectorProviderAsync::new(Metric::CosineNormalized, 2, test_table());
         let full0 = [1u8, 0, 0, 2];
         let full1 = [2u8, 0, 0, 1];
         let code0 = [0u8, 1];
@@ -703,5 +712,26 @@ mod tests {
         ] {
             assert_eq!(computer.evaluate_similarity(left, right), 2.0);
         }
+    }
+
+    #[test]
+    fn cosine_normalized_quantized_pruning_uses_squared_l2() {
+        let provider: DefaultProvider<NoStore, DefaultQuant> = DefaultProvider::new_empty(
+            DefaultProviderParameters::simple(2, 4, Metric::CosineNormalized, 1),
+            NoStore,
+            test_table(),
+            NoDeletes,
+        )
+        .unwrap();
+        let accessor = Quantized
+            .prune_accessor(&provider, &DefaultContext, 2)
+            .unwrap();
+
+        assert_eq!(
+            accessor
+                .distance
+                .evaluate_similarity(&[0u8, 1][..], &[1u8, 0][..]),
+            2.0,
+        );
     }
 }
