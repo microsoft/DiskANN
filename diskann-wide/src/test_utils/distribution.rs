@@ -19,14 +19,15 @@ use rand::{
     distr::{Distribution, StandardUniform},
 };
 
-const KIND_COUNT: u64 = 128;
-const NORMAL_KIND_COUNT: u64 = 116;
-const SUBNORMAL_KIND_COUNT: u64 = 6;
-const ZERO_KIND_COUNT: u64 = 6;
+// Must be a power of two to avoid bias when reducing a uniformly distributed integer.
+const TOTAL_WEIGHT: u64 = 128;
+const NORMAL_WEIGHT: u64 = 116;
+const SUBNORMAL_WEIGHT: u64 = 6;
+const ZERO_WEIGHT: u64 = 6;
 
 const _: () = assert!(
-    NORMAL_KIND_COUNT + SUBNORMAL_KIND_COUNT + ZERO_KIND_COUNT == KIND_COUNT,
-    "floating point kind counts must sum to the total kind count"
+    NORMAL_WEIGHT + SUBNORMAL_WEIGHT + ZERO_WEIGHT == TOTAL_WEIGHT,
+    "floating point weights must sum to the total weight"
 );
 
 trait Layout {
@@ -93,8 +94,8 @@ macro_rules! finite {
                 let twice: $twice = StandardUniform {}.sample(rng);
 
                 let mut value = twice as $bits;
-                let kind = u64::from(twice >> <$bits>::BITS) % KIND_COUNT;
-                let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < NORMAL_KIND_COUNT {
+                let kind = u64::from(twice >> <$bits>::BITS) % TOTAL_WEIGHT;
+                let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < NORMAL_WEIGHT {
                     // Generate a normal floating point number.
                     //
                     // All digits are fair game, but the exponent cannot be all zeros
@@ -103,7 +104,7 @@ macro_rules! finite {
                     //
                     // The mantissa is allowed to be all zeros.
                     (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
-                } else if kind < NORMAL_KIND_COUNT + SUBNORMAL_KIND_COUNT {
+                } else if kind < NORMAL_WEIGHT + SUBNORMAL_WEIGHT {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
@@ -278,21 +279,16 @@ mod tests {
         assert!(
             kinds
                 .normal
-                .abs_diff(num_trials * NORMAL_KIND_COUNT / KIND_COUNT)
+                .abs_diff(num_trials * NORMAL_WEIGHT / TOTAL_WEIGHT)
                 < margin
         );
         assert!(
             kinds
                 .subnormal
-                .abs_diff(num_trials * SUBNORMAL_KIND_COUNT / KIND_COUNT)
+                .abs_diff(num_trials * SUBNORMAL_WEIGHT / TOTAL_WEIGHT)
                 < margin
         );
-        assert!(
-            kinds
-                .zero
-                .abs_diff(num_trials * ZERO_KIND_COUNT / KIND_COUNT)
-                < margin
-        );
+        assert!(kinds.zero.abs_diff(num_trials * ZERO_WEIGHT / TOTAL_WEIGHT) < margin);
     }
 
     #[test]
