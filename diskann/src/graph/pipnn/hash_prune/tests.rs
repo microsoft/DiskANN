@@ -345,6 +345,10 @@ fn leaf_edges_grow_then_reuse_sketch_scratch() {
     hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
     assert_eq!(scratch.len(), 16);
     assert_eq!(scratch.capacity(), capacity);
+
+    hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch);
+    assert_eq!(scratch.len(), 16);
+    assert_eq!(scratch.capacity(), capacity);
     assert!(
         hp.into_candidate_lists()
             .iter()
@@ -431,7 +435,7 @@ fn full_reservoir_bf16_ties_are_history_independent() {
 
 #[test]
 #[allow(clippy::disallowed_methods)]
-fn parallel_insertion_matches_serial_candidate_lists() {
+fn parallel_insertion_matches_serial_neighbor_lists() {
     use rayon::prelude::*;
 
     let data = vec![0.0f32; 100 * 4];
