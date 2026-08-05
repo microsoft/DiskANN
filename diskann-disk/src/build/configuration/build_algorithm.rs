@@ -46,7 +46,7 @@ impl Default for PiPNNParameters {
 }
 
 #[cfg(feature = "pipnn")]
-impl From<&PiPNNParameters> for diskann_pipnn::PiPNNConfig {
+impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
     fn from(config: &PiPNNParameters) -> Self {
         Self {
             c_max: config.c_max,

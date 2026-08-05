@@ -15,7 +15,7 @@
 //! 5. serialize adjacency with the same header/layout used by Vamana.
 //!
 //! ```text
-//! dataset file ──> metadata check ──> MatrixView ──> diskann-pipnn ──> adjacency
+//! dataset file ──> metadata check ──> MatrixView ──> diskann::graph::pipnn ──> adjacency
 //!      │                                                              │
 //!      └──────────────────> sampled medoid ────────────────────────────┤
 //!                                                                     v
@@ -25,8 +25,8 @@
 //! There is no PiPNN-specific disk graph format. Keeping serialization here means
 //! search and loading cannot distinguish which builder produced the graph.
 
+use diskann::graph::pipnn::{PiPNNBuildContext, PiPNNConfig};
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
-use diskann_pipnn::{PiPNNBuildContext, PiPNNConfig};
 use diskann_providers::{
     storage::{save_adjacency_graph, StorageReadProvider, StorageWriteProvider},
     utils::{find_medoid_with_sampling, RayonThreadPoolRef, MAX_MEDOID_SAMPLE_SIZE},
@@ -76,7 +76,7 @@ where
         builder.index_configuration.dist_metric,
         pool.as_rayon(),
     )?;
-    let adjacency = diskann_pipnn::build_graph(data.as_view(), &context)?;
+    let adjacency = diskann::graph::pipnn::build_graph(data.as_view(), &context)?;
 
     // Start-node policy belongs to the persisted index, not the core graph
     // constructor. Reuse the production sampled medoid implementation so the

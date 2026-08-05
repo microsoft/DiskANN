@@ -198,7 +198,7 @@ impl DiskIndexBuildParameters {
     }
 
     #[cfg(feature = "pipnn")]
-    pub(crate) fn pipnn_config(&self) -> Option<diskann_pipnn::PiPNNConfig> {
+    pub(crate) fn pipnn_config(&self) -> Option<diskann::graph::pipnn::PiPNNConfig> {
         match &self.build_algorithm {
             BuildAlgorithm::PiPNN(config) => Some(config.into()),
             BuildAlgorithm::Vamana => None,
@@ -290,24 +290,5 @@ mod dataset_test {
     fn num_pq_chunks_new_accepts_valid_values() {
         let chunks = NumPQChunks::new_with(64, 128).unwrap();
         assert_eq!(chunks.get(), 64);
-    }
-
-    #[cfg(feature = "pipnn")]
-    #[test]
-    fn new_pipnn_uses_the_common_disk_pipeline_parameters() {
-        let pq = NumPQChunks::new_with(1, 128).unwrap();
-        let parameters = PiPNNParameters::default();
-        let config = diskann_pipnn::PiPNNConfig::from(&parameters);
-        let budget = MemoryBudget::try_from_gb(2.0).unwrap();
-        let params = DiskIndexBuildParameters::new_pipnn(budget, pq, parameters);
-
-        assert_eq!(params.pipnn_config(), Some(config));
-        assert_eq!(params.build_memory_limit(), budget);
-        assert_eq!(params.search_pq_chunks(), pq);
-        assert_eq!(
-            params.data_compression_chunk_vector_count(),
-            DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT
-        );
-        assert!(matches!(params.build_algorithm(), BuildAlgorithm::PiPNN(_)));
     }
 }

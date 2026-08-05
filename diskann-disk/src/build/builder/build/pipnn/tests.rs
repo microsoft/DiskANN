@@ -88,7 +88,7 @@ fn builder<'a>(
 }
 
 #[test]
-fn pipnn_disk_build_rejects_configuration_dataset_mismatch() {
+fn disk_build_rejects_dataset_shape_mismatch() {
     let storage = VirtualStorageProvider::new_memory();
     write_data(&storage, 2, 8);
     let params = DiskIndexBuildParameters::new_pipnn(
@@ -107,7 +107,7 @@ fn pipnn_disk_build_rejects_configuration_dataset_mismatch() {
 }
 
 #[test]
-fn pipnn_graph_adapter_rejects_point_count_mismatch() {
+fn graph_adapter_rejects_point_count_mismatch() {
     let storage = VirtualStorageProvider::new_memory();
     write_data(&storage, 2, 8);
     let parameters = pipnn();
@@ -120,20 +120,7 @@ fn pipnn_graph_adapter_rejects_point_count_mismatch() {
 }
 
 #[test]
-fn pipnn_disk_build_uses_common_pipeline() {
-    let storage = VirtualStorageProvider::new_memory();
-    let (points, dimensions) = (256, 8);
-    write_data(&storage, points, dimensions);
-    let mut builder = builder(&storage, points, dimensions, 1.0, 1.2, pipnn());
-
-    builder.build().unwrap();
-
-    assert!(storage.exists(&get_disk_index_file("/index")));
-    assert!(storage.exists("/index_pq_compressed.bin"));
-}
-
-#[test]
-fn pipnn_graph_adapter_writes_real_point_header() {
+fn graph_adapter_writes_degree_medoid_and_frozen_count() {
     let storage = VirtualStorageProvider::new_memory();
     let (points, dimensions) = (256, 8);
     write_data(&storage, points, dimensions);
@@ -157,7 +144,7 @@ fn pipnn_graph_adapter_writes_real_point_header() {
 }
 
 #[test]
-fn explicit_pipnn_selection_is_not_replaced_by_memory_budget() {
+fn explicit_selection_ignores_the_vamana_memory_strategy() {
     let storage = VirtualStorageProvider::new_memory();
     let (points, dimensions) = (256, 8);
     write_data(&storage, points, dimensions);
@@ -176,10 +163,11 @@ fn explicit_pipnn_selection_is_not_replaced_by_memory_budget() {
     assert_eq!(builder.index_configuration.config.alpha(), 1.3);
     builder.build().unwrap();
     assert!(storage.exists(&get_disk_index_file("/index")));
+    assert!(storage.exists("/index_pq_compressed.bin"));
 }
 
 #[test]
-fn pipnn_disk_build_rejects_invalid_config() {
+fn builder_rejects_invalid_pipnn_config() {
     let storage = VirtualStorageProvider::new_memory();
     let invalid = PiPNNParameters {
         c_max: 0,
