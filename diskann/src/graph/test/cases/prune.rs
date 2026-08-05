@@ -260,6 +260,14 @@ async fn self_and_unavailable_candidates_are_excluded() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn saturation_does_not_reintroduce_unavailable_candidates() {
+    let case = l2_case(&[0.0, -1.0, 2.0, 3.0], [0, 1, 2, 3], 3, 1.2, true, 10);
+    let strategy = test_provider::Strategy::with_transient(true, [2]);
+
+    assert_eq!(&*case.run(&strategy).await, &[1, 3]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn max_occlusion_size_truncates_to_nearest_candidates() {
     let case = PruneCase::new(
         vec![
