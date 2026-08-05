@@ -28,7 +28,7 @@ use super::{
         self, Batch, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, PruneAccessor,
         PruneStrategy, SearchAccessor, SearchPostProcess, SearchStrategy,
     },
-    internal::{BackedgeBuffer, SortedNeighbors, prune},
+    internal::{BackedgeBuffer, SortedNeighbors, robust_prune, vamana_prune as prune},
     search::{
         PagedSearch,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
@@ -48,10 +48,7 @@ use crate::{
         NeighborAccessorMut, SetElement,
     },
     tracked_debug, tracked_error, tracked_trace,
-    utils::{
-        VectorId,
-        async_tools::{self, DynamicBalancer},
-    },
+    utils::async_tools::{self, DynamicBalancer},
 };
 use diskann_utils::object_pool::{ObjectPool, PooledRef};
 
@@ -117,137 +114,6 @@ struct PendingEdge<I> {
 impl<I> PendingEdge<I> {
     fn new(source: I, edges: AdjacencyList<I>) -> Self {
         Self { source, edges }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PruneOptions {
-    force_saturate: bool,
-}
-
-#[derive(Debug)]
-pub(crate) struct PruneScratch<I>
-where
-    I: VectorId,
-{
-    pool: Vec<Neighbor<I>>,
-    states: Vec<prune::State>,
-    neighbors: AdjacencyList<I>,
-}
-
-impl<I> PruneScratch<I>
-where
-    I: VectorId,
-{
-    fn new() -> Self {
-        Self {
-            pool: Vec::new(),
-            states: Vec::new(),
-            neighbors: AdjacencyList::new(),
-        }
-    }
-
-    fn as_context(&mut self, max_candidates: usize) -> PruneContext<'_, I> {
-        PruneContext {
-            pool: SortedNeighbors::new(&mut self.pool, max_candidates),
-            states: &mut self.states,
-            neighbors: &mut self.neighbors,
-        }
-    }
-}
-
-impl<I> Default for PruneScratch<I>
-where
-    I: VectorId,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug)]
-struct PruneContext<'a, I>
-where
-    I: VectorId,
-{
-    pool: SortedNeighbors<'a, I>,
-    states: &'a mut Vec<prune::State>,
-    neighbors: &'a mut AdjacencyList<I>,
-}
-
-#[derive(Debug, Clone, Copy, Error)]
-#[error("retrieval of main vector id {} failed during prune aggregation", self.0)]
-struct FailedVectorRetrieval<I>(I)
-where
-    I: VectorId;
-
-impl<I> crate::error::TransientError<ANNError> for FailedVectorRetrieval<I>
-where
-    I: VectorId,
-{
-    fn acknowledge<D>(self, _why: D)
-    where
-        D: std::fmt::Display,
-    {
-    }
-
-    #[track_caller]
-    #[inline(never)]
-    fn escalate<D>(self, why: D) -> ANNError
-    where
-        D: std::fmt::Display,
-    {
-        ANNError::new(ANNErrorKind::IndexError, self).context(why.to_string())
-    }
-}
-
-#[derive(Debug)]
-enum PruneListError<I>
-where
-    I: VectorId,
-{
-    FailedVectorRetrieval(FailedVectorRetrieval<I>),
-    Other(ANNError),
-}
-
-impl<I> PruneListError<I>
-where
-    I: VectorId,
-{
-    fn failed_retrieval(id: I) -> Self {
-        Self::FailedVectorRetrieval(FailedVectorRetrieval(id))
-    }
-}
-
-impl<I> From<ANNError> for PruneListError<I>
-where
-    I: VectorId,
-{
-    fn from(error: ANNError) -> Self {
-        Self::Other(error)
-    }
-}
-
-impl<I> crate::error::ToRanked for PruneListError<I>
-where
-    I: VectorId,
-{
-    type Transient = FailedVectorRetrieval<I>;
-    type Error = ANNError;
-
-    fn to_ranked(self) -> crate::error::RankedError<Self::Transient, Self::Error> {
-        match self {
-            Self::FailedVectorRetrieval(error) => crate::error::RankedError::Transient(error),
-            Self::Other(error) => crate::error::RankedError::Error(error),
-        }
-    }
-
-    fn from_transient(transient: Self::Transient) -> Self {
-        Self::FailedVectorRetrieval(transient)
-    }
-
-    fn from_error(error: Self::Error) -> Self {
-        Self::Other(error)
     }
 }
 
@@ -397,7 +263,7 @@ where
             let insert_retry = self.config.experimental_insert_retry();
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
-            let mut prune_scratch = PruneScratch::new();
+            let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
             for attempt in 0..num_insert_attempts {
@@ -412,7 +278,7 @@ where
                 )
                 .await?;
 
-                let context = PruneContext {
+                let context = prune::Context {
                     pool: SortedNeighbors::new(
                         &mut search_record.visited,
                         self.max_occlusion_size(),
@@ -421,7 +287,7 @@ where
                     neighbors: &mut new_neighbors,
                 };
 
-                let options = PruneOptions {
+                let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
                 };
 
@@ -485,7 +351,7 @@ where
         ids: &[DP::InternalId],
         position: usize,
         prune_accessor: &mut A,
-        prune_scratch: &mut PruneScratch<DP::InternalId>,
+        prune_scratch: &mut prune::Scratch<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
     where
         S: for<'a> InsertStrategy<'a, DP, B::Element<'a>>,
@@ -531,7 +397,7 @@ where
                 // distance computations.
                 let candidates = self.config.intra_batch_candidates().get(batch.len());
 
-                let options = PruneOptions {
+                let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
                 };
 
@@ -695,7 +561,7 @@ where
                 Err(err) => return Err((output, err)),
             };
 
-            let mut prune_scratch = PruneScratch::new();
+            let mut prune_scratch = prune::Scratch::new();
             while let Some((_, position)) = work.next() {
                 match self
                     .search_and_prune(
@@ -753,13 +619,13 @@ where
                 .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
-            let mut prune_scratch = PruneScratch::new();
+            let mut prune_scratch = prune::Scratch::new();
 
             // During bootstrap, we want the graph to be as dense as possible to aid
             // in early navigation.
             //
             // Enabling saturation help achieve that.
-            let options = PruneOptions {
+            let options = prune::Options {
                 force_saturate: true,
             };
 
@@ -1113,7 +979,7 @@ where
                         let range = async_tools::partition(backedges_clone.len(), num_tasks, i)?;
                         let itr = backedges_clone.iter().skip(range.start).take(range.len());
 
-                        let mut prune_scratch = PruneScratch::new();
+                        let mut prune_scratch = prune::Scratch::new();
                         let mut sorted_buf = Vec::new();
 
                         for (source, adj_list) in itr {
@@ -1589,7 +1455,7 @@ where
                                 guard.next()
                             };
 
-                            let mut prune_scratch = PruneScratch::new();
+                            let mut prune_scratch = prune::Scratch::new();
                             let mut accessor = strategy_clone
                                 .prune_accessor(
                                     self_clone.provider(),
@@ -1691,7 +1557,7 @@ where
                 .prune_accessor(self.provider(), context, self.max_occlusion_size())
                 .into_ann_result()?;
 
-            let mut prune_scratch = PruneScratch::new();
+            let mut prune_scratch = prune::Scratch::new();
 
             for (neighbor, edges) in edges_to_add.iter() {
                 self.add_edge_and_prune(
@@ -2019,12 +1885,12 @@ where
                 if neighbors.len() < degree {
                     neighbors
                 } else {
-                    let mut prune_scratch = PruneScratch::new();
+                    let mut prune_scratch = prune::Scratch::new();
 
                     // Force saturation is mainly used for the retry insert logic.
                     //
                     // No need to force during consolidation.
-                    let options = PruneOptions {
+                    let options = prune::Options {
                         force_saturate: false,
                     };
 
@@ -2397,7 +2263,7 @@ where
         accessor: &'a mut A,
         targets: &[DP::InternalId],
         source: DP::InternalId,
-        scratch: &mut PruneScratch<DP::InternalId>,
+        scratch: &mut prune::Scratch<DP::InternalId>,
         to_remove: Option<&HashSet<DP::InternalId>>,
     ) -> impl SendFuture<ANNResult<()>>
     where
@@ -2445,7 +2311,7 @@ where
                 // of candidates and trying to keep the best of said candidates.
                 //
                 // No need to enable saturation.
-                let options = PruneOptions {
+                let options = prune::Options {
                     force_saturate: false,
                 };
 
@@ -2471,8 +2337,8 @@ where
         }
     }
 
-    /// Run the pruning algorithm on [`PruneContext::pool`] and write the pruned
-    /// list into [`PruneContext::neighbors`].
+    /// Run the pruning algorithm on [`prune::Context::pool`] and write the pruned
+    /// list into [`prune::Context::neighbors`].
     ///
     /// # Errors
     ///
@@ -2481,8 +2347,8 @@ where
         &self,
         accessor: &mut A,
         location: DP::InternalId,
-        mut context: PruneContext<'_, DP::InternalId>,
-        options: PruneOptions,
+        mut context: prune::Context<'_, DP::InternalId>,
+        options: prune::Options,
     ) -> impl SendFuture<ANNResult<()>>
     where
         A: PruneAccessor<Id = DP::InternalId>,
@@ -2514,7 +2380,7 @@ where
     /// A specialization of [`Self::robust_prune`] that prunes the IDs in an [`AdjacencyList`].
     ///
     /// The resulting candidates list will be placed into `scratch`'s
-    /// [`PruneScratch::neighbors`] field.
+    /// [`prune::Scratch::neighbors`] field.
     ///
     /// All other fields of `scratch` are clobbered.
     ///
@@ -2524,16 +2390,16 @@ where
     /// # Errors
     ///
     /// Forwards errors from [`PruneAccessor::fill`]. If `location` was not made available
-    /// during [`PruneAccessor::fill`], [`PruneListError::FailedVectorRetrieval`] is
+    /// during [`PruneAccessor::fill`], [`prune::ListError::FailedVectorRetrieval`] is
     /// returned to delegate escalation to the caller.
     fn robust_prune_list<A>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         list: &AdjacencyList<DP::InternalId>,
-        scratch: &mut PruneScratch<DP::InternalId>,
-        options: PruneOptions,
-    ) -> impl SendFuture<Result<(), PruneListError<DP::InternalId>>>
+        scratch: &mut prune::Scratch<DP::InternalId>,
+        options: prune::Options,
+    ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
         A: PruneAccessor<Id = DP::InternalId>,
     {
@@ -2562,7 +2428,7 @@ where
             {
                 let vector = match view.get(location) {
                     Some(v) => v,
-                    None => return Err(PruneListError::failed_retrieval(location)),
+                    None => return Err(prune::ListError::failed_retrieval(location)),
                 };
 
                 for id in list.iter().filter(|&&i| i != location) {
@@ -2592,7 +2458,7 @@ where
     /// optional extra candidates.
     ///
     /// The resulting candidates list will be placed into `scratch`'s
-    /// [`PruneScratch::neighbors`] field.
+    /// [`prune::Scratch::neighbors`] field.
     ///
     /// All other fields of `scratch` are clobbered.
     ///
@@ -2607,16 +2473,16 @@ where
     /// # Errors
     ///
     /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved,
-    /// [`PruneListError::FailedVectorRetrieval`] is returned.
+    /// [`prune::ListError::FailedVectorRetrieval`] is returned.
     fn robust_prune_with<A, Itr>(
         &self,
         accessor: &mut A,
         internal_id: DP::InternalId,
         extras: Itr,
         record: &mut VisitedSearchRecord<DP::InternalId>,
-        scratch: &mut PruneScratch<DP::InternalId>,
-        options: PruneOptions,
-    ) -> impl SendFuture<Result<(), PruneListError<DP::InternalId>>>
+        scratch: &mut prune::Scratch<DP::InternalId>,
+        options: prune::Options,
+    ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
         A: PruneAccessor<Id = DP::InternalId>,
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
@@ -2635,7 +2501,7 @@ where
             if extras.len() != 0 {
                 let this_vector = view
                     .get(internal_id)
-                    .ok_or_else(|| PruneListError::failed_retrieval(internal_id))?;
+                    .ok_or_else(|| prune::ListError::failed_retrieval(internal_id))?;
 
                 for id in extras {
                     if let Some(element) = view.get(id) {
@@ -2648,7 +2514,7 @@ where
                 }
             }
 
-            let mut context = PruneContext {
+            let mut context = prune::Context {
                 pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
                 states: &mut scratch.states,
                 neighbors: &mut scratch.neighbors,
@@ -2674,10 +2540,10 @@ where
     fn occlude_list<M, C, F>(
         &self,
         computer: &C,
-        context: &mut PruneContext<'_, DP::InternalId>,
+        context: &mut prune::Context<'_, DP::InternalId>,
         map: M,
         exclude: F,
-        options: PruneOptions,
+        options: prune::Options,
     ) -> ANNResult<()>
     where
         M: View<DP::InternalId>,
@@ -2686,7 +2552,7 @@ where
     {
         // Preserve the structural bound on the sorted/capped source pool before
         // availability filtering; filtering must not backfill farther candidates.
-        prune::validate_candidate_count::<std::convert::Infallible>(context.pool.len())
+        robust_prune::validate_candidate_count::<std::convert::Infallible>(context.pool.len())
             .map_err(ANNError::opaque)?;
 
         let mut candidates = Vec::new();
@@ -2699,7 +2565,7 @@ where
                 continue;
             }
             if let Some(value) = map.get(id) {
-                candidates.push(prune::Candidate::new(id, neighbor.distance(), value));
+                candidates.push(robust_prune::Candidate::new(id, neighbor.distance(), value));
             }
         }
 
@@ -2709,16 +2575,14 @@ where
             .map_err(ANNError::opaque)?;
         context
             .states
-            .resize(candidates.len(), prune::State::default());
+            .resize(candidates.len(), robust_prune::State::default());
 
-        let selected = prune::robust_prune(
+        let selected = robust_prune::robust_prune(
             &candidates,
             context.states.as_mut_slice(),
-            prune::Policy::new(
-                self.config.pruned_degree().get(),
-                self.config.alpha(),
-                self.config.prune_kind(),
-            ),
+            self.config.pruned_degree().get(),
+            self.config.alpha(),
+            self.config.prune_kind(),
             |candidate, selected| {
                 Ok::<_, std::convert::Infallible>(
                     computer.evaluate_similarity((*candidate).reborrow(), selected.reborrow()),
@@ -2767,7 +2631,7 @@ where
                 .into_ann_result()?;
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
-            let mut prune_scratch = PruneScratch::<DP::InternalId>::new();
+            let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();
 
             for id in ids {
                 accessor
@@ -2779,7 +2643,7 @@ where
                 }
 
                 // Saturation is controlled by the index configuration.
-                let options = PruneOptions {
+                let options = prune::Options {
                     force_saturate: false,
                 };
 

@@ -27,41 +27,14 @@ fn propagates_distance_failure() {
     let error = robust_prune(
         &candidates,
         &mut states,
-        Policy::new(2, 1.2, PruneKind::TriangleInequality),
+        2,
+        1.2,
+        PruneKind::TriangleInequality,
         |_, _| Err(DistanceFailure),
     )
     .unwrap_err();
 
     assert!(matches!(error, RobustPruneError::Distance(DistanceFailure)));
-}
-
-#[test]
-fn rejects_invalid_alpha() {
-    for alpha in [f32::NAN, f32::INFINITY, 0.999] {
-        let mut states = [];
-        let error = robust_prune(
-            &[] as &[Candidate<u32, u32>],
-            &mut states,
-            Policy::new(1, alpha, PruneKind::TriangleInequality),
-            |_, _| Ok::<_, std::convert::Infallible>(0.0),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, RobustPruneError::InvalidAlpha(value) if value.to_bits() == alpha.to_bits())
-        );
-    }
-
-    let mut states = [];
-    assert_eq!(
-        robust_prune(
-            &[] as &[Candidate<u32, u32>],
-            &mut states,
-            Policy::new(1, 1.0, PruneKind::TriangleInequality),
-            |_, _| Ok::<_, std::convert::Infallible>(0.0),
-        )
-        .unwrap(),
-        0
-    );
 }
 
 #[test]
@@ -74,7 +47,9 @@ fn accepts_u16_max_candidates_and_rejects_one_more() {
         robust_prune(
             &candidates,
             &mut states,
-            Policy::new(0, 1.2, PruneKind::TriangleInequality),
+            0,
+            1.2,
+            PruneKind::TriangleInequality,
             |_, _| Ok::<_, std::convert::Infallible>(0.0),
         )
         .unwrap(),
@@ -87,7 +62,9 @@ fn accepts_u16_max_candidates_and_rejects_one_more() {
         robust_prune(
             &candidates,
             &mut states,
-            Policy::new(1, 1.2, PruneKind::TriangleInequality),
+            1,
+            1.2,
+            PruneKind::TriangleInequality,
             |_, _| Ok::<_, std::convert::Infallible>(0.0),
         ),
         Err(RobustPruneError::TooManyCandidates { actual, max })
@@ -104,7 +81,9 @@ fn rejects_state_count_mismatch() {
         robust_prune(
             &candidates,
             &mut states,
-            Policy::new(1, 1.2, PruneKind::TriangleInequality),
+            1,
+            1.2,
+            PruneKind::TriangleInequality,
             |_, _| Ok::<_, std::convert::Infallible>(0.0),
         ),
         Err(RobustPruneError::StateCountMismatch {
@@ -122,7 +101,9 @@ fn returns_selected_positions_in_candidate_order() {
     let selected = robust_prune(
         &candidates,
         &mut states,
-        Policy::new(3, 1.0, PruneKind::TriangleInequality),
+        3,
+        1.0,
+        PruneKind::TriangleInequality,
         |_, _| Ok::<_, std::convert::Infallible>(0.0),
     )
     .unwrap();
@@ -138,7 +119,9 @@ fn revisits_occluded_candidates_at_larger_alpha() {
     let selected = robust_prune(
         &candidates,
         &mut states,
-        Policy::new(2, 1.2, PruneKind::TriangleInequality),
+        2,
+        1.2,
+        PruneKind::TriangleInequality,
         |_, _| Ok::<_, std::convert::Infallible>(1.0),
     )
     .unwrap();
@@ -153,7 +136,9 @@ fn empty_candidates_select_nothing() {
         robust_prune(
             &[] as &[Candidate<u32, u32>],
             &mut states,
-            Policy::new(usize::MAX, 1.2, PruneKind::TriangleInequality),
+            usize::MAX,
+            1.2,
+            PruneKind::TriangleInequality,
             |_, _| Ok::<_, std::convert::Infallible>(0.0),
         )
         .unwrap(),

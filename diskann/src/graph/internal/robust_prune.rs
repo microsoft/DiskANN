@@ -35,24 +35,6 @@ impl<I, V> Candidate<I, V> {
     }
 }
 
-/// Provider-independent policy for the RobustPrune state machine.
-#[derive(Debug, Clone, Copy)]
-pub(in crate::graph) struct Policy {
-    degree: usize,
-    alpha: f32,
-    prune_kind: PruneKind,
-}
-
-impl Policy {
-    pub(in crate::graph) fn new(degree: usize, alpha: f32, prune_kind: PruneKind) -> Self {
-        Self {
-            degree,
-            alpha,
-            prune_kind,
-        }
-    }
-}
-
 /// Per-candidate state reused across alpha rounds.
 ///
 /// `states[i]` initially describes `candidates[i]`. Once a candidate is
@@ -74,8 +56,6 @@ impl State {
 /// Structural or caller-distance failure from [`robust_prune`].
 #[derive(Debug, Error)]
 pub(in crate::graph) enum RobustPruneError<E = std::convert::Infallible> {
-    #[error("robust prune alpha must be finite and >= 1.0, got {0}")]
-    InvalidAlpha(f32),
     #[error("robust prune supports at most {max} candidates, got {actual}")]
     TooManyCandidates { actual: usize, max: usize },
     #[error(
@@ -109,15 +89,14 @@ pub(in crate::graph) fn validate_candidate_count<E>(
 pub(in crate::graph) fn robust_prune<I, V, E, D>(
     candidates: &[Candidate<I, V>],
     states: &mut [State],
-    policy: Policy,
+    degree: usize,
+    alpha: f32,
+    prune_kind: PruneKind,
     mut distance: D,
 ) -> Result<usize, RobustPruneError<E>>
 where
     D: FnMut(&V, &V) -> Result<f32, E>,
 {
-    if !policy.alpha.is_finite() || policy.alpha < 1.0 {
-        return Err(RobustPruneError::InvalidAlpha(policy.alpha));
-    }
     validate_candidate_count(candidates.len())?;
     if states.len() != candidates.len() {
         return Err(RobustPruneError::StateCountMismatch {
@@ -132,12 +111,12 @@ where
     }
 
     let mut current_alpha = 1.0f32;
-    let increment_factor = policy.alpha.min(1.2);
+    let increment_factor = alpha.min(1.2);
     let mut selected = 0;
 
-    while selected < policy.degree {
+    while selected < degree {
         for (index, candidate) in candidates.iter().enumerate() {
-            if selected >= policy.degree {
+            if selected >= degree {
                 break;
             }
 
@@ -162,7 +141,7 @@ where
                 let pair_distance =
                     distance(&candidate.value, &candidates[selected_position].value)
                         .map_err(RobustPruneError::Distance)?;
-                occlude_factor = policy.prune_kind.update_occlude_factor(
+                occlude_factor = prune_kind.update_occlude_factor(
                     candidate.source_distance,
                     pair_distance,
                     occlude_factor,
@@ -185,10 +164,10 @@ where
             selected += 1;
         }
 
-        if current_alpha == policy.alpha {
+        if current_alpha == alpha {
             break;
         }
-        current_alpha = (current_alpha * increment_factor).min(policy.alpha);
+        current_alpha = (current_alpha * increment_factor).min(alpha);
     }
 
     Ok(selected)
