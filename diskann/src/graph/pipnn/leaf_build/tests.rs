@@ -9,8 +9,8 @@ use half::f16;
 use std::collections::BTreeSet;
 
 use super::{
-    add_symmetric_neighbors, allocation_error, build_leaf_candidates, DirectCandidates,
-    LeafBuffers, LeafBuildError,
+    DirectCandidates, LeafBuffers, LeafBuildError, add_symmetric_neighbors, allocation_error,
+    build_leaf_candidates,
 };
 
 fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
@@ -29,14 +29,14 @@ fn build<T>(
     leaves: &[Vec<u32>],
     k: usize,
     metric: Metric,
-) -> Result<Vec<diskann::graph::AdjacencyList<u32>>, LeafBuildError>
+) -> Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError>
 where
-    T: diskann::utils::VectorRepr + 'static,
+    T: crate::utils::VectorRepr + 'static,
 {
     pool().install(|| build_leaf_candidates(data, leaves.to_vec(), k, metric))
 }
 
-fn adjacency_lists(graph: Vec<diskann::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
+fn adjacency_lists(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
     graph.into_iter().map(Vec::from).collect()
 }
 
@@ -150,7 +150,7 @@ fn global_id_translation_is_independent_of_leaf_order() {
 
 fn source_graph<T>(data: &[T], points: usize, dimensions: usize) -> Vec<Vec<u32>>
 where
-    T: diskann::utils::VectorRepr + 'static,
+    T: crate::utils::VectorRepr + 'static,
 {
     let leaves = vec![(0..points as u32).collect()];
     adjacency_lists(build(view(data, points, dimensions), &leaves, 2, Metric::L2).unwrap())
@@ -158,7 +158,7 @@ where
 
 fn assert_source_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
 where
-    T: diskann::utils::VectorRepr + 'static,
+    T: crate::utils::VectorRepr + 'static,
 {
     let points = 8;
     // Source dimension controls VectorRepr conversion chunking. Cover tails on
@@ -213,9 +213,11 @@ fn all_metrics_produce_symmetric_unique_non_self_candidates() {
         let graph = build(view(&data, 4, 2), &leaves, 2, metric).unwrap();
         for (source, neighbors) in graph.iter().enumerate() {
             assert!(neighbors.iter().all(|&target| target as usize != source));
-            assert!(neighbors
-                .iter()
-                .all(|&target| graph[target as usize].contains(source as u32)));
+            assert!(
+                neighbors
+                    .iter()
+                    .all(|&target| graph[target as usize].contains(source as u32))
+            );
             assert!(neighbors.windows(2).all(|pair| pair[0] < pair[1]));
         }
     }
@@ -240,7 +242,7 @@ fn parallel_leaf_schedule_does_not_change_candidate_order() {
 }
 
 #[test]
-fn rejects_invalid_shape_inputs_without_panicking() {
+fn rejects_invalid_dimensions_and_leaf_membership() {
     let data = [0.0_f32, 1.0];
     let no_dimensions = MatrixView::try_from(&data[..0], 2, 0).unwrap();
     assert!(matches!(
@@ -288,10 +290,12 @@ fn singleton_and_zero_k_leaves_add_no_candidates() {
     )
     .unwrap();
     let zero_k = build(view(&data, 3, 1), &[vec![0, 1, 2]], 0, Metric::L2).unwrap();
-    assert!(singleton
-        .iter()
-        .chain(&zero_k)
-        .all(|candidates| candidates.is_empty()));
+    assert!(
+        singleton
+            .iter()
+            .chain(&zero_k)
+            .all(|candidates| candidates.is_empty())
+    );
 }
 
 #[test]
@@ -323,13 +327,13 @@ fn reports_shape_overflow_before_allocating() {
 
 #[test]
 fn rejects_an_invalid_kernel_target() {
-    let mut graph = vec![diskann::graph::AdjacencyList::new(); 2];
+    let mut graph = vec![crate::graph::AdjacencyList::new(); 2];
     let error = add_symmetric_neighbors(
         &[10, 20],
         1,
         &[
-            crate::leaf_kernel::LeafNeighbor::new(9, 1.0),
-            crate::leaf_kernel::LeafNeighbor::new(0, 1.0),
+            super::super::leaf_kernel::LeafNeighbor::new(9, 1.0),
+            super::super::leaf_kernel::LeafNeighbor::new(0, 1.0),
         ],
         &mut graph,
     )
@@ -345,13 +349,13 @@ fn rejects_an_invalid_kernel_target() {
 
 #[test]
 fn skips_duplicate_global_ids_without_self_edges() {
-    let mut graph = vec![diskann::graph::AdjacencyList::new(); 2];
+    let mut graph = vec![crate::graph::AdjacencyList::new(); 2];
     add_symmetric_neighbors(
         &[7, 7],
         1,
         &[
-            crate::leaf_kernel::LeafNeighbor::new(1, 0.0),
-            crate::leaf_kernel::LeafNeighbor::new(0, 0.0),
+            super::super::leaf_kernel::LeafNeighbor::new(1, 0.0),
+            super::super::leaf_kernel::LeafNeighbor::new(0, 0.0),
         ],
         &mut graph,
     )
@@ -367,7 +371,7 @@ fn poisoned_candidate_lists_return_errors() {
         panic!("poison candidate list");
     });
     assert!(matches!(
-        candidates.add_leaf(&[0], &[diskann::graph::AdjacencyList::new()]),
+        candidates.add_leaf(&[0], &[crate::graph::AdjacencyList::new()]),
         Err(LeafBuildError::PoisonedCandidateList { point: 0 })
     ));
     assert!(matches!(
@@ -398,8 +402,8 @@ fn direct_candidate_accumulator_keeps_unique_sorted_lists() {
         .add_leaf(
             &[0, 1],
             &[
-                diskann::graph::AdjacencyList::from_iter_untrusted([1, 1]),
-                diskann::graph::AdjacencyList::from_iter_untrusted([0]),
+                crate::graph::AdjacencyList::from_iter_untrusted([1, 1]),
+                crate::graph::AdjacencyList::from_iter_untrusted([0]),
             ],
         )
         .unwrap();

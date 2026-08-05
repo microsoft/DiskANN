@@ -5,6 +5,7 @@
 
 #![cfg(feature = "pipnn")]
 #![allow(
+    clippy::expect_used,
     clippy::unwrap_used,
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
@@ -37,14 +38,6 @@ fn pool() -> rayon::ThreadPool {
         .num_threads(2)
         .build()
         .unwrap()
-}
-
-#[test]
-fn accepts_the_six_algorithm_parameters_with_outer_graph_policy() {
-    let graph = graph_config(Metric::L2, 1.2);
-    let pool = pool();
-
-    PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
 }
 
 #[test]

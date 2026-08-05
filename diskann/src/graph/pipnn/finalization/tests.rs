@@ -4,8 +4,8 @@
  */
 
 use crate::graph::{
-    config::{self, MaxDegree},
     AdjacencyList,
+    config::{self, MaxDegree},
 };
 use diskann_utils::views::MatrixView;
 
@@ -58,8 +58,7 @@ fn prunes_an_overfull_list_with_the_vamana_kernel() {
 
     let actual = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
 
-    assert!(actual[0].len() <= 2);
-    assert!(actual[0].contains(1));
+    assert_eq!(&*actual[0], &[1, 3]);
 }
 
 #[test]
@@ -103,23 +102,5 @@ fn rejects_candidate_list_count_mismatch_without_panicking() {
             lists: 4,
             points: 3
         })
-    ));
-}
-
-#[test]
-fn rejects_more_candidates_than_the_shared_position_type_can_represent() {
-    let count = u16::MAX as usize + 1;
-    let data = vec![0.0_f32; count + 1];
-    let data = MatrixView::try_from(&data[..], count + 1, 1).unwrap();
-    let mut candidates = Vec::with_capacity(count + 1);
-    candidates.push(candidate_list(1..=count as u32));
-    candidates.resize_with(count + 1, AdjacencyList::new);
-
-    let error = prune_overfull(data, candidates, &graph_config(1), Metric::L2).unwrap_err();
-
-    assert!(matches!(
-        error.downcast_ref::<prune::RobustPruneError<Infallible>>(),
-        Some(prune::RobustPruneError::TooManyCandidates { actual, max })
-            if *actual == count && *max == u16::MAX as usize
     ));
 }

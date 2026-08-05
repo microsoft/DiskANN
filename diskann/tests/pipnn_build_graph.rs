@@ -5,16 +5,17 @@
 
 #![cfg(feature = "pipnn")]
 #![allow(
+    clippy::expect_used,
     clippy::unwrap_used,
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 
 use diskann::graph::config::{self, MaxDegree};
-use diskann::graph::pipnn::{build_graph, PiPNNBuildContext, PiPNNConfig};
+use diskann::graph::pipnn::{PiPNNBuildContext, PiPNNConfig, build_graph};
 use diskann_utils::views::MatrixView;
 use diskann_vector::distance::Metric;
 use half::f16;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 fn pipnn_config() -> PiPNNConfig {
     PiPNNConfig {
@@ -58,9 +59,10 @@ fn assert_graph_invariants(
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), row.len());
-        assert!(row
-            .iter()
-            .all(|&id| (id as usize) < points && id as usize != source));
+        assert!(
+            row.iter()
+                .all(|&id| (id as usize) < points && id as usize != source)
+        );
     }
 }
 
