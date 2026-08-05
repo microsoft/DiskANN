@@ -65,10 +65,31 @@ fn rejects_invalid_alpha() {
 }
 
 #[test]
-fn rejects_candidate_count_above_u16() {
-    validate_candidate_count::<std::convert::Infallible>(u16::MAX as usize).unwrap();
+fn accepts_u16_max_candidates_and_rejects_one_more() {
+    let mut candidates = (0..u16::MAX as u32)
+        .map(|id| candidate(id, id as f32))
+        .collect::<Vec<_>>();
+    let mut states = vec![State::default(); candidates.len()];
+    assert_eq!(
+        robust_prune(
+            &candidates,
+            &mut states,
+            Policy::new(0, 1.2, PruneKind::TriangleInequality),
+            |_, _| Ok::<_, std::convert::Infallible>(0.0),
+        )
+        .unwrap(),
+        0
+    );
+
+    candidates.push(candidate(u16::MAX as u32, u16::MAX as f32));
+    states.push(State::default());
     assert!(matches!(
-        validate_candidate_count::<std::convert::Infallible>(u16::MAX as usize + 1),
+        robust_prune(
+            &candidates,
+            &mut states,
+            Policy::new(1, 1.2, PruneKind::TriangleInequality),
+            |_, _| Ok::<_, std::convert::Infallible>(0.0),
+        ),
         Err(RobustPruneError::TooManyCandidates { actual, max })
             if actual == u16::MAX as usize + 1 && max == u16::MAX as usize
     ));
