@@ -104,7 +104,7 @@
 //! # Example
 //!
 //! ```
-//! use diskann_pipnn::partition_kernel::{
+//! use diskann::graph::pipnn::partition_kernel::{
 //!     PartitionInput, PartitionKernel, PartitionScales,
 //! };
 //! use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -133,12 +133,12 @@ use std::marker::PhantomData;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
+    Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
     arch::{self, Dispatched2, FTarget2},
     lifetime::AddLifetime,
-    Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
 };
 
-use crate::kernel_metric::{visit_metric, KernelMetric, MetricVisitor, ScaleKind};
+use super::kernel_metric::{KernelMetric, MetricVisitor, ScaleKind, visit_metric};
 
 /// Maximum number of leaders retained for one point.
 ///
@@ -545,11 +545,7 @@ fn validate<'a, M: KernelMetric>(
 ///
 /// Associated `ScaleKind` constants make this choice compile away.
 const fn expected_scale_len(kind: ScaleKind, count: usize) -> usize {
-    if kind.is_some() {
-        count
-    } else {
-        0
-    }
+    if kind.is_some() { count } else { 0 }
 }
 
 fn checked_area(
@@ -739,36 +735,9 @@ fn copy_leader_ids(tracker: &LeaderTracker, assignments: &mut [u32]) {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
+    use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
 
     use super::*;
-
-    fn test_data(metric: Metric, leader_count: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-        let dots = (0..2 * leader_count)
-            .map(|index| (((index * 13 + 7) % 29) as f32 - 14.0) * 0.125)
-            .collect();
-        let point_scales = if metric == Metric::Cosine {
-            vec![0.0, 16.0]
-        } else {
-            Vec::new()
-        };
-        let leader_scales = match metric {
-            Metric::L2 => (0..leader_count)
-                .map(|leader| ((leader + 1) as f32).powi(2))
-                .collect(),
-            Metric::Cosine => (0..leader_count)
-                .map(|leader| {
-                    if leader == 0 {
-                        0.0
-                    } else {
-                        (leader + 1) as f32
-                    }
-                })
-                .collect(),
-            Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
-        };
-        (dots, point_scales, leader_scales)
-    }
 
     fn test_input<'a>(
         metric: Metric,
@@ -850,80 +819,6 @@ mod tests {
             }
             copy_leader_ids(&tracker, point_output);
         }
-    }
-
-    fn run_scalar_traversal(
-        metric: Metric,
-        input: PartitionInput<'_>,
-        fanout: usize,
-        output: &mut [u32],
-    ) {
-        match metric {
-            Metric::L2 => scalar_traversal_reference::<L2>(input, fanout, output),
-            Metric::Cosine => scalar_traversal_reference::<Cosine>(input, fanout, output),
-            Metric::CosineNormalized => {
-                scalar_traversal_reference::<CosineNormalized>(input, fanout, output)
-            }
-            Metric::InnerProduct => {
-                scalar_traversal_reference::<InnerProduct>(input, fanout, output)
-            }
-        }
-    }
-
-    fn assert_scalar_reference_matches_prepared_dispatch(metric: Metric) {
-        // Leader count controls SIMD chunking. Exercise both sides of 4-, 8-, and
-        // 16-lane boundaries, then a second 16-lane chunk.
-        for leader_count in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
-            let (dots, point_scales, leader_scales) = test_data(metric, leader_count);
-            let input = test_input(
-                metric,
-                &dots,
-                2,
-                leader_count,
-                &point_scales,
-                &leader_scales,
-            );
-            let kernel = PartitionKernel::new(metric);
-            for fanout in [1, 2, 6, MAX_PARTITION_FANOUT] {
-                if fanout > leader_count {
-                    continue;
-                }
-                let mut expected = vec![u32::MAX; 2 * fanout];
-                kernel
-                    .nearest_leaders(
-                        input,
-                        MutMatrixView::try_from(expected.as_mut_slice(), 2, fanout).unwrap(),
-                    )
-                    .unwrap();
-
-                let mut actual = vec![u32::MAX; 2 * fanout];
-                run_scalar_traversal(metric, input, fanout, &mut actual);
-                assert_eq!(
-                    actual, expected,
-                    "{metric:?}, leaders={leader_count}, k={fanout}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn l2_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::L2);
-    }
-
-    #[test]
-    fn cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::Cosine);
-    }
-
-    #[test]
-    fn normalized_cosine_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::CosineNormalized);
-    }
-
-    #[test]
-    fn inner_product_scalar_reference_matches_prepared_dispatch_at_lane_boundaries() {
-        assert_scalar_reference_matches_prepared_dispatch(Metric::InnerProduct);
     }
 
     #[test]

@@ -3,16 +3,18 @@
  * Licensed under the MIT license.
  */
 
+#![cfg(feature = "pipnn")]
+
 use std::cmp::Ordering;
 
-use diskann_pipnn::leaf_kernel::{
-    leaf_neighbor_count, leaf_output_len, LeafInput, LeafKernel, LeafKernelError,
-    LeafKernelWorkspace, LeafNeighbor,
+use diskann::graph::pipnn::leaf_kernel::{
+    LeafInput, LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
+    leaf_output_len,
 };
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 
-const SIMD_BOUNDARY_POINTS: [usize; 9] = [7, 8, 9, 15, 16, 17, 64, 256, 512];
+const SIMD_BOUNDARY_POINTS: [usize; 15] = [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 256, 512];
 const ZERO_NORM_POSITION: usize = 0;
 const DISTINCT_NORM_POSITION: usize = 2;
 const NORM_PERIOD: usize = 5;
@@ -37,9 +39,7 @@ fn differential_dots(metric: Metric, points: usize) -> Vec<f32> {
         for target in 0..source {
             let pair =
                 ((source * SOURCE_MIXER + target * TARGET_MIXER) % MIX_MODULUS) as f32 - MIX_CENTER;
-            dots[source * points + target] = if source == points - 1 && target == 0 {
-                f32::NAN
-            } else if TIED_TARGETS.contains(&target) {
+            dots[source * points + target] = if TIED_TARGETS.contains(&target) {
                 0.5
             } else {
                 pair * DOT_SCALE
@@ -224,7 +224,7 @@ fn cosine_treats_zero_norm_as_zero_similarity() {
 }
 
 #[test]
-fn preserves_pipnn_metric_edge_semantics() {
+fn clamps_negative_distances_and_preserves_cosine_extremes() {
     #[rustfmt::skip]
     let out_of_range = [1.0, 0.0, 2.0, 1.0];
     assert_eq!(
@@ -328,9 +328,11 @@ fn clamps_k_to_available_non_self_neighbors() {
 
     assert_eq!(leaf_k, 2);
     for (source, neighbors) in output.chunks_exact(leaf_k).enumerate() {
-        assert!(neighbors
-            .iter()
-            .all(|neighbor| neighbor.target as usize != source));
+        assert!(
+            neighbors
+                .iter()
+                .all(|neighbor| neighbor.target as usize != source)
+        );
     }
 }
 

@@ -3,8 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann_pipnn::partition_kernel::{
-    PartitionInput, PartitionKernel, PartitionKernelError, PartitionScales, MAX_PARTITION_FANOUT,
+#![cfg(feature = "pipnn")]
+
+use diskann::graph::pipnn::partition_kernel::{
+    MAX_PARTITION_FANOUT, PartitionInput, PartitionKernel, PartitionKernelError, PartitionScales,
 };
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
@@ -157,7 +159,7 @@ fn prepared_dispatch_matches_reference_across_simd_width_boundaries() {
         Metric::CosineNormalized,
         Metric::InnerProduct,
     ] {
-        for leader_count in [7, 8, 9, 15, 16, 17] {
+        for leader_count in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
             let (dots, point_scales, leader_scales) = differential_data(metric, leader_count);
             let input = test_input(
                 metric,

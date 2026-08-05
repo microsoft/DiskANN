@@ -210,11 +210,7 @@ where
 /// Scalar equivalent of [`clamp_nonnegative`].
 #[inline(always)]
 fn clamp_nonnegative_scalar(distance: f32) -> f32 {
-    if distance < 0.0 {
-        0.0
-    } else {
-        distance
-    }
+    if distance < 0.0 { 0.0 } else { distance }
 }
 
 /// Compute cosine distance while preserving DiskANN zero/NaN semantics.
