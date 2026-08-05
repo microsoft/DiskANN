@@ -20,7 +20,7 @@ env:
   DISKANN_FEATURES: >-
     virtual_storage,spherical-quantization,product-quantization,tracing,
     experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,
-    multi-vector,bftree,inmem2,integration-test,pipnn
+    multi-vector,bftree,inmem2,integration-test,pipnn,testing
 
 defaults:
   run:
