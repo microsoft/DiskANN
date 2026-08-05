@@ -291,6 +291,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(u64x4, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_sumtree!(u64x4, 0x529c27f62ea171ec, test_neon());
         test_utils::ops::test_splitjoin!(u64x4 => u64x2, 0x2e301b7e12090d5c, test_neon());
     }
 
