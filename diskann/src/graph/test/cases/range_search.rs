@@ -62,7 +62,7 @@ impl RangeSearchBaseline {
             query,
             radius: range.radius(),
             inner_radius: range.inner_radius(),
-            starting_l: range.starting_l(),
+            starting_l: range.starting_l().get(),
             results: results.iter().map(|n| (*n.id(), *n.distance())).collect(),
             comparisons: stats.cmps as usize,
             hops: stats.hops as usize,

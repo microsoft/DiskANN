@@ -5,22 +5,25 @@
 
 //! Range-based search within a distance radius.
 
+use std::num::NonZeroUsize;
+
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::{Search, scratch::SearchScratch};
 use crate::{
     ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{self, SearchAccessor, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
-        search::{filtered_range_search::FilteredRange, record::NoopSearchRecord},
+        search::{
+            Knn, Search, filtered_range_search::FilteredRange, record::NoopSearchRecord,
+            scratch::SearchScratch,
+        },
         search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
     provider::DataProvider,
-    utils::IntoUsize,
 };
 
 /// Error type for [`Range`] parameter validation.
@@ -50,9 +53,9 @@ pub struct Range {
     /// Maximum results to return (None = unlimited).
     max_returned: Option<usize>,
     /// Initial search list size.
-    starting_l: usize,
-    /// Optional beam width.
-    beam_width: Option<usize>,
+    starting_l: NonZeroUsize,
+    /// Beam width.
+    beam_width: NonZeroUsize,
     /// Outer radius - points within this distance are candidates.
     radius: f32,
     /// Inner radius - points closer than this are excluded.
@@ -61,26 +64,6 @@ pub struct Range {
     initial_slack: f32,
     /// Slack factor for range expansion (>= 1.0).
     range_slack: f32,
-}
-
-/// Builder for [`Range`] search parameters.
-#[derive(Debug, Clone, Copy)]
-pub struct RangeBuilder {
-    max_returned: Option<usize>,
-    starting_l: usize,
-    beam_width: Option<usize>,
-    radius: f32,
-    inner_radius: Option<f32>,
-    initial_slack: f32,
-    range_slack: f32,
-}
-
-impl RangeBuilder {
-    /// Build validated [`FilteredRange`] parameters.
-    pub fn build_filtered(self) -> Result<FilteredRange, RangeSearchError> {
-        let range_params = self.build()?;
-        Ok(FilteredRange::from_range_params(range_params))
-    }
 }
 
 impl Range {
@@ -114,16 +97,16 @@ impl Range {
         initial_slack: f32,
         range_slack: f32,
     ) -> Result<Self, RangeSearchError> {
-        if let Some(bw) = beam_width
-            && bw == 0
-        {
-            return Err(RangeSearchError::BeamWidthZero);
-        }
-        if starting_l == 0 {
-            return Err(RangeSearchError::LZero);
-        }
+        let beam_width = match NonZeroUsize::new(beam_width.unwrap_or(1)) {
+            Some(bw) => bw,
+            None => return Err(RangeSearchError::BeamWidthZero),
+        };
+        let starting_l = match NonZeroUsize::new(starting_l) {
+            Some(l) => l,
+            None => return Err(RangeSearchError::LZero),
+        };
         if let Some(max) = max_returned
-            && max < starting_l
+            && max < starting_l.get()
         {
             return Err(RangeSearchError::MaxReturnedLessThanInitialL);
         }
@@ -158,13 +141,13 @@ impl Range {
 
     /// Returns the initial search list size.
     #[inline]
-    pub fn starting_l(&self) -> usize {
+    pub fn starting_l(&self) -> NonZeroUsize {
         self.starting_l
     }
 
     /// Returns the optional beam width.
     #[inline]
-    pub fn beam_width(&self) -> Option<usize> {
+    pub fn beam_width(&self) -> NonZeroUsize {
         self.beam_width
     }
 
@@ -191,9 +174,32 @@ impl Range {
     pub fn range_slack(&self) -> f32 {
         self.range_slack
     }
+
+    /// Returns a [`Knn`] search parameter set with the same starting_l and beam_width.
+    pub(super) fn to_knn(self) -> Knn {
+        Knn::new_unchecked(self.starting_l, self.beam_width)
+    }
+}
+
+/// Builder for [`Range`] search parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct RangeBuilder {
+    max_returned: Option<usize>,
+    starting_l: usize,
+    beam_width: Option<usize>,
+    radius: f32,
+    inner_radius: Option<f32>,
+    initial_slack: f32,
+    range_slack: f32,
 }
 
 impl RangeBuilder {
+    /// Build validated [`FilteredRange`] parameters.
+    pub fn build_filtered(self) -> Result<FilteredRange, RangeSearchError> {
+        let range_params = self.build()?;
+        Ok(FilteredRange::from_range_params(range_params))
+    }
+
     /// Set maximum results to return (`None` means unlimited).
     pub fn max_returned(mut self, value: Option<usize>) -> Self {
         self.max_returned = value;
@@ -265,20 +271,20 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
             let num_start_ids = accessor.num_starting_points().await?;
-            let mut scratch = index.search_scratch(self.starting_l(), num_start_ids);
+            let mut scratch = index.search_scratch(self.starting_l().get(), num_start_ids);
 
             let initial_stats = index
                 .search_internal(
-                    self.beam_width(),
+                    Some(self.beam_width().get()),
                     &mut accessor,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
                 )
                 .await?;
 
-            let mut in_range = Vec::with_capacity(self.starting_l().into_usize());
+            let mut in_range = Vec::with_capacity(self.starting_l().get());
 
-            let starting_l = self.starting_l().into_usize();
+            let starting_l = self.starting_l().get();
             let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             for neighbor in scratch.best.iter().take(starting_l) {
@@ -411,7 +417,7 @@ pub(crate) async fn range_search_internal<A>(
 where
     A: SearchAccessor,
 {
-    let beam_width = search_params.beam_width().unwrap_or(1);
+    let beam_width = search_params.beam_width().get();
 
     for neighbor in &scratch.in_range {
         scratch.range_frontier.push_back(*neighbor.id());
@@ -498,8 +504,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(built.max_returned(), Some(101));
-        assert_eq!(built.starting_l(), 100);
-        assert_eq!(built.beam_width(), Some(8));
+        assert_eq!(built.starting_l().get(), 100);
+        assert_eq!(built.beam_width().get(), 8);
         assert_eq!(built.radius(), 0.8);
         assert_eq!(built.inner_radius(), Some(0.3));
         assert_eq!(built.initial_slack(), 0.9);
