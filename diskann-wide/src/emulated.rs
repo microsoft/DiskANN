@@ -545,7 +545,7 @@ impl_sumtree!(f32, 1, 2, 4, 8, 16);
 impl_sumtree!(i32, 4, 8, 16);
 impl_sumtree!(u32, 4, 8, 16);
 impl_sumtree!(i64, 2, 4);
-impl_sumtree!(u64, 2, 4);
+impl_sumtree!(u64, 2, 4, 8);
 
 ////////////////
 // Conversion //
@@ -692,6 +692,7 @@ impl_splitjoin!(u8, 64 => 32);
 impl_splitjoin!(u32, 8 => 4);
 impl_splitjoin!(u32, 16 => 8);
 impl_splitjoin!(u64, 4 => 2);
+impl_splitjoin!(u64, 8 => 4);
 
 impl_splitjoin!(f32, 16 => 8);
 impl_splitjoin!(f32, 8 => 4);
@@ -978,6 +979,7 @@ mod test_emulated {
 
     test_utils::ops::test_sumtree!(Emulated<u64, 2>, 0xe1dc2d07ae014508, SC);
     test_utils::ops::test_sumtree!(Emulated<u64, 4>, 0x529c27f62ea171ec, SC);
+    test_utils::ops::test_sumtree!(Emulated<u64, 8>, 0x7f6ba325baf079b3, SC);
 
     /////////////////
     // conversions //
