@@ -166,7 +166,7 @@ mod winmem {
     pub(super) const MEM_RELEASE: u32 = 0x0000_8000;
     pub(super) const PAGE_READWRITE: u32 = 0x04;
 
-    extern "system" {
+    unsafe extern "system" {
         pub(super) fn VirtualAlloc(
             lpAddress: LPVOID,
             dwSize: usize,
