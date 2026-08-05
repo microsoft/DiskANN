@@ -19,6 +19,16 @@ use rand::{
     distr::{Distribution, StandardUniform},
 };
 
+const KIND_COUNT: u64 = 128;
+const NORMAL_KIND_COUNT: u64 = 116;
+const SUBNORMAL_KIND_COUNT: u64 = 6;
+const ZERO_KIND_COUNT: u64 = 6;
+
+const _: () = assert!(
+    NORMAL_KIND_COUNT + SUBNORMAL_KIND_COUNT + ZERO_KIND_COUNT == KIND_COUNT,
+    "floating point kind counts must sum to the total kind count"
+);
+
 trait Layout {
     type Bits;
 
@@ -83,8 +93,8 @@ macro_rules! finite {
                 let twice: $twice = StandardUniform {}.sample(rng);
 
                 let mut value = twice as $bits;
-                let kind = (twice >> <$bits>::BITS) % 128;
-                let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < 116 {
+                let kind = u64::from(twice >> <$bits>::BITS) % KIND_COUNT;
+                let (mask, allow_edge_exponent, allow_zero_mantissa) = if kind < NORMAL_KIND_COUNT {
                     // Generate a normal floating point number.
                     //
                     // All digits are fair game, but the exponent cannot be all zeros
@@ -93,7 +103,7 @@ macro_rules! finite {
                     //
                     // The mantissa is allowed to be all zeros.
                     (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
-                } else if kind < 122 {
+                } else if kind < NORMAL_KIND_COUNT + SUBNORMAL_KIND_COUNT {
                     // Generate a subnormal floating point number.
                     //
                     // The exponent must be all zero and the mantissa cannot be zero.
@@ -143,13 +153,13 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct Kinds {
-        normal: i64,
-        subnormal: i64,
-        zero: i64,
+        normal: u64,
+        subnormal: u64,
+        zero: u64,
     }
 
     impl Kinds {
-        fn sum(&self) -> i64 {
+        fn sum(&self) -> u64 {
             self.normal + self.subnormal + self.zero
         }
     }
@@ -241,12 +251,7 @@ mod tests {
     where
         T: TestDistribution,
     {
-        let normal_weight = 116;
-        let subnormal_weight = 6;
-        let zero_weight = 6;
-        let total_weight = normal_weight + subnormal_weight + zero_weight;
-
-        let num_trials: i64 = 1_000_000;
+        let num_trials: u64 = 1_000_000;
         let margin = num_trials / 500;
         let counts = T::test_distribution(num_trials as usize, seed);
 
@@ -255,18 +260,39 @@ mod tests {
 
         println!("Counts = {:?}", counts);
 
-        assert!((positive_count - num_trials / 2).abs() < margin);
-        assert!((negative_count - num_trials / 2).abs() < margin);
+        assert!(positive_count.abs_diff(num_trials / 2) < margin);
+        assert!(negative_count.abs_diff(num_trials / 2) < margin);
 
-        assert!((counts.positive.normal - counts.negative.normal).abs() < margin);
-        assert!((counts.positive.subnormal - counts.negative.subnormal).abs() < margin);
-        assert!((counts.positive.zero - counts.negative.zero).abs() < margin);
+        assert!(counts.positive.normal.abs_diff(counts.negative.normal) < margin);
+        assert!(
+            counts
+                .positive
+                .subnormal
+                .abs_diff(counts.negative.subnormal)
+                < margin
+        );
+        assert!(counts.positive.zero.abs_diff(counts.negative.zero) < margin);
 
         let kinds = counts.sum_accross();
 
-        assert!((kinds.normal - num_trials * normal_weight / total_weight).abs() < margin);
-        assert!((kinds.subnormal - num_trials * subnormal_weight / total_weight).abs() < margin);
-        assert!((kinds.zero - num_trials * zero_weight / total_weight).abs() < margin);
+        assert!(
+            kinds
+                .normal
+                .abs_diff(num_trials * NORMAL_KIND_COUNT / KIND_COUNT)
+                < margin
+        );
+        assert!(
+            kinds
+                .subnormal
+                .abs_diff(num_trials * SUBNORMAL_KIND_COUNT / KIND_COUNT)
+                < margin
+        );
+        assert!(
+            kinds
+                .zero
+                .abs_diff(num_trials * ZERO_KIND_COUNT / KIND_COUNT)
+                < margin
+        );
     }
 
     #[test]
