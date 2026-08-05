@@ -27,9 +27,9 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use rayon::prelude::*;
 
-use crate::leaf_kernel::{
-    leaf_neighbor_count, leaf_output_len, LeafInput, LeafKernel, LeafKernelError,
-    LeafKernelWorkspace, LeafNeighbor,
+use super::leaf_kernel::{
+    LeafInput, LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
+    leaf_output_len,
 };
 
 /// Failure while converting leaves into direct graph candidates.
@@ -67,7 +67,7 @@ pub(crate) enum LeafBuildError {
         leaf: usize,
         point: u32,
         #[source]
-        source: diskann::ANNError,
+        source: crate::ANNError,
     },
     #[error("lower-AAT failed for leaf {leaf}")]
     LowerAat {

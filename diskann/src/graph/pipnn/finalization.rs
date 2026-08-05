@@ -38,13 +38,13 @@
 use std::convert::Infallible;
 
 use crate::{
-    graph::{prune, AdjacencyList, Config},
+    ANNError, ANNResult,
+    graph::{AdjacencyList, Config, prune},
     neighbor::Neighbor,
     utils::VectorRepr,
-    ANNError, ANNResult,
 };
 use diskann_utils::views::MatrixView;
-use diskann_vector::{distance::Metric, DistanceFunction};
+use diskann_vector::{DistanceFunction, distance::Metric};
 use rayon::prelude::*;
 
 #[derive(Debug, thiserror::Error)]
