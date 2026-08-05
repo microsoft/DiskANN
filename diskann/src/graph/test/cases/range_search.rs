@@ -120,7 +120,7 @@ pub(super) fn setup_grid_index_and_default_query(
 pub(super) fn assert_no_duplicates(results: &[Neighbor<u32>]) {
     let mut seen = std::collections::HashSet::new();
     for n in results {
-        assert!(seen.insert(n.id), "duplicate result id {}", n.id);
+        assert!(seen.insert(*n.id()), "duplicate result id {}", n.id());
     }
 }
 
@@ -131,18 +131,18 @@ pub(super) fn assert_range_invariants(
 ) {
     for n in results {
         assert!(
-            n.distance <= radius,
+            *n.distance() <= radius,
             "result {} distance {} exceeds radius {}",
-            n.id,
-            n.distance,
+            n.id(),
+            n.distance(),
             radius
         );
         if let Some(inner) = inner_radius {
             assert!(
-                n.distance > inner,
+                *n.distance() > inner,
                 "result {} distance {} is within inner radius {}",
-                n.id,
-                n.distance,
+                n.id(),
+                n.distance(),
                 inner
             );
         }
@@ -185,7 +185,7 @@ fn basic_range_search() {
         radius,
         inner_radius: None,
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -238,7 +238,7 @@ fn inner_radius_filtering() {
         radius,
         inner_radius: Some(inner_radius),
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -288,7 +288,7 @@ fn two_round_search() {
         radius,
         inner_radius: None,
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -372,7 +372,7 @@ fn max_results_respected_means_no_second_round() {
         radius,
         inner_radius: None,
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -430,7 +430,7 @@ fn max_results_respected_and_second_round_triggered() {
         radius,
         inner_radius: None,
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),

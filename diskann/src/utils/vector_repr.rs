@@ -110,14 +110,7 @@ pub struct NativeTypeLengthError {
     dst: usize,
 }
 
-impl From<NativeTypeLengthError> for ANNError {
-    fn from(err: NativeTypeLengthError) -> ANNError {
-        ANNError::log_index_error(format!(
-            "Unable to set full-precision vector of length {} into slice of length {}",
-            err.src, err.dst
-        ))
-    }
-}
+crate::convert_error!(NativeTypeLengthError);
 
 macro_rules! default_impl {
     (

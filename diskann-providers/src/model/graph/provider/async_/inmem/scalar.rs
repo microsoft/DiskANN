@@ -880,12 +880,7 @@ pub enum SQError {
     QuantizerDecodeError(#[from] crate::storage::protos::ProtoConversionError),
 }
 
-impl From<SQError> for ANNError {
-    #[cold]
-    fn from(err: SQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
+diskann::convert_error!(SQError);
 
 #[cfg(test)]
 mod tests {

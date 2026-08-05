@@ -39,7 +39,7 @@ use super::{
 };
 
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult},
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
@@ -493,13 +493,10 @@ where
     {
         async move {
             if batch.len() != ids.len() {
-                return Err(ANNError::new(
-                    ANNErrorKind::IndexError,
-                    BatchIdMismatch {
-                        batch_len: batch.len(),
-                        ids_len: ids.len(),
-                    },
-                ));
+                return Err(ANNError::new(BatchIdMismatch {
+                    batch_len: batch.len(),
+                    ids_len: ids.len(),
+                }));
             }
 
             let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
@@ -526,9 +523,7 @@ where
             let mut guards = Vec::with_capacity(batch.len());
 
             for h in handles {
-                let processed = h
-                    .await
-                    .map_err(|err| ANNError::new(ANNErrorKind::IndexError, err))??;
+                let processed = h.await.map_err(ANNError::new)??;
                 for guard in processed {
                     guards.push(guard);
                 }
@@ -1218,7 +1213,7 @@ where
             let mut undeleted_ids: Vec<_> = output
                 .iter()
                 .take(num_results)
-                .map(|neighbor| neighbor.id)
+                .map(|neighbor| *neighbor.id())
                 .collect();
 
             // Collect IDs whose adjacency lists need to be updated.
@@ -1401,7 +1396,7 @@ where
                         #[error("Spawning a task failed in inplace-delete: {0}")]
                         struct LocalError(tokio::task::JoinError);
 
-                        ANNError::log_async_error(LocalError(err))
+                        ANNError::new(LocalError(err))
                     });
                     edge_collection.push(res);
                 }
@@ -1458,7 +1453,7 @@ where
                         loop {
                             let result = {
                                 let mut guard = edges_clone.lock().map_err(|_| {
-                                    ANNError::log_async_error("Poisoned mutex during construction")
+                                    ANNError::message("Poisoned mutex during construction")
                                 })?;
                                 guard.next()
                             };
@@ -1710,8 +1705,8 @@ where
                     ));
                 }
 
-                pool.sort_unstable();
-                let best = pool.iter().take(num_to_replace).map(|x| x.id).collect();
+                pool.sort_unstable_by(neighbor::ord::fast_distance);
+                let best = pool.iter().take(num_to_replace).map(|x| *x.id()).collect();
                 edges_to_add.insert(*neighbor, best);
             }
 
@@ -1740,10 +1735,10 @@ where
                     ));
                 }
 
-                pool.sort_unstable();
+                pool.sort_unstable_by(neighbor::ord::fast_distance);
                 pool.iter().take(num_to_replace).for_each(|n| {
                     edges_to_add
-                        .entry(n.id)
+                        .entry(*n.id())
                         .or_insert_with(Vec::new)
                         .push(neighbor);
                 });
@@ -1972,7 +1967,7 @@ where
                     && let Some(closest_node) = scratch.best.closest_notvisited()
                 {
                     search_record.record(closest_node, scratch.hops, scratch.cmps);
-                    scratch.beam_nodes.push(closest_node.id);
+                    scratch.beam_nodes.push(*closest_node.id());
                 }
 
                 neighbors.clear();
@@ -2368,7 +2363,7 @@ where
             }
 
             let (view, computer) = accessor
-                .fill(context.pool.iter().map(|n| n.id))
+                .fill(context.pool.iter().map(|n| *n.id()))
                 .send()
                 .await?;
 
@@ -2613,11 +2608,11 @@ where
             .iter()
             .map(|neighbor| {
                 // Filter out self loops.
-                let id = &neighbor.id;
+                let id = neighbor.id();
                 if exclude(*id) {
-                    (neighbor.distance, None)
+                    (*neighbor.distance(), None)
                 } else {
-                    (neighbor.distance, map.get(*id))
+                    (*neighbor.distance(), map.get(*id))
                 }
             })
             .collect();
@@ -2759,7 +2754,7 @@ where
 
         let mut guard = neighbors.resize(found);
         std::iter::zip(guard.iter_mut(), states.iter()).for_each(|(d, s)| {
-            *d = pool[s.neighbor.into_usize()].id;
+            *d = *pool[s.neighbor.into_usize()].id();
         });
         guard.finish(found);
 
@@ -2772,10 +2767,10 @@ where
                     break;
                 }
 
-                if !exclude(neighbor.id) {
+                if !exclude(*neighbor.id()) {
                     // `AdjacencyList` filters out duplicates. No need to explicitly
                     // check.
-                    neighbors.push(neighbor.id);
+                    neighbors.push(*neighbor.id());
                 }
             }
         }

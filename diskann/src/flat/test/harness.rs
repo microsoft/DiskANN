@@ -8,7 +8,7 @@
 //! Use [`KnnOracleRun::run`] to drive `knn_search` under a chosen [`OracleProcessor`]
 //! and pair the result with the oracle's expected post-processed output.
 
-use std::{cmp::Ordering, convert::Infallible, num::NonZeroUsize};
+use std::{convert::Infallible, num::NonZeroUsize};
 
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
@@ -22,7 +22,7 @@ use crate::{
         SearchOutputBuffer,
         glue::{CopyIds, SearchPostProcess},
     },
-    neighbor::{BackInserter, Neighbor},
+    neighbor::{self, BackInserter, Neighbor},
     provider::HasId,
     test::tokio::current_thread_runtime,
     utils::VectorRepr,
@@ -88,7 +88,7 @@ impl KnnOracleRun {
             .take(stats.result_count as usize)
             .collect();
         sort_neighbors(&mut top_k);
-        let top_k_distances = top_k.iter().map(|n| n.distance).collect();
+        let top_k_distances = top_k.iter().map(|n| *n.distance()).collect();
 
         let ground_truth =
             oracle.expected(brute_force_topk(index.provider(), Metric::L2, query, k));
@@ -154,11 +154,7 @@ where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let count = output.extend(
-            candidates
-                .filter(|n| n.id % 2 == 0)
-                .map(|n| (n.id, n.distance)),
-        );
+        let count = output.extend(candidates.filter(|n| *n.id() % 2 == 0));
         std::future::ready(Ok(count))
     }
 }
@@ -175,7 +171,7 @@ impl OracleProcessor for EvenIdsOnlyOracle {
     }
 
     fn expected(&self, gt: Vec<Neighbor<u32>>) -> Vec<Neighbor<u32>> {
-        gt.into_iter().filter(|n| n.id % 2 == 0).collect()
+        gt.into_iter().filter(|n| *n.id() % 2 == 0).collect()
     }
 }
 
@@ -203,10 +199,5 @@ pub(crate) fn brute_force_topk(
 
 /// Sort a slice of [`Neighbor<u32>`] by `(distance asc, id asc)`.
 fn sort_neighbors(neighbors: &mut [Neighbor<u32>]) {
-    neighbors.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(Ordering::Equal)
-            .then(a.id.cmp(&b.id))
-    });
+    neighbors.sort_by(neighbor::ord::fast_distance_total);
 }

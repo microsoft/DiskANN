@@ -3,5 +3,5 @@
  * Licensed under the MIT license.
  */
 
-pub mod checkpoint;
-pub mod continuation;
+pub mod counters;
+pub mod store;

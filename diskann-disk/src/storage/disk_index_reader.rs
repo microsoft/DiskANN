@@ -67,7 +67,6 @@ impl DiskIndexReader {
 
 #[cfg(test)]
 mod disk_index_storage_test {
-    use diskann::ANNErrorKind;
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
@@ -103,7 +102,6 @@ mod disk_index_storage_test {
             Ok(_) => panic!("this function should not have succeeded"),
             Err(err) => err,
         };
-        assert_eq!(err.kind(), ANNErrorKind::PQError);
         assert!(err.to_string().contains("PQ k-means pivot file not found"));
     }
 

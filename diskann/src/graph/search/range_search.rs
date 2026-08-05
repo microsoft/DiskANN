@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{Search, scratch::SearchScratch};
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{self, SearchAccessor, SearchStrategy},
@@ -40,12 +40,7 @@ pub enum RangeSearchError {
     MaxReturnedLessThanInitialL,
 }
 
-impl From<RangeSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: RangeSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
+convert_error!(RangeSearchError);
 
 /// Parameters for range-based search.
 ///
@@ -279,7 +274,7 @@ where
             let max_returned = self.max_returned().unwrap_or(usize::MAX);
 
             for neighbor in scratch.best.iter().take(starting_l) {
-                if neighbor.distance <= self.radius() {
+                if *neighbor.distance() <= self.radius() {
                     in_range.push(neighbor);
                 }
             }
@@ -287,7 +282,7 @@ where
             // clear the visited set and repopulate it with just the in-range points
             scratch.visited.clear();
             for neighbor in in_range.iter() {
-                scratch.visited.insert(neighbor.id);
+                scratch.visited.insert(*neighbor.id());
             }
             scratch.in_range = in_range;
 
@@ -367,9 +362,9 @@ where
         self.inner.size_hint()
     }
 
-    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
-        if (self.predicate)(distance) {
-            self.inner.push(id, distance)
+    fn push(&mut self, neighbor: Neighbor<I>) -> search_output_buffer::BufferState {
+        if (self.predicate)(*neighbor.distance()) {
+            self.inner.push(neighbor)
         } else {
             match self.inner.size_hint() {
                 Some(0) => search_output_buffer::BufferState::Full,
@@ -384,10 +379,10 @@ where
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (I, f32)>,
+        Itr: IntoIterator<Item = Neighbor<I>>,
     {
         self.inner
-            .extend(itr.into_iter().filter(|(_, dist)| (self.predicate)(*dist)))
+            .extend(itr.into_iter().filter(|n| (self.predicate)(*n.distance())))
     }
 }
 
@@ -411,7 +406,7 @@ where
     let beam_width = search_params.beam_width().unwrap_or(1);
 
     for neighbor in &scratch.in_range {
-        scratch.range_frontier.push_back(neighbor.id);
+        scratch.range_frontier.push_back(*neighbor.id());
     }
 
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
@@ -441,11 +436,11 @@ where
 
         // The predicate ensures that the contents of `neighbors` are unique.
         for neighbor in neighbors.iter() {
-            if neighbor.distance <= search_params.radius() * search_params.range_slack()
+            if *neighbor.distance() <= search_params.radius() * search_params.range_slack()
                 && scratch.in_range.len() < max_returned
             {
                 scratch.in_range.push(*neighbor);
-                scratch.range_frontier.push_back(neighbor.id);
+                scratch.range_frontier.push_back(*neighbor.id());
             }
         }
         scratch.cmps += neighbors.len() as u32;
@@ -545,10 +540,10 @@ mod tests {
         let mut inner: Vec<Neighbor<u32>> = Vec::new();
         let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
 
-        assert_eq!(filtered.push(1, 0.5), BufferState::Available);
+        assert_eq!(filtered.push(Neighbor::new(1, 0.5)), BufferState::Available);
         assert_eq!(filtered.current_len(), 1);
-        assert_eq!(inner[0].id, 1);
-        assert_eq!(inner[0].distance, 0.5);
+        assert_eq!(*inner[0].id(), 1);
+        assert_eq!(*inner[0].distance(), 0.5);
     }
 
     #[test]
@@ -556,7 +551,7 @@ mod tests {
         let mut inner: Vec<Neighbor<u32>> = Vec::new();
         let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
 
-        assert_eq!(filtered.push(1, 1.5), BufferState::Available);
+        assert_eq!(filtered.push(Neighbor::new(1, 1.5)), BufferState::Available);
         assert_eq!(filtered.current_len(), 0);
     }
 
@@ -566,14 +561,14 @@ mod tests {
         let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
         assert!(filtered.size_hint().is_none());
 
-        let items = vec![(1u32, 0.3), (2, 1.5), (3, 0.7), (4, 2.0), (5, 0.9)];
+        let items = [(1u32, 0.3), (2, 1.5), (3, 0.7), (4, 2.0), (5, 0.9)].map(Neighbor::from_tuple);
         let count = filtered.extend(items);
 
         assert_eq!(count, 3);
         assert_eq!(inner.len(), 3);
-        assert_eq!(inner[0].id, 1);
-        assert_eq!(inner[1].id, 3);
-        assert_eq!(inner[2].id, 5);
+        assert_eq!(*inner[0].id(), 1);
+        assert_eq!(*inner[1].id(), 3);
+        assert_eq!(*inner[2].id(), 5);
     }
 
     #[test]
@@ -584,7 +579,7 @@ mod tests {
         let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
         assert_eq!(filtered.size_hint(), Some(2));
 
-        let items = vec![(1u32, 0.1), (2, 0.2), (3, 0.3)];
+        let items = [(1u32, 0.1), (2, 0.2), (3, 0.3)].map(Neighbor::from_tuple);
         let count = filtered.extend(items);
 
         assert_eq!(count, 2);
@@ -605,12 +600,12 @@ mod tests {
             dist < radius
         });
 
-        let items = vec![(1u32, 0.1), (2, 0.5), (3, 0.3), (4, 1.0), (5, 0.8)];
+        let items = [(1u32, 0.1), (2, 0.5), (3, 0.3), (4, 1.0), (5, 0.8)].map(Neighbor::from_tuple);
         let count = filtered.extend(items);
 
         // 0.1 and 0.3 are <= inner_radius, 1.0 is not < radius
         assert_eq!(count, 2);
-        assert_eq!(inner[0].id, 2);
-        assert_eq!(inner[1].id, 5);
+        assert_eq!(*inner[0].id(), 2);
+        assert_eq!(*inner[1].id(), 5);
     }
 }

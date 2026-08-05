@@ -9,9 +9,6 @@ compile_error!("diskann-utils assumes little-endian targets");
 pub mod reborrow;
 pub use reborrow::{Reborrow, ReborrowMut};
 
-pub mod lifetime;
-pub use lifetime::WithLifetime;
-
 pub mod future;
 
 pub mod io;
