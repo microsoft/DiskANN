@@ -39,7 +39,10 @@ use std::convert::Infallible;
 
 use crate::{
     ANNError, ANNResult,
-    graph::{AdjacencyList, Config, prune},
+    graph::{
+        AdjacencyList, Config,
+        internal::{SortedNeighbors, prune},
+    },
     neighbor::Neighbor,
     utils::VectorRepr,
 };
@@ -61,16 +64,15 @@ pub(crate) enum FinalizationError {
     },
 }
 
-/// Per-Rayon-job state retained across source points.
+/// Per-Rayon-job preparation and kernel state retained across source points.
 ///
-/// `prune` owns candidate/state/output buffers. `cache` stores provider lookup
-/// results required by the shared kernel. Reusing both avoids per-node
-/// allocations, which would otherwise dominate finalization for millions of
-/// short candidate lists.
+/// PiPNN owns sorting, allocation, and ID translation. The shared internal
+/// kernel receives only the prepared candidates and an exactly sized state slice.
 #[derive(Default)]
 struct Workspace {
-    prune: prune::Scratch<u32>,
-    cache: Vec<(f32, Option<u32>)>,
+    pool: Vec<Neighbor<u32>>,
+    prepared: Vec<prune::Candidate<u32, u32>>,
+    states: Vec<prune::State>,
 }
 
 /// Validate candidate IDs and prune only lists whose length exceeds graph degree.
@@ -86,7 +88,7 @@ where
     validate_candidate_lists(&candidates, data.nrows()).map_err(ANNError::opaque)?;
 
     let degree = graph.pruned_degree().get();
-    let policy = prune::Policy::new(degree, graph.alpha(), graph.prune_kind(), false);
+    let policy = prune::Policy::new(degree, graph.alpha(), graph.prune_kind());
     let distance = T::distance(metric, Some(data.ncols()));
 
     // build_graph installs the complete call tree in the caller-owned pool.
@@ -105,41 +107,72 @@ where
 
                 let source_id = u32::try_from(source).map_err(ANNError::opaque)?;
                 let source_vector = data.row(source);
-                let pool = workspace.prune.candidates_mut();
-                pool.clear();
-                pool.try_reserve(source_candidates.len())
+                workspace.pool.clear();
+                workspace
+                    .pool
+                    .try_reserve(source_candidates.len())
                     .map_err(ANNError::opaque)?;
-                pool.extend(source_candidates.iter().copied().map(|candidate| {
-                    Neighbor::new(
-                        candidate,
-                        distance.evaluate_similarity(source_vector, data.row(candidate as usize)),
+                workspace
+                    .pool
+                    .extend(source_candidates.iter().copied().map(|candidate| {
+                        Neighbor::new(
+                            candidate,
+                            distance
+                                .evaluate_similarity(source_vector, data.row(candidate as usize)),
+                        )
+                    }));
+
+                let candidate_count = workspace.pool.len();
+                prune::validate_candidate_count::<Infallible>(candidate_count)
+                    .map_err(ANNError::opaque)?;
+                workspace.prepared.clear();
+                workspace
+                    .prepared
+                    .try_reserve(candidate_count)
+                    .map_err(ANNError::opaque)?;
+                {
+                    // Sorting/capping precedes source exclusion so filtering cannot
+                    // backfill with farther candidates.
+                    let sorted = SortedNeighbors::new(&mut workspace.pool, candidate_count);
+                    workspace
+                        .prepared
+                        .extend(sorted.iter().filter_map(|neighbor| {
+                            let id = *neighbor.id();
+                            (id != source_id)
+                                .then(|| prune::Candidate::new(id, neighbor.distance(), id))
+                        }));
+                }
+                workspace
+                    .states
+                    .try_reserve(
+                        workspace
+                            .prepared
+                            .len()
+                            .saturating_sub(workspace.states.len()),
                     )
-                }));
-                // as_context sorts the active candidate prefix by source distance.
-                // The callback below is needed only for selected-to-candidate
-                // occlusion checks; dimension specialization stays in `distance`.
-                let candidate_count = pool.len();
-                let mut context = workspace.prune.as_context(candidate_count);
-                prune::robust_prune(
-                    &mut context,
+                    .map_err(ANNError::opaque)?;
+                workspace
+                    .states
+                    .resize(workspace.prepared.len(), prune::State::default());
+
+                let selected = prune::robust_prune(
+                    &workspace.prepared,
+                    workspace.states.as_mut_slice(),
                     policy,
-                    &mut workspace.cache,
-                    Some,
                     |left, right| {
                         Ok::<_, Infallible>(distance.evaluate_similarity(
                             data.row(*left as usize),
                             data.row(*right as usize),
                         ))
                     },
-                    |id| id == source_id,
                 )
                 .map_err(ANNError::opaque)?;
 
-                // RobustPrune selects distinct candidate positions, so its output IDs
-                // are unique by construction. `extend_from_slice` would re-derive that
-                // with an O(degree^2) membership scan per list; the trusted overwrite
-                // is a copy and still verifies uniqueness under debug assertions.
-                source_candidates.overwrite_trusted(workspace.prune.neighbors());
+                let mut guard = source_candidates.resize(selected);
+                for (destination, state) in guard.iter_mut().zip(workspace.states.iter()) {
+                    *destination = *workspace.prepared[state.selected_position()].id();
+                }
+                guard.finish(selected);
                 Ok(source_candidates)
             },
         )
