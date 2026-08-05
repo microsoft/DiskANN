@@ -52,7 +52,7 @@
 //!                                                          search graph
 //! ```
 //!
-//! This crate keeps GEMM separate from score selection: callers compute dense
+//! This module keeps GEMM separate from score selection: callers compute dense
 //! dot-product matrices, then the kernels documented below convert those dots to
 //! metric scores and retain top candidates. A *point* is a vector being assigned
 //! during partitioning; a *leader* names a child group. In leaf selection,
