@@ -75,17 +75,6 @@ impl<'a> TableL2<'a> {
             .populate_chunk_distances(query, &mut self.lookup_table)
     }
 
-    /// Scale every entry of the lookup table.
-    ///
-    /// `Metric::CosineNormalized` is half the squared L2 distance for unit-norm vectors;
-    /// applying that factor to the table keeps evaluation a plain lookup.
-    pub(crate) fn scaled(mut self, scale: f32) -> Self {
-        self.lookup_table
-            .iter_mut()
-            .for_each(|distance| *distance *= scale);
-        self
-    }
-
     /// Compute the distance between a PQ code that the query provided to the most recent
     /// call to `preprocess`.
     ///

@@ -66,7 +66,7 @@ pub mod pq {
 
     use diskann::utils::VectorRepr;
     use diskann_utils::Reborrow;
-    use diskann_vector::{DistanceFunction, distance::Metric};
+    use diskann_vector::DistanceFunction;
 
     use crate::model::pq;
 
@@ -112,33 +112,23 @@ pub mod pq {
 
     /// Distance computer that handles mixed full-precision and PQ-compressed operands.
     ///
-    /// For `CosineNormalized`, every operand combination uses half squared L2 so pruning
-    /// compares compatible values. For other metrics, full-precision pairs use the native
-    /// distance function and pairs involving a quantized operand use the PQ distance table.
-    /// Mixed pairs convert the full-precision side to `f32` for the PQ lookup.
+    /// When both operands are full-precision, the native distance function is used. When
+    /// at least one is quantized, the PQ distance table is used instead. Mixed pairs
+    /// (full vs quant) convert the full-precision side to `f32` for the PQ lookup.
     pub struct HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
         quant: pq::distance::DistanceComputer<'a>,
         full: T::Distance,
-        full_scale: f32,
     }
 
     impl<'a, T> HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
-        pub fn new(quant: pq::distance::DistanceComputer<'a>, dim: Option<usize>) -> Self {
-            let (full_metric, full_scale) = match quant.metric() {
-                Metric::CosineNormalized => (Metric::L2, pq::COSINE_NORMALIZED_L2_SCALE),
-                metric => (metric, 1.0),
-            };
-            Self {
-                quant,
-                full: T::distance(full_metric, dim),
-                full_scale,
-            }
+        pub fn new(quant: pq::distance::DistanceComputer<'a>, full: T::Distance) -> Self {
+            Self { quant, full }
         }
     }
 
@@ -151,7 +141,7 @@ pub mod pq {
         fn evaluate_similarity(&self, x: Hybrid<&[T], &[u8]>, y: Hybrid<&[T], &[u8]>) -> f32 {
             match x {
                 Hybrid::Full(x) => match y {
-                    Hybrid::Full(y) => self.full_scale * self.full.evaluate_similarity(x, y),
+                    Hybrid::Full(y) => self.full.evaluate_similarity(x, y),
                     Hybrid::Quant(y) => {
                         // SAFETY: This can only panic when T = `MinMaxElement` and the underlying slice is ill-defined.
                         // we are ok with panicking in distance functions for now.
@@ -169,74 +159,6 @@ pub mod pq {
                     Hybrid::Quant(y) => self.quant.evaluate_similarity(x, y),
                 },
             }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use diskann_vector::{DistanceFunction, distance::Metric};
-
-        use super::{Hybrid, HybridComputer};
-        use crate::model::pq::{FixedChunkPQTable, distance::DistanceComputer};
-
-        fn assert_all_hybrid_pair_distances(
-            computer: &HybridComputer<'_, u8>,
-            full0: &[u8],
-            full1: &[u8],
-            code0: &[u8],
-            code1: &[u8],
-            expected: f32,
-        ) {
-            for (left, right) in [
-                (Hybrid::Full(full0), Hybrid::Full(full1)),
-                (Hybrid::Full(full0), Hybrid::Quant(code1)),
-                (Hybrid::Quant(code0), Hybrid::Full(full1)),
-                (Hybrid::Quant(code0), Hybrid::Quant(code1)),
-            ] {
-                assert_eq!(computer.evaluate_similarity(left, right), expected);
-            }
-        }
-
-        #[test]
-        fn hybrid_cosine_normalized_matches_cosine_for_unit_vectors() {
-            let table = FixedChunkPQTable::new(
-                4,
-                vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0].into(),
-                vec![0, 2, 4].into(),
-            )
-            .unwrap();
-            let computer = HybridComputer::<u8>::new(
-                DistanceComputer::new(&table, Metric::CosineNormalized),
-                Some(4),
-            );
-            let full0 = [1, 0, 0, 0];
-            let full1 = [0, 1, 0, 0];
-            let code0 = [0, 0];
-            let code1 = [1, 1];
-
-            assert_all_hybrid_pair_distances(&computer, &full0, &full1, &code0, &code1, 1.0);
-        }
-
-        #[test]
-        fn hybrid_cosine_normalized_uses_scaled_l2_for_integer_vectors() {
-            let table = FixedChunkPQTable::new(
-                4,
-                vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0].into(),
-                vec![0, 2, 4].into(),
-            )
-            .unwrap();
-            let computer = HybridComputer::<u8>::new(
-                DistanceComputer::new(&table, Metric::CosineNormalized),
-                Some(4),
-            );
-            let full0 = [1, 0, 0, 2];
-            let full1 = [2, 0, 0, 1];
-            let code0 = [0, 1];
-            let code1 = [1, 0];
-
-            // Integer CosineNormalized normally dispatches to Cosine. Non-unit vectors make
-            // that differ from scaled L2, so this verifies Hybrid pruning keeps one definition.
-            assert_all_hybrid_pair_distances(&computer, &full0, &full1, &code0, &code1, 1.0);
         }
     }
 }

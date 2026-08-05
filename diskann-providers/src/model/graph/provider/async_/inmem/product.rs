@@ -42,6 +42,20 @@ use crate::model::{
 /// The default quant provider.
 pub type DefaultQuant = FastMemoryQuantVectorProviderAsync;
 
+fn quant_pruning_distance_computer(
+    quant: &DefaultQuant,
+) -> (pq::distance::DistanceComputer<'_>, Metric) {
+    let metric = match quant.metric() {
+        // Match the squared-L2 approximation used by PQ graph-search queries.
+        Metric::CosineNormalized => Metric::L2,
+        metric => metric,
+    };
+    (
+        pq::distance::DistanceComputer::new(&quant.pq_chunk_table, metric),
+        metric,
+    )
+}
+
 impl CreateVectorStore for FixedChunkPQTable {
     type Target = DefaultQuant;
     fn create(
@@ -410,9 +424,12 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let full = &provider.base_vectors;
         let quant = &provider.aux_vectors;
+        let (quant_distance_computer, metric) = quant_pruning_distance_computer(quant);
 
-        let distance =
-            distances::pq::HybridComputer::new(quant.distance_computer(), Some(full.dim()));
+        let distance = distances::pq::HybridComputer::new(
+            quant_distance_computer,
+            T::distance(metric, Some(full.dim())),
+        );
 
         let accessor = HybridPruneAccessor {
             full: &provider.base_vectors,
@@ -576,10 +593,12 @@ where
         _context: &'a Ctx,
         _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+        let quant = &provider.aux_vectors;
+        let (distance_computer, _) = quant_pruning_distance_computer(quant);
         let accessor = PruneAccessor {
-            provider: &provider.aux_vectors,
+            provider: quant,
             neighbors: provider.neighbors(),
-            distance: provider.aux_vectors.distance_computer(),
+            distance: distance_computer,
         };
         Ok(accessor)
     }
@@ -642,5 +661,47 @@ where
     ) -> ANNResult<PruneAccessor<'a>> {
         self.prune_accessor(provider, context, capacity)
             .into_ann_result()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diskann::utils::VectorRepr;
+    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+
+    use super::{FastMemoryQuantVectorProviderAsync, quant_pruning_distance_computer};
+    use crate::model::{
+        graph::provider::async_::distances::pq::{Hybrid, HybridComputer},
+        pq::FixedChunkPQTable,
+    };
+
+    #[test]
+    fn cosine_normalized_query_and_pruning_use_squared_l2() {
+        let table = FixedChunkPQTable::new(
+            4,
+            vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0].into(),
+            vec![0, 2, 4].into(),
+        )
+        .unwrap();
+        let provider = FastMemoryQuantVectorProviderAsync::new(Metric::CosineNormalized, 2, table);
+        let full0 = [1u8, 0, 0, 2];
+        let full1 = [2u8, 0, 0, 1];
+        let code0 = [0u8, 1];
+        let code1 = [1u8, 0];
+
+        let query = provider.query_computer(&full0).unwrap();
+        assert_eq!(query.evaluate_similarity(&code1), 2.0);
+
+        let (quant_distance_computer, metric) = quant_pruning_distance_computer(&provider);
+        let computer =
+            HybridComputer::<u8>::new(quant_distance_computer, u8::distance(metric, Some(4)));
+        for (left, right) in [
+            (Hybrid::Full(&full0[..]), Hybrid::Full(&full1[..])),
+            (Hybrid::Full(&full0[..]), Hybrid::Quant(&code1[..])),
+            (Hybrid::Quant(&code0[..]), Hybrid::Full(&full1[..])),
+            (Hybrid::Quant(&code0[..]), Hybrid::Quant(&code1[..])),
+        ] {
+            assert_eq!(computer.evaluate_similarity(left, right), 2.0);
+        }
     }
 }
