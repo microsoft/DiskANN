@@ -4,6 +4,10 @@
  */
 
 #![cfg(feature = "pipnn")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "deterministic test fixture construction must abort on invalid setup"
+)]
 
 use diskann::graph::pipnn::partition_kernel::{
     MAX_PARTITION_FANOUT, PartitionInput, PartitionKernel, PartitionKernelError, PartitionScales,
