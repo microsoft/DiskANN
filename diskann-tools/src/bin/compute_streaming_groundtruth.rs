@@ -21,7 +21,7 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
-use diskann::utils::VectorRepr;
+use diskann::utils::{IntoUsize, VectorRepr};
 use diskann_benchmark_core::streaming::executors::bigann::{
     FindGroundtruth, RunBook, ScanDirectory,
 };
@@ -147,14 +147,29 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
         recall_at,
     );
 
+    run_inner(
+        &MatrixDistance {
+            dataset: &dataset,
+            queries: &queries,
+            distance_fn: V::distance(args.distance_function, Some(dataset.ncols())),
+        },
+        args,
+    )?;
+
+    Ok(())
+}
+
+fn run_inner(distance: &dyn GroundtruthDistance, args: &Args) -> CMDResult<()> {
+    let storage = FileStorageProvider;
     let output_dir = Path::new(&args.output_dir);
+
     std::fs::create_dir_all(output_dir)
         .with_context(|| format!("creating output directory {}", output_dir.display()))
         .map_err(|e| CMDToolError {
             details: e.to_string(),
         })?;
 
-    let gt_suffix = format!("gt{}", recall_at);
+    let gt_suffix = format!("gt{}", args.recall_at);
 
     // FindGroundtruth impl that always returns the expected output path whether
     // or not it exists yet -- we are about to generate the files.
@@ -192,12 +207,8 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
     tracing::info!("Runbook has {} stages", runbook.len());
     let mut stream = GroundtruthStream {
         storage: &storage,
-        distance: Box::new(MatrixDistance {
-            dataset: &dataset,
-            queries: &queries,
-            distance_fn: V::distance(args.distance_function, Some(dataset.ncols())),
-        }),
-        recall_at,
+        distance,
+        recall_at: args.recall_at.into_usize(),
         external_to_internal: HashMap::new(),
     };
 
@@ -208,12 +219,13 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
         })?;
 
     tracing::info!("Done.");
+
     Ok(())
 }
 
 struct GroundtruthStream<'a> {
     storage: &'a FileStorageProvider,
-    distance: Box<dyn GroundtruthDistance + 'a>,
+    distance: &'a dyn GroundtruthDistance,
     recall_at: usize,
     external_to_internal: HashMap<u32, usize>,
 }
@@ -258,8 +270,7 @@ impl<'a> streaming::Stream<diskann_benchmark_core::streaming::executors::bigann:
             .map(|(external_id, internal_id)| (*external_id, *internal_id))
             .collect();
 
-        let results =
-            compute_groundtruth_results(self.distance.as_ref(), &active_entries, self.recall_at)?;
+        let results = compute_groundtruth_results(self.distance, &active_entries, self.recall_at)?;
 
         write_ground_truth::<()>(
             self.storage,
@@ -286,8 +297,9 @@ impl<'a> streaming::Stream<diskann_benchmark_core::streaming::executors::bigann:
         &mut self,
         args: diskann_benchmark_core::streaming::executors::bigann::Insert,
     ) -> anyhow::Result<Self::Output> {
+        let n_base = self.distance.n_base();
         for internal_id in args.offsets.clone() {
-            if internal_id < self.distance.n_base() {
+            if internal_id < n_base {
                 self.external_to_internal
                     .insert(internal_id as u32, internal_id);
             }
@@ -303,8 +315,10 @@ impl<'a> streaming::Stream<diskann_benchmark_core::streaming::executors::bigann:
             self.remove_active_external_id(external_id as u32);
         }
 
+        let n_base = self.distance.n_base();
+
         for (internal_id, external_id) in args.offsets.clone().zip(args.ids.clone()) {
-            if internal_id < self.distance.n_base() {
+            if internal_id < n_base {
                 self.external_to_internal
                     .insert(external_id as u32, internal_id);
             }

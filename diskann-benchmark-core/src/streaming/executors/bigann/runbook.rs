@@ -177,7 +177,7 @@ impl RunBook {
 
     /// Returns a reference to the stages in this runbook.
     #[cfg(test)]
-    pub fn stages(&self) -> &[Stage] {
+    pub(super) fn stages(&self) -> &[Stage] {
         &self.stages
     }
 
@@ -402,6 +402,8 @@ impl ScanDirectory {
     }
 
     /// Returns the expected BigANN groundtruth path for a stage.
+    ///
+    /// See also: [`Self::groundtruth_filename`].
     pub fn groundtruth_path(&self, stage: usize, suffix: &str) -> PathBuf {
         self.directory
             .join(Self::groundtruth_filename(stage, suffix))
