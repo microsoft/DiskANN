@@ -341,6 +341,9 @@ fn test_add_leaf_edges_grows_and_then_reuses_sketch_scratch() {
     hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
     assert_eq!(scratch.len(), 16);
     assert_eq!(scratch.capacity(), capacity);
+    hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch);
+    assert_eq!(scratch.len(), 16);
+    assert_eq!(scratch.capacity(), capacity);
     assert!(hp
         .into_candidate_lists()
         .iter()
