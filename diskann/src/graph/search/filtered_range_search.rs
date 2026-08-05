@@ -7,7 +7,6 @@
 
 use diskann_utils::future::SendFuture;
 
-use super::{Knn, Search, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -15,14 +14,15 @@ use crate::{
         glue::{self, FilteredAccessor, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::inline_filter_search::{Ret, inline_filter_search_internal},
-        search::{Range, RangeSearchError, range_search::RangeBuilder, record::NoopSearchRecord},
+        search::{
+            Knn, Range, RangeSearchError, Search, range_search::DistanceFiltered,
+            range_search::RangeBuilder, record::NoopSearchRecord, scratch::SearchScratch,
+        },
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::DataProvider,
 };
-
-use super::range_search::DistanceFiltered;
 
 /// Parameters for range-based search.
 ///
@@ -92,13 +92,15 @@ impl FilteredRange {
     pub fn range(&self) -> Range {
         self.range_params
     }
+
+    pub fn from_range_params(range_params: Range) -> Self {
+        Self { range_params }
+    }
 }
 
-impl RangeBuilder {
-    /// Build validated [`FilteredRange`] parameters.
-    pub fn build_filtered(self) -> Result<FilteredRange, RangeSearchError> {
-        let range_params = self.build()?;
-        Ok(FilteredRange { range_params })
+impl From<Range> for FilteredRange {
+    fn from(range_params: Range) -> Self {
+        Self { range_params }
     }
 }
 
@@ -133,7 +135,7 @@ where
 
             // Perform an initial inline filtered search, store both filtered and unfiltered results
 
-            let search_knn = Knn::new(self.starting_l(), self.starting_l(), self.beam_width())?;
+            let search_knn = Knn::new(self.starting_l(), self.beam_width())?;
 
             let Ret {
                 cmps,
@@ -158,25 +160,19 @@ where
                 .iter()
                 .take(self.starting_l())
                 .chain(matched_results.iter().copied())
-                .filter(|neighbor| neighbor.distance <= self.radius())
+                .filter(|neighbor| *neighbor.distance() <= self.radius())
                 .collect();
 
             in_range.sort_unstable_by(|left, right| {
-                left.id
-                    .cmp(&right.id)
-                    .then_with(|| left.distance.total_cmp(&right.distance))
+                left.distance()
+                    .total_cmp(right.distance())
+                    .then_with(|| left.id().cmp(right.id()))
             });
-            in_range.dedup_by_key(|neighbor| neighbor.id);
-
-            in_range.sort_unstable_by(|left, right| {
-                left.distance
-                    .total_cmp(&right.distance)
-                    .then_with(|| left.id.cmp(&right.id))
-            });
+            in_range.dedup_by(|left, right| left.id() == right.id());
 
             let mut matched_within_radius = Vec::with_capacity(matched_results.len());
             for neighbor in matched_results.iter().copied() {
-                if neighbor.distance <= self.radius() {
+                if *neighbor.distance() <= self.radius() {
                     matched_within_radius.push(neighbor);
                 }
             }
@@ -184,10 +180,12 @@ where
             // clear the visited set and repopulate it with all in-range points found so far, filtered and unfiltered
             scratch.visited.clear();
             scratch.range_frontier.clear();
-            for neighbor in in_range.iter() {
-                scratch.visited.insert(neighbor.id);
-                scratch.range_frontier.push_back(neighbor.id);
-            }
+            scratch
+                .visited
+                .extend(in_range.iter().map(|neighbor| *neighbor.id()));
+            scratch
+                .range_frontier
+                .extend(in_range.iter().map(|neighbor| *neighbor.id()));
 
             let stats = if in_range.len()
                 >= ((self.starting_l() as f32) * self.initial_slack()) as usize

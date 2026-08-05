@@ -119,14 +119,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let filtered_range_search =
-            graph::search::FilteredRange::builder(parameters.starting_l(), parameters.radius())
-                .max_returned(parameters.max_returned())
-                .beam_width(parameters.beam_width())
-                .inner_radius(parameters.inner_radius())
-                .initial_slack(parameters.initial_slack())
-                .range_slack(parameters.range_slack())
-                .build_filtered()?;
+        let filtered_range_search = graph::search::FilteredRange::from(*parameters);
         let strategy =
             labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
         let _ = self

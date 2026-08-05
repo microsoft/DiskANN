@@ -63,7 +63,7 @@ impl RangeSearchBaseline {
             radius: range.radius(),
             inner_radius: range.inner_radius(),
             starting_l: range.starting_l(),
-            results: results.iter().map(|n| (n.id, n.distance)).collect(),
+            results: results.iter().map(|n| (*n.id(), *n.distance())).collect(),
             comparisons: stats.cmps as usize,
             hops: stats.hops as usize,
             result_count: stats.result_count as usize,
@@ -151,8 +151,8 @@ pub(super) fn assert_range_invariants(
 
 #[test]
 fn basic_range_search() {
-    let description = "Basic range search test to validate that the range /
-     search returns results within the specified radius and that there are /
+    let description = "Basic range search test to validate that the range \
+     search returns results within the specified radius and that there are \
      no duplicate results.";
 
     let rt = current_thread_runtime();
@@ -254,8 +254,8 @@ fn inner_radius_filtering() {
 
 #[test]
 fn two_round_search() {
-    let description = "Two round search test to validate that a /
-    low starting L with a large radius triggers a second round /
+    let description = "Two round search test to validate that a \
+    low starting L with a large radius triggers a second round \
     of range search.";
 
     let rt = current_thread_runtime();
@@ -341,6 +341,9 @@ fn empty_results() {
 
 #[test]
 fn max_results_respected_means_no_second_round() {
+    let description = "Two round search test to validate that max_results = \
+    starting_l means no second round is triggered.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -352,8 +355,11 @@ fn max_results_respected_means_no_second_round() {
     let starting_l = 4; // small set to trigger multiple rounds
     let max_results = 4; // max_returned = starting_l, so second round should not be triggered
 
-    let range_search =
-        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
+    let range_search = Range::builder(starting_l, radius)
+        .max_returned(Some(max_results))
+        .build()
+        .unwrap();
+
     let mut results: Vec<Neighbor<u32>> = Vec::new();
 
     let stats = rt
@@ -367,6 +373,7 @@ fn max_results_respected_means_no_second_round() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,
@@ -399,6 +406,9 @@ fn max_results_respected_means_no_second_round() {
 
 #[test]
 fn max_results_respected_and_second_round_triggered() {
+    let description = "Two round search test to validate that max_results > \
+    starting_l means a second round is triggered.";
+
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
@@ -410,8 +420,11 @@ fn max_results_respected_and_second_round_triggered() {
     let starting_l = 4; // small set to trigger multiple rounds
     let max_results = 5; // max_returned greater than starting_l, so second round should be triggered
 
-    let range_search =
-        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
+    let range_search = Range::builder(starting_l, radius)
+        .max_returned(Some(max_results))
+        .build()
+        .unwrap();
+
     let mut results: Vec<Neighbor<u32>> = Vec::new();
 
     let stats = rt
@@ -425,6 +438,7 @@ fn max_results_respected_and_second_round_triggered() {
         .unwrap();
 
     let baseline = RangeSearchBaseline {
+        description: description.to_string(),
         grid_size,
         query: query.clone(),
         radius,

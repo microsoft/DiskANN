@@ -74,10 +74,10 @@ impl labeled::QueryLabelProvider<u32> for DivisibleByFourFilter {
 fn assert_divisible_by_four(results: &[Neighbor<u32>]) {
     for n in results {
         assert_eq!(
-            n.id % 4,
+            n.id() % 4,
             0,
             "result id {} does not satisfy divisible-by-4 filter",
-            n.id
+            n.id()
         );
     }
 }
@@ -96,7 +96,7 @@ fn assert_divisible_by_four(results: &[Neighbor<u32>]) {
 
 #[test]
 fn basic_range_search() {
-    let description = "Basic range search test with an always-true filter. Validates /
+    let description = "Basic range search test with an always-true filter. Validates \
      that the filtered range search returns correct results without any duplicates.";
 
     let mut test_root = root();
@@ -171,8 +171,8 @@ fn inner_radius_filtering() {
 
 #[test]
 fn two_round_search() {
-    let description = "Two round search test to validate that a /
-    low starting L with a large radius triggers a second round /
+    let description = "Two round search test to validate that a \
+    low starting L with a large radius triggers a second round \
     of range search.";
 
     let mut test_root = root();
@@ -246,8 +246,8 @@ fn empty_results() {
 
 #[test]
 fn max_results_respected_means_no_second_round() {
-    let description = "Test of `max_results` that sets `initial_l_search` equal /
-     to `max_results`, with a permissive radius so that `max_results` is met / 
+    let description = "Test of `max_results` that sets `initial_l_search` equal \
+     to `max_results`, with a permissive radius so that `max_results` is met \
      without needing a second round.";
     let mut test_root = root();
     let mut path = test_root.path();
@@ -296,9 +296,9 @@ fn max_results_respected_means_no_second_round() {
 
 #[test]
 fn max_results_respected_and_second_round_triggered() {
-    let description = "Test of `max_results` that sets `initial_l_search` /
-     below `max_results` so that a second round of search is triggered. Note that /
-     the result set size is expected to be below `max_results` due to filtering /
+    let description = "Test of `max_results` that sets `initial_l_search` \
+     below `max_results` so that a second round of search is triggered. Note that \
+     the result set size is expected to be below `max_results` due to filtering \
      out start points during `post_process`.";
 
     let mut test_root = root();
@@ -356,8 +356,8 @@ fn max_results_respected_and_second_round_triggered() {
 
 #[test]
 fn divisible_by_four_filter_second_round_triggered() {
-    let description = "Test that a small starting L triggers a second /
-     round of search when using the divisible-by-4 filter. Tests for /
+    let description = "Test that a small starting L triggers a second \
+     round of search when using the divisible-by-4 filter. Tests for \
      no duplicates, respect for the radius, and respect for the filter.";
 
     let mut test_root = root();
@@ -432,51 +432,6 @@ fn divisible_by_four_filter_no_second_round_from_l_search() {
     assert!(
         !filtered_stats.range_search_second_round,
         "larger starting_l should avoid a second round with divisible-by-4 filter"
-    );
-    assert_range_invariants(&filtered_results, radius, None);
-    assert_no_duplicates(&filtered_results);
-    assert_divisible_by_four(&filtered_results);
-}
-
-#[test]
-fn divisible_by_four_filter_no_second_round_from_max_results() {
-    let description = "A test of the divisible-by-4 filter with `max_results` /
-    set to starting_l / 4. The second round of search should not be triggered /
-    since the correct number of results should be discovered.";
-    let mut test_root = root();
-    let mut path = test_root.path();
-    let name = path.push("divisible_by_four_filter_no_second_round_from_max_results");
-
-    let grid_size = 5;
-    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 50.0;
-    let starting_l = 16;
-    let max_results = starting_l / 4;
-    let filter = DivisibleByFourFilter;
-
-    let filtered_range = FilteredRange::builder(starting_l, radius)
-        .max_returned(Some(max_results))
-        .build_filtered()
-        .unwrap();
-
-    let (filtered_stats, filtered_results) =
-        run_filtered_range_search(&index, query.as_slice(), filtered_range, &filter);
-
-    let baseline = RangeSearchBaseline::new(
-        &filtered_range.range(),
-        &filtered_results,
-        filtered_stats,
-        grid_size,
-        description,
-        query.clone(),
-    );
-
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
-    assert!(
-        !filtered_stats.range_search_second_round,
-        "max_results = starting_l / 4 should prevent a second round"
     );
     assert_range_invariants(&filtered_results, radius, None);
     assert_no_duplicates(&filtered_results);

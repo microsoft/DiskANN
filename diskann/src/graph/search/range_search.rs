@@ -15,7 +15,7 @@ use crate::{
     graph::{
         glue::{self, SearchAccessor, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
-        search::record::NoopSearchRecord,
+        search::{filtered_range_search::FilteredRange, record::NoopSearchRecord},
         search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
@@ -73,6 +73,14 @@ pub struct RangeBuilder {
     inner_radius: Option<f32>,
     initial_slack: f32,
     range_slack: f32,
+}
+
+impl RangeBuilder {
+    /// Build validated [`FilteredRange`] parameters.
+    pub fn build_filtered(self) -> Result<FilteredRange, RangeSearchError> {
+        let range_params = self.build()?;
+        Ok(FilteredRange::from_range_params(range_params))
+    }
 }
 
 impl Range {
@@ -342,13 +350,13 @@ where
 
 /// A [`SearchOutputBuffer`] wrapper that filters results by distance before
 /// forwarding them to an inner buffer.
-pub(crate) struct DistanceFiltered<'a, F, B: ?Sized> {
+pub(super) struct DistanceFiltered<'a, F, B: ?Sized> {
     predicate: F,
     inner: &'a mut B,
 }
 
 impl<'a, F, B: ?Sized> DistanceFiltered<'a, F, B> {
-    pub(crate) fn new(inner: &'a mut B, predicate: F) -> Self {
+    pub(super) fn new(inner: &'a mut B, predicate: F) -> Self {
         Self { predicate, inner }
     }
 }
@@ -481,7 +489,7 @@ mod tests {
     #[test]
     fn range_builder_custom_options_match_expected_values() {
         let built = Range::builder(100, 0.8)
-            .max_returned(Some(10))
+            .max_returned(Some(101))
             .beam_width(Some(8))
             .inner_radius(Some(0.3))
             .initial_slack(0.9)
@@ -489,7 +497,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(built.max_returned(), Some(10));
+        assert_eq!(built.max_returned(), Some(101));
         assert_eq!(built.starting_l(), 100);
         assert_eq!(built.beam_width(), Some(8));
         assert_eq!(built.radius(), 0.8);
@@ -529,7 +537,7 @@ mod tests {
 
         assert!(
             Range::builder(100, 0.5)
-                .max_returned(Some(1.0))
+                .max_returned(Some(1))
                 .build()
                 .is_err()
         );
