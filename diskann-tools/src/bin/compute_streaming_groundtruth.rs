@@ -129,6 +129,16 @@ fn run<V: VectorRepr + Send + Sync>(args: &Args) -> CMDResult<()> {
 
     let recall_at = args.recall_at as usize;
 
+    if dataset.ncols() != queries.ncols() {
+        return Err(CMDToolError {
+            details: format!(
+                "Dataset dimension {} does not match query dimension {}",
+                dataset.ncols(),
+                queries.ncols()
+            ),
+        });
+    }
+
     tracing::info!(
         "Dataset: {} vectors, Queries: {} vectors, dim: {}, recall@{}",
         dataset.nrows(),
