@@ -25,11 +25,9 @@
 //!    dense general matrix multiplication (GEMM) to compute all pair dot
 //!    products. Each point picks its nearest leaf companions; selected pairs
 //!    become candidate graph edges.
-//! 3. **Merge and prune.** Candidates from overlapping leaves are combined.
-//!    HashPrune can keep a bounded reservoir per source while edges stream in,
-//!    retaining the closest candidate for each residual-direction hash. The
-//!    alternative collects unique candidates directly. An optional final Vamana
-//!    RobustPrune selects a bounded, directionally diverse adjacency list.
+//! 3. **Merge and finalize.** Candidates from overlapping leaves are combined
+//!    into one bounded adjacency list per source. Later stack layers own the
+//!    candidate-merging and graph-policy details; these numerical kernels do not.
 //!
 //! ```text
 //! dataset points
