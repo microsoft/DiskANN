@@ -235,12 +235,6 @@ impl<'a> PiPNNBuildContext<'a> {
         pool: &'a ThreadPool,
     ) -> ANNResult<Self> {
         config.validate()?;
-        if !graph.alpha().is_finite() || graph.alpha() < 1.0 {
-            return Err(config_error(format!(
-                "graph alpha ({}) must be finite and at least 1",
-                graph.alpha()
-            )));
-        }
         if graph.prune_kind() != metric.into() {
             return Err(config_error(format!(
                 "graph prune kind {:?} is incompatible with metric {metric:?}",

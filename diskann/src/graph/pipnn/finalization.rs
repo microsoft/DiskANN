@@ -41,7 +41,7 @@ use crate::{
     ANNError, ANNResult,
     graph::{
         AdjacencyList, Config,
-        internal::{SortedNeighbors, prune},
+        internal::{SortedNeighbors, robust_prune as prune},
     },
     neighbor::Neighbor,
     utils::VectorRepr,
@@ -88,7 +88,6 @@ where
     validate_candidate_lists(&candidates, data.nrows()).map_err(ANNError::opaque)?;
 
     let degree = graph.pruned_degree().get();
-    let policy = prune::Policy::new(degree, graph.alpha(), graph.prune_kind());
     let distance = T::distance(metric, Some(data.ncols()));
 
     // build_graph installs the complete call tree in the caller-owned pool.
@@ -158,7 +157,9 @@ where
                 let selected = prune::robust_prune(
                     &workspace.prepared,
                     workspace.states.as_mut_slice(),
-                    policy,
+                    degree,
+                    graph.alpha(),
+                    graph.prune_kind(),
                     |left, right| {
                         Ok::<_, Infallible>(distance.evaluate_similarity(
                             data.row(*left as usize),
