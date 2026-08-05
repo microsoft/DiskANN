@@ -4,6 +4,11 @@
  */
 
 #![cfg(feature = "pipnn")]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "deterministic test fixture construction must abort on invalid setup"
+)]
 
 use std::cmp::Ordering;
 
