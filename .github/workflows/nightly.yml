@@ -143,13 +143,13 @@ jobs:
       - name: miri PiPNN HashPrune kernels
         run: |
           find_hash_test="graph::pipnn::hash_prune::tests::"
-          find_hash_test+="test_find_hash_handles_padded_"
+          find_hash_test+="find_hash_handles_padded_"
           find_hash_test+="boundaries_and_all_bit_patterns"
           cargo +nightly miri test --locked --package diskann \
             --features pipnn --lib "$find_hash_test" -- --exact
           cargo +nightly miri test --locked --package diskann \
             --features pipnn --lib \
-            graph::pipnn::hash_prune::tests::test_relative_hash_matches_numeric_reference \
+            graph::pipnn::hash_prune::tests::relative_hash_matches_numeric_reference \
             -- --exact
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

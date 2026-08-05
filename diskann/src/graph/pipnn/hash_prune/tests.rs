@@ -126,8 +126,10 @@ fn assert_sketch_source_type_matches_f32<T>(
     }
 }
 
+// Source conversion.
+
 #[test]
-fn test_f16_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+fn f16_sketch_conversion_matches_f32_across_dimensions_and_planes() {
     assert_sketch_source_type_matches_f32(
         "f16",
         |value| half::f16::from_f32(value as f32),
@@ -136,12 +138,12 @@ fn test_f16_sketch_conversion_matches_f32_across_dimensions_and_planes() {
 }
 
 #[test]
-fn test_u8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+fn u8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
     assert_sketch_source_type_matches_f32("u8", |value| value, |value| value as f32);
 }
 
 #[test]
-fn test_i8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+fn i8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
     assert_sketch_source_type_matches_f32(
         "i8",
         |value| value as i8 - 11,
@@ -149,8 +151,10 @@ fn test_i8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
     );
 }
 
+// Dispatched hash primitives.
+
 #[test]
-fn test_relative_hash_matches_numeric_reference() {
+fn relative_hash_matches_numeric_reference() {
     let dispatched = select_relative_hash();
 
     let src = [
@@ -177,7 +181,7 @@ fn test_relative_hash_matches_numeric_reference() {
 }
 
 #[test]
-fn test_relative_hash_defines_signed_zero_and_nan_buckets() {
+fn relative_hash_defines_signed_zero_and_nan_buckets() {
     let src = [0.0; 4];
     let dst = [
         0.0,
@@ -197,7 +201,7 @@ fn test_relative_hash_defines_signed_zero_and_nan_buckets() {
 }
 
 #[test]
-fn test_find_hash_handles_padded_boundaries_and_all_bit_patterns() {
+fn find_hash_handles_padded_boundaries_and_all_bit_patterns() {
     let dispatched = select_find_hash();
 
     for target in [0, 0xF00D] {
@@ -224,8 +228,10 @@ fn test_find_hash_handles_padded_boundaries_and_all_bit_patterns() {
     }
 }
 
+// Storage and configuration.
+
 #[test]
-fn test_slab_is_zeroed_and_reports_its_bytes() {
+fn slab_is_zeroed_and_reports_its_bytes() {
     let slab = MmapSlab::<u32>::new_zeroed(4).unwrap();
     assert_eq!(slab.bytes(), 4 * std::mem::size_of::<u32>());
     assert_eq!(slab.len(), 4);
@@ -234,7 +240,7 @@ fn test_slab_is_zeroed_and_reports_its_bytes() {
 }
 
 #[test]
-fn test_hash_prune_accepts_structural_l_max_boundaries() {
+fn accepts_structural_l_max_boundaries() {
     let data = [0.0_f32];
     let low = HashPrune::new(&data, 1, 1, 1, 1, 42).unwrap();
     assert_eq!(low.l_max, 1);
@@ -246,7 +252,7 @@ fn test_hash_prune_accepts_structural_l_max_boundaries() {
 }
 
 #[test]
-fn test_hash_prune_rejects_l_max_outside_structural_boundaries() {
+fn rejects_l_max_outside_structural_boundaries() {
     for l_max in [0, MAX_RESERVOIR_LEN + 1] {
         let result = HashPrune::new(&[0.0_f32], 1, 1, 1, l_max, 42);
         let error = match result {
@@ -258,7 +264,7 @@ fn test_hash_prune_rejects_l_max_outside_structural_boundaries() {
 }
 
 #[test]
-fn test_ordered_key_roundtrips_bf16_order_for_all_signs() {
+fn ordered_key_roundtrips_bf16_order_for_all_signs() {
     let values = [
         f32::NEG_INFINITY,
         -100.0,
@@ -278,8 +284,10 @@ fn test_ordered_key_roundtrips_bf16_order_for_all_signs() {
     }
 }
 
+// Leaf ingestion and scratch reuse.
+
 #[test]
-fn test_add_leaf_edges_matches_single_edge_reference() {
+fn batched_leaf_edges_match_single_edge_reference() {
     let data = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
     let batched = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
     let reference = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
@@ -302,16 +310,12 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
     let mut scratch = Vec::new();
 
     batched.add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch);
-    let scratch_len = scratch.len();
-    batched.add_leaf_edges(&point_ids[..2], &[0, 0, 0], &[], &mut scratch);
-    assert_eq!(scratch.len(), scratch_len);
-
     for source in 0..point_ids.len() {
         for &(target, distance) in &edges[offsets[source] as usize..offsets[source + 1] as usize] {
             add_edge(&reference, source, target as usize, distance);
         }
     }
-    let canonicalize = |lists: Vec<diskann::graph::AdjacencyList<u32>>| {
+    let canonicalize = |lists: Vec<crate::graph::AdjacencyList<u32>>| {
         lists
             .into_iter()
             .map(|candidates| {
@@ -329,7 +333,7 @@ fn test_add_leaf_edges_matches_single_edge_reference() {
 }
 
 #[test]
-fn test_add_leaf_edges_grows_and_then_reuses_sketch_scratch() {
+fn leaf_edges_grow_then_reuse_sketch_scratch() {
     let data = [0.0_f32, 1.0, 2.0, 3.0];
     let hp = HashPrune::new(&data, 4, 1, 8, 4, 42).unwrap();
     let mut scratch = vec![99.0; 1];
@@ -341,107 +345,44 @@ fn test_add_leaf_edges_grows_and_then_reuses_sketch_scratch() {
     hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
     assert_eq!(scratch.len(), 16);
     assert_eq!(scratch.capacity(), capacity);
-    assert!(hp
-        .into_candidate_lists()
-        .iter()
-        .all(|candidates| candidates.len() == 1));
+    assert!(
+        hp.into_candidate_lists()
+            .iter()
+            .all(|candidates| candidates.len() == 1)
+    );
 }
 
+// Reservoir replacement and ordering policy.
+
 #[test]
-fn test_reservoir_basic() {
+fn full_reservoir_evicts_the_farthest_candidate() {
     let mut reservoir = Reservoir::new(3);
     assert!(reservoir.is_empty());
 
     assert!(reservoir.insert(0, 1, 1.0));
     assert!(reservoir.insert(1, 2, 2.0));
     assert!(reservoir.insert(2, 3, 3.0));
-    assert_eq!(reservoir.len(), 3);
-
     assert!(reservoir.insert(3, 4, 0.5));
+
     assert_eq!(reservoir.len(), 3);
-
-    let neighbors = reservoir.neighbors();
-    assert!(!neighbors.iter().any(|(id, _)| *id == 3));
-    assert!(neighbors.iter().any(|(id, _)| *id == 4));
+    assert_eq!(reservoir.neighbors(), [(4, 0.5), (1, 1.0), (2, 2.0)]);
 }
 
 #[test]
-fn test_reservoir_same_hash_keeps_closer() {
-    let mut reservoir = Reservoir::new(10);
+fn same_hash_keeps_only_the_closest_candidate() {
+    let mut reservoir = Reservoir::new(5);
 
-    assert!(reservoir.insert(0, 1, 2.0));
+    assert!(reservoir.insert(0, 1, 3.0));
+    assert!(reservoir.insert(0, 2, 2.0));
+    assert!(reservoir.insert(0, 3, 1.0));
+    assert!(!reservoir.insert(0, 4, 5.0));
+
     assert_eq!(reservoir.len(), 1);
-
-    assert!(reservoir.insert(0, 2, 1.0));
-    assert_eq!(reservoir.len(), 1);
-
-    let neighbors = reservoir.neighbors();
-    assert_eq!(neighbors[0].0, 2);
-    assert_eq!(neighbors[0].1, 1.0);
-
-    assert!(!reservoir.insert(0, 3, 5.0));
-    assert_eq!(reservoir.len(), 1);
+    assert_eq!(reservoir.neighbors(), [(3, 1.0)]);
 }
 
 #[test]
-fn test_hash_prune_end_to_end() {
-    let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-
-    let hp = HashPrune::new(&data, 4, 2, 4, 10, 42).unwrap();
-
-    add_edge(&hp, 0, 1, 1.0);
-    add_edge(&hp, 0, 2, 1.0);
-    add_edge(&hp, 0, 3, 1.414);
-    add_edge(&hp, 1, 0, 1.0);
-    add_edge(&hp, 1, 3, 1.0);
-    add_edge(&hp, 2, 0, 1.0);
-    add_edge(&hp, 2, 3, 1.0);
-    add_edge(&hp, 3, 1, 1.0);
-    add_edge(&hp, 3, 2, 1.0);
-
-    let graph = hp.into_nearest_lists(3);
-    assert_eq!(graph.len(), 4);
-
-    for (i, neighbors) in graph.iter().enumerate() {
-        assert!(!neighbors.is_empty(), "point {} has no neighbors", i);
-    }
-}
-
-#[test]
-fn test_reservoir_lazy_allocation() {
-    let mut res = Reservoir::new(5);
-    assert!(res.is_empty());
-    assert!(res.insert(0, 1, 1.0));
-    assert_eq!(res.len(), 1);
-}
-
-#[test]
-fn test_reservoir_insert_then_evict_cycle() {
-    let mut res = Reservoir::new(3);
-    res.insert(0, 10, 3.0);
-    res.insert(1, 11, 2.0);
-    res.insert(2, 12, 1.0);
-    assert_eq!(res.len(), 3);
-    assert!(res.insert(3, 13, 0.5));
-    assert_eq!(res.len(), 3);
-    let neighbors = res.neighbors();
-    assert!(neighbors.iter().all(|&(_, d)| d <= 2.0));
-}
-
-#[test]
-fn test_reservoir_all_same_hash() {
-    let mut res = Reservoir::new(5);
-    res.insert(0, 1, 3.0);
-    res.insert(0, 2, 2.0);
-    res.insert(0, 3, 1.0);
-    assert_eq!(res.len(), 1);
-    let neighbors = res.neighbors();
-    assert_eq!(neighbors[0].0, 3);
-    assert_eq!(neighbors[0].1, 1.0);
-}
-
-#[test]
-fn test_reservoir_all_same_distance() {
+fn equal_distances_are_ordered_by_neighbor_id() {
     let mut res = Reservoir::new(5);
     res.insert(0, 1, 1.0);
     res.insert(1, 2, 1.0);
@@ -486,121 +427,77 @@ fn full_reservoir_bf16_ties_are_history_independent() {
     }
 }
 
+// Concurrency and consuming extraction.
+
 #[test]
 #[allow(clippy::disallowed_methods)]
-fn test_hash_prune_parallel_safety() {
+fn parallel_insertion_matches_serial_candidate_lists() {
     use rayon::prelude::*;
+
     let data = vec![0.0f32; 100 * 4];
-    let hp = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
-    (0..50).into_par_iter().for_each(|i| {
-        add_edge(&hp, i, (i + 1) % 100, 1.0);
-        add_edge(&hp, (i + 1) % 100, i, 1.0);
+    let parallel = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
+    let serial = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
+
+    (0..50).into_par_iter().for_each(|source| {
+        add_edge(&parallel, source, (source + 1) % 100, 1.0);
+        add_edge(&parallel, (source + 1) % 100, source, 1.0);
     });
-    let graph = hp.into_nearest_lists(5);
-    assert_eq!(graph.len(), 100);
-}
-
-#[test]
-fn test_hash_prune_high_degree_limit() {
-    let data = vec![0.0f32; 10 * 2];
-    let hp = HashPrune::new(&data, 10, 2, 4, 10, 42).unwrap();
-    for i in 0..10 {
-        for j in 0..10 {
-            if i != j {
-                add_edge(&hp, i, j, (i as f32 - j as f32).abs());
-            }
-        }
+    for source in 0..50 {
+        add_edge(&serial, source, (source + 1) % 100, 1.0);
+        add_edge(&serial, (source + 1) % 100, source, 1.0);
     }
-    let graph = hp.into_nearest_lists(1);
-    for neighbors in &graph {
-        assert!(
-            neighbors.len() <= 1,
-            "max_degree=1 should limit to 1 neighbor"
-        );
+
+    assert_eq!(parallel.into_nearest_lists(5), serial.into_nearest_lists(5));
+}
+
+#[test]
+fn extraction_returns_full_candidates_and_truncates_to_nearest_degree() {
+    #[rustfmt::skip]
+    let data = [
+         0.0,  0.0,
+         1.0,  0.0,
+         0.0,  1.0,
+        -1.0,  0.0,
+         0.0, -1.0,
+         1.0,  1.0,
+        -1.0,  1.0,
+         1.0, -1.0,
+    ];
+    let full = HashPrune::new(&data, 8, 2, 16, 10, 42).unwrap();
+    let nearest = HashPrune::new(&data, 8, 2, 16, 10, 42).unwrap();
+    for target in 1..8 {
+        add_edge(&full, 0, target, target as f32);
+        add_edge(&nearest, 0, target, target as f32);
     }
+
+    let mut full_ids = full.into_candidate_lists()[0].to_vec();
+    full_ids.sort_unstable();
+    assert_eq!(full_ids, (1..8).collect::<Vec<_>>());
+    assert_eq!(&*nearest.into_nearest_lists(2)[0], &[1, 2]);
 }
 
 #[test]
-fn test_hash_prune_extract_sorted() {
-    let data = vec![0.0f32; 4 * 2];
-    let hp = HashPrune::new(&data, 4, 2, 4, 10, 42).unwrap();
-    add_edge(&hp, 0, 1, 3.0);
-    add_edge(&hp, 0, 2, 1.0);
-    add_edge(&hp, 0, 3, 2.0);
-    let graph = hp.into_nearest_lists(3);
-    assert!(!graph[0].is_empty());
+fn farthest_cache_updates_after_repeated_evictions() {
+    let mut reservoir = Reservoir::new(3);
+    reservoir.insert(0, 10, 5.0);
+    reservoir.insert(1, 11, 4.0);
+    reservoir.insert(2, 12, 3.0);
+    assert!(reservoir.insert(3, 13, 2.0));
+    assert!(reservoir.insert(4, 14, 1.0));
+
+    assert_eq!(reservoir.neighbors(), [(14, 1.0), (13, 2.0), (12, 3.0)]);
 }
 
 #[test]
-fn test_into_candidate_lists_returns_full_reservoir() {
-    let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-    let hp = HashPrune::new(&data, 4, 2, 4, 10, 42).unwrap();
-    add_edge(&hp, 0, 1, 1.0);
-    add_edge(&hp, 0, 2, 1.0);
-    add_edge(&hp, 0, 3, 1.414);
-    add_edge(&hp, 1, 0, 1.0);
-    add_edge(&hp, 2, 0, 1.0);
-    add_edge(&hp, 3, 0, 1.414);
+fn sorted_extraction_handles_an_early_farthest_slot() {
+    let mut reservoir = Reservoir::new(4);
+    reservoir.insert(5, 1, 1.0);
+    reservoir.insert(10, 2, 3.0);
+    reservoir.insert(15, 3, 2.0);
+    reservoir.insert(3, 4, 0.5);
 
-    let full = hp.into_candidate_lists();
-    assert_eq!(full.len(), 4);
-    assert!(!full[0].is_empty(), "node 0 should have neighbors");
-    // ids-only, unsorted: every id is one of node 0's inserted neighbors
-    // {1,2,3} with no duplicates (the LSH bucket may keep-closer-collapse a
-    // colliding pair on this tiny 4-plane sketch, so we don't assert all 3).
-    let mut n0 = full[0].to_vec();
-    n0.sort_unstable();
-    let deduped = {
-        let mut d = n0.clone();
-        d.dedup();
-        d
-    };
-    assert_eq!(n0, deduped, "no duplicate ids in a reservoir");
-    assert!(
-        n0.iter().all(|&id| (1..=3).contains(&id)),
-        "node 0 ids must be a subset of its inserted neighbors {{1,2,3}}, got {:?}",
-        n0
+    assert_eq!(
+        reservoir.neighbors(),
+        [(4, 0.5), (1, 1.0), (3, 2.0), (2, 3.0)]
     );
-}
-
-#[test]
-fn test_into_nearest_lists_truncates_to_max_degree() {
-    let data = vec![0.0f32; 4 * 2];
-    let hp = HashPrune::new(&data, 4, 2, 4, 10, 42).unwrap();
-    add_edge(&hp, 0, 1, 1.0);
-    add_edge(&hp, 0, 2, 2.0);
-    add_edge(&hp, 0, 3, 3.0);
-
-    let graph = hp.into_nearest_lists(2);
-    assert!(
-        graph[0].len() <= 2,
-        "bounded graph extraction should truncate to max_degree"
-    );
-}
-
-#[test]
-fn test_reservoir_farthest_cache_after_eviction() {
-    let mut res = Reservoir::new(3);
-    res.insert(0, 10, 5.0);
-    res.insert(1, 11, 4.0);
-    res.insert(2, 12, 3.0);
-    assert!(res.insert(3, 13, 2.0));
-    assert!(res.insert(4, 14, 1.0));
-    let neighbors = res.neighbors();
-    assert_eq!(neighbors.len(), 3);
-    for &(_, d) in &neighbors {
-        assert!(d <= 3.1, "expected dist <= 3.0, got {}", d);
-    }
-}
-
-#[test]
-fn test_reservoir_farthest_insert_before_farthest_idx() {
-    let mut res = Reservoir::new(4);
-    res.insert(5, 1, 1.0);
-    res.insert(10, 2, 3.0);
-    res.insert(15, 3, 2.0);
-    res.insert(3, 4, 0.5);
-    let neighbors = res.neighbors();
-    assert_eq!(neighbors.len(), 4);
-    assert_eq!(neighbors[0].0, 4);
 }

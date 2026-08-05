@@ -57,13 +57,13 @@ use super::{
     bf16::{bf16_to_f32, f32_to_bf16},
     lsh::{LshSketchError, LshSketches},
 };
+use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use bytemuck::Pod;
-use crate::{graph::AdjacencyList, utils::VectorRepr, ANNError, ANNResult};
 use diskann_vector::prefetch_hint_all;
 use diskann_wide::{
+    Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
     arch::{self, Dispatched1, FTarget1, Target},
     lifetime::As,
-    Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
 };
 use rayon::prelude::*;
 
@@ -97,7 +97,7 @@ impl<T: Pod> MmapSlab<T> {
         }
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| crate::config_error(format!("slab size {len} overflows usize")))?;
+            .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
         // SAFETY: MAP_ANONYMOUS gives a zero-backed VA region; PROT_RW makes
         // it readable/writable. Pages allocate on first write only.
         unsafe {
@@ -202,7 +202,7 @@ impl<T: Pod> MmapSlab<T> {
         }
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| crate::config_error(format!("slab size {len} overflows usize")))?;
+            .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
         // SAFETY: MEM_RESERVE|MEM_COMMIT + PAGE_READWRITE returns a zero-backed
         // RW region; physical pages fault in on first write only. Windows
         // zero-fills committed pages, matching mmap's MAP_ANONYMOUS contract.
@@ -315,7 +315,7 @@ fn sketches_from_data<T: VectorRepr + Send + Sync>(
     })
     .map_err(|error| match error {
         LshSketchError::InvalidPlaneCount { actual, max } => {
-            crate::config_error(format!("num_hash_planes ({actual}) must be in 1..={max}"))
+            super::config_error(format!("num_hash_planes ({actual}) must be in 1..={max}"))
         }
         LshSketchError::ShapeOverflow { rows, columns } => ANNError::log_index_error(format!(
             "LSH matrix shape {rows} x {columns} overflows usize"
@@ -525,11 +525,7 @@ where
 #[inline(always)]
 fn ordered_key(distance: f32) -> u16 {
     let b = f32_to_bf16(distance);
-    if b & 0x8000 != 0 {
-        !b
-    } else {
-        b | 0x8000
-    }
+    if b & 0x8000 != 0 { !b } else { b | 0x8000 }
 }
 
 /// Inverse of [`ordered_key`]: recover the bf16 bits for distance readback.
@@ -765,7 +761,7 @@ impl HashPrune {
         seed: u64,
     ) -> ANNResult<Self> {
         if !(1..=MAX_RESERVOIR_LEN).contains(&l_max) {
-            return Err(crate::config_error(format!(
+            return Err(super::config_error(format!(
                 "HashPrune l_max ({l_max}) must be in 1..={MAX_RESERVOIR_LEN}"
             )));
         }
@@ -794,7 +790,7 @@ impl HashPrune {
         // 64 * 8 = 512 B; at scan_lanes = 128 it is 1024 B. Reservoirs that
         // never fill past the avg fill don't touch the high pages.
         let total = npoints.checked_mul(scan_lanes).ok_or_else(|| {
-            crate::config_error(format!(
+            super::config_error(format!(
                 "HashPrune slab shape {npoints} x {scan_lanes} overflows usize"
             ))
         })?;

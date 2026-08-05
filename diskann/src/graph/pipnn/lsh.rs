@@ -216,51 +216,36 @@ mod tests {
     }
 
     #[test]
-    fn sketches_match_serial_hyperplane_reference() {
+    fn sketches_match_seeded_serial_hyperplane_reference() {
         let npoints = 3;
         let ndims = 4;
         let planes = 5;
-        let seed = 42;
         let data: Vec<f32> = (0..npoints * ndims)
             .map(|value| value as f32 - 3.0)
             .collect();
-        let actual = build_pool(2)
-            .install(|| {
-                LshSketches::try_new(npoints, ndims, planes, seed, |i, out| {
-                    out.copy_from_slice(&data[i * ndims..(i + 1) * ndims]);
-                    Ok::<_, std::convert::Infallible>(())
-                })
-            })
-            .unwrap();
 
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        let hyperplanes: Vec<f32> = (0..planes * ndims)
-            .map(|_| StandardNormal.sample(&mut rng))
-            .collect();
-        let mut expected = Vec::<f32>::new();
-        for point in data.chunks_exact(ndims) {
-            for plane in hyperplanes.chunks_exact(ndims) {
-                expected.push(point.iter().zip(plane).map(|(x, h)| x * h).sum());
+        for seed in [42, 99] {
+            let actual = build_pool(2)
+                .install(|| {
+                    LshSketches::try_new(npoints, ndims, planes, seed, |i, out| {
+                        out.copy_from_slice(&data[i * ndims..(i + 1) * ndims]);
+                        Ok::<_, std::convert::Infallible>(())
+                    })
+                })
+                .unwrap();
+
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let hyperplanes: Vec<f32> = (0..planes * ndims)
+                .map(|_| StandardNormal.sample(&mut rng))
+                .collect();
+            let mut expected = Vec::<f32>::new();
+            for point in data.chunks_exact(ndims) {
+                for plane in hyperplanes.chunks_exact(ndims) {
+                    expected.push(point.iter().zip(plane).map(|(x, h)| x * h).sum());
+                }
             }
+            assert_eq!(actual.sketches(), expected, "seed={seed}");
         }
-        assert_eq!(actual.sketches(), expected);
-    }
-
-    #[test]
-    fn worker_conversion_scratch_grows_across_point_rows() {
-        let lengths = std::sync::Mutex::new(Vec::new());
-        let sketches = build_pool(1)
-            .install(|| {
-                LshSketches::try_new(2, 5, 1, 42, |i, out| {
-                    lengths.lock().unwrap().push(out.len());
-                    out.fill((i + 1) as f32);
-                    Ok::<_, std::convert::Infallible>(())
-                })
-            })
-            .unwrap();
-        assert_eq!(*lengths.lock().unwrap(), [5, 5]);
-        assert_eq!(sketches.sketches().len(), 2);
-        assert_ne!(sketches.sketches()[0], sketches.sketches()[1]);
     }
 
     #[test]
@@ -319,25 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn different_seeds_change_hashes() {
-        let pool = build_pool(2);
-        let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
-        let build = |seed| {
-            pool.install(|| {
-                LshSketches::try_new(32, 4, 12, seed, |i, out| {
-                    out.copy_from_slice(&data[i * 4..(i + 1) * 4]);
-                    Ok::<_, std::convert::Infallible>(())
-                })
-            })
-            .unwrap()
-        };
-        let sk1 = build(42);
-        let sk2 = build(99);
-        assert_ne!(sk1.sketches(), sk2.sketches());
-    }
-
-    #[test]
-    fn try_new_propagates_fill_errors() {
+    fn propagates_fill_errors() {
         #[derive(Debug, PartialEq, thiserror::Error)]
         #[error("fill failed")]
         struct FillError;
@@ -354,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn try_new_reports_too_many_planes() {
+    fn rejects_plane_count_above_u16_capacity() {
         let pool = build_pool(1);
         let error = match pool.install(|| {
             LshSketches::try_new(1, 2, 17, 42, |_, _| Ok::<_, std::convert::Infallible>(()))
@@ -373,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn try_new_rejects_zero_planes() {
+    fn rejects_zero_planes() {
         let pool = build_pool(1);
         let error = match pool.install(|| {
             LshSketches::try_new(1, 2, 0, 42, |_, _| Ok::<_, std::convert::Infallible>(()))
