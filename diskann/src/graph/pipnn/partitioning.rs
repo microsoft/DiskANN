@@ -39,19 +39,19 @@
 
 use std::collections::HashSet;
 
-use crate::{utils::VectorRepr, ANNError, ANNResult};
+use crate::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_linalg::Transpose;
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
 };
-use diskann_vector::{distance::Metric, norm::FastL2NormSquared, Norm};
-use rand::{prelude::IndexedRandom, SeedableRng};
+use diskann_vector::{Norm, distance::Metric, norm::FastL2NormSquared};
+use rand::{SeedableRng, prelude::IndexedRandom};
 use rayon::prelude::*;
 
-use crate::{
-    partition_kernel::{PartitionInput, PartitionKernel, PartitionScales},
+use super::{
     PiPNNConfig,
+    partition_kernel::{PartitionInput, PartitionKernel, PartitionScales},
 };
 
 // Private algorithm and batching constants live together. None are user policy.
@@ -704,22 +704,22 @@ fn global_merge_small(
 
     if !small.is_empty() {
         let mut remainder = drain_sorted(&mut small)?;
-        if remainder.len() < c_min {
-            if let Some(last) = merged.last_mut() {
-                remainder.retain(|id| !last.contains(id));
-                let combined = last.len().checked_add(remainder.len()).ok_or_else(|| {
-                    ANNError::opaque(PartitionError::ShapeOverflow {
-                        buffer: "small-leaf tail merge",
-                        rows: last.len(),
-                        cols: remainder.len(),
-                    })
-                })?;
-                if combined <= c_max {
-                    last.try_reserve(remainder.len())
-                        .map_err(ANNError::opaque)?;
-                    last.append(&mut remainder);
-                    last.sort_unstable();
-                }
+        if remainder.len() < c_min
+            && let Some(last) = merged.last_mut()
+        {
+            remainder.retain(|id| !last.contains(id));
+            let combined = last.len().checked_add(remainder.len()).ok_or_else(|| {
+                ANNError::opaque(PartitionError::ShapeOverflow {
+                    buffer: "small-leaf tail merge",
+                    rows: last.len(),
+                    cols: remainder.len(),
+                })
+            })?;
+            if combined <= c_max {
+                last.try_reserve(remainder.len())
+                    .map_err(ANNError::opaque)?;
+                last.append(&mut remainder);
+                last.sort_unstable();
             }
         }
         if !remainder.is_empty() {

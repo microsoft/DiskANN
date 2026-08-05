@@ -3,12 +3,12 @@
  * Licensed under the MIT license.
  */
 
-//! Provider-independent PiPNN graph construction.
+//! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
 //! PiPNN means **Pick-in-Partitions Nearest Neighbors**. It builds a graph for
 //! approximate nearest-neighbor search: every input vector becomes one graph
 //! vertex, and its adjacency list stores other vectors worth visiting during a
-//! later query. This crate constructs that adjacency; it does not execute queries.
+//! later query. This module constructs that adjacency; it does not execute queries.
 //!
 //! Incremental builders such as Vamana find construction candidates by running
 //! beam search against a partially built graph: they repeatedly follow graph
@@ -151,9 +151,9 @@ mod partitioning;
 mod simd;
 
 use crate::{
+    ANNError, ANNResult,
     graph::{AdjacencyList, Config},
     utils::VectorRepr,
-    ANNError, ANNResult,
 };
 use diskann_utils::views::MatrixView;
 use diskann_vector::distance::Metric;

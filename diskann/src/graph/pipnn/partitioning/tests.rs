@@ -4,7 +4,7 @@
  */
 
 use diskann_utils::views::{Matrix, MatrixView};
-use diskann_vector::{distance::Metric, Half};
+use diskann_vector::{Half, distance::Metric};
 
 use super::*;
 
@@ -70,9 +70,11 @@ fn sorted_memberships(leaves: &[Vec<u32>]) -> Vec<Vec<u32>> {
 }
 
 fn assert_valid_partition(leaves: &[Vec<u32>], points: usize, c_max: usize, replicas: usize) {
-    assert!(leaves
-        .iter()
-        .all(|leaf| !leaf.is_empty() && leaf.len() <= c_max));
+    assert!(
+        leaves
+            .iter()
+            .all(|leaf| !leaf.is_empty() && leaf.len() <= c_max)
+    );
     let mut counts = vec![0usize; points];
     for leaf in leaves {
         let mut ids = leaf.clone();
@@ -110,7 +112,7 @@ fn partition_is_fixed_seed_deterministic_and_bounded() {
 }
 
 #[test]
-fn recursion_after_fanout_levels_falls_back_to_one() {
+fn partition_remains_bounded_after_the_fanout_schedule_is_exhausted() {
     let data = clustered_data(80, 4);
     let leaves = partition(data.as_view(), config(2, 8, vec![2], 1), Metric::L2).unwrap();
 
@@ -176,7 +178,7 @@ fn replicas_cover_every_point_once_or_more_per_replica() {
 
 fn assert_partition_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
 where
-    T: diskann::utils::VectorRepr + Send + Sync,
+    T: crate::utils::VectorRepr + Send + Sync,
 {
     let points = 64;
     // Partition gathering converts source vectors before GEMM. Exercise conversion
