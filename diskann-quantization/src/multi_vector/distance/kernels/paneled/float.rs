@@ -11,7 +11,7 @@ use diskann_wide::arch::x86_64::V3;
 use super::arena::ResettableArena;
 use super::leaves::{A_PANEL, B_PANEL};
 use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
-use super::{Accumulate, At, Block, Drain, Plan, Strip, StripRef, TileBudget, drive, leaves};
+use super::{Accumulate, Block, Drain, Plan, Region, Strip, TileBudget, drive, leaves};
 use crate::alloc::{Poly, ScopedAllocator};
 use crate::bits::{Dynamic, Static};
 use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
@@ -25,7 +25,7 @@ impl<'a, 'b, 'x>
         V3,
         QPanel<'a, f32, A_PANEL>,
         DPanel<'b, f32, B_PANEL, Static<B_PANEL>>,
-        Block<'x, f32, A_PANEL, B_PANEL, Static<B_PANEL>>,
+        Block<'x, f32, A_PANEL, B_PANEL>,
     > for F32Kernel
 {
     #[inline(always)]
@@ -34,19 +34,9 @@ impl<'a, 'b, 'x>
         arch: V3,
         a: QPanel<'a, f32, A_PANEL>,
         b: DPanel<'b, f32, B_PANEL, Static<B_PANEL>>,
-        mut out: Block<'x, f32, A_PANEL, B_PANEL, Static<B_PANEL>>,
+        out: Block<'x, f32, A_PANEL, B_PANEL>,
     ) {
-        // SAFETY: `a` is an A_PANEL×k block-transposed f32 block; `b` is B_PANEL rows
-        // of k f32; `out` is B_PANEL columns of A_PANEL f32 at stride A_PANEL.
-        unsafe {
-            leaves::f32_store_microkernel::<B_PANEL>(
-                arch,
-                a.as_ptr(),
-                b.as_ptr(),
-                a.k(),
-                out.as_mut_ptr(),
-            );
-        }
+        leaves::f32_store_microkernel::<B_PANEL, _>(arch, a, b, out);
     }
 }
 
@@ -55,7 +45,7 @@ impl<'a, 'b, 'x>
         V3,
         QPanel<'a, f32, A_PANEL>,
         DPanel<'b, f32, B_PANEL, Dynamic>,
-        Block<'x, f32, A_PANEL, B_PANEL, Dynamic>,
+        Block<'x, f32, A_PANEL, B_PANEL>,
     > for F32Kernel
 {
     #[inline(always)]
@@ -64,26 +54,21 @@ impl<'a, 'b, 'x>
         arch: V3,
         a: QPanel<'a, f32, A_PANEL>,
         b: DPanel<'b, f32, B_PANEL, Dynamic>,
-        mut out: Block<'x, f32, A_PANEL, B_PANEL, Dynamic>,
+        out: Block<'x, f32, A_PANEL, B_PANEL>,
     ) {
-        debug_assert_eq!(out.cols(), b.rows());
-        debug_assert!(b.rows() < B_PANEL);
-        let (ap, bp, op, k) = (a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), a.k());
-        // SAFETY: as the full-width impl, with a runtime width in 1..B_PANEL.
-        unsafe {
-            match b.rows() {
-                3 => leaves::f32_store_microkernel::<3>(arch, ap, bp, k, op),
-                2 => leaves::f32_store_microkernel::<2>(arch, ap, bp, k, op),
-                1 => leaves::f32_store_microkernel::<1>(arch, ap, bp, k, op),
-                other => unreachable!("tail width {other} out of 1..{B_PANEL}"),
-            }
+        // The leaf checks that the width it unrolls for is the width `b` actually has.
+        match b.rows() {
+            3 => leaves::f32_store_microkernel::<3, _>(arch, a, b, out),
+            2 => leaves::f32_store_microkernel::<2, _>(arch, a, b, out),
+            1 => leaves::f32_store_microkernel::<1, _>(arch, a, b, out),
+            other => unreachable!("tail width {other} out of 1..{B_PANEL}"),
         }
     }
 }
 
 // ── Drain ────────────────────────────────────────────────────────
 
-/// Running max over an output it owns, padded to whole A-panels by the caller.
+/// Running max, over an output the caller has padded to whole A-panels.
 pub(crate) struct RawMax<'o> {
     out: &'o mut [f32],
 }
@@ -97,10 +82,10 @@ impl<'o> RawMax<'o> {
 
 impl Drain<V3, Strip<'_, f32, A_PANEL, B_PANEL>> for RawMax<'_> {
     #[inline(always)]
-    fn drain(&mut self, arch: V3, acc: StripRef<'_, f32, A_PANEL>, at: At) {
-        let out = &mut self.out[at.a_panel * A_PANEL..][..A_PANEL];
-        // SAFETY: `out` is A_PANEL f32; `acc` is `cols` columns of A_PANEL f32.
-        unsafe { leaves::fold_strip(arch, out.as_mut_ptr(), acc.as_ptr(), acc.cols()) }
+    fn drain(&mut self, arch: V3, acc: &Strip<'_, f32, A_PANEL, B_PANEL>, region: Region) {
+        // This output is padded to whole panels, so the stride is ours to state.
+        let out = &mut self.out[region.a.start..][..A_PANEL];
+        leaves::fold_strip(arch, out, acc, region.b.len());
     }
 }
 

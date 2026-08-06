@@ -1,14 +1,21 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! V3 SIMD leaves, and the panel geometry they impose. The store-out micro-kernels are
-//! byte-identical to `tiler`'s, so an A/B between the two experiments measures only the
-//! abstraction; [`score_fold_strip`] is the one that differs — it fuses `tiler`'s
-//! separate dequant and max passes.
+//! V3 SIMD leaves, and the panel geometry they impose. The store-out micro-kernels do
+//! the same math as `tiler`'s, so an A/B between the two experiments measures the
+//! abstraction rather than a different kernel; [`score_fold_strip`] is the one with no
+//! counterpart there — it fuses `tiler`'s separate dequant and max passes.
+//!
+//! Every leaf is safe to call: they take the panel and slot handles whole, so each one's
+//! requirements are discharged here rather than promised at every call site. The
+//! remaining `unsafe` is the SIMD loads and stores, each in bounds by the lines above it.
 
 use diskann_wide::arch::x86_64::V3;
 use diskann_wide::{SIMDCast, SIMDDotProduct, SIMDMinMax, SIMDMulAdd, SIMDReinterpret, SIMDVector};
 
+use super::strip::{Block, Strip};
+use super::views::{DPanel, QPanel};
+use crate::bits::Length;
 use crate::minmax::MinMaxCompensation;
 
 diskann_wide::alias!(i16s = <V3>::i16x16);
@@ -16,28 +23,26 @@ diskann_wide::alias!(i32s = <V3>::i32x8);
 diskann_wide::alias!(u32s = <V3>::u32x8);
 diskann_wide::alias!(f32s = <V3>::f32x8);
 
-/// Rows per A-panel: every leaf below emits exactly two 32-bit SIMD registers of rows.
-/// Derived rather than written, so a wider ISA's leaves get their own width.
+/// Rows per A-panel: every leaf below emits exactly two 32-bit SIMD registers of rows,
+/// so a wider ISA's leaves get their own width.
 pub(super) const A_PANEL: usize = 2 * f32s::LANES;
 
-/// Max B-rows per kernel call. Not derived — a register-budget choice: `B_PANEL` × two
-/// accumulator registers, plus two A registers, must fit the architectural file.
+/// Max B-rows per kernel call — a register-budget choice: `B_PANEL` × two accumulator
+/// registers, plus two A registers, must fit the architectural file.
 pub(super) const B_PANEL: usize = 4;
 
-/// Integer store-out micro-kernel: [`A_PANEL`] A-rows × `UNROLL` B-rows.
+/// Integer store-out micro-kernel: [`A_PANEL`] A-rows × `UNROLL` B-rows. `k` must be
+/// even — the loads take column pairs.
 ///
-/// # Safety
+/// # Panics
 ///
-/// 1. `a_packed` points to an `A_PANEL × k` block-transposed `i16` block (`k` even).
-/// 2. `b` points to `UNROLL` rows of `k` contiguous `u8` (`k` even).
-/// 3. `partial` is valid for `UNROLL` columns of `A_PANEL` `i32` at stride `A_PANEL`.
+/// If the panels disagree on `k`, or `b` is not `UNROLL` rows — both driver bugs.
 #[inline(always)]
-pub(super) unsafe fn int_store_microkernel<const UNROLL: usize>(
+pub(super) fn int_store_microkernel<const UNROLL: usize, L: Length>(
     arch: V3,
-    a_packed: *const i16,
-    b: *const u8,
-    k: usize,
-    partial: *mut i32,
+    a: QPanel<'_, i16, A_PANEL>,
+    b: DPanel<'_, u8, B_PANEL, L>,
+    mut out: Block<'_, i32, A_PANEL, B_PANEL>,
 ) {
     // The i16 half-loads and the i32 stores must span the same rows; that relation
     // holds across two different register types, so it is not self-evident.
@@ -47,6 +52,19 @@ pub(super) unsafe fn int_store_microkernel<const UNROLL: usize>(
             "leaf loads A_PANEL i16 per A column-pair half"
         )
     }
+    // Bounds the store below inside the slot's `A_PANEL * B_PANEL`.
+    const { assert!(UNROLL <= B_PANEL, "unroll wider than the slot") }
+
+    let k = a.k();
+    assert_eq!(
+        k,
+        b.k(),
+        "panels paired across different contraction lengths"
+    );
+    assert_eq!(b.rows(), UNROLL, "panel height must match the unroll");
+    debug_assert_eq!(k % 2, 0, "the integer leaf loads column pairs");
+    let (a_packed, b_ptr, partial) = (a.as_ptr(), b.as_ptr(), out.as_mut_ptr());
+
     let mut p0 = [i32s::default(arch); UNROLL];
     let mut p1 = [i32s::default(arch); UNROLL];
     let offsets: [usize; UNROLL] = core::array::from_fn(|j| k * j);
@@ -56,7 +74,8 @@ pub(super) unsafe fn int_store_microkernel<const UNROLL: usize>(
     let pairs = k / 2;
 
     for p in 0..pairs {
-        // SAFETY: precondition 1 — the A block has `pairs` col-pairs of 2·A_PANEL i16.
+        // SAFETY: `a` is `A_PANEL * k` i16, so it holds `pairs` column-pairs of
+        // `2 * A_PANEL`, and `p < pairs`.
         let (a0, a1) = unsafe {
             (
                 i16s::load_simd(arch, a_packed.add(a_pair_stride * p)),
@@ -65,12 +84,13 @@ pub(super) unsafe fn int_store_microkernel<const UNROLL: usize>(
         };
 
         for j in 0..UNROLL {
-            // SAFETY: precondition 2 — B row j is `offsets[j]` in, `2*p+1 < k`.
+            // SAFETY: `b` is `UNROLL * k` u8 (both asserted), row j starts at
+            // `offsets[j] = k * j`, and `2 * p + 1 < k`.
             let (d0, d1) = unsafe {
                 let base = 2 * p + offsets[j];
                 (
-                    u32::from(b.add(base).read()),
-                    u32::from(b.add(base + 1).read()),
+                    u32::from(b_ptr.add(base).read()),
+                    u32::from(b_ptr.add(base + 1).read()),
                 )
             };
             let packed = d0 | (d1 << 16);
@@ -81,7 +101,8 @@ pub(super) unsafe fn int_store_microkernel<const UNROLL: usize>(
     }
 
     for j in 0..UNROLL {
-        // SAFETY: precondition 3 — column j occupies [j*A_PANEL, j*A_PANEL+A_PANEL) i32.
+        // SAFETY: the slot is `A_PANEL * B_PANEL` writable i32 and `UNROLL <= B_PANEL`,
+        // so column j occupies `[j * A_PANEL, (j + 1) * A_PANEL)` inside it.
         unsafe {
             p0[j].store_simd(partial.add(j * A_PANEL));
             p1[j].store_simd(partial.add(j * A_PANEL + i32s::LANES));
@@ -91,19 +112,28 @@ pub(super) unsafe fn int_store_microkernel<const UNROLL: usize>(
 
 /// f32 store-out micro-kernel: [`A_PANEL`] A-rows × `UNROLL` B-rows of inner product.
 ///
-/// # Safety
+/// # Panics
 ///
-/// 1. `a_packed` points to an `A_PANEL × k` block-transposed `f32` block (`PACK = 1`).
-/// 2. `b` points to `UNROLL` rows of `k` contiguous `f32`.
-/// 3. `partial` is valid for `UNROLL` columns of `A_PANEL` `f32` at stride `A_PANEL`.
+/// If the panels disagree on `k`, or `b` is not `UNROLL` rows — both driver bugs.
 #[inline(always)]
-pub(super) unsafe fn f32_store_microkernel<const UNROLL: usize>(
+pub(super) fn f32_store_microkernel<const UNROLL: usize, L: Length>(
     arch: V3,
-    a_packed: *const f32,
-    b: *const f32,
-    k: usize,
-    partial: *mut f32,
+    a: QPanel<'_, f32, A_PANEL>,
+    b: DPanel<'_, f32, B_PANEL, L>,
+    mut out: Block<'_, f32, A_PANEL, B_PANEL>,
 ) {
+    // Bounds the store below inside the slot's `A_PANEL * B_PANEL`.
+    const { assert!(UNROLL <= B_PANEL, "unroll wider than the slot") }
+
+    let k = a.k();
+    assert_eq!(
+        k,
+        b.k(),
+        "panels paired across different contraction lengths"
+    );
+    assert_eq!(b.rows(), UNROLL, "panel height must match the unroll");
+    let (a_packed, b_ptr, partial) = (a.as_ptr(), b.as_ptr(), out.as_mut_ptr());
+
     let mut p0 = [f32s::default(arch); UNROLL];
     let mut p1 = [f32s::default(arch); UNROLL];
     let offsets: [usize; UNROLL] = core::array::from_fn(|j| k * j);
@@ -112,7 +142,8 @@ pub(super) unsafe fn f32_store_microkernel<const UNROLL: usize>(
     let a_half = f32s::LANES;
 
     for i in 0..k {
-        // SAFETY: precondition 1 — the A block has `k` columns of A_PANEL f32.
+        // SAFETY: `a` is `A_PANEL * k` f32 and `i < k`, so both halves of column `i`
+        // are in bounds.
         let (a0, a1) = unsafe {
             (
                 f32s::load_simd(arch, a_packed.add(a_stride * i)),
@@ -120,15 +151,17 @@ pub(super) unsafe fn f32_store_microkernel<const UNROLL: usize>(
             )
         };
         for j in 0..UNROLL {
-            // SAFETY: precondition 2 — B row j is `offsets[j]` in, `i < k`.
-            let bj = unsafe { f32s::splat(arch, b.add(i + offsets[j]).read_unaligned()) };
+            // SAFETY: `b` is `UNROLL * k` f32 (both asserted), row j starts at
+            // `offsets[j] = k * j`, and `i < k`.
+            let bj = unsafe { f32s::splat(arch, b_ptr.add(i + offsets[j]).read_unaligned()) };
             p0[j] = a0.mul_add_simd(bj, p0[j]);
             p1[j] = a1.mul_add_simd(bj, p1[j]);
         }
     }
 
     for j in 0..UNROLL {
-        // SAFETY: precondition 3 — column j occupies [j*A_PANEL, j*A_PANEL+A_PANEL) f32.
+        // SAFETY: the slot is `A_PANEL * B_PANEL` writable f32 and `UNROLL <= B_PANEL`,
+        // so column j occupies `[j * A_PANEL, (j + 1) * A_PANEL)` inside it.
         unsafe {
             p0[j].store_simd(partial.add(j * A_PANEL));
             p1[j].store_simd(partial.add(j * A_PANEL + f32s::LANES));
@@ -138,13 +171,24 @@ pub(super) unsafe fn f32_store_microkernel<const UNROLL: usize>(
 
 /// Fold an [`A_PANEL`]×`cols` A-major f32 strip into the running max.
 ///
-/// # Safety
+/// # Panics
 ///
-/// `state` writable for `A_PANEL` `f32`; `acc` valid for `cols` columns of `A_PANEL` `f32`.
+/// If `state` is not exactly one A-panel, or the strip holds fewer than `cols` columns.
 #[inline(always)]
-pub(super) unsafe fn fold_strip(arch: V3, state: *mut f32, acc: *const f32, cols: usize) {
+pub(super) fn fold_strip(
+    arch: V3,
+    state: &mut [f32],
+    strip: &Strip<'_, f32, A_PANEL, B_PANEL>,
+    cols: usize,
+) {
     let lanes = f32s::LANES;
-    // SAFETY: `state` writable for A_PANEL; `acc` valid for `cols` columns of A_PANEL.
+    // The slicing is the bounds check: both loads below are inside these lengths.
+    let acc = strip.columns(cols);
+    assert_eq!(state.len(), A_PANEL, "the fold writes a whole A-panel");
+    let (state, acc) = (state.as_mut_ptr(), acc.as_ptr());
+
+    // SAFETY: `state` is A_PANEL = 2·LANES writable f32, and `acc` is `cols * A_PANEL`
+    // readable f32, so column `c < cols` and both its halves are in bounds.
     unsafe {
         let mut m0 = f32s::load_simd(arch, state);
         let mut m1 = f32s::load_simd(arch, state.add(lanes));
@@ -161,32 +205,38 @@ pub(super) unsafe fn fold_strip(arch: V3, state: *mut f32, acc: *const f32, cols
 /// 4-bit MinMax dequant of an [`A_PANEL`]×`cols` A-major `i32` strip, folded straight
 /// into the running max — the score never reaches memory.
 ///
-/// # Safety
+/// # Panics
 ///
-/// `acc` valid for `cols` columns of `A_PANEL` `i32` (stride `A_PANEL`); `state`
-/// writable for `A_PANEL` `f32`; `q_meta.len() >= A_PANEL`; `d_meta.len() >= cols`.
+/// If `state` or `q_meta` is not one A-panel, or `d_meta` or the strip holds fewer than
+/// `cols` columns.
 #[inline(always)]
-pub(super) unsafe fn score_fold_strip(
+pub(super) fn score_fold_strip(
     arch: V3,
-    acc: *const i32,
-    state: *mut f32,
+    strip: &Strip<'_, i32, A_PANEL, B_PANEL>,
+    state: &mut [f32],
     cols: usize,
     q_meta: &[MinMaxCompensation],
     d_meta: &[MinMaxCompensation],
     dim: f32,
 ) {
     let lanes = f32s::LANES;
+    // The slicing is the bounds check: every load below is inside these lengths.
+    let acc = strip.columns(cols);
+    let d_meta = &d_meta[..cols];
+    assert_eq!(state.len(), A_PANEL, "the fold writes a whole A-panel");
+    assert_eq!(q_meta.len(), A_PANEL, "one compensation per A-panel row");
+    let (state, acc) = (state.as_mut_ptr(), acc.as_ptr());
 
     let mut qa = [0.0f32; A_PANEL];
     let mut qb = [0.0f32; A_PANEL];
     let mut qn = [0.0f32; A_PANEL];
-    for i in 0..A_PANEL {
-        let qm = q_meta[i];
+    for (i, qm) in q_meta.iter().enumerate() {
         qa[i] = qm.a;
         qb[i] = qm.b;
         qn[i] = qm.n;
     }
-    // SAFETY: each array holds exactly A_PANEL = 2·LANES f32; `state` writable for A_PANEL.
+    // SAFETY: each array holds exactly A_PANEL = 2·LANES f32, and `state` is A_PANEL
+    // writable f32, so both halves of each are in bounds.
     let (qa0, qa1, qb0, qb1, qn0, qn1, mut m0, mut m1) = unsafe {
         (
             f32s::load_simd(arch, qa.as_ptr()),
@@ -200,12 +250,13 @@ pub(super) unsafe fn score_fold_strip(
         )
     };
 
-    for (c, dm) in d_meta.iter().enumerate().take(cols) {
+    for (c, dm) in d_meta.iter().enumerate() {
         let a_c = f32s::splat(arch, dm.a);
         let b_c = f32s::splat(arch, dm.b);
         let c_c = f32s::splat(arch, dm.n + dm.b * dim);
         let col = c * A_PANEL;
-        // SAFETY: `col + 2·LANES <= cols*A_PANEL`; `acc` valid for that many i32.
+        // SAFETY: `acc` is `cols * A_PANEL` readable i32 and `c < cols`, so the column
+        // and both its halves are in bounds.
         unsafe {
             let raw0 = i32s::load_simd(arch, acc.add(col)).simd_cast();
             let raw1 = i32s::load_simd(arch, acc.add(col + lanes)).simd_cast();
@@ -216,7 +267,7 @@ pub(super) unsafe fn score_fold_strip(
         }
     }
 
-    // SAFETY: `state` writable for A_PANEL f32.
+    // SAFETY: `state` is A_PANEL writable f32, as loaded above.
     unsafe {
         m0.store_simd(state);
         m1.store_simd(state.add(lanes));

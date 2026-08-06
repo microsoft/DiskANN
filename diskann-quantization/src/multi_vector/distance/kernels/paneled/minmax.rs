@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 //! 4-bit MinMax instantiation. The interesting half is [`MinMaxMax`]: dequant needs
-//! per-vector metadata indexed by [`At`] and the reduction needs the dequantized
+//! per-vector metadata indexed by [`Region`] and the reduction needs the dequantized
 //! score, so both ride in one [`Drain`] and the score never reaches memory.
 
 use core::mem::size_of;
@@ -14,7 +14,7 @@ use diskann_wide::arch::x86_64::V3;
 use super::arena::ResettableArena;
 use super::leaves::{A_PANEL, B_PANEL};
 use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
-use super::{Accumulate, At, Block, Drain, Plan, Strip, StripRef, TileBudget, drive, leaves};
+use super::{Accumulate, Block, Drain, Plan, Region, Strip, TileBudget, drive, leaves};
 use crate::CompressInto;
 use crate::algorithms::Transform;
 use crate::algorithms::transforms::NullTransform;
@@ -33,7 +33,7 @@ impl<'a, 'b, 'x>
         V3,
         QPanel<'a, i16, A_PANEL>,
         DPanel<'b, u8, B_PANEL, Static<B_PANEL>>,
-        Block<'x, i32, A_PANEL, B_PANEL, Static<B_PANEL>>,
+        Block<'x, i32, A_PANEL, B_PANEL>,
     > for I8Kernel
 {
     #[inline(always)]
@@ -42,19 +42,9 @@ impl<'a, 'b, 'x>
         arch: V3,
         a: QPanel<'a, i16, A_PANEL>,
         b: DPanel<'b, u8, B_PANEL, Static<B_PANEL>>,
-        mut out: Block<'x, i32, A_PANEL, B_PANEL, Static<B_PANEL>>,
+        out: Block<'x, i32, A_PANEL, B_PANEL>,
     ) {
-        // SAFETY: `a` is an A_PANEL×k block-transposed i16 block; `b` is B_PANEL rows
-        // of k u8; `out` is B_PANEL columns of A_PANEL i32 at stride A_PANEL (`k` even).
-        unsafe {
-            leaves::int_store_microkernel::<B_PANEL>(
-                arch,
-                a.as_ptr(),
-                b.as_ptr(),
-                a.k(),
-                out.as_mut_ptr(),
-            );
-        }
+        leaves::int_store_microkernel::<B_PANEL, _>(arch, a, b, out);
     }
 }
 
@@ -63,7 +53,7 @@ impl<'a, 'b, 'x>
         V3,
         QPanel<'a, i16, A_PANEL>,
         DPanel<'b, u8, B_PANEL, Dynamic>,
-        Block<'x, i32, A_PANEL, B_PANEL, Dynamic>,
+        Block<'x, i32, A_PANEL, B_PANEL>,
     > for I8Kernel
 {
     #[inline(always)]
@@ -72,19 +62,14 @@ impl<'a, 'b, 'x>
         arch: V3,
         a: QPanel<'a, i16, A_PANEL>,
         b: DPanel<'b, u8, B_PANEL, Dynamic>,
-        mut out: Block<'x, i32, A_PANEL, B_PANEL, Dynamic>,
+        out: Block<'x, i32, A_PANEL, B_PANEL>,
     ) {
-        debug_assert_eq!(out.cols(), b.rows());
-        debug_assert!(b.rows() < B_PANEL);
-        let (ap, bp, op, k) = (a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), a.k());
-        // SAFETY: as the full-width impl, with a runtime width in 1..B_PANEL.
-        unsafe {
-            match b.rows() {
-                3 => leaves::int_store_microkernel::<3>(arch, ap, bp, k, op),
-                2 => leaves::int_store_microkernel::<2>(arch, ap, bp, k, op),
-                1 => leaves::int_store_microkernel::<1>(arch, ap, bp, k, op),
-                other => unreachable!("tail width {other} out of 1..{B_PANEL}"),
-            }
+        // The leaf checks that the width it unrolls for is the width `b` actually has.
+        match b.rows() {
+            3 => leaves::int_store_microkernel::<3, _>(arch, a, b, out),
+            2 => leaves::int_store_microkernel::<2, _>(arch, a, b, out),
+            1 => leaves::int_store_microkernel::<1, _>(arch, a, b, out),
+            other => unreachable!("tail width {other} out of 1..{B_PANEL}"),
         }
     }
 }
@@ -93,7 +78,7 @@ impl<'a, 'b, 'x>
 
 /// Fused 4-bit MinMax dequant + running max: rewrites each raw integer dot into the
 /// MinMax inner product using per-vector `a`/`b`/`n` metadata, then folds it straight
-/// into the output it owns.
+/// into the output — the score never reaches memory.
 pub(crate) struct MinMaxMax<'m, 'o> {
     query_meta: &'m [MinMaxCompensation],
     doc_meta: &'m [MinMaxCompensation],
@@ -120,18 +105,15 @@ impl<'m, 'o> MinMaxMax<'m, 'o> {
 
 impl Drain<V3, Strip<'_, i32, A_PANEL, B_PANEL>> for MinMaxMax<'_, '_> {
     #[inline(always)]
-    fn drain(&mut self, arch: V3, acc: StripRef<'_, i32, A_PANEL>, at: At) {
-        let cols = acc.cols();
-        let lo = at.a_panel * A_PANEL;
-        let q = &self.query_meta[lo..lo + A_PANEL];
-        let d = &self.doc_meta[at.b_row..at.b_row + cols];
+    fn drain(&mut self, arch: V3, acc: &Strip<'_, i32, A_PANEL, B_PANEL>, region: Region) {
+        let (a, b) = (region.a, region.b);
+        // A-indexed buffers here are padded to whole panels, so the stride is ours to
+        // state — which is what makes the leaf's one-compensation-per-row check hold.
+        let q = &self.query_meta[a.start..][..A_PANEL];
+        let d = &self.doc_meta[b.range()];
         let dim = self.dim;
-        let out = &mut self.out[lo..][..A_PANEL];
-        // SAFETY: `acc` is `cols` columns of A_PANEL i32; `out` is A_PANEL writable
-        // f32; `q.len() == A_PANEL`; `d.len() == cols`.
-        unsafe {
-            leaves::score_fold_strip(arch, acc.as_ptr(), out.as_mut_ptr(), cols, q, d, dim);
-        }
+        let out = &mut self.out[a.start..][..A_PANEL];
+        leaves::score_fold_strip(arch, acc, out, b.len(), q, d, dim);
     }
 }
 
