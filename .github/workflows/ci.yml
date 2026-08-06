@@ -5,7 +5,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "pipnn-stack/**"]
 
 name: CI
 
@@ -485,7 +485,9 @@ jobs:
             --config "$RUST_CONFIG" \
             --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace \
+            --features "${{ env.DISKANN_FEATURES }}" \
+            --config "$RUST_CONFIG"
 
   coverage:
     needs: basics

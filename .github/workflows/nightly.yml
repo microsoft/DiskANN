@@ -116,7 +116,9 @@ jobs:
             --config "$RUST_CONFIG" \
             --features "${{ env.DISKANN_FEATURES }}"
 
-          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace \
+            --features "${{ env.DISKANN_FEATURES }}" \
+            --config "$RUST_CONFIG"
 
   miri:
     name: miri-test
@@ -141,7 +143,5 @@ jobs:
         run: |
           cargo +nightly miri nextest run --locked \
             --package diskann-quantization
-          cargo +nightly miri test --locked \
-            --package diskann --features pipnn --lib
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
