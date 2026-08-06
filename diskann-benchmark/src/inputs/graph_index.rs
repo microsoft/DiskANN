@@ -969,6 +969,10 @@ impl std::fmt::Display for IndexBuild {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "index-source")] // Use tagged enums for JSON
+#[allow(
+    clippy::large_enum_variant,
+    reason = "build configuration is parsed once; boxing would add indirection to every source access"
+)]
 pub enum IndexSource {
     Load(IndexLoad),
     Build(IndexBuild),
