@@ -399,20 +399,20 @@ where
 {
     let points = adjacency.len();
     if start_point.into_usize() >= points {
-        return Err(ANNError::log_index_error(format!(
+        return Err(ANNError::message(format!(
             "graph start point {start_point} is outside {points} rows"
         )));
     }
     let max_degree = max_degree.into_usize();
     for (source, neighbors) in adjacency.iter().enumerate() {
         if neighbors.len() > max_degree {
-            return Err(ANNError::log_index_error(format!(
+            return Err(ANNError::message(format!(
                 "graph row {source} has degree {}, exceeding configured max degree {max_degree}",
                 neighbors.len()
             )));
         }
         if let Some(&neighbor) = neighbors.iter().find(|&&id| id.into_usize() >= points) {
-            return Err(ANNError::log_index_error(format!(
+            return Err(ANNError::message(format!(
                 "graph row {source} has neighbor {neighbor} outside {points} rows"
             )));
         }
@@ -445,7 +445,7 @@ impl GetAdjacencyList for AdjacencyGraph<'_> {
         self.adjacency
             .get(index)
             .map(|row| &**row)
-            .ok_or_else(|| ANNError::log_index_error(format_args!("missing graph row {index}")))
+            .ok_or_else(|| ANNError::message(format!("missing graph row {index}")))
     }
 
     fn total(&self) -> usize {
