@@ -2419,7 +2419,7 @@ where
             scratch
                 .pool
                 .try_reserve(list.len())
-                .map_err(ANNError::opaque)?;
+                .map_err(ANNError::new)?;
 
             // Look up the source vector from the working set and compute distances.
             {
@@ -2550,26 +2550,30 @@ where
         // Preserve the structural bound on the sorted/capped source pool before
         // availability filtering; filtering must not backfill farther candidates.
         robust_prune::validate_candidate_count::<std::convert::Infallible>(context.pool.len())
-            .map_err(ANNError::opaque)?;
+            .map_err(ANNError::new)?;
 
         let mut candidates = Vec::new();
         candidates
             .try_reserve(context.pool.len())
-            .map_err(ANNError::opaque)?;
+            .map_err(ANNError::new)?;
         for neighbor in context.pool.iter() {
             let id = *neighbor.id();
             if exclude(id) {
                 continue;
             }
             if let Some(value) = map.get(id) {
-                candidates.push(robust_prune::Candidate::new(id, neighbor.distance(), value));
+                candidates.push(robust_prune::Candidate::new(
+                    id,
+                    *neighbor.distance(),
+                    value,
+                ));
             }
         }
 
         context
             .states
             .try_reserve(candidates.len().saturating_sub(context.states.len()))
-            .map_err(ANNError::opaque)?;
+            .map_err(ANNError::new)?;
         context
             .states
             .resize(candidates.len(), robust_prune::State::default());
@@ -2586,7 +2590,7 @@ where
                 )
             },
         )
-        .map_err(ANNError::opaque)?;
+        .map_err(ANNError::new)?;
 
         let mut guard = context.neighbors.resize(selected);
         for (destination, state) in guard.iter_mut().zip(context.states.iter()) {
