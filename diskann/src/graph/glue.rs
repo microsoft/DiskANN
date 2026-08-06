@@ -252,10 +252,12 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 ///
 /// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
 pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
-    fn expand_beam<Itr, P, F>(
+    /// Run the provided beam-expansion implementation with a reusable adjacency-list buffer.
+    fn expand_beam_default_with_scratch<Itr, P, F>(
         &mut self,
         ids: Itr,
         computer: &Self::QueryComputer,
+        neighbors: &mut AdjacencyList<Self::Id>,
         mut pred: P,
         mut on_neighbors: F,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send
@@ -265,9 +267,8 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
-            let mut neighbors = AdjacencyList::new();
             for id in ids {
-                self.get_neighbors(id, &mut neighbors).send().await?;
+                self.get_neighbors(id, neighbors).send().await?;
                 neighbors.retain(|i| pred.eval(i));
 
                 self.distances_unordered(neighbors.iter().copied(), computer, |distance, id| {
@@ -281,6 +282,47 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
             }
 
             Ok(())
+        }
+    }
+
+    /// Expand a beam while allowing the caller to provide reusable scratch storage.
+    ///
+    /// The default delegates to [`Self::expand_beam`] so specialized provider overrides retain
+    /// their I/O, batching, and accounting semantics. Providers using the default implementation
+    /// may override this method and call [`Self::expand_beam_default_with_scratch`] to reuse
+    /// `neighbors`.
+    fn expand_beam_with_scratch<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        computer: &Self::QueryComputer,
+        _neighbors: &mut AdjacencyList<Self::Id>,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(f32, Self::Id) + Send,
+    {
+        async move { self.expand_beam(ids, computer, pred, on_neighbors).await }
+    }
+
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        computer: &Self::QueryComputer,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(f32, Self::Id) + Send,
+    {
+        async move {
+            let mut neighbors = AdjacencyList::new();
+            self.expand_beam_default_with_scratch(ids, computer, &mut neighbors, pred, on_neighbors)
+                .await
         }
     }
 }

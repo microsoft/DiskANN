@@ -15,6 +15,7 @@ use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
     graph::{
+        AdjacencyList,
         glue::{
             self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
             SearchPostProcess, SearchStrategy,
@@ -214,6 +215,7 @@ where
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut two_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut candidates_two_hop_expansion = Vec::with_capacity(max_degree_with_slack);
+    let mut adjacency_scratch = AdjacencyList::with_capacity(max_degree_with_slack);
 
     while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
         scratch.beam_nodes.clear();
@@ -232,9 +234,10 @@ where
 
         // compute distances from query to one-hop neighbors, and mark them visited
         accessor
-            .expand_beam(
+            .expand_beam_with_scratch(
                 scratch.beam_nodes.iter().copied(),
                 computer,
+                &mut adjacency_scratch,
                 glue::NotInMut::new(&mut scratch.visited),
                 |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
             )
@@ -274,13 +277,15 @@ where
         // Expand each two-hop candidate: if its neighbor is a match, compute its distance
         // to the query and insert into `scratch.visited`
         // If it is not a match, do nothing
-        let two_hop_expansion_candidate_ids: Vec<I> =
-            candidates_two_hop_expansion.iter().map(|n| n.id).collect();
+        let two_hop_expansion_count = candidates_two_hop_expansion.len();
 
         accessor
-            .expand_beam(
-                two_hop_expansion_candidate_ids.iter().copied(),
+            .expand_beam_with_scratch(
+                candidates_two_hop_expansion
+                    .iter()
+                    .map(|neighbor| neighbor.id),
                 computer,
+                &mut adjacency_scratch,
                 NotInMutWithLabelCheck::new(&mut scratch.visited, query_label_evaluator),
                 |distance, id| {
                     two_hop_neighbors.push(Neighbor::new(id, distance));
@@ -294,7 +299,7 @@ where
             .for_each(|neighbor| scratch.best.insert(*neighbor));
 
         scratch.cmps += two_hop_neighbors.len() as u32;
-        scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
+        scratch.hops += two_hop_expansion_count as u32;
     }
 
     Ok(make_stats(scratch))

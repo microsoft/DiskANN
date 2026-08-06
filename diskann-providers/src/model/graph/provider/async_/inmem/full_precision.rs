@@ -10,7 +10,7 @@ use diskann::{
     ANNError, ANNResult,
     error::Infallible,
     graph::{
-        SearchOutputBuffer,
+        AdjacencyList, SearchOutputBuffer,
         glue::{
             self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
@@ -314,6 +314,21 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
+    fn expand_beam_with_scratch<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        computer: &Self::QueryComputer,
+        neighbors: &mut AdjacencyList<Self::Id>,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(f32, Self::Id) + Send,
+    {
+        self.expand_beam_default_with_scratch(ids, computer, neighbors, pred, on_neighbors)
+    }
 }
 
 //-------------------//
