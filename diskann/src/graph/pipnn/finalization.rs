@@ -85,7 +85,7 @@ pub(crate) fn prune_overfull<T>(
 where
     T: VectorRepr + Send + Sync,
 {
-    validate_candidate_lists(&candidates, data.nrows()).map_err(ANNError::opaque)?;
+    validate_candidate_lists(&candidates, data.nrows()).map_err(ANNError::new)?;
 
     let degree = graph.pruned_degree().get();
     let distance = T::distance(metric, Some(data.ncols()));
@@ -104,13 +104,13 @@ where
                     return Ok(source_candidates);
                 }
 
-                let source_id = u32::try_from(source).map_err(ANNError::opaque)?;
+                let source_id = u32::try_from(source).map_err(ANNError::new)?;
                 let source_vector = data.row(source);
                 workspace.pool.clear();
                 workspace
                     .pool
                     .try_reserve(source_candidates.len())
-                    .map_err(ANNError::opaque)?;
+                    .map_err(ANNError::new)?;
                 workspace
                     .pool
                     .extend(source_candidates.iter().copied().map(|candidate| {
@@ -123,12 +123,12 @@ where
 
                 let candidate_count = workspace.pool.len();
                 prune::validate_candidate_count::<Infallible>(candidate_count)
-                    .map_err(ANNError::opaque)?;
+                    .map_err(ANNError::new)?;
                 workspace.prepared.clear();
                 workspace
                     .prepared
                     .try_reserve(candidate_count)
-                    .map_err(ANNError::opaque)?;
+                    .map_err(ANNError::new)?;
                 {
                     // Sorting/capping precedes source exclusion so filtering cannot
                     // backfill with farther candidates.
@@ -138,7 +138,7 @@ where
                         .extend(sorted.iter().filter_map(|neighbor| {
                             let id = *neighbor.id();
                             (id != source_id)
-                                .then(|| prune::Candidate::new(id, neighbor.distance(), id))
+                                .then(|| prune::Candidate::new(id, *neighbor.distance(), id))
                         }));
                 }
                 workspace
@@ -149,7 +149,7 @@ where
                             .len()
                             .saturating_sub(workspace.states.len()),
                     )
-                    .map_err(ANNError::opaque)?;
+                    .map_err(ANNError::new)?;
                 workspace
                     .states
                     .resize(workspace.prepared.len(), prune::State::default());
@@ -167,7 +167,7 @@ where
                         ))
                     },
                 )
-                .map_err(ANNError::opaque)?;
+                .map_err(ANNError::new)?;
 
                 let mut guard = source_candidates.resize(selected);
                 for (destination, state) in guard.iter_mut().zip(workspace.states.iter()) {
@@ -203,4 +203,106 @@ fn validate_candidate_lists(
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use crate::graph::{
+        AdjacencyList,
+        config::{self, MaxDegree},
+    };
+    use diskann_utils::views::MatrixView;
+
+    use super::*;
+
+    fn graph_config(degree: usize) -> Config {
+        config::Builder::new_with(
+            degree,
+            MaxDegree::same(),
+            degree,
+            Metric::L2.into(),
+            |builder| {
+                builder.alpha(1.2);
+            },
+        )
+        .build()
+        .unwrap()
+    }
+
+    fn candidate_list(ids: impl IntoIterator<Item = u32>) -> AdjacencyList<u32> {
+        AdjacencyList::from_iter_untrusted(ids)
+    }
+
+    #[test]
+    fn preserves_lists_within_the_degree_bound() {
+        let data = [0.0_f32, 1.0, 2.0, 3.0];
+        let data = MatrixView::try_from(&data[..], 4, 1).unwrap();
+        let candidates = vec![
+            candidate_list([3, 1]),
+            candidate_list([]),
+            candidate_list([]),
+            candidate_list([]),
+        ];
+
+        let actual = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
+
+        assert_eq!(&*actual[0], &[1, 3]);
+    }
+
+    #[test]
+    fn prunes_an_overfull_list_with_the_vamana_kernel() {
+        let data = [0.0_f32, 1.0, 2.0, -3.0];
+        let data = MatrixView::try_from(&data[..], 4, 1).unwrap();
+        let candidates = vec![
+            candidate_list([3, 2, 1]),
+            candidate_list([]),
+            candidate_list([]),
+            candidate_list([]),
+        ];
+
+        let actual = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
+
+        assert_eq!(&*actual[0], &[1, 3]);
+    }
+
+    #[test]
+    fn rejects_invalid_candidate_ids_without_panicking() {
+        let data = [0.0_f32, 1.0, 2.0];
+        let data = MatrixView::try_from(&data[..], 3, 1).unwrap();
+        let candidates = vec![
+            candidate_list([1, 3]),
+            candidate_list([]),
+            candidate_list([]),
+        ];
+
+        let error = prune_overfull(data, candidates, &graph_config(1), Metric::L2).unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<FinalizationError>(),
+            Some(FinalizationError::InvalidCandidateId {
+                source_index: 0,
+                candidate: 3,
+                points: 3,
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_candidate_list_count_mismatch_without_panicking() {
+        let data = [0.0_f32, 1.0, 2.0];
+        let data = MatrixView::try_from(&data[..], 3, 1).unwrap();
+        let candidates = vec![
+            candidate_list([]),
+            candidate_list([]),
+            candidate_list([]),
+            candidate_list([]),
+        ];
+
+        let error = prune_overfull(data, candidates, &graph_config(1), Metric::L2).unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<FinalizationError>(),
+            Some(FinalizationError::CandidateListCountMismatch {
+                lists: 4,
+                points: 3
+            })
+        ));
+    }
+}
