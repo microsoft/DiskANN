@@ -23,7 +23,7 @@
 //! `LF_BENCH_PROBES` ids probed per iteration (default 50_000).
 
 use criterion::{criterion_group, Criterion, Throughput};
-use diskann::graph::index::QueryLabelProvider;
+use diskann::graph::ext::labeled::QueryLabelProvider;
 use diskann_label_filter::attribute::Attribute;
 use diskann_label_filter::{
     ASTExpr, CompareOp, InlineAttributeIndex, InlineAttributeIndexBitslice,

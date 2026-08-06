@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU16, NonZeroU32};
 
 use super::IntraBatchCandidates;
 
@@ -11,7 +11,7 @@ use super::IntraBatchCandidates;
 /// pruning. Since pruning has quadratic complexity in the number of candidates, a default
 /// value of 750 provides plenty of room for new candidates without leading to excessive
 /// prune times.
-pub const MAX_OCCLUSION_SIZE: NonZeroU32 = NonZeroU32::new(750).unwrap();
+pub const MAX_OCCLUSION_SIZE: NonZeroU16 = NonZeroU16::new(750).unwrap();
 
 /// "Adjacency list saturation" after pruning involves packing the adjcancy list until it
 /// reaches exactly the configured target degree.

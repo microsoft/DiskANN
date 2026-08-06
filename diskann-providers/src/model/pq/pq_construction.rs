@@ -8,6 +8,7 @@ use std::{
     mem::size_of,
     num::NonZeroUsize,
     sync::atomic::AtomicBool,
+    time::Instant,
     vec,
 };
 
@@ -34,7 +35,7 @@ use crate::{
     model::GeneratePivotArguments,
     storage::PQStorage,
     utils::{
-        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef, Timer,
+        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef,
         create_rnd_provider_from_seed,
     },
 };
@@ -108,9 +109,9 @@ where
     };
 
     let dim = NonZeroUsize::new(parameters.dim())
-        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+        .ok_or_else(|| ANNError::message("dim must be non-zero"))?;
     let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
-        .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
+        .ok_or_else(|| ANNError::message("num_pq_chunks must be non-zero"))?;
     let chunk_offsets = ChunkOffsets::partition(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -128,7 +129,7 @@ where
                 &random_provider,
                 &diskann_quantization::cancel::DontCancel,
             )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?
+            .map_err(ANNError::new)?
             .flatten();
         Ok(result)
     })?;
@@ -169,19 +170,19 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if full_pivot_data.len() != parameters.num_centers() * parameters.dim() {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: full_pivot_data size is not num_centers * dim.",
         ));
     }
 
     if offsets.len() != parameters.num_pq_chunks() + 1 {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: invalid offsets buffer input size.",
         ));
     }
 
     if *cancellation_token {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: Cancellation requested by caller.",
         ));
     }
@@ -194,7 +195,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
 
     // Calculate the chunk offsets, filling the caller-owned buffer.
     let dim = NonZeroUsize::new(parameters.dim())
-        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+        .ok_or_else(|| ANNError::message("dim must be non-zero"))?;
     let chunk_offsets_view = ChunkOffsetsView::partition_into(dim, offsets).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -232,7 +233,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
                 &rng_builder,
                 &cancelation,
             )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?
+            .map_err(ANNError::new)?
             .flatten();
         Ok(result)
     })?;
@@ -324,7 +325,7 @@ where
     T: Copy + VectorRepr,
     Storage: StorageWriteProvider + StorageReadProvider,
 {
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     info!("Generating PQ data starting from offset {}", offset);
 
@@ -345,9 +346,7 @@ where
     let full_dim: usize;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
-        return Err(ANNError::log_pq_error(
-            "ERROR: PQ k-means pivot file not found.",
-        ));
+        return Err(ANNError::message("ERROR: PQ k-means pivot file not found."));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
         (full_pivot_data, centroid, chunk_offsets) = pq_storage.load_existing_pivot_data(
@@ -394,7 +393,7 @@ where
             .bridge_err()?
             .to_owned(),
     )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+    .map_err(ANNError::new)?;
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
@@ -437,9 +436,7 @@ where
             .par_window_iter(BATCH_SIZE)
             .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
             .try_for_each_in_pool(pool, |(src, dst)| {
-                table.compress_into(src, dst).map_err(|err| {
-                    ANNError::log_pq_error(diskann_quantization::error::format(&err))
-                })
+                table.compress_into(src, dst).map_err(ANNError::new)
             })?;
 
         let offset = start_index * num_pq_chunks + std::mem::size_of::<i32>() * 2;
@@ -504,7 +501,7 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
         MatrixView::try_from(pivot_data, num_pivots, dim).bridge_err()?,
         diskann_quantization::views::ChunkOffsetsView::new(offsets).bridge_err()?,
     )
-    .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+    .map_err(ANNError::new)?;
 
     let data = vector_data
         .iter()
@@ -513,7 +510,7 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
 
     table
         .compress_into(data.as_slice(), pq_out)
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))
+        .map_err(ANNError::new)
 }
 
 /// Legacy compatibility function for providing an batch data generation.
@@ -541,14 +538,12 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
     let dim = parameters.dim();
 
     if vector_data.len() != num_train * dim {
-        return Err(ANNError::log_pq_error(
+        return Err(ANNError::message(
             "Error: Vector data length has the incorrect size!",
         ));
     }
     if pq_out.len() != num_train * num_pq_chunks {
-        return Err(ANNError::log_pq_error(
-            "Error: Invalid PQ buffer input size.",
-        ));
+        return Err(ANNError::message("Error: Invalid PQ buffer input size."));
     }
 
     pq_out

@@ -1,0 +1,14 @@
+{
+  "checks": [
+        {
+          "input": {
+            "type": "integration-test",
+            "content": {}
+          },
+          "tolerance": {
+            "type": "empty-tolerance",
+            "content": null
+          }
+        }
+  ]
+}

@@ -7,10 +7,9 @@ use diskann_utils::future::SendFuture;
 
 use crate::{
     ANNError, ANNResult,
-    error::IntoANNResult,
     graph::{
         DiskANNIndex,
-        glue::{SearchExt, SearchStrategy},
+        glue::SearchAccessor,
         search::{record::NoopSearchRecord, scratch::SearchScratch},
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -25,23 +24,23 @@ use crate::{
 ///
 /// See also: [`DiskANNIndex::paged_search`], [`DiskANNIndex::paged_search_with_init_ids`].
 #[derive(Debug)]
-pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
+pub struct PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
     pub(in crate::graph) index: &'a DiskANNIndex<DP>,
-    pub(in crate::graph) context: &'a DP::Context,
     pub(in crate::graph) scratch: SearchScratch<DP::InternalId>,
     pub(in crate::graph) computed_result: Vec<Neighbor<DP::InternalId>>,
     pub(in crate::graph) next_result_index: usize,
     pub(in crate::graph) search_param_l: usize,
-    pub(in crate::graph) strategy: S,
-    pub(in crate::graph) computer: S::QueryComputer,
-    // Note: The `fn` is so we derive `Send` and `Sync` more easily: `fn` is always Send/Sync.
-    pub(in crate::graph) _query: std::marker::PhantomData<fn(T)>,
+    pub(in crate::graph) accessor: A,
 }
 
-impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+impl<'a, DP, A> PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
@@ -57,14 +56,12 @@ where
     ) -> impl SendFuture<ANNResult<Vec<Neighbor<DP::InternalId>>>> {
         async move {
             if k > self.search_param_l {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be less than or equal to search_param_l".to_string(),
+                return ANNResult::Err(ANNError::message(
+                    "k should be less than or equal to search_param_l",
                 ));
             }
             if k == 0 {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be greater than 0".to_string(),
-                ));
+                return ANNResult::Err(ANNError::message("k should be greater than 0"));
             }
 
             let mut result = Vec::with_capacity(k);
@@ -88,27 +85,16 @@ where
             }
 
             // Resume graph search to fill the next batch.
-            let start_points = {
-                let mut accessor = self
-                    .strategy
-                    .search_accessor(&self.index.data_provider, self.context)
-                    .into_ann_result()?;
+            self.index
+                .search_internal(
+                    None, // beam_width
+                    &mut self.accessor,
+                    &mut self.scratch,
+                    &mut NoopSearchRecord::new(),
+                )
+                .await?;
 
-                let start_ids = accessor.starting_points().await?;
-                self.index
-                    .search_internal(
-                        None, // beam_width
-                        &start_ids,
-                        &mut accessor,
-                        &self.computer,
-                        &mut self.scratch,
-                        &mut NoopSearchRecord::new(),
-                    )
-                    .await?;
-
-                start_ids
-            };
-
+            let start_points = self.accessor.starting_points().await?;
             let (mut candidates, total_considered) =
                 filter_search_candidates(&start_points, k, &mut self.scratch.best);
             self.scratch.best.drain_best(total_considered);
@@ -146,7 +132,7 @@ where
     let mut candidates = Vec::with_capacity(page_size);
     for n in best.iter() {
         total += 1;
-        if !start_points.contains(&n.id) {
+        if !start_points.contains(n.id()) {
             candidates.push(n);
             if candidates.len() >= page_size {
                 break;

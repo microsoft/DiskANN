@@ -17,12 +17,10 @@ use std::{
 use diskann::{
     graph::{
         SearchOutputBuffer,
-        config::{
-            self,
-            defaults::{FILTER_BETA, GRAPH_SLACK_FACTOR},
-        },
-        search,
+        config::{self, defaults::GRAPH_SLACK_FACTOR},
+        search::{self, AdaptiveL},
     },
+    neighbor::Neighbor,
     utils::VectorRepr,
 };
 use diskann_providers::index::wrapped_async::DiskANNIndex;
@@ -31,6 +29,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
+    garnet::FilterCallback,
     provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
@@ -49,12 +48,14 @@ mod ffi_recall_tests;
 mod ffi_tests;
 mod fsm;
 mod garnet;
-mod labels;
 mod provider;
 mod quantization;
 #[cfg(test)]
 mod test_utils;
 
+const ADAPTIVE_L_SAMPLES: usize = 1000;
+
+#[derive(Debug, PartialEq)]
 enum IndexState {
     NoStartPoints,
     SettingStartPoints,
@@ -126,7 +127,9 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
         Some(self.dists.len() - self.index)
     }
 
-    fn push(&mut self, id: GarnetId, distance: f32) -> diskann::graph::BufferState {
+    fn push(&mut self, neighbor: Neighbor<GarnetId>) -> diskann::graph::BufferState {
+        let (id, distance) = neighbor.as_tuple();
+
         if self.index >= self.dists.len()
             || self.id_index + mem::size_of::<u32>() + id.len() > self.ids.len()
         {
@@ -156,12 +159,12 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (GarnetId, f32)>,
+        Itr: IntoIterator<Item = Neighbor<GarnetId>>,
     {
         let initial = self.current_len();
 
-        for (id, dist) in itr {
-            if self.push(id, dist).is_full() {
+        for neighbor in itr {
+            if self.push(neighbor).is_full() {
                 break;
             }
         }
@@ -178,7 +181,7 @@ fn create_index_impl<T: VectorRepr>(
     max_degree: usize,
     callbacks: Callbacks,
     context: Context,
-) -> Result<Arc<Index>, GarnetProviderError> {
+) -> Result<(Arc<Index>, bool), GarnetProviderError> {
     let provider = GarnetProvider::<T>::new(
         dim,
         quant_type,
@@ -192,13 +195,24 @@ fn create_index_impl<T: VectorRepr>(
     } else {
         AtomicUsize::new(IndexState::NoStartPoints as usize)
     };
-    Ok(Arc::new(Index {
-        inner: Box::new(DiskANNIndex::new_with_current_thread_runtime(
-            config, provider,
-        )),
-        quant_type,
-        state,
-    }))
+
+    let quant_needed = match quant_type {
+        VectorQuantType::Bin | VectorQuantType::XBinI8 | VectorQuantType::XBinU8 => {
+            provider.quantization_needed()
+        }
+        _ => false,
+    };
+
+    Ok((
+        Arc::new(Index {
+            inner: Box::new(DiskANNIndex::new_with_current_thread_runtime(
+                config, provider,
+            )),
+            quant_type,
+            state,
+        }),
+        quant_needed,
+    ))
 }
 
 /// # Safety
@@ -217,7 +231,11 @@ pub unsafe extern "C" fn create_index(
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
+    filter_callback: FilterCallback,
+    quantization_needed: *mut bool,
 ) -> *const c_void {
+    unsafe { *quantization_needed = false };
+
     let metric_type = match Metric::try_from(metric_type) {
         Ok(m) => m,
         Err(_) => return ptr::null(),
@@ -239,12 +257,18 @@ pub unsafe extern "C" fn create_index(
     };
 
     let context = Context::new(ctx);
-    let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback);
+    let callbacks = Callbacks::new(
+        read_callback,
+        write_callback,
+        delete_callback,
+        rmw_callback,
+        filter_callback,
+    );
 
     match quant_type {
         VectorQuantType::Invalid => ptr::null(),
         VectorQuantType::XNoQuantU8 | VectorQuantType::XBinU8 => {
-            if let Ok(index) = create_index_impl::<u8>(
+            if let Ok((index, quant_needed)) = create_index_impl::<u8>(
                 quant_type,
                 config,
                 dim as usize,
@@ -253,13 +277,14 @@ pub unsafe extern "C" fn create_index(
                 callbacks,
                 context,
             ) {
+                unsafe { *quantization_needed = quant_needed };
                 Arc::into_raw(index).cast::<c_void>()
             } else {
                 ptr::null()
             }
         }
         VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
-            if let Ok(index) = create_index_impl::<i8>(
+            if let Ok((index, quant_needed)) = create_index_impl::<i8>(
                 quant_type,
                 config,
                 dim as usize,
@@ -268,13 +293,14 @@ pub unsafe extern "C" fn create_index(
                 callbacks,
                 context,
             ) {
+                unsafe { *quantization_needed = quant_needed };
                 Arc::into_raw(index).cast::<c_void>()
             } else {
                 ptr::null()
             }
         }
         VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
-            if let Ok(index) = create_index_impl::<f32>(
+            if let Ok((index, quant_needed)) = create_index_impl::<f32>(
                 quant_type,
                 config,
                 dim as usize,
@@ -283,6 +309,7 @@ pub unsafe extern "C" fn create_index(
                 callbacks,
                 context,
             ) {
+                unsafe { *quantization_needed = quant_needed };
                 Arc::into_raw(index).cast::<c_void>()
             } else {
                 ptr::null()
@@ -335,6 +362,7 @@ fn interpret_vector<'a>(
 ) -> Option<PolyCow<'a>> {
     let vector_len_bytes = match quant_type {
         VectorQuantType::Invalid => return None,
+
         VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => vector_len * 4,
         VectorQuantType::XNoQuantU8
         | VectorQuantType::XNoQuantI8
@@ -346,6 +374,7 @@ fn interpret_vector<'a>(
 
     let v = match quant_type {
         VectorQuantType::Invalid => return None,
+
         VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
             if v.as_ptr().align_offset(mem::align_of::<f32>()) == 0 {
                 // pointer is correctly aligned to interpret as f32
@@ -370,6 +399,7 @@ fn interpret_vector<'a>(
     Some(v)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum InsertResult {
     Fail,
     Success,
@@ -382,6 +412,17 @@ impl From<InsertResult> for u8 {
             InsertResult::Fail => 0,
             InsertResult::Success => 1,
             InsertResult::SuccessStartTraining => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<u8> for InsertResult {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => InsertResult::Success,
+            2 => InsertResult::SuccessStartTraining,
+            _ => InsertResult::Fail,
         }
     }
 }
@@ -549,10 +590,17 @@ pub unsafe extern "C" fn set_attribute(
         return false;
     }
 
-    if attribute_len > 0 && !attribute_data.is_null() {
+    if !attribute_data.is_null() {
         let attr_data: &[u8] = unsafe { slice::from_raw_parts(attribute_data, attribute_len) };
-        if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-            return false;
+        if !attr_data.is_empty() {
+            if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
+                return false;
+            }
+        } else {
+            // Empty attribute string is interpreted as deletion
+            if index.inner.delete_attributes(&ctx, &id).is_err() {
+                return false;
+            }
         }
     }
 
@@ -572,7 +620,7 @@ pub unsafe extern "C" fn search_vector(
     search_exploration_factor: u32,
     bitmap_data: *const u8,
     bitmap_len: usize,
-    _max_filtering_effort: usize,
+    max_filtering_effort: usize,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
@@ -596,28 +644,28 @@ pub unsafe extern "C" fn search_vector(
         output_distances_len,
     );
 
-    let params = match search::Knn::new(
-        output_distances_len,
-        search_exploration_factor as usize,
-        None,
-    ) {
+    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
         Ok(params) => params,
         Err(_) => return -1,
     };
 
-    let has_filter = !bitmap_data.is_null() && bitmap_len > 0;
+    let res = if bitmap_data.is_null() || bitmap_len == 0 {
+        // normal KNN search
 
-    let labels = if has_filter {
-        Some(unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) })
+        index.inner.search_vector(&ctx, &v, knn_params, &mut output)
     } else {
-        None
+        // inline filtered search
+
+        let adaptive_l = match AdaptiveL::new(ADAPTIVE_L_SAMPLES, max_filtering_effort as f64) {
+            Ok(al) => al,
+            Err(_) => return -1,
+        };
+        let params = search::InlineFilterSearch::new(knn_params, Some(adaptive_l));
+
+        index
+            .inner
+            .filtered_search_vector(&ctx, &v, params, &mut output)
     };
-    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
-
-    let res = index
-        .inner
-        .search_vector(&ctx, &v, &params, filter, &mut output);
-
     if let Ok(stats) = res {
         if stats.result_count > i32::MAX as u32 {
             -1
@@ -642,7 +690,7 @@ pub unsafe extern "C" fn search_element(
     search_exploration_factor: u32,
     bitmap_data: *const u8,
     bitmap_len: usize,
-    _max_filtering_effort: usize,
+    max_filtering_effort: usize,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
@@ -661,26 +709,31 @@ pub unsafe extern "C" fn search_element(
         output_distances_len,
     );
 
-    let params = match search::Knn::new(
-        output_distances_len,
-        search_exploration_factor as usize,
-        None,
-    ) {
-        Ok(params) => params,
+    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
+        Ok(knn) => knn,
         Err(_) => return -1,
     };
 
-    let has_filter = !bitmap_data.is_null() && bitmap_len > 0;
-    let labels = if has_filter {
-        Some(unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) })
-    } else {
-        None
-    };
-    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
+    let res = if bitmap_data.is_null() || bitmap_len == 0 {
+        // normal KNN search
 
-    let res = index
-        .inner
-        .search_element(&ctx, &id, &params, filter, &mut output);
+        index
+            .inner
+            .search_element(&ctx, &id, knn_params, &mut output)
+    } else {
+        // inline filtered search
+
+        let adaptive_l = match AdaptiveL::new(ADAPTIVE_L_SAMPLES, max_filtering_effort as f64) {
+            Ok(al) => al,
+            Err(_) => return -1,
+        };
+        let params = search::InlineFilterSearch::new(knn_params, Some(adaptive_l));
+
+        index
+            .inner
+            .filtered_search_element(&ctx, &id, params, &mut output)
+    };
+
     if let Ok(stats) = res {
         if stats.result_count > i32::MAX as u32 {
             -1
@@ -706,7 +759,7 @@ pub unsafe extern "C" fn continue_search(
     _output_distances_len: usize,
     _new_continuation: *mut c_void,
 ) -> i32 {
-    unimplemented!()
+    -1
 }
 
 /// # Safety
@@ -780,4 +833,240 @@ pub unsafe extern "C" fn check_external_id_valid(
     let id = GarnetId::from(id_bytes);
 
     index.inner.external_id_exists(&ctx, &id)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{mem, ptr};
+
+    use diskann::{
+        graph::{BufferState, SearchOutputBuffer},
+        neighbor::Neighbor,
+    };
+    use diskann_vector::distance::Metric;
+
+    use crate::{
+        Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
+        garnet::{Context, GarnetId, Term},
+        test_utils::Store,
+    };
+
+    #[test]
+    fn index_state() {
+        assert_eq!(IndexState::from(0), IndexState::NoStartPoints);
+        assert_eq!(IndexState::from(1), IndexState::SettingStartPoints);
+        assert_eq!(IndexState::from(2), IndexState::Ready);
+    }
+
+    #[test]
+    fn search_results() {
+        let mut ids = vec![0u8; 40]; // 20 bytes for 5 IDs; 20 bytes for 5 length prefixes
+        let mut dists = vec![0.0f32; 5];
+        let ids_buffer = ids.as_mut_ptr();
+        let ids_len = ids.len();
+        let dists_buffer = dists.as_mut_ptr();
+        let dists_len = dists.len();
+
+        let mut sr = SearchResults::new(ids_buffer, ids_len, dists_buffer, dists_len);
+
+        assert_eq!(sr.size_hint(), Some(5));
+
+        let test_data = [
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&1u32)), 1.1f32),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&2u32)), 2.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&3u32)), 3.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&4u32)), 4.1),
+            Neighbor::new(GarnetId::from(bytemuck::bytes_of(&5u32)), 5.1),
+        ];
+
+        assert_eq!(sr.current_len(), 0);
+
+        sr.extend(test_data);
+
+        assert_eq!(sr.current_len(), 5);
+
+        let mut pos = 0usize;
+        for (i, d) in dists.iter().enumerate() {
+            let mut size = 0u32;
+            bytemuck::bytes_of_mut(&mut size).copy_from_slice(&ids[pos..pos + 4]);
+            pos += 4;
+
+            assert_eq!(size, 4);
+
+            let mut id = 0u32;
+            bytemuck::bytes_of_mut(&mut id).copy_from_slice(&ids[pos..pos + 4]);
+            pos += 4;
+
+            assert_eq!(id, i as u32 + 1);
+
+            assert_eq!(*d, i as f32 + 1.1);
+        }
+
+        assert_eq!(
+            sr.push(Neighbor::new(
+                GarnetId::from(bytemuck::bytes_of(&6u32)),
+                6.1f32
+            )),
+            BufferState::Full
+        );
+    }
+
+    fn check_create_index(quant_type: VectorQuantType) {
+        let store = Store::new();
+        let mut quant_needed = false;
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                quant_type,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+        assert!(!index_ptr.is_null());
+        let index = unsafe { &*index_ptr.cast::<Index>() };
+        assert_eq!(index.quant_type, quant_type);
+        assert_eq!(index.inner.approximate_count(), 0);
+
+        unsafe {
+            drop_index(0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn create_index() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::Invalid,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+        assert!(index_ptr.is_null());
+
+        check_create_index(VectorQuantType::NoQuant);
+        check_create_index(VectorQuantType::Bin);
+        check_create_index(VectorQuantType::Q8);
+        check_create_index(VectorQuantType::XNoQuantU8);
+        check_create_index(VectorQuantType::XBinU8);
+        check_create_index(VectorQuantType::XNoQuantI8);
+        check_create_index(VectorQuantType::XBinI8);
+    }
+
+    #[test]
+    fn interpret_vector() {
+        // f32; correctly aligned
+        let v = vec![0.0f32; 2];
+        let v_ptr = bytemuck::cast_slice::<f32, u8>(&v).as_ptr();
+        let res = super::interpret_vector(VectorQuantType::NoQuant, &v_ptr, v.len());
+        assert!(matches!(res, Some(PolyCow::Borrowed(_))));
+
+        // f32; unaligned
+        let real_v = vec![0.0f32; 2];
+        let mut v = vec![0u8; 2 * mem::size_of::<f32>() + 1];
+        v[1..].copy_from_slice(bytemuck::cast_slice::<f32, u8>(&real_v));
+        let v_ptr = unsafe { v.as_ptr().offset(1) };
+        let res = super::interpret_vector(VectorQuantType::NoQuant, &v_ptr, real_v.len());
+        assert!(matches!(res, Some(PolyCow::Owned(_))));
+
+        // i8
+        let v = vec![0i8; 2];
+        let v_ptr = bytemuck::cast_slice::<i8, u8>(&v).as_ptr();
+        let res = super::interpret_vector(VectorQuantType::XNoQuantI8, &v_ptr, v.len());
+        assert!(matches!(res, Some(PolyCow::Borrowed(_))));
+
+        let res = super::interpret_vector(VectorQuantType::Invalid, &ptr::null() as &*const u8, 0);
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn set_and_delete_attributes() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let id = 0u32;
+        let eid = GarnetId::from(bytemuck::bytes_of(&id));
+        let metadata = b"{'foo': 0}";
+        let ctx = Context::new(0);
+        let v = [0.0f32, 0.0f32];
+
+        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+
+        assert_eq!(
+            unsafe {
+                super::insert(
+                    ctx.get(),
+                    index_ptr,
+                    eid.as_ptr(),
+                    eid.len(),
+                    bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                    v.len(),
+                    metadata.as_ptr(),
+                    metadata.len(),
+                )
+            },
+            1
+        );
+        assert_eq!(
+            store.get(ctx.term(Term::Attributes).get(), &eid),
+            Some(metadata.as_slice().to_owned())
+        );
+
+        assert!(unsafe {
+            super::set_attribute(
+                ctx.get(),
+                index_ptr,
+                eid.as_ptr(),
+                eid.len(),
+                b"".as_ptr(),
+                0,
+            )
+        });
+        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+
+        unsafe {
+            drop_index(0, index_ptr);
+        }
+    }
 }

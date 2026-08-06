@@ -4,7 +4,7 @@
  */
 //! Disk index quantizer implementation.
 use crate::data_model::GraphDataType;
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
@@ -19,7 +19,10 @@ use diskann_quantization::scalar::train::ScalarQuantizationParameters;
 use diskann_utils::views::MatrixView;
 use tracing::info;
 
-use crate::QuantizationType;
+use crate::{
+    error::{diskann_error, ErrorKind},
+    QuantizationType,
+};
 
 /// Quantizer types used specifically for async disk index building.
 #[derive(Clone)]
@@ -66,7 +69,7 @@ impl BuildQuantizer {
                         create_thread_pool(index_configuration.num_threads)?.as_ref(),
                     )?
                 };
-                // Save at checkpoint. Note the the compressed data path and pivots path here
+                // The compressed data path and pivots path are derived from the index prefix.
                 // are different than the ones used in quant vector generation.
                 let pq_paths = PQPathNames::new(index_path_prefix);
                 let pq_build_storage =
@@ -86,9 +89,9 @@ impl BuildQuantizer {
                 standard_deviation,
             } => {
                 if nbits != 1 {
-                    return Err(ANNError::log_index_config_error(
-                        "build_quantization_type".to_string(),
-                        "SQ quantization is only supported for 1 bit".to_string(),
+                    return Err(diskann_error!(
+                        ErrorKind::IndexConfigError("build_quantization_type"),
+                        "SQ quantization is only supported for 1 bit",
                     ));
                 }
                 let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
@@ -116,39 +119,6 @@ impl BuildQuantizer {
                 sq_storage.save_quantizer(&quantizer, storage_provider)?;
 
                 Ok(Self::Scalar1Bit(WithBits::<1>::new(quantizer)))
-            }
-        }
-    }
-
-    /// Load a previously trained quantizer from storage.
-    pub fn load<StorageProvider>(
-        build_quantization_type: &QuantizationType,
-        index_path_prefix: &str,
-        storage_provider: &StorageProvider,
-    ) -> ANNResult<Self>
-    where
-        StorageProvider: StorageReadProvider,
-    {
-        match build_quantization_type {
-            QuantizationType::FP => Ok(Self::NoQuant(NoStore)),
-            QuantizationType::PQ { num_chunks } => {
-                let pq_pivots_paths = PQPathNames::new(index_path_prefix);
-                let pq_build_storage = PQStorage::new(
-                    &pq_pivots_paths.pivots,
-                    &pq_pivots_paths.compressed_data,
-                    None,
-                );
-                let table = pq_build_storage.load_pq_pivots_bin::<StorageProvider>(
-                    &pq_pivots_paths.pivots,
-                    *num_chunks,
-                    storage_provider,
-                )?;
-                Ok(Self::PQ(table))
-            }
-            QuantizationType::SQ { .. } => {
-                let sq_storage = SQStorage::new(index_path_prefix);
-                let sq_quantizer = sq_storage.load_quantizer(storage_provider)?;
-                Ok(Self::Scalar1Bit(WithBits::<1>::new(sq_quantizer)))
             }
         }
     }

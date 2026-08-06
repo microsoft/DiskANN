@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDSumTree, SIMDVector},
 };
 
 /////
@@ -73,6 +73,13 @@ macros::x86_avx512_load_store!(
 
 macros::x86_avx512_int_comparisons!(u64x2, _mm_cmp_epu64_mask, "avx512f,avx512vl");
 
+impl SIMDSumTree for u64x2 {
+    #[inline(always)]
+    fn sum_tree(self) -> u64 {
+        self.retarget().sum_tree()
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -111,6 +118,8 @@ mod test_x86_u64 {
     test_utils::ops::test_fma!(u64x2, 0xcb45c9f29a44719f, V4::new_checked_uncached());
 
     test_utils::ops::test_cmp!(u64x2, 0x92486698bb7603e7, V4::new_checked_uncached());
+
+    test_utils::ops::test_sumtree!(u64x2, 0xe1dc2d07ae014508, V4::new_checked_uncached());
 
     // Bit ops
     test_utils::ops::test_bitops!(u64x2, 0xf9566b095125ca45, V4::new_checked_uncached());

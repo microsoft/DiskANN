@@ -85,6 +85,7 @@ pub(crate) type ReadModifyWriteCallback =
     unsafe extern "C" fn(u64, *const u8, usize, usize, RmwDataCallback, *mut c_void) -> bool;
 pub(crate) type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
 pub(crate) type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
+pub(crate) type FilterCallback = unsafe extern "C" fn(u64, u32) -> bool;
 
 #[derive(Copy, Clone)]
 pub(crate) struct Callbacks {
@@ -92,6 +93,7 @@ pub(crate) struct Callbacks {
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
+    filter_callback: FilterCallback,
 }
 
 impl Callbacks {
@@ -100,12 +102,14 @@ impl Callbacks {
         write_callback: WriteCallback,
         delete_callback: DeleteCallback,
         rmw_callback: ReadModifyWriteCallback,
+        filter_callback: FilterCallback,
     ) -> Self {
         Self {
             read_callback,
             write_callback,
             delete_callback,
             rmw_callback,
+            filter_callback,
         }
     }
 
@@ -127,6 +131,11 @@ impl Callbacks {
     #[cfg(test)]
     pub(crate) fn rmw_callback(&self) -> ReadModifyWriteCallback {
         self.rmw_callback
+    }
+
+    #[cfg(test)]
+    pub(crate) fn filter_callback(&self) -> FilterCallback {
+        self.filter_callback
     }
 
     #[cfg(test)]
@@ -476,6 +485,12 @@ impl Callbacks {
                 &mut f as *mut _ as *mut c_void,
             )
         }
+    }
+
+    /// Evaluate the filter callback on an ID.
+    #[must_use]
+    pub(crate) fn matches_filter(&self, ctx: &Context, id: u32) -> bool {
+        unsafe { (self.filter_callback)(ctx.inner, id) }
     }
 }
 

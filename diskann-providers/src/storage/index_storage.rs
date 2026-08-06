@@ -9,7 +9,7 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult, graph::DiskANNIndex, provider::DataProvider, utils::VectorRepr,
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, lazy_format};
 
 use super::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
 use crate::model::{
@@ -197,7 +197,8 @@ fn get_and_validate_single_starting_point<U, V, D>(
 
     let num_starting_points = start_ids.len();
     if num_starting_points > 1 {
-        return Err(ANNError::log_index_error(format_args!(
+        return Err(ANNError::message(lazy_format!(
+            move,
             "ERROR: Save index does not support multiple starting points. Found {} starting points.",
             num_starting_points
         )));
@@ -206,7 +207,7 @@ fn get_and_validate_single_starting_point<U, V, D>(
     start_ids
         .first()
         .cloned()
-        .ok_or_else(|| ANNError::log_index_error("ERROR: No starting points found"))
+        .ok_or_else(|| ANNError::message("ERROR: No starting points found"))
 }
 ///////////
 // Tests //
@@ -219,10 +220,10 @@ mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::{
         graph::{AdjacencyList, config, glue::InsertStrategy},
-        provider::{Accessor, SetElement},
+        provider::SetElement,
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{Reborrow, test_data_root, views::MatrixView};
+    use diskann_utils::{test_data_root, views::MatrixView};
     use diskann_vector::distance::Metric;
 
     use super::*;
@@ -231,7 +232,6 @@ mod tests {
         model::graph::provider::async_::{
             SimpleNeighborProviderAsync,
             common::{FullPrecision, NoDeletes, NoStore, TableBasedDeletes},
-            inmem::{self},
         },
         utils::create_rnd_from_seed_in_tests,
     };
@@ -243,14 +243,11 @@ mod tests {
     ) where
         DP: DataProvider<ExternalId = u32> + for<'a> SetElement<&'a [f32]>,
         DP::Context: Default,
-        S: for<'a> InsertStrategy<DP, &'a [f32]> + Clone,
+        S: for<'a> InsertStrategy<'a, DP, &'a [f32]> + Clone,
     {
         let ctx = &DP::Context::default();
         for (i, v) in data.row_iter().enumerate() {
-            index
-                .insert(strategy.clone(), ctx, &(i as u32), v)
-                .await
-                .unwrap();
+            index.insert(&strategy, ctx, &(i as u32), v).await.unwrap();
         }
     }
 
@@ -346,12 +343,10 @@ mod tests {
                 .unwrap();
 
             assert_eq!(id_iter, reloaded.data_provider.iter());
-            check_accessor_equal(
-                inmem::FullAccessor::new(index.provider()),
-                inmem::FullAccessor::new(reloaded.provider()),
-                id_iter.clone(),
-            )
-            .await;
+            index
+                .provider()
+                .base_vectors
+                .compare_data(&reloaded.provider().base_vectors);
 
             check_graphs_equal(
                 &index.provider().neighbor_provider,
@@ -367,12 +362,10 @@ mod tests {
                 .unwrap();
 
             assert_eq!(id_iter, reloaded.data_provider.iter());
-            check_accessor_equal(
-                inmem::FullAccessor::new(index.provider()),
-                inmem::FullAccessor::new(reloaded.provider()),
-                id_iter.clone(),
-            )
-            .await;
+            index
+                .provider()
+                .base_vectors
+                .compare_data(&reloaded.provider().base_vectors);
 
             check_graphs_equal(
                 &index.provider().neighbor_provider,
@@ -389,19 +382,14 @@ mod tests {
                     .unwrap();
 
             assert_eq!(id_iter, reloaded.data_provider.iter());
-            check_accessor_equal(
-                inmem::FullAccessor::new(index.provider()),
-                inmem::FullAccessor::new(reloaded.provider()),
-                index.data_provider.iter(),
-            )
-            .await;
-
-            check_accessor_equal(
-                inmem::product::QuantAccessor::new(index.provider()),
-                inmem::product::QuantAccessor::new(reloaded.provider()),
-                index.data_provider.iter(),
-            )
-            .await;
+            index
+                .provider()
+                .base_vectors
+                .compare_data(&reloaded.provider().base_vectors);
+            index
+                .provider()
+                .aux_vectors
+                .compare_data(&reloaded.provider().aux_vectors);
 
             check_graphs_equal(
                 &index.provider().neighbor_provider,
@@ -417,19 +405,14 @@ mod tests {
                 .unwrap();
 
             assert_eq!(id_iter, reloaded.data_provider.iter());
-            check_accessor_equal(
-                inmem::FullAccessor::new(index.provider()),
-                inmem::FullAccessor::new(reloaded.provider()),
-                index.data_provider.iter(),
-            )
-            .await;
-
-            check_accessor_equal(
-                inmem::product::QuantAccessor::new(index.provider()),
-                inmem::product::QuantAccessor::new(reloaded.provider()),
-                index.data_provider.iter(),
-            )
-            .await;
+            index
+                .provider()
+                .base_vectors
+                .compare_data(&reloaded.provider().base_vectors);
+            index
+                .provider()
+                .aux_vectors
+                .compare_data(&reloaded.provider().aux_vectors);
 
             check_graphs_equal(
                 &index.provider().neighbor_provider,
@@ -439,26 +422,9 @@ mod tests {
         }
     }
 
-    async fn check_accessor_equal<T, A, B, Itr>(mut left: A, mut right: B, itr: Itr)
-    where
-        A: for<'a> Accessor<Id = u32, ElementRef<'a> = &'a T>,
-        B: for<'a> Accessor<Id = u32, ElementRef<'a> = &'a T>,
-        T: PartialEq + std::fmt::Debug + ?Sized,
-        Itr: Iterator<Item = u32>,
-    {
-        for i in itr {
-            assert_eq!(
-                left.get_element(i).await.unwrap().reborrow(),
-                right.get_element(i).await.unwrap().reborrow(),
-                "failed for index {}",
-                i
-            );
-        }
-    }
-
     fn check_graphs_equal<Itr>(
-        left: &SimpleNeighborProviderAsync<u32>,
-        right: &SimpleNeighborProviderAsync<u32>,
+        left: &SimpleNeighborProviderAsync,
+        right: &SimpleNeighborProviderAsync,
         itr: Itr,
     ) where
         Itr: Iterator<Item = u32>,

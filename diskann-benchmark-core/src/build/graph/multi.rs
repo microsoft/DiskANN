@@ -6,7 +6,7 @@
 use std::{ops::Range, sync::Arc};
 
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     graph::{self, glue},
     provider,
 };
@@ -95,14 +95,11 @@ where
                     }
                 }
 
-                ANNError::message(
-                    ANNErrorKind::Opaque,
-                    OutOfBounds {
-                        max: self.data.nrows(),
-                        start: range.start,
-                        end: range.end,
-                    },
-                )
+                ANNError::message(OutOfBounds {
+                    max: self.data.nrows(),
+                    start: range.start,
+                    end: range.end,
+                })
             })?
             .to_owned();
 
@@ -182,7 +179,7 @@ mod tests {
         .unwrap();
 
         // Ensure that the index is correctly populated.
-        let accessor = index.provider().neighbors();
+        let mut accessor = index.provider().neighbors();
         let mut v = diskann::graph::AdjacencyList::new();
 
         for i in 0..data.nrows() {

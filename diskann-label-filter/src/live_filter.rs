@@ -25,8 +25,8 @@
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use diskann::graph::index::QueryLabelProvider;
-use diskann::{ANNError, ANNErrorKind, ANNResult};
+use diskann::graph::ext::labeled::QueryLabelProvider;
+use diskann::{ANNError, ANNResult};
 use roaring::{RoaringBitmap, RoaringTreemap};
 
 use crate::attribute::Attribute;
@@ -129,25 +129,18 @@ fn ensure_and_or_only(ast: &ASTExpr) -> ANNResult<()> {
             ..
         } => Ok(()),
         ASTExpr::Not(_) => Err(ANNError::message(
-            ANNErrorKind::Opaque,
             "NOT is not supported by the live AND/OR filter",
         )),
-        ASTExpr::Compare { op, .. } => Err(ANNError::message(
-            ANNErrorKind::Opaque,
-            format!(
-                "operator {} is not supported by the live AND/OR filter (only $eq)",
-                op
-            ),
-        )),
+        ASTExpr::Compare { op, .. } => Err(ANNError::message(format!(
+            "operator {} is not supported by the live AND/OR filter (only $eq)",
+            op
+        ))),
     }
 }
 
 fn checked_vector_count(vec_id: u32) -> ANNResult<u32> {
     vec_id.checked_add(1).ok_or_else(|| {
-        ANNError::message(
-            ANNErrorKind::Opaque,
-            "dense live-filter indexes do not support vector id u32::MAX",
-        )
+        ANNError::message("dense live-filter indexes do not support vector id u32::MAX")
     })
 }
 
@@ -247,10 +240,7 @@ impl InlineAttributeIndexCsr {
         for attr in attributes {
             let attr_id = self.attribute_map.insert(attr);
             let attr_id = u32::try_from(attr_id).map_err(|_| {
-                ANNError::message(
-                    ANNErrorKind::Opaque,
-                    "live CSR filter supports at most u32::MAX distinct attributes",
-                )
+                ANNError::message("live CSR filter supports at most u32::MAX distinct attributes")
             })?;
             self.rows[idx].push(attr_id);
         }
@@ -414,7 +404,6 @@ impl InlineAttributeIndexPosting {
             let attr_id = self.attribute_map.insert(attr);
             let attr_id = usize::try_from(attr_id).map_err(|_| {
                 ANNError::message(
-                    ANNErrorKind::Opaque,
                     "posting-list filter supports at most usize::MAX distinct attributes",
                 )
             })?;
@@ -601,16 +590,10 @@ impl InlineAttributeIndexAuto {
         for attr in attributes {
             let attr_id = self.attribute_map.insert(attr);
             let attr_idx = usize::try_from(attr_id).map_err(|_| {
-                ANNError::message(
-                    ANNErrorKind::Opaque,
-                    "auto filter supports at most usize::MAX distinct attributes",
-                )
+                ANNError::message("auto filter supports at most usize::MAX distinct attributes")
             })?;
             let attr_id_u32 = u32::try_from(attr_id).map_err(|_| {
-                ANNError::message(
-                    ANNErrorKind::Opaque,
-                    "auto filter (CSR) supports at most u32::MAX distinct attributes",
-                )
+                ANNError::message("auto filter (CSR) supports at most u32::MAX distinct attributes")
             })?;
             self.rows[idx].push(attr_id_u32);
             if attr_idx >= self.posting.len() {
@@ -771,7 +754,6 @@ impl InlineAttributeIndexBitslice {
             let attr_id = self.attribute_map.insert(attr);
             let attr_idx = usize::try_from(attr_id).map_err(|_| {
                 ANNError::message(
-                    ANNErrorKind::Opaque,
                     "bit-slice filter supports at most usize::MAX distinct attributes",
                 )
             })?;
@@ -985,10 +967,9 @@ impl EncodedDnf {
     fn attribute_index(id: u64, num_attributes: usize) -> ANNResult<usize> {
         let index = usize::try_from(id).map_err(|_| Self::shape_error())?;
         if index >= num_attributes {
-            return Err(ANNError::message(
-                ANNErrorKind::Opaque,
-                format!("encoded attribute id {id} is outside the bit-slice index"),
-            ));
+            return Err(ANNError::message(format!(
+                "encoded attribute id {id} is outside the bit-slice index"
+            )));
         }
         Ok(index)
     }
@@ -999,7 +980,6 @@ impl EncodedDnf {
 
     fn shape_error() -> ANNError {
         ANNError::message(
-            ANNErrorKind::Opaque,
             "bit-slice DNF requires a terminal, an AND of terminals, or an OR of terminal/AND clauses",
         )
     }

@@ -5,7 +5,7 @@ name = "diskann-providers"
 version.workspace = true
 authors.workspace = true
 description.workspace = true
-documentation.workspace = true
+repository.workspace = true
 license.workspace = true
 edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -21,8 +21,6 @@ rand.workspace = true
 rayon.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
-opentelemetry = { workspace = true, optional = true }
-diskann-platform = { workspace = true }
 diskann-vector = { workspace = true }
 rand_distr.workspace = true
 cfg-if.workspace = true
@@ -40,26 +38,14 @@ vfs = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true
-criterion.workspace = true
 diskann = { workspace = true, features = ["testing"] }
 diskann-utils = { workspace = true, features = ["testing"] }
-iai-callgrind.workspace = true
 itertools.workspace = true
 tempfile.workspace = true
 rstest.workspace = true
 tokio = { workspace = true, features = ["full"] }
 proptest.workspace = true
 vfs.workspace = true
-
-[[bench]]
-name = "bench_main"
-harness = false
-required-features = ["virtual_storage"]
-
-[[bench]]
-name = "bench_main_iai"
-harness = false
-required-features = ["virtual_storage"]
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
@@ -71,7 +57,6 @@ targets = [
 
 [features]
 default = []
-perf_test = ["dep:opentelemetry"]
 testing = ["dep:tempfile"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 virtual_storage = ["dep:vfs"]

@@ -1,0 +1,12 @@
+include "transforms_v001.fbs";
+
+namespace Minmax;
+
+file_identifier "mq00";
+
+table Quantizer {
+    transform:Transforms.Transform (required);
+    grid_scale:float32;
+}
+
+root_type Quantizer;

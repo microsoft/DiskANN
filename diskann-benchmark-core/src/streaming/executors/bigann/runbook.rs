@@ -19,7 +19,7 @@ use super::{parsing, validate};
 ///
 /// If using this struct as a [`streaming::Executor`], consider using the
 /// [`super::WithData`] adaptor to provide dataset and query matrices.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RunBook {
     // The individual runbook stages.
     stages: Vec<Stage>,
@@ -393,6 +393,21 @@ impl ScanDirectory {
 
         Ok(Self { directory, files })
     }
+
+    /// Returns the expected BigANN groundtruth file name for a stage.
+    ///
+    /// Files follow the `step<stage>.gt<suffix>` naming convention.
+    pub fn groundtruth_filename(stage: usize, suffix: &str) -> String {
+        format!("step{}.{}", stage, suffix)
+    }
+
+    /// Returns the expected BigANN groundtruth path for a stage.
+    ///
+    /// See also: [`Self::groundtruth_filename`].
+    pub fn groundtruth_path(&self, stage: usize, suffix: &str) -> PathBuf {
+        self.directory
+            .join(Self::groundtruth_filename(stage, suffix))
+    }
 }
 
 impl FindGroundtruth for ScanDirectory {
@@ -402,7 +417,7 @@ impl FindGroundtruth for ScanDirectory {
     ///
     /// Returns an error if no matching file is found or if multiple matches exist.
     fn find_groundtruth(&mut self, stage: usize) -> anyhow::Result<PathBuf> {
-        let prefix = format!("step{}.gt", stage);
+        let prefix = Self::groundtruth_filename(stage, "gt");
 
         enum Matches<'a> {
             None,
@@ -437,10 +452,10 @@ impl FindGroundtruth for ScanDirectory {
         match matches {
             Matches::One(m) => Ok(self.directory.join(m)),
             Matches::None => Err(anyhow::anyhow!(
-                "No groundtruth found for step {} in \"{}\", expected pattern: \"step{}.gt[0-9]*\"",
+                "No groundtruth found for step {} in \"{}\", expected pattern: \"{}[0-9]*\"",
                 stage,
                 self.directory.display(),
-                stage,
+                prefix,
             )),
             Matches::Many(matches) => Err(anyhow::anyhow!(
                 "Multiple groundtruth files found for step {} in \"{}\": {:?}",
@@ -469,6 +484,8 @@ mod tests {
     //---------//
     // Runbook //
     //---------//
+
+    fn _assert_is_clone<T: Clone>(_x: &T) {}
 
     struct MockStream {
         stages: Vec<Stage>,
@@ -661,6 +678,7 @@ test_dataset:
         // Load the runbook
         let mut groundtruth_finder = ScanDirectory::new(temp_dir.path()).unwrap();
         let runbook = RunBook::load(&yaml_path, "test_dataset", &mut groundtruth_finder).unwrap();
+        _assert_is_clone(&runbook);
 
         // Verify the runbook was loaded correctly
         assert_eq!(runbook.len(), 8);

@@ -103,9 +103,14 @@ fn run_row(
     let len = index.provider().len();
     let metrics_before = index.provider().metrics();
 
-    let outcome =
-        harness::KnnOracleRun::run_sync(index, &Strategy::new(index.provider().dim()), query, k)
-            .unwrap();
+    let outcome = harness::KnnOracleRun::run_sync(
+        index,
+        &Strategy::new(index.provider().dim()),
+        &harness::CopyIdsOracle,
+        query,
+        k,
+    )
+    .unwrap();
     let stats = outcome.stats;
 
     assert_eq!(

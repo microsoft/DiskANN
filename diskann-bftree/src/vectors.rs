@@ -7,29 +7,26 @@
 
 use std::marker::PhantomData;
 
-use crate::{AccessError, AsKey, VectorError, VectorUnavailable};
+use crate::{AccessError, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
 use bytemuck::cast_slice;
-use diskann::{
-    error::RankedError,
-    utils::{ErrorToVectorId, TryIntoVectorId, VectorId, VectorRepr},
-    ANNError, ANNErrorKind, ANNResult,
-};
+use diskann::{error::RankedError, utils::VectorRepr, ANNError, ANNResult};
+use diskann_utils::lazy_format;
 use thiserror::Error;
 
 use super::ConfigError;
-use crate::TestCallCount;
+use crate::{bftree_insert, TestCallCount};
 
-pub struct VectorProvider<T: VectorRepr, I: VectorId = u32> {
+pub struct VectorProvider<T: VectorRepr> {
     dim: usize,
     pub max_vectors: usize,
     pub num_start_points: usize,
     vector_index: BfTree,
     pub(super) num_get_calls: TestCallCount,
-    _phantom: PhantomData<(T, I)>,
+    _phantom: PhantomData<T>,
 }
 
-impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
+impl<T: VectorRepr> VectorProvider<T> {
     /// Create a new instance based on bf-tree Config directly
     pub fn new_with_config(
         max_vectors: usize,
@@ -37,6 +34,13 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         num_start_points: usize,
         config: Config,
     ) -> ANNResult<Self> {
+        crate::validate_record_size(
+            "vector_provider",
+            &config,
+            std::mem::size_of::<usize>(),
+            dim * std::mem::size_of::<T>(),
+        )?;
+
         let vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Ok(Self {
@@ -92,9 +96,16 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
     /// Return a vector of vector Ids of the starting points
     ///
     #[inline(always)]
-    pub fn starting_points(&self) -> Result<Vec<I>, ErrorToVectorId<usize, I>> {
+    pub fn starting_points<I: crate::BfTreeId>(&self) -> ANNResult<Vec<I>> {
         (self.max_vectors..self.total())
-            .map(|i| i.try_into_vector_id())
+            .map(|i| {
+                I::try_from_index(i).ok_or_else(|| {
+                    ANNError::message(lazy_format!(
+                        move,
+                        "start point id {i} exceeds the id type's maximum"
+                    ))
+                })
+            })
             .collect()
     }
 
@@ -117,21 +128,21 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
     #[inline(always)]
     pub(crate) fn set_vector_sync(&self, i: usize, v: &[T]) -> ANNResult<()> {
         if v.len() != self.dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
 
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
         let value = cast_slice::<T, u8>(v);
 
-        self.vector_index.insert(key, value);
+        bftree_insert(&self.vector_index, key, value)?;
 
         Ok(())
     }
@@ -142,21 +153,22 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
             #[error("expected a buffer with dim {0}, instead got {1}")]
             struct WrongDim(usize, usize);
 
-            return Err(RankedError::Error(ANNError::new(
-                ANNErrorKind::IndexError,
-                WrongDim(self.dim(), buffer.len()),
-            )));
+            return Err(RankedError::Error(ANNError::new(WrongDim(
+                self.dim(),
+                buffer.len(),
+            ))));
         }
 
         self.num_get_calls.increment();
-        match self
-            .vector_index
-            .read(i.as_key(), bytemuck::must_cast_slice_mut::<_, u8>(buffer))
-        {
+        match self.vector_index.read(
+            bytemuck::bytes_of(&i),
+            bytemuck::must_cast_slice_mut::<_, u8>(buffer),
+        ) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 let vector_size = std::mem::size_of::<T>() * self.dim;
                 if read_size as usize != vector_size {
-                    return Err(RankedError::Error(ANNError::log_index_error(format!(
+                    return Err(RankedError::Error(ANNError::message(lazy_format!(
+                        move,
                         "The bf-tree entry for vector id {} is marked as found but has size {} instead of the expected size {}",
                         i, read_size, vector_size,
                     ))));
@@ -169,7 +181,8 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
                 }));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(RankedError::Error(ANNError::log_index_error(format!(
+                return Err(RankedError::Error(ANNError::message(lazy_format!(
+                    move,
                     "The bf-tree entry for vector id {} is marked as invalid",
                     i
                 ))));
@@ -195,7 +208,7 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
     }
 
     pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
         self.vector_index.delete(key);
     }
 }
@@ -210,7 +223,6 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
 mod tests {
     use std::sync::Arc;
 
-    use diskann::utils::vecid_from_usize;
     use tokio::task::JoinSet;
 
     use super::*;
@@ -231,9 +243,7 @@ mod tests {
             let vector_provider_clone = Arc::clone(&vector_provider);
             set.spawn(async move {
                 // One tokio task per vector insertion
-                vector_provider_clone
-                    .set_vector_sync(vecid_from_usize(i).unwrap(), &vector)
-                    .unwrap()
+                vector_provider_clone.set_vector_sync(i, &vector).unwrap()
             });
         }
 
@@ -243,9 +253,7 @@ mod tests {
 
         for i in 0..num_points {
             // SAFETY: We're only accessing one at a time.
-            let vector = vector_provider
-                .get_vector_sync(vecid_from_usize(i).unwrap())
-                .unwrap();
+            let vector = vector_provider.get_vector_sync(i).unwrap();
             assert_eq!(&vector, &vec![(i as f32), (i + 1) as f32, (i + 2) as f32]);
         }
         if TestCallCount::enabled() {
