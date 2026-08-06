@@ -38,8 +38,8 @@ float32, distance squared_l2, max_degree 64, l_build 100, alpha 1.2, medoid star
 ## 3. Methodology
 
 - **Labels (set-membership):** each line token -> boolean field `{"doc_id":i,"GeoLocationID_190":true,"EN-US":true,...}`. A label matches regardless of position. Predicates use `{"<label>":{"$eq":true}}` composed with `$and`/`$or`.
-- Full-vocabulary file `data_labels_set.jsonl` (all 596 labels) supports *any* query. For the 9 test cases the referenced-label subset `data_labels_min.jsonl` (11 labels) yields **identical** match-sets/recall/latency and is used here for speed.
-- **Filtered groundtruth** via `compute_groundtruth` (shared evaluator with the benchmark), true top-150 among matching docs, `recall_at=150`.
+- Full-vocabulary file `data_labels_set.jsonl` (all 596 labels) is the authoritative source. For the 9 test cases, `data_labels_min.jsonl` is an exact 11-field projection and remains available only as a setup-speed optimization.
+- **Filtered groundtruth** via `compute_groundtruth` (shared evaluator with the benchmark), true top-150 among matching docs, `recall_at=150`. The canonical `gtset_S1..S9.bin` files were regenerated from `data_labels_set.jsonl`; all nine are byte-identical to the earlier `gtmin` files.
 - **Search:** k=150, L in {150,200,300,500,1000}, 3 reps, single thread. Beta uses `beta=0.1`. Recall = recall@150 vs the same filtered GT for both methods.
 
 ## 4. Filter cases & (corrected) selectivity
@@ -269,11 +269,208 @@ Full live comparison (same index, k=150, L=150, single thread, 1000 queries; rec
 
 **Bottom line for live query latency:** if the label vocabulary is modest, **bit-sliced per-attribute bitsets win across all selectivities**; otherwise **auto** (adaptive bitmap<->CSR) reliably takes the better of the two base methods. Both keep recall identical and evaluate the filter fully live.
 
+## 8.4 Bit-sliced layout and flat DNF query evaluation
+
+### 8.4.1 Attribute-major bit-sliced index
+
+`InlineAttributeIndexBitslice` builds one dense vector-id bitmap for every encoded
+attribute. If `a` is an attribute id and `v` is a vector id, the membership test is:
+
+```text
+word = bitsets[a][v / 64]
+matches = ((word >> (v % 64)) & 1) != 0
+```
+
+The storage is therefore an attribute-major Boolean matrix:
+
+```text
+attribute 0: [bit for node 0, bit for node 1, ...]
+attribute 1: [bit for node 0, bit for node 1, ...]
+...
+```
+
+Each equality terminal requires one indexed `u64` load plus a shift/mask. The immutable
+bitsets are shared by every query provider through `Arc`; there is no per-query result bitmap,
+lock, or allocation in `is_match`. Storage is:
+
+```text
+num_attributes * ceil(num_vectors / 64) * 8 bytes
+```
+
+For 9,996,160 vectors and all 596 labels this is 744,713,920 bytes (710.21 MiB). A
+single-attribute query touches only one 1.19 MiB slice even though the complete matrix is much
+larger.
+
+### 8.4.2 Recursive encoded AST
+
+The original Bitslice provider encodes each comparison to an integer terminal, but preserves the
+recursive query tree:
+
+```text
+ASTIdExpr =
+    Terminal(attribute_id)
+  | And(Vec<ASTIdExpr>)
+  | Or(Vec<ASTIdExpr>)
+```
+
+For every visited node, an `ASTIdExprVisitor` recursively dispatches on each node in the tree.
+`AND` and `OR` short-circuit through `all()` and `any()`, but every terminal still repeats enum
+dispatch, attribute-array lookup, and vector-id word/mask calculation.
+
+### 8.4.3 Flat DNF representation
+
+The optimized search type `topk-multihop-live-filter-bitslice-dnf` accepts expressions already in
+disjunctive normal form: an OR of AND clauses. A terminal is a one-term clause and a plain AND is
+a one-clause expression.
+
+```text
+(A AND B) OR (C AND D)
+
+clause_offsets = [0, 2, 4]
+attributes     = [A, B, C, D]
+```
+
+Clause `i` occupies
+`attributes[clause_offsets[i]..clause_offsets[i + 1]]`. The final hot-path query plan is stored
+in two contiguous boxed allocations regardless of clause count. The current prototype still
+builds the existing recursive encoded AST during query setup and then flattens it; the optimization
+targets repeated per-node evaluation rather than JSON/AST construction.
+
+At search time, the provider calculates the vector word and mask once, then loops over clauses:
+
+```text
+word_index = vector_id / 64
+mask = 1 << (vector_id % 64)
+
+for each AND clause:
+    if every bitsets[attribute][word_index] contains mask:
+        return true
+return false
+```
+
+The inner AND stops at its first missing attribute and the outer OR stops at its first matching
+clause. Single-terminal predicates use a dedicated provider that performs the bit test directly.
+Term order is intentionally preserved in this experiment; no cardinality-based reordering is
+included.
+
+The DNF compiler rejects trees such as `(A OR B) AND (C OR D)`. These must be normalized before
+ANN search, for example:
+
+```text
+(A OR B) AND (C OR D)
+  -> (A AND C) OR (A AND D) OR (B AND C) OR (B AND D)
+```
+
+Normalization belongs outside the hot search path and needs clause/terminal limits because
+unrestricted distribution can grow exponentially.
+
+Associatively nested groups such as `A OR (B OR C)` and `A AND (B AND C)` are flattened during
+query setup; they do not require distributive normalization.
+
+### 8.4.4 Isolated `is_match` result
+
+Criterion benchmark: 1M nodes, 596-label vocabulary, 50,000 random node probes per iteration.
+
+| Expression | Recursive Bitslice | Flat DNF | Speedup |
+|---|---:|---:|---:|
+| one terminal | 239.63 us | 118.31 us | **2.03x** |
+| `A AND B` | 529.57 us | 385.22 us | **1.37x** |
+| `(A AND B) OR (C AND D)` | 1,059.0 us | 553.62 us | **1.91x** |
+
+### 8.4.5 Full ANN result
+
+Full 596-label dataset, k=150, L=150, one thread, 1,000 queries. Latencies are milliseconds.
+Recall, comparisons, and hops are exactly identical between recursive and DNF providers.
+
+| Case | Terms | Recursive AVG | DNF AVG | Recursive P99 | DNF P99 | Recursive P99.9 | DNF P99.9 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| S1 | 1 | 2.735 | **2.555** | 9.258 | **8.850** | **14.228** | 14.342 |
+| S2 | 2 | 4.906 | **4.386** | 10.837 | **9.137** | 18.209 | **10.697** |
+| S3 | 2 | 4.841 | **4.354** | 12.130 | **10.613** | 13.986 | **13.443** |
+| S4 | 4 | 6.789 | **5.148** | 17.297 | **13.269** | 20.875 | **15.500** |
+| S5 | 1 | 3.223 | **2.985** | 9.903 | **8.618** | 14.714 | **13.835** |
+| S6 | 1 | 5.563 | **4.969** | 10.030 | **8.486** | 12.275 | **10.374** |
+| S7 | 1 | 6.362 | **5.660** | 9.969 | **9.057** | 12.544 | **11.061** |
+| S8 | 1 | 6.600 | **5.816** | 9.590 | **8.555** | 12.954 | **10.704** |
+| S9 | 2 | 4.905 | **4.612** | 8.988 | **8.776** | **11.895** | 12.150 |
+
+Across S1-S9, flat DNF improves mean latency by **1.125x geometric mean** (6.0-24.2%)
+and P99 by **1.137x geometric mean**. The four-terminal S4 expression benefits most:
+24.2% lower mean and 23.3% lower P99. P99.9 improves in seven cases; the small S1/S9
+regressions are within single-run tail noise.
+
+The uniform-random single-attribute workload also improves from 3.300 to 2.856 ms mean
+(13.45%), 10.242 to 9.112 ms P99 (11.03%), and 13.187 to 11.312 ms P99.9 (14.22%).
+
+## 8.5 Exact-semantics multihop allocation reuse
+
+After optimizing filter evaluation, the current multihop implementation still created temporary
+graph-traversal storage repeatedly:
+
+- every `expand_beam` call constructed a new adjacency-list buffer;
+- each search iteration copied the selected two-hop routing IDs into a new `Vec`.
+
+The optimized implementation adds `expand_beam_with_scratch`, allowing the in-memory full-precision
+provider to reuse one adjacency list, preallocated to the graph's maximum degree, for all one-hop
+and two-hop expansions in a query. Providers with specialized `expand_beam` implementations keep
+their original I/O, batching, and accounting behavior. The two-hop call now consumes an iterator
+over the already sorted `Neighbor` list instead of allocating a second ID vector.
+
+This change does not alter predicate order, candidate order, distance calculations, queue
+operations, or traversal limits. A fresh controlled benchmark compared matched old and optimized
+binaries using the same DNF provider, full 596-label dataset, and **three repetitions per S1-S9
+case**. Recall, comparisons, and hops were exactly identical.
+
+All values below are milliseconds and are the mean of the three repetitions.
+
+| Case | Old AVG | Optimized AVG | AVG gain | Old P99 | Optimized P99 | P99 gain | Old P99.9 | Optimized P99.9 | P99.9 gain |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | 2.527 | **2.350** | 7.02% | 8.423 | **7.985** | 5.20% | 11.729 | **11.180** | 4.68% |
+| S2 | 4.296 | **4.280** | 0.39% | **9.070** | 9.253 | -2.02% | **11.903** | 21.286 | -78.83% |
+| S3 | 4.236 | **4.101** | 3.18% | 10.304 | **10.141** | 1.58% | 13.183 | **11.758** | 10.81% |
+| S4 | 5.020 | **4.940** | 1.60% | 12.571 | **12.383** | 1.50% | **17.176** | 21.160 | -23.20% |
+| S5 | 3.001 | **2.765** | 7.84% | 9.489 | **8.469** | 10.75% | 12.923 | **11.643** | 9.91% |
+| S6 | 4.871 | **4.714** | 3.22% | 8.388 | **8.336** | 0.62% | 10.307 | **9.315** | 9.63% |
+| S7 | 5.547 | **5.413** | 2.42% | 9.126 | **8.796** | 3.61% | 13.213 | **10.430** | 21.06% |
+| S8 | 5.588 | **5.467** | 2.15% | **8.179** | 8.236 | -0.70% | 13.912 | **12.383** | 10.99% |
+| S9 | 4.438 | **4.254** | 4.16% | 8.510 | **8.032** | 5.62% | 11.920 | **10.219** | 14.27% |
+
+The fresh geometric-mean speedups are **1.0372x** for AVG (3.72%), **1.0307x** for
+P99 (3.07%), and **1.0095x** for P99.9 (0.95%). P99.9 is intrinsically noisy with
+1,000 queries: the S2 and S4 optimized means are dominated by one repetition at
+39.489 ms and 31.415 ms respectively. The repeatable signal is the AVG improvement,
+with P99 also improving in seven of nine cases. This is a useful low-risk improvement,
+but the larger remaining ceiling is avoiding duplicated predicate checks and unnecessary
+distance work rather than removing additional small allocations.
+
+## 8.6 Backlog: ACORN-style filter-first traversal
+
+ACORN-1 is deferred for later investigation. It changes traversal semantics rather than only
+optimizing predicate evaluation, so it is not expected to return the exact same neighbor IDs as
+the current multihop implementation. The goal would be competitive recall at lower latency and
+fewer distance comparisons.
+
+The proposed experiment would retain rejected nodes as unscored routing connectors, expand
+bounded multi-hop neighborhoods, and compute vector distances only for matching nodes. Evaluation
+must compare recall-versus-latency curves rather than result parity:
+
+- keep the existing multihop search as the baseline;
+- add ACORN as a separate search type over the same graph;
+- sweep L and routing depth/budget across S1-S9;
+- require every returned node to satisfy the hard DNF predicate;
+- compare latency and distance comparisons at equal recall;
+- preserve an exact/current-search fallback if fewer than k matches are found.
+
+This work is intentionally postponed. The immediate priority is exact-semantics optimization of
+the current multihop implementation, including allocation reuse and removal of duplicated work,
+before changing its traversal policy.
+
 ## 9. Artifacts (`Q:\test6\filtered_test2\bench\full\`)
 
 - Labels: `data_labels_set.jsonl` (596 labels, general), `data_labels_min.jsonl` (11, fast)
 - Predicates: `predmin_S1..S9.jsonl` (also `predset_S1..S9.jsonl`)
-- Groundtruth: `gtmin_S1..S9.bin`
+- Groundtruth: `gtset_S1..S9.bin` (canonical, regenerated from all 596 labels); `gtmin_S1..S9.bin` are verified byte-identical projections
+- Full-label Bitslice-DNF runbook: `runbook_bitslice_dnf_set.json`
 - Runbooks: `runbook_setmin.json` (multihop), `runbook_beta_setmin.json` (beta), `runbook_livefilter.json` (live per-node)
 - Outputs: `out_setmin.json`, `out_beta_setmin.json`, `out_livefilter.json` (+ `out_live_S8.json`, `out_live_S9.json`)
 - Encoders: `gen_setmembership.py` (full), `gen_setmin.py` (minimal)
@@ -281,6 +478,7 @@ Full live comparison (same index, k=150, L=150, single thread, 1000 queries; rec
 - CSR live-filter code (section 8.1): `InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr` in the same module; benchmark search-type `topk-multihop-live-filter-csr`; is_match microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
 - Posting-list + materialized-bitmap live code (section 8.2): `InlineAttributeIndexPosting` / `FrozenAttributeIndexPosting` / `MaterializedBitmapProvider`; benchmark search-type `topk-multihop-live-filter-bitmap`
 - Adaptive + bit-sliced live code (section 8.3): `InlineAttributeIndexAuto` (search-type `topk-multihop-live-filter-auto`) and `InlineAttributeIndexBitslice` (search-type `topk-multihop-live-filter-bitslice`)
+- Flat DNF Bitslice code (section 8.4): `EncodedDnf`, `BitsliceSingleProvider`, and `BitsliceDnfProvider`; benchmark search-type `topk-multihop-live-filter-bitslice-dnf`; microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
 - Index (reused): `idxsave_full`(+`.data`)
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
