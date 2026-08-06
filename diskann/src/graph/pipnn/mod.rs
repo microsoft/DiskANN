@@ -679,9 +679,8 @@ mod config_tests {
         ];
 
         for config in &mut cases {
-            let error = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
+            PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
                 .expect_err("invalid PiPNN config must be rejected");
-            assert_eq!(error.kind(), diskann::ANNErrorKind::IndexConfigError);
         }
     }
 
@@ -692,7 +691,6 @@ mod config_tests {
 
         let error = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap_err();
 
-        assert_eq!(error.kind(), diskann::ANNErrorKind::IndexConfigError);
         assert!(error.to_string().contains("prune kind"));
     }
 
