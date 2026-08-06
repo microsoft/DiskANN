@@ -355,7 +355,7 @@ jobs:
               --package diskann-vector \
               --package diskann-quantization \
               --package diskann \
-              --features diskann/pipnn \
+              --features pipnn \
               -- --skip compile_tests \
                  --skip pivots::tests::run_test_happy_path
 
@@ -419,7 +419,7 @@ jobs:
             --package diskann-vector \
             --package diskann-quantization \
             --package diskann \
-            --features diskann/pipnn \
+            --features pipnn \
             -- --skip compile_tests
 
   test-workspace:
