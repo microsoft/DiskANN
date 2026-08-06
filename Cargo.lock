@@ -444,7 +444,6 @@ dependencies = [
  "futures-util",
  "half",
  "hashbrown 0.16.1",
- "iai-callgrind",
  "num-traits",
  "pin-project",
  "rand",
