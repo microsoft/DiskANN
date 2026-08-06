@@ -161,7 +161,7 @@ impl<T: Pod> std::ops::Deref for MmapSlab<T> {
 mod winmem {
     // Minimal FFI to the Win32 memory API — avoids pulling in the `windows`
     // crate for four extern declarations.
-    pub(super) type LPVOID = *mut core::ffi::c_void;
+    pub(super) type Lpvoid = *mut core::ffi::c_void;
     pub(super) const MEM_COMMIT: u32 = 0x0000_1000;
     pub(super) const MEM_RESERVE: u32 = 0x0000_2000;
     pub(super) const MEM_RELEASE: u32 = 0x0000_8000;
@@ -169,12 +169,12 @@ mod winmem {
 
     unsafe extern "system" {
         pub(super) fn VirtualAlloc(
-            lpAddress: LPVOID,
+            lpAddress: Lpvoid,
             dwSize: usize,
             flAllocationType: u32,
             flProtect: u32,
-        ) -> LPVOID;
-        pub(super) fn VirtualFree(lpAddress: LPVOID, dwSize: usize, dwFreeType: u32) -> i32;
+        ) -> Lpvoid;
+        pub(super) fn VirtualFree(lpAddress: Lpvoid, dwSize: usize, dwFreeType: u32) -> i32;
     }
 }
 
@@ -246,7 +246,7 @@ impl<T: Pod> Drop for MmapSlab<T> {
         if self.len > 0 {
             // SAFETY: ptr came from VirtualAlloc; MEM_RELEASE requires dwSize=0.
             unsafe {
-                winmem::VirtualFree(self.ptr as winmem::LPVOID, 0, winmem::MEM_RELEASE);
+                winmem::VirtualFree(self.ptr as winmem::Lpvoid, 0, winmem::MEM_RELEASE);
             }
         }
     }
