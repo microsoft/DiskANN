@@ -35,14 +35,9 @@
 //! | bounded list | none | move list directly to output |
 //! | overfull list | source and occlusion distances | reuse Rayon-job workspace |
 
-use std::convert::Infallible;
-
 use crate::{
     ANNError, ANNResult,
-    graph::{
-        AdjacencyList, Config,
-        internal::{SortedNeighbors, robust_prune as prune},
-    },
+    graph::{AdjacencyList, Config, internal::SortedNeighbors, robust_prune as prune},
     neighbor::Neighbor,
     utils::VectorRepr,
 };
@@ -62,6 +57,8 @@ pub(crate) enum FinalizationError {
         candidate: u32,
         points: usize,
     },
+    #[error("candidate count {actual} exceeds the u16 position limit {max}")]
+    TooManyCandidates { actual: usize, max: usize },
 }
 
 /// Per-Rayon-job preparation and kernel state retained across source points.
@@ -71,7 +68,7 @@ pub(crate) enum FinalizationError {
 #[derive(Default)]
 struct Workspace {
     pool: Vec<Neighbor<u32>>,
-    prepared: Vec<prune::Candidate<u32, u32>>,
+    prepared: Vec<(f32, Option<u32>)>,
     states: Vec<prune::State>,
 }
 
@@ -122,8 +119,12 @@ where
                     }));
 
                 let candidate_count = workspace.pool.len();
-                prune::validate_candidate_count::<Infallible>(candidate_count)
-                    .map_err(ANNError::new)?;
+                if candidate_count > u16::MAX as usize {
+                    return Err(ANNError::new(FinalizationError::TooManyCandidates {
+                        actual: candidate_count,
+                        max: u16::MAX as usize,
+                    }));
+                }
                 workspace.prepared.clear();
                 workspace
                     .prepared
@@ -137,8 +138,7 @@ where
                         .prepared
                         .extend(sorted.iter().filter_map(|neighbor| {
                             let id = *neighbor.id();
-                            (id != source_id)
-                                .then(|| prune::Candidate::new(id, *neighbor.distance(), id))
+                            (id != source_id).then(|| (*neighbor.distance(), Some(id)))
                         }));
                 }
                 workspace
@@ -161,17 +161,21 @@ where
                     graph.alpha(),
                     graph.prune_kind(),
                     |left, right| {
-                        Ok::<_, Infallible>(distance.evaluate_similarity(
+                        distance.evaluate_similarity(
                             data.row(*left as usize),
                             data.row(*right as usize),
-                        ))
+                        )
                     },
-                )
-                .map_err(ANNError::new)?;
+                );
 
                 let mut guard = source_candidates.resize(selected);
                 for (destination, state) in guard.iter_mut().zip(workspace.states.iter()) {
-                    *destination = *workspace.prepared[state.selected_position()].id();
+                    *destination =
+                        workspace.prepared[state.neighbor as usize]
+                            .1
+                            .ok_or_else(|| {
+                                ANNError::message("RobustPrune selected an unavailable candidate")
+                            })?;
                 }
                 guard.finish(selected);
                 Ok(source_candidates)
