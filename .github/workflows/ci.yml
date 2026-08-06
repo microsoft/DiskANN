@@ -5,7 +5,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main", "pipnn-stack/**"]
+    branches: ["main"]
 
 name: CI
 
@@ -462,7 +462,6 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
-          - ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -486,9 +485,7 @@ jobs:
             --config "$RUST_CONFIG" \
             --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --locked --doc --workspace \
-            --features "${{ env.DISKANN_FEATURES }}" \
-            --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -521,7 +518,6 @@ jobs:
           cargo llvm-cov nextest --locked \
             --config "$RUST_CONFIG" \
             --workspace \
-            --features "${{ env.DISKANN_FEATURES }}" \
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage

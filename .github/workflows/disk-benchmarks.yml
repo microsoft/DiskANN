@@ -19,7 +19,6 @@ on:
   pull_request:
     branches:
       - main
-      - "pipnn-stack/**"
     paths:
       - 'diskann/**'
       - 'diskann-disk/**'

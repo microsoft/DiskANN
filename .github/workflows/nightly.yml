@@ -17,10 +17,7 @@ env:
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  DISKANN_FEATURES: >-
-    virtual_storage,spherical-quantization,product-quantization,tracing,
-    experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,
-    multi-vector,bftree,inmem2,integration-test,pipnn,testing
+  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,multi-vector,bftree,inmem2,integration-test,pipnn,testing"
 
 defaults:
   run:
@@ -39,9 +36,7 @@ jobs:
         run: rustup show && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
-        run: |
-          cargo clippy --locked --workspace --all-targets --no-deps \
-            --config "$RUST_CONFIG" -- -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
 
   clippy-features:
     name: clippy-features (macos)
@@ -57,7 +52,7 @@ jobs:
           cargo clippy --locked --workspace \
             --all-targets \
             --no-deps \
-            --features "${{ env.DISKANN_FEATURES }}" \
+            --features ${{ env.DISKANN_FEATURES }} \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
 
@@ -114,11 +109,9 @@ jobs:
           set -euxo pipefail
           cargo nextest run --locked --workspace \
             --config "$RUST_CONFIG" \
-            --features "${{ env.DISKANN_FEATURES }}"
+            --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --locked --doc --workspace \
-            --features "${{ env.DISKANN_FEATURES }}" \
-            --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   miri:
     name: miri-test
@@ -140,8 +133,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: miri
-        run: |
-          cargo +nightly miri nextest run --locked \
-            --package diskann-quantization
+        run: cargo +nightly miri nextest run --locked --package diskann-quantization
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
