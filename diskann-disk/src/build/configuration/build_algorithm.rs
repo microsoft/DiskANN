@@ -78,7 +78,7 @@ impl Default for PiPNNParameters {
             fanout: vec![8, 3],
             k: 2,
             replicas: 1,
-            hash_prune: Some(HashPruneParameters::default()),
+            hash_prune: None,
         }
     }
 }
@@ -154,7 +154,15 @@ mod tests {
         assert_eq!(config.fanout, [10, 3]);
         assert_eq!(config.k, 3);
         assert_eq!(config.replicas, 1);
-        assert_eq!(config.hash_prune, Some(HashPruneParameters::default()));
+        assert_eq!(config.hash_prune, None);
+
+        let explicit: BuildAlgorithm =
+            serde_json::from_str(r#"{"algorithm":"PiPNN","hash_prune":{}}"#).unwrap();
+        let BuildAlgorithm::PiPNN(explicit) = explicit else {
+            panic!("expected PiPNN");
+        };
+        assert_eq!(explicit.hash_prune, Some(HashPruneParameters::default()));
+
         assert!(
             serde_json::from_str::<BuildAlgorithm>(r#"{"algorithm":"PiPNN","l_max":72}"#).is_err()
         );
