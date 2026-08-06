@@ -820,6 +820,36 @@ impl FrozenAttributeIndexBitslice {
             num_vectors: self.num_vectors,
         }))
     }
+
+    /// Build a provider using a flat disjunctive-normal-form representation.
+    ///
+    /// Accepted expressions are a terminal, an AND of terminals, or an OR whose children are
+    /// terminals or ANDs of terminals. Associatively nested AND and OR groups are flattened.
+    /// Expressions such as `(A OR B) AND (C OR D)` must be normalized before provider
+    /// construction.
+    ///
+    /// # Errors
+    /// Returns an error if the expression is unsupported, references an unknown attribute, or is
+    /// not already in the accepted DNF shape.
+    pub fn make_dnf_provider(&self, ast: &ASTExpr) -> ANNResult<Arc<dyn QueryLabelProvider<u32>>> {
+        ensure_and_or_only(ast)?;
+        let encoded = EncodedFilterExpr::new(ast, self.attribute_map.clone())?;
+        let dnf = EncodedDnf::new(encoded.encoded_filter_expr(), self.bitsets.len())?;
+
+        if let Some(attribute_id) = dnf.single_attribute() {
+            Ok(Arc::new(BitsliceSingleProvider {
+                attribute_id,
+                bitsets: self.bitsets.clone(),
+                num_vectors: self.num_vectors,
+            }))
+        } else {
+            Ok(Arc::new(BitsliceDnfProvider {
+                dnf,
+                bitsets: self.bitsets.clone(),
+                num_vectors: self.num_vectors,
+            }))
+        }
+    }
 }
 
 /// A [`QueryLabelProvider`] that evaluates the predicate as one `O(1)` bit test per terminal against
@@ -876,6 +906,159 @@ impl ASTIdExprVisitor<u64> for BitsliceEvaluator<'_> {
             .ok()
             .and_then(|i| self.bitsets.get(i))
             .is_some_and(|bits| dense_contains(bits, self.vec_id))
+    }
+}
+
+/// A flat OR-of-ANDs expression.
+///
+/// Clause `i` occupies `attributes[clause_offsets[i]..clause_offsets[i + 1]]`.
+struct EncodedDnf {
+    clause_offsets: Box<[usize]>,
+    attributes: Box<[usize]>,
+}
+
+impl EncodedDnf {
+    fn new(expr: &ASTIdExpr<u64>, num_attributes: usize) -> ANNResult<Self> {
+        let mut clause_offsets = vec![0usize];
+        let mut attributes = Vec::new();
+
+        Self::append_disjunction(expr, num_attributes, &mut clause_offsets, &mut attributes)?;
+
+        Ok(Self {
+            clause_offsets: clause_offsets.into_boxed_slice(),
+            attributes: attributes.into_boxed_slice(),
+        })
+    }
+
+    fn append_disjunction(
+        expr: &ASTIdExpr<u64>,
+        num_attributes: usize,
+        clause_offsets: &mut Vec<usize>,
+        attributes: &mut Vec<usize>,
+    ) -> ANNResult<()> {
+        match expr {
+            ASTIdExpr::Terminal(_) | ASTIdExpr::And(_) => {
+                let start = attributes.len();
+                Self::append_conjunction(expr, num_attributes, attributes)?;
+                if attributes.len() == start {
+                    return Err(Self::shape_error());
+                }
+                clause_offsets.push(attributes.len());
+            }
+            ASTIdExpr::Or(clauses) => {
+                if clauses.is_empty() {
+                    return Err(Self::shape_error());
+                }
+                for clause in clauses {
+                    Self::append_disjunction(clause, num_attributes, clause_offsets, attributes)?;
+                }
+            }
+            ASTIdExpr::Not(_) => return Err(Self::shape_error()),
+        }
+
+        Ok(())
+    }
+
+    fn append_conjunction(
+        expr: &ASTIdExpr<u64>,
+        num_attributes: usize,
+        attributes: &mut Vec<usize>,
+    ) -> ANNResult<()> {
+        match expr {
+            ASTIdExpr::Terminal(id) => {
+                attributes.push(Self::attribute_index(*id, num_attributes)?);
+            }
+            ASTIdExpr::And(terms) => {
+                if terms.is_empty() {
+                    return Err(Self::shape_error());
+                }
+                for term in terms {
+                    Self::append_conjunction(term, num_attributes, attributes)?;
+                }
+            }
+            ASTIdExpr::Or(_) | ASTIdExpr::Not(_) => return Err(Self::shape_error()),
+        }
+
+        Ok(())
+    }
+
+    fn attribute_index(id: u64, num_attributes: usize) -> ANNResult<usize> {
+        let index = usize::try_from(id).map_err(|_| Self::shape_error())?;
+        if index >= num_attributes {
+            return Err(ANNError::message(
+                ANNErrorKind::Opaque,
+                format!("encoded attribute id {id} is outside the bit-slice index"),
+            ));
+        }
+        Ok(index)
+    }
+
+    fn single_attribute(&self) -> Option<usize> {
+        (self.clause_offsets.len() == 2 && self.attributes.len() == 1).then_some(self.attributes[0])
+    }
+
+    fn shape_error() -> ANNError {
+        ANNError::message(
+            ANNErrorKind::Opaque,
+            "bit-slice DNF requires a terminal, an AND of terminals, or an OR of terminal/AND clauses",
+        )
+    }
+}
+
+/// Specialized query provider for the common single-terminal predicate.
+struct BitsliceSingleProvider {
+    attribute_id: usize,
+    bitsets: Arc<[Box<[u64]>]>,
+    num_vectors: u32,
+}
+
+impl std::fmt::Debug for BitsliceSingleProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BitsliceSingleProvider").finish()
+    }
+}
+
+impl QueryLabelProvider<u32> for BitsliceSingleProvider {
+    fn is_match(&self, vec_id: u32) -> bool {
+        vec_id < self.num_vectors && dense_contains(&self.bitsets[self.attribute_id], vec_id)
+    }
+}
+
+/// Query provider that evaluates a flat OR of AND clauses without recursive AST traversal.
+struct BitsliceDnfProvider {
+    dnf: EncodedDnf,
+    bitsets: Arc<[Box<[u64]>]>,
+    num_vectors: u32,
+}
+
+impl std::fmt::Debug for BitsliceDnfProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BitsliceDnfProvider").finish()
+    }
+}
+
+impl QueryLabelProvider<u32> for BitsliceDnfProvider {
+    fn is_match(&self, vec_id: u32) -> bool {
+        if vec_id >= self.num_vectors {
+            return false;
+        }
+
+        let bit_index = vec_id as usize;
+        let word_index = bit_index / 64;
+        let mask = 1u64 << (bit_index % 64);
+
+        for clause in self.dnf.clause_offsets.windows(2) {
+            let start = clause[0];
+            let end = clause[1];
+            let matches = self.dnf.attributes[start..end]
+                .iter()
+                .all(|&attribute_id| self.bitsets[attribute_id][word_index] & mask != 0);
+            if matches {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -1144,6 +1327,10 @@ mod tests {
                 ASTExpr::And(vec![eq_true("A"), eq_true("B")]),
                 eq_true("C"),
             ]),
+            ASTExpr::Or(vec![
+                ASTExpr::And(vec![eq_true("A"), ASTExpr::And(vec![eq_true("B")])]),
+                ASTExpr::Or(vec![eq_true("C")]),
+            ]),
         ];
         for ast in &asts {
             let rp = roaring.make_provider(ast).unwrap();
@@ -1152,6 +1339,7 @@ mod tests {
                 posting.make_provider(ast).unwrap(),
                 auto.make_provider(ast).unwrap(),
                 bitslice.make_provider(ast).unwrap(),
+                bitslice.make_dnf_provider(ast).unwrap(),
             ];
             for id in 0..7u32 {
                 let expected = rp.is_match(id);
@@ -1177,5 +1365,29 @@ mod tests {
 
         let mut bitslice = InlineAttributeIndexBitslice::new();
         assert!(bitslice.insert_document(u32::MAX, &attrs).is_err());
+    }
+
+    #[test]
+    fn bitslice_dnf_rejects_and_of_or_clauses() {
+        let mut index = InlineAttributeIndexBitslice::new();
+        index
+            .insert_document(
+                0,
+                &[
+                    attr("A", true),
+                    attr("B", true),
+                    attr("C", true),
+                    attr("D", true),
+                ],
+            )
+            .unwrap();
+        let index = index.freeze();
+        let ast = ASTExpr::And(vec![
+            ASTExpr::Or(vec![eq_true("A"), eq_true("B")]),
+            ASTExpr::Or(vec![eq_true("C"), eq_true("D")]),
+        ]);
+
+        assert!(index.make_provider(&ast).is_ok());
+        assert!(index.make_dnf_provider(&ast).is_err());
     }
 }

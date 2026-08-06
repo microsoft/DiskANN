@@ -5,7 +5,7 @@
 
 //! Microbenchmark isolating the per-node `is_match` cost of live filter matching.
 //!
-//! It compares three representations of the *same* corpus of per-document attribute
+//! It compares multiple representations of the *same* corpus of per-document attribute
 //! sets, evaluating the *same* predicate over the *same* probed node ids:
 //!
 //! * `treemap`  — the current production path: [`InlineAttributeIndex`]
@@ -16,7 +16,7 @@
 //! * `posting`  — one `RoaringBitmap` per attribute id (the doc-ids carrying it):
 //!   a match is an `AND`/`OR` of `posting[term].contains(node)`.
 //!
-//! Before timing, all three are asserted to agree on every probe, so the benchmark
+//! Before timing, all representations are asserted to agree on every probe, so the benchmark
 //! measures only *how* the match decision is computed, not *what* it decides.
 //!
 //! Tunables (env): `LF_BENCH_N` corpus size (default 1_000_000),
@@ -25,7 +25,9 @@
 use criterion::{criterion_group, Criterion, Throughput};
 use diskann::graph::index::QueryLabelProvider;
 use diskann_label_filter::attribute::Attribute;
-use diskann_label_filter::{ASTExpr, CompareOp, InlineAttributeIndex};
+use diskann_label_filter::{
+    ASTExpr, CompareOp, InlineAttributeIndex, InlineAttributeIndexBitslice,
+};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
@@ -138,6 +140,20 @@ fn build_treemap(corpus: &[Vec<u16>]) -> InlineAttributeIndex {
     index
 }
 
+fn build_bitslice(corpus: &[Vec<u16>]) -> InlineAttributeIndexBitslice {
+    let attr_cache: Vec<Attribute> = (0..VOCAB)
+        .map(|id| Attribute::from_json_value(&format!("L{id}"), &json!(true)).unwrap())
+        .collect();
+    let mut index = InlineAttributeIndexBitslice::new();
+    let mut scratch: Vec<Attribute> = Vec::new();
+    for (doc, attrs) in corpus.iter().enumerate() {
+        scratch.clear();
+        scratch.extend(attrs.iter().map(|&id| attr_cache[id as usize].clone()));
+        index.insert_document(doc as u32, &scratch).unwrap();
+    }
+    index
+}
+
 fn bench_live_filter(c: &mut Criterion) {
     let n: usize = std::env::var("LF_BENCH_N")
         .ok()
@@ -153,6 +169,7 @@ fn bench_live_filter(c: &mut Criterion) {
     let (offsets, values) = build_csr(&corpus);
     let posting = build_posting(&corpus);
     let frozen = build_treemap(&corpus).freeze();
+    let frozen_bitslice = build_bitslice(&corpus).freeze();
 
     // Random node ids mimic the data-dependent traversal order (defeats prefetching).
     let probes: Vec<u32> = (0..num_probes)
@@ -174,11 +191,15 @@ fn bench_live_filter(c: &mut Criterion) {
     for (name, pred) in &predicates {
         let ast = pred.to_ast();
         let provider: Arc<dyn QueryLabelProvider<u32>> = frozen.make_provider(&ast).unwrap();
+        let bitslice_recursive = frozen_bitslice.make_provider(&ast).unwrap();
+        let bitslice_dnf = frozen_bitslice.make_dnf_provider(&ast).unwrap();
 
         // Correctness gate: all three representations must agree on every probe.
         let mut match_count = 0usize;
         for &node in &probes {
             let treemap_hit = provider.is_match(node);
+            let recursive_hit = bitslice_recursive.is_match(node);
+            let dnf_hit = bitslice_dnf.is_match(node);
             let start = offsets[node as usize] as usize;
             let end = offsets[node as usize + 1] as usize;
             let csr_hit = pred.eval_csr(&values[start..end]);
@@ -190,6 +211,14 @@ fn bench_live_filter(c: &mut Criterion) {
             assert_eq!(
                 treemap_hit, posting_hit,
                 "treemap vs posting disagree ({name}, node {node})"
+            );
+            assert_eq!(
+                treemap_hit, recursive_hit,
+                "treemap vs recursive bitslice disagree ({name}, node {node})"
+            );
+            assert_eq!(
+                treemap_hit, dnf_hit,
+                "treemap vs DNF bitslice disagree ({name}, node {node})"
             );
             if treemap_hit {
                 match_count += 1;
@@ -235,6 +264,30 @@ fn bench_live_filter(c: &mut Criterion) {
                 let mut hits = 0u64;
                 for &node in &probes {
                     if pred.eval_posting(black_box(node), &posting) {
+                        hits += 1;
+                    }
+                }
+                black_box(hits)
+            })
+        });
+
+        group.bench_function(format!("bitslice_recursive[{sel_tag}]"), |b| {
+            b.iter(|| {
+                let mut hits = 0u64;
+                for &node in &probes {
+                    if bitslice_recursive.is_match(black_box(node)) {
+                        hits += 1;
+                    }
+                }
+                black_box(hits)
+            })
+        });
+
+        group.bench_function(format!("bitslice_dnf[{sel_tag}]"), |b| {
+            b.iter(|| {
+                let mut hits = 0u64;
+                for &node in &probes {
+                    if bitslice_dnf.is_match(black_box(node)) {
                         hits += 1;
                     }
                 }
