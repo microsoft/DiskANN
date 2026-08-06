@@ -319,6 +319,7 @@ pub(crate) enum SearchPhase {
     TopkMultihopLiveFilterBitmap(MultiHopSearchPhase),
     TopkMultihopLiveFilterAuto(MultiHopSearchPhase),
     TopkMultihopLiveFilterBitslice(MultiHopSearchPhase),
+    TopkMultihopLiveFilterBitsliceDnf(MultiHopSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -351,6 +352,9 @@ impl SearchPhase {
             Self::TopkMultihopLiveFilterAuto(_) => SearchPhaseKind::TopkMultihopLiveFilterAuto,
             Self::TopkMultihopLiveFilterBitslice(_) => {
                 SearchPhaseKind::TopkMultihopLiveFilterBitslice
+            }
+            Self::TopkMultihopLiveFilterBitsliceDnf(_) => {
+                SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf
             }
         }
     }
@@ -456,6 +460,18 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_multihop_live_filter_bitslice_dnf(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopLiveFilterBitsliceDnf(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -470,6 +486,7 @@ impl SearchPhase {
             SearchPhase::TopkMultihopLiveFilterBitmap(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterAuto(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterBitslice(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopLiveFilterBitsliceDnf(phase) => phase.validate(checker),
         }
     }
 }
@@ -485,6 +502,7 @@ pub(crate) enum SearchPhaseKind {
     TopkMultihopLiveFilterBitmap,
     TopkMultihopLiveFilterAuto,
     TopkMultihopLiveFilterBitslice,
+    TopkMultihopLiveFilterBitsliceDnf,
 }
 
 impl SearchPhaseKind {
@@ -499,6 +517,7 @@ impl SearchPhaseKind {
             Self::TopkMultihopLiveFilterBitmap => "topk-multihop-live-filter-bitmap",
             Self::TopkMultihopLiveFilterAuto => "topk-multihop-live-filter-auto",
             Self::TopkMultihopLiveFilterBitslice => "topk-multihop-live-filter-bitslice",
+            Self::TopkMultihopLiveFilterBitsliceDnf => "topk-multihop-live-filter-bitslice-dnf",
         }
     }
 }

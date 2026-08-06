@@ -246,3 +246,14 @@ impl TopkMultihopLiveFilterBitslice {
         SearchPhaseKind::TopkMultihopLiveFilterBitslice
     }
 }
+
+/// A multi-hop live-filter plugin backed by bit slices and a flat OR-of-AND query plan.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterBitsliceDnf;
+
+impl TopkMultihopLiveFilterBitsliceDnf {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf
+    }
+}

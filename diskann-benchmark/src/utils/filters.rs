@@ -337,6 +337,7 @@ pub(crate) fn build_inline_attribute_index_bitslice(
             .insert_document(doc_id, &attrs)
             .map_err(|e| anyhow::anyhow!("failed to insert document {}: {e:?}", doc.doc_id))?;
     }
+    drop(docs);
     Ok(Arc::new(index.freeze()))
 }
 
@@ -353,6 +354,24 @@ pub(crate) fn make_live_providers_bitslice(
             index
                 .make_provider(&ast)
                 .map_err(|e| anyhow::anyhow!("failed to build live provider: {e:?}"))?,
+        );
+    }
+    Ok(providers)
+}
+
+/// Build one flat-DNF bit-sliced [`QueryLabelProvider`] per query.
+pub(crate) fn make_live_providers_bitslice_dnf(
+    index: &FrozenAttributeIndexBitslice,
+    query_predicates: &InputFile,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    let mut providers = Vec::with_capacity(parsed.len());
+    for (_query_id, ast) in parsed {
+        providers.push(
+            index
+                .make_dnf_provider(&ast)
+                .map_err(|e| anyhow::anyhow!("failed to build DNF live provider: {e:?}"))?,
         );
     }
     Ok(providers)

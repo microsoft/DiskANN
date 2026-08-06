@@ -81,7 +81,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::TopkMultihopLiveFilterCsr)
             .search(plugins::TopkMultihopLiveFilterBitmap)
             .search(plugins::TopkMultihopLiveFilterAuto)
-            .search(plugins::TopkMultihopLiveFilterBitslice),
+            .search(plugins::TopkMultihopLiveFilterBitslice)
+            .search(plugins::TopkMultihopLiveFilterBitsliceDnf),
     )?;
 
     registry.register(
@@ -918,6 +919,62 @@ where
         Ok(AggregatedSearchResults::Topk(result))
     }
 }
+
+//------------------------------------//
+// MultihopLiveFilter (Bitslice DNF)   //
+//------------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>>
+    for plugins::TopkMultihopLiveFilterBitsliceDnf
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter_bitslice_dnf()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps =
+            search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_bitslice(&multihop.data_labels)?;
+        let providers = utils::filters::make_live_providers_bitslice_dnf(
+            &attribute_index,
+            &multihop.query_predicates,
+        )?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
 /// The stack looks like this:
 ///
 /// - Bottom: [`FullPrecisionStream`]: The core streaming index implementation.
