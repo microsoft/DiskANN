@@ -167,12 +167,7 @@ where
     let start_points = input
         .start_point_strategy()
         .compute(data.as_view())
-        .map_err(|error| {
-            ANNError::new(
-                diskann::ANNErrorKind::DiskANN(StartPointComputeError),
-                error,
-            )
-        })?;
+        .map_err(ANNError::new)?;
     let distance = T::distance(metric, Some(dimensions));
     // Provider start vectors occupy frozen slots outside the real point-ID
     // range. Connect each slot to an identical source row when one exists;
