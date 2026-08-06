@@ -110,6 +110,13 @@ impl Knn {
     pub fn beam_width(&self) -> NonZeroUsize {
         self.beam_width
     }
+
+    pub(crate) fn new_unchecked(l_value: NonZeroUsize, beam_width: NonZeroUsize) -> Self {
+        Self {
+            l_value,
+            beam_width,
+        }
+    }
 }
 
 impl<'a, DP, S, T> Search<'a, DP, S, T> for Knn

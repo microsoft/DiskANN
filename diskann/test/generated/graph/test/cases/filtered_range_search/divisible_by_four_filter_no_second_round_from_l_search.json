@@ -1,0 +1,26 @@
+{
+  "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
+  "test": "graph/test/cases/filtered_range_search/divisible_by_four_filter_no_second_round_from_l_search",
+  "payload": {
+    "comparisons": 53,
+    "description": "Test of divisible-by-4 filter with a larger starting L. Since only 1/4 of discovered points will satisfy the filter, the second round of search should not be triggered.",
+    "grid_size": 5,
+    "hops": 33,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 12.0,
+    "range_search_second_round": false,
+    "result_count": 1,
+    "results": [
+      [
+        124,
+        3.0
+      ]
+    ],
+    "starting_l": 32
+  }
+}

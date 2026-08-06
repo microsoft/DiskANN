@@ -76,6 +76,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         FullPrecision::<f32>::new()
             .search(plugins::Topk)
             .search(plugins::Range)
+            .search(plugins::FilteredRange)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
             .search(plugins::TopkInlineFilter)
@@ -88,7 +89,10 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
     registry.register(
         "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new().search(plugins::Topk),
+        FullPrecision::<u8>::new()
+            .search(plugins::Topk)
+            .search(plugins::TopkInlineFilter)
+            .search(plugins::FilteredRange),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
@@ -559,6 +563,72 @@ where
         )?;
 
         let result = search::range::run(&range, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Range(result))
+    }
+}
+
+//-------------------//
+// Filtered Range    //
+//-------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::FilteredRange
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        plugins::FilteredRange::is_match(phase)
+    }
+
+    fn kind(&self) -> &'static str {
+        plugins::FilteredRange::as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let filtered_range = phase.as_filtered_range()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&filtered_range.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
+
+        let steps = search::range::RangeSearchSteps::new(
+            filtered_range.reps,
+            &filtered_range.num_threads,
+            &filtered_range.runs,
+        );
+
+        let bit_maps = generate_bitmaps(
+            &filtered_range.query_predicates,
+            &filtered_range.data_labels,
+        )?;
+
+        let labels: Arc<[_]> = bit_maps
+            .into_iter()
+            .map(utils::filters::as_query_label_provider)
+            .collect();
+
+        let filtered_range = benchmark_core::search::graph::filtered_range::FilteredRange::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            labels,
+        )?;
+
+        let result = search::range::run(&filtered_range, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Range(result))
     }
 }

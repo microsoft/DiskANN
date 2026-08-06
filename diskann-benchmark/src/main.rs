@@ -700,6 +700,22 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    fn graph_index_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-range.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_filter_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-filter-range.json"));
+        run_integration_test(raw);
+    }
+
     /// Filtered disk search end-to-end: drives the disk-index backend through
     /// `disk-index-filter.json`
     #[test]

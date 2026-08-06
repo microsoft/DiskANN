@@ -3,6 +3,7 @@
   "test": "graph/test/cases/range_search/max_results_respected_means_no_second_round",
   "payload": {
     "comparisons": 11,
+    "description": "Two round search test to validate that max_results = starting_l means no second round is triggered.",
     "grid_size": 5,
     "hops": 5,
     "inner_radius": null,
