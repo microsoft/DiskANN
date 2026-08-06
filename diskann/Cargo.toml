@@ -21,7 +21,6 @@ half = { workspace = true, features = ["bytemuck", "num-traits"] }
 # Note: hashbrown not using workspace because diskann needs default-features = false
 # while other crates use default-features = true. Keeping version 0.16.0 consistent.
 hashbrown = { version = "0.16.0", default-features = false, features = ["default-hasher"] }
-libc = { version = "0.2", optional = true }
 num-traits.workspace = true
 parking_lot = { version = "0.12", optional = true }
 rand.workspace = true
@@ -35,6 +34,9 @@ diskann-wide = { workspace = true }
 
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 futures-util = { workspace = true, default-features = false  }

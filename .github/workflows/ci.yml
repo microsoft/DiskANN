@@ -71,6 +71,7 @@ jobs:
       - test-workspace
       - test-workspace-features
       - coverage
+      - miri-pipnn
       - vectorset-clippy
       - vectorset-fmt
       - vectorset-build
@@ -94,6 +95,32 @@ jobs:
       # - docs
     steps:
       - run: exit 0
+
+  miri-pipnn:
+    needs: basics
+    name: strict-provenance PiPNN kernels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly with Miri
+        run: rustup toolchain install nightly --component miri
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run HashPrune pointer boundaries
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        run: |
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::hash_prune::tests::find_hash_handles_padded_boundaries_and_all_bit_patterns \
+            -- --exact
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::hash_prune::tests::relative_hash_matches_numeric_reference \
+            -- --exact
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::hash_prune::tests::full_reservoir_evicts_the_farthest_candidate \
+            -- --exact
 
   fmt:
     name: format check
