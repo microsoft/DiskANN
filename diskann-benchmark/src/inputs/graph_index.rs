@@ -730,6 +730,21 @@ pub(crate) struct IndexBuild {
     build_algorithm: Option<serde_json::Value>,
 }
 
+#[cfg(feature = "pipnn")]
+fn validate_dynamic_build_algorithm(
+    build_algorithm: &diskann_disk::BuildAlgorithm,
+) -> Result<(), anyhow::Error> {
+    match build_algorithm {
+        diskann_disk::BuildAlgorithm::Vamana => Ok(()),
+        diskann_disk::BuildAlgorithm::PiPNN(_) => Err(anyhow!(
+            "PiPNN is a batch builder and is not supported by graph-index-dynamic-run"
+        )),
+        _ => Err(anyhow!(
+            "the selected graph build algorithm is not supported by graph-index-dynamic-run"
+        )),
+    }
+}
+
 #[cfg(not(feature = "pipnn"))]
 fn validate_disabled_build_algorithm(
     build_algorithm: Option<&serde_json::Value>,
@@ -1481,6 +1496,9 @@ impl DynamicIndexRun {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        #[cfg(feature = "pipnn")]
+        validate_dynamic_build_algorithm(self.build.build_algorithm())?;
+
         self.build.validate(checker)?;
         self.runbook_params.validate(checker)?;
         self.search_phase.validate(checker)?;
@@ -1526,6 +1544,21 @@ impl std::fmt::Display for DynamicIndexRun {
         self.build.summarize_fields(f)?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "pipnn"))]
+mod dynamic_pipnn_tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_run_rejects_the_batch_only_pipnn_algorithm() {
+        let error = validate_dynamic_build_algorithm(&diskann_disk::BuildAlgorithm::PiPNN(
+            diskann_disk::PiPNNParameters::default(),
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("not supported"));
+        validate_dynamic_build_algorithm(&diskann_disk::BuildAlgorithm::Vamana).unwrap();
     }
 }
 
