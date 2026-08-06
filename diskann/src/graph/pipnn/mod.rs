@@ -417,7 +417,7 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod build_graph_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig, build_graph, leaf_kernel};
+    use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig, build_graph, leaf_kernel};
     use crate::graph::config::{self, MaxDegree};
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
@@ -641,6 +641,57 @@ mod build_graph_tests {
             assert_graph_invariants(&actual, points, degree);
         }
     }
+
+    #[test]
+    fn parallel_hash_prune_build_is_set_invariant() {
+        let points = 64;
+        let dimensions = 4;
+        let values: Vec<f32> = (0..points * dimensions)
+            .map(|value| ((value * 17 + 3) % 101) as f32)
+            .collect();
+        let data = MatrixView::try_from(values.as_slice(), points, dimensions).unwrap();
+        let graph = graph_config(Metric::L2, 8);
+        let pool = pool(4);
+        let config = PiPNNConfig {
+            c_max: 16,
+            c_min: 4,
+            p_samp: 0.25,
+            fanout: vec![3, 2],
+            k: 3,
+            replicas: 2,
+        };
+        let hash_prune = HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 16,
+            final_prune: true,
+        };
+        let build = || {
+            let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
+                .unwrap()
+                .with_hash_prune(hash_prune.clone())
+                .unwrap();
+            build_graph(data, &context).unwrap()
+        };
+
+        let first = build();
+        let second = build();
+        let canonicalize = |graph: &[crate::graph::AdjacencyList<u32>]| {
+            graph
+                .iter()
+                .map(|row| {
+                    let mut ids = row.to_vec();
+                    ids.sort_unstable();
+                    ids
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Parallel finalization may order equal candidates differently; retained
+        // neighbor sets are the graph-content contract.
+        assert_eq!(canonicalize(&first), canonicalize(&second));
+        assert_graph_invariants(&first, points, 8);
+        assert!(first.iter().any(|row| !row.is_empty()));
+    }
 }
 #[cfg(test)]
 #[allow(
@@ -649,7 +700,7 @@ mod build_graph_tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod config_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig, leaf_kernel};
+    use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig, leaf_kernel};
     use crate::graph::config::{self, MaxDegree};
     use diskann_vector::distance::Metric;
 
@@ -665,7 +716,11 @@ mod config_tests {
     }
 
     fn graph_config(metric: Metric, alpha: f32) -> crate::graph::Config {
-        config::Builder::new_with(64, MaxDegree::same(), 72, metric.into(), |builder| {
+        graph_config_with_degree(metric, alpha, 64)
+    }
+
+    fn graph_config_with_degree(metric: Metric, alpha: f32, degree: usize) -> crate::graph::Config {
+        config::Builder::new_with(degree, MaxDegree::same(), 72, metric.into(), |builder| {
             builder.alpha(alpha);
         })
         .build()
@@ -756,6 +811,67 @@ mod config_tests {
         for alpha in [0.9, f32::NAN, f32::INFINITY] {
             let graph = graph_config(Metric::L2, alpha);
             PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_hash_prune_parameters_and_accepts_valid_boundary() {
+        let graph = graph_config(Metric::L2, 1.2);
+        let pool = pool();
+        for config in [
+            HashPruneConfig {
+                num_hash_planes: 0,
+                l_max: 64,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 17,
+                l_max: 64,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 0,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 256,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 63,
+                final_prune: true,
+            },
+        ] {
+            let context =
+                PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+            assert!(context.with_hash_prune(config).is_err());
+        }
+
+        PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool)
+            .unwrap()
+            .with_hash_prune(HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 64,
+                final_prune: true,
+            })
+            .unwrap();
+    }
+    #[test]
+    fn requires_hash_bucket_capacity_to_cover_graph_degree() {
+        let pool = pool();
+        for (degree, accepted) in [(2, true), (3, false)] {
+            let graph = graph_config_with_degree(Metric::L2, 1.2, degree);
+            let result = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool)
+                .unwrap()
+                .with_hash_prune(HashPruneConfig {
+                    num_hash_planes: 1,
+                    l_max: 64,
+                    final_prune: true,
+                });
+            assert_eq!(result.is_ok(), accepted, "degree={degree}");
         }
     }
 }

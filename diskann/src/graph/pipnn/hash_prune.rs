@@ -34,7 +34,8 @@
 //! | full | not closer | reject before scanning hashes |
 //!
 //! Storage is AoSoA hot/cold split:
-//! - `hot: Vec<HotSlot>` — one 16-byte slot per point (mutex + len + farthest).
+//! - `hot: Vec<LockedHotSlot>` — one 16-byte slot per point with a mutex beside
+//!   an `UnsafeCell<HotSlot>` containing len/farthest state.
 //!   Early rejection and lock acquisition only touch this slab.
 //! - Three cold slabs (`cold_hashes`, `cold_distances`, `cold_neighbors`), each a
 //!   single `MmapSlab` of `npoints * scan_lanes` elements. Splitting hashes /
@@ -59,7 +60,7 @@ use super::{
 };
 use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use bytemuck::Pod;
-use diskann_vector::prefetch_hint_all;
+use diskann_vector::{prefetch_hint_all, prefetch_hint_all_raw};
 use diskann_wide::{
     Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
     arch::{self, Dispatched1, FTarget1, Target},
@@ -271,7 +272,7 @@ impl<T: Pod + Default> MmapSlab<T> {
         let mut values = Vec::new();
         values
             .try_reserve_exact(len)
-            .map_err(ANNError::opaque)
+            .map_err(ANNError::new)
             .map_err(|error| error.context(format!("reserving {len} HashPrune slab elements")))?;
         values.resize_with(len, T::default);
         Ok(Self(values))
@@ -317,58 +318,75 @@ fn sketches_from_data<T: VectorRepr + Send + Sync>(
         LshSketchError::InvalidPlaneCount { actual, max } => {
             super::config_error(format!("num_hash_planes ({actual}) must be in 1..={max}"))
         }
-        LshSketchError::ShapeOverflow { rows, columns } => ANNError::log_index_error(format!(
+        LshSketchError::ShapeOverflow { rows, columns } => ANNError::message(format!(
             "LSH matrix shape {rows} x {columns} overflows usize"
         )),
-        LshSketchError::Allocation(error) => ANNError::opaque(error),
+        LshSketchError::Allocation(error) => ANNError::new(error),
         LshSketchError::Fill(error) => error.into(),
     })
 }
 
 // ─── HotSlot: 16-byte per-point mutex + cached fields ─────────────────────────
 
-#[repr(C, align(16))]
+#[repr(C)]
 struct HotSlot {
-    lock: parking_lot::RawMutex,
     len: u8,
     farthest_idx: u8,
-    _pad0: u8,
     farthest_dist: u16,
-    _pad1: [u8; 10],
+    _pad: [u8; 10],
 }
 
-#[repr(transparent)]
-struct LockedHotSlot(UnsafeCell<HotSlot>);
+#[repr(C, align(16))]
+struct LockedHotSlot {
+    lock: parking_lot::RawMutex,
+    state: UnsafeCell<HotSlot>,
+}
 
 impl LockedHotSlot {
     fn new() -> Self {
-        Self(UnsafeCell::new(HotSlot::new_empty()))
+        Self {
+            lock: <parking_lot::RawMutex as RawMutexTrait>::INIT,
+            state: UnsafeCell::new(HotSlot::new_empty()),
+        }
     }
 
     fn get(&self) -> *mut HotSlot {
-        self.0.get()
+        self.state.get()
+    }
+
+    fn with_state<R>(&self, f: impl FnOnce(&mut HotSlot) -> R) -> R {
+        struct UnlockOnDrop<'a>(&'a parking_lot::RawMutex);
+        impl Drop for UnlockOnDrop<'_> {
+            fn drop(&mut self) {
+                // SAFETY: the guard is created only after acquiring this mutex.
+                unsafe { self.0.unlock() };
+            }
+        }
+
+        self.lock.lock();
+        let _guard = UnlockOnDrop(&self.lock);
+        // SAFETY: the mutex is separate from `state`, so contending threads may
+        // access the lock while this exclusive state reference is live.
+        f(unsafe { &mut *self.state.get() })
     }
 }
 
-// SAFETY: every mutable access to the contained HotSlot is guarded by its
-// embedded RawMutex. Read-only extraction happens only after HashPrune is
-// consumed, when no mutation can remain.
+// SAFETY: `lock` guards every mutable access to `state`. Read-only extraction
+// happens only after HashPrune is consumed, when no mutation can remain.
 unsafe impl Sync for LockedHotSlot {}
 
 impl HotSlot {
     const fn new_empty() -> Self {
         Self {
-            lock: <parking_lot::RawMutex as RawMutexTrait>::INIT,
             len: 0,
             farthest_idx: 0,
-            _pad0: 0,
             farthest_dist: 0,
-            _pad1: [0; 10],
+            _pad: [0; 10],
         }
     }
 }
 
-const _: () = assert!(std::mem::size_of::<HotSlot>() == 16);
+const _: () = assert!(std::mem::size_of::<LockedHotSlot>() == 16);
 
 // ─── Cold slabs ───────────────────────────────────────────────────────────────
 //
@@ -721,17 +739,17 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
 /// Global bounded reservoirs shared by parallel leaf workers.
 ///
 /// Row `i` consists of `hot[i]` and the `i * scan_lanes` range in each cold
-/// slab. The embedded point mutex is the sole synchronization boundary: callers
-/// never hold two point locks, and sketch computation/extraction happens without
-/// a lock. Consuming extraction proves that no writer can remain.
+/// slab. The point mutex is the sole synchronization boundary: callers never
+/// hold two point locks, and sketch computation/extraction happens without a
+/// lock. Consuming extraction proves that no writer can remain.
 pub(crate) struct HashPrune {
     hot: Vec<LockedHotSlot>,
     /// AoSoA hashes slab: `npoints * scan_lanes` u16.
-    cold_hashes: MmapSlab<u16>,
+    cold_hashes: UnsafeCell<MmapSlab<u16>>,
     /// AoSoA distances slab (bf16 in u16): `npoints * scan_lanes`.
-    cold_distances: MmapSlab<u16>,
+    cold_distances: UnsafeCell<MmapSlab<u16>>,
     /// AoSoA neighbors slab: `npoints * scan_lanes` u32.
-    cold_neighbors: MmapSlab<u32>,
+    cold_neighbors: UnsafeCell<MmapSlab<u32>>,
     /// Per-slot stride. Equals `l_max.next_multiple_of(32).max(32)`. Always a
     /// multiple of 32 so the AVX-512 / AVX-2 find_hash scan stays aligned.
     scan_lanes: usize,
@@ -741,12 +759,12 @@ pub(crate) struct HashPrune {
     relative_hash: RelativeHash,
 }
 
-// SAFETY: HotSlot has interior mutability via RawMutex. The cold slabs are
-// plain bit-pattern arrays; each per-point slot is guarded by HotSlot[i].lock.
-// Disjoint-index parallel access is safe.
+// SAFETY: every mutable hot/cold access is inside an UnsafeCell and guarded by
+// the corresponding `LockedHotSlot::lock`. Different locks cover disjoint cold
+// ranges, and consuming extraction proves no writer remains.
 unsafe impl Send for HashPrune {}
-// SAFETY: the same per-point lock protects all mutation through shared
-// references, and immutable sketches are safe to share.
+// SAFETY: the same per-point lock protects mutation through shared HashPrune
+// references; immutable sketches are safe to share.
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
@@ -778,7 +796,7 @@ impl HashPrune {
         // Hot slab: one HotSlot per point, contiguous.
         let mut hot: Vec<LockedHotSlot> = Vec::new();
         hot.try_reserve_exact(npoints)
-            .map_err(ANNError::opaque)
+            .map_err(ANNError::new)
             .map_err(|error| error.context(format!("reserving {npoints} HashPrune reservoirs")))?;
         for _ in 0..npoints {
             hot.push(LockedHotSlot::new());
@@ -840,9 +858,9 @@ impl HashPrune {
 
         Ok(Self {
             hot,
-            cold_hashes,
-            cold_distances,
-            cold_neighbors,
+            cold_hashes: UnsafeCell::new(cold_hashes),
+            cold_distances: UnsafeCell::new(cold_distances),
+            cold_neighbors: UnsafeCell::new(cold_neighbors),
             scan_lanes,
             sketches,
             l_max,
@@ -852,34 +870,23 @@ impl HashPrune {
     }
 
     /// Locks the per-slot mutex at `idx`, runs `f` with mutable access to the
-    /// hot slot and its cold-slab pointers, and unlocks on return or panic.
+    /// hot state and its cold-slab pointers, and unlocks on return or panic.
     #[inline(always)]
     fn with_locked<R>(&self, idx: usize, f: impl FnOnce(&mut HotSlot, ColdSlotPtrs) -> R) -> R {
-        struct UnlockOnDrop {
-            hot_ptr: *mut HotSlot,
-        }
-        impl Drop for UnlockOnDrop {
-            fn drop(&mut self) {
-                // SAFETY: only constructed after locking this slot's mutex.
-                unsafe { (*self.hot_ptr).lock.unlock() };
-            }
-        }
         assert!(idx < self.hot.len(), "HashPrune point index out of bounds");
-        // SAFETY: idx bounds-checked above, so `idx * scan_lanes + scan_lanes`
-        // is within each cold slab's capacity. UnlockOnDrop unlocks on panic.
-        unsafe {
-            let hot_ptr = self.hot[idx].get();
-            let off = idx * self.scan_lanes;
-            let cold = ColdSlotPtrs {
-                hashes: (self.cold_hashes.as_ptr() as *mut u16).add(off),
-                distances: (self.cold_distances.as_ptr() as *mut u16).add(off),
-                neighbors: (self.cold_neighbors.as_ptr() as *mut u32).add(off),
+        let off = idx * self.scan_lanes;
+        // SAFETY: `idx` is bounds-checked, each slab has
+        // `hot.len() * scan_lanes` elements, and its UnsafeCell permits mutation
+        // through this shared HashPrune reference while the point lock is held.
+        let cold = unsafe {
+            ColdSlotPtrs {
+                hashes: (*self.cold_hashes.get()).as_ptr().cast_mut().add(off),
+                distances: (*self.cold_distances.get()).as_ptr().cast_mut().add(off),
+                neighbors: (*self.cold_neighbors.get()).as_ptr().cast_mut().add(off),
                 scan_lanes: self.scan_lanes,
-            };
-            (*hot_ptr).lock.lock();
-            let _guard = UnlockOnDrop { hot_ptr };
-            f(&mut *hot_ptr, cold)
-        }
+            }
+        };
+        self.hot[idx].with_state(|hot| f(hot, cold))
     }
 
     /// Merge one leaf's CSR edge list into the global reservoirs.
@@ -931,7 +938,16 @@ impl HashPrune {
             {
                 let off = next * self.scan_lanes;
                 prefetch_hint_all(std::slice::from_ref(&self.hot[next]));
-                prefetch_hint_all(&self.cold_hashes[off..off + self.scan_lanes]);
+                // SAFETY: `next` is a dataset point ID, so this raw range is the
+                // complete padded hash segment for that point. Raw prefetch avoids
+                // creating a shared slice while another worker mutates the segment.
+                unsafe {
+                    let hashes = (*self.cold_hashes.get()).as_ptr().add(off);
+                    prefetch_hint_all_raw(
+                        hashes.cast(),
+                        self.scan_lanes * std::mem::size_of::<u16>(),
+                    );
+                }
             }
 
             let src_sketch = &sketch_scratch[local_src * m..(local_src + 1) * m];
@@ -977,6 +993,9 @@ impl HashPrune {
             cold_neighbors,
             ..
         } = self;
+        let cold_hashes = cold_hashes.into_inner();
+        let cold_distances = cold_distances.into_inner();
+        let cold_neighbors = cold_neighbors.into_inner();
         drop(cold_hashes);
         (0..hot.len())
             .into_par_iter()
@@ -1018,6 +1037,9 @@ impl HashPrune {
             cold_neighbors,
             ..
         } = self;
+        let cold_hashes = cold_hashes.into_inner();
+        let cold_distances = cold_distances.into_inner();
+        let cold_neighbors = cold_neighbors.into_inner();
         // Neither the hashes (LSH dedup index) nor the distances (bf16
         // keep-closer key) are read again — free them before the copy so the
         // reservoir+copy overlap is just the neighbors slab.
@@ -1041,4 +1063,531 @@ impl HashPrune {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    struct Reservoir {
+        hot: HotSlot,
+        hashes: Vec<u16>,
+        distances: Vec<u16>,
+        neighbors: Vec<u32>,
+        scan_lanes: usize,
+        l_max: u8,
+    }
+
+    impl Reservoir {
+        fn new(l_max: usize) -> Self {
+            assert!(l_max <= MAX_RESERVOIR_LEN);
+            let scan_lanes = l_max.next_multiple_of(32).max(32);
+            Self {
+                hot: HotSlot::new_empty(),
+                hashes: vec![0; scan_lanes],
+                distances: vec![0; scan_lanes],
+                neighbors: vec![0; scan_lanes],
+                scan_lanes,
+                l_max: l_max as u8,
+            }
+        }
+
+        fn cold(&self) -> ColdSlotPtrs {
+            ColdSlotPtrs {
+                hashes: self.hashes.as_ptr() as *mut u16,
+                distances: self.distances.as_ptr() as *mut u16,
+                neighbors: self.neighbors.as_ptr() as *mut u32,
+                scan_lanes: self.scan_lanes,
+            }
+        }
+
+        fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
+            let cold = self.cold();
+            // SAFETY: the test owns the reservoir and holds its only mutable reference.
+            unsafe {
+                insert_locked(
+                    &mut self.hot,
+                    cold,
+                    hash,
+                    neighbor,
+                    distance,
+                    self.l_max,
+                    select_find_hash(),
+                )
+            }
+        }
+
+        fn neighbors(&self) -> Vec<(u32, f32)> {
+            let cold = self.cold();
+            let mut scratch = Vec::new();
+            // SAFETY: the test owns the reservoir; all cold slabs span scan_lanes entries.
+            unsafe {
+                collect_sorted_neighbors(
+                    &self.hot,
+                    cold.distances,
+                    cold.neighbors,
+                    usize::MAX,
+                    &mut scratch,
+                )
+            }
+        }
+
+        fn len(&self) -> usize {
+            self.hot.len as usize
+        }
+
+        fn is_empty(&self) -> bool {
+            self.hot.len == 0
+        }
+    }
+
+    #[test]
+    fn hot_slot_contention_serializes_state_mutation() {
+        let slot = LockedHotSlot::new();
+        let start = std::sync::Barrier::new(3);
+
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let slot = &slot;
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..16 {
+                        slot.with_state(|hot| hot.farthest_dist += 1);
+                    }
+                });
+            }
+            start.wait();
+        });
+
+        assert_eq!(slot.with_state(|hot| hot.farthest_dist), 32);
+    }
+
+    fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
+        let m = hp.sketches.num_planes();
+        let sketches = hp.sketches.sketches();
+        let hash = hp.relative_hash.call(RelativeHashArgs {
+            src: sketches[src * m..(src + 1) * m].as_ptr(),
+            dst: sketches[dst * m..(dst + 1) * m].as_ptr(),
+            len: m,
+        });
+        let l_max = hp.l_max as u8;
+        hp.with_locked(src, |hot, cold| {
+            // SAFETY: with_locked guards the reservoir and supplies valid cold-slab pointers.
+            unsafe { insert_locked(hot, cold, hash, dst as u32, distance, l_max, hp.find_hash) };
+        });
+    }
+
+    fn assert_sketch_source_type_matches_f32<T>(
+        label: &str,
+        convert: impl Fn(u8) -> T,
+        reference: impl Fn(u8) -> f32,
+    ) where
+        T: VectorRepr + Send + Sync,
+    {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let points = 5;
+        for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+            let raw: Vec<u8> = (0..points * dimensions)
+                .map(|index| ((index * 7 + index / dimensions * 3) % 23) as u8)
+                .collect();
+            let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
+            let f32_data: Vec<f32> = raw.iter().copied().map(&reference).collect();
+            for planes in [1, 8, 16] {
+                let (actual, expected) = pool.install(|| {
+                    (
+                        sketches_from_data(&converted, points, dimensions, planes, 42).unwrap(),
+                        sketches_from_data(&f32_data, points, dimensions, planes, 42).unwrap(),
+                    )
+                });
+                assert_eq!(
+                    actual.sketches(),
+                    expected.sketches(),
+                    "{label} dimensions={dimensions} planes={planes}"
+                );
+            }
+        }
+    }
+
+    // Source conversion.
+
+    #[test]
+    fn f16_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+        assert_sketch_source_type_matches_f32(
+            "f16",
+            |value| half::f16::from_f32(value as f32),
+            |value| value as f32,
+        );
+    }
+
+    #[test]
+    fn u8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+        assert_sketch_source_type_matches_f32("u8", |value| value, |value| value as f32);
+    }
+
+    #[test]
+    fn i8_sketch_conversion_matches_f32_across_dimensions_and_planes() {
+        assert_sketch_source_type_matches_f32(
+            "i8",
+            |value| value as i8 - 11,
+            |value| (value as i8 - 11) as f32,
+        );
+    }
+
+    // Dispatched hash primitives.
+
+    #[test]
+    fn relative_hash_matches_numeric_reference() {
+        let dispatched = select_relative_hash();
+
+        let src = [
+            1.0, -2.0, 0.0, 7.5, -0.0, 3.25, -9.0, 4.0, 8.0, -1.5, 2.0, 0.0, 6.0, -3.0, 5.5, -7.25,
+        ];
+        let dst = [
+            1.0, -3.0, 0.5, 7.0, 0.0, 3.25, -8.0, -4.0, 9.0, -1.5, -2.0, -0.0, 5.0, -2.0, 5.5, -8.0,
+        ];
+
+        for m in 0..=16 {
+            let mut expected = 0u16;
+            for j in 0..m {
+                let diff: f32 = dst[j] - src[j];
+                expected |= ((diff >= 0.0) as u16) << j;
+            }
+
+            let actual = dispatched.call(RelativeHashArgs {
+                src: src.as_ptr(),
+                dst: dst.as_ptr(),
+                len: m,
+            });
+            assert_eq!(actual, expected, "m={m}");
+        }
+    }
+
+    #[test]
+    fn relative_hash_defines_signed_zero_and_nan_buckets() {
+        let src = [0.0; 4];
+        let dst = [
+            0.0,
+            -0.0,
+            f32::from_bits(0x7FC0_0000),
+            f32::from_bits(0xFFC0_0000),
+        ];
+
+        assert_eq!(
+            select_relative_hash().call(RelativeHashArgs {
+                src: src.as_ptr(),
+                dst: dst.as_ptr(),
+                len: dst.len(),
+            }),
+            0b0011
+        );
+    }
+
+    #[test]
+    fn find_hash_handles_padded_boundaries_and_all_bit_patterns() {
+        let dispatched = select_find_hash();
+
+        for target in [0, 0xF00D] {
+            for len in [0usize, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 254, 255] {
+                let scan_lanes = len.max(1).next_multiple_of(32);
+                let mut hashes = vec![target; scan_lanes];
+                hashes[..len].fill(0x8001);
+                let args = |hashes: &[u16]| FindHashArgs {
+                    hashes: hashes.as_ptr(),
+                    scan_lanes,
+                    len: len as u8,
+                    target,
+                };
+
+                assert_eq!(dispatched.call(args(&hashes)), None, "len={len}");
+                for index in [0, len / 2, len.saturating_sub(1)] {
+                    if index < len {
+                        hashes[index] = target;
+                        assert_eq!(dispatched.call(args(&hashes)), Some(index), "len={len}");
+                        hashes[index] = 0x8001;
+                    }
+                }
+            }
+        }
+    }
+
+    // Storage and configuration.
+
+    #[test]
+    fn slab_is_zeroed_and_reports_its_bytes() {
+        let slab = MmapSlab::<u32>::new_zeroed(4).unwrap();
+        assert_eq!(slab.bytes(), 4 * std::mem::size_of::<u32>());
+        assert_eq!(slab.len(), 4);
+        assert!(!slab.as_ptr().is_null());
+        assert_eq!(&*slab, &[0; 4]);
+    }
+
+    #[test]
+    fn accepts_structural_l_max_boundaries() {
+        let data = [0.0_f32];
+        let low = HashPrune::new(&data, 1, 1, 1, 1, 42).unwrap();
+        assert_eq!(low.l_max, 1);
+        assert_eq!(low.scan_lanes, 32);
+
+        let high = HashPrune::new(&data, 1, 1, 1, MAX_RESERVOIR_LEN, 42).unwrap();
+        assert_eq!(high.l_max, MAX_RESERVOIR_LEN);
+        assert_eq!(high.scan_lanes, 256);
+    }
+
+    #[test]
+    fn rejects_l_max_outside_structural_boundaries() {
+        for l_max in [0, MAX_RESERVOIR_LEN + 1] {
+            let result = HashPrune::new(&[0.0_f32], 1, 1, 1, l_max, 42);
+            let error = match result {
+                Ok(_) => panic!("l_max={l_max} must be rejected"),
+                Err(error) => error,
+            };
+            assert!(format!("{error:?}").contains(&format!("l_max ({l_max})")));
+        }
+    }
+
+    #[test]
+    fn ordered_key_roundtrips_bf16_order_for_all_signs() {
+        let values = [
+            f32::NEG_INFINITY,
+            -100.0,
+            -0.0,
+            0.0,
+            0.25,
+            100.0,
+            f32::INFINITY,
+        ];
+        let keys: Vec<_> = values.iter().copied().map(ordered_key).collect();
+        assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]));
+        for (value, key) in values.into_iter().zip(keys) {
+            assert_eq!(
+                bf16_to_f32(key_to_bf16(key)),
+                bf16_to_f32(f32_to_bf16(value))
+            );
+        }
+    }
+
+    // Leaf ingestion and scratch reuse.
+
+    #[test]
+    fn batched_leaf_edges_match_single_edge_reference() {
+        let data = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let batched = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
+        let reference = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
+        let point_ids = [0, 1, 2, 3];
+        let offsets = [0, 3, 6, 9, 12];
+        let edges = [
+            (1, 1.0),
+            (2, 1.0),
+            (3, 2.0),
+            (0, 1.0),
+            (2, 2.0),
+            (3, 1.0),
+            (0, 1.0),
+            (1, 2.0),
+            (3, 1.0),
+            (0, 2.0),
+            (1, 1.0),
+            (2, 1.0),
+        ];
+        let mut scratch = Vec::new();
+
+        batched.add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch);
+        for source in 0..point_ids.len() {
+            for &(target, distance) in
+                &edges[offsets[source] as usize..offsets[source + 1] as usize]
+            {
+                add_edge(&reference, source, target as usize, distance);
+            }
+        }
+        let canonicalize = |lists: Vec<crate::graph::AdjacencyList<u32>>| {
+            lists
+                .into_iter()
+                .map(|candidates| {
+                    let mut ids = candidates.to_vec();
+                    ids.sort_unstable();
+                    ids
+                })
+                .collect::<Vec<_>>()
+        };
+        let actual = canonicalize(batched.into_candidate_lists());
+        let expected = canonicalize(reference.into_candidate_lists());
+
+        assert_eq!(actual, expected);
+        assert!(actual.iter().all(|candidates| !candidates.is_empty()));
+    }
+
+    #[test]
+    fn leaf_edges_grow_then_reuse_sketch_scratch() {
+        let data = [0.0_f32, 1.0, 2.0, 3.0];
+        let hp = HashPrune::new(&data, 4, 1, 8, 4, 42).unwrap();
+        let mut scratch = vec![99.0; 1];
+
+        hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
+        assert_eq!(scratch.len(), 16);
+        let capacity = scratch.capacity();
+
+        hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
+        assert_eq!(scratch.len(), 16);
+        assert_eq!(scratch.capacity(), capacity);
+
+        hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch);
+        assert_eq!(scratch.len(), 16);
+        assert_eq!(scratch.capacity(), capacity);
+        assert!(
+            hp.into_candidate_lists()
+                .iter()
+                .all(|candidates| candidates.len() == 1)
+        );
+    }
+
+    // Reservoir replacement and ordering policy.
+
+    #[test]
+    fn full_reservoir_evicts_the_farthest_candidate() {
+        let mut reservoir = Reservoir::new(3);
+        assert!(reservoir.is_empty());
+
+        assert!(reservoir.insert(0, 1, 1.0));
+        assert!(reservoir.insert(1, 2, 2.0));
+        assert!(reservoir.insert(2, 3, 3.0));
+        assert!(reservoir.insert(3, 4, 0.5));
+
+        assert_eq!(reservoir.len(), 3);
+        assert_eq!(reservoir.neighbors(), [(4, 0.5), (1, 1.0), (2, 2.0)]);
+    }
+
+    #[test]
+    fn same_hash_keeps_only_the_closest_candidate() {
+        let mut reservoir = Reservoir::new(5);
+
+        assert!(reservoir.insert(0, 1, 3.0));
+        assert!(reservoir.insert(0, 2, 2.0));
+        assert!(reservoir.insert(0, 3, 1.0));
+        assert!(!reservoir.insert(0, 4, 5.0));
+
+        assert_eq!(reservoir.len(), 1);
+        assert_eq!(reservoir.neighbors(), [(3, 1.0)]);
+    }
+
+    #[test]
+    fn equal_distances_are_ordered_by_neighbor_id() {
+        let mut res = Reservoir::new(5);
+        res.insert(0, 1, 1.0);
+        res.insert(1, 2, 1.0);
+        res.insert(2, 3, 1.0);
+        assert_eq!(res.len(), 3);
+        assert_eq!(res.neighbors(), [(1, 1.0), (2, 1.0), (3, 1.0)]);
+    }
+
+    #[test]
+    fn same_hash_bf16_ties_are_history_independent() {
+        for order in [[0, 1], [1, 0]] {
+            let candidates = [(7, 20, 1.0), (7, 10, 1.0)];
+            let mut reservoir = Reservoir::new(2);
+            for index in order {
+                let (hash, neighbor, distance) = candidates[index];
+                reservoir.insert(hash, neighbor, distance);
+            }
+            assert_eq!(reservoir.neighbors(), [(10, 1.0)], "order={order:?}");
+        }
+    }
+
+    #[test]
+    fn full_reservoir_bf16_ties_are_history_independent() {
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let candidates = [(1, 30, 1.0), (2, 10, 1.0), (3, 20, 1.0)];
+        for order in permutations {
+            let mut reservoir = Reservoir::new(2);
+            for index in order {
+                let (hash, neighbor, distance) = candidates[index];
+                reservoir.insert(hash, neighbor, distance);
+            }
+            let mut actual = reservoir.neighbors();
+            actual.sort_unstable_by_key(|&(neighbor, _)| neighbor);
+            assert_eq!(actual, [(10, 1.0), (30, 1.0)], "order={order:?}");
+        }
+    }
+
+    // Concurrency and consuming extraction.
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parallel_insertion_matches_serial_neighbor_lists() {
+        use rayon::prelude::*;
+
+        let data = vec![0.0f32; 100 * 4];
+        let parallel = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
+        let serial = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
+
+        (0..50).into_par_iter().for_each(|source| {
+            add_edge(&parallel, source, (source + 1) % 100, 1.0);
+            add_edge(&parallel, (source + 1) % 100, source, 1.0);
+        });
+        for source in 0..50 {
+            add_edge(&serial, source, (source + 1) % 100, 1.0);
+            add_edge(&serial, (source + 1) % 100, source, 1.0);
+        }
+
+        assert_eq!(parallel.into_nearest_lists(5), serial.into_nearest_lists(5));
+    }
+
+    #[test]
+    fn extraction_returns_full_candidates_and_truncates_to_nearest_degree() {
+        #[rustfmt::skip]
+        let data = [
+             0.0,  0.0,
+             1.0,  0.0,
+             0.0,  1.0,
+            -1.0,  0.0,
+             0.0, -1.0,
+             1.0,  1.0,
+            -1.0,  1.0,
+             1.0, -1.0,
+        ];
+        let full = HashPrune::new(&data, 8, 2, 16, 10, 42).unwrap();
+        let nearest = HashPrune::new(&data, 8, 2, 16, 10, 42).unwrap();
+        for target in 1..8 {
+            add_edge(&full, 0, target, target as f32);
+            add_edge(&nearest, 0, target, target as f32);
+        }
+
+        let mut full_ids = full.into_candidate_lists()[0].to_vec();
+        full_ids.sort_unstable();
+        assert_eq!(full_ids, (1..8).collect::<Vec<_>>());
+        assert_eq!(&*nearest.into_nearest_lists(2)[0], &[1, 2]);
+    }
+
+    #[test]
+    fn farthest_cache_updates_after_repeated_evictions() {
+        let mut reservoir = Reservoir::new(3);
+        reservoir.insert(0, 10, 5.0);
+        reservoir.insert(1, 11, 4.0);
+        reservoir.insert(2, 12, 3.0);
+        assert!(reservoir.insert(3, 13, 2.0));
+        assert!(reservoir.insert(4, 14, 1.0));
+
+        assert_eq!(reservoir.neighbors(), [(14, 1.0), (13, 2.0), (12, 3.0)]);
+    }
+
+    #[test]
+    fn sorted_extraction_handles_an_early_farthest_slot() {
+        let mut reservoir = Reservoir::new(4);
+        reservoir.insert(5, 1, 1.0);
+        reservoir.insert(10, 2, 3.0);
+        reservoir.insert(15, 3, 2.0);
+        reservoir.insert(3, 4, 0.5);
+
+        assert_eq!(
+            reservoir.neighbors(),
+            [(4, 0.5), (1, 1.0), (3, 2.0), (2, 3.0)]
+        );
+    }
+}
