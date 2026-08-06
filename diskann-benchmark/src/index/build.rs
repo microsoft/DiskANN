@@ -245,17 +245,11 @@ where
     }
 
     let total_time = MicroSeconds::from(batch_elapsed + install_started.elapsed());
-    let per_vector = MicroSeconds::new(
-        total_time
-            .as_micros()
-            .checked_div(u64::try_from(npoints)?)
-            .context("PiPNN build received an empty dataset")?,
-    );
     let stats = BuildStats {
         kind: BuildKind::PiPNN,
         total_time,
         vectors_inserted: npoints,
-        insert_latencies: percentiles::compute_percentiles(&mut [per_vector])?,
+        insert_latencies: None,
     };
     Ok((index, stats))
 }
@@ -328,7 +322,8 @@ pub(crate) struct BuildStats {
     pub(crate) kind: BuildKind,
     pub(crate) total_time: MicroSeconds,
     pub(crate) vectors_inserted: usize,
-    pub(crate) insert_latencies: percentiles::Percentiles<MicroSeconds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) insert_latencies: Option<percentiles::Percentiles<MicroSeconds>>,
 }
 
 impl BuildStats {
@@ -349,7 +344,7 @@ impl BuildStats {
             kind,
             total_time,
             vectors_inserted,
-            insert_latencies: percentiles::compute_percentiles(&mut latencies)?,
+            insert_latencies: Some(percentiles::compute_percentiles(&mut latencies)?),
         })
     }
 }
@@ -359,11 +354,15 @@ impl std::fmt::Display for BuildStats {
         writeln!(f, "Index Build Time: {}s", self.total_time.as_seconds())?;
         writeln!(f, "Vectors Inserted: {}", self.vectors_inserted)?;
         writeln!(f, "Kind: {}", self.kind)?;
-        write!(
-            f,
-            "Insert Latencies:\n  average: {}us\n      p90: {}\n      p99: {}\n\n",
-            self.insert_latencies.mean, self.insert_latencies.p90, self.insert_latencies.p99,
-        )
+        if let Some(latencies) = &self.insert_latencies {
+            write!(
+                f,
+                "Insert Latencies:\n  average: {}us\n      p90: {}\n      p99: {}\n\n",
+                latencies.mean, latencies.p90, latencies.p99,
+            )
+        } else {
+            writeln!(f, "Insert Latencies: not measured for batch construction\n")
+        }
     }
 }
 
@@ -485,6 +484,7 @@ mod pipnn_tests {
 
         let (index, stats) = pipnn_build(Arc::new(data), &input, parameters).unwrap();
         assert_eq!(stats.vectors_inserted, 16);
+        assert!(stats.insert_latencies.is_none());
         let starts = index.provider().starting_points().unwrap();
         assert_eq!(starts.len(), 1);
         // SAFETY: the completed build has no concurrent vector writers.
