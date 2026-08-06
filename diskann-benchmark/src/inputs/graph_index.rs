@@ -725,6 +725,30 @@ pub(crate) struct IndexBuild {
     #[cfg(feature = "pipnn")]
     #[serde(default)]
     build_algorithm: diskann_disk::BuildAlgorithm,
+    #[cfg(not(feature = "pipnn"))]
+    #[serde(default)]
+    build_algorithm: Option<serde_json::Value>,
+}
+
+#[cfg(not(feature = "pipnn"))]
+fn validate_disabled_build_algorithm(
+    build_algorithm: Option<&serde_json::Value>,
+) -> Result<(), anyhow::Error> {
+    let Some(build_algorithm) = build_algorithm else {
+        return Ok(());
+    };
+    let algorithm = build_algorithm
+        .as_object()
+        .and_then(|object| object.get("algorithm"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("build_algorithm must be an object containing an algorithm tag"))?;
+    match algorithm {
+        "Vamana" => Ok(()),
+        "PiPNN" => Err(anyhow!(
+            "PiPNN graph construction requires the `pipnn` feature"
+        )),
+        other => Err(anyhow!("unrecognized graph build algorithm `{other}`")),
+    }
 }
 
 impl IndexBuild {
@@ -830,6 +854,9 @@ impl IndexBuild {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        #[cfg(not(feature = "pipnn"))]
+        validate_disabled_build_algorithm(self.build_algorithm.as_ref())?;
+
         self.data.resolve(checker)?;
 
         // We allow overwriting of already existing save paths, since users like to do this
@@ -909,6 +936,8 @@ impl Example for IndexBuild {
             save_path: None,
             #[cfg(feature = "pipnn")]
             build_algorithm: diskann_disk::BuildAlgorithm::Vamana,
+            #[cfg(not(feature = "pipnn"))]
+            build_algorithm: None,
         }
     }
 }
@@ -1497,5 +1526,25 @@ impl std::fmt::Display for DynamicIndexRun {
         self.build.summarize_fields(f)?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(feature = "pipnn")))]
+mod disabled_pipnn_tests {
+    use super::*;
+
+    #[test]
+    fn pipnn_request_fails_closed_without_the_feature() {
+        let pipnn = serde_json::json!({
+            "algorithm": "PiPNN",
+            "c_max": 512,
+            "fanout": [8, 3]
+        });
+        let error = validate_disabled_build_algorithm(Some(&pipnn)).unwrap_err();
+        assert!(error.to_string().contains("requires the `pipnn` feature"));
+
+        let vamana = serde_json::json!({ "algorithm": "Vamana" });
+        validate_disabled_build_algorithm(Some(&vamana)).unwrap();
+        validate_disabled_build_algorithm(None).unwrap();
     }
 }
