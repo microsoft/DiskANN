@@ -146,6 +146,23 @@ impl HashPruneConfig {
         }
         Ok(())
     }
+
+    /// Validate that the reservoir and hash space can cover `degree` neighbors.
+    pub fn validate_for_degree(&self, degree: usize) -> ANNResult<()> {
+        self.validate()?;
+        let hash_capacity = 1usize
+            .checked_shl(self.num_hash_planes as u32)
+            .unwrap_or(usize::MAX);
+        let candidate_capacity = self.l_max.min(hash_capacity);
+        if candidate_capacity < degree {
+            return Err(config_error(format!(
+                "HashPrune capacity min(l_max={}, hash buckets={hash_capacity}) must be at least \
+                 the graph degree ({degree})",
+                self.l_max
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -191,19 +208,7 @@ impl<'a> PiPNNBuildContext<'a> {
 
     /// Enable HashPrune candidate merging for this build.
     pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
-        config.validate()?;
-        let degree = self.graph.pruned_degree().get();
-        let hash_capacity = 1usize
-            .checked_shl(config.num_hash_planes as u32)
-            .unwrap_or(usize::MAX);
-        let candidate_capacity = config.l_max.min(hash_capacity);
-        if candidate_capacity < degree {
-            return Err(config_error(format!(
-                "HashPrune capacity min(l_max={}, hash buckets={hash_capacity}) must be at least \
-                 the graph degree ({degree})",
-                config.l_max
-            )));
-        }
+        config.validate_for_degree(self.graph.pruned_degree().get())?;
         self.candidate_merge = CandidateMerge::HashPrune(config);
         Ok(self)
     }

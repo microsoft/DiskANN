@@ -80,7 +80,8 @@ where
         if let Some(parameters) = disk_build_param.pipnn_parameters() {
             diskann::graph::pipnn::PiPNNConfig::from(parameters).validate()?;
             if let Some(hash_prune) = &parameters.hash_prune {
-                diskann::graph::pipnn::HashPruneConfig::from(hash_prune).validate()?;
+                diskann::graph::pipnn::HashPruneConfig::from(hash_prune)
+                    .validate_for_degree(index_configuration.config.pruned_degree().get())?;
             }
         }
 
