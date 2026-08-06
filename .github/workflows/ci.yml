@@ -70,6 +70,7 @@ jobs:
       - test-workspace
       - test-workspace-features
       - coverage
+      - iai-callgrind
       - vectorset-clippy
       - vectorset-fmt
       - vectorset-build
@@ -92,6 +93,32 @@ jobs:
       - docs
     steps:
       - run: exit 0
+
+  iai-callgrind:
+    needs: basics
+    name: IAI-Callgrind microbenchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup show
+
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y valgrind
+
+      - name: Install iai-callgrind-runner
+        run: cargo install iai-callgrind-runner --version 0.14.2 --locked
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run shared DiskANN IAI target
+        run: |
+          cargo bench --locked -p diskann \
+            --bench bench_main_iai \
+            --features pipnn,testing
 
   fmt:
     name: format check
@@ -463,6 +490,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
