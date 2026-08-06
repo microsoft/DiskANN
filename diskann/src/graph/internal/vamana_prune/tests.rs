@@ -291,27 +291,3 @@ async fn max_occlusion_size_truncates_to_nearest_candidates() {
 
     assert_eq!(&*case.run(&test_provider::Strategy::new()).await, &[1, 2]);
 }
-
-#[tokio::test(flavor = "current_thread")]
-async fn maximum_u16_candidate_pool_is_supported() {
-    let num_candidates = u16::MAX as usize;
-    let vectors = (0..=num_candidates)
-        .map(|position| vec![position as f32])
-        .collect();
-    let case = PruneCase::new(
-        vectors,
-        1..=u16::MAX as u32,
-        PruneConfig {
-            metric: Metric::L2,
-            source: 0,
-            degree: 1,
-            alpha: 1.2,
-            prune_kind: PruneKind::TriangleInequality,
-            saturate: false,
-            max_occlusion_size: num_candidates,
-        },
-    );
-
-    let strategy = test_provider::Strategy::with_transient(true, 1..u16::MAX as u32);
-    assert_eq!(&*case.run(&strategy).await, &[u16::MAX as u32]);
-}

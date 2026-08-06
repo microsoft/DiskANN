@@ -2354,9 +2354,7 @@ where
         A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
-            // Reused scratch may still contain the previous source's output.
             if context.pool.is_empty() {
-                context.neighbors.clear();
                 return Ok(());
             }
 
@@ -2405,7 +2403,6 @@ where
     {
         async move {
             if list.is_empty() {
-                scratch.neighbors.clear();
                 return Ok(());
             }
 
