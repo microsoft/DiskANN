@@ -381,6 +381,12 @@ where
 }
 
 /// Save real-point adjacency lists in the canonical graph layout.
+///
+/// # Errors
+///
+/// Returns an error before creating the file when `start_point` or a neighbor ID
+/// is outside `adjacency`, or when a row exceeds `max_degree`. Storage creation
+/// and write failures are forwarded from `provider`.
 pub fn save_adjacency_graph<P>(
     adjacency: &[AdjacencyList<u32>],
     max_degree: u32,
