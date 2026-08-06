@@ -119,6 +119,7 @@ mod tests {
             fanout: vec![10, 3],
             k: 2,
             replicas: 1,
+            hash_prune: Some(crate::HashPruneParameters::default()),
         }
     }
 
@@ -276,5 +277,35 @@ mod tests {
         };
 
         assert!(format!("{error:?}").contains("c_max must be greater than zero"));
+    }
+
+    #[test]
+    fn builder_rejects_hash_prune_capacity_before_quantizer_artifacts() {
+        let storage = VirtualStorageProvider::new_memory();
+        let parameters = PiPNNParameters {
+            hash_prune: Some(crate::HashPruneParameters {
+                num_hash_planes: 12,
+                l_max: 16,
+                final_prune: true,
+            }),
+            ..PiPNNParameters::default()
+        };
+        let params = DiskIndexBuildParameters::new_pipnn(
+            MemoryBudget::try_from_gb(1.0).unwrap(),
+            NumPQChunks::new_with(1, 1).unwrap(),
+            parameters,
+        );
+        let config = IndexConfiguration::new(Metric::L2, 1, 1, ONE, 1, graph_config(32, 1.2));
+        let writer =
+            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
+
+        let error = match DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, config, writer) {
+            Ok(_) => panic!("HashPrune capacity below graph degree must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(format!("{error:?}").contains("must be at least the graph degree (32)"));
+        assert!(!storage.exists("/index_pq_pivots.bin"));
+        assert!(!storage.exists("/index_pq_compressed.bin"));
     }
 }
