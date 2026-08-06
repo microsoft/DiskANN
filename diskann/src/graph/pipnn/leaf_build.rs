@@ -653,9 +653,10 @@ mod tests {
     use half::f16;
     use std::collections::BTreeSet;
 
+    use super::super::leaf_kernel::LeafNeighbor;
     use super::{
-        DirectCandidates, LeafBuffers, LeafBuildError, add_symmetric_neighbors, allocation_error,
-        build_leaf_candidates,
+        DirectCandidates, EdgeBuffers, LeafBuffers, LeafBuildError, add_symmetric_neighbors,
+        allocation_error, build_leaf_candidates, build_symmetric_edge_csr,
     };
 
     fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
@@ -1107,5 +1108,118 @@ mod tests {
             adjacency_lists(candidates.into_lists().unwrap()),
             [vec![1], vec![0]]
         );
+    }
+
+    #[test]
+    fn symmetric_edge_csr_matches_expected_adjacency() {
+        let point_ids = [10, 20, 30];
+        let neighbors = [
+            LeafNeighbor::new(1, 1.0),
+            LeafNeighbor::new(2, 2.0),
+            LeafNeighbor::new(1, 1.5),
+        ];
+        let mut seen = vec![false; 9];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+
+        let count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            1,
+            &neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 4);
+        assert_eq!(offsets, [0, 1, 3, 4]);
+        assert_eq!(edges, [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)]);
+    }
+    #[test]
+    fn symmetric_edge_csr_deduplicates_edges_seen_from_both_endpoints() {
+        let point_ids = [10, 20];
+        let neighbors = [LeafNeighbor::new(1, 1.0), LeafNeighbor::new(0, 1.0)];
+        let mut seen = vec![false; 4];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+
+        let count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            1,
+            &neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(offsets, [0, 1, 2]);
+        assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
+    }
+    #[test]
+    fn symmetric_edge_csr_rejects_out_of_range_local_targets() {
+        let mut seen = vec![false; 4];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+        let error = build_symmetric_edge_csr(
+            7,
+            &[10, 20],
+            1,
+            &[LeafNeighbor::new(2, 1.0), LeafNeighbor::new(0, 1.0)],
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            LeafBuildError::InvalidLocalTarget {
+                target: 2,
+                points: 2
+            }
+        ));
+    }
+    #[test]
+    fn zero_k_edge_csr_has_empty_adjacency() {
+        let point_ids = [10, 20, 30];
+        let mut seen = vec![false; 9];
+        let mut offsets = Vec::new();
+        let mut edges = vec![(99, 99.0)];
+        let mut cursor = Vec::new();
+
+        let count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            0,
+            &[],
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(offsets, [0, 0, 0, 0]);
+        assert!(edges.is_empty());
     }
 }
