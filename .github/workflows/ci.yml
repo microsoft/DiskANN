@@ -119,6 +119,9 @@ jobs:
           cargo +nightly miri test --locked -p diskann --features pipnn --lib \
             graph::pipnn::hash_prune::tests::full_reservoir_evicts_the_farthest_candidate \
             -- --exact
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::hash_prune::tests::hot_slot_contention_serializes_state_mutation \
+            -- --exact
 
   fmt:
     name: format check
