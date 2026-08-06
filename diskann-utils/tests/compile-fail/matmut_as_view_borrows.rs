@@ -1,0 +1,17 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use diskann_utils::views::{Mat, MatMut, RowMajor};
+
+// Test that `as_view` on MatMut correctly captures an immutable lifetime,
+// preventing mutating the MatMut while the immutable view is in scope.
+fn main() {
+    let mut mat: Mat<RowMajor<f32>> = Mat::from_repr(RowMajor::new(4, 3).unwrap(), 0.0f32).unwrap();
+    let mut view: MatMut<'_, RowMajor<f32>> = mat.as_view_mut();
+    let immut_view = view.as_view();
+    // This should fail: we cannot mutate `view` while `immut_view` exists
+    let _ = view.get_row_mut(0);
+    let _ = immut_view.num_vectors();
+}

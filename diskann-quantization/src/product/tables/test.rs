@@ -6,7 +6,7 @@
 // A collection of test helpers to ensure uniformity across tables.
 use diskann_utils::views::Matrix;
 #[cfg(not(miri))]
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::views::{MatrixView, MatrixViewMut};
 #[cfg(not(miri))]
 use rand::seq::IndexedRandom;
 use rand::{
@@ -298,7 +298,7 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
     build: &dyn Fn(Matrix<f32>, ChunkOffsets) -> T,
     context: &dyn std::fmt::Display,
 ) where
-    T: for<'a> CompressInto<MatrixView<'a, f32>, MutMatrixView<'a, u8>>,
+    T: for<'a> CompressInto<MatrixView<'a, f32>, MatrixViewMut<'a, u8>>,
 {
     let dim = 10;
     let num_chunks = 3;
@@ -419,7 +419,7 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
         let mut buf = Matrix::<f32>::new(0.0, num_points, offsets.dim());
         let mut output = Matrix::<u8>::new(0, num_points, offsets.len());
 
-        fn clear<T: Default>(mut x: MutMatrixView<T>) {
+        fn clear<T: Default>(mut x: MatrixViewMut<T>) {
             x.as_mut_slice().iter_mut().for_each(|i| *i = T::default());
         }
 

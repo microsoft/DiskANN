@@ -28,7 +28,7 @@ pub enum MaxSimError {
 /// ```
 ///
 /// Implements `DistanceFnMut` for various matrix types
-/// (e.g., [`MatRef<Standard<f32>>`](crate::multi_vector::MatRef)).
+/// (e.g., [`MatRef<RowMajor<f32>>`](crate::multi_vector::MatRef)).
 ///
 /// # Usage
 /// - Create with [`MaxSim::new`], providing a mutable scores buffer.

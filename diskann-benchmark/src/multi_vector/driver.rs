@@ -14,7 +14,8 @@ use diskann_benchmark_runner::{
     },
     Checker, Input,
 };
-use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Overflow, Standard};
+use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, RowMajor};
+use diskann_utils::views::Init;
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -68,25 +69,27 @@ impl Input for MultiVectorTolerance {
 
 /// Random query / doc fixture for a single benchmark run.
 pub(super) struct Data<T: Copy> {
-    pub(super) queries: Mat<Standard<T>>,
-    pub(super) docs: Mat<Standard<T>>,
+    pub(super) queries: Mat<RowMajor<T>>,
+    pub(super) docs: Mat<RowMajor<T>>,
 }
 
 impl<T: Copy> Data<T>
 where
     StandardUniform: Distribution<T>,
 {
-    pub(super) fn new(run: &Run) -> Result<Self, Overflow> {
+    pub(super) fn new(run: &Run) -> Self {
         let mut rng = StdRng::seed_from_u64(0x12345);
-        let queries = Mat::from_fn(
-            Standard::new(run.num_query_vectors.get(), run.dim.get())?,
-            || StandardUniform.sample(&mut rng),
+        let queries = Mat::new(
+            Init(|| StandardUniform.sample(&mut rng)),
+            run.num_query_vectors.get(),
+            run.dim.get(),
         );
-        let docs = Mat::from_fn(
-            Standard::new(run.num_doc_vectors.get(), run.dim.get())?,
-            || StandardUniform.sample(&mut rng),
+        let docs = Mat::new(
+            Init(|| StandardUniform.sample(&mut rng)),
+            run.num_doc_vectors.get(),
+            run.dim.get(),
         );
-        Ok(Self { queries, docs })
+        Self { queries, docs }
     }
 }
 
@@ -96,7 +99,7 @@ where
 
 pub(super) fn run_with_kernel<T: Copy>(
     run: &Run,
-    doc: MatRef<'_, Standard<T>>,
+    doc: MatRef<'_, RowMajor<T>>,
     kernel: &dyn MaxSimKernel<T>,
 ) -> RunResult {
     let mut scores = vec![0.0f32; run.num_query_vectors.get()];

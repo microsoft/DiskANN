@@ -1,0 +1,19 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use diskann_utils::views::{Mat, MatMut, RowMajor};
+
+// Test that the `rows_mut` iterator on MatMut correctly captures a mutable lifetime,
+// preventing the MatMut from being used while the iterator is in scope.
+fn main() {
+    let mut mat: Mat<RowMajor<f32>> = Mat::from_repr(RowMajor::new(4, 3).unwrap(), 0.0f32).unwrap();
+    let mut view: MatMut<'_, RowMajor<f32>> = mat.as_view_mut();
+    let iter = view.rows_mut();
+    // This should fail: we cannot use `view` while the mutable iterator is alive
+    let _ = view.num_vectors();
+    for row in iter {
+        row[0] = 1.0;
+    }
+}

@@ -41,7 +41,7 @@ pub(crate) fn as_nonnull_mut<T>(slice: &mut [T]) -> NonNull<T> {
 ///
 /// This is the owned-allocation counterpart of [`as_nonnull`]: it consumes the
 /// box, preventing its destructor from running, and hands back a non-null
-/// pointer suitable for storing inside a [`Mat`](super::multi_vector::matrix::Mat).
+/// pointer suitable for storing inside a [`Mat`](super::multi_vector::views::Mat).
 ///
 /// To reclaim the memory later, reconstruct the `Box` via
 /// `Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len))`.

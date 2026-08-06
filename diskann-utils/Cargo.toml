@@ -32,6 +32,7 @@ workspace = true
 cfg-if.workspace = true
 rand.workspace = true
 rstest.workspace = true
+trybuild = "1.0.101"
 
 
 [features]

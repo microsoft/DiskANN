@@ -19,7 +19,7 @@ use super::Kernel;
 use super::TileBudget;
 use super::f32::{F32Kernel, max_ip_kernel};
 use super::layouts;
-use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
+use crate::multi_vector::{BlockTransposedRef, MatRef, RowMajor};
 
 pub(crate) struct F16Entry<const GROUP: usize>;
 
@@ -28,7 +28,7 @@ impl<A, const GROUP: usize>
         A,
         (),
         BlockTransposedRef<'_, half::f16, GROUP>,
-        MatRef<'_, Standard<half::f16>>,
+        MatRef<'_, RowMajor<half::f16>>,
         &mut [f32],
     > for F16Entry<GROUP>
 where
@@ -44,7 +44,7 @@ where
         self,
         arch: A,
         lhs: BlockTransposedRef<'_, half::f16, GROUP>,
-        rhs: MatRef<'_, Standard<half::f16>>,
+        rhs: MatRef<'_, RowMajor<half::f16>>,
         scratch: &mut [f32],
     ) {
         max_ip_kernel(arch, lhs, rhs, scratch, TileBudget::default());

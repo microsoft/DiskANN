@@ -22,7 +22,7 @@ pub fn quantizer_preprocess(
 ) -> ANNResult<()> {
     let table = pq_data.pq_table();
     let expected_len = table.ncenters() * table.nchunks();
-    let dst = diskann_utils::views::MutMatrixView::try_from(
+    let dst = diskann_utils::views::MatrixViewMut::try_from(
         &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
         table.nchunks(),
         table.ncenters(),

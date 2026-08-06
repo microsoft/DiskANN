@@ -23,7 +23,7 @@ use super::Kernel;
 use super::TileBudget;
 use super::layouts::{self, DescribeLayout};
 use super::tiled_reduce::tiled_reduce;
-use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
+use crate::multi_vector::{BlockTransposedRef, MatRef, RowMajor};
 
 mod scalar;
 #[cfg(target_arch = "x86_64")]
@@ -61,7 +61,7 @@ fn max_ip_kernel_panic(scratch_len: usize, padded_nrows: usize, a_ncols: usize, 
 pub(super) fn max_ip_kernel<A: Architecture, T: Copy, const GROUP: usize>(
     arch: A,
     a: BlockTransposedRef<'_, T, GROUP>,
-    b: MatRef<'_, Standard<T>>,
+    b: MatRef<'_, RowMajor<T>>,
     scratch: &mut [f32],
     budget: TileBudget,
 ) where
@@ -86,7 +86,7 @@ pub(super) fn max_ip_kernel<A: Architecture, T: Copy, const GROUP: usize>(
 
     // SAFETY:
     // - a.as_ptr() is valid for a.padded_nrows() * k elements of T.
-    // - MatRef<Standard<T>> stores nrows * ncols contiguous T elements.
+    // - MatRef<RowMajor<T>> stores nrows * ncols contiguous T elements.
     // - scratch.len() == a.padded_nrows() (checked above).
     // - a.padded_nrows() is always a multiple of GROUP, and the const assert above
     //   verifies A_PANEL == GROUP at compile time.
@@ -111,7 +111,7 @@ impl<A, const GROUP: usize>
         A,
         (),
         BlockTransposedRef<'_, f32, GROUP>,
-        MatRef<'_, Standard<f32>>,
+        MatRef<'_, RowMajor<f32>>,
         &mut [f32],
     > for F32Kernel<GROUP>
 where
@@ -127,7 +127,7 @@ where
         self,
         arch: A,
         lhs: BlockTransposedRef<'_, f32, GROUP>,
-        rhs: MatRef<'_, Standard<f32>>,
+        rhs: MatRef<'_, RowMajor<f32>>,
         scratch: &mut [f32],
     ) {
         max_ip_kernel(arch, lhs, rhs, scratch, TileBudget::default());

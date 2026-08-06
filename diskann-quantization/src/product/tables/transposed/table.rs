@@ -13,7 +13,7 @@ use crate::{
 };
 use diskann_utils::{
     strided,
-    views::{self, MatrixView, MutMatrixView},
+    views::{self, MatrixView, MatrixViewMut},
 };
 use thiserror::Error;
 
@@ -187,7 +187,7 @@ impl TransposedTable {
             let range = self.offsets.at(i);
             if let Some(chunk_dim) = NonZeroUsize::new(range.len()) {
                 // Construct a view for the packing buffer for this chunk.
-                let mut packing_view = views::MutMatrixView::try_from(
+                let mut packing_view = views::MatrixViewMut::try_from(
                     &mut packing_buffer[..SUB_BATCH_SIZE * chunk_dim.get()],
                     SUB_BATCH_SIZE,
                     chunk_dim.get(),
@@ -282,7 +282,7 @@ impl TransposedTable {
     /// * `query.len() != self.dim()`.
     /// * `partisl.nrows() != self.nchunks()`.
     /// * `partisl.ncols() != self.ncenters()`.
-    pub fn process_into<T>(&self, query: &[f32], mut partials: MutMatrixView<'_, f32>)
+    pub fn process_into<T>(&self, query: &[f32], mut partials: MatrixViewMut<'_, f32>)
     where
         T: pivots::ProcessInto,
     {
@@ -422,7 +422,7 @@ pub enum TableBatchCompressionError {
     InfinityOrNaN(usize, usize),
 }
 
-impl<T> CompressInto<MatrixView<'_, T>, MutMatrixView<'_, u8>> for TransposedTable
+impl<T> CompressInto<MatrixView<'_, T>, MatrixViewMut<'_, u8>> for TransposedTable
 where
     T: Copy + Into<f32>,
 {
@@ -465,7 +465,7 @@ where
     fn compress_into(
         &self,
         from: MatrixView<'_, T>,
-        mut to: MutMatrixView<'_, u8>,
+        mut to: MatrixViewMut<'_, u8>,
     ) -> Result<(), Self::Error> {
         if self.ncenters() > 256 {
             return Err(Self::Error::CannotCompressToByte(self.ncenters()));

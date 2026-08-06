@@ -9,7 +9,7 @@ use super::common::square_norm;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 use diskann_utils::{
     strided::StridedView,
-    views::{Matrix, MatrixView, MutMatrixView},
+    views::{Matrix, MatrixView, MatrixViewMut},
 };
 
 ////////////////////////////////
@@ -342,7 +342,7 @@ fn update((d0, i0): (f32s, u32s), (d1, i1): (f32s, u32s)) -> (f32s, u32s) {
 // Update Step //
 /////////////////
 
-fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: StridedView<'_, f32>, map: &[u32]) {
+fn update_centroids(mut centers: MatrixViewMut<'_, f32>, data: StridedView<'_, f32>, map: &[u32]) {
     let mut sums = Matrix::<f64>::new(0.0, centers.nrows(), centers.ncols());
     let mut counts: Vec<u32> = vec![0; centers.nrows()];
     data.row_iter().zip(map.iter()).for_each(|(row, &center)| {
@@ -373,7 +373,7 @@ pub(crate) fn lloyds_inner(
     data: StridedView<'_, f32>,
     square_norms: &[f32],
     transpose: BlockTransposedRef<'_, f32, 16>,
-    mut centers: MutMatrixView<'_, f32>,
+    mut centers: MatrixViewMut<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
     // Check our requirements.
@@ -440,7 +440,7 @@ pub(crate) fn lloyds_inner(
 /// dimension.
 pub fn lloyds(
     data: MatrixView<'_, f32>,
-    centers: MutMatrixView<'_, f32>,
+    centers: MatrixViewMut<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
     assert_eq!(

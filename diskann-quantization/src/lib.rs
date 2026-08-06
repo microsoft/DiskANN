@@ -216,7 +216,6 @@ mod tests {
         t.pass("tests/compile-fail/bootstrap/bootstrap.rs");
         t.compile_fail("tests/compile-fail/*.rs");
         t.compile_fail("tests/compile-fail/error/*.rs");
-        t.compile_fail("tests/compile-fail/multi/*.rs");
     }
 }
 
