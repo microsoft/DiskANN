@@ -427,14 +427,11 @@ fn scan_point_pairs<F, M, const N: usize>(
     }
 }
 
-/// Insert one candidate into a fixed-width sorted list.
+/// Insert one target point into a source point's retained neighbor set.
 ///
-/// Width `N` is one, two, or three. The caller has already proved that the
-/// candidate is better than the last slot. Strict comparisons keep scan order
-/// for equal distances. The eligibility test has already rejected NaN.
-///
-/// The function returns the new last-slot distance. An unsupported `N` returns
-/// the underfill sentinel.
+/// `N` is the configured leaf neighbor count. The candidate is closer than the
+/// current farthest neighbor. Equal distances keep pair scan order. The function
+/// returns the new farthest retained distance.
 #[inline(always)]
 fn insert_fixed_neighbor<const N: usize>(
     neighbors: &mut [LeafNeighbor; N],
