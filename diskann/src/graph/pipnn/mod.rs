@@ -291,19 +291,12 @@ where
             data.nrows()
         )));
     }
-    data.nrows().checked_mul(data.ncols()).ok_or_else(|| {
-        ANNError::message(format!(
-            "PiPNN dataset shape {} x {} overflows usize",
-            data.nrows(),
-            data.ncols()
-        ))
-    })?;
     // Integer source vectors are not guaranteed unit-normalized after conversion,
     // so their normalized-cosine request must use the norm-aware formula.
     let metric = effective_metric::<T>(context.metric);
 
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition(data, context.config.clone(), metric))?;
+        .in_scope(|| partitioning::partition(data, &context.config, metric))?;
     // `leaves` is consumed here. Workers borrow individual ID lists during the
     // parallel pass, and the complete partition allocation drops on return.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
