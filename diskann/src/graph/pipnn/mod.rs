@@ -17,8 +17,7 @@
 //! required norm units for each metric.
 //!
 //! The graph builder selects architecture `A` and metric `M` once. It passes
-//! these concrete types to both kernels. The hot loops use no metric match,
-//! trait object, or stored function pointer.
+//! these concrete types to both kernels.
 //!
 //! Each kernel checks all view and scale relationships before unchecked SIMD
 //! access. The kernels borrow their matrices. They write only to caller-owned
