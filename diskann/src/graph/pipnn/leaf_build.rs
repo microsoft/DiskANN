@@ -133,13 +133,10 @@ impl LeafBuffers {
         let neighbor_count =
             point_count
                 .checked_mul(leaf_k)
-                .ok_or_else(|| LeafBuildError::Kernel {
+                .ok_or(LeafBuildError::ShapeOverflow {
                     leaf,
-                    source: LeafKernelError::ShapeOverflow {
-                        buffer: "output",
-                        rows: point_count,
-                        cols: leaf_k,
-                    },
+                    rows: point_count,
+                    columns: leaf_k,
                 })?;
 
         grow(
