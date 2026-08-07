@@ -5,10 +5,12 @@
 
 //! Deterministic overlapping partition construction for PiPNN.
 //!
-//! This module converts dataset point IDs into bounded leaf ID lists. It uses
-//! dense GEMM and the partition kernel for leader assignment. An `ObjectPool`
-//! supplies one reusable buffer set to each Rayon worker chunk. The pool lock is
-//! not held during gather, GEMM, or top-k selection.
+//! A leader is a sampled point that acts as the center of one child partition.
+//! A point can join several leaders, so child partitions can overlap.
+//!
+//! This module recursively splits dataset point IDs into bounded leaves. It uses
+//! dense GEMM to compare points with sampled leaders. An `ObjectPool` supplies
+//! reusable buffers to Rayon worker chunks.
 //!
 //! A configured level assigns each point to `fanout[level]` leaders. A deeper
 //! level assigns each point to one leader. Each replica uses a different
@@ -99,27 +101,23 @@ impl AsPooled<()> for StripeBuffers {
     }
 
     fn modify(&mut self, _: ()) {
-        // Keep the largest allocation across leases. `assign_stripe` defines the
+        // Keep the largest allocation across leases. `assign_point_stripe` defines the
         // active prefix before each read.
     }
 }
 
-/// Reusable partition buffers owned by this partition call.
+/// Reusable buffers for point-to-leader assignment.
 ///
-/// `ObjectPool` locks only when it gives or receives a lease. RAII returns each
-/// lease after success, error, or panic. Numerical work holds only the lease.
+/// `ObjectPool` locks only when it gives or receives a lease. Numerical work
+/// holds the lease, not the pool lock.
 type StripeBufferPool = ObjectPool<StripeBuffers>;
 
-/// Partition all configured replicas into overlapping bounded leaves.
+/// Build overlapping bounded leaves for all configured replicas.
 ///
-/// An oversized work item samples `ceil(p_samp * points)` leaders, up to
-/// `LEADER_CAP`. It assigns each point to the configured number of nearest
-/// leaders. It adds each cluster above `c_max` to the work queue.
-///
-/// A level without a configured fanout assigns each point to one leader. The
-/// final merge does not make a leaf larger than `c_max`. Each replica covers
-/// every input point. The caller supplies concrete architecture `A` and metric
-/// `M`.
+/// Each split samples partition centers and assigns every cluster point to its
+/// nearest centers. A cluster above `c_max` is split again. A level without a
+/// configured fanout assigns each point to one center. Each replica covers every
+/// input point.
 pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -196,7 +194,7 @@ where
 
     for _ in 0..MAX_PARTITION_ITERATIONS {
         if work.is_empty() {
-            return global_merge_small(leaves, config.c_min, config.c_max);
+            return merge_undersized_leaves(leaves, config.c_min, config.c_max);
         }
 
         let mut results = Vec::new();
@@ -211,7 +209,7 @@ where
             .par_iter_mut()
             .zip(work.into_par_iter())
             .try_for_each(|(slot, item)| {
-                *slot = Some(partition_one_level::<A, M, T>(
+                *slot = Some(partition_work_item::<A, M, T>(
                     arch,
                     data,
                     config,
@@ -236,10 +234,10 @@ where
     }
 
     if work.is_empty() {
-        return global_merge_small(leaves, config.c_min, config.c_max);
+        return merge_undersized_leaves(leaves, config.c_min, config.c_max);
     }
     let Some(largest) = work.iter().max_by_key(|item| item.indices.len()) else {
-        return global_merge_small(leaves, config.c_min, config.c_max);
+        return merge_undersized_leaves(leaves, config.c_min, config.c_max);
     };
     Err(ANNError::new(PartitionError::IterationLimit {
         size: largest.indices.len(),
@@ -248,11 +246,11 @@ where
     }))
 }
 
-/// Process one partition work item.
+/// Split one oversized cluster into child partitions.
 ///
-/// The function samples leaders, assigns all points, and separates complete
-/// leaves from clusters that require another recursion level.
-fn partition_one_level<A, M, T>(
+/// The function samples center points, assigns the cluster points, and returns
+/// bounded leaves separately from child clusters that need another split.
+fn partition_work_item<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
@@ -301,8 +299,9 @@ where
     Ok((pending, finished))
 }
 
+/// Sample point IDs that act as centers for one partition split.
 fn sample_leaders(points: &[u32], sampling_fraction: f64, seed: u64) -> ANNResult<Vec<u32>> {
-    let count = sample_num_leaders(points.len(), sampling_fraction);
+    let count = sampled_leader_count(points.len(), sampling_fraction);
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut leaders = Vec::new();
     leaders.try_reserve_exact(count).map_err(ANNError::new)?;
@@ -310,7 +309,12 @@ fn sample_leaders(points: &[u32], sampling_fraction: f64, seed: u64) -> ANNResul
     Ok(leaders)
 }
 
-fn sample_num_leaders(points: usize, sampling_fraction: f64) -> usize {
+/// Return the number of centers to sample from one cluster.
+///
+/// The count is `ceil(points * sampling_fraction)`, limited by `LEADER_CAP` and
+/// the number of available points. A cluster with at least two points uses at
+/// least two centers.
+fn sampled_leader_count(points: usize, sampling_fraction: f64) -> usize {
     ((points as f64 * sampling_fraction).ceil() as usize)
         .clamp(2, LEADER_CAP)
         .min(points)
@@ -327,13 +331,11 @@ fn mix_seed(seed: u64, salt: u64) -> u64 {
         .wrapping_add(salt)
 }
 
-/// Assign each point to its nearest sampled leaders.
+/// Assign each cluster point to its nearest sampled partition centers.
 ///
-/// The function gathers leader vectors once. It divides points into bounded
-/// stripes. Each worker chunk reuses one leased buffer set for all its stripes.
-///
-/// The flat assignment matrix keeps point order. The scatter step keeps the same
-/// order in each leader cluster. Recursive sampling depends on this order.
+/// The function gathers center vectors once and evaluates points in bounded
+/// stripes. The assignment matrix keeps point order. Scatter preserves this order
+/// inside each child partition, which makes recursive sampling deterministic.
 fn assign_to_leaders<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -397,7 +399,7 @@ where
             {
                 let first_point = worker_first + stripe * stripe_points;
                 let stripe_point_count = stripe_assignments.len() / fanout;
-                assign_stripe::<A, M, T>(
+                assign_point_stripe::<A, M, T>(
                     arch,
                     data,
                     &point_ids[first_point..first_point + stripe_point_count],
@@ -414,13 +416,13 @@ where
     scatter_assignments(point_ids, &assignments, fanout, leader_ids.len())
 }
 
-/// Assign one point stripe to the selected leaders.
+/// Assign one point stripe to sampled partition centers.
 ///
-/// The function gathers point vectors, computes point-to-leader dot products,
-/// and writes nearest leader-column IDs to `assignments`.
+/// The function gathers point vectors and computes point-to-center dot products.
+/// It writes center-column IDs for partition scatter.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn assign_stripe<A, M, T>(
+fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
@@ -656,7 +658,7 @@ fn clusters_with_capacities(sizes: &[usize]) -> ANNResult<Vec<Vec<u32>>> {
 ///
 /// A `HashSet` removes duplicate point IDs across merged leaves. The function
 /// sorts each merged result before it returns.
-fn global_merge_small(
+fn merge_undersized_leaves(
     leaves: Vec<Vec<u32>>,
     c_min: usize,
     c_max: usize,
@@ -975,7 +977,7 @@ mod tests {
     fn global_merge_canonicalizes_small_leaf_membership() {
         let leaves = vec![vec![9, 3, 1], vec![3, 2], vec![8]];
 
-        let merged = global_merge_small(leaves, 4, 8).unwrap();
+        let merged = merge_undersized_leaves(leaves, 4, 8).unwrap();
 
         assert_eq!(merged, vec![vec![1, 2, 3, 8, 9]]);
     }
@@ -984,7 +986,7 @@ mod tests {
     fn global_merge_never_overfills_before_reaching_c_min() {
         let leaves = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]];
 
-        let merged = global_merge_small(leaves, 11, 11).unwrap();
+        let merged = merge_undersized_leaves(leaves, 11, 11).unwrap();
 
         assert_eq!(
             merged,
@@ -994,7 +996,7 @@ mod tests {
 
     #[test]
     fn global_merge_fills_exact_capacity_before_flushing() {
-        let merged = global_merge_small(vec![vec![0, 1], vec![2, 3]], 4, 4).unwrap();
+        let merged = merge_undersized_leaves(vec![vec![0, 1], vec![2, 3]], 4, 4).unwrap();
 
         assert_eq!(merged, vec![vec![0, 1, 2, 3]]);
     }
@@ -1123,9 +1125,9 @@ mod tests {
 
     #[test]
     fn leader_count_is_bounded() {
-        assert_eq!(sample_num_leaders(1, 1.0), 1);
-        assert_eq!(sample_num_leaders(10, 0.01), 2);
-        assert_eq!(sample_num_leaders(50_000, 1.0), LEADER_CAP);
+        assert_eq!(sampled_leader_count(1, 1.0), 1);
+        assert_eq!(sampled_leader_count(10, 0.01), 2);
+        assert_eq!(sampled_leader_count(50_000, 1.0), LEADER_CAP);
     }
 
     #[test]
