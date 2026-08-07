@@ -91,8 +91,8 @@
 //! [`leaf_kernel::LeafKernel`] writes sorted [`leaf_kernel::LeafNeighbor`] values
 //! to a caller-owned matrix. [`leaf_kernel::leaf_neighbor_count`] derives each
 //! leaf's width from its point count and requested `k`. Module documentation
-//! describes width selection, `process_pairs`, fixed/dynamic storage, and stable
-//! endpoint insertion.
+//! describes fixed-width selection, `process_pairs`, and stable endpoint
+//! insertion.
 //!
 //! ## `kernel_metric`
 //!
