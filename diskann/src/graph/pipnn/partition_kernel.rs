@@ -72,9 +72,7 @@ pub enum PartitionScales<'a> {
 /// [`Self::scales`] supplies the norm layout for metric `M`.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionInput<'a> {
-    /// One assigned point per row and one sampled leader per column.
     pub dots: MatrixView<'a, f32>,
-    /// Normalization inputs matching concrete metric `M`.
     pub scales: PartitionScales<'a>,
 }
 
@@ -86,54 +84,32 @@ pub enum PartitionKernelError {
         "invalid output shape: expected {expected_rows} rows, got {actual_rows} rows and {actual_cols} columns"
     )]
     InvalidOutputShape {
-        /// Required row count.
         expected_rows: usize,
-        /// Supplied row count.
         actual_rows: usize,
-        /// Supplied column count.
         actual_cols: usize,
     },
     /// A metric-specific scale slice has the wrong length.
     #[error("invalid {buffer} length: expected {expected}, got {actual}")]
     InvalidBufferLength {
-        /// Name of the invalid scale buffer.
         buffer: &'static str,
-        /// Required length.
         expected: usize,
-        /// Supplied length.
         actual: usize,
     },
     /// Scale inputs do not match concrete metric `M`.
     #[error("partition scales do not match selected {expected} metric")]
-    InvalidScales {
-        /// Expected scale layout.
-        expected: &'static str,
-    },
+    InvalidScales { expected: &'static str },
     /// The requested fanout exceeds the available leader count.
     #[error("invalid fanout {fanout}: must not exceed {leader_count} leaders")]
-    InvalidFanout {
-        /// Requested number of leaders per point.
-        fanout: usize,
-        /// Available leader count.
-        leader_count: usize,
-    },
+    InvalidFanout { fanout: usize, leader_count: usize },
     /// Reusable tracker storage could not be reserved.
     #[error("failed to reserve {additional} partition tracker entries")]
-    Allocation {
-        /// Additional entries requested from the allocator.
-        additional: usize,
-    },
+    Allocation { additional: usize },
     /// Leader positions cannot be represented as `u32`.
     #[error("leader count {0} exceeds the u32 position limit")]
     TooManyLeaders(usize),
     /// A point did not contain enough rankable leaders to fill its output.
     #[error("point {point} has fewer than {fanout} rankable leaders")]
-    InsufficientRankableLeaders {
-        /// Zero-based point position in the input tile.
-        point: usize,
-        /// Requested number of leader positions.
-        fanout: usize,
-    },
+    InsufficientRankableLeaders { point: usize, fanout: usize },
 }
 
 /// Select the nearest sampled partition centers for each input point.
@@ -265,7 +241,6 @@ fn validate<'a, M: KernelMetric>(
     Ok(scales)
 }
 
-/// Return the required norm-slice length for one concrete metric.
 const fn expected_scale_len(kind: ScaleKind, count: usize) -> usize {
     if kind.is_some() { count } else { 0 }
 }
@@ -415,8 +390,6 @@ fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
 }
 
 /// Write retained center-column IDs for partition scatter.
-///
-/// `assignments` is the current point's fanout-sized output.
 fn copy_leader_ids(tracker: &[(u32, f32)], assignments: &mut [u32]) {
     for (destination, &(leader, _)) in assignments.iter_mut().zip(tracker) {
         *destination = leader;

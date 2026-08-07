@@ -69,46 +69,31 @@ pub enum LeafKernelError {
     TooManyPoints(usize),
     /// The dot-product matrix is not square.
     #[error("leaf dot-product matrix must be square, got {rows} x {cols}")]
-    NonSquareDots {
-        /// Supplied row count.
-        rows: usize,
-        /// Supplied column count.
-        cols: usize,
-    },
+    NonSquareDots { rows: usize, cols: usize },
     /// The output matrix does not have one row per input point.
     #[error("invalid output row count: expected {expected}, got {actual} with {columns} columns")]
     InvalidOutputRows {
-        /// Required row count.
         expected: usize,
-        /// Supplied row count.
         actual: usize,
-        /// Supplied neighbor columns.
         columns: usize,
     },
     /// A source requests more neighbors than the leaf or fixed kernel supports.
     #[error("invalid leaf neighbor count {neighbors} for {points} points; maximum is {maximum}")]
     InvalidNeighborCount {
-        /// Point count in the leaf.
         points: usize,
-        /// Supplied output-column count.
         neighbors: usize,
-        /// Maximum non-self neighbors per point.
         maximum: usize,
     },
     /// Temporary storage could not be reserved.
     #[error("failed to reserve {additional} values for {buffer}")]
     Allocation {
-        /// Name of the temporary buffer.
         buffer: &'static str,
-        /// Additional element capacity requested.
         additional: usize,
     },
     /// A source did not contain enough rankable targets to fill its output.
     #[error("source {source_index} has fewer than {neighbors} rankable leaf neighbors")]
     InsufficientRankableNeighbors {
-        /// Zero-based source position in the leaf.
         source_index: usize,
-        /// Required number of non-self neighbors.
         neighbors: usize,
     },
 }
