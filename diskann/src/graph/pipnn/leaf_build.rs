@@ -311,8 +311,14 @@ where
     leaves.par_iter().enumerate().try_for_each_init(
         LeafBuffers::default,
         |buffers, (leaf, point_ids)| {
-            let leaf_k =
-                compute_leaf::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
+            let leaf_k = select_leaf_neighbors::<A, M, T>(
+                arch,
+                data,
+                leaf,
+                point_ids,
+                requested_k,
+                buffers,
+            )?;
             let point_count = point_ids.len();
             let edge_count = build_symmetric_edge_csr(
                 leaf,
@@ -361,7 +367,8 @@ where
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
-    let leaf_k = compute_leaf::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
+    let leaf_k =
+        select_leaf_neighbors::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
     if leaf_k == 0 {
         return Ok(());
     }
@@ -375,12 +382,12 @@ where
     candidates.add_leaf(point_ids, &buffers.local_adjacency[..point_ids.len()])
 }
 
-/// Compute local nearest neighbors for one leaf.
+/// Select local nearest neighbors for one leaf.
 ///
 /// The function checks point IDs, converts their vectors to `f32`, and computes
 /// the lower Gram matrix. It writes leaf-local neighbors to `buffers.neighbors`
 /// and returns the effective neighbor count.
-fn compute_leaf<A, M, T>(
+fn select_leaf_neighbors<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     leaf: usize,
