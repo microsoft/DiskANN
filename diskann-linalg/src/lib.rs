@@ -189,16 +189,16 @@ pub fn sgemm(
     Ok(())
 }
 
-/// Computes the lower triangle of $C = A A^\mathsf{T}$ for a dense row-major
-/// $m \times k$ matrix $A$.
+/// Compute the lower triangle of $C = A A^\mathsf{T}$.
 ///
-/// The lower triangle, including the diagonal, is overwritten. The upper
-/// triangle of the $m \times m$ destination is left unchanged.
+/// `A` is a dense row-major $m \times k$ matrix. The function overwrites the
+/// lower triangle of `C`, including its diagonal. It does not change the upper
+/// triangle.
 ///
 /// # Errors
 ///
-/// Returns an error if a matrix-size calculation overflows or either slice does
-/// not match its declared dimensions.
+/// Returns an error if a size product overflows. It also returns an error if a
+/// slice length does not match its declared matrix shape.
 pub fn sgemm_aat_lower(m: usize, k: usize, a: &[f32], c: &mut [f32]) -> Result<(), SgemmError> {
     check_matrix(MatrixName::A, a.len(), m, k)?;
     check_matrix(MatrixName::C, c.len(), m, m)?;

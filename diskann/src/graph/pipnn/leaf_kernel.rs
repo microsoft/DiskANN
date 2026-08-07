@@ -3,26 +3,26 @@
  * Licensed under the MIT license.
  */
 
-//! Leaf-local top-k selection over a lower-triangular Gram matrix.
+//! Leaf-local top-k selection from a lower-triangular Gram matrix.
 //!
-//! Caller supplies an `n × n` [`MatrixView`] produced by `sgemm_aat_lower`.
-//! Diagonal entries provide metric scales; only strict-lower pair dots are read.
-//! Each pair is evaluated once and offered to both endpoint rows.
+//! The input is an `n × n` [`MatrixView`] from `sgemm_aat_lower`. The diagonal
+//! contains metric norms. The kernel reads only the strict lower triangle. It
+//! evaluates each point pair once and updates both points.
 //!
-//! Output is an `n × k` matrix of sorted [`LeafNeighbor`] values with leaf-local
-//! targets. Supported `k` is zero through [`MAX_LEAF_NEIGHBORS`]; positive widths
-//! use fixed arrays. Strict comparisons preserve encounter order for ties and
-//! reject NaN. L2, cosine, normalized cosine, and inner product share the same
-//! scalar/SIMD traversal.
+//! The output is an `n × k` matrix of sorted [`LeafNeighbor`] values. Each target
+//! is a position in the leaf. The kernel supports `k` from zero through
+//! [`MAX_LEAF_NEIGHBORS`]. Positive widths use fixed arrays.
 //!
-//! Callers select architecture and metric once outside the leaf loop, then call
-//! [`nearest_neighbors`] with concrete `A` and `M` types. Every call validates
-//! square shape, row count, local-ID bounds, and output width before scratch
-//! mutation or unchecked SIMD loads. [`LeafKernelWorkspace`] retains per-worker
-//! norm and threshold buffers.
+//! Strict comparisons keep scan order for equal distances. They do not rank NaN.
+//! All supported metrics use the same scalar and SIMD traversal.
 //!
-//! Work is `n(n - 1) / 2` distance evaluations with constant bounded insertion;
-//! scratch is `O(n)` and output is `O(nk)`.
+//! The caller supplies concrete architecture `A` and metric `M`. The function
+//! checks all shapes and local-ID bounds before it changes workspace or uses an
+//! unchecked SIMD load. [`LeafKernelWorkspace`] stores reusable norms and
+//! rejection thresholds.
+//!
+//! The kernel evaluates `n(n - 1) / 2` distances. Scratch size is `O(n)`. Output
+//! size is `O(nk)`.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
@@ -44,8 +44,8 @@ pub struct LeafNeighbor {
 impl LeafNeighbor {
     /// Construct a leaf-local neighbor.
     ///
-    /// `target` is a position in the current leaf and `distance` is its score
-    /// from the source represented by the containing output row.
+    /// `target` is a position in the leaf. `distance` is its score relative to
+    /// the source of the output row.
     pub const fn new(target: u32, distance: f32) -> Self {
         Self { target, distance }
     }
@@ -126,12 +126,11 @@ pub enum LeafKernelError {
     },
 }
 
-/// Return the usable non-self neighbor count for one leaf.
+/// Return the non-self neighbor count for one leaf.
 ///
-/// `points` is the leaf point count and `requested_k` is the build-wide target.
-/// Values above [`MAX_LEAF_NEIGHBORS`] are rejected. Otherwise the returned
-/// width is `min(requested_k, points - 1)`, allowing empty, singleton, and small
-/// leaves without a second effective-k state.
+/// `points` is the number of points in the leaf. `requested_k` is the configured
+/// neighbor count. The result is `min(requested_k, points - 1)`. The function
+/// rejects a value above [`MAX_LEAF_NEIGHBORS`].
 ///
 /// # Errors
 ///
@@ -158,8 +157,7 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
 
 /// Return the required output length for [`nearest_neighbors`].
 ///
-/// `points` and `requested_k` have the same meaning as in
-/// [`leaf_neighbor_count`]. The return value is `points * effective_k`.
+/// The result is `points * leaf_neighbor_count(points, requested_k)`.
 ///
 /// # Errors
 ///
@@ -173,18 +171,16 @@ pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafK
     checked_area("output", points, leaf_neighbor_count(points, requested_k)?)
 }
 
-/// Select the nearest non-self leaf positions for every source point.
+/// Select the nearest non-self positions for each point in a leaf.
 ///
-/// `output` must have one row per input point. Its column count is the neighbor
-/// count for this leaf and must not exceed either `point_count - 1` or
-/// [`MAX_LEAF_NEIGHBORS`]. Equal distances retain pair scan order. `A` and `M`
-/// must already have been selected at the enclosing build boundary.
+/// `output` must have one row for each input point. Its column count is the
+/// neighbor count. This count must not exceed `point_count - 1` or
+/// [`MAX_LEAF_NEIGHBORS`]. Equal distances keep pair scan order.
 ///
 /// # Errors
 ///
-/// Returns [`LeafKernelError`] for incompatible shapes, excessive
-/// point/neighbor counts, scratch allocation failure, or an underfilled source
-/// caused by non-rankable distances.
+/// Returns [`LeafKernelError`] for an invalid shape or count. It also returns an
+/// error for allocation failure or insufficient rankable neighbors.
 pub(crate) fn nearest_neighbors<A, M>(
     arch: A,
     input: MatrixView<'_, f32>,
@@ -229,12 +225,11 @@ where
     Ok(())
 }
 
-/// Validate the complete safety contract before dispatched SIMD executes.
+/// Check the safety conditions for the SIMD kernel.
 ///
-/// `MatrixView` and `MutMatrixView` construction guarantee exact, non-overflowing
-/// backing lengths. This check establishes square dots, representable local IDs,
-/// and an output width bounded by the point count and fixed kernel capacity.
-/// Failure returns [`LeafKernelError`] before output or workspace mutation.
+/// The matrix views already prove their backing lengths. This function checks
+/// that the dot matrix is square. It also checks local-ID range and output width.
+/// An error occurs before the kernel changes output or workspace.
 fn validate(
     input: MatrixView<'_, f32>,
     output: &MutMatrixView<'_, LeafNeighbor>,
@@ -269,16 +264,13 @@ fn validate(
     Ok(())
 }
 
-/// Prepare metric-specific scale and threshold scratch.
+/// Prepare metric norms and rejection thresholds.
 ///
-/// L2 stores diagonal squared norms; cosine converts diagonals to norms using
-/// DiskANN's zero threshold. Normalized cosine and inner product skip the norm
-/// allocation entirely. `worst` is reset separately after allocation succeeds.
+/// L2 uses each diagonal value as a squared norm. Cosine converts each diagonal
+/// value to a norm. Normalized cosine and inner product clear the norm buffer.
 ///
-/// `input` supplies diagonal dots and `workspace` owns reusable vectors. Success
-/// prepares one scale and one threshold per point when needed; allocation failure
-/// is returned without entering SIMD traversal. Work is `O(n)`, with at most
-/// `O(n)` retained capacity per buffer.
+/// The workspace keeps at most `O(n)` capacity in each buffer. An allocation
+/// error occurs before SIMD traversal.
 fn prepare_workspace<M: KernelMetric>(
     input: MatrixView<'_, f32>,
     workspace: &mut LeafKernelWorkspace,
@@ -319,12 +311,10 @@ fn checked_area(buffer: &'static str, rows: usize, cols: usize) -> Result<usize,
         .ok_or(LeafKernelError::ShapeOverflow { buffer, rows, cols })
 }
 
-/// Convert the validated neighbor count into fixed source storage.
+/// Select fixed-width storage for the validated neighbor count.
 ///
-/// This branch runs once per leaf. `as_chunks_mut` performs one safe conversion,
-/// avoiding per-candidate slice-to-array checks. `output` contains
-/// `point_count * neighbor_count` initialized slots; `norms` and `worst` satisfy
-/// the invariants established by `prepare_workspace`.
+/// This match runs once for each leaf. `as_chunks_mut` converts the output once.
+/// Candidate insertion does not convert slices to arrays.
 fn process_neighbor_width<F, M>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
@@ -354,11 +344,10 @@ where
     Ok(())
 }
 
-/// Reinterpret validated output as one fixed array per source, then run shared
-/// pair traversal.
+/// Split the validated output into one fixed array for each source.
 ///
-/// `N` is one, two, or three. `as_chunks_mut` performs one safe shape split per
-/// leaf, keeping array conversion out of candidate insertion.
+/// `N` is one, two, or three. The function performs one safe split for each
+/// leaf. It then starts the shared pair traversal.
 fn process_fixed_width<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
@@ -376,27 +365,22 @@ fn process_fixed_width<F, M, const N: usize>(
     process_pairs::<F, M, N>(arch, input, neighbor_lists, norms, worst);
 }
 
-/// Scan the strict lower triangle once and update both endpoint sources.
+/// Scan the strict lower triangle and update both points of each pair.
 ///
-/// Invariants on entry:
+/// Entry conditions:
 ///
-/// - `dots` is a validated square row-major matrix;
-/// - `output` has one sorted neighbor list per source point;
-/// - `worst[source]` equals that source's last slot;
-/// - `norms` has one value per point exactly when `M` requires scales.
+/// - `input` is a square row-major matrix.
+/// - `output` has one sorted list for each point.
+/// - `worst[source]` equals the distance in the last output slot.
+/// - `norms` has one value per point when metric `M` requires norms.
 ///
-/// Each SIMD chunk computes both endpoint eligibility masks before mutation.
-/// Multiple lanes compete for the current source, so source candidates recheck
-/// its live cached threshold. Every target lane belongs to a distinct earlier
-/// source and can use the precomputed mask directly. Scalar tails call the
-/// matching scalar metric operation to preserve established rounding semantics.
+/// Each SIMD chunk computes both eligibility masks before it changes output.
+/// Several lanes can update the current source. Each such lane checks the current
+/// threshold again. Each target lane updates a different earlier source.
 ///
-/// `M` is concrete before type erasure and `N` is one through three. `input`
-/// supplies `n × n` dots, `output` owns `n` sorted fixed-size lists, `norms`
-/// holds metric scales when required, and `worst` mirrors every list's final
-/// distance. The function evaluates exactly `n(n - 1) / 2` pairs. SIMD computes
-/// up to `F::LANES` distances together; accepted candidates still insert in scan
-/// order to keep deterministic ties.
+/// The scalar tail uses the scalar formula for `M`. This keeps its specified
+/// rounding order. The function evaluates exactly `n(n - 1) / 2` pairs. It
+/// inserts accepted candidates in scan order.
 #[inline(never)]
 fn process_pairs<F, M, const N: usize>(
     arch: F::Arch,
@@ -437,12 +421,12 @@ fn process_pairs<F, M, const N: usize>(
     }
     let worst_ptr = worst.as_mut_ptr();
 
-    // `source` starts at one because source zero has no strict-lower targets;
-    // later sources still offer their pair back to source zero.
+    // Source zero has no earlier target. Each source after zero can still add
+    // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        // `uses_norms` comes from a metric associated constant. Specialization
-        // removes both branch and scale memory traffic for scale-free metrics.
+        // `uses_norms` is an associated constant of `M`. The compiler removes
+        // this branch and all norm loads from metrics that do not use norms.
         let source_scale = if uses_norms {
             F::splat(arch, norms[source])
         } else {
@@ -535,17 +519,15 @@ fn process_pairs<F, M, const N: usize>(
     debug_assert_eq!(output.len(), point_count);
 }
 
-/// Insert into a fixed-width neighbor list and return its new worst distance.
+/// Insert one candidate into a fixed-width sorted list.
 ///
-/// Width is a compile-time constant from one through three. Strict `<`
-/// comparisons preserve scan order for ties; callers already rejected NaN via
-/// the eligibility comparison. Explicit shifts save about 0.5% estimated cycles
-/// versus the generic bubble loop in the local Callgrind `k=3` fixture.
+/// Width `N` is one, two, or three. The caller has already proved that the
+/// candidate is better than the last slot. Strict comparisons keep scan order
+/// for equal distances. The eligibility test has already rejected NaN.
 ///
-/// `neighbors` is the sorted list for one source. `target` and `distance` are a
-/// candidate already known to beat its final slot. The return value is the new
-/// final-slot distance. Unsupported instantiations return an underfill sentinel;
-/// `process_neighbor_width` never constructs them.
+/// The function returns the new last-slot distance. Explicit shifts used 0.5%
+/// fewer estimated cycles than a generic bubble loop in the local `k=3`
+/// Callgrind fixture. An unsupported `N` returns the underfill sentinel.
 #[inline(always)]
 fn insert_fixed_neighbor<const N: usize>(
     neighbors: &mut [LeafNeighbor; N],
