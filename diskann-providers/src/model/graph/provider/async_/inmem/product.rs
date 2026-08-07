@@ -42,6 +42,20 @@ use crate::model::{
 /// The default quant provider.
 pub type DefaultQuant = FastMemoryQuantVectorProviderAsync;
 
+fn quant_pruning_distance_computer(
+    quant: &DefaultQuant,
+) -> (pq::distance::DistanceComputer<'_>, Metric) {
+    let metric = match quant.metric() {
+        // Match the squared-L2 approximation used by PQ graph-search queries.
+        Metric::CosineNormalized => Metric::L2,
+        metric => metric,
+    };
+    (
+        pq::distance::DistanceComputer::new(&quant.pq_chunk_table, metric),
+        metric,
+    )
+}
+
 impl CreateVectorStore for FixedChunkPQTable {
     type Target = DefaultQuant;
     fn create(
@@ -410,10 +424,10 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let full = &provider.base_vectors;
         let quant = &provider.aux_vectors;
-        let metric = quant.metric();
+        let (quant_distance_computer, metric) = quant_pruning_distance_computer(quant);
 
         let distance = distances::pq::HybridComputer::new(
-            quant.distance_computer(),
+            quant_distance_computer,
             T::distance(metric, Some(full.dim())),
         );
 
@@ -579,10 +593,12 @@ where
         _context: &'a Ctx,
         _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+        let quant = &provider.aux_vectors;
+        let (distance_computer, _) = quant_pruning_distance_computer(quant);
         let accessor = PruneAccessor {
-            provider: &provider.aux_vectors,
+            provider: quant,
             neighbors: provider.neighbors(),
-            distance: provider.aux_vectors.distance_computer(),
+            distance: distance_computer,
         };
         Ok(accessor)
     }
@@ -645,5 +661,77 @@ where
     ) -> ANNResult<PruneAccessor<'a>> {
         self.prune_accessor(provider, context, capacity)
             .into_ann_result()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diskann::{graph::glue::PruneStrategy, provider::DefaultContext, utils::VectorRepr};
+    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+
+    use super::{DefaultQuant, quant_pruning_distance_computer};
+    use crate::model::{
+        graph::provider::async_::{
+            FastMemoryQuantVectorProviderAsync,
+            common::{NoDeletes, NoStore, Quantized},
+            distances::pq::{Hybrid, HybridComputer},
+            inmem::{DefaultProvider, DefaultProviderParameters},
+        },
+        pq::FixedChunkPQTable,
+    };
+
+    fn test_table() -> FixedChunkPQTable {
+        FixedChunkPQTable::new(
+            4,
+            vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0].into(),
+            vec![0, 2, 4].into(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cosine_normalized_query_and_hybrid_pruning_use_squared_l2() {
+        let provider =
+            FastMemoryQuantVectorProviderAsync::new(Metric::CosineNormalized, 2, test_table());
+        let full0 = [1u8, 0, 0, 2];
+        let full1 = [2u8, 0, 0, 1];
+        let code0 = [0u8, 1];
+        let code1 = [1u8, 0];
+
+        let query = provider.query_computer(&full0).unwrap();
+        assert_eq!(query.evaluate_similarity(&code1), 2.0);
+
+        let (quant_distance_computer, metric) = quant_pruning_distance_computer(&provider);
+        let computer =
+            HybridComputer::<u8>::new(quant_distance_computer, u8::distance(metric, Some(4)));
+        for (left, right) in [
+            (Hybrid::Full(&full0[..]), Hybrid::Full(&full1[..])),
+            (Hybrid::Full(&full0[..]), Hybrid::Quant(&code1[..])),
+            (Hybrid::Quant(&code0[..]), Hybrid::Full(&full1[..])),
+            (Hybrid::Quant(&code0[..]), Hybrid::Quant(&code1[..])),
+        ] {
+            assert_eq!(computer.evaluate_similarity(left, right), 2.0);
+        }
+    }
+
+    #[test]
+    fn cosine_normalized_quantized_pruning_uses_squared_l2() {
+        let provider: DefaultProvider<NoStore, DefaultQuant> = DefaultProvider::new_empty(
+            DefaultProviderParameters::simple(2, 4, Metric::CosineNormalized, 1),
+            NoStore,
+            test_table(),
+            NoDeletes,
+        )
+        .unwrap();
+        let accessor = Quantized
+            .prune_accessor(&provider, &DefaultContext, 2)
+            .unwrap();
+
+        assert_eq!(
+            accessor
+                .distance
+                .evaluate_similarity(&[0u8, 1][..], &[1u8, 0][..]),
+            2.0,
+        );
     }
 }
