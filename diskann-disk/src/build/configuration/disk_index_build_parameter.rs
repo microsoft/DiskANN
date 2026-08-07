@@ -111,8 +111,8 @@ impl NumPQChunks {
 /// Parameters specific for disk index construction.
 #[derive(Clone, PartialEq, Debug)]
 pub struct DiskIndexBuildParameters {
-    /// Memory budget for disk-index pipeline stages that support bounded work.
-    /// Explicit one-shot PiPNN selection is never silently replaced.
+    /// Memory budget for disk-index stages that support bounded work.
+    /// PiPNN always uses its one-shot graph build.
     build_memory_limit: MemoryBudget,
 
     /// Number of PQ chunks stored in-memory for search and to be generated during build.
@@ -146,8 +146,8 @@ impl DiskIndexBuildParameters {
 
     /// Create parameters for one-shot PiPNN graph construction.
     ///
-    /// PiPNN uses the common search-PQ and disk-layout pipeline. Its one-shot
-    /// graph build is not governed by the pipeline memory budget.
+    /// PiPNN uses the common search-PQ and disk layout. The memory budget does
+    /// not limit its one-shot graph build.
     #[cfg(feature = "pipnn")]
     pub fn new_pipnn(
         build_memory_limit: MemoryBudget,

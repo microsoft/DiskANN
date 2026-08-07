@@ -9,10 +9,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// JSON-facing PiPNN parameters.
+/// PiPNN parameters in the JSON build configuration.
 ///
-/// Graph degree, build-L, alpha, metric, threads, and memory limits remain in
-/// the outer index configuration shared with Vamana.
+/// The common index configuration supplies graph degree, alpha, metric, thread
+/// count, and memory limit.
 #[cfg(feature = "pipnn")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -59,7 +59,7 @@ impl From<&PiPNNParameters> for diskann::graph::pipnn::PiPNNConfig {
     }
 }
 
-/// Selects the graph construction algorithm for index building.
+/// Graph construction algorithm for index building.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "algorithm")]
 #[non_exhaustive]

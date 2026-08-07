@@ -384,9 +384,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error before creating the file when `start_point` or a neighbor ID
-/// is outside `adjacency`, or when a row exceeds `max_degree`. Storage creation
-/// and write failures are forwarded from `provider`.
+/// Returns an error before file creation if an ID is outside `adjacency`. It also
+/// returns an error if a row exceeds `max_degree`. The function returns storage
+/// creation and write errors from `provider`.
 pub fn save_adjacency_graph<P>(
     adjacency: &[AdjacencyList<u32>],
     max_degree: u32,
