@@ -5,18 +5,17 @@
 
 //! Merge leaf edges into bounded per-point reservoirs.
 //!
-//! Random-hyperplane sketches define one relative hash for each directed edge.
-//! A source reservoir stores at most one neighbor for each hash. A closer edge
-//! replaces the edge with the same hash. A new hash uses an empty slot. If the
-//! reservoir is full, only an edge that is better than the farthest edge enters.
+//! For edge `source → target`, relative-hash bit `j` records whether the target's
+//! projection on hyperplane `j` is at least the source's projection. The hash
+//! groups edges with similar residual directions.
 //!
-//! Each point has one locked `HotSlot`. It stores the current length and the
-//! farthest-entry index. Three arrays store hashes, ordered distance keys, and
-//! neighbor IDs. A point lock protects the same row in all three arrays.
+//! A source reservoir keeps at most one neighbor for each relative hash. A closer
+//! edge replaces the edge for that direction. A full reservoir accepts only an
+//! edge below its farthest total key.
 //!
-//! `l_max` sets the logical reservoir length. `scan_lanes` rounds this length up
-//! to a full hash-scan group. `MAX_RESERVOIR_LEN` is 255 because `HotSlot` stores
-//! its length and farthest index as `u8`.
+//! Each source owns one lock. The lock protects its reservoir metadata and its
+//! rows in the hash, distance, and neighbor arrays. `l_max` sets the logical
+//! reservoir length. The `u8` metadata limits this value to 255.
 
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
 use std::cell::UnsafeCell;
@@ -228,14 +227,14 @@ impl<T: Pod + Default> MmapSlab<T> {
     }
 }
 
-/// Largest reservoir length that fits in `HotSlot`.
+/// Largest reservoir length that fits in `ReservoirState`.
 ///
-/// `HotSlot.len` and `HotSlot.farthest_idx` are `u8`. Runtime `l_max` selects the
-/// actual length and must not exceed this bound.
+/// `ReservoirState.len` and `ReservoirState.farthest_idx` are `u8`. Runtime `l_max` selects the
+/// actual length. Values above this bound are invalid.
 pub(crate) const MAX_RESERVOIR_LEN: usize = u8::MAX as usize;
 
 #[repr(C)]
-struct HotSlot {
+struct ReservoirState {
     len: u8,
     farthest_idx: u8,
     farthest_dist: u16,
@@ -243,24 +242,24 @@ struct HotSlot {
 }
 
 #[repr(C, align(16))]
-struct LockedHotSlot {
+struct LockedReservoirState {
     lock: parking_lot::RawMutex,
-    state: UnsafeCell<HotSlot>,
+    state: UnsafeCell<ReservoirState>,
 }
 
-impl LockedHotSlot {
+impl LockedReservoirState {
     fn new() -> Self {
         Self {
             lock: <parking_lot::RawMutex as RawMutexTrait>::INIT,
-            state: UnsafeCell::new(HotSlot::new_empty()),
+            state: UnsafeCell::new(ReservoirState::new_empty()),
         }
     }
 
-    fn get(&self) -> *mut HotSlot {
+    fn state_ptr(&self) -> *mut ReservoirState {
         self.state.get()
     }
 
-    fn with_state<R>(&self, f: impl FnOnce(&mut HotSlot) -> R) -> R {
+    fn with_locked_state<R>(&self, f: impl FnOnce(&mut ReservoirState) -> R) -> R {
         struct UnlockOnDrop<'a>(&'a parking_lot::RawMutex);
         impl Drop for UnlockOnDrop<'_> {
             fn drop(&mut self) {
@@ -279,9 +278,9 @@ impl LockedHotSlot {
 
 // SAFETY: `lock` guards every mutable access to `state`. Read-only extraction
 // happens only after HashPrune is consumed, when no mutation can remain.
-unsafe impl Sync for LockedHotSlot {}
+unsafe impl Sync for LockedReservoirState {}
 
-impl HotSlot {
+impl ReservoirState {
     const fn new_empty() -> Self {
         Self {
             len: 0,
@@ -292,23 +291,23 @@ impl HotSlot {
     }
 }
 
-const _: [(); 16] = [(); std::mem::size_of::<LockedHotSlot>()];
+const _: [(); 16] = [(); std::mem::size_of::<LockedReservoirState>()];
 
-// These pointers name one point's row in the three cold arrays. The caller must
-// hold that point's lock before it writes through a pointer.
+// These pointers name one source reservoir's hash, distance, and neighbor rows.
+// The caller must hold that source lock before it writes through a pointer.
 
 #[derive(Clone, Copy)]
-struct ColdSlotPtrs {
+struct ReservoirRows {
     hashes: *mut u16,
     distances: *mut u16,
     neighbors: *mut u32,
-    scan_lanes: usize,
+    row_stride: usize,
 }
 
 #[derive(Clone, Copy)]
 struct FindHashArgs {
     hashes: *const u16,
-    scan_lanes: usize,
+    row_stride: usize,
     len: u8,
     target: u16,
 }
@@ -387,10 +386,10 @@ where
 {
     let len = args.len as usize;
     let target = F::splat(arch, args.target as i16);
-    let chunks = len.div_ceil(F::LANES).min(args.scan_lanes / F::LANES);
+    let chunks = len.div_ceil(F::LANES).min(args.row_stride / F::LANES);
     for chunk in 0..chunks {
-        // SAFETY: `insert_locked` supplies a hash row with `scan_lanes` elements.
-        // `chunks <= scan_lanes / F::LANES`, so this full load stays in the row.
+        // SAFETY: `insert_reservoir_edge` supplies a hash row with `row_stride` elements.
+        // `chunks <= row_stride / F::LANES`, so this full load stays in the row.
         let values = unsafe { F::load_simd(arch, args.hashes.add(chunk * F::LANES).cast::<i16>()) };
         if let Some(offset) = values.eq_simd(target).first() {
             let lane = chunk * F::LANES + offset;
@@ -432,7 +431,7 @@ where
 /// distance can be negative. This transform preserves the total numeric order
 /// for both signs.
 #[inline(always)]
-fn ordered_key(distance: f32) -> u16 {
+fn ordered_distance_key(distance: f32) -> u16 {
     let b = f32_to_bf16(distance);
     if b & 0x8000 != 0 { !b } else { b | 0x8000 }
 }
@@ -441,28 +440,28 @@ fn ordered_key(distance: f32) -> u16 {
 ///
 /// # Safety
 ///
-/// The caller holds the source lock. `hot.len <= cold.scan_lanes`. The first
-/// `hot.len` entries of every cold array are initialized.
+/// The caller holds the source lock. `state.len <= rows.row_stride`. The first
+/// `state.len` entries of all three reservoir rows are initialized.
 #[inline]
-unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
-    if hot.len == 0 {
-        hot.farthest_dist = 0;
-        hot.farthest_idx = 0;
+unsafe fn update_farthest(state: &mut ReservoirState, rows: ReservoirRows) {
+    if state.len == 0 {
+        state.farthest_dist = 0;
+        state.farthest_idx = 0;
         return;
     }
     // The total key is `(distance, residual hash, neighbor ID)`. The residual
     // hash resolves equal bf16 distances. The ID resolves the remaining ties.
     let mut max_idx: u8 = 0;
-    // SAFETY: `hot.len > 0` and all active slots are initialized.
-    let mut max_key = unsafe { (*cold.distances, *cold.hashes, *cold.neighbors) };
-    for i in 1..hot.len as usize {
-        // SAFETY: `i < hot.len <= cold.scan_lanes`, and all active entries are
+    // SAFETY: `state.len > 0` and all active slots are initialized.
+    let mut max_key = unsafe { (*rows.distances, *rows.hashes, *rows.neighbors) };
+    for i in 1..state.len as usize {
+        // SAFETY: `i < state.len <= rows.row_stride`, and all active entries are
         // initialized.
         let key = unsafe {
             (
-                *cold.distances.add(i),
-                *cold.hashes.add(i),
-                *cold.neighbors.add(i),
+                *rows.distances.add(i),
+                *rows.hashes.add(i),
+                *rows.neighbors.add(i),
             )
         };
         if key > max_key {
@@ -470,8 +469,8 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
             max_idx = i as u8;
         }
     }
-    hot.farthest_dist = max_key.0;
-    hot.farthest_idx = max_idx;
+    state.farthest_dist = max_key.0;
+    state.farthest_idx = max_idx;
 }
 
 /// Insert one edge into a locked reservoir.
@@ -481,29 +480,29 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
 ///
 /// # Safety
 ///
-/// The caller holds the source lock. Each cold pointer is valid for
-/// `scan_lanes` elements. `hot.len <= l_max <= scan_lanes`. The first `hot.len`
-/// entries of each cold array are initialized.
+/// The caller holds the source lock. Each pointer in `rows` is valid for
+/// `row_stride` elements. `state.len <= l_max <= row_stride`. The first
+/// `state.len` entries of all three rows are initialized.
 #[inline(always)]
-unsafe fn insert_locked(
-    hot: &mut HotSlot,
-    cold: ColdSlotPtrs,
+unsafe fn insert_reservoir_edge(
+    state: &mut ReservoirState,
+    rows: ReservoirRows,
     hash: u16,
     neighbor: u32,
     distance: f32,
     l_max: u8,
     find_hash: FindHash,
 ) -> bool {
-    let dist_key = ordered_key(distance);
+    let dist_key = ordered_distance_key(distance);
 
-    if hot.len >= l_max {
-        let farthest = hot.farthest_idx as usize;
-        // SAFETY: a full reservoir has `farthest < hot.len` initialized slots.
+    if state.len >= l_max {
+        let farthest = state.farthest_idx as usize;
+        // SAFETY: a full reservoir has `farthest < state.len` initialized slots.
         let farthest_key = unsafe {
             (
-                hot.farthest_dist,
-                *cold.hashes.add(farthest),
-                *cold.neighbors.add(farthest),
+                state.farthest_dist,
+                *rows.hashes.add(farthest),
+                *rows.neighbors.add(farthest),
             )
         };
         if (dist_key, hash, neighbor) >= farthest_key {
@@ -512,70 +511,70 @@ unsafe fn insert_locked(
     }
 
     if let Some(idx) = find_hash.call(FindHashArgs {
-        hashes: cold.hashes,
-        scan_lanes: cold.scan_lanes,
-        len: hot.len,
+        hashes: rows.hashes,
+        row_stride: rows.row_stride,
+        len: state.len,
         target: hash,
     }) {
-        // SAFETY: `idx < hot.len <= cold.scan_lanes`.
-        let current_key = unsafe { (*cold.distances.add(idx), *cold.neighbors.add(idx)) };
+        // SAFETY: `idx < state.len <= rows.row_stride`.
+        let current_key = unsafe { (*rows.distances.add(idx), *rows.neighbors.add(idx)) };
         if (dist_key, neighbor) < current_key {
-            let was_farthest = idx == hot.farthest_idx as usize;
-            // SAFETY: `idx < hot.len <= cold.scan_lanes`. The entry is
+            let was_farthest = idx == state.farthest_idx as usize;
+            // SAFETY: `idx < state.len <= rows.row_stride`. The entry is
             // initialized, and the caller holds the source lock.
             unsafe {
-                *cold.neighbors.add(idx) = neighbor;
-                *cold.distances.add(idx) = dist_key;
+                *rows.neighbors.add(idx) = neighbor;
+                *rows.distances.add(idx) = dist_key;
             }
             if was_farthest {
-                // SAFETY: the caller still holds the source lock. The cold rows
+                // SAFETY: the caller still holds the source lock. The reservoir rows
                 // and initialized prefix are unchanged.
-                unsafe { update_farthest(hot, cold) };
+                unsafe { update_farthest(state, rows) };
             }
             return true;
         }
         return false;
     }
 
-    if hot.len < l_max {
-        let new_idx = hot.len as usize;
-        let becomes_farthest = if hot.len == 0 {
+    if state.len < l_max {
+        let new_idx = state.len as usize;
+        let becomes_farthest = if state.len == 0 {
             true
         } else {
-            let farthest = hot.farthest_idx as usize;
-            // SAFETY: `farthest < hot.len` identifies an initialized slot.
+            let farthest = state.farthest_idx as usize;
+            // SAFETY: `farthest < state.len` identifies an initialized slot.
             let farthest_key = unsafe {
                 (
-                    hot.farthest_dist,
-                    *cold.hashes.add(farthest),
-                    *cold.neighbors.add(farthest),
+                    state.farthest_dist,
+                    *rows.hashes.add(farthest),
+                    *rows.neighbors.add(farthest),
                 )
             };
             (dist_key, hash, neighbor) > farthest_key
         };
-        // SAFETY: `new_idx < l_max <= cold.scan_lanes`; the caller holds the lock.
+        // SAFETY: `new_idx < l_max <= rows.row_stride`; the caller holds the lock.
         unsafe {
-            *cold.hashes.add(new_idx) = hash;
-            *cold.distances.add(new_idx) = dist_key;
-            *cold.neighbors.add(new_idx) = neighbor;
+            *rows.hashes.add(new_idx) = hash;
+            *rows.distances.add(new_idx) = dist_key;
+            *rows.neighbors.add(new_idx) = neighbor;
         }
-        hot.len += 1;
+        state.len += 1;
         if becomes_farthest {
-            hot.farthest_dist = dist_key;
-            hot.farthest_idx = new_idx as u8;
+            state.farthest_dist = dist_key;
+            state.farthest_idx = new_idx as u8;
         }
         return true;
     }
 
     // The full-reservoir early rejection above proved that the incoming
     // `(distance, residual hash, ID)` key is better than the cached farthest key.
-    let idx = hot.farthest_idx as usize;
-    // SAFETY: `idx < hot.len <= cold.scan_lanes`; the caller holds the lock.
+    let idx = state.farthest_idx as usize;
+    // SAFETY: `idx < state.len <= rows.row_stride`; the caller holds the lock.
     unsafe {
-        *cold.hashes.add(idx) = hash;
-        *cold.distances.add(idx) = dist_key;
-        *cold.neighbors.add(idx) = neighbor;
-        update_farthest(hot, cold);
+        *rows.hashes.add(idx) = hash;
+        *rows.distances.add(idx) = dist_key;
+        *rows.neighbors.add(idx) = neighbor;
+        update_farthest(state, rows);
     }
     true
 }
@@ -586,20 +585,20 @@ unsafe fn insert_locked(
 ///
 /// # Safety
 ///
-/// The caller must exclude mutation with the point lock or unique ownership.
-/// `distances` and `neighbors` each point to `hot.len` initialized entries.
+/// The caller must exclude mutation with the source lock or unique ownership.
+/// `distances` and `neighbors` each point to `state.len` initialized entries.
 unsafe fn collect_nearest_ids(
-    hot: &HotSlot,
+    state: &ReservoirState,
     distances: *const u16,
     neighbors: *const u32,
     cap: usize,
     scratch: &mut Vec<(u32, u16)>,
 ) -> Vec<u32> {
-    let n = hot.len as usize;
+    let n = state.len as usize;
     scratch.clear();
     scratch.reserve(n);
     for i in 0..n {
-        // SAFETY: `i < n == hot.len`, and both arrays have an initialized entry
+        // SAFETY: `i < n == state.len`, and both arrays have an initialized entry
         // at `i`.
         scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
     }
@@ -614,14 +613,18 @@ unsafe fn collect_nearest_ids(
 ///
 /// # Safety
 ///
-/// The caller must exclude mutation with the point lock or unique ownership.
-/// `neighbors` points to `hot.len` initialized entries.
+/// The caller must exclude mutation with the source lock or unique ownership.
+/// `neighbors` points to `state.len` initialized entries.
 #[inline]
-unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize) -> Vec<u32> {
-    let out_len = (hot.len as usize).min(cap);
+unsafe fn collect_neighbor_ids(
+    state: &ReservoirState,
+    neighbors: *const u32,
+    cap: usize,
+) -> Vec<u32> {
+    let out_len = (state.len as usize).min(cap);
     let mut out = Vec::with_capacity(out_len);
     for i in 0..out_len {
-        // SAFETY: `i < out_len <= hot.len`, and the neighbor entry is initialized.
+        // SAFETY: `i < out_len <= state.len`, and the neighbor entry is initialized.
         out.push(unsafe { *neighbors.add(i) });
     }
     out
@@ -629,28 +632,24 @@ unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize)
 
 /// Bounded point reservoirs shared by parallel leaf workers.
 ///
-/// Point `i` uses `hot[i]` and row `i` in each cold array. Its mutex protects all
-/// four locations. A worker holds at most one point mutex. Extraction consumes
-/// `HashPrune`, so no writer can remain.
+/// Source point `i` owns `states[i]` and row `i` in each reservoir array.
+/// Its lock protects the metadata and all three rows. A worker holds at most one
+/// source lock. Extraction consumes `HashPrune`, so no writer can remain.
 pub(crate) struct HashPrune {
-    hot: Vec<LockedHotSlot>,
-    /// AoSoA hashes slab: `npoints * scan_lanes` u16.
-    cold_hashes: UnsafeCell<MmapSlab<u16>>,
-    /// AoSoA distances slab (bf16 in u16): `npoints * scan_lanes`.
-    cold_distances: UnsafeCell<MmapSlab<u16>>,
-    /// AoSoA neighbors slab: `npoints * scan_lanes` u32.
-    cold_neighbors: UnsafeCell<MmapSlab<u32>>,
-    /// Row stride: `l_max.next_multiple_of(32).max(32)`.
-    scan_lanes: usize,
+    states: Vec<LockedReservoirState>,
+    hash_rows: UnsafeCell<MmapSlab<u16>>,
+    distance_rows: UnsafeCell<MmapSlab<u16>>,
+    neighbor_rows: UnsafeCell<MmapSlab<u32>>,
+    row_stride: usize,
     sketches: LshSketches,
     l_max: usize,
     find_hash: FindHash,
     relative_hash: RelativeHash,
 }
 
-// SAFETY: every mutable hot/cold access is inside an UnsafeCell and guarded by
-// the corresponding `LockedHotSlot::lock`. Different locks cover disjoint cold
-// ranges, and consuming extraction proves no writer remains.
+// SAFETY: each mutable reservoir row is inside `UnsafeCell` and guarded by the
+// matching source lock. Different source locks protect disjoint rows. Consuming
+// extraction proves that no writer remains.
 unsafe impl Send for HashPrune {}
 // SAFETY: the same per-point lock protects mutation through shared HashPrune
 // references; immutable sketches are safe to share.
@@ -678,45 +677,43 @@ impl HashPrune {
             "sketch computation"
         );
         let t1 = std::time::Instant::now();
-        let scan_lanes = l_max.next_multiple_of(32).max(32);
+        let row_stride = l_max.next_multiple_of(32).max(32);
 
-        let mut hot: Vec<LockedHotSlot> = Vec::new();
-        hot.try_reserve_exact(npoints)
+        let mut states: Vec<LockedReservoirState> = Vec::new();
+        states
+            .try_reserve_exact(npoints)
             .map_err(ANNError::new)
             .map_err(|error| error.context(format!("reserving {npoints} HashPrune reservoirs")))?;
         for _ in 0..npoints {
-            hot.push(LockedHotSlot::new());
+            states.push(LockedReservoirState::new());
         }
 
-        // Each cold array has one `scan_lanes` row for each point.
-        let total = npoints.checked_mul(scan_lanes).ok_or_else(|| {
+        // Each reservoir array has one `row_stride` row for each source point.
+        let total = npoints.checked_mul(row_stride).ok_or_else(|| {
             super::config_error(format!(
-                "HashPrune slab shape {npoints} x {scan_lanes} overflows usize"
+                "HashPrune slab shape {npoints} x {row_stride} overflows usize"
             ))
         })?;
-        let cold_hashes = MmapSlab::<u16>::new_zeroed(total)?;
-        let cold_distances = MmapSlab::<u16>::new_zeroed(total)?;
-        let cold_neighbors = MmapSlab::<u32>::new_zeroed(total)?;
+        let hash_rows = MmapSlab::<u16>::new_zeroed(total)?;
+        let distance_rows = MmapSlab::<u16>::new_zeroed(total)?;
+        let neighbor_rows = MmapSlab::<u32>::new_zeroed(total)?;
 
         #[cfg(target_os = "linux")]
         {
-            let hot_bytes = hot.len() * std::mem::size_of::<LockedHotSlot>();
+            let state_bytes = states.len() * std::mem::size_of::<LockedReservoirState>();
             // SAFETY: each pointer names a contiguous allocation of `bytes`.
             // `madvise` does not read or write the allocation.
             unsafe {
                 for (ptr, bytes) in [
-                    (hot.as_ptr() as *mut libc::c_void, hot_bytes),
+                    (states.as_ptr() as *mut libc::c_void, state_bytes),
+                    (hash_rows.as_ptr() as *mut libc::c_void, hash_rows.bytes()),
                     (
-                        cold_hashes.as_ptr() as *mut libc::c_void,
-                        cold_hashes.bytes(),
+                        distance_rows.as_ptr() as *mut libc::c_void,
+                        distance_rows.bytes(),
                     ),
                     (
-                        cold_distances.as_ptr() as *mut libc::c_void,
-                        cold_distances.bytes(),
-                    ),
-                    (
-                        cold_neighbors.as_ptr() as *mut libc::c_void,
-                        cold_neighbors.bytes(),
+                        neighbor_rows.as_ptr() as *mut libc::c_void,
+                        neighbor_rows.bytes(),
                     ),
                 ] {
                     if bytes > 2 * 1024 * 1024 {
@@ -728,16 +725,16 @@ impl HashPrune {
 
         tracing::debug!(
             elapsed_secs = t1.elapsed().as_secs_f64(),
-            scan_lanes,
+            row_stride,
             "reservoir allocation"
         );
 
         Ok(Self {
-            hot,
-            cold_hashes: UnsafeCell::new(cold_hashes),
-            cold_distances: UnsafeCell::new(cold_distances),
-            cold_neighbors: UnsafeCell::new(cold_neighbors),
-            scan_lanes,
+            states,
+            hash_rows: UnsafeCell::new(hash_rows),
+            distance_rows: UnsafeCell::new(distance_rows),
+            neighbor_rows: UnsafeCell::new(neighbor_rows),
+            row_stride,
             sketches,
             l_max,
             find_hash: select_find_hash(),
@@ -745,42 +742,42 @@ impl HashPrune {
         })
     }
 
-    /// Lock point `idx` and run `f` with its mutable hot and cold state.
+    /// Lock one source reservoir and run `f` with its metadata and array rows.
     ///
     /// RAII unlocks the point when the closure exits.
     ///
     /// Returns an error when `idx` is outside the reservoir array or its row
     /// offset overflows `usize`.
     #[inline(always)]
-    fn with_locked<R>(
+    fn with_locked_reservoir<R>(
         &self,
         idx: usize,
-        f: impl FnOnce(&mut HotSlot, ColdSlotPtrs) -> R,
+        f: impl FnOnce(&mut ReservoirState, ReservoirRows) -> R,
     ) -> ANNResult<R> {
-        let slot = self.hot.get(idx).ok_or_else(|| {
+        let slot = self.states.get(idx).ok_or_else(|| {
             ANNError::message(format!(
                 "HashPrune point ID {idx} is outside {} reservoirs",
-                self.hot.len()
+                self.states.len()
             ))
         })?;
-        let off = idx.checked_mul(self.scan_lanes).ok_or_else(|| {
+        let off = idx.checked_mul(self.row_stride).ok_or_else(|| {
             ANNError::message(format!(
                 "HashPrune row offset {idx} x {} overflows usize",
-                self.scan_lanes
+                self.row_stride
             ))
         })?;
-        // SAFETY: `idx` is in bounds. Each slab has
-        // `hot.len() * scan_lanes` elements. `UnsafeCell` permits these writes,
-        // and `with_state` holds the point lock for the closure.
-        let cold = unsafe {
-            ColdSlotPtrs {
-                hashes: (*self.cold_hashes.get()).as_ptr().cast_mut().add(off),
-                distances: (*self.cold_distances.get()).as_ptr().cast_mut().add(off),
-                neighbors: (*self.cold_neighbors.get()).as_ptr().cast_mut().add(off),
-                scan_lanes: self.scan_lanes,
+        // SAFETY: `idx` is in bounds. Each array has
+        // `states.len() * row_stride` elements. `UnsafeCell` permits these writes,
+        // and `with_locked_state` holds the source lock for the closure.
+        let rows = unsafe {
+            ReservoirRows {
+                hashes: (*self.hash_rows.get()).as_ptr().cast_mut().add(off),
+                distances: (*self.distance_rows.get()).as_ptr().cast_mut().add(off),
+                neighbors: (*self.neighbor_rows.get()).as_ptr().cast_mut().add(off),
+                row_stride: self.row_stride,
             }
         };
-        Ok(slot.with_state(|hot| f(hot, cold)))
+        Ok(slot.with_locked_state(|state| f(state, rows)))
     }
 
     /// Merge one leaf's CSR edges into the point reservoirs.
@@ -839,22 +836,22 @@ impl HashPrune {
                 .find(|&i| edge_offsets[i] != edge_offsets[i + 1])
                 .map(|i| point_ids[i] as usize)
             {
-                let off = next * self.scan_lanes;
-                prefetch_hint_all(std::slice::from_ref(&self.hot[next]));
+                let off = next * self.row_stride;
+                prefetch_hint_all(std::slice::from_ref(&self.states[next]));
                 // SAFETY: `next` is a dataset point ID, so this raw range is the
                 // complete padded hash segment for that point. Raw prefetch avoids
                 // creating a shared slice while another worker mutates the segment.
                 unsafe {
-                    let hashes = (*self.cold_hashes.get()).as_ptr().add(off);
+                    let hashes = (*self.hash_rows.get()).as_ptr().add(off);
                     prefetch_hint_all_raw(
                         hashes.cast(),
-                        self.scan_lanes * std::mem::size_of::<u16>(),
+                        self.row_stride * std::mem::size_of::<u16>(),
                     );
                 }
             }
 
             let src_sketch = &sketch_scratch[local_src * m..(local_src + 1) * m];
-            self.with_locked(global_src, |hot, cold| -> ANNResult<()> {
+            self.with_locked_reservoir(global_src, |state, rows| -> ANNResult<()> {
                 for &(dst_local, dist) in &edges[start..end] {
                     let dst_index = dst_local as usize;
                     let global_dst = *point_ids.get(dst_index).ok_or_else(|| {
@@ -868,12 +865,20 @@ impl HashPrune {
                         dst: dst_sketch.as_ptr(),
                         len: m,
                     });
-                    // SAFETY: `with_locked` holds this source's lock for the
-                    // closure and supplies its exact `scan_lanes` cold segments.
-                    // `l_max` was validated at construction and `insert_locked`
-                    // maintains initialized entries through `hot.len`.
+                    // SAFETY: `with_locked_reservoir` holds this source's lock for the
+                    // closure and supplies its three exact reservoir rows.
+                    // `l_max` was validated at construction and `insert_reservoir_edge`
+                    // maintains initialized entries through `state.len`.
                     unsafe {
-                        insert_locked(hot, cold, hash, global_dst, dist, l_max, self.find_hash)
+                        insert_reservoir_edge(
+                            state,
+                            rows,
+                            hash,
+                            global_dst,
+                            dist,
+                            l_max,
+                            self.find_hash,
+                        )
                     };
                 }
                 Ok(())
@@ -918,34 +923,34 @@ impl HashPrune {
     /// Consume the reservoirs and return at most `max_degree` nearest IDs per point.
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_nearest_lists(self, max_degree: usize) -> Vec<AdjacencyList<u32>> {
-        let scan_lanes = self.scan_lanes;
+        let row_stride = self.row_stride;
         drop(self.sketches);
         let HashPrune {
-            hot,
-            cold_hashes,
-            cold_distances,
-            cold_neighbors,
+            states,
+            hash_rows,
+            distance_rows,
+            neighbor_rows,
             ..
         } = self;
-        let cold_hashes = cold_hashes.into_inner();
-        let cold_distances = cold_distances.into_inner();
-        let cold_neighbors = cold_neighbors.into_inner();
-        drop(cold_hashes);
-        (0..hot.len())
+        let hash_rows = hash_rows.into_inner();
+        let distance_rows = distance_rows.into_inner();
+        let neighbor_rows = neighbor_rows.into_inner();
+        drop(hash_rows);
+        (0..states.len())
             .into_par_iter()
             .map_init(Vec::new, |scratch, i| {
-                let off = i * scan_lanes;
+                let off = i * row_stride;
                 // SAFETY: indexing proves that `i` names a live slot. This method
                 // consumes `self`, so no writer can overlap this state reference.
-                let hot = unsafe { &*hot[i].get() };
-                // SAFETY: construction allocated `npoints * scan_lanes` entries;
+                let state = unsafe { &*states[i].state_ptr() };
+                // SAFETY: construction allocated `npoints * row_stride` entries;
                 // this loop keeps `i < npoints`, and insertion maintains
-                // `hot.len <= l_max <= scan_lanes` initialized entries.
+                // `state.len <= l_max <= row_stride` initialized entries.
                 let ids = unsafe {
                     collect_nearest_ids(
-                        hot,
-                        cold_distances.as_ptr().wrapping_add(off),
-                        cold_neighbors.as_ptr().wrapping_add(off),
+                        state,
+                        distance_rows.as_ptr().wrapping_add(off),
+                        neighbor_rows.as_ptr().wrapping_add(off),
                         max_degree,
                         scratch,
                     )
@@ -961,33 +966,33 @@ impl HashPrune {
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_candidate_lists(self) -> Vec<AdjacencyList<u32>> {
         let cap = self.l_max;
-        let scan_lanes = self.scan_lanes;
+        let row_stride = self.row_stride;
         drop(self.sketches);
         let HashPrune {
-            hot,
-            cold_hashes,
-            cold_distances,
-            cold_neighbors,
+            states,
+            hash_rows,
+            distance_rows,
+            neighbor_rows,
             ..
         } = self;
-        let cold_hashes = cold_hashes.into_inner();
-        let cold_distances = cold_distances.into_inner();
-        let cold_neighbors = cold_neighbors.into_inner();
+        let hash_rows = hash_rows.into_inner();
+        let distance_rows = distance_rows.into_inner();
+        let neighbor_rows = neighbor_rows.into_inner();
         // Extraction reads only neighbor IDs. Drop the hash and distance arrays
         // before the code creates the output lists.
-        drop(cold_hashes);
-        drop(cold_distances);
-        (0..hot.len())
+        drop(hash_rows);
+        drop(distance_rows);
+        (0..states.len())
             .into_par_iter()
             .map(|i| {
-                let neighbors = cold_neighbors.as_ptr().wrapping_add(i * scan_lanes);
+                let neighbors = neighbor_rows.as_ptr().wrapping_add(i * row_stride);
                 // SAFETY: indexing proves that `i` names a live slot. This method
                 // consumes `self`, so no writer can overlap this state reference.
-                let hot = unsafe { &*hot[i].get() };
-                // SAFETY: construction allocated `npoints * scan_lanes` entries;
+                let state = unsafe { &*states[i].state_ptr() };
+                // SAFETY: construction allocated `npoints * row_stride` entries;
                 // this loop keeps `i < npoints`, and insertion maintains
-                // `hot.len <= l_max <= scan_lanes` initialized entries.
-                let ids = unsafe { collect_neighbor_ids(hot, neighbors, cap) };
+                // `state.len <= l_max <= row_stride` initialized entries.
+                let ids = unsafe { collect_neighbor_ids(state, neighbors, cap) };
                 // Reservoir slots have unique hashes, and one neighbor cannot
                 // produce two hashes for the same source.
                 AdjacencyList::from_vec_trusted(ids)
@@ -1016,44 +1021,44 @@ mod tests {
     }
 
     struct Reservoir {
-        hot: HotSlot,
+        state: ReservoirState,
         hashes: Vec<u16>,
         distances: Vec<u16>,
         neighbors: Vec<u32>,
-        scan_lanes: usize,
+        row_stride: usize,
         l_max: u8,
     }
 
     impl Reservoir {
         fn new(l_max: usize) -> Self {
             assert!(l_max <= MAX_RESERVOIR_LEN);
-            let scan_lanes = l_max.next_multiple_of(32).max(32);
+            let row_stride = l_max.next_multiple_of(32).max(32);
             Self {
-                hot: HotSlot::new_empty(),
-                hashes: vec![0; scan_lanes],
-                distances: vec![0; scan_lanes],
-                neighbors: vec![0; scan_lanes],
-                scan_lanes,
+                state: ReservoirState::new_empty(),
+                hashes: vec![0; row_stride],
+                distances: vec![0; row_stride],
+                neighbors: vec![0; row_stride],
+                row_stride,
                 l_max: l_max as u8,
             }
         }
 
-        fn cold(&self) -> ColdSlotPtrs {
-            ColdSlotPtrs {
+        fn rows(&self) -> ReservoirRows {
+            ReservoirRows {
                 hashes: self.hashes.as_ptr() as *mut u16,
                 distances: self.distances.as_ptr() as *mut u16,
                 neighbors: self.neighbors.as_ptr() as *mut u32,
-                scan_lanes: self.scan_lanes,
+                row_stride: self.row_stride,
             }
         }
 
         fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
-            let cold = self.cold();
+            let rows = self.rows();
             // SAFETY: the test owns the reservoir and holds its only mutable reference.
             unsafe {
-                insert_locked(
-                    &mut self.hot,
-                    cold,
+                insert_reservoir_edge(
+                    &mut self.state,
+                    rows,
                     hash,
                     neighbor,
                     distance,
@@ -1086,17 +1091,17 @@ mod tests {
         }
 
         fn len(&self) -> usize {
-            self.hot.len as usize
+            self.state.len as usize
         }
 
         fn is_empty(&self) -> bool {
-            self.hot.len == 0
+            self.state.len == 0
         }
     }
 
     #[test]
-    fn hot_slot_contention_serializes_state_mutation() {
-        let slot = LockedHotSlot::new();
+    fn reservoir_lock_serializes_state_mutation() {
+        let slot = LockedReservoirState::new();
         let start = std::sync::Barrier::new(3);
 
         std::thread::scope(|scope| {
@@ -1106,14 +1111,14 @@ mod tests {
                 scope.spawn(move || {
                     start.wait();
                     for _ in 0..16 {
-                        slot.with_state(|hot| hot.farthest_dist += 1);
+                        slot.with_locked_state(|state| state.farthest_dist += 1);
                     }
                 });
             }
             start.wait();
         });
 
-        assert_eq!(slot.with_state(|hot| hot.farthest_dist), 32);
+        assert_eq!(slot.with_locked_state(|state| state.farthest_dist), 32);
     }
 
     fn add_edge(hp: &HashPrune, src: usize, dst: usize, distance: f32) {
@@ -1125,9 +1130,11 @@ mod tests {
             len: m,
         });
         let l_max = hp.l_max as u8;
-        hp.with_locked(src, |hot, cold| {
-            // SAFETY: `with_locked` holds the source lock and supplies valid cold rows.
-            unsafe { insert_locked(hot, cold, hash, dst as u32, distance, l_max, hp.find_hash) };
+        hp.with_locked_reservoir(src, |state, rows| {
+            // SAFETY: `with_locked_reservoir` holds the source lock and supplies valid reservoir rows.
+            unsafe {
+                insert_reservoir_edge(state, rows, hash, dst as u32, distance, l_max, hp.find_hash)
+            };
         })
         .unwrap();
     }
@@ -1256,12 +1263,12 @@ mod tests {
 
         for target in [0, 0xF00D] {
             for len in [0usize, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 254, 255] {
-                let scan_lanes = len.max(1).next_multiple_of(32);
-                let mut hashes = vec![target; scan_lanes];
+                let row_stride = len.max(1).next_multiple_of(32);
+                let mut hashes = vec![target; row_stride];
                 hashes[..len].fill(0x8001);
                 let args = |hashes: &[u16]| FindHashArgs {
                     hashes: hashes.as_ptr(),
-                    scan_lanes,
+                    row_stride,
                     len: len as u8,
                     target,
                 };
@@ -1295,11 +1302,11 @@ mod tests {
         let data = [0.0_f32];
         let low = hash_prune(&data, 1, 1, 1, 1).unwrap();
         assert_eq!(low.l_max, 1);
-        assert_eq!(low.scan_lanes, 32);
+        assert_eq!(low.row_stride, 32);
 
         let high = hash_prune(&data, 1, 1, 1, MAX_RESERVOIR_LEN).unwrap();
         assert_eq!(high.l_max, MAX_RESERVOIR_LEN);
-        assert_eq!(high.scan_lanes, 256);
+        assert_eq!(high.row_stride, 256);
     }
 
     #[test]
@@ -1315,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_key_preserves_bf16_order_for_all_signs() {
+    fn ordered_distance_key_preserves_bf16_order_for_all_signs() {
         let values = [
             f32::NEG_INFINITY,
             -100.0,
@@ -1325,7 +1332,7 @@ mod tests {
             100.0,
             f32::INFINITY,
         ];
-        let keys: Vec<_> = values.iter().copied().map(ordered_key).collect();
+        let keys: Vec<_> = values.iter().copied().map(ordered_distance_key).collect();
         assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
