@@ -69,8 +69,6 @@ pub(crate) enum PartitionError {
         level: usize,
         limit: usize,
     },
-    #[error("partition produced an invalid leaf of size {size}; expected 1..={limit}")]
-    InvalidLeaf { size: usize, limit: usize },
     #[error("invalid {buffer} length: expected {expected}, got {actual}")]
     InvalidBufferLength {
         buffer: &'static str,
@@ -208,20 +206,21 @@ where
         results
             .par_iter_mut()
             .zip(work.into_par_iter())
-            .for_each(|(slot, item)| {
+            .try_for_each(|(slot, item)| {
                 *slot = Some(partition_one_level::<A, M, T>(
                     arch,
                     data,
                     config,
                     item,
                     stripe_buffers,
-                ));
-            });
+                )?);
+                Ok::<(), ANNError>(())
+            })?;
 
         let mut next_work = Vec::new();
         for result in results {
             let (mut pending, mut finished) =
-                result.ok_or_else(|| ANNError::new(PartitionError::MissingWorkerResult))??;
+                result.ok_or_else(|| ANNError::new(PartitionError::MissingWorkerResult))?;
             next_work
                 .try_reserve(pending.len())
                 .map_err(ANNError::new)?;
@@ -555,14 +554,15 @@ fn scatter_assignments(
                 .par_chunks(stripe_points)
                 .zip(assignments.par_chunks(stripe_assignment_count)),
         )
-        .for_each(|(slot, (points, assignments))| {
-            *slot = Some(scatter_serial(points, assignments, fanout, leaders));
-        });
+        .try_for_each(|(slot, (points, assignments))| {
+            *slot = Some(scatter_serial(points, assignments, fanout, leaders)?);
+            Ok::<(), ANNError>(())
+        })?;
 
     let mut locals = Vec::new();
     locals.try_reserve_exact(stripes).map_err(ANNError::new)?;
     for result in partials {
-        locals.push(result.ok_or_else(|| ANNError::new(PartitionError::MissingWorkerResult))??);
+        locals.push(result.ok_or_else(|| ANNError::new(PartitionError::MissingWorkerResult))?);
     }
 
     let mut sizes = filled_vec(leaders, 0usize)?;
@@ -707,7 +707,11 @@ fn global_merge_small(
         }
     }
 
-    validate_leaves(&merged, c_max)?;
+    debug_assert!(
+        merged
+            .iter()
+            .all(|leaf| !leaf.is_empty() && leaf.len() <= c_max)
+    );
     Ok(merged)
 }
 
@@ -717,19 +721,6 @@ fn drain_sorted(set: &mut HashSet<u32>) -> ANNResult<Vec<u32>> {
     values.extend(set.drain());
     values.sort_unstable();
     Ok(values)
-}
-
-fn validate_leaves(leaves: &[Vec<u32>], c_max: usize) -> ANNResult<()> {
-    if let Some(leaf) = leaves
-        .iter()
-        .find(|leaf| leaf.is_empty() || leaf.len() > c_max)
-    {
-        return Err(ANNError::new(PartitionError::InvalidLeaf {
-            size: leaf.len(),
-            limit: c_max,
-        }));
-    }
-    Ok(())
 }
 
 fn point_ids(points: usize) -> ANNResult<Vec<u32>> {
@@ -1244,16 +1235,5 @@ mod tests {
                 actual: 3,
             }
         );
-    }
-
-    #[test]
-    fn rejects_empty_and_oversized_leaves() {
-        for (leaves, size) in [(vec![vec![]], 0), (vec![vec![0, 1, 2]], 3)] {
-            let error = validate_leaves(&leaves, 2).unwrap_err();
-            assert_eq!(
-                error.downcast::<PartitionError>().unwrap(),
-                PartitionError::InvalidLeaf { size, limit: 2 }
-            );
-        }
     }
 }
