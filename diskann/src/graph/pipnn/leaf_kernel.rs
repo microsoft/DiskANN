@@ -64,19 +64,6 @@ pub struct LeafKernelWorkspace {
     worst: Vec<f32>,
 }
 
-impl LeafKernelWorkspace {
-    /// Construct an empty workspace.
-    ///
-    /// This does not allocate. First use grows buffers to the leaf point count;
-    /// later calls reuse capacity owned by the same worker.
-    pub const fn new() -> Self {
-        Self {
-            norms: Vec::new(),
-            worst: Vec::new(),
-        }
-    }
-}
-
 /// Validation or allocation error returned by [`nearest_neighbors`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LeafKernelError {
@@ -743,7 +730,7 @@ mod tests {
         let points = 7;
         let dots = test_dots(Metric::L2, points);
         let input = test_input(&dots, points);
-        let mut workspace = LeafKernelWorkspace::new();
+        let mut workspace = LeafKernelWorkspace::default();
 
         for neighbor_count in [1, 3, 2] {
             let mut output = vec![LeafNeighbor::default(); points * neighbor_count];
@@ -760,7 +747,7 @@ mod tests {
 
     #[test]
     fn workspace_can_shrink_and_grow_between_calls() {
-        let mut workspace = LeafKernelWorkspace::new();
+        let mut workspace = LeafKernelWorkspace::default();
         for points in [17, 7, 17] {
             let dots = test_dots(Metric::L2, points);
             let mut output = vec![LeafNeighbor::default(); points * 2];
@@ -912,7 +899,7 @@ mod integration_tests {
             metric,
             test_input(dots, points),
             MutMatrixView::try_from(output.as_mut_slice(), points, leaf_k).unwrap(),
-            &mut LeafKernelWorkspace::new(),
+            &mut LeafKernelWorkspace::default(),
         )
         .unwrap();
         (leaf_k, output)
@@ -1079,7 +1066,7 @@ mod integration_tests {
             Metric::L2,
             test_input(&dots, 2),
             MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
-            &mut LeafKernelWorkspace::new(),
+            &mut LeafKernelWorkspace::default(),
         )
         .unwrap_err();
 
@@ -1133,7 +1120,7 @@ mod integration_tests {
                 Metric::L2,
                 non_square,
                 MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
-                &mut LeafKernelWorkspace::new(),
+                &mut LeafKernelWorkspace::default(),
             ),
             Err(LeafKernelError::NonSquareDots { rows: 2, cols: 3 })
         );
@@ -1145,7 +1132,7 @@ mod integration_tests {
                 Metric::L2,
                 test_input(&square, 3),
                 MutMatrixView::try_from(&mut wrong_rows[..], 2, 1).unwrap(),
-                &mut LeafKernelWorkspace::new(),
+                &mut LeafKernelWorkspace::default(),
             ),
             Err(LeafKernelError::InvalidOutputRows {
                 expected: 3,
@@ -1160,7 +1147,7 @@ mod integration_tests {
                 Metric::L2,
                 test_input(&square, 3),
                 MutMatrixView::try_from(&mut too_many[..], 3, 3).unwrap(),
-                &mut LeafKernelWorkspace::new(),
+                &mut LeafKernelWorkspace::default(),
             ),
             Err(LeafKernelError::InvalidNeighborCount {
                 points: 3,
@@ -1176,7 +1163,7 @@ mod integration_tests {
                 Metric::L2,
                 test_input(&square, 5),
                 MutMatrixView::try_from(&mut too_wide[..], 5, 4).unwrap(),
-                &mut LeafKernelWorkspace::new(),
+                &mut LeafKernelWorkspace::default(),
             ),
             Err(LeafKernelError::InvalidNeighborCount {
                 points: 5,

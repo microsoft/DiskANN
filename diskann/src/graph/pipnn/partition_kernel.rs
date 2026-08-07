@@ -34,13 +34,6 @@ pub struct PartitionKernelWorkspace {
 }
 
 impl PartitionKernelWorkspace {
-    /// Construct an empty allocation-free workspace.
-    pub const fn new() -> Self {
-        Self {
-            tracker: Vec::new(),
-        }
-    }
-
     fn prepare(&mut self, fanout: usize) -> Result<(), PartitionKernelError> {
         let additional = fanout.saturating_sub(self.tracker.len());
         self.tracker
@@ -667,7 +660,7 @@ mod tests {
             Metric::Cosine,
             input,
             MutMatrixView::try_from(actual.as_mut_slice(), point_scales.len(), 2).unwrap(),
-            &mut PartitionKernelWorkspace::new(),
+            &mut PartitionKernelWorkspace::default(),
         )
         .unwrap();
 
@@ -689,7 +682,7 @@ mod tests {
 
     #[test]
     fn workspace_reuses_runtime_fanout_capacity() {
-        let mut workspace = PartitionKernelWorkspace::new();
+        let mut workspace = PartitionKernelWorkspace::default();
         workspace.prepare(32).unwrap();
         let allocation = workspace.tracker.as_ptr();
 
@@ -850,7 +843,7 @@ mod integration_tests {
             metric,
             input,
             MutMatrixView::try_from(output.as_mut_slice(), input.dots.nrows(), fanout).unwrap(),
-            &mut PartitionKernelWorkspace::new(),
+            &mut PartitionKernelWorkspace::default(),
         )?;
         Ok(output)
     }
@@ -1043,7 +1036,7 @@ mod integration_tests {
                 Metric::InnerProduct,
                 valid_input,
                 MutMatrixView::try_from(&mut wrong_output[..], 1, 3).unwrap(),
-                &mut PartitionKernelWorkspace::new(),
+                &mut PartitionKernelWorkspace::default(),
             ),
             Err(PartitionKernelError::InvalidOutputShape {
                 expected_rows: 2,
