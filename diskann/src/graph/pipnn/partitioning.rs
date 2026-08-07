@@ -157,7 +157,6 @@ where
             .map_err(ANNError::new)?;
         leaves.append(&mut replica_leaves);
     }
-    validate_leaves(&leaves, config.c_max)?;
     Ok(leaves)
 }
 
