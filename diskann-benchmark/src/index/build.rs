@@ -482,7 +482,9 @@ mod pipnn_tests {
         assert!(stats.insert_latencies.is_none());
         let starts = index.provider().starting_points().unwrap();
         assert_eq!(starts.len(), 1);
-        // SAFETY: the completed build has no concurrent vector writers.
+        // SAFETY: `starting_points` returns provider-installed frozen IDs, so
+        // `starts[0] < base_vectors.total()`. The completed build has no concurrent
+        // vector writers, so no mutable alias exists for the returned shared slice.
         let start = unsafe {
             index
                 .data_provider
