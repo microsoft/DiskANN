@@ -751,7 +751,7 @@ mod integration_tests {
         (dots, point_scales, leader_scales)
     }
 
-    fn run(
+    fn run_partition_kernel(
         metric: Metric,
         input: PartitionInput<'_>,
         fanout: usize,
@@ -789,7 +789,7 @@ mod integration_tests {
                         continue;
                     }
                     assert_eq!(
-                        run(metric, input, fanout).unwrap(),
+                        run_partition_kernel(metric, input, fanout).unwrap(),
                         brute_force_reference(input, fanout, metric),
                         "{metric:?}, leaders={leader_count}, k={fanout}"
                     );
@@ -808,7 +808,7 @@ mod integration_tests {
         let norms = [0.0, 1.0, 4.0, 9.0];
 
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::L2,
                 test_input(Metric::L2, &dots, 2, 4, &[], &norms),
                 2
@@ -837,7 +837,7 @@ mod integration_tests {
             (Metric::InnerProduct, &[][..], &[][..], [0, 1, 1, 0]),
         ] {
             assert_eq!(
-                run(
+                run_partition_kernel(
                     metric,
                     test_input(metric, &dots, 2, 3, point_scales, leader_scales),
                     2,
@@ -852,7 +852,7 @@ mod integration_tests {
     #[test]
     fn cosine_treats_a_zero_norm_as_zero_similarity() {
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::Cosine,
                 test_input(Metric::Cosine, &[100.0, -100.0], 1, 2, &[0.0], &[1.0, 1.0]),
                 2,
@@ -867,7 +867,7 @@ mod integration_tests {
         let mut dots = [0.0; 8];
         dots[7] = -f32::MAX;
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::InnerProduct,
                 test_input(Metric::InnerProduct, &dots, 1, 8, &[], &[]),
                 8
@@ -880,7 +880,7 @@ mod integration_tests {
     #[test]
     fn ignores_nan_distances_without_displacing_finite_leaders() {
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::InnerProduct,
                 test_input(Metric::InnerProduct, &[f32::NAN, 3.0, 2.0], 1, 3, &[], &[]),
                 2,
@@ -893,7 +893,7 @@ mod integration_tests {
     #[test]
     fn rejects_points_with_too_few_rankable_leaders() {
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::InnerProduct,
                 test_input(Metric::InnerProduct, &[f32::NAN, 3.0], 1, 2, &[], &[]),
                 2,
@@ -907,19 +907,19 @@ mod integration_tests {
 
     #[test]
     fn accepts_empty_points_zero_fanout_and_largest_leader_id() {
-        run(
+        run_partition_kernel(
             Metric::InnerProduct,
             test_input(Metric::InnerProduct, &[], 0, 3, &[], &[]),
             2,
         )
         .unwrap();
-        run(
+        run_partition_kernel(
             Metric::InnerProduct,
             test_input(Metric::InnerProduct, &[1.0, 2.0, 3.0], 1, 3, &[], &[]),
             0,
         )
         .unwrap();
-        run(
+        run_partition_kernel(
             Metric::InnerProduct,
             test_input(Metric::InnerProduct, &[], 0, u32::MAX as usize, &[], &[]),
             0,
@@ -928,7 +928,7 @@ mod integration_tests {
 
         #[cfg(target_pointer_width = "64")]
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::InnerProduct,
                 test_input(
                     Metric::InnerProduct,
@@ -968,12 +968,12 @@ mod integration_tests {
             scales: PartitionScales::None,
         };
         assert_eq!(
-            run(Metric::L2, wrong_scales, 2),
+            run_partition_kernel(Metric::L2, wrong_scales, 2),
             Err(PartitionKernelError::InvalidScales { expected: "L2" })
         );
 
         assert_eq!(
-            run(Metric::InnerProduct, valid_input, 4),
+            run_partition_kernel(Metric::InnerProduct, valid_input, 4),
             Err(PartitionKernelError::InvalidFanout {
                 fanout: 4,
                 leader_count: 3,
@@ -982,7 +982,7 @@ mod integration_tests {
 
         let one = [0.0];
         assert_eq!(
-            run(
+            run_partition_kernel(
                 Metric::InnerProduct,
                 test_input(Metric::InnerProduct, &one, 1, 1, &[], &[]),
                 2,
