@@ -37,7 +37,10 @@
 
 use crate::{
     ANNError, ANNResult,
-    graph::{AdjacencyList, Config, internal::SortedNeighbors, robust_prune as prune},
+    graph::{
+        AdjacencyList, Config,
+        internal::{SortedNeighbors, prune},
+    },
     neighbor::Neighbor,
     utils::VectorRepr,
 };
@@ -130,17 +133,15 @@ where
                     .prepared
                     .try_reserve(candidate_count)
                     .map_err(ANNError::new)?;
-                {
-                    // Sorting/capping precedes source exclusion so filtering cannot
-                    // backfill with farther candidates.
-                    let sorted = SortedNeighbors::new(&mut workspace.pool, candidate_count);
-                    workspace
-                        .prepared
-                        .extend(sorted.iter().filter_map(|neighbor| {
-                            let id = *neighbor.id();
-                            (id != source_id).then(|| (*neighbor.distance(), Some(id)))
-                        }));
-                }
+
+                // Sorting/capping precedes source exclusion so filtering cannot
+                // backfill with farther candidates. Passing this witness into
+                // RobustPrune makes source-distance order part of its input type.
+                let sorted = SortedNeighbors::new(&mut workspace.pool, candidate_count);
+                workspace.prepared.extend(sorted.iter().map(|neighbor| {
+                    let id = *neighbor.id();
+                    (*neighbor.distance(), (id != source_id).then_some(id))
+                }));
                 workspace
                     .states
                     .try_reserve(
@@ -155,6 +156,7 @@ where
                     .resize(workspace.prepared.len(), prune::State::default());
 
                 let selected = prune::robust_prune(
+                    &sorted,
                     &workspace.prepared,
                     workspace.states.as_mut_slice(),
                     degree,
@@ -170,12 +172,7 @@ where
 
                 let mut guard = source_candidates.resize(selected);
                 for (destination, state) in guard.iter_mut().zip(workspace.states.iter()) {
-                    *destination =
-                        workspace.prepared[state.neighbor as usize]
-                            .1
-                            .ok_or_else(|| {
-                                ANNError::message("RobustPrune selected an unavailable candidate")
-                            })?;
+                    *destination = *sorted[state.neighbor as usize].id();
                 }
                 guard.finish(selected);
                 Ok(source_candidates)
