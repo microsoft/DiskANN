@@ -97,7 +97,7 @@
 //!
 //! With `k > 0`, the kernel evaluates exactly `n(n - 1) / 2` pair distances;
 //! `k = 0` returns before traversal. Supported widths `k = 1, 2, 3` use fixed
-//! arrays and straight-line insertion, giving `O(n²)` work. Scratch is `O(n)`
+//! arrays and bounded insertion, giving `O(n²)` work. Scratch is `O(n)`
 //! (`worst`, plus norms only when required); output is `O(nk)`. No allocation
 //! occurs after a worker workspace has sufficient capacity. Runtime architecture
 //! and metric selection happen once in [`LeafKernel::new`].
@@ -487,7 +487,7 @@ where
             call.output.as_mut_slice(),
             &call.workspace.norms,
             &mut call.workspace.worst,
-        );
+        )?;
         // Sorted lists use the last slot as both worst-distance threshold and
         // underfill sentinel, so one slot check per source proves full output.
         if let Some(source) = call
@@ -634,7 +634,8 @@ fn process_neighbor_width<F, M>(
     output: &mut [LeafNeighbor],
     norms: &[f32],
     worst: &mut [f32],
-) where
+) -> Result<(), LeafKernelError>
+where
     F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
@@ -644,8 +645,15 @@ fn process_neighbor_width<F, M>(
         1 => process_fixed_width::<F, M, 1>(arch, input, output, norms, worst),
         2 => process_fixed_width::<F, M, 2>(arch, input, output, norms, worst),
         3 => process_fixed_width::<F, M, 3>(arch, input, output, norms, worst),
-        _ => unreachable!("validated leaf neighbor count must be in 1..=3"),
+        _ => {
+            return Err(LeafKernelError::InvalidNeighborCount {
+                points: input.nrows(),
+                neighbors: neighbor_count,
+                maximum: MAX_LEAF_NEIGHBORS,
+            });
+        }
     }
+    Ok(())
 }
 
 /// Reinterpret validated output as one fixed array per source, then run shared
@@ -832,54 +840,30 @@ fn process_pairs<F, M, const N: usize>(
 
 /// Insert into a fixed-width neighbor list and return its new worst distance.
 ///
-/// Production widths one through three use straight-line shifts. Strict `<`
+/// Width is a compile-time constant from one through three. Strict `<`
 /// comparisons preserve scan order for ties; callers already rejected NaN via
 /// the eligibility comparison.
 ///
 /// `neighbors` is the sorted list for one source. `target` and `distance` are a
 /// candidate already known to beat its final slot. The return value is the new
-/// final-slot distance. Insertion is allocation-free and constant-time because
-/// `N <= 3`.
+/// final-slot distance. Insertion is allocation-free and bounded by three swaps.
 #[inline(always)]
 fn insert_fixed_neighbor<const N: usize>(
     neighbors: &mut [LeafNeighbor; N],
     target: u32,
     distance: f32,
 ) -> f32 {
-    let entry = LeafNeighbor::new(target, distance);
-    match N {
-        1 => {
-            neighbors[0] = entry;
-            distance
-        }
-        2 => {
-            let first = neighbors[0];
-            if distance < first.distance {
-                neighbors[0] = entry;
-                neighbors[1] = first;
-                first.distance
-            } else {
-                neighbors[1] = entry;
-                distance
-            }
-        }
-        3 => {
-            let (first, second) = (neighbors[0], neighbors[1]);
-            if distance < first.distance {
-                neighbors[0] = entry;
-                neighbors[1] = first;
-                neighbors[2] = second;
-            } else if distance < second.distance {
-                neighbors[1] = entry;
-                neighbors[2] = second;
-            } else {
-                neighbors[2] = entry;
-                return distance;
-            }
-            second.distance
-        }
-        _ => unreachable!("fixed leaf widths are one through three"),
+    if N == 0 {
+        return f32::INFINITY;
     }
+    let last = N - 1;
+    neighbors[last] = LeafNeighbor::new(target, distance);
+    let mut index = last;
+    while index > 0 && neighbors[index].distance < neighbors[index - 1].distance {
+        neighbors.swap(index, index - 1);
+        index -= 1;
+    }
+    neighbors[last].distance
 }
 
 #[cfg(test)]
