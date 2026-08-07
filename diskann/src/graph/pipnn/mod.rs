@@ -166,12 +166,6 @@ impl HashPruneConfig {
     }
 }
 
-#[derive(Clone, Debug)]
-enum CandidateMerge {
-    Direct,
-    HashPrune(HashPruneConfig),
-}
-
 /// PiPNN policy and borrowed execution resources for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
@@ -179,7 +173,7 @@ pub struct PiPNNBuildContext<'a> {
     pub(crate) graph: &'a Config,
     pub(crate) metric: Metric,
     pub(crate) pool: &'a ThreadPool,
-    candidate_merge: CandidateMerge,
+    hash_prune: Option<HashPruneConfig>,
 }
 
 impl<'a> PiPNNBuildContext<'a> {
@@ -203,14 +197,14 @@ impl<'a> PiPNNBuildContext<'a> {
             graph,
             metric,
             pool,
-            candidate_merge: CandidateMerge::Direct,
+            hash_prune: None,
         })
     }
 
     /// Enable HashPrune candidate merging for this build.
     pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
         config.validate_for_degree(self.graph.pruned_degree().get())?;
-        self.candidate_merge = CandidateMerge::HashPrune(config);
+        self.hash_prune = Some(config);
         Ok(self)
     }
 }
@@ -323,8 +317,8 @@ where
 {
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
-    match &context.candidate_merge {
-        CandidateMerge::Direct => {
+    match &context.hash_prune {
+        None => {
             // Leaf jobs borrow individual ID lists. This call consumes the leaf
             // vector, so its allocation drops when leaf construction returns.
             let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
@@ -337,15 +331,14 @@ where
                 finalization::prune_overfull(data, candidates, context.graph, M::METRIC)
             })
         }
-        CandidateMerge::HashPrune(config) => {
-            let hash_prune = hash_prune::HashPrune::new(
-                data.as_slice(),
-                data.nrows(),
-                data.ncols(),
-                config.num_hash_planes,
-                config.l_max,
-                42,
-            )?;
+        Some(config) => {
+            // Sketches and reservoir slabs must exist before leaf workers start;
+            // workers borrow this stage owner and mutate only one locked source
+            // reservoir at a time.
+            let hash_prune =
+                hash_prune::HashPrune::new(data, config.num_hash_planes, config.l_max, 42)?;
+            // Leaves are consumed at this boundary. Their local weighted CSR
+            // lists are temporary; only bounded reservoir state survives.
             tracing::info_span!("pipnn.leaf_build").in_scope(|| {
                 leaf_build::add_hash_prune_candidates::<A, M, T>(
                     arch,
