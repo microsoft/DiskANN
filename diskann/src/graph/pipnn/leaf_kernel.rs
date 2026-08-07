@@ -51,9 +51,8 @@
 //!
 //! # Main structures
 //!
-//! - [`LeafKernel`] is the reusable public handle containing one prepared direct
+//! - [`LeafKernel`] is the reusable handle containing one prepared direct
 //!   function pointer.
-//! - [`LeafInput`] identifies the borrowed lower-triangular dot matrix.
 //! - [`LeafKernelWorkspace`] owns norm and rejection-threshold scratch and is
 //!   reused by one worker across leaves.
 //! - [`LeafNeighbor`] is one output slot containing leaf-local target position
@@ -66,7 +65,7 @@
 //!
 //! # Inputs and output
 //!
-//! For `n` leaf points, [`LeafInput::dots`] is an `n × n` row-major matrix from
+//! For `n` leaf points, the input is an `n × n` row-major matrix from
 //! `sgemm_aat_lower`. Diagonal entries provide norms when the metric needs them;
 //! only strict-lower entries `(source, target)` with `target < source` provide
 //! pair dots. Output is an `n × k` [`LeafNeighbor`] matrix. Every output row is
@@ -110,7 +109,7 @@
 //!
 //! ```
 //! use diskann::graph::pipnn::leaf_kernel::{
-//!     leaf_output_len, LeafInput, LeafKernel, LeafKernelWorkspace, LeafNeighbor,
+//!     leaf_output_len, LeafKernel, LeafKernelWorkspace, LeafNeighbor,
 //! };
 //! use diskann_utils::views::{MatrixView, MutMatrixView};
 //! use diskann_vector::distance::Metric;
@@ -121,9 +120,7 @@
 //!     0.9, 1.0,      f32::NAN,
 //!     0.1, 0.2,      1.0,
 //! ];
-//! let input = LeafInput {
-//!     dots: MatrixView::try_from(&dots[..], 3, 3).unwrap(),
-//! };
+//! let input = MatrixView::try_from(&dots[..], 3, 3).unwrap();
 //! let mut neighbors = vec![LeafNeighbor::default(); leaf_output_len(3, 1).unwrap()];
 //! let output = MutMatrixView::try_from(&mut neighbors[..], 3, 1).unwrap();
 //! let mut workspace = LeafKernelWorkspace::new();
@@ -170,13 +167,6 @@ impl Default for LeafNeighbor {
     fn default() -> Self {
         Self::new(u32::MAX, f32::INFINITY)
     }
-}
-
-/// Square lower-triangular dot-product matrix for one leaf.
-#[derive(Clone, Copy, Debug)]
-pub struct LeafInput<'a> {
-    /// Point-by-point matrix. Only entries with `target <= source` are read.
-    pub dots: MatrixView<'a, f32>,
 }
 
 /// Reusable temporary storage for leaf top-k selection.
@@ -316,7 +306,7 @@ pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafK
 /// and exclusive scratch lease without storing any of them in `LeafKernel`.
 #[derive(Debug)]
 struct LeafCall<'a> {
-    input: LeafInput<'a>,
+    input: MatrixView<'a, f32>,
     output: MutMatrixView<'a, LeafNeighbor>,
     workspace: &'a mut LeafKernelWorkspace,
 }
@@ -387,7 +377,7 @@ impl LeafKernel {
     /// pointer; it performs no runtime ISA or metric dispatch.
     pub fn nearest_neighbors(
         &self,
-        input: LeafInput<'_>,
+        input: MatrixView<'_, f32>,
         output: MutMatrixView<'_, LeafNeighbor>,
         workspace: &mut LeafKernelWorkspace,
     ) -> Result<(), LeafKernelError> {
@@ -517,11 +507,11 @@ where
 /// output or workspace mutation. Runtime is constant apart from view metadata
 /// checks; matrix contents are not scanned.
 fn validate(
-    input: LeafInput<'_>,
+    input: MatrixView<'_, f32>,
     output: &MutMatrixView<'_, LeafNeighbor>,
 ) -> Result<(), LeafKernelError> {
-    let point_count = input.dots.nrows();
-    let dot_columns = input.dots.ncols();
+    let point_count = input.nrows();
+    let dot_columns = input.ncols();
     if point_count > u32::MAX as usize {
         return Err(LeafKernelError::TooManyPoints(point_count));
     }
@@ -532,11 +522,7 @@ fn validate(
         });
     }
     let dots_len = checked_area("leaf dot-product matrix", point_count, dot_columns)?;
-    check_length(
-        "leaf dot-product matrix",
-        input.dots.as_slice().len(),
-        dots_len,
-    )?;
+    check_length("leaf dot-product matrix", input.as_slice().len(), dots_len)?;
     let output_len = checked_area("output", output.nrows(), output.ncols())?;
     check_length("output", output.as_slice().len(), output_len)?;
 
@@ -570,14 +556,14 @@ fn validate(
 /// is returned without entering SIMD traversal. Work is `O(n)`, with at most
 /// `O(n)` retained capacity per buffer.
 fn prepare_workspace<M: KernelMetric>(
-    input: LeafInput<'_>,
+    input: MatrixView<'_, f32>,
     workspace: &mut LeafKernelWorkspace,
 ) -> Result<(), LeafKernelError> {
-    let points = input.dots.nrows();
+    let points = input.nrows();
     if M::LEAF_SCALE.is_some() {
         resize("norms", &mut workspace.norms, points, 0.0)?;
         for (source, norm) in workspace.norms.iter_mut().enumerate() {
-            *norm = M::LEAF_SCALE.transform(input.dots[(source, source)]);
+            *norm = M::LEAF_SCALE.transform(input[(source, source)]);
         }
     } else {
         workspace.norms.clear();
@@ -637,7 +623,7 @@ fn check_length(
 /// insertion to locate its dynamic slice.
 fn process_neighbor_width<F, M>(
     arch: F::Arch,
-    input: LeafInput<'_>,
+    input: MatrixView<'_, f32>,
     neighbor_count: usize,
     output: &mut [LeafNeighbor],
     norms: &[f32],
@@ -672,7 +658,7 @@ fn process_neighbor_width<F, M>(
 /// leaf, keeping array conversion out of candidate insertion.
 fn process_fixed_width<F, M, const N: usize>(
     arch: F::Arch,
-    input: LeafInput<'_>,
+    input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
     norms: &[f32],
     worst: &mut [f32],
@@ -769,7 +755,7 @@ impl NeighborStorage for DynamicNeighborStorage<'_> {
 #[inline(never)]
 fn process_pairs<F, M, R>(
     arch: F::Arch,
-    input: LeafInput<'_>,
+    input: MatrixView<'_, f32>,
     mut output: R,
     norms: &[f32],
     worst: &mut [f32],
@@ -780,9 +766,9 @@ fn process_pairs<F, M, R>(
     R: NeighborStorage,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let point_count = input.dots.nrows();
+    let point_count = input.nrows();
     assert_eq!(
-        input.dots.ncols(),
+        input.ncols(),
         point_count,
         "validated leaf dot matrix must be square"
     );
@@ -796,7 +782,7 @@ fn process_pairs<F, M, R>(
         point_count,
         "validated leaf thresholds must have one value per point"
     );
-    let dots = input.dots.as_slice();
+    let dots = input.as_slice();
     let uses_norms = M::LEAF_SCALE.is_some();
     if uses_norms {
         assert_eq!(
@@ -990,10 +976,8 @@ mod tests {
         dots
     }
 
-    fn test_input(dots: &[f32], points: usize) -> LeafInput<'_> {
-        LeafInput {
-            dots: MatrixView::try_from(dots, points, points).unwrap(),
-        }
+    fn test_input(dots: &[f32], points: usize) -> MatrixView<'_, f32> {
+        MatrixView::try_from(dots, points, points).unwrap()
     }
 
     fn insert_reference(
@@ -1109,8 +1093,8 @@ mod integration_tests {
     use std::cmp::Ordering;
 
     use super::{
-        LeafInput, LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor,
-        leaf_neighbor_count, leaf_output_len,
+        LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
+        leaf_output_len,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
@@ -1151,10 +1135,8 @@ mod integration_tests {
         dots
     }
 
-    fn test_input(dots: &[f32], points: usize) -> LeafInput<'_> {
-        LeafInput {
-            dots: MatrixView::try_from(dots, points, points).unwrap(),
-        }
+    fn test_input(dots: &[f32], points: usize) -> MatrixView<'_, f32> {
+        MatrixView::try_from(dots, points, points).unwrap()
     }
 
     fn brute_force_reference(
@@ -1452,9 +1434,7 @@ mod integration_tests {
     #[test]
     fn rejects_non_square_input_and_invalid_output_dimensions() {
         let dots = [0.0; 6];
-        let non_square = LeafInput {
-            dots: MatrixView::try_from(&dots[..], 2, 3).unwrap(),
-        };
+        let non_square = MatrixView::try_from(&dots[..], 2, 3).unwrap();
         let mut output = [LeafNeighbor::default(); 2];
         let kernel = LeafKernel::new(Metric::L2);
         assert_eq!(
