@@ -3,17 +3,18 @@
  * Licensed under the MIT license.
  */
 
-//! Final graph-degree enforcement through the shared Vamana RobustPrune kernel.
+//! Graph-degree enforcement with the Vamana RobustPrune kernel.
 //!
-//! Candidate merging may produce more than `R` IDs for a point. This stage first
-//! validates every global ID, then processes each point's candidate list in the
-//! caller's Rayon pool. Lists already within the degree bound are returned without
-//! distance work. Overfull lists are converted to source-distance candidates,
-//! passed through RobustPrune, and rewritten from the selected output.
+//! Candidate merging can produce more than `R` IDs for one point. This module
+//! checks every global ID before parallel work starts. It returns a list with at
+//! most `R` IDs without distance work.
 //!
-//! The shared kernel owns occlusion and alpha-round semantics; this adapter owns
-//! only contiguous dataset access and distance specialization for the source
-//! representation.
+//! For a longer list, the module computes each source distance. It sorts the
+//! candidates and calls RobustPrune. The module then writes the selected IDs into
+//! the original list allocation.
+//!
+//! RobustPrune defines occlusion and alpha-round behavior. This module supplies
+//! contiguous vector access and a distance function for input type `T`.
 //!
 //! ```text
 //! candidate lists ──> validate point count and every global ID
@@ -64,10 +65,11 @@ pub(crate) enum FinalizationError {
     TooManyCandidates { actual: usize, max: usize },
 }
 
-/// Per-Rayon-job preparation and kernel state retained across source points.
+/// Reusable buffers for one Rayon job.
 ///
-/// PiPNN owns sorting, allocation, and ID translation. The shared internal
-/// kernel receives only the prepared candidates and an exactly sized state slice.
+/// `pool` stores candidates with source distances. `prepared` stores each
+/// distance and optional non-self ID. `states` stores one RobustPrune state for
+/// each sorted candidate.
 #[derive(Default)]
 struct Workspace {
     pool: Vec<Neighbor<u32>>,
@@ -75,7 +77,7 @@ struct Workspace {
     states: Vec<prune::State>,
 }
 
-/// Validate candidate IDs and prune only lists whose length exceeds graph degree.
+/// Check candidate IDs and prune each list that exceeds the graph degree.
 pub(crate) fn prune_overfull<T>(
     data: MatrixView<'_, T>,
     candidates: Vec<AdjacencyList<u32>>,
@@ -90,7 +92,7 @@ where
     let degree = graph.pruned_degree().get();
     let distance = T::distance(metric, Some(data.ncols()));
 
-    // build_graph installs the complete call tree in the caller-owned pool.
+    // `build_graph` runs this Rayon operation in the pool from the build context.
     #[allow(clippy::disallowed_methods)]
     candidates
         .into_par_iter()
@@ -98,8 +100,8 @@ where
         .map_init(
             Workspace::default,
             |workspace, (source, mut source_candidates)| {
-                // Candidate accumulators already enforce uniqueness. A bounded list
-                // therefore satisfies the graph policy without distance evaluation.
+                // Candidate merging already removes duplicate IDs. A list within
+                // the degree limit needs no distance calculation.
                 if source_candidates.len() <= degree {
                     return Ok(source_candidates);
                 }
@@ -134,9 +136,9 @@ where
                     .try_reserve(candidate_count)
                     .map_err(ANNError::new)?;
 
-                // Sorting/capping precedes source exclusion so filtering cannot
-                // backfill with farther candidates. Passing this witness into
-                // RobustPrune makes source-distance order part of its input type.
+                // Sort all candidates before the code marks a self-edge as absent.
+                // Thus, self-edge removal cannot add a farther candidate. The
+                // `SortedNeighbors` value carries this order into RobustPrune.
                 let sorted = SortedNeighbors::new(&mut workspace.pool, candidate_count);
                 workspace.prepared.extend(sorted.iter().map(|neighbor| {
                     let id = *neighbor.id();

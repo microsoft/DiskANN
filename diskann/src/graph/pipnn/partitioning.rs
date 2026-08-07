@@ -5,37 +5,38 @@
 
 //! Deterministic overlapping partition construction for PiPNN.
 //!
-//! The stage maps real dataset points to bounded leaf ID lists. Numerical work
-//! reuses the partition kernel and dense GEMM. A stage-owned pool leases scratch
-//! to Rayon chunks and takes it back after each chunk; computation never holds
-//! the pool lock, and no thread-local cleanup protocol is required.
+//! This module converts dataset point IDs into bounded leaf ID lists. It uses
+//! dense GEMM and the partition kernel for leader assignment. An `ObjectPool`
+//! supplies one reusable buffer set to each Rayon worker chunk. The pool lock is
+//! not held during gather, GEMM, or top-k selection.
 //!
 //! ```text
-//! replica root IDs ──> work queue
-//!                         │
-//!                         v
-//!                  sample leaders
-//!                         │
-//!        gather stripes ─> GEMM distances ─> nearest leaders
-//!                                             │
-//!                                             v
-//!                                stable scatter by leader
-//!                                  │                   │
-//!                           size <= c_max        oversized cluster
-//!                                  │                   │
-//!                           completed leaf      next recursion level
-//!                                  └──────────┬────────┘
-//!                                             v
-//!                              global small-leaf merge
-//!                                             v
-//!                               coverage/bound validation
+//! replica point IDs ──> work queue
+//!                          │
+//!                          v
+//!                   sample leaders
+//!                          │
+//!         gather stripes ─> GEMM ─> nearest leaders
+//!                                      │
+//!                                      v
+//!                           stable scatter by leader
+//!                              │                 │
+//!                       size <= c_max      oversized cluster
+//!                              │                 │
+//!                       completed leaf      work queue
+//!                              └────────┬────────┘
+//!                                       v
+//!                           merge undersized leaves
+//!                                       │
+//!                                       v
+//!                              check leaf bounds
 //! ```
 //!
-//! | Recursion level | Assignment multiplicity |
+//! | Condition | Assignments per point |
 //! | --- | --- |
 //! | `level < fanout.len()` | `fanout[level]` nearest leaders |
-//! | later levels | one nearest leader until bounded |
-//! | replica boundary | independent deterministic seed |
+//! | `level >= fanout.len()` | one nearest leader |
+//! | new replica | independent deterministic seed |
 
 use std::collections::HashSet;
 
@@ -58,7 +59,7 @@ use super::{
     },
 };
 
-// Private algorithm and batching constants live together. None are user policy.
+// These constants control internal batching and deterministic seed generation.
 const PARTITION_SEED: u64 = 1_000;
 const REPLICA_SEED_STEP: u64 = 7_919;
 const LEADER_CAP: usize = 1_000;
@@ -68,7 +69,7 @@ const MAX_ASSIGNMENT_STRIPE_POINTS: usize = 1_024;
 const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
 const MAX_PARTITION_ITERATIONS: usize = 30;
 
-/// A partition failure with enough context to diagnose non-progressing input.
+/// Error from partition input checks, allocation, or recursion progress.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum PartitionError {
     #[error("PiPNN cannot partition an empty dataset")]
@@ -124,27 +125,27 @@ impl AsPooled<()> for StripeBuffers {
     }
 
     fn modify(&mut self, _: ()) {
-        // Scratch retains its high-water allocation across leases; active
-        // prefixes are established by `assign_stripe` before every read.
+        // Keep the largest allocation across leases. `assign_stripe` defines the
+        // active prefix before each read.
     }
 }
 
-/// Stage-owned high-water scratch storage for partition assignment.
+/// Reusable partition buffers owned by this partition call.
 ///
-/// `ObjectPool` owns the short pop/push lock and returns leases through RAII,
-/// including error and panic paths. Gather, GEMM, and top-k run while only the
-/// leased `StripeBuffers` is held.
+/// `ObjectPool` locks only when it gives or receives a lease. RAII returns each
+/// lease after success, error, or panic. Numerical work holds only the lease.
 type StripeBufferPool = ObjectPool<StripeBuffers>;
 
-/// Partition every configured replica into overlapping bounded leaves.
+/// Partition all configured replicas into overlapping bounded leaves.
 ///
-/// Each oversized work item samples `ceil(p_samp * points)` leaders (clamped
-/// to the private leader bound), assigns every point to its nearest `fanout`
-/// leaders for the current level, and recurses only on oversized clusters.
-/// Levels beyond `fanout.len()` retain one leader assignment. Completed small
-/// leaves are merged without exceeding `c_max`; every input point must remain
-/// covered once per replica. The caller has already selected `A` and `M` and
-/// installed the operation in its pool.
+/// An oversized work item samples `ceil(p_samp * points)` leaders, up to
+/// `LEADER_CAP`. It assigns each point to the configured number of nearest
+/// leaders. It adds each cluster above `c_max` to the work queue.
+///
+/// A level without a configured fanout assigns each point to one leader. The
+/// final merge does not make a leaf larger than `c_max`. Each replica covers
+/// every input point. The caller supplies concrete architecture `A` and metric
+/// `M`.
 pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -226,8 +227,8 @@ where
             .try_reserve_exact(work.len())
             .map_err(ANNError::new)?;
         results.resize_with(work.len(), || None);
-        // build_graph installs this complete private call tree into the
-        // caller-owned pool; the indexed fill cannot escape that pool.
+        // `build_graph` runs this Rayon operation in the pool from the build
+        // context. Each worker writes only to its indexed result slot.
         #[allow(clippy::disallowed_methods)]
         results
             .par_iter_mut()
@@ -337,20 +338,20 @@ fn replica_seed(replica: usize) -> u64 {
     PARTITION_SEED.wrapping_add((replica as u64).wrapping_mul(REPLICA_SEED_STEP))
 }
 
-// A single LCG mixer derives recursive seeds. Wrapping makes the mapping stable
-// across debug/release builds and supported platforms.
+// This LCG derives child seeds. Wrapping arithmetic gives the same mapping in
+// debug and release builds on all supported platforms.
 fn mix_seed(seed: u64, salt: u64) -> u64 {
     seed.wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(salt)
 }
 
-/// Assign each point to its nearest `fanout` sampled leaders.
+/// Assign each point to its nearest sampled leaders.
 ///
-/// Leader vectors are gathered once. Points are processed in cache-sized
-/// stripes, while a worker chunk retains one leased scratch buffer across all of
-/// its stripes. The flat assignment matrix preserves point order and is then
-/// scattered into per-leader clusters; preserving order is required for fixed
-/// seed determinism in later recursion levels.
+/// The function gathers leader vectors once. It divides points into cache-sized
+/// stripes. Each worker chunk reuses one leased buffer set for all its stripes.
+///
+/// The flat assignment matrix keeps point order. The scatter step keeps the same
+/// order in each leader cluster. Recursive sampling depends on this order.
 fn assign_to_leaders<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -381,10 +382,8 @@ where
         .iter_mut()
         .zip(leader_values.chunks_exact(dimension_count))
     {
-        // Leader norms participate in the top-k ordering. Preserve the original
-        // scalar reduction order: reassociating this short setup pass through a
-        // SIMD norm changes low bits and can send near-tied points down different
-        // recursive partition paths.
+        // Leader norms affect top-k order. Use this scalar reduction order.
+        // SIMD reassociation changes low bits and can change a near-tie branch.
         *scale = leader_vector.iter().map(|value| value * value).sum();
         if M::METRIC == Metric::Cosine {
             *scale = scale.sqrt();
@@ -401,8 +400,8 @@ where
     let worker_point_count = checked_area("assignment worker", worker_stripe_count, stripe_points)?;
     let worker_assignment_count = checked_area("assignment worker", worker_point_count, fanout)?;
 
-    // Each worker chunk owns one scratch value and reuses it for its stripes.
-    // build_graph pins this terminal operation to the caller-owned pool.
+    // Each worker chunk reuses one buffer lease for all its stripes.
+    // `build_graph` runs this operation in the pool from the build context.
     #[allow(clippy::disallowed_methods)]
     assignments
         .par_chunks_mut(worker_assignment_count)
@@ -459,13 +458,10 @@ where
     let point_values_len = checked_area("point stripe", point_count, dimensions)?;
     let dots_len = checked_area("dot-product stripe", point_count, leader_count)?;
     let output_len = checked_area("partition assignments", point_count, fanout)?;
-    // Scratch keeps its high-water length and every consumer receives an
-    // explicit active prefix. Resizing to the exact stripe shape would be
-    // correct but re-zeroes the buffer whenever a pooled value moves between
-    // work items with different leader counts: `stripe_points` is derived from
-    // `leader_count`, so the point buffer swings between roughly 768 KiB and 6 MiB
-    // and `Vec::resize` only truncates on the way down, then memsets the whole
-    // delta on the way back up.
+    // Keep each buffer at its largest length and use an explicit active prefix.
+    // Different leader counts change the point buffer from about 768 KiB to
+    // 6 MiB. Exact resizing truncates the buffer and then zeros the full growth
+    // when another work item needs the larger shape.
     grow_fallible(&mut buffers.points, point_values_len, 0.0)?;
     grow_fallible(&mut buffers.dots, dots_len, 0.0)?;
     let StripeBuffers {
@@ -555,12 +551,11 @@ where
     Ok(())
 }
 
-/// Convert the flat point-major assignment matrix into leader-major clusters.
+/// Convert point-major assignments into leader-major clusters.
 ///
-/// Small inputs use one serial exact-capacity pass. Large inputs form at most
-/// one partial cluster set per Rayon worker, then merge each leader independently.
-/// Concatenating partials in stripe order keeps the same member order as the
-/// serial implementation while removing a large serial copy tail.
+/// A small input uses one serial pass with exact capacities. A large input makes
+/// at most one partial cluster set for each Rayon worker. It then merges each
+/// leader independently. Stripe-order concatenation matches serial member order.
 fn scatter_assignments(
     points: &[u32],
     assignments: &[u32],
@@ -577,7 +572,8 @@ fn scatter_assignments(
     let mut partials = Vec::new();
     partials.try_reserve_exact(stripes).map_err(ANNError::new)?;
     partials.resize_with(stripes, || None);
-    // See the pool invariant at the other partition terminal operations.
+    // `build_graph` runs this Rayon operation in the pool from the build context.
+    // Each worker writes only to its indexed partial result.
     #[allow(clippy::disallowed_methods)]
     partials
         .par_iter_mut()
@@ -609,7 +605,8 @@ fn scatter_assignments(
         }
     }
 
-    // See the pool invariant at the other partition terminal operations.
+    // `build_graph` runs this Rayon operation in the pool from the build context.
+    // Each worker creates one independent leader cluster.
     #[allow(clippy::disallowed_methods)]
     sizes
         .into_par_iter()
@@ -776,11 +773,11 @@ fn filled_vec<T: Clone>(len: usize, value: T) -> ANNResult<Vec<T>> {
     Ok(values)
 }
 
-/// Grow `values` to at least `len` elements, never shrinking it.
+/// Grow `values` to at least `len` elements and do not shrink it.
 ///
-/// Callers slice the active prefix themselves. Shrinking would force the next
-/// larger stripe to re-zero the reclaimed tail, which is the dominant cost when
-/// one pooled buffer serves work items with different stripe shapes.
+/// Callers use an explicit active prefix. Shrinking and regrowing the buffer
+/// zeros the reclaimed tail. This zeroing dominates buffer reuse across
+/// different stripe shapes.
 fn grow_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
     if values.len() >= len {
         return Ok(());
@@ -1047,8 +1044,8 @@ mod tests {
         T: crate::utils::VectorRepr + Send + Sync,
     {
         let points = 64;
-        // Partition gathering converts source vectors before GEMM. Exercise conversion
-        // tails around 4-, 8-, and 16-element boundaries and a second 16-lane chunk.
+        // Partition gather converts source vectors before GEMM. Test conversion
+        // tails around 4, 8, 16, and 32 elements.
         for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
             let raw: Vec<u8> = (0..points * dimensions)
                 .map(|index| {
@@ -1107,10 +1104,9 @@ mod tests {
             (((*state >> 40) as f32 / 8_388_608.0) - 1.0) * 1_000.0
         }
 
-        // This fixed case sits on opposite sides of the top-1 boundary depending
-        // on whether leader norms use the original scalar reduction or a SIMD
-        // reassociation. Point/leader dot products still go through the production
-        // GEMM; only the setup norm calculation is under test.
+        // Scalar and SIMD-reassociated leader norms select different top-1
+        // leaders for this case. Dot products still use the production GEMM. The
+        // test changes only the leader-norm reduction.
         let dimensions = 129;
         let mut state = 0x3a85_f952_c718_6e49;
         let point: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
