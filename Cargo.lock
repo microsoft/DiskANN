@@ -670,7 +670,6 @@ dependencies = [
 name = "diskann-label-index"
 version = "0.55.1-pre.1"
 dependencies = [
- "diskann",
  "roaring",
  "serde_json",
  "tempfile",

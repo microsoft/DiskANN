@@ -5,7 +5,6 @@
 
 //! Versioned on-disk label-index encoding, loading, and query evaluation for DiskANN.
 
-use diskann::graph::ext::labeled::QueryLabelProvider;
 use roaring::RoaringBitmap;
 use serde_json::{Map, Value};
 use std::{
@@ -132,8 +131,9 @@ impl std::fmt::Debug for EncodedLabelQuery<'_> {
     }
 }
 
-impl QueryLabelProvider<u32> for EncodedLabelQuery<'_> {
-    fn is_match(&self, vec_id: u32) -> bool {
+impl EncodedLabelQuery<'_> {
+    /// Return whether `vec_id` satisfies this compiled label query.
+    pub fn is_match(&self, vec_id: u32) -> bool {
         if vec_id >= self.num_vectors {
             return false;
         }

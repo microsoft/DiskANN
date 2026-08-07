@@ -12,7 +12,6 @@ clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"
 
 [dependencies]
-diskann.workspace = true
 roaring.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
