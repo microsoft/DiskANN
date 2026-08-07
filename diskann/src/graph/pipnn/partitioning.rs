@@ -10,33 +10,9 @@
 //! supplies one reusable buffer set to each Rayon worker chunk. The pool lock is
 //! not held during gather, GEMM, or top-k selection.
 //!
-//! ```text
-//! replica point IDs ──> work queue
-//!                          │
-//!                          v
-//!                   sample leaders
-//!                          │
-//!         gather stripes ─> GEMM ─> nearest leaders
-//!                                      │
-//!                                      v
-//!                           stable scatter by leader
-//!                              │                 │
-//!                       size <= c_max      oversized cluster
-//!                              │                 │
-//!                       completed leaf      work queue
-//!                              └────────┬────────┘
-//!                                       v
-//!                           merge undersized leaves
-//!                                       │
-//!                                       v
-//!                              check leaf bounds
-//! ```
-//!
-//! | Condition | Assignments per point |
-//! | --- | --- |
-//! | `level < fanout.len()` | `fanout[level]` nearest leaders |
-//! | `level >= fanout.len()` | one nearest leader |
-//! | new replica | independent deterministic seed |
+//! A configured level assigns each point to `fanout[level]` leaders. A deeper
+//! level assigns each point to one leader. Each replica uses a different
+//! deterministic seed.
 
 use std::collections::HashSet;
 
@@ -347,7 +323,7 @@ fn mix_seed(seed: u64, salt: u64) -> u64 {
 
 /// Assign each point to its nearest sampled leaders.
 ///
-/// The function gathers leader vectors once. It divides points into cache-sized
+/// The function gathers leader vectors once. It divides points into bounded
 /// stripes. Each worker chunk reuses one leased buffer set for all its stripes.
 ///
 /// The flat assignment matrix keeps point order. The scatter step keeps the same
@@ -458,10 +434,8 @@ where
     let point_values_len = checked_area("point stripe", point_count, dimensions)?;
     let dots_len = checked_area("dot-product stripe", point_count, leader_count)?;
     let output_len = checked_area("partition assignments", point_count, fanout)?;
-    // Keep each buffer at its largest length and use an explicit active prefix.
-    // Different leader counts change the point buffer from about 768 KiB to
-    // 6 MiB. Exact resizing truncates the buffer and then zeros the full growth
-    // when another work item needs the larger shape.
+    // Keep each buffer at its largest length. Every operation uses an explicit
+    // active prefix.
     grow_fallible(&mut buffers.points, point_values_len, 0.0)?;
     grow_fallible(&mut buffers.dots, dots_len, 0.0)?;
     let StripeBuffers {
@@ -775,9 +749,7 @@ fn filled_vec<T: Clone>(len: usize, value: T) -> ANNResult<Vec<T>> {
 
 /// Grow `values` to at least `len` elements and do not shrink it.
 ///
-/// Callers use an explicit active prefix. Shrinking and regrowing the buffer
-/// zeros the reclaimed tail. This zeroing dominates buffer reuse across
-/// different stripe shapes.
+/// Callers use an explicit active prefix.
 fn grow_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
     if values.len() >= len {
         return Ok(());
