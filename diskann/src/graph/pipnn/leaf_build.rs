@@ -28,7 +28,7 @@ use diskann_vector::distance::Metric;
 use rayon::prelude::*;
 
 use super::leaf_kernel::{
-    LeafInput, LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
+    LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
     leaf_output_len,
 };
 
@@ -356,7 +356,7 @@ where
         },
     })?;
     kernel
-        .nearest_neighbors(LeafInput { dots }, output, &mut buffers.kernel_workspace)
+        .nearest_neighbors(dots, output, &mut buffers.kernel_workspace)
         .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
 
     buffers.prepare_local_adjacency(point_ids.len())?;
