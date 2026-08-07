@@ -3,27 +3,16 @@
  * Licensed under the MIT license.
  */
 
-//! Random-hyperplane LSH (Locality-Sensitive Hashing) for `f32` vectors.
+//! Random-hyperplane locality-sensitive hashing for dataset vectors.
 //!
-//! Computes `Sketch(v) = [v · H_i for i in 0..num_planes]` where each
-//! hyperplane component is sampled from a standard normal distribution. Callers
-//! use differences between two point sketches to derive relative hash bits.
+//! For each point `v`, the module computes
+//! `Sketch(v) = [v · H_i for i in 0..num_planes]`. A seeded random generator
+//! samples each hyperplane component from a standard normal distribution.
+//! HashPrune compares two sketches to make a relative hash.
 //!
-//! ```text
-//! seeded RNG ──> hyperplanes [planes × dimensions] (immutable)
-//!                                      │
-//! source vector ──> worker f32 scratch ──> dot products ──> point sketch [planes]
-//! ```
-//!
-//! | Buffer | Shape | Lifetime |
-//! | --- | --- | --- |
-//! | hyperplanes | `num_planes × ndims` | construction call |
-//! | conversion scratch | `ndims` per Rayon job | reused across points |
-//! | sketches | `npoints × num_planes` | owned by `LshSketches` |
-//!
-//! Sketches are computed in parallel via Rayon, with per-worker `VectorRepr`
-//! conversion so f16, u8, and i8 storage does not require a full upfront f32
-//! copy. `num_planes ≤ 16` keeps every relative hash in a `u16`.
+//! `LshSketches` stores a row-major `npoints × num_planes` matrix. Each Rayon job
+//! uses one `f32` conversion buffer for its source rows. `num_planes` cannot
+//! exceed 16 because each relative hash is a `u16`.
 
 use crate::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_utils::views::MatrixView;
@@ -43,13 +32,10 @@ pub(super) struct LshSketches {
 }
 
 impl LshSketches {
-    /// Compute LSH sketches for `npoints` points of dimension `ndims`.
+    /// Compute one sketch row for each point in `data`.
     ///
-    /// Each worker converts one source row into reusable `f32` scratch, avoiding
-    /// a full-dataset conversion for f16, u8, and i8 inputs.
-    ///
-    /// Caller must be inside `rayon::ThreadPool::install(...)`; parallel work
-    /// runs on the current pool.
+    /// Each worker converts one source row into reusable `f32` storage. The caller
+    /// must run this function inside `rayon::ThreadPool::install(...)`.
     pub(super) fn try_new<T: VectorRepr>(
         data: MatrixView<'_, T>,
         num_planes: usize,
@@ -127,9 +113,7 @@ impl LshSketches {
         self.num_planes
     }
 
-    /// Raw access to the row-major `npoints × num_planes` sketch buffer.
-    /// Callers can scatter-gather a small per-leaf cache of sketches to avoid
-    /// touching the multi-hundred-MB global buffer in tight inner loops.
+    /// Return the row-major `npoints × num_planes` sketch buffer.
     #[inline]
     pub(super) fn sketches(&self) -> &[f32] {
         &self.sketches

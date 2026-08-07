@@ -12,11 +12,12 @@
 //! 2. Compute the lower triangle of `A · Aᵀ`.
 //! 3. Select local neighbors for both points of each pair.
 //! 4. Convert local positions to global point IDs.
-//! 5. Add both edge directions to global candidate lists.
+//! 5. Add both edge directions to direct candidates or HashPrune reservoirs.
 //!
-//! Overlapping leaves run concurrently. A worker locks one destination list only
-//! while it adds one leaf's IDs. Reusable buffers keep their largest allocation.
-//! Each operation uses an explicit active prefix.
+//! Overlapping leaves run concurrently. The direct path locks one destination
+//! list while it adds IDs. The HashPrune path locks one source reservoir while it
+//! adds weighted edges. Reusable buffers keep their largest allocation. Each
+//! operation uses an explicit active prefix.
 
 use std::{collections::TryReserveError, sync::Mutex};
 
@@ -32,7 +33,7 @@ use super::{
     simd::PiPNNSIMDSchema,
 };
 
-/// Failure while converting leaves into direct graph candidates.
+/// Failure while converting leaves into graph candidates.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LeafBuildError {
     #[error("leaf build requires at least one dimension")]
@@ -95,8 +96,9 @@ pub(crate) enum LeafBuildError {
 
 /// Reusable buffers for one Rayon leaf job.
 ///
-/// The numerical vectors keep the largest leaf shape that this job observed.
-/// The job creates local adjacency lists only when the effective `k` is not zero.
+/// The buffers keep the largest leaf shape that this job observed. The direct
+/// path uses `local_adjacency`. The HashPrune path uses the CSR and sketch
+/// buffers.
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
