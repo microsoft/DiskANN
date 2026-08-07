@@ -46,12 +46,19 @@ use diskann_utils::{
     views::{MatrixView, MutMatrixView},
 };
 use diskann_vector::{Norm, distance::Metric, norm::FastL2NormSquared};
+use diskann_wide::{
+    Architecture, SIMDMask, SIMDSelect, SIMDVector,
+    arch::{self, Target1},
+};
 use rand::{SeedableRng, prelude::IndexedRandom};
 use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    partition_kernel::{PartitionInput, PartitionKernel, PartitionScales},
+    kernel_metric::{KernelMetric, MetricVisitor, visit_metric},
+    partition_kernel::{
+        PartitionInput, PartitionKernelWorkspace, PartitionScales, nearest_leaders_for,
+    },
 };
 
 // Private algorithm and batching constants live together. None are user policy.
@@ -111,6 +118,7 @@ struct StripeBuffers {
     points: Vec<f32>,
     dots: Vec<f32>,
     point_scales: Vec<f32>,
+    kernel: PartitionKernelWorkspace,
 }
 
 impl AsPooled<()> for StripeBuffers {
@@ -147,6 +155,70 @@ pub(crate) fn partition<T>(
 where
     T: VectorRepr + Send + Sync,
 {
+    arch::dispatch1_no_features(
+        RunPartitionStage,
+        PartitionStageCall {
+            data,
+            config,
+            metric,
+        },
+    )
+}
+
+struct PartitionStageCall<'a, T> {
+    data: MatrixView<'a, T>,
+    config: &'a PiPNNConfig,
+    metric: Metric,
+}
+
+struct RunPartitionStage;
+
+impl<A, T> Target1<A, ANNResult<Vec<Vec<u32>>>, PartitionStageCall<'_, T>> for RunPartitionStage
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    T: VectorRepr + Send + Sync,
+{
+    fn run(self, arch: A, call: PartitionStageCall<'_, T>) -> ANNResult<Vec<Vec<u32>>> {
+        visit_metric(call.metric, ExecutePartitionStage { arch, call })
+    }
+}
+
+struct ExecutePartitionStage<'a, A, T> {
+    arch: A,
+    call: PartitionStageCall<'a, T>,
+}
+
+impl<A, T> MetricVisitor for ExecutePartitionStage<'_, A, T>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    T: VectorRepr + Send + Sync,
+{
+    type Output = ANNResult<Vec<Vec<u32>>>;
+
+    fn visit<M: KernelMetric>(self) -> Self::Output {
+        partition_for::<A, M, T>(self.arch, self.call.data, self.call.config)
+    }
+}
+
+fn partition_for<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    config: &PiPNNConfig,
+) -> ANNResult<Vec<Vec<u32>>>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
+    T: VectorRepr + Send + Sync,
+{
     let points = data.nrows();
     if points == 0 {
         return Err(ANNError::new(PartitionError::EmptyDataset));
@@ -159,15 +231,11 @@ where
     }
 
     let mut leaves = Vec::new();
-    // Prepare metric and ISA dispatch before replicas spawn Rayon work. The
-    // Copy handle is shared read-only; every stripe calls its direct function
-    // pointer instead of redispatching in the recursive hot path.
-    let kernel = PartitionKernel::new(metric);
     let stripe_buffers = StripeBufferPool::new((), 0, None);
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves =
-            partition_replica(data, config, metric, &kernel, seed, &stripe_buffers)?;
+            partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
         leaves
             .try_reserve(replica_leaves.len())
             .map_err(ANNError::new)?;
@@ -177,15 +245,19 @@ where
     Ok(leaves)
 }
 
-fn partition_replica<T>(
+fn partition_replica<A, M, T>(
+    arch: A,
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
-    metric: Metric,
-    kernel: &PartitionKernel,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
     T: VectorRepr + Send + Sync,
 {
     let initial_indices = point_ids(data.nrows())?;
@@ -222,11 +294,10 @@ where
             .par_iter_mut()
             .zip(work.into_par_iter())
             .for_each(|(slot, item)| {
-                *slot = Some(partition_one_level(
+                *slot = Some(partition_one_level::<A, M, T>(
+                    arch,
                     data,
                     config,
-                    metric,
-                    kernel,
                     item,
                     stripe_buffers,
                 ));
@@ -259,15 +330,19 @@ where
     }))
 }
 
-fn partition_one_level<T>(
+fn partition_one_level<A, M, T>(
+    arch: A,
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
-    metric: Metric,
-    kernel: &PartitionKernel,
     item: WorkItem,
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<(Vec<WorkItem>, Vec<Vec<u32>>)>
 where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
     T: VectorRepr + Send + Sync,
 {
     let points = item.indices.len();
@@ -277,15 +352,8 @@ where
         config.p_samp,
         mix_seed(item.seed, points as u64),
     )?;
-    let clusters = assign_to_leaders(
-        data,
-        &item.indices,
-        &leaders,
-        fanout,
-        metric,
-        kernel,
-        stripe_buffers,
-    )?;
+    let clusters =
+        assign_to_leaders::<A, M, T>(arch, data, &item.indices, &leaders, fanout, stripe_buffers)?;
 
     let mut pending = Vec::new();
     let mut finished = Vec::new();
@@ -344,16 +412,20 @@ fn mix_seed(seed: u64, salt: u64) -> u64 {
 /// its stripes. The flat assignment matrix preserves point order and is then
 /// scattered into per-leader clusters; preserving order is required for fixed
 /// seed determinism in later recursion levels.
-fn assign_to_leaders<T>(
+fn assign_to_leaders<A, M, T>(
+    arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
     leader_ids: &[u32],
     fanout: usize,
-    metric: Metric,
-    kernel: &PartitionKernel,
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
     T: VectorRepr + Send + Sync,
 {
     let dimension_count = data.ncols();
@@ -361,7 +433,7 @@ where
     let mut leader_values = filled_vec(leader_values_len, 0.0f32)?;
     gather_vectors(data, leader_ids, &mut leader_values)?;
 
-    let mut leader_scales = if matches!(metric, Metric::L2 | Metric::Cosine) {
+    let mut leader_scales = if matches!(M::METRIC, Metric::L2 | Metric::Cosine) {
         filled_vec(leader_ids.len(), 0.0f32)?
     } else {
         Vec::new()
@@ -375,7 +447,7 @@ where
         // SIMD norm changes low bits and can send near-tied points down different
         // recursive partition paths.
         *scale = leader_vector.iter().map(|value| value * value).sum();
-        if metric == Metric::Cosine {
+        if M::METRIC == Metric::Cosine {
             *scale = scale.sqrt();
         }
     }
@@ -405,13 +477,12 @@ where
             {
                 let first_point = worker_first + stripe * stripe_points;
                 let stripe_point_count = stripe_assignments.len() / fanout;
-                assign_stripe(
+                assign_stripe::<A, M, T>(
+                    arch,
                     data,
                     &point_ids[first_point..first_point + stripe_point_count],
                     &leader_values,
                     &leader_scales,
-                    metric,
-                    kernel,
                     fanout,
                     &mut buffers,
                     stripe_assignments,
@@ -425,18 +496,22 @@ where
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn assign_stripe<T>(
+fn assign_stripe<A, M, T>(
+    arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
     leader_values: &[f32],
     leader_scales: &[f32],
-    metric: Metric,
-    kernel: &PartitionKernel,
     fanout: usize,
     buffers: &mut StripeBuffers,
     assignments: &mut [u32],
 ) -> ANNResult<()>
 where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
     T: VectorRepr,
 {
     let point_count = point_ids.len();
@@ -458,6 +533,7 @@ where
         points: point_buffer,
         dots: dot_buffer,
         point_scales: point_scale_buffer,
+        kernel: kernel_workspace,
     } = buffers;
     let point_values = &mut point_buffer[..point_values_len];
     let dots = &mut dot_buffer[..dots_len];
@@ -476,7 +552,7 @@ where
     )
     .map_err(ANNError::new)?;
 
-    let point_scales = if metric == Metric::Cosine {
+    let point_scales = if M::METRIC == Metric::Cosine {
         grow_fallible(point_scale_buffer, point_count, 0.0)?;
         let point_scales = &mut point_scale_buffer[..point_count];
         for (scale, point_values) in point_scales
@@ -489,7 +565,7 @@ where
     } else {
         &[]
     };
-    let scales = match metric {
+    let scales = match M::METRIC {
         Metric::L2 => PartitionScales::L2 {
             leader_squared_norms: leader_scales,
         },
@@ -513,9 +589,13 @@ where
             actual: error.into_inner().len(),
         })
     })?;
-    kernel
-        .nearest_leaders(PartitionInput { dots, scales }, output)
-        .map_err(ANNError::new)
+    nearest_leaders_for::<A, M>(
+        arch,
+        PartitionInput { dots, scales },
+        output,
+        kernel_workspace,
+    )
+    .map_err(ANNError::new)
 }
 
 fn gather_vectors<T>(data: MatrixView<'_, T>, indices: &[u32], output: &mut [f32]) -> ANNResult<()>
@@ -1044,13 +1124,12 @@ mod tests {
             .collect();
         let data = MatrixView::try_from(data.as_slice(), 3, dimensions).unwrap();
 
-        let clusters = assign_to_leaders(
+        let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
+            diskann_wide::ARCH,
             data,
             &[2],
             &[0, 1],
             1,
-            Metric::L2,
-            &PartitionKernel::new(Metric::L2),
             &StripeBufferPool::new((), 0, None),
         )
         .unwrap();
@@ -1118,13 +1197,12 @@ mod tests {
         let data = MatrixView::try_from(data.as_slice(), points, 1).unwrap();
         let point_ids: Vec<u32> = (0..points as u32).collect();
 
-        let clusters = assign_to_leaders(
+        let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
+            diskann_wide::ARCH,
             data,
             &point_ids,
             &[0, 2_047],
             1,
-            Metric::L2,
-            &PartitionKernel::new(Metric::L2),
             &StripeBufferPool::new((), 0, None),
         )
         .unwrap();
