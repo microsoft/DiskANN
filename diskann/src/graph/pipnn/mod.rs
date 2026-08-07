@@ -86,8 +86,8 @@
 //! ## [`leaf_kernel`]
 //!
 //! Leaf callers compute a lower-triangular point-by-point dot matrix with
-//! `sgemm_aat_lower`. [`leaf_kernel::LeafInput`] borrows that matrix;
-//! [`leaf_kernel::LeafKernelWorkspace`] owns reusable per-worker scratch; and
+//! `sgemm_aat_lower`. [`leaf_kernel::LeafKernelWorkspace`] owns reusable
+//! per-worker scratch, and
 //! [`leaf_kernel::LeafKernel`] writes sorted [`leaf_kernel::LeafNeighbor`] values
 //! to a caller-owned matrix. [`leaf_kernel::leaf_neighbor_count`] derives each
 //! leaf's width from its point count and requested `k`. Module documentation
