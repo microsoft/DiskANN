@@ -6,15 +6,15 @@
 //! Graph-degree enforcement with the Vamana RobustPrune kernel.
 //!
 //! Candidate merging can produce more than `R` IDs for one point. This module
-//! checks every global ID before parallel work starts. It returns a list with at
-//! most `R` IDs without distance work.
+//! checks every global ID before parallel work starts. A list at or below `R`
+//! returns without distance calculations.
 //!
 //! For a longer list, the module computes each source distance. It sorts the
 //! candidates and calls RobustPrune. The module then writes the selected IDs into
 //! the original list allocation.
 //!
 //! RobustPrune defines occlusion and alpha-round behavior. This module supplies
-//! contiguous vector access and a distance function for input type `T`.
+//! source vectors and metric distances.
 
 use crate::{
     ANNError, ANNResult,
@@ -45,16 +45,15 @@ pub(crate) enum FinalizationError {
     TooManyCandidates { actual: usize, max: usize },
 }
 
-/// Reusable buffers for one Rayon job.
+/// RobustPrune state for one Rayon job.
 ///
-/// `pool` stores candidates with source distances. `prepared` stores each
-/// distance and optional non-self ID. `states` stores one RobustPrune state for
-/// each sorted candidate.
+/// `candidate_slots` and `prune_states` stay positionally aligned with
+/// `sorted_candidates`.
 #[derive(Default)]
-struct Workspace {
-    pool: Vec<Neighbor<u32>>,
-    prepared: Vec<(f32, Option<u32>)>,
-    states: Vec<prune::State>,
+struct PruneWorkspace {
+    sorted_candidates: Vec<Neighbor<u32>>,
+    candidate_slots: Vec<(f32, Option<u32>)>,
+    prune_states: Vec<prune::State>,
 }
 
 /// Check candidate IDs and prune each list that exceeds the graph degree.
@@ -78,7 +77,7 @@ where
         .into_par_iter()
         .enumerate()
         .map_init(
-            Workspace::default,
+            PruneWorkspace::default,
             |workspace, (source, mut source_candidates)| {
                 // Candidate merging already removes duplicate IDs. A list within
                 // the degree limit needs no distance calculation.
@@ -88,13 +87,13 @@ where
 
                 let source_id = u32::try_from(source).map_err(ANNError::new)?;
                 let source_vector = data.row(source);
-                workspace.pool.clear();
+                workspace.sorted_candidates.clear();
                 workspace
-                    .pool
+                    .sorted_candidates
                     .try_reserve(source_candidates.len())
                     .map_err(ANNError::new)?;
                 workspace
-                    .pool
+                    .sorted_candidates
                     .extend(source_candidates.iter().copied().map(|candidate| {
                         Neighbor::new(
                             candidate,
@@ -103,44 +102,47 @@ where
                         )
                     }));
 
-                let candidate_count = workspace.pool.len();
+                let candidate_count = workspace.sorted_candidates.len();
                 if candidate_count > u16::MAX as usize {
                     return Err(ANNError::new(FinalizationError::TooManyCandidates {
                         actual: candidate_count,
                         max: u16::MAX as usize,
                     }));
                 }
-                workspace.prepared.clear();
+                workspace.candidate_slots.clear();
                 workspace
-                    .prepared
+                    .candidate_slots
                     .try_reserve(candidate_count)
                     .map_err(ANNError::new)?;
 
                 // Sort all candidates before the code marks a self-edge as absent.
                 // Thus, self-edge removal cannot add a farther candidate. The
                 // `SortedNeighbors` value carries this order into RobustPrune.
-                let sorted = SortedNeighbors::new(&mut workspace.pool, candidate_count);
-                workspace.prepared.extend(sorted.iter().map(|neighbor| {
-                    let id = *neighbor.id();
-                    (*neighbor.distance(), (id != source_id).then_some(id))
-                }));
+                let sorted =
+                    SortedNeighbors::new(&mut workspace.sorted_candidates, candidate_count);
                 workspace
-                    .states
+                    .candidate_slots
+                    .extend(sorted.iter().map(|neighbor| {
+                        let id = *neighbor.id();
+                        (*neighbor.distance(), (id != source_id).then_some(id))
+                    }));
+                workspace
+                    .prune_states
                     .try_reserve(
                         workspace
-                            .prepared
+                            .candidate_slots
                             .len()
-                            .saturating_sub(workspace.states.len()),
+                            .saturating_sub(workspace.prune_states.len()),
                     )
                     .map_err(ANNError::new)?;
                 workspace
-                    .states
-                    .resize(workspace.prepared.len(), prune::State::default());
+                    .prune_states
+                    .resize(workspace.candidate_slots.len(), prune::State::default());
 
                 let selected = prune::robust_prune(
                     &sorted,
-                    &workspace.prepared,
-                    workspace.states.as_mut_slice(),
+                    &workspace.candidate_slots,
+                    workspace.prune_states.as_mut_slice(),
                     degree,
                     graph.alpha(),
                     graph.prune_kind(),
@@ -153,7 +155,7 @@ where
                 );
 
                 let mut guard = source_candidates.resize(selected);
-                for (destination, state) in guard.iter_mut().zip(workspace.states.iter()) {
+                for (destination, state) in guard.iter_mut().zip(workspace.prune_states.iter()) {
                     *destination = *sorted[state.neighbor as usize].id();
                 }
                 guard.finish(selected);

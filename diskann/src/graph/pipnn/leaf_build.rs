@@ -194,7 +194,7 @@ impl DirectCandidates {
         local_adjacency: &[AdjacencyList<u32>],
     ) -> Result<(), LeafBuildError> {
         for (&source, additions) in point_ids.iter().zip(local_adjacency) {
-            // `build_leaf` checks every point ID before this append.
+            // `add_direct_leaf_candidates` checks every point ID before this append.
             let candidates = &self.lists[source as usize];
             let mut candidates = candidates
                 .lock()
@@ -220,9 +220,10 @@ impl DirectCandidates {
     }
 }
 
-/// Build symmetric leaf-local k-NN graphs and return unique global candidates.
+/// Build direct graph candidates from all overlapping leaves.
 ///
-/// The caller supplies concrete architecture `A` and metric `M`.
+/// Each selected leaf pair contributes both edge directions. Candidate lists use
+/// global dataset IDs and contain no duplicate IDs.
 #[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
@@ -249,7 +250,7 @@ where
     leaves.par_iter().enumerate().try_for_each_init(
         LeafBuffers::default,
         |buffers, (leaf, point_ids)| {
-            build_leaf::<A, M, T>(
+            add_direct_leaf_candidates::<A, M, T>(
                 arch,
                 data,
                 leaf,
@@ -263,12 +264,12 @@ where
     candidates.into_lists()
 }
 
-/// Build and publish the symmetric neighbor lists for one leaf.
+/// Add one leaf's symmetric neighbors to the direct candidate lists.
 ///
-/// The function checks all IDs before it indexes the dataset. IDs must be
-/// strictly increasing. Reusable vectors can be longer than this leaf. Every
-/// read and write uses the active length from `prepare`.
-fn build_leaf<A, M, T>(
+/// The function rejects empty, duplicate, unsorted, or out-of-range point IDs.
+/// Reusable buffers can be longer than this leaf, so all accesses use the current
+/// leaf shape.
+fn add_direct_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     leaf: usize,
