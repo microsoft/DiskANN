@@ -143,7 +143,7 @@ pub enum PartitionKernelError {
 pub(crate) fn nearest_leaders<A, M>(
     arch: A,
     input: PartitionInput<'_>,
-    mut output: MutMatrixView<'_, u32>,
+    output: MutMatrixView<'_, u32>,
     workspace: &mut PartitionKernelWorkspace,
 ) -> Result<(), PartitionKernelError>
 where
@@ -160,21 +160,7 @@ where
     }
 
     workspace.prepare(fanout)?;
-    process_points::<A::f32x16, M>(
-        arch,
-        input.dots,
-        scales,
-        output.as_mut_slice(),
-        &mut workspace.tracker,
-    );
-    if let Some(point) = output
-        .as_slice()
-        .chunks_exact(fanout)
-        .position(|assignments| assignments[fanout - 1] == u32::MAX)
-    {
-        return Err(PartitionKernelError::InsufficientRankableLeaders { point, fanout });
-    }
-    Ok(())
+    process_points::<A::f32x16, M>(arch, input.dots, scales, output, &mut workspace.tracker)
 }
 
 /// Checked norm slices in the storage form that `M` requires.
@@ -302,7 +288,8 @@ fn check_length(
 /// 1. Convert the point norm to the unit that `M` requires.
 /// 2. Process complete SIMD groups.
 /// 3. Process the scalar tail.
-/// 4. Copy the sorted leader IDs to the output row.
+/// 4. Check that the tracker is full.
+/// 5. Copy the sorted leader IDs to the output row.
 ///
 /// `tracker` has `fanout` entries and stays sorted after each insertion. Strict
 /// comparisons keep leader scan order for equal scores. They do not rank NaN.
@@ -313,9 +300,10 @@ fn process_points<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
     scales: ScaleSlices<'_>,
-    output: &mut [u32],
+    mut output: MutMatrixView<'_, u32>,
     tracker: &mut [(u32, f32)],
-) where
+) -> Result<(), PartitionKernelError>
+where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
@@ -341,12 +329,14 @@ fn process_points<F, M>(
             "validated leader scales must match leader count"
         );
     }
-    let fanout = tracker.len();
+    let fanout = output.ncols();
+    debug_assert!(fanout > 0);
+    debug_assert_eq!(tracker.len(), fanout);
     // Reset the tracker for each point. No assignment state can pass from one
     // output row to another.
     for (point, (point_dots, point_output)) in dots
         .row_iter()
-        .zip(output.chunks_exact_mut(fanout))
+        .zip(output.as_mut_slice().chunks_exact_mut(fanout))
         .enumerate()
     {
         tracker.fill((u32::MAX, f32::INFINITY));
@@ -393,10 +383,14 @@ fn process_points<F, M>(
                 M::partition_distance_scalar(dot, point_scale, leader_scale),
             );
         }
+        if tracker[fanout - 1].0 == u32::MAX {
+            return Err(PartitionKernelError::InsufficientRankableLeaders { point, fanout });
+        }
         // Distances stay in the workspace. Partition construction needs only the
         // leader-column positions in nearest-first order.
         copy_leader_ids(tracker, point_output);
     }
+    Ok(())
 }
 
 /// Insert competitive SIMD lanes in increasing leader order.
