@@ -304,8 +304,9 @@ where
 
 /// Run the PiPNN graph pipeline for one selected metric implementation.
 ///
-/// The function builds overlapping leaves, merges direct candidates, and applies
-/// final graph-degree pruning.
+/// The function builds overlapping leaves and runs the configured candidate
+/// merge. It prunes direct candidates to graph degree. It prunes HashPrune
+/// candidates when `final_prune` is true.
 fn build_graph_for<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
