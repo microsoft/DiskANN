@@ -3,16 +3,16 @@
  * Licensed under the MIT license.
  */
 
-//! Prepared nearest-leader selection for PiPNN partition assignment.
+//! Nearest-leader selection for PiPNN partition assignment.
 //!
 //! Caller supplies a row-major point-by-leader dot matrix plus metric-specific
 //! [`PartitionScales`]. Output contains sorted leader-column positions for each
 //! point; fanout is the output width and cannot exceed the leader count.
 //!
-//! Runtime callers may use [`PartitionKernel`]; production dispatches once at
-//! the partition-stage boundary and calls the generic kernel directly. Calls
-//! validate row counts, scale variants and lengths, fanout, and leader-ID
-//! representation before output mutation or unchecked SIMD loads.
+//! Callers select architecture and metric once outside partition recursion,
+//! then call [`nearest_leaders`] with concrete `A` and `M` types. Calls validate
+//! row counts, scale variants and lengths, fanout, and leader-ID representation
+//! before output mutation or unchecked SIMD loads.
 //!
 //! L2 omits the point norm because it cannot change one point's leader order.
 //! Strict comparisons preserve scan order for ties and leave NaN non-rankable.
@@ -23,10 +23,9 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
-    arch::{self, Target1},
 };
 
-use super::kernel_metric::{KernelMetric, MetricVisitor, ScaleKind, visit_metric};
+use super::kernel_metric::{KernelMetric, ScaleKind};
 
 /// Reusable nearest-leader tracker for one partition worker.
 #[derive(Debug, Default)]
@@ -79,17 +78,17 @@ pub enum PartitionScales<'a> {
 /// One row-major point-by-leader dot-product tile.
 ///
 /// Matrix rows are points, columns are leaders, and [`Self::scales`] must match
-/// the metric used to prepare [`PartitionKernel`]. This value only borrows input;
-/// the prepared kernel stores no tile state.
+/// concrete metric selected by the enclosing build. This value only borrows
+/// input; the numerical kernel stores no tile state.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionInput<'a> {
     /// One point per matrix row and one leader per column.
     pub dots: MatrixView<'a, f32>,
-    /// Normalization inputs matching the prepared metric.
+    /// Normalization inputs matching concrete metric `M`.
     pub scales: PartitionScales<'a>,
 }
 
-/// Validation error returned by [`PartitionKernel::nearest_leaders`].
+/// Validation error returned by [`nearest_leaders`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PartitionKernelError {
     /// The output matrix does not match the input row count.
@@ -114,8 +113,8 @@ pub enum PartitionKernelError {
         /// Supplied length.
         actual: usize,
     },
-    /// Scale inputs do not match the metric used to prepare the kernel.
-    #[error("partition scales do not match prepared {expected} metric")]
+    /// Scale inputs do not match concrete metric `M`.
+    #[error("partition scales do not match selected {expected} metric")]
     InvalidScales {
         /// Expected scale layout.
         expected: &'static str,
@@ -147,91 +146,12 @@ pub enum PartitionKernelError {
     },
 }
 
-/// Inputs for one immediate architecture/metric dispatch.
-#[derive(Debug)]
-struct PartitionCall<'a> {
-    input: PartitionInput<'a>,
-    output: MutMatrixView<'a, u32>,
-    workspace: &'a mut PartitionKernelWorkspace,
-}
-
-/// Partition-kernel convenience API for callers with a runtime [`Metric`].
-#[derive(Clone, Copy, Debug)]
-pub struct PartitionKernel {
-    metric: Metric,
-}
-
-impl PartitionKernel {
-    /// Construct a kernel selector for `metric`.
-    pub const fn new(metric: Metric) -> Self {
-        Self { metric }
-    }
-
-    /// Select nearest leader positions for every input point.
-    ///
-    /// `output.nrows()` must equal `input.dots.nrows()` and fanout, represented
-    /// by `output.ncols()`, must not exceed the leader count.
-    pub fn nearest_leaders(
-        &self,
-        input: PartitionInput<'_>,
-        output: MutMatrixView<'_, u32>,
-        workspace: &mut PartitionKernelWorkspace,
-    ) -> Result<(), PartitionKernelError> {
-        arch::dispatch1_no_features(
-            RunPartition {
-                metric: self.metric,
-            },
-            PartitionCall {
-                input,
-                output,
-                workspace,
-            },
-        )
-    }
-}
-
-struct RunPartition {
-    metric: Metric,
-}
-
-impl<A> Target1<A, Result<(), PartitionKernelError>, PartitionCall<'_>> for RunPartition
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    fn run(self, arch: A, call: PartitionCall<'_>) -> Result<(), PartitionKernelError> {
-        visit_metric(self.metric, ExecutePartition { arch, call })
-    }
-}
-
-struct ExecutePartition<'a, A> {
-    arch: A,
-    call: PartitionCall<'a>,
-}
-
-impl<A> MetricVisitor for ExecutePartition<'_, A>
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    type Output = Result<(), PartitionKernelError>;
-
-    fn visit<M: KernelMetric>(self) -> Self::Output {
-        nearest_leaders_for::<A, M>(
-            self.arch,
-            self.call.input,
-            self.call.output,
-            self.call.workspace,
-        )
-    }
-}
-
-/// Architecture/metric-specialized partition kernel used by stage dispatch.
-pub(crate) fn nearest_leaders_for<A, M>(
+/// Select nearest leader positions for every input point.
+///
+/// `output.nrows()` must equal `input.dots.nrows()` and fanout, represented by
+/// `output.ncols()`, must not exceed the leader count. `A` and `M` must already
+/// have been selected at the enclosing build boundary.
+pub(crate) fn nearest_leaders<A, M>(
     arch: A,
     input: PartitionInput<'_>,
     mut output: MutMatrixView<'_, u32>,
@@ -565,6 +485,64 @@ fn copy_leader_ids(tracker: &[(u32, f32)], assignments: &mut [u32]) {
 }
 
 #[cfg(test)]
+struct DispatchedPartitionCall<'a> {
+    input: PartitionInput<'a>,
+    output: MutMatrixView<'a, u32>,
+    workspace: &'a mut PartitionKernelWorkspace,
+}
+
+#[cfg(test)]
+struct DispatchPartitionForTest(Metric);
+
+#[cfg(test)]
+impl<A>
+    diskann_wide::arch::Target1<A, Result<(), PartitionKernelError>, DispatchedPartitionCall<'_>>
+    for DispatchPartitionForTest
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn run(self, arch: A, call: DispatchedPartitionCall<'_>) -> Result<(), PartitionKernelError> {
+        use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+
+        match self.0 {
+            Metric::L2 => nearest_leaders::<A, L2>(arch, call.input, call.output, call.workspace),
+            Metric::Cosine => {
+                nearest_leaders::<A, Cosine>(arch, call.input, call.output, call.workspace)
+            }
+            Metric::CosineNormalized => nearest_leaders::<A, CosineNormalized>(
+                arch,
+                call.input,
+                call.output,
+                call.workspace,
+            ),
+            Metric::InnerProduct => {
+                nearest_leaders::<A, InnerProduct>(arch, call.input, call.output, call.workspace)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn dispatch_nearest_leaders(
+    metric: Metric,
+    input: PartitionInput<'_>,
+    output: MutMatrixView<'_, u32>,
+    workspace: &mut PartitionKernelWorkspace,
+) -> Result<(), PartitionKernelError> {
+    diskann_wide::arch::dispatch1_no_features(
+        DispatchPartitionForTest(metric),
+        DispatchedPartitionCall {
+            input,
+            output,
+            workspace,
+        },
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
 
@@ -663,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn cosine_special_norms_match_scalar_and_prepared_dispatch() {
+    fn cosine_special_norms_match_scalar_and_dispatched_kernel() {
         let leader_count = 17;
         let point_scales = [0.0, f32::MIN_POSITIVE / 2.0, f32::MIN_POSITIVE, f32::NAN];
         let dots = vec![1.0; point_scales.len() * leader_count];
@@ -685,13 +663,13 @@ mod tests {
         let mut expected = vec![u32::MAX; point_scales.len() * 2];
         scalar_traversal_reference::<Cosine>(input, 2, &mut expected);
         let mut actual = vec![u32::MAX; point_scales.len() * 2];
-        PartitionKernel::new(Metric::Cosine)
-            .nearest_leaders(
-                input,
-                MutMatrixView::try_from(actual.as_mut_slice(), point_scales.len(), 2).unwrap(),
-                &mut PartitionKernelWorkspace::new(),
-            )
-            .unwrap();
+        dispatch_nearest_leaders(
+            Metric::Cosine,
+            input,
+            MutMatrixView::try_from(actual.as_mut_slice(), point_scales.len(), 2).unwrap(),
+            &mut PartitionKernelWorkspace::new(),
+        )
+        .unwrap();
 
         assert_eq!(actual, expected);
         assert_eq!(&actual[..4], &[0, 1, 0, 1]);
@@ -729,8 +707,8 @@ mod tests {
 )]
 mod integration_tests {
     use super::{
-        PartitionInput, PartitionKernel, PartitionKernelError, PartitionKernelWorkspace,
-        PartitionScales,
+        PartitionInput, PartitionKernelError, PartitionKernelWorkspace, PartitionScales,
+        dispatch_nearest_leaders,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
@@ -868,7 +846,8 @@ mod integration_tests {
         fanout: usize,
     ) -> Result<Vec<u32>, PartitionKernelError> {
         let mut output = vec![u32::MAX; input.dots.nrows() * fanout];
-        PartitionKernel::new(metric).nearest_leaders(
+        dispatch_nearest_leaders(
+            metric,
             input,
             MutMatrixView::try_from(output.as_mut_slice(), input.dots.nrows(), fanout).unwrap(),
             &mut PartitionKernelWorkspace::new(),
@@ -877,7 +856,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn prepared_dispatch_matches_reference_across_simd_width_boundaries() {
+    fn dispatched_kernel_matches_reference_across_simd_width_boundaries() {
         for metric in [
             Metric::L2,
             Metric::Cosine,
@@ -1060,7 +1039,8 @@ mod integration_tests {
         let valid_input = test_input(Metric::InnerProduct, &dots, 2, 3, &[], &[]);
         let mut wrong_output = [u32::MAX; 3];
         assert_eq!(
-            PartitionKernel::new(Metric::InnerProduct).nearest_leaders(
+            dispatch_nearest_leaders(
+                Metric::InnerProduct,
                 valid_input,
                 MutMatrixView::try_from(&mut wrong_output[..], 1, 3).unwrap(),
                 &mut PartitionKernelWorkspace::new(),
