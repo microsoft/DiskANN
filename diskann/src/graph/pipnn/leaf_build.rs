@@ -23,11 +23,18 @@ use std::{collections::TryReserveError, sync::Mutex};
 use crate::{graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
+use diskann_wide::{
+    Architecture, SIMDMask, SIMDSelect, SIMDVector,
+    arch::{self, Target1},
+};
 use rayon::prelude::*;
 
-use super::leaf_kernel::{
-    LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
-    leaf_output_len,
+use super::{
+    kernel_metric::{KernelMetric, MetricVisitor, visit_metric},
+    leaf_kernel::{
+        LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, leaf_output_len,
+        nearest_neighbors_for,
+    },
 };
 
 /// Failure while converting leaves into direct graph candidates.
@@ -216,7 +223,6 @@ impl DirectCandidates {
 }
 
 /// Build symmetric leaf-local k-NN graphs and retain every unique global candidate.
-#[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
 pub(crate) fn build_leaf_candidates<T>(
     data: MatrixView<'_, T>,
     leaves: Vec<Vec<u32>>,
@@ -224,6 +230,84 @@ pub(crate) fn build_leaf_candidates<T>(
     metric: Metric,
 ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
 where
+    T: VectorRepr + 'static,
+{
+    arch::dispatch1_no_features(
+        RunLeafStage,
+        LeafStageCall {
+            data,
+            leaves,
+            requested_k,
+            metric,
+        },
+    )
+}
+
+struct LeafStageCall<'a, T> {
+    data: MatrixView<'a, T>,
+    leaves: Vec<Vec<u32>>,
+    requested_k: usize,
+    metric: Metric,
+}
+
+struct RunLeafStage;
+
+impl<A, T> Target1<A, Result<Vec<AdjacencyList<u32>>, LeafBuildError>, LeafStageCall<'_, T>>
+    for RunLeafStage
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    T: VectorRepr + 'static,
+{
+    fn run(
+        self,
+        arch: A,
+        call: LeafStageCall<'_, T>,
+    ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError> {
+        visit_metric(call.metric, ExecuteLeafStage { arch, call })
+    }
+}
+
+struct ExecuteLeafStage<'a, A, T> {
+    arch: A,
+    call: LeafStageCall<'a, T>,
+}
+
+impl<A, T> MetricVisitor for ExecuteLeafStage<'_, A, T>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    T: VectorRepr + 'static,
+{
+    type Output = Result<Vec<AdjacencyList<u32>>, LeafBuildError>;
+
+    fn visit<M: KernelMetric>(self) -> Self::Output {
+        build_leaf_candidates_for::<A, M, T>(
+            self.arch,
+            self.call.data,
+            self.call.leaves,
+            self.call.requested_k,
+        )
+    }
+}
+
+#[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
+fn build_leaf_candidates_for<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    leaves: Vec<Vec<u32>>,
+    requested_k: usize,
+) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
     T: VectorRepr + 'static,
 {
     if data.ncols() == 0 {
@@ -234,18 +318,15 @@ where
     }
 
     let candidates = DirectCandidates::new(data.nrows())?;
-    // Metric and ISA are selected before Rayon workers start. Workers share
-    // this Copy handle; each output view supplies its leaf-specific width.
-    let kernel = LeafKernel::new(metric);
     leaves.par_iter().enumerate().try_for_each_init(
         LeafBuffers::default,
         |buffers, (leaf, point_ids)| {
-            build_leaf(
+            build_leaf::<A, M, T>(
+                arch,
                 data,
                 leaf,
                 point_ids,
                 requested_k,
-                &kernel,
                 buffers,
                 &candidates,
             )
@@ -256,20 +337,24 @@ where
 
 /// Build and publish one leaf's symmetric neighbor lists.
 ///
-/// Validation precedes all dataset indexing. Sorted partition output takes the
-/// adjacent-duplicate path, while arbitrary-order callers use `seen_ids`. The
-/// active lengths computed after `prepare` must be used for every later slice,
-/// because the reusable vectors may still be longer than this leaf.
-fn build_leaf<T>(
+/// Validation precedes all dataset indexing and rejects IDs that are not strictly
+/// increasing. Active lengths computed after `prepare` must be used for every
+/// later slice because reusable vectors may remain longer than this leaf.
+fn build_leaf<A, M, T>(
+    arch: A,
     data: MatrixView<'_, T>,
     leaf: usize,
     point_ids: &[u32],
     requested_k: usize,
-    kernel: &LeafKernel,
     buffers: &mut LeafBuffers,
     candidates: &DirectCandidates,
 ) -> Result<(), LeafBuildError>
 where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
     T: VectorRepr + 'static,
 {
     if point_ids.is_empty() {
@@ -338,8 +423,7 @@ where
         leaf,
         buffer: "leaf output",
     })?;
-    kernel
-        .nearest_neighbors(dots, output, &mut buffers.kernel_workspace)
+    nearest_neighbors_for::<A, M>(arch, dots, output, &mut buffers.kernel_workspace)
         .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
 
     buffers.prepare_local_adjacency(point_ids.len())?;
