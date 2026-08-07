@@ -135,6 +135,18 @@ where
         }
     }
 
+    /// Take ownership of a vector that contains unique items.
+    ///
+    /// The caller must supply unique items. Debug builds check this condition.
+    pub(crate) fn from_vec_trusted(edges: Vec<I>) -> Self
+    where
+        I: ContainsSimd,
+    {
+        let list = Self { edges };
+        list.debug_check_uniqueness();
+        list
+    }
+
     /// Resize the underlying storage to `capacity` elements and return a guard allowing
     /// full mutable access to the resized span.
     ///
@@ -665,6 +677,16 @@ mod tests {
         for _ in 0..10 {
             test_extend_from_slice_fuzz_impl(domain, length_distribution, 50, &mut rng);
         }
+    }
+
+    #[test]
+    fn test_from_vec_trusted_preserves_order_and_allocation() {
+        let edges = vec![3_u32, 1, 2];
+        let pointer = edges.as_ptr();
+        let list = AdjacencyList::from_vec_trusted(edges);
+
+        assert_eq!(&*list, &[3, 1, 2]);
+        assert_eq!(list.as_ptr(), pointer);
     }
 
     #[test]

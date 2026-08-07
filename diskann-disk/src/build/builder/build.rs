@@ -77,8 +77,12 @@ where
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
         #[cfg(feature = "pipnn")]
-        if let Some(config) = disk_build_param.pipnn_config() {
-            config.validate()?;
+        if let Some(parameters) = disk_build_param.pipnn_parameters() {
+            diskann::graph::pipnn::PiPNNConfig::from(parameters).validate()?;
+            if let Some(hash_prune) = &parameters.hash_prune {
+                diskann::graph::pipnn::HashPruneConfig::from(hash_prune)
+                    .validate_for_degree(index_configuration.config.pruned_degree().get())?;
+            }
         }
 
         let pq_storage = PQStorage::new(
@@ -182,8 +186,8 @@ where
 
     async fn build_graph(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         #[cfg(feature = "pipnn")]
-        if let Some(config) = self.disk_build_param.pipnn_config() {
-            return pipnn::build_graph(self, pool, config);
+        if let Some(parameters) = self.disk_build_param.pipnn_parameters().cloned() {
+            return pipnn::build_graph(self, pool, &parameters);
         }
 
         match determine_build_strategy::<Data>(

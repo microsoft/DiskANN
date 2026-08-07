@@ -12,9 +12,10 @@
 //! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
 //!    at most `c_max` points.
 //! 2. `leaf_build` computes a lower-triangular Gram matrix for each leaf. It
-//!    selects local neighbors and merges their global point IDs.
-//! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
-//!    longer than the graph degree.
+//!    selects local neighbors. The direct path merges their global point IDs.
+//!    The HashPrune path sends weighted edges to bounded point reservoirs.
+//! 3. `finalization` applies Vamana RobustPrune to direct candidates. It also
+//!    prunes HashPrune candidates when `final_prune` is true.
 //!
 //! `diskann-wide` selects architecture `A`. One match selects metric marker `M`.
 //! The build passes both concrete types through all replicas, recursive
@@ -33,9 +34,12 @@
 
 mod kernel_metric;
 
+mod bf16;
 mod finalization;
+mod hash_prune;
 mod leaf_build;
 mod leaf_kernel;
+mod lsh;
 mod partition_kernel;
 mod partitioning;
 
@@ -114,6 +118,55 @@ impl PiPNNConfig {
     }
 }
 
+/// HashPrune policy for bounded candidate reservoirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashPruneConfig {
+    /// Number of random-hyperplane bits in each relative-direction hash.
+    pub num_hash_planes: usize,
+    /// Maximum number of direction buckets retained for each source point.
+    pub l_max: usize,
+    /// Apply Vamana RobustPrune after reservoir extraction.
+    pub final_prune: bool,
+}
+
+impl HashPruneConfig {
+    /// Check the structural HashPrune limits.
+    pub fn validate(&self) -> ANNResult<()> {
+        if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
+            return Err(config_error(format!(
+                "num_hash_planes ({}) must be in [1, {}]",
+                self.num_hash_planes,
+                lsh::MAX_PLANES
+            )));
+        }
+        if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
+            return Err(config_error(format!(
+                "l_max ({}) must be in [1, {}]",
+                self.l_max,
+                hash_prune::MAX_RESERVOIR_LEN
+            )));
+        }
+        Ok(())
+    }
+
+    /// Check that the reservoir and hash space can hold `degree` neighbors.
+    pub fn validate_for_degree(&self, degree: usize) -> ANNResult<()> {
+        self.validate()?;
+        let hash_capacity = 1usize
+            .checked_shl(self.num_hash_planes as u32)
+            .unwrap_or(usize::MAX);
+        let candidate_capacity = self.l_max.min(hash_capacity);
+        if candidate_capacity < degree {
+            return Err(config_error(format!(
+                "HashPrune capacity min(l_max={}, hash buckets={hash_capacity}) must be at least \
+                 the graph degree ({degree})",
+                self.l_max
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// PiPNN policy and borrowed execution resources for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
@@ -121,6 +174,7 @@ pub struct PiPNNBuildContext<'a> {
     pub(crate) graph: &'a Config,
     pub(crate) metric: Metric,
     pub(crate) pool: &'a ThreadPool,
+    hash_prune: Option<HashPruneConfig>,
 }
 
 impl<'a> PiPNNBuildContext<'a> {
@@ -144,7 +198,15 @@ impl<'a> PiPNNBuildContext<'a> {
             graph,
             metric,
             pool,
+            hash_prune: None,
         })
+    }
+
+    /// Enable HashPrune candidate merging for this build.
+    pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
+        config.validate_for_degree(self.graph.pruned_degree().get())?;
+        self.hash_prune = Some(config);
+        Ok(self)
     }
 }
 
@@ -239,8 +301,9 @@ where
 
 /// Run the PiPNN graph pipeline for one selected metric implementation.
 ///
-/// The function builds overlapping leaves, merges direct candidates, and applies
-/// final graph-degree pruning.
+/// The function builds overlapping leaves and runs the configured candidate
+/// merge. It prunes direct candidates to graph degree. It prunes HashPrune
+/// candidates when `final_prune` is true.
 fn build_graph_for<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -256,16 +319,47 @@ where
 {
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
-    // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
-    // so its complete allocation drops when leaf construction returns.
-    let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.k)
-            .map_err(ANNError::new)
-    })?;
-    // Finalization consumes each candidate list. It reuses that list's allocation
-    // for the final adjacency when the graph policy permits it.
-    tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, M::METRIC))
+    match &context.hash_prune {
+        None => {
+            // Leaf jobs borrow individual ID lists. This call consumes the leaf
+            // vector, so its allocation drops when leaf construction returns.
+            let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.k)
+                    .map_err(ANNError::new)
+            })?;
+            // Finalization consumes each candidate list. It reuses that list's
+            // allocation when the graph policy permits it.
+            tracing::info_span!("pipnn.finalization").in_scope(|| {
+                finalization::prune_overfull(data, candidates, context.graph, M::METRIC)
+            })
+        }
+        Some(config) => {
+            // `HashPrune` lives until all leaf jobs finish. A leaf job locks only
+            // one source reservoir at a time.
+            let hash_prune =
+                hash_prune::HashPrune::new(data, config.num_hash_planes, config.l_max, 42)?;
+            // This call consumes the leaves. Each weighted CSR list exists only
+            // during its leaf job. The reservoirs retain the selected edges.
+            tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::add_hash_prune_candidates::<A, M, T>(
+                    arch,
+                    data,
+                    leaves,
+                    context.config.k,
+                    &hash_prune,
+                )
+                .map_err(ANNError::new)
+            })?;
+            if config.final_prune {
+                let candidates = hash_prune.into_candidate_lists();
+                tracing::info_span!("pipnn.finalization").in_scope(|| {
+                    finalization::prune_overfull(data, candidates, context.graph, M::METRIC)
+                })
+            } else {
+                Ok(hash_prune.into_nearest_lists(context.graph.pruned_degree().get()))
+            }
+        }
+    }
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {
@@ -317,7 +411,7 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod build_graph_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig, build_graph, leaf_kernel};
+    use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig, build_graph, leaf_kernel};
     use crate::graph::config::{self, MaxDegree};
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
@@ -541,6 +635,57 @@ mod build_graph_tests {
             assert_graph_invariants(&actual, points, degree);
         }
     }
+
+    #[test]
+    fn parallel_hash_prune_build_is_set_invariant() {
+        let points = 64;
+        let dimensions = 4;
+        let values: Vec<f32> = (0..points * dimensions)
+            .map(|value| ((value * 17 + 3) % 101) as f32)
+            .collect();
+        let data = MatrixView::try_from(values.as_slice(), points, dimensions).unwrap();
+        let graph = graph_config(Metric::L2, 8);
+        let pool = pool(4);
+        let config = PiPNNConfig {
+            c_max: 16,
+            c_min: 4,
+            p_samp: 0.25,
+            fanout: vec![3, 2],
+            k: 3,
+            replicas: 2,
+        };
+        let hash_prune = HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 16,
+            final_prune: true,
+        };
+        let build = || {
+            let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
+                .unwrap()
+                .with_hash_prune(hash_prune.clone())
+                .unwrap();
+            build_graph(data, &context).unwrap()
+        };
+
+        let first = build();
+        let second = build();
+        let canonicalize = |graph: &[crate::graph::AdjacencyList<u32>]| {
+            graph
+                .iter()
+                .map(|row| {
+                    let mut ids = row.to_vec();
+                    ids.sort_unstable();
+                    ids
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Parallel finalization can order equal candidates differently. Compare
+        // the retained neighbor sets.
+        assert_eq!(canonicalize(&first), canonicalize(&second));
+        assert_graph_invariants(&first, points, 8);
+        assert!(first.iter().any(|row| !row.is_empty()));
+    }
 }
 #[cfg(test)]
 #[allow(
@@ -549,7 +694,7 @@ mod build_graph_tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod config_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig, leaf_kernel};
+    use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig, leaf_kernel};
     use crate::graph::config::{self, MaxDegree};
     use diskann_vector::distance::Metric;
 
@@ -565,7 +710,11 @@ mod config_tests {
     }
 
     fn graph_config(metric: Metric, alpha: f32) -> crate::graph::Config {
-        config::Builder::new_with(64, MaxDegree::same(), 72, metric.into(), |builder| {
+        graph_config_with_degree(metric, alpha, 64)
+    }
+
+    fn graph_config_with_degree(metric: Metric, alpha: f32, degree: usize) -> crate::graph::Config {
+        config::Builder::new_with(degree, MaxDegree::same(), 72, metric.into(), |builder| {
             builder.alpha(alpha);
         })
         .build()
@@ -656,6 +805,67 @@ mod config_tests {
         for alpha in [0.9, f32::NAN, f32::INFINITY] {
             let graph = graph_config(Metric::L2, alpha);
             PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_hash_prune_parameters_and_accepts_valid_boundary() {
+        let graph = graph_config(Metric::L2, 1.2);
+        let pool = pool();
+        for config in [
+            HashPruneConfig {
+                num_hash_planes: 0,
+                l_max: 64,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 17,
+                l_max: 64,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 0,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 256,
+                final_prune: true,
+            },
+            HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 63,
+                final_prune: true,
+            },
+        ] {
+            let context =
+                PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+            assert!(context.with_hash_prune(config).is_err());
+        }
+
+        PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool)
+            .unwrap()
+            .with_hash_prune(HashPruneConfig {
+                num_hash_planes: 8,
+                l_max: 64,
+                final_prune: true,
+            })
+            .unwrap();
+    }
+    #[test]
+    fn requires_hash_bucket_capacity_to_cover_graph_degree() {
+        let pool = pool();
+        for (degree, accepted) in [(2, true), (3, false)] {
+            let graph = graph_config_with_degree(Metric::L2, 1.2, degree);
+            let result = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool)
+                .unwrap()
+                .with_hash_prune(HashPruneConfig {
+                    num_hash_planes: 1,
+                    l_max: 64,
+                    final_prune: true,
+                });
+            assert_eq!(result.is_ok(), accepted, "degree={degree}");
         }
     }
 }
