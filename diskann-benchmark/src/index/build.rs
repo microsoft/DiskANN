@@ -178,8 +178,8 @@ where
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     // A frozen slot stores the selected source vector. Its adjacency must equal
-    // that source row. Adding the source ID would remove one graph edge because
-    // the row has a fixed degree.
+    // that source row. Adding the source ID removes one graph edge because the
+    // row has a fixed degree.
     let start_neighbors: Vec<_> = start_sources
         .into_iter()
         .map(|source| adjacency[source].clone())
