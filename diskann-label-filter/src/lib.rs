@@ -57,6 +57,7 @@ pub mod tests {
 
 pub mod attribute;
 pub mod document;
+pub mod encoded_label_index;
 pub mod live_filter;
 pub mod query;
 pub mod set;
@@ -68,6 +69,10 @@ pub mod kv_index;
 pub mod stores;
 
 // Re-exports for convenience
+pub use encoded_label_index::{
+    encode_label_index_jsonl, EncodedLabelIndex, EncodedLabelIndexError, EncodedLabelQuery,
+    FilterExpressionType, LabelIndexFormat,
+};
 pub use live_filter::{
     FrozenAttributeIndex, FrozenAttributeIndexAuto, FrozenAttributeIndexBitslice,
     FrozenAttributeIndexCsr, FrozenAttributeIndexPosting, InlineAttributeIndex,

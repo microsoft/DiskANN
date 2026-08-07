@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-label-filter"
-version = "0.55.0"
+version = "0.55.1-pre.1"
 dependencies = [
  "anyhow",
  "bf-tree",

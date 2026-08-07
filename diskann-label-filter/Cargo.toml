@@ -1,6 +1,6 @@
 [package]
 name = "diskann-label-filter"
-version.workspace = true
+version = "0.55.1-pre.1"
 description.workspace = true
 authors.workspace = true
 repository.workspace = true
