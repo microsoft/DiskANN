@@ -46,18 +46,15 @@ use diskann_utils::{
     views::{MatrixView, MutMatrixView},
 };
 use diskann_vector::{Norm, distance::Metric, norm::FastL2NormSquared};
-use diskann_wide::{
-    Architecture, SIMDMask, SIMDSelect, SIMDVector,
-    arch::{self, Target1},
-};
+use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rand::{SeedableRng, prelude::IndexedRandom};
 use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::{KernelMetric, MetricVisitor, visit_metric},
+    kernel_metric::KernelMetric,
     partition_kernel::{
-        PartitionInput, PartitionKernelWorkspace, PartitionScales, nearest_leaders_for,
+        PartitionInput, PartitionKernelWorkspace, PartitionScales, nearest_leaders,
     },
 };
 
@@ -146,67 +143,9 @@ type StripeBufferPool = ObjectPool<StripeBuffers>;
 /// leaders for the current level, and recurses only on oversized clusters.
 /// Levels beyond `fanout.len()` retain one leader assignment. Completed small
 /// leaves are merged without exceeding `c_max`; every input point must remain
-/// covered once per replica. The caller installs the operation in its pool.
-pub(crate) fn partition<T>(
-    data: MatrixView<'_, T>,
-    config: &PiPNNConfig,
-    metric: Metric,
-) -> ANNResult<Vec<Vec<u32>>>
-where
-    T: VectorRepr + Send + Sync,
-{
-    arch::dispatch1_no_features(
-        RunPartitionStage,
-        PartitionStageCall {
-            data,
-            config,
-            metric,
-        },
-    )
-}
-
-struct PartitionStageCall<'a, T> {
-    data: MatrixView<'a, T>,
-    config: &'a PiPNNConfig,
-    metric: Metric,
-}
-
-struct RunPartitionStage;
-
-impl<A, T> Target1<A, ANNResult<Vec<Vec<u32>>>, PartitionStageCall<'_, T>> for RunPartitionStage
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    T: VectorRepr + Send + Sync,
-{
-    fn run(self, arch: A, call: PartitionStageCall<'_, T>) -> ANNResult<Vec<Vec<u32>>> {
-        visit_metric(call.metric, ExecutePartitionStage { arch, call })
-    }
-}
-
-struct ExecutePartitionStage<'a, A, T> {
-    arch: A,
-    call: PartitionStageCall<'a, T>,
-}
-
-impl<A, T> MetricVisitor for ExecutePartitionStage<'_, A, T>
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    T: VectorRepr + Send + Sync,
-{
-    type Output = ANNResult<Vec<Vec<u32>>>;
-
-    fn visit<M: KernelMetric>(self) -> Self::Output {
-        partition_for::<A, M, T>(self.arch, self.call.data, self.call.config)
-    }
-}
-
-fn partition_for<A, M, T>(
+/// covered once per replica. The caller has already selected `A` and `M` and
+/// installed the operation in its pool.
+pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
@@ -589,7 +528,7 @@ where
             actual: error.into_inner().len(),
         })
     })?;
-    nearest_leaders_for::<A, M>(
+    nearest_leaders::<A, M>(
         arch,
         PartitionInput { dots, scales },
         output,
@@ -872,8 +811,54 @@ fn assignment_stripe_point_count(leader_count: usize) -> usize {
 mod tests {
     use diskann_utils::views::{Matrix, MatrixView};
     use diskann_vector::{Half, distance::Metric};
+    use diskann_wide::{
+        Architecture, SIMDMask, SIMDSelect, SIMDVector,
+        arch::{self, Target1},
+    };
 
     use super::*;
+
+    struct PartitionCall<'a, T> {
+        data: MatrixView<'a, T>,
+        config: &'a PiPNNConfig,
+    }
+
+    struct DispatchPartition(Metric);
+
+    impl<A, T> Target1<A, ANNResult<Vec<Vec<u32>>>, PartitionCall<'_, T>> for DispatchPartition
+    where
+        A: Architecture,
+        A::f32x16: std::ops::Div<Output = A::f32x16>,
+        <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+        u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+        T: VectorRepr + Send + Sync,
+    {
+        fn run(self, arch: A, call: PartitionCall<'_, T>) -> ANNResult<Vec<Vec<u32>>> {
+            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+
+            match self.0 {
+                Metric::L2 => partition::<A, L2, T>(arch, call.data, call.config),
+                Metric::Cosine => partition::<A, Cosine, T>(arch, call.data, call.config),
+                Metric::CosineNormalized => {
+                    partition::<A, CosineNormalized, T>(arch, call.data, call.config)
+                }
+                Metric::InnerProduct => {
+                    partition::<A, InnerProduct, T>(arch, call.data, call.config)
+                }
+            }
+        }
+    }
+
+    fn partition_with_runtime_metric<T>(
+        data: MatrixView<'_, T>,
+        config: &PiPNNConfig,
+        metric: Metric,
+    ) -> ANNResult<Vec<Vec<u32>>>
+    where
+        T: VectorRepr + Send + Sync,
+    {
+        arch::dispatch1_no_features(DispatchPartition(metric), PartitionCall { data, config })
+    }
 
     fn config(c_min: usize, c_max: usize, fanout: Vec<usize>, replicas: usize) -> PiPNNConfig {
         PiPNNConfig {
@@ -936,7 +921,12 @@ mod tests {
         memberships
     }
 
-    fn assert_valid_partition(leaves: &[Vec<u32>], points: usize, c_max: usize, replicas: usize) {
+    fn assert_valid_partition_with_runtime_metric(
+        leaves: &[Vec<u32>],
+        points: usize,
+        c_max: usize,
+        replicas: usize,
+    ) {
         assert!(
             leaves
                 .iter()
@@ -960,7 +950,12 @@ mod tests {
     fn returns_one_leaf_at_and_below_c_max() {
         for points in [7, 8] {
             let data = clustered_data(points, 3);
-            let leaves = partition(data.as_view(), &config(2, 8, vec![2], 1), Metric::L2).unwrap();
+            let leaves = partition_with_runtime_metric(
+                data.as_view(),
+                &config(2, 8, vec![2], 1),
+                Metric::L2,
+            )
+            .unwrap();
             assert_eq!(leaves, vec![(0..points as u32).collect::<Vec<_>>()]);
         }
     }
@@ -970,26 +965,30 @@ mod tests {
         let data = clustered_data(96, 8);
         let config = config(4, 16, vec![3, 2], 2);
 
-        let first = partition(data.as_view(), &config, Metric::L2).unwrap();
-        let second = partition(data.as_view(), &config, Metric::L2).unwrap();
+        let first = partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
+        let second = partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
 
         assert_eq!(sorted_memberships(&first), sorted_memberships(&second));
-        assert_valid_partition(&first, 96, 16, 2);
+        assert_valid_partition_with_runtime_metric(&first, 96, 16, 2);
         assert!(first.iter().map(Vec::len).sum::<usize>() > 96 * 2);
     }
 
     #[test]
     fn partition_remains_bounded_after_the_fanout_schedule_is_exhausted() {
         let data = clustered_data(80, 4);
-        let leaves = partition(data.as_view(), &config(2, 8, vec![2], 1), Metric::L2).unwrap();
+        let leaves =
+            partition_with_runtime_metric(data.as_view(), &config(2, 8, vec![2], 1), Metric::L2)
+                .unwrap();
 
-        assert_valid_partition(&leaves, 80, 8, 1);
+        assert_valid_partition_with_runtime_metric(&leaves, 80, 8, 1);
     }
 
     #[test]
     fn duplicate_points_return_iteration_limit_instead_of_oversized_leaf() {
         let data = Matrix::new(1.0f32, 24, 4);
-        let error = partition(data.as_view(), &config(2, 4, vec![1], 1), Metric::L2).unwrap_err();
+        let error =
+            partition_with_runtime_metric(data.as_view(), &config(2, 4, vec![1], 1), Metric::L2)
+                .unwrap_err();
         let error = error.downcast::<PartitionError>().unwrap();
 
         assert!(matches!(
@@ -1033,14 +1032,14 @@ mod tests {
     #[test]
     fn replicas_cover_every_point_once_or_more_per_replica() {
         let data = directional_data(72, 5);
-        let leaves = partition(
+        let leaves = partition_with_runtime_metric(
             data.as_view(),
             &config(3, 12, vec![3, 2], 3),
             Metric::CosineNormalized,
         )
         .unwrap();
 
-        assert_valid_partition(&leaves, 72, 12, 3);
+        assert_valid_partition_with_runtime_metric(&leaves, 72, 12, 3);
     }
 
     fn assert_partition_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
@@ -1061,20 +1060,20 @@ mod tests {
             let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
             let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
             let config = config(2, 16, vec![2, 1], 1);
-            let expected = partition(
+            let expected = partition_with_runtime_metric(
                 MatrixView::try_from(&f32_data, points, dimensions).unwrap(),
                 &config,
                 Metric::L2,
             )
             .unwrap();
-            let actual = partition(
+            let actual = partition_with_runtime_metric(
                 MatrixView::try_from(&converted, points, dimensions).unwrap(),
                 &config,
                 Metric::L2,
             )
             .unwrap_or_else(|error| panic!("{label} dimensions={dimensions}: {error}"));
 
-            assert_valid_partition(&actual, points, 16, 1);
+            assert_valid_partition_with_runtime_metric(&actual, points, 16, 1);
             assert_eq!(
                 sorted_memberships(&actual),
                 sorted_memberships(&expected),
@@ -1148,8 +1147,8 @@ mod tests {
             Metric::CosineNormalized,
             Metric::InnerProduct,
         ] {
-            let leaves = partition(data.as_view(), &config, metric).unwrap();
-            assert_valid_partition(&leaves, 64, 20, 1);
+            let leaves = partition_with_runtime_metric(data.as_view(), &config, metric).unwrap();
+            assert_valid_partition_with_runtime_metric(&leaves, 64, 20, 1);
         }
     }
 
@@ -1228,7 +1227,9 @@ mod tests {
     #[test]
     fn rejects_empty_dataset() {
         let data = Matrix::<f32>::new(0.0, 0, 4);
-        let error = partition(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2).unwrap_err();
+        let error =
+            partition_with_runtime_metric(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2)
+                .unwrap_err();
 
         assert_eq!(
             error.downcast::<PartitionError>().unwrap(),
@@ -1239,7 +1240,9 @@ mod tests {
     #[test]
     fn rejects_zero_dimensions() {
         let data = Matrix::<f32>::new(0.0, 4, 0);
-        let error = partition(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2).unwrap_err();
+        let error =
+            partition_with_runtime_metric(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2)
+                .unwrap_err();
 
         assert_eq!(
             error.downcast::<PartitionError>().unwrap(),
