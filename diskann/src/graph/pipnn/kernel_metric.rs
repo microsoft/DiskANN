@@ -30,7 +30,7 @@ pub(crate) enum ScaleKind {
     None,
     /// Stored value is already a squared norm.
     SquaredNorm,
-    /// Stored value is a squared norm that must become a norm.
+    /// Stored value is a squared norm; the kernel takes its square root.
     NormFromSquared,
     /// Stored value is already a norm.
     Norm,
