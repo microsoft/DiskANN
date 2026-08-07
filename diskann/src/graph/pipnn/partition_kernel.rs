@@ -281,21 +281,14 @@ fn check_length(
     }
 }
 
-/// Convert each point's leader scores into sorted leader IDs.
+/// Compute the nearest leader IDs for each point.
 ///
-/// For each point, the function does these steps:
+/// The function converts each dot-product row to metric `M` scores. It writes
+/// `output.ncols()` leader-column IDs in nearest-first order. Equal scores keep
+/// leader-column order. NaN and positive infinity do not enter the tracker.
 ///
-/// 1. Convert the point norm to the unit that `M` requires.
-/// 2. Process complete SIMD groups.
-/// 3. Process the scalar tail.
-/// 4. Check that the tracker is full.
-/// 5. Copy the sorted leader IDs to the output row.
-///
-/// `tracker` has `fanout` entries and stays sorted after each insertion. Strict
-/// comparisons keep leader scan order for equal scores. They do not rank NaN.
-///
-/// The caller allocates the runtime-sized tracker once and reuses it for all
-/// point rows.
+/// `tracker.len()` must equal `output.ncols()`. The function resets the tracker
+/// for each point and returns an error if rankable scores do not fill it.
 fn process_points<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
