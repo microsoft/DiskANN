@@ -793,25 +793,6 @@ impl HashPrune {
                 edge_offsets.len()
             )));
         }
-        if edge_offsets.windows(2).any(|pair| pair[0] > pair[1])
-            || edge_offsets.last().copied().unwrap_or(0) as usize > edges.len()
-        {
-            return Err(ANNError::message("HashPrune received invalid CSR offsets"));
-        }
-        if let Some(&point) = point_ids
-            .iter()
-            .find(|&&point| point as usize >= self.hot.len())
-        {
-            return Err(ANNError::message(format!(
-                "HashPrune point ID {point} is outside {} reservoirs",
-                self.hot.len()
-            )));
-        }
-        if let Some(&(target, _)) = edges.iter().find(|&&(target, _)| target as usize >= n) {
-            return Err(ANNError::message(format!(
-                "HashPrune local target {target} is outside {n} leaf points"
-            )));
-        }
         if edges.is_empty() {
             return Ok(());
         }
@@ -829,6 +810,12 @@ impl HashPrune {
         for local_src in 0..n {
             let start = edge_offsets[local_src] as usize;
             let end = edge_offsets[local_src + 1] as usize;
+            if start > end || end > edges.len() {
+                return Err(ANNError::message(format!(
+                    "HashPrune CSR range {start}..{end} is outside {} edges",
+                    edges.len()
+                )));
+            }
             if start == end {
                 continue;
             }
@@ -853,11 +840,15 @@ impl HashPrune {
             }
 
             let src_sketch = &sketch_scratch[local_src * m..(local_src + 1) * m];
-            self.with_locked(global_src, |hot, cold| {
+            self.with_locked(global_src, |hot, cold| -> ANNResult<()> {
                 for &(dst_local, dist) in &edges[start..end] {
-                    let global_dst = point_ids[dst_local as usize];
-                    let dst_sketch =
-                        &sketch_scratch[dst_local as usize * m..(dst_local as usize + 1) * m];
+                    let dst_index = dst_local as usize;
+                    let global_dst = *point_ids.get(dst_index).ok_or_else(|| {
+                        ANNError::message(format!(
+                            "HashPrune local target {dst_local} is outside {n} leaf points"
+                        ))
+                    })?;
+                    let dst_sketch = &sketch_scratch[dst_index * m..(dst_index + 1) * m];
                     let hash = self.relative_hash.call(RelativeHashArgs {
                         src: src_sketch.as_ptr(),
                         dst: dst_sketch.as_ptr(),
@@ -871,7 +862,8 @@ impl HashPrune {
                         insert_locked(hot, cold, hash, global_dst, dist, l_max, self.find_hash)
                     };
                 }
-            })?;
+                Ok(())
+            })??;
         }
         Ok(())
     }
@@ -1382,7 +1374,10 @@ mod tests {
         let mut scratch = Vec::new();
 
         assert!(hp.add_leaf_edges(&[0], &[0], &[], &mut scratch).is_err());
-        assert!(hp.add_leaf_edges(&[2], &[0, 0], &[], &mut scratch).is_err());
+        assert!(
+            hp.add_leaf_edges(&[2], &[0, 1], &[(0, 1.0)], &mut scratch)
+                .is_err()
+        );
         assert!(
             hp.add_leaf_edges(&[0, 1], &[0, 1, 1], &[(2, 1.0)], &mut scratch)
                 .is_err()
