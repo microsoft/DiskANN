@@ -3,53 +3,20 @@
  * Licensed under the MIT license.
  */
 
-//! HashPrune: LSH-based online pruning for merging edges from overlapping partitions.
+//! Merge leaf edges into bounded per-point reservoirs.
 //!
-//! ```text
-//! dataset ──> random-hyperplane sketches (one sketch per point)
-//!                                  │
-//! leaf-local symmetric CSR ──> gather leaf sketches
-//!                                  │
-//!                                  v
-//!                     relative hash(source, target)
-//!                                  │
-//!                                  v
-//!              lock source reservoir ──> update bounded candidates
-//!                                  │
-//!                    consume HashPrune at stage exit
-//!                       ┌──────────┴──────────┐
-//!                       v                     v
-//!              nearest lists         unsorted candidate lists
-//!                                      (for RobustPrune)
-//! ```
+//! Random-hyperplane sketches define one relative hash for each directed edge.
+//! A source reservoir stores at most one neighbor for each hash. A closer edge
+//! replaces the edge with the same hash. A new hash uses an empty slot. If the
+//! reservoir is full, only an edge that is better than the farthest edge enters.
 //!
-//! Each source reservoir retains at most one neighbor per relative hash bucket:
+//! Each point has one locked `HotSlot`. It stores the current length and the
+//! farthest-entry index. Three arrays store hashes, ordered distance keys, and
+//! neighbor IDs. A point lock protects the same row in all three arrays.
 //!
-//! | Existing state | Incoming edge | Action |
-//! | --- | --- | --- |
-//! | matching hash | closer | replace that bucket |
-//! | matching hash | not closer | reject |
-//! | free bucket | any distance | append |
-//! | full | closer than cached farthest | replace farthest |
-//! | full | not closer | reject before scanning hashes |
-//!
-//! Storage is AoSoA hot/cold split:
-//! - `hot: Vec<LockedHotSlot>` — one 16-byte slot per point with a mutex beside
-//!   an `UnsafeCell<HotSlot>` containing len/farthest state.
-//!   Early rejection and lock acquisition only touch this slab.
-//! - Three cold slabs (`cold_hashes`, `cold_distances`, `cold_neighbors`), each a
-//!   single `MmapSlab` of `npoints * scan_lanes` elements. Splitting hashes /
-//!   distances / neighbors into three contiguous arrays lets `find_hash` walk
-//!   pure u16 hashes (32 per cache line) instead of 8-byte mixed-AoS entries.
-//!
-//! Each slab is one contiguous allocation, so `madvise(HUGEPAGE)` is effective
-//! when the kernel actually backs THP.
-//!
-//! `l_max` is dynamic user input; the cold slab stride (`scan_lanes`) and the
-//! hash scan width both scale with it at runtime. The only fixed
-//! bound is `MAX_RESERVOIR_LEN = 255`, the structural limit of the `u8`
-//! `HotSlot.len` / `farthest_idx` fields; a larger `l_max` is rejected at
-//! construction time.
+//! `l_max` sets the logical reservoir length. `scan_lanes` rounds this length up
+//! to a full hash-scan group. `MAX_RESERVOIR_LEN` is 255 because `HotSlot` stores
+//! its length and farthest index as `u8`.
 
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
 use std::cell::UnsafeCell;
@@ -66,10 +33,7 @@ use diskann_wide::{
 };
 use rayon::prelude::*;
 
-/// Owned slab allocated via direct `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`. The
-/// kernel backs the range with its zero-page until first write, so we get
-/// true lazy faulting for the AoSoA cold slabs rather than eagerly committing
-/// the full reservoir allocation.
+/// Owned zero-initialized slab from `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`.
 #[cfg(target_os = "linux")]
 struct MmapSlab<T: Pod> {
     ptr: *mut T,
@@ -77,13 +41,12 @@ struct MmapSlab<T: Pod> {
 }
 
 #[cfg(target_os = "linux")]
-// SAFETY: the slab uniquely owns its mmap region until Drop; moving the slab
-// transfers that ownership, and `T: Send` permits its initialized values to move.
+// SAFETY: the slab uniquely owns its mmap region until `drop`. Moving the slab
+// transfers that ownership. `T: Send` permits transfer of initialized values.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(target_os = "linux")]
-// SAFETY: safe shared access exposes only `*const T`, and `T: Sync`.
-// Dereferencing or mutating it requires an unsafe block;
-// HashPrune places the slab in UnsafeCell before performing such mutation.
+// SAFETY: shared access exposes only `*const T`. `T: Sync` permits shared access
+// to initialized values. HashPrune uses `UnsafeCell` and a point lock for writes.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(target_os = "linux")]
@@ -98,8 +61,8 @@ impl<T: Pod> MmapSlab<T> {
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
             .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
-        // SAFETY: MAP_ANONYMOUS gives a zero-backed VA region; PROT_RW makes
-        // it readable/writable. Pages allocate on first write only.
+        // SAFETY: `MAP_ANONYMOUS` returns zero-initialized memory.
+        // `PROT_READ | PROT_WRITE` permits all accesses used by this slab.
         unsafe {
             let ptr = libc::mmap(
                 std::ptr::null_mut(),
@@ -145,14 +108,9 @@ impl<T: Pod> Drop for MmapSlab<T> {
     }
 }
 
-/// Windows counterpart of the Linux mmap slab. `VirtualAlloc(MEM_RESERVE |
-/// MEM_COMMIT, PAGE_READWRITE)` reserves a zero-backed anonymous range whose
-/// pages fault in on first write — the same lazy-commit behavior as
-/// `mmap(MAP_ANONYMOUS)`, rather than the fallback `Vec`'s eager initialization.
+/// Owned zero-initialized slab from `VirtualAlloc`.
 #[cfg(windows)]
 mod winmem {
-    // Minimal FFI to the Win32 memory API — avoids pulling in the `windows`
-    // crate for four extern declarations.
     pub(super) type Lpvoid = *mut core::ffi::c_void;
     pub(super) const MEM_COMMIT: u32 = 0x0000_1000;
     pub(super) const MEM_RESERVE: u32 = 0x0000_2000;
@@ -177,12 +135,12 @@ struct MmapSlab<T: Pod> {
 }
 
 #[cfg(windows)]
-// SAFETY: the slab uniquely owns its VirtualAlloc region until Drop; moving
-// transfers that ownership, and `T: Send` permits its initialized values to move.
+// SAFETY: the slab uniquely owns its `VirtualAlloc` region until `drop`. Moving
+// the slab transfers that ownership. `T: Send` permits transfer of initialized values.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(windows)]
-// SAFETY: safe shared access exposes only `*const T`, and `T: Sync`.
-// HashPrune places the slab in UnsafeCell before any raw mutation.
+// SAFETY: shared access exposes only `*const T`. `T: Sync` permits shared access
+// to initialized values. HashPrune uses `UnsafeCell` and a point lock for writes.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(windows)]
@@ -197,9 +155,8 @@ impl<T: Pod> MmapSlab<T> {
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
             .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
-        // SAFETY: MEM_RESERVE|MEM_COMMIT + PAGE_READWRITE returns a zero-backed
-        // RW region; physical pages fault in on first write only. Windows
-        // zero-fills committed pages, matching mmap's MAP_ANONYMOUS contract.
+        // SAFETY: `MEM_RESERVE | MEM_COMMIT` returns zero-initialized memory.
+        // `PAGE_READWRITE` permits all accesses used by this slab.
         unsafe {
             let ptr = winmem::VirtualAlloc(
                 std::ptr::null_mut(),
@@ -227,7 +184,7 @@ impl<T: Pod> MmapSlab<T> {
     }
 
     #[inline]
-    #[allow(dead_code)] // parity with the Linux slab; madvise (Linux-only) is the sole caller
+    #[allow(dead_code)]
     fn bytes(&self) -> usize {
         self.len * std::mem::size_of::<T>()
     }
@@ -246,8 +203,7 @@ impl<T: Pod> Drop for MmapSlab<T> {
     }
 }
 
-/// Fallback slab for platforms that are neither Linux nor Windows: regular Vec.
-/// Eager-fault behavior tracks the host allocator.
+/// Owned zero-initialized slab for platforms without `mmap` or `VirtualAlloc`.
 #[cfg(not(any(target_os = "linux", windows)))]
 struct MmapSlab<T: Pod>(Vec<T>);
 
@@ -272,15 +228,11 @@ impl<T: Pod + Default> MmapSlab<T> {
     }
 }
 
-/// Structural upper bound on per-node reservoir length: `HotSlot.len` and
-/// `farthest_idx` are `u8`, so a reservoir can hold at most 255 entries. This
-/// is an overflow guard, NOT the reservoir size — the cold slab stride
-/// (`scan_lanes`) is sized to the runtime `l_max`, so the list scales with the
-/// user's `l_max` up to this bound. `find_hash_simd` scans `scan_lanes / 32`
-/// chunks, also runtime-sized.
+/// Largest reservoir length that fits in `HotSlot`.
+///
+/// `HotSlot.len` and `HotSlot.farthest_idx` are `u8`. Runtime `l_max` selects the
+/// actual length and must not exceed this bound.
 pub(crate) const MAX_RESERVOIR_LEN: usize = u8::MAX as usize;
-
-// ─── HotSlot: 16-byte per-point mutex + cached fields ─────────────────────────
 
 #[repr(C)]
 struct HotSlot {
@@ -342,18 +294,8 @@ impl HotSlot {
 
 const _: () = assert!(std::mem::size_of::<LockedHotSlot>() == 16);
 
-// ─── Cold slabs ───────────────────────────────────────────────────────────────
-//
-// Each per-point reservoir lives at index `idx` across three runtime-sized
-// slabs: hashes, distances, neighbors. The stride is `scan_lanes` (l_max
-// rounded up to a multiple of 32 so the AVX-512 / AVX-2 find_hash scan can
-// stay aligned). At l_max=64 the stride is 64 and the per-point cold cost is
-// 64 * 8 = 512 B; at l_max=128 the stride is 128 and the per-point cost is
-// 1024 B. No fixed-size padding — the stride is the runtime l_max.
-//
-// `ColdSlotPtrs` is the lightweight view passed into `insert_locked` and the
-// scan/update helpers — three raw pointers + the stride. Mutation safety is
-// established by the caller via `HotSlot.lock`.
+// These pointers name one point's row in the three cold arrays. The caller must
+// hold that point's lock before it writes through a pointer.
 
 #[derive(Clone, Copy)]
 struct ColdSlotPtrs {
@@ -362,8 +304,6 @@ struct ColdSlotPtrs {
     neighbors: *mut u32,
     scan_lanes: usize,
 }
-
-// ─── find_hash SIMD: 32-way u16 compare ───────────────────────────────────────
 
 #[derive(Clone, Copy)]
 struct FindHashArgs {
@@ -437,9 +377,10 @@ where
     }
 }
 
-/// Hashes are compared for equality only, so the lanes are loaded as `i16`
-/// (diskann-wide has no `u16` vector type) — the bit patterns, and therefore
-/// the equality result, are identical.
+/// Find one `u16` hash with `i16` SIMD equality.
+///
+/// `diskann-wide` has no `u16` vector type. An `i16` load keeps each bit pattern,
+/// so equality gives the same result.
 fn find_hash_simd<F>(arch: F::Arch, args: FindHashArgs) -> Option<usize>
 where
     F: SIMDVector<Scalar = i16> + SIMDPartialEq,
@@ -448,9 +389,8 @@ where
     let target = F::splat(arch, args.target as i16);
     let chunks = len.div_ceil(F::LANES).min(args.scan_lanes / F::LANES);
     for chunk in 0..chunks {
-        // SAFETY: production args are created inside `insert_locked` from a
-        // `ColdSlotPtrs` hash segment valid for `scan_lanes` elements. `chunks`
-        // is capped at `scan_lanes / F::LANES`, so this full load stays inside it.
+        // SAFETY: `insert_locked` supplies a hash row with `scan_lanes` elements.
+        // `chunks <= scan_lanes / F::LANES`, so this full load stays in the row.
         let values = unsafe { F::load_simd(arch, args.hashes.add(chunk * F::LANES).cast::<i16>()) };
         if let Some(offset) = values.eq_simd(target).first() {
             let lane = chunk * F::LANES + offset;
@@ -462,8 +402,10 @@ where
     None
 }
 
-/// Bit `j` of the returned hash is `dst[j] - src[j] >= 0.0`; equality,
-/// including signed zero, hashes as non-negative on every backend.
+/// Return the relative hash for two sketches.
+///
+/// Bit `j` is one when `dst[j] - src[j] >= 0.0`. Equality and signed zero set
+/// the bit on every architecture.
 fn relative_hash_simd<F>(arch: F::Arch, args: RelativeHashArgs) -> u16
 where
     F: SIMDVector<Scalar = f32> + SIMDPartialOrd + std::ops::Sub<Output = F>,
@@ -472,11 +414,10 @@ where
     debug_assert!(args.len <= F::LANES);
     debug_assert!(F::LANES <= u16::BITS as usize);
 
-    // SAFETY: the production constructor takes `src` and `dst` from slices of
-    // exactly `len` sketch values. HashPrune validates `len <= 16 <= F::LANES`,
-    // and masked loads do not access inactive lanes.
+    // SAFETY: `src` and `dst` each contain `len` values. Construction checks
+    // `len <= 16 <= F::LANES`. The masked load does not read inactive lanes.
     let dst = unsafe { F::load_simd_first(arch, args.dst, args.len) };
-    // SAFETY: as above.
+    // SAFETY: `dst` and `src` have the same checked length.
     let src = unsafe { F::load_simd_first(arch, args.src, args.len) };
     let bits = u64::from(
         (dst - src)
@@ -488,14 +429,11 @@ where
     bits as u16 & active
 }
 
-// ─── Per-reservoir mutation helpers (caller holds lock) ───────────────────────
-
-/// Map a bf16-rounded `f32` to an order-preserving `u16` so raw integer
-/// comparison matches float ordering for ALL signs. Raw bf16-bit compares are
-/// monotonic only for non-negative values; InnerProduct distances are `-dot`
-/// (negative), which otherwise sort inverted and make the reservoir evict its
-/// best edges. For non-negative inputs this only sets the top bit on every
-/// value, so L2/Cosine orderings — and the resulting graphs — are unchanged.
+/// Convert a bf16 distance to an order-preserving `u16` key.
+///
+/// Raw bf16 bits are monotonic only for non-negative values. Inner-product
+/// distance can be negative. This transform preserves the total numeric order
+/// for both signs.
 #[inline(always)]
 fn ordered_key(distance: f32) -> u16 {
     let b = f32_to_bf16(distance);
@@ -513,16 +451,14 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
         hot.farthest_idx = 0;
         return;
     }
-    // Distance is stored as bf16, so distinct candidates frequently tie after
-    // quantization. The residual hash is already a seeded, ID-order-independent
-    // discriminator; the neighbor ID is only the final total-order fallback.
-    // This preserves the paper's history-independence guarantee under ties
-    // without systematically favoring low dataset IDs.
+    // The total key is `(distance, residual hash, neighbor ID)`. The residual
+    // hash resolves equal bf16 distances. The ID resolves the remaining ties.
     let mut max_idx: u8 = 0;
     // SAFETY: `hot.len > 0` and all active slots are initialized.
     let mut max_key = unsafe { (*cold.distances, *cold.hashes, *cold.neighbors) };
     for i in 1..hot.len as usize {
-        // SAFETY: guaranteed by this function's contract.
+        // SAFETY: `i < hot.len <= cold.scan_lanes`, and all active entries are
+        // initialized.
         let key = unsafe {
             (
                 *cold.distances.add(i),
@@ -541,9 +477,9 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
 
 /// # Safety
 ///
-/// The source slot lock is held; each cold pointer is valid for `scan_lanes`
-/// elements; `hot.len <= l_max <= scan_lanes`; and the first `hot.len` entries
-/// of every cold array are initialized.
+/// The caller holds the source lock. Each cold pointer is valid for
+/// `scan_lanes` elements. `hot.len <= l_max <= scan_lanes`. The first `hot.len`
+/// entries of each cold array are initialized.
 #[inline(always)]
 unsafe fn insert_locked(
     hot: &mut HotSlot,
@@ -581,13 +517,15 @@ unsafe fn insert_locked(
         let current_key = unsafe { (*cold.distances.add(idx), *cold.neighbors.add(idx)) };
         if (dist_key, neighbor) < current_key {
             let was_farthest = idx == hot.farthest_idx as usize;
-            // SAFETY: as above; the caller holds the slot lock.
+            // SAFETY: `idx < hot.len <= cold.scan_lanes`. The entry is
+            // initialized, and the caller holds the source lock.
             unsafe {
                 *cold.neighbors.add(idx) = neighbor;
                 *cold.distances.add(idx) = dist_key;
             }
             if was_farthest {
-                // SAFETY: this function's contract provides the same invariants.
+                // SAFETY: the caller still holds the source lock. The cold rows
+                // and initialized prefix are unchanged.
                 unsafe { update_farthest(hot, cold) };
             }
             return true;
@@ -638,14 +576,14 @@ unsafe fn insert_locked(
     true
 }
 
-/// Collect the reservoir's neighbor IDs sorted by distance and truncated to `cap`.
-/// A Rayon-owned scratch `Vec`, sized to the reservoir's runtime fill and
-/// reused within one extraction job, avoids per-reservoir scratch allocation.
+/// Return at most `cap` neighbor IDs in distance order.
+///
+/// `scratch` belongs to one Rayon extraction job and is reused for its rows.
 ///
 /// # Safety
 ///
-/// Mutation is excluded by the slot lock or unique ownership, and `distances`
-/// and `neighbors` each point to at least `hot.len` initialized entries.
+/// The caller must exclude mutation with the point lock or unique ownership.
+/// `distances` and `neighbors` each point to `hot.len` initialized entries.
 unsafe fn collect_nearest_ids(
     hot: &HotSlot,
     distances: *const u16,
@@ -657,41 +595,39 @@ unsafe fn collect_nearest_ids(
     scratch.clear();
     scratch.reserve(n);
     for i in 0..n {
-        // SAFETY: guaranteed by this function's contract.
+        // SAFETY: `i < n == hot.len`, and both arrays have an initialized entry
+        // at `i`.
         scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
     }
     scratch.sort_unstable_by_key(|&(id, distance)| (distance, id));
     scratch[..n.min(cap)].iter().map(|&(id, _)| id).collect()
 }
 
-/// Collect the reservoir's neighbor ids, truncated to `cap`, WITHOUT sorting.
-/// Reservoir order is intentionally not preserved. Reading only `neighbors`
-/// lets the caller drop the hashes and distances slabs before extraction; any
-/// ordering required by a later graph-finalization policy belongs to that caller.
+/// Return at most `cap` neighbor IDs without sorting them.
+///
+/// The caller does not depend on reservoir order. This function reads only the
+/// neighbor row.
 ///
 /// # Safety
 ///
-/// Mutation is excluded by the slot lock or unique ownership, and `neighbors`
-/// points to at least `hot.len` initialized entries.
+/// The caller must exclude mutation with the point lock or unique ownership.
+/// `neighbors` points to `hot.len` initialized entries.
 #[inline]
 unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize) -> Vec<u32> {
     let out_len = (hot.len as usize).min(cap);
     let mut out = Vec::with_capacity(out_len);
     for i in 0..out_len {
-        // SAFETY: guaranteed by this function's contract.
+        // SAFETY: `i < out_len <= hot.len`, and the neighbor entry is initialized.
         out.push(unsafe { *neighbors.add(i) });
     }
     out
 }
 
-// ─── HashPrune ────────────────────────────────────────────────────────────────
-
-/// Global bounded reservoirs shared by parallel leaf workers.
+/// Bounded point reservoirs shared by parallel leaf workers.
 ///
-/// Row `i` consists of `hot[i]` and the `i * scan_lanes` range in each cold
-/// slab. The point mutex is the sole synchronization boundary: callers never
-/// hold two point locks, and sketch computation/extraction happens without a
-/// lock. Consuming extraction proves that no writer can remain.
+/// Point `i` uses `hot[i]` and row `i` in each cold array. Its mutex protects all
+/// four locations. A worker holds at most one point mutex. Extraction consumes
+/// `HashPrune`, so no writer can remain.
 pub(crate) struct HashPrune {
     hot: Vec<LockedHotSlot>,
     /// AoSoA hashes slab: `npoints * scan_lanes` u16.
@@ -700,8 +636,7 @@ pub(crate) struct HashPrune {
     cold_distances: UnsafeCell<MmapSlab<u16>>,
     /// AoSoA neighbors slab: `npoints * scan_lanes` u32.
     cold_neighbors: UnsafeCell<MmapSlab<u32>>,
-    /// Per-slot stride. Equals `l_max.next_multiple_of(32).max(32)`. Always a
-    /// multiple of 32 so the AVX-512 / AVX-2 find_hash scan stays aligned.
+    /// Row stride: `l_max.next_multiple_of(32).max(32)`.
     scan_lanes: usize,
     sketches: LshSketches,
     l_max: usize,
@@ -718,8 +653,7 @@ unsafe impl Send for HashPrune {}
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
-    /// Precompute immutable sketches and allocate one lazy-backed reservoir
-    /// per dataset point.
+    /// Compute sketches and allocate one zero-initialized reservoir per point.
     pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: MatrixView<'_, T>,
         num_planes: usize,
@@ -742,7 +676,6 @@ impl HashPrune {
         let t1 = std::time::Instant::now();
         let scan_lanes = l_max.next_multiple_of(32).max(32);
 
-        // Hot slab: one HotSlot per point, contiguous.
         let mut hot: Vec<LockedHotSlot> = Vec::new();
         hot.try_reserve_exact(npoints)
             .map_err(ANNError::new)
@@ -751,11 +684,7 @@ impl HashPrune {
             hot.push(LockedHotSlot::new());
         }
 
-        // Three cold slabs, each `npoints * scan_lanes` elements, allocated
-        // via mmap so the kernel keeps them zero-backed (no physical pages
-        // until first write). At scan_lanes = 64 the per-point cold cost is
-        // 64 * 8 = 512 B; at scan_lanes = 128 it is 1024 B. Reservoirs that
-        // never fill past the avg fill don't touch the high pages.
+        // Each cold array has one `scan_lanes` row for each point.
         let total = npoints.checked_mul(scan_lanes).ok_or_else(|| {
             super::config_error(format!(
                 "HashPrune slab shape {npoints} x {scan_lanes} overflows usize"
@@ -765,17 +694,11 @@ impl HashPrune {
         let cold_distances = MmapSlab::<u16>::new_zeroed(total)?;
         let cold_neighbors = MmapSlab::<u32>::new_zeroed(total)?;
 
-        // Hint hugepages on slabs > 2 MB so DTLB pressure scales with 2 MB
-        // pages instead of 4 KB. Non-fatal on failure; no-op on kernels
-        // without THP. Linux-only: the Windows MEM_LARGE_PAGES equivalent must
-        // be requested at VirtualAlloc time AND needs SeLockMemoryPrivilege
-        // (off by default), so a failure would abort the slab rather than
-        // silently fall back — not worth it for a DTLB hint.
         #[cfg(target_os = "linux")]
         {
             let hot_bytes = hot.len() * std::mem::size_of::<LockedHotSlot>();
-            // SAFETY: each slab backs a contiguous allocation of the indicated
-            // byte length. madvise is non-fatal on failure.
+            // SAFETY: each pointer names a contiguous allocation of `bytes`.
+            // `madvise` does not read or write the allocation.
             unsafe {
                 for (ptr, bytes) in [
                     (hot.as_ptr() as *mut libc::c_void, hot_bytes),
@@ -818,15 +741,16 @@ impl HashPrune {
         })
     }
 
-    /// Locks the per-slot mutex at `idx`, runs `f` with mutable access to the
-    /// hot state and its cold-slab pointers, and unlocks on return or panic.
+    /// Lock point `idx` and run `f` with its mutable hot and cold state.
+    ///
+    /// RAII unlocks the point after return or panic.
     #[inline(always)]
     fn with_locked<R>(&self, idx: usize, f: impl FnOnce(&mut HotSlot, ColdSlotPtrs) -> R) -> R {
         assert!(idx < self.hot.len(), "HashPrune point index out of bounds");
         let off = idx * self.scan_lanes;
-        // SAFETY: `idx` is bounds-checked, each slab has
-        // `hot.len() * scan_lanes` elements, and its UnsafeCell permits mutation
-        // through this shared HashPrune reference while the point lock is held.
+        // SAFETY: `idx` is in bounds. Each slab has
+        // `hot.len() * scan_lanes` elements. `UnsafeCell` permits these writes,
+        // and `with_state` holds the point lock for the closure.
         let cold = unsafe {
             ColdSlotPtrs {
                 hashes: (*self.cold_hashes.get()).as_ptr().cast_mut().add(off),
@@ -838,10 +762,9 @@ impl HashPrune {
         self.hot[idx].with_state(|hot| f(hot, cold))
     }
 
-    /// Merge one leaf's CSR edge list into the global reservoirs.
+    /// Merge one leaf's CSR edges into the point reservoirs.
     ///
-    /// Sketch layout and gathering are HashPrune implementation details; the
-    /// caller only lends a reusable buffer to avoid per-leaf allocation.
+    /// `sketch_scratch` stores the gathered sketches for this leaf.
     pub(crate) fn add_leaf_edges(
         &self,
         point_ids: &[u32],
@@ -870,7 +793,6 @@ impl HashPrune {
             }
             let global_src = point_ids[local_src] as usize;
 
-            // Prefetch the next non-empty source's hot and cold slots.
             if let Some(next) = (local_src + 1..n)
                 .find(|&i| edge_offsets[i] != edge_offsets[i + 1])
                 .map(|i| point_ids[i] as usize)
@@ -923,7 +845,7 @@ impl HashPrune {
         }
     }
 
-    /// Extract the nearest `max_degree` candidates retained by HashPrune.
+    /// Consume the reservoirs and return at most `max_degree` nearest IDs per point.
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_nearest_lists(self, max_degree: usize) -> Vec<AdjacencyList<u32>> {
         let scan_lanes = self.scan_lanes;
@@ -943,9 +865,8 @@ impl HashPrune {
             .into_par_iter()
             .map_init(Vec::new, |scratch, i| {
                 let off = i * scan_lanes;
-                // SAFETY: indexing proves `i` names a live slot, and consuming
-                // `self` gives this extraction unique ownership, so no mutable
-                // access can overlap the returned state reference.
+                // SAFETY: indexing proves that `i` names a live slot. This method
+                // consumes `self`, so no writer can overlap this state reference.
                 let hot = unsafe { &*hot[i].get() };
                 // SAFETY: construction allocated `npoints * scan_lanes` entries;
                 // this loop keeps `i < npoints`, and insertion maintains
@@ -966,9 +887,7 @@ impl HashPrune {
             .collect()
     }
 
-    /// Extract each point's full reservoir as candidate IDs. Drops the hashes
-    /// and distances slabs (2/3 of the reservoir) before materializing the copy,
-    /// so only the neighbors slab overlaps it.
+    /// Consume the reservoirs and return all retained candidate IDs.
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_candidate_lists(self) -> Vec<AdjacencyList<u32>> {
         let cap = self.l_max;
@@ -984,18 +903,16 @@ impl HashPrune {
         let cold_hashes = cold_hashes.into_inner();
         let cold_distances = cold_distances.into_inner();
         let cold_neighbors = cold_neighbors.into_inner();
-        // Neither the hashes (LSH dedup index) nor the distances (bf16
-        // keep-closer key) are read again — free them before the copy so the
-        // reservoir+copy overlap is just the neighbors slab.
+        // Extraction reads only neighbor IDs. Drop the hash and distance arrays
+        // before the code creates the output lists.
         drop(cold_hashes);
         drop(cold_distances);
         (0..hot.len())
             .into_par_iter()
             .map(|i| {
                 let neighbors = cold_neighbors.as_ptr().wrapping_add(i * scan_lanes);
-                // SAFETY: indexing proves `i` names a live slot, and consuming
-                // `self` gives this extraction unique ownership, so no mutable
-                // access can overlap the returned state reference.
+                // SAFETY: indexing proves that `i` names a live slot. This method
+                // consumes `self`, so no writer can overlap this state reference.
                 let hot = unsafe { &*hot[i].get() };
                 // SAFETY: construction allocated `npoints * scan_lanes` entries;
                 // this loop keeps `i < npoints`, and insertion maintains

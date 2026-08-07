@@ -135,10 +135,9 @@ where
         }
     }
 
-    /// Construct an adjacency list by taking ownership of a vector whose items
-    /// are known to be unique.
+    /// Take ownership of a vector that contains unique items.
     ///
-    /// Uniqueness is checked in debug builds but not in release builds.
+    /// The caller must supply unique items. Debug builds check this condition.
     pub(crate) fn from_vec_trusted(edges: Vec<I>) -> Self
     where
         I: ContainsSimd,
