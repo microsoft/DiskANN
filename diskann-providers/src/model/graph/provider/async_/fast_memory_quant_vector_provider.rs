@@ -229,7 +229,7 @@ impl FastMemoryQuantVectorProviderAsync {
 
     /// Load `self` from a pivots file and data file.
     ///
-    /// The pivots file follows the format in [`storage::PQStorage::load_pq_pivots_bin`] and
+    /// The pivots file follows the format in [`storage::PQStorage::load_pivots`] and
     /// the compressed code is saved in a canonical `.bin` format.
     ///
     /// See also: [`storage::bin::load_from_bin`].
@@ -245,8 +245,15 @@ impl FastMemoryQuantVectorProviderAsync {
             // We can use that information to load the pivots, then finish the rest
             // of initialization.
             let pq_storage = storage::PQStorage::new(pivots, data, None);
-            let table = pq_storage.load_pq_pivots_bin(pivots, pq_bytes, provider)?;
-            Ok(Self::new(metric, num_points, table))
+            let table = pq_storage.load_pivots(provider)?;
+            if table.nchunks() != pq_bytes {
+                return Err(ANNError::message(format!(
+                    "PQ pivot table mismatch: file has {} chunks but expected {} chunks.",
+                    table.nchunks(),
+                    pq_bytes
+                )));
+            }
+            Ok(Self::new(metric, num_points, table.try_into()?))
         })
     }
 
