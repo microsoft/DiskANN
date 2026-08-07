@@ -54,17 +54,15 @@
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
 use std::cell::UnsafeCell;
 
-use super::{
-    bf16::{bf16_to_f32, f32_to_bf16},
-    lsh::{LshSketchError, LshSketches},
-};
+use super::{bf16::f32_to_bf16, lsh::LshSketches};
+use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use bytemuck::Pod;
-use crate::{graph::AdjacencyList, utils::VectorRepr, ANNError, ANNResult};
+use diskann_utils::views::MatrixView;
 use diskann_vector::{prefetch_hint_all, prefetch_hint_all_raw};
 use diskann_wide::{
+    Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
     arch::{self, Dispatched1, FTarget1, Target},
     lifetime::As,
-    Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
 };
 use rayon::prelude::*;
 
@@ -83,8 +81,8 @@ struct MmapSlab<T: Pod> {
 // transfers that ownership, and `T: Send` permits its initialized values to move.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(target_os = "linux")]
-// SAFETY: safe shared access exposes only `*const T` or `&[T]`, and `T: Sync`.
-// Raw mutation is possible only inside this module and requires an unsafe block;
+// SAFETY: safe shared access exposes only `*const T`, and `T: Sync`.
+// Dereferencing or mutating it requires an unsafe block;
 // HashPrune places the slab in UnsafeCell before performing such mutation.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
@@ -99,7 +97,7 @@ impl<T: Pod> MmapSlab<T> {
         }
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| crate::config_error(format!("slab size {len} overflows usize")))?;
+            .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
         // SAFETY: MAP_ANONYMOUS gives a zero-backed VA region; PROT_RW makes
         // it readable/writable. Pages allocate on first write only.
         unsafe {
@@ -147,17 +145,6 @@ impl<T: Pod> Drop for MmapSlab<T> {
     }
 }
 
-#[cfg(target_os = "linux")]
-impl<T: Pod> std::ops::Deref for MmapSlab<T> {
-    type Target = [T];
-    fn deref(&self) -> &[T] {
-        // SAFETY: `new_zeroed` stores an aligned mmap base covering
-        // `len * size_of::<T>()` live bytes; anonymous pages are zero-initialized,
-        // and every zero bit pattern is valid because `T: Pod`.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-    }
-}
-
 /// Windows counterpart of the Linux mmap slab. `VirtualAlloc(MEM_RESERVE |
 /// MEM_COMMIT, PAGE_READWRITE)` reserves a zero-backed anonymous range whose
 /// pages fault in on first write — the same lazy-commit behavior as
@@ -194,7 +181,7 @@ struct MmapSlab<T: Pod> {
 // transfers that ownership, and `T: Send` permits its initialized values to move.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(windows)]
-// SAFETY: safe shared access exposes only `*const T` or `&[T]`, and `T: Sync`.
+// SAFETY: safe shared access exposes only `*const T`, and `T: Sync`.
 // HashPrune places the slab in UnsafeCell before any raw mutation.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
@@ -209,7 +196,7 @@ impl<T: Pod> MmapSlab<T> {
         }
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| crate::config_error(format!("slab size {len} overflows usize")))?;
+            .ok_or_else(|| super::config_error(format!("slab size {len} overflows usize")))?;
         // SAFETY: MEM_RESERVE|MEM_COMMIT + PAGE_READWRITE returns a zero-backed
         // RW region; physical pages fault in on first write only. Windows
         // zero-fills committed pages, matching mmap's MAP_ANONYMOUS contract.
@@ -259,17 +246,6 @@ impl<T: Pod> Drop for MmapSlab<T> {
     }
 }
 
-#[cfg(windows)]
-impl<T: Pod> std::ops::Deref for MmapSlab<T> {
-    type Target = [T];
-    fn deref(&self) -> &[T] {
-        // SAFETY: `new_zeroed` stores an aligned VirtualAlloc base covering
-        // `len * size_of::<T>()` live bytes; Windows zero-initializes the region,
-        // and every zero bit pattern is valid because `T: Pod`.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-    }
-}
-
 /// Fallback slab for platforms that are neither Linux nor Windows: regular Vec.
 /// Eager-fault behavior tracks the host allocator.
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -296,14 +272,6 @@ impl<T: Pod + Default> MmapSlab<T> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
-impl<T: Pod> std::ops::Deref for MmapSlab<T> {
-    type Target = [T];
-    fn deref(&self) -> &[T] {
-        &self.0
-    }
-}
-
 /// Structural upper bound on per-node reservoir length: `HotSlot.len` and
 /// `farthest_idx` are `u8`, so a reservoir can hold at most 255 entries. This
 /// is an overflow guard, NOT the reservoir size — the cold slab stride
@@ -311,29 +279,6 @@ impl<T: Pod> std::ops::Deref for MmapSlab<T> {
 /// user's `l_max` up to this bound. `find_hash_simd` scans `scan_lanes / 32`
 /// chunks, also runtime-sized.
 pub(crate) const MAX_RESERVOIR_LEN: usize = u8::MAX as usize;
-
-/// Compute LSH sketches over `data` (row-major `npoints × ndims` of `T`).
-fn sketches_from_data<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    npoints: usize,
-    ndims: usize,
-    num_planes: usize,
-    seed: u64,
-) -> ANNResult<LshSketches> {
-    LshSketches::try_new(npoints, ndims, num_planes, seed, |i, out| {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out)
-    })
-    .map_err(|error| match error {
-        LshSketchError::InvalidPlaneCount { actual, max } => {
-            super::config_error(format!("num_hash_planes ({actual}) must be in 1..={max}"))
-        }
-        LshSketchError::ShapeOverflow { rows, columns } => ANNError::message(format!(
-            "LSH matrix shape {rows} x {columns} overflows usize"
-        )),
-        LshSketchError::Allocation(error) => ANNError::new(error),
-        LshSketchError::Fill(error) => error.into(),
-    })
-}
 
 // ─── HotSlot: 16-byte per-point mutex + cached fields ─────────────────────────
 
@@ -551,25 +496,10 @@ where
 /// (negative), which otherwise sort inverted and make the reservoir evict its
 /// best edges. For non-negative inputs this only sets the top bit on every
 /// value, so L2/Cosine orderings — and the resulting graphs — are unchanged.
-/// Inverse: [`key_to_bf16`].
 #[inline(always)]
 fn ordered_key(distance: f32) -> u16 {
     let b = f32_to_bf16(distance);
-    if b & 0x8000 != 0 {
-        !b
-    } else {
-        b | 0x8000
-    }
-}
-
-/// Inverse of [`ordered_key`]: recover the bf16 bits for distance readback.
-#[inline(always)]
-fn key_to_bf16(key: u16) -> u16 {
-    if key & 0x8000 != 0 {
-        key & 0x7FFF
-    } else {
-        !key
-    }
+    if b & 0x8000 != 0 { !b } else { b | 0x8000 }
 }
 
 /// # Safety
@@ -708,21 +638,21 @@ unsafe fn insert_locked(
     true
 }
 
-/// Collect the reservoir's entries sorted by distance, truncated to `cap`.
+/// Collect the reservoir's neighbor IDs sorted by distance and truncated to `cap`.
 /// A Rayon-owned scratch `Vec`, sized to the reservoir's runtime fill and
-/// reused within one extraction job, avoids per-reservoir allocation.
+/// reused within one extraction job, avoids per-reservoir scratch allocation.
 ///
 /// # Safety
 ///
 /// Mutation is excluded by the slot lock or unique ownership, and `distances`
 /// and `neighbors` each point to at least `hot.len` initialized entries.
-unsafe fn collect_sorted_neighbors(
+unsafe fn collect_nearest_ids(
     hot: &HotSlot,
     distances: *const u16,
     neighbors: *const u32,
     cap: usize,
     scratch: &mut Vec<(u32, u16)>,
-) -> Vec<(u32, f32)> {
+) -> Vec<u32> {
     let n = hot.len as usize;
     scratch.clear();
     scratch.reserve(n);
@@ -731,12 +661,7 @@ unsafe fn collect_sorted_neighbors(
         scratch.push(unsafe { (*neighbors.add(i), *distances.add(i)) });
     }
     scratch.sort_unstable_by_key(|&(id, distance)| (distance, id));
-    let out_len = n.min(cap);
-    let mut out = Vec::with_capacity(out_len);
-    for &(id, d) in &scratch[..out_len] {
-        out.push((id, bf16_to_f32(key_to_bf16(d))));
-    }
-    out
+    scratch[..n.min(cap)].iter().map(|&(id, _)| id).collect()
 }
 
 /// Collect the reservoir's neighbor ids, truncated to `cap`, WITHOUT sorting.
@@ -796,21 +721,20 @@ impl HashPrune {
     /// Precompute immutable sketches and allocate one lazy-backed reservoir
     /// per dataset point.
     pub(crate) fn new<T: VectorRepr + Send + Sync>(
-        data: &[T],
-        npoints: usize,
-        ndims: usize,
+        data: MatrixView<'_, T>,
         num_planes: usize,
         l_max: usize,
         seed: u64,
     ) -> ANNResult<Self> {
         if !(1..=MAX_RESERVOIR_LEN).contains(&l_max) {
-            return Err(crate::config_error(format!(
+            return Err(super::config_error(format!(
                 "HashPrune l_max ({l_max}) must be in 1..={MAX_RESERVOIR_LEN}"
             )));
         }
 
+        let npoints = data.nrows();
         let t0 = std::time::Instant::now();
-        let sketches = sketches_from_data(data, npoints, ndims, num_planes, seed)?;
+        let sketches = LshSketches::try_new(data, num_planes, seed)?;
         tracing::debug!(
             elapsed_secs = t0.elapsed().as_secs_f64(),
             "sketch computation"
@@ -833,7 +757,7 @@ impl HashPrune {
         // 64 * 8 = 512 B; at scan_lanes = 128 it is 1024 B. Reservoirs that
         // never fill past the avg fill don't touch the high pages.
         let total = npoints.checked_mul(scan_lanes).ok_or_else(|| {
-            crate::config_error(format!(
+            super::config_error(format!(
                 "HashPrune slab shape {npoints} x {scan_lanes} overflows usize"
             ))
         })?;
@@ -928,16 +852,6 @@ impl HashPrune {
         if edges.is_empty() {
             return;
         }
-        self.add_leaf_edges_with_scratch(point_ids, edge_offsets, edges, sketch_scratch);
-    }
-
-    fn add_leaf_edges_with_scratch(
-        &self,
-        point_ids: &[u32],
-        edge_offsets: &[u32],
-        edges: &[(u32, f32)],
-        sketch_scratch: &mut Vec<f32>,
-    ) {
         let n = point_ids.len();
         let m = self.sketches.num_planes();
         let l_max = self.l_max as u8;
@@ -1036,8 +950,8 @@ impl HashPrune {
                 // SAFETY: construction allocated `npoints * scan_lanes` entries;
                 // this loop keeps `i < npoints`, and insertion maintains
                 // `hot.len <= l_max <= scan_lanes` initialized entries.
-                let nbrs = unsafe {
-                    collect_sorted_neighbors(
+                let ids = unsafe {
+                    collect_nearest_ids(
                         hot,
                         cold_distances.as_ptr().wrapping_add(off),
                         cold_neighbors.as_ptr().wrapping_add(off),
@@ -1045,7 +959,6 @@ impl HashPrune {
                         scratch,
                     )
                 };
-                let ids = nbrs.into_iter().map(|(id, _)| id).collect();
                 // A neighbor always has the same relative hash for this source;
                 // insertion replaces an existing hash slot instead of appending.
                 AdjacencyList::from_vec_trusted(ids)
@@ -1100,6 +1013,21 @@ impl HashPrune {
 mod tests {
     use super::*;
 
+    fn hash_prune<T: VectorRepr>(
+        data: &[T],
+        points: usize,
+        dimensions: usize,
+        planes: usize,
+        l_max: usize,
+    ) -> ANNResult<HashPrune> {
+        HashPrune::new(
+            MatrixView::try_from(data, points, dimensions).unwrap(),
+            planes,
+            l_max,
+            42,
+        )
+    }
+
     struct Reservoir {
         hot: HotSlot,
         hashes: Vec<u16>,
@@ -1149,18 +1077,25 @@ mod tests {
         }
 
         fn neighbors(&self) -> Vec<(u32, f32)> {
-            let cold = self.cold();
-            let mut scratch = Vec::new();
-            // SAFETY: the test owns the reservoir; all cold slabs span scan_lanes entries.
-            unsafe {
-                collect_sorted_neighbors(
-                    &self.hot,
-                    cold.distances,
-                    cold.neighbors,
-                    usize::MAX,
-                    &mut scratch,
-                )
-            }
+            let mut entries: Vec<_> = self
+                .neighbors
+                .iter()
+                .copied()
+                .zip(self.distances.iter().copied())
+                .take(self.len())
+                .collect();
+            entries.sort_unstable_by_key(|&(id, distance)| (distance, id));
+            entries
+                .into_iter()
+                .map(|(id, key)| {
+                    let bits = if key & 0x8000 != 0 {
+                        key & 0x7fff
+                    } else {
+                        !key
+                    };
+                    (id, f32::from_bits((bits as u32) << 16))
+                })
+                .collect()
         }
 
         fn len(&self) -> usize {
@@ -1230,8 +1165,18 @@ mod tests {
             for planes in [1, 8, 16] {
                 let (actual, expected) = pool.install(|| {
                     (
-                        sketches_from_data(&converted, points, dimensions, planes, 42).unwrap(),
-                        sketches_from_data(&f32_data, points, dimensions, planes, 42).unwrap(),
+                        LshSketches::try_new(
+                            MatrixView::try_from(converted.as_slice(), points, dimensions).unwrap(),
+                            planes,
+                            42,
+                        )
+                        .unwrap(),
+                        LshSketches::try_new(
+                            MatrixView::try_from(f32_data.as_slice(), points, dimensions).unwrap(),
+                            planes,
+                            42,
+                        )
+                        .unwrap(),
                     )
                 });
                 assert_eq!(
@@ -1351,19 +1296,20 @@ mod tests {
     fn slab_is_zeroed_and_reports_its_bytes() {
         let slab = MmapSlab::<u32>::new_zeroed(4).unwrap();
         assert_eq!(slab.bytes(), 4 * std::mem::size_of::<u32>());
-        assert_eq!(slab.len(), 4);
         assert!(!slab.as_ptr().is_null());
-        assert_eq!(&*slab, &[0; 4]);
+        // SAFETY: this test uniquely owns a live four-element slab.
+        let values = unsafe { std::slice::from_raw_parts(slab.as_ptr(), 4) };
+        assert_eq!(values, &[0; 4]);
     }
 
     #[test]
     fn accepts_structural_l_max_boundaries() {
         let data = [0.0_f32];
-        let low = HashPrune::new(&data, 1, 1, 1, 1, 42).unwrap();
+        let low = hash_prune(&data, 1, 1, 1, 1).unwrap();
         assert_eq!(low.l_max, 1);
         assert_eq!(low.scan_lanes, 32);
 
-        let high = HashPrune::new(&data, 1, 1, 1, MAX_RESERVOIR_LEN, 42).unwrap();
+        let high = hash_prune(&data, 1, 1, 1, MAX_RESERVOIR_LEN).unwrap();
         assert_eq!(high.l_max, MAX_RESERVOIR_LEN);
         assert_eq!(high.scan_lanes, 256);
     }
@@ -1371,7 +1317,7 @@ mod tests {
     #[test]
     fn rejects_l_max_outside_structural_boundaries() {
         for l_max in [0, MAX_RESERVOIR_LEN + 1] {
-            let result = HashPrune::new(&[0.0_f32], 1, 1, 1, l_max, 42);
+            let result = hash_prune(&[0.0_f32], 1, 1, 1, l_max);
             let error = match result {
                 Ok(_) => panic!("l_max={l_max} must be rejected"),
                 Err(error) => error,
@@ -1381,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_key_roundtrips_bf16_order_for_all_signs() {
+    fn ordered_key_preserves_bf16_order_for_all_signs() {
         let values = [
             f32::NEG_INFINITY,
             -100.0,
@@ -1393,12 +1339,6 @@ mod tests {
         ];
         let keys: Vec<_> = values.iter().copied().map(ordered_key).collect();
         assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]));
-        for (value, key) in values.into_iter().zip(keys) {
-            assert_eq!(
-                bf16_to_f32(key_to_bf16(key)),
-                bf16_to_f32(f32_to_bf16(value))
-            );
-        }
     }
 
     // Leaf ingestion and scratch reuse.
@@ -1406,8 +1346,8 @@ mod tests {
     #[test]
     fn batched_leaf_edges_match_single_edge_reference() {
         let data = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let batched = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
-        let reference = HashPrune::new(&data, 4, 2, 8, 8, 42).unwrap();
+        let batched = hash_prune(&data, 4, 2, 8, 8).unwrap();
+        let reference = hash_prune(&data, 4, 2, 8, 8).unwrap();
         let point_ids = [0, 1, 2, 3];
         let offsets = [0, 3, 6, 9, 12];
         let edges = [
@@ -1454,7 +1394,7 @@ mod tests {
     #[test]
     fn leaf_edges_grow_then_reuse_sketch_scratch() {
         let data = [0.0_f32, 1.0, 2.0, 3.0];
-        let hp = HashPrune::new(&data, 4, 1, 8, 4, 42).unwrap();
+        let hp = hash_prune(&data, 4, 1, 8, 4).unwrap();
         let mut scratch = vec![99.0; 1];
 
         hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
@@ -1558,8 +1498,8 @@ mod tests {
         use rayon::prelude::*;
 
         let data = vec![0.0f32; 100 * 4];
-        let parallel = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
-        let serial = HashPrune::new(&data, 100, 4, 4, 10, 42).unwrap();
+        let parallel = hash_prune(&data, 100, 4, 4, 10).unwrap();
+        let serial = hash_prune(&data, 100, 4, 4, 10).unwrap();
 
         (0..50).into_par_iter().for_each(|source| {
             add_edge(&parallel, source, (source + 1) % 100, 1.0);
@@ -1586,8 +1526,8 @@ mod tests {
             -1.0,  1.0,
              1.0, -1.0,
         ];
-        let full = HashPrune::new(&data, 8, 2, 16, 10, 42).unwrap();
-        let nearest = HashPrune::new(&data, 8, 2, 16, 10, 42).unwrap();
+        let full = hash_prune(&data, 8, 2, 16, 10).unwrap();
+        let nearest = hash_prune(&data, 8, 2, 16, 10).unwrap();
         for target in 1..8 {
             add_edge(&full, 0, target, target as f32);
             add_edge(&nearest, 0, target, target as f32);

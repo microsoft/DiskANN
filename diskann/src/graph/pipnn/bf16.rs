@@ -17,13 +17,14 @@
 
 /// Convert `f32` → bf16 by truncating the lower 16 mantissa bits.
 #[inline(always)]
-pub fn f32_to_bf16(v: f32) -> u16 {
+pub(super) fn f32_to_bf16(v: f32) -> u16 {
     (v.to_bits() >> 16) as u16
 }
 
-/// Reconstruct `f32` from a bf16, zero-filling the lower mantissa bits.
+/// Reconstruct `f32` from a bf16 for conversion tests.
+#[cfg(test)]
 #[inline(always)]
-pub fn bf16_to_f32(v: u16) -> f32 {
+fn bf16_to_f32(v: u16) -> f32 {
     f32::from_bits((v as u32) << 16)
 }
 
