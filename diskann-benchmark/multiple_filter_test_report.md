@@ -402,6 +402,65 @@ regressions are within single-run tail noise.
 The uniform-random single-attribute workload also improves from 3.300 to 2.856 ms mean
 (13.45%), 10.242 to 9.112 ms P99 (11.03%), and 13.187 to 11.312 ms P99.9 (14.22%).
 
+### 8.4.6 Fresh Roaring-materialized bitmap versus Bitslice-DNF
+
+After merging `origin/main`, both providers were rerun in one counterbalanced S1-S9 runbook using
+the full 596-label dataset, canonical `gtset` ground truth, k=150, L=150, one thread, 1,000
+queries, and three repetitions. Values are milliseconds averaged across the three repetitions.
+`topk-multihop-live-filter-bitmap` rebuilt fresh query providers for every repetition and L; its
+lazy Roaring set algebra and dense result-bitmap construction were therefore included in query
+latency, with no cross-query result cache.
+
+| Case | Bitmap AVG | DNF AVG | AVG speedup | Bitmap P99 | DNF P99 | P99 speedup | Bitmap P99.9 | DNF P99.9 | P99.9 speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | 50.914 | **2.130** | 23.91x | 60.307 | **7.321** | 8.24x | 76.567 | **11.090** | 6.90x |
+| S2 | 11.109 | **4.121** | 2.70x | 14.936 | **8.976** | 1.66x | 18.371 | **10.849** | 1.69x |
+| S3 | 16.508 | **4.221** | 3.91x | 22.508 | **10.410** | 2.16x | 30.520 | **13.176** | 2.32x |
+| S4 | 17.757 | **5.205** | 3.41x | 23.850 | **13.216** | 1.80x | 34.291 | **17.202** | 1.99x |
+| S5 | 48.190 | **2.723** | 17.70x | 58.693 | **8.262** | 7.10x | 73.576 | **10.871** | 6.77x |
+| S6 | 15.432 | **4.468** | 3.45x | 19.774 | **7.996** | 2.47x | 29.565 | **10.705** | 2.76x |
+| S7 | 8.757 | **5.206** | 1.68x | 12.453 | **8.317** | 1.50x | 20.782 | **10.945** | 1.90x |
+| S8 | 6.361 | **5.135** | 1.24x | 9.002 | **7.698** | 1.17x | 11.031 | **8.704** | 1.27x |
+| S9 | 9.580 | **4.311** | 2.22x | 13.963 | **7.895** | 1.77x | 17.651 | **9.942** | 1.78x |
+
+Recall, comparisons, and hops were exactly identical for every pair. Bitslice-DNF won all 27
+latency comparisons. Its geometric-mean speedups were **3.967x AVG**, **2.426x P99**, and
+**2.534x P99.9**. The largest gaps were the broad single-terminal S1 and S5 cases, where iterating
+millions of Roaring matches during densification dominates. The closest case was selective S8,
+where cheap materialization plus frequent membership tests narrowed the DNF advantage to 1.24x
+AVG.
+
+### 8.4.7 Fixed-L InlineFilterSearch versus multihop with Bitslice-DNF
+
+A dedicated `topk-inline-live-filter-bitslice-dnf` benchmark mode was added so InlineFilterSearch
+and multihop can use the exact same attribute index, encoded DNF providers, queries, and ground
+truth. The initial comparison intentionally disabled Adaptive-L and used the same fixed k=150,
+L=150, one thread, 1,000 queries, full 596-label metadata, canonical `gtset` ground truth, and
+three repetitions. Values are milliseconds averaged across repetitions.
+
+| Case | Inline AVG | Multi AVG | Speedup | Inline P99 | Multi P99 | Inline P99.9 | Multi P99.9 | Inline recall | Multi recall | Recall delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | **0.432** | 2.324 | 5.38x | **1.189** | 7.921 | **1.547** | 11.730 | 0.76114 | **0.97104** | -0.20990 |
+| S2 | **0.466** | 4.390 | 9.42x | **1.210** | 9.492 | **1.536** | 12.295 | 0.41239 | **0.94577** | -0.53338 |
+| S3 | **0.465** | 4.400 | 9.45x | **1.207** | 10.703 | **1.609** | 12.488 | 0.48748 | **0.95031** | -0.46283 |
+| S4 | **0.554** | 5.606 | 10.11x | **1.564** | 14.346 | **1.830** | 19.392 | 0.44256 | **0.95338** | -0.51082 |
+| S5 | **0.443** | 2.842 | 6.41x | **1.152** | 8.687 | **2.426** | 11.842 | 0.70740 | **0.97237** | -0.26497 |
+| S6 | **0.399** | 4.406 | 11.05x | **1.205** | 7.716 | **2.213** | 9.134 | 0.16844 | **0.87069** | -0.70225 |
+| S7 | **0.415** | 5.229 | 12.60x | **1.052** | 8.445 | **1.887** | 10.107 | 0.11883 | **0.88348** | -0.76465 |
+| S8 | **0.385** | 5.192 | 13.50x | **0.965** | 7.893 | **1.451** | 9.811 | 0.05506 | **0.83374** | -0.77868 |
+| S9 | **0.418** | 4.559 | 10.91x | **1.052** | 8.498 | **1.358** | 10.378 | 0.21855 | **0.91891** | -0.70035 |
+
+Fixed-L Inline was **9.512x faster in AVG**, **7.815x in P99**, and **6.717x in P99.9**
+by geometric mean, but it was not recall-competitive. Mean recall was only **0.37465**, versus
+**0.92219** for multihop, a -0.54754 absolute difference. Inline performed the same
+filter-independent traversal in every case (2,330.738 comparisons and 156.407 hops), while
+multihop spent 11.9K-18.4K comparisons and 1.1K-4.4K hops routing through rejected nodes to recover
+matching neighbors.
+
+The latency advantage therefore represents a different recall point, not an algorithmic win at
+equal quality. Adaptive-L or an L sweep is required to compare recall-versus-latency curves and
+determine whether Inline can match multihop recall efficiently.
+
 ## 8.5 Exact-semantics multihop allocation reuse
 
 After optimizing filter evaluation, the current multihop implementation still created temporary
@@ -465,6 +524,33 @@ This work is intentionally postponed. The immediate priority is exact-semantics 
 the current multihop implementation, including allocation reuse and removal of duplicated work,
 before changing its traversal policy.
 
+## 8.7 Backlog: SIMD whole-query bitmap materialization
+
+A no-cache SIMD materialization path is worth testing as the strongest whole-query-bitmap
+alternative to live DNF Bitslice evaluation. It would reuse the existing attribute-major dense
+bitsets, but evaluate the complete predicate over all `ceil(N / 64)` words using AVX2 or AVX-512:
+AND the terminal bitsets within each DNF clause, OR the clause results, and write one dense
+query-result bitmap. ANN traversal would then perform one bit lookup per visited node.
+
+This differs from `topk-multihop-live-filter-bitmap`, which currently performs Roaring posting-list
+set algebra and then iterates the matching IDs to densify the result. The SIMD experiment should
+not use a cross-query result cache: construct a fresh result bitmap for each query execution and
+charge all allocation, initialization, Boolean operations, and writes to query latency.
+
+The comparison should include:
+
+- current Roaring materialization, SIMD dense materialization, and live Bitslice-DNF;
+- one-, two-, four-, and larger-terminal DNF expressions with controlled short-circuit behavior;
+- total filter evaluations relative to `N / 64`, including all nodes visited during the query;
+- selective and broad results, plus different terminal/clause orderings;
+- separate materialization, ANN traversal, and end-to-end latency;
+- exact recall, comparison, hop, and filter-result parity;
+- memory bandwidth, output-bitmap allocation/zeroing, and cache-pollution measurements.
+
+The expected opportunity is complex predicates with weak live short-circuiting and enough visited
+nodes to amortize a sequential SIMD pass. Live Bitslice-DNF should remain favored for small
+one-off searches and well-ordered selective predicates.
+
 ## 9. Artifacts (`Q:\test6\filtered_test2\bench\full\`)
 
 - Labels: `data_labels_set.jsonl` (596 labels, general), `data_labels_min.jsonl` (11, fast)
@@ -479,6 +565,7 @@ before changing its traversal policy.
 - Posting-list + materialized-bitmap live code (section 8.2): `InlineAttributeIndexPosting` / `FrozenAttributeIndexPosting` / `MaterializedBitmapProvider`; benchmark search-type `topk-multihop-live-filter-bitmap`
 - Adaptive + bit-sliced live code (section 8.3): `InlineAttributeIndexAuto` (search-type `topk-multihop-live-filter-auto`) and `InlineAttributeIndexBitslice` (search-type `topk-multihop-live-filter-bitslice`)
 - Flat DNF Bitslice code (section 8.4): `EncodedDnf`, `BitsliceSingleProvider`, and `BitsliceDnfProvider`; benchmark search-type `topk-multihop-live-filter-bitslice-dnf`; microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
+- Inline Bitslice-DNF comparison (section 8.4.7): benchmark search-type `topk-inline-live-filter-bitslice-dnf`, using the same `InlineAttributeIndexBitslice` and DNF providers with `InlineFilterSearch`
 - Index (reused): `idxsave_full`(+`.data`)
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
