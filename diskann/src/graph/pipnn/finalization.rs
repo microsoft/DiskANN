@@ -15,26 +15,6 @@
 //!
 //! RobustPrune defines occlusion and alpha-round behavior. This module supplies
 //! contiguous vector access and a distance function for input type `T`.
-//!
-//! ```text
-//! candidate lists ──> validate point count and every global ID
-//!                                      │
-//!                         ┌────────────┴────────────┐
-//!                         v                         v
-//!                    len <= R                  len > R
-//!                  return list      source-distance candidates
-//!                                                   │
-//!                                                   v
-//!                                           shared RobustPrune
-//!                                                   │
-//!                                                   v
-//!                                           rewrite same list owner
-//! ```
-//!
-//! | Path | Distance evaluations | Allocation behavior |
-//! | --- | --- | --- |
-//! | bounded list | none | move list directly to output |
-//! | overfull list | source and occlusion distances | reuse Rayon-job workspace |
 
 use crate::{
     ANNError, ANNResult,
