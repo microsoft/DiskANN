@@ -3,27 +3,13 @@
  * Licensed under the MIT license.
  */
 
-//! Adapter from provider-independent PiPNN adjacency to the common disk index format.
+//! Write a PiPNN graph in the DiskANN disk-index format.
 //!
-//! The core crate deliberately knows nothing about dataset files, medoids, graph
-//! headers, or serialization. This adapter owns that boundary:
+//! This adapter checks dataset metadata and loads one contiguous matrix. It runs
+//! PiPNN in the supplied Rayon pool. It computes the start point with the sampled
+//! medoid policy. It then writes the common graph header and adjacency layout.
 //!
-//! 1. verify on-disk dataset metadata against the requested index configuration;
-//! 2. load the contiguous matrix required by batch construction;
-//! 3. run PiPNN in the caller-provided Rayon pool;
-//! 4. compute the production start node with the existing medoid policy; and
-//! 5. serialize adjacency with the same header/layout used by Vamana.
-//!
-//! ```text
-//! dataset file ──> metadata check ──> MatrixView ──> diskann::graph::pipnn ──> adjacency
-//!      │                                                              │
-//!      └──────────────────> sampled medoid ────────────────────────────┤
-//!                                                                     v
-//!                                                        canonical graph writer
-//! ```
-//!
-//! There is no PiPNN-specific disk graph format. Keeping serialization here means
-//! search and loading cannot distinguish which builder produced the graph.
+//! PiPNN and Vamana use the same disk graph format.
 
 use diskann::graph::pipnn::{PiPNNBuildContext, PiPNNConfig};
 use diskann::{utils::VectorRepr, ANNError, ANNResult};
@@ -48,8 +34,8 @@ where
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
     let data_path = builder.index_writer.get_dataset_file();
-    // Validate metadata before allocating/loading the full matrix. A mismatch
-    // here otherwise turns a configuration error into a later shape failure.
+    // Check metadata before the code loads the full matrix. Report a configuration
+    // error instead of a matrix-shape error.
     let (points, dimensions) =
         Metadata::read(&mut builder.storage_provider.open_reader(&data_path)?)?.into_dims();
     if dimensions != builder.index_configuration.dim {
@@ -65,9 +51,8 @@ where
         )));
     }
 
-    // PiPNN is a batch algorithm: materialize the matrix once, while all
-    // partition and leaf scratch stays inside the supplied pool and is released
-    // before the outer disk pipeline continues.
+    // PiPNN requires one contiguous matrix. Partition and leaf work use the
+    // supplied Rayon pool.
     let data =
         read_bin::<Data::VectorDataType>(&mut builder.storage_provider.open_reader(&data_path)?)?;
     let context = PiPNNBuildContext::new(
@@ -78,9 +63,8 @@ where
     )?;
     let adjacency = diskann::graph::pipnn::build_graph(data.as_view(), &context)?;
 
-    // Start-node policy belongs to the persisted index, not the core graph
-    // constructor. Reuse the production sampled medoid implementation so the
-    // serialized header has the same semantics as a Vamana-built index.
+    // The disk header requires a start point. Use the same sampled medoid policy
+    // as the Vamana disk builder.
     let mut rng = diskann_providers::utils::create_rnd_from_optional_seed(
         builder.index_configuration.random_seed,
     );
