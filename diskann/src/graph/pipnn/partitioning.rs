@@ -158,6 +158,10 @@ where
     Ok(leaves)
 }
 
+/// Partition one replica until each leaf has at most `c_max` points.
+///
+/// The function processes one work queue per recursion level. It merges leaves
+/// smaller than `c_min` after the queue becomes empty.
 fn partition_replica<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -244,6 +248,10 @@ where
     }))
 }
 
+/// Process one partition work item.
+///
+/// The function samples leaders, assigns all points, and separates complete
+/// leaves from clusters that require another recursion level.
 fn partition_one_level<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -406,6 +414,10 @@ where
     scatter_assignments(point_ids, &assignments, fanout, leader_ids.len())
 }
 
+/// Assign one point stripe to the selected leaders.
+///
+/// The function gathers point vectors, computes point-to-leader dot products,
+/// and writes nearest leader-column IDs to `assignments`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn assign_stripe<A, M, T>(
@@ -640,6 +652,10 @@ fn clusters_with_capacities(sizes: &[usize]) -> ANNResult<Vec<Vec<u32>>> {
     Ok(clusters)
 }
 
+/// Merge leaves smaller than `c_min` without exceeding `c_max`.
+///
+/// A `HashSet` removes duplicate point IDs across merged leaves. The function
+/// sorts each merged result before it returns.
 fn global_merge_small(
     leaves: Vec<Vec<u32>>,
     c_min: usize,
