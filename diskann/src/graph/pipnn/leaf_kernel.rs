@@ -140,9 +140,9 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
 
 /// Select the nearest non-self positions for each point in a leaf.
 ///
-/// `output` must have one row for each input point. Its column count is the
-/// neighbor count. This count must not exceed `point_count - 1` or
-/// [`MAX_LEAF_NEIGHBORS`]. Equal distances keep pair scan order.
+/// `output` has one row for each input point. Its column count requests the
+/// neighbor count. The function checks this shape and the supported count before
+/// it changes output. Equal distances keep pair scan order.
 ///
 /// # Errors
 ///
@@ -330,8 +330,8 @@ fn run_neighbor_count<F, M, const N: usize>(
 /// The function reads the strict lower triangle once. It offers each distance to
 /// both endpoint lists. SIMD groups and the scalar tail preserve pair scan order.
 ///
-/// `input` must be square. `output` and `worst` must have one row per point.
-/// `norms` must have one value per point when metric `M` requires norms.
+/// `input` supplies square dot products. `output` and `worst` contain one row
+/// for each point. `norms` contains one value per point when `M` uses norms.
 #[inline(never)]
 fn scan_point_pairs<F, M, const N: usize>(
     arch: F::Arch,
