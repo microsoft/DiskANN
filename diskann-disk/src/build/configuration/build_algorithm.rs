@@ -29,20 +29,20 @@ pub struct PiPNNParameters {
     pub k: usize,
     /// Number of independent partition passes.
     pub replicas: usize,
-    /// HashPrune policy, or `None` for exact direct-candidate accumulation.
+    /// HashPrune policy. `None` keeps all unique direct candidates.
     pub hash_prune: Option<HashPruneParameters>,
 }
 
-/// JSON-facing HashPrune parameters.
+/// HashPrune parameters in the JSON build configuration.
 #[cfg(feature = "pipnn")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HashPruneParameters {
     /// Number of random-hyperplane sketch dimensions.
     pub num_hash_planes: usize,
-    /// Maximum candidates retained per point.
+    /// Maximum number of candidates retained per point.
     pub l_max: usize,
-    /// Apply shared Vamana RobustPrune after reservoir extraction.
+    /// Apply Vamana RobustPrune after reservoir extraction.
     pub final_prune: bool,
 }
 
