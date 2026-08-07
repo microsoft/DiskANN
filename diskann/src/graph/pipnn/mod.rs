@@ -35,6 +35,6 @@
 mod kernel_metric;
 
 #[allow(dead_code)]
-pub mod leaf_kernel;
+mod leaf_kernel;
 #[allow(dead_code)]
-pub mod partition_kernel;
+mod partition_kernel;
