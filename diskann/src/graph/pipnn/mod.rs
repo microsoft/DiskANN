@@ -6,7 +6,8 @@
 //! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
 //! PiPNN builds graph candidates in three steps. A leader is a sampled dataset
-//! point that acts as the center of one child partition.
+//! point that acts as the center of one child partition. A leaf is a bounded
+//! child partition used for local neighbor selection.
 //!
 //! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
 //!    at most `c_max` points.
