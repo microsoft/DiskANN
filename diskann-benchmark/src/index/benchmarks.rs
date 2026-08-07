@@ -233,9 +233,8 @@ where
                         single_or_multi_insert,
                     )
                 };
-                // PiPNN is selected before constructing the incremental provider:
-                // explicit batch selection must never allocate an incremental
-                // index and then silently fall through to Vamana insertion.
+                // PiPNN uses the batch build path. Do not create an incremental
+                // provider or run Vamana insertion.
                 #[cfg(feature = "pipnn")]
                 let result = match build.build_algorithm() {
                     diskann_disk::BuildAlgorithm::PiPNN(parameters) => {

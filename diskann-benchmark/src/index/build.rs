@@ -113,28 +113,14 @@ where
 }
 
 #[cfg(feature = "pipnn")]
-/// Run the dedicated batch lifecycle and install its result in a searchable provider.
+/// Build a PiPNN graph and install it in a searchable provider.
 ///
-/// Incremental Vamana interleaves provider allocation with per-point insertion.
-/// PiPNN must not use that path: its partitions and candidate graph are complete
-/// before a provider exists. The benchmark lifecycle is therefore:
+/// PiPNN completes its graph before provider creation. The function also computes
+/// start vectors and their source IDs. It then installs vectors, edges, and start
+/// slots in a new `MemoryIndex`.
 ///
-/// ```text
-/// Arc<Matrix<T>> ──> PiPNN core ──> Vec<AdjacencyList<u32>>
-///       │                                      │
-///       ├──> start vectors ──> source IDs      │
-///       │                                      v
-///       └──────────────────────────────> provider installation ──> MemoryIndex
-/// ```
-///
-/// | Interval | Included in build statistics | Large owner |
-/// | --- | --- | --- |
-/// | batch graph + start computation | yes | input matrix, core stage outputs |
-/// | provider allocation | no (setup, matching incremental path) | empty provider |
-/// | vectors, edges, and start-slot installation | yes | searchable provider |
-///
-/// The returned provider is a benchmark/search adapter; provider concerns do not
-/// leak back into `diskann::graph::pipnn`.
+/// `BuildStats` includes graph construction and provider installation. It does
+/// not include provider allocation.
 pub(crate) fn pipnn_build<T>(
     data: Arc<Matrix<T>>,
     input: &IndexBuild,
@@ -169,10 +155,9 @@ where
         .compute(data.as_view())
         .map_err(ANNError::new)?;
     let distance = T::distance(metric, Some(dimensions));
-    // Provider start vectors occupy frozen slots outside the real point-ID
-    // range. Connect each slot to an identical source row when one exists;
-    // synthetic strategies fall back to the nearest real row under the build
-    // metric. `total_cmp` gives deterministic ordering for all finite/NaN bits.
+    // Start vectors use frozen IDs outside the real point-ID range. Connect each
+    // frozen ID to its source row. For a synthetic start vector, connect it to
+    // the nearest real row. `total_cmp` gives a deterministic total order.
     let start_sources = start_points
         .row_iter()
         .map(|start| {
@@ -192,28 +177,24 @@ where
                 .context("PiPNN cannot connect a start point to an empty dataset")
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    // A frozen start slot carries the chosen source vector, so expanding it
-    // must expose exactly that real source's outgoing row. Prepending the source
-    // ID would consume one degree slot and discard a graph edge, changing every
-    // search from the graph produced by the core builder.
+    // A frozen slot stores the selected source vector. Its adjacency must equal
+    // that source row. Adding the source ID would remove one graph edge because
+    // the row has a fixed degree.
     let start_neighbors: Vec<_> = start_sources
         .into_iter()
         .map(|source| adjacency[source].clone())
         .collect();
     let batch_elapsed = started.elapsed();
 
-    // Unlike incremental insertion, PiPNN finishes all batch-build scratch
-    // before allocating the provider that owns the searchable index.
     let index = diskann_async::new_index::<T, _>(
         graph,
         input.inmem_parameters(npoints, dimensions),
         common::NoDeletes,
     )?;
-    // Provider allocation is setup, just as it is for the incremental path;
-    // BuildStats covers graph construction plus provider installation.
+    // `BuildStats` excludes provider allocation and includes provider installation.
     let install_started = std::time::Instant::now();
-    // Install vectors before edges so a successfully returned MemoryIndex never
-    // exposes graph IDs whose source vectors are absent.
+    // Install vectors before edges. A returned index must contain a vector for
+    // every graph ID.
     for (id, vector) in data.row_iter().enumerate() {
         let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
         index.data_provider.base_vectors.set_element(&id, vector)?;
@@ -482,9 +463,9 @@ mod pipnn_tests {
         assert!(stats.insert_latencies.is_none());
         let starts = index.provider().starting_points().unwrap();
         assert_eq!(starts.len(), 1);
-        // SAFETY: `starting_points` returns provider-installed frozen IDs, so
-        // `starts[0] < base_vectors.total()`. The completed build has no concurrent
-        // vector writers, so no mutable alias exists for the returned shared slice.
+        // SAFETY: `starting_points` returns installed frozen IDs. Therefore,
+        // `starts[0] < base_vectors.total()`. The completed build has no vector
+        // writer, so the returned shared slice has no mutable alias.
         let start = unsafe {
             index
                 .data_provider
