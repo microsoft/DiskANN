@@ -5,19 +5,18 @@
 
 //! Nearest-leader selection for PiPNN partition assignment.
 //!
-//! Caller supplies a row-major point-by-leader dot matrix plus metric-specific
-//! [`PartitionScales`]. Output contains sorted leader-column positions for each
-//! point; fanout is the output width and cannot exceed the leader count.
+//! The input contains a row-major point-to-leader dot matrix and
+//! metric-specific [`PartitionScales`]. The output contains sorted leader-column
+//! positions for each point. Its width sets the fanout and cannot exceed the
+//! leader count.
 //!
-//! Callers select architecture and metric once outside partition recursion,
-//! then call [`nearest_leaders`] with concrete `A` and `M` types. Calls validate
-//! row counts, scale variants and lengths, fanout, and leader-ID representation
-//! before output mutation or unchecked SIMD loads.
+//! The caller supplies concrete architecture `A` and metric `M`. The function
+//! checks row counts, scale units, scale lengths, fanout, and leader-ID range.
+//! These checks occur before output changes or unchecked SIMD loads.
 //!
-//! L2 omits the point norm because it cannot change one point's leader order.
-//! Strict comparisons preserve scan order for ties and leave NaN non-rankable.
-//! Each point evaluates every leader; competitive scores move through a
-//! caller-owned tracker reused across points.
+//! L2 omits the point norm because it is constant for one point. Strict
+//! comparisons keep leader scan order for equal scores. They do not rank NaN.
+//! One runtime-sized workspace tracks the nearest leaders for each point.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
@@ -44,12 +43,11 @@ impl PartitionKernelWorkspace {
     }
 }
 
-/// Metric-specific normalization inputs for one partition tile.
+/// Metric-specific norm inputs for one partition tile.
 ///
-/// Slice lengths are checked against dot-matrix dimensions before output
-/// mutation. Names encode units: cosine points arrive as squared norms because
-/// they come from the point matrix diagonal, while leaders are normalized once
-/// by the partition caller and arrive as norms.
+/// The kernel checks each slice length before it changes output. Cosine point
+/// values are squared norms from a matrix diagonal. Cosine leader values are
+/// norms that partition setup computes once.
 #[derive(Clone, Copy, Debug)]
 pub enum PartitionScales<'a> {
     /// L2 needs only squared leader norms; the point norm cannot affect ranking.
@@ -68,11 +66,10 @@ pub enum PartitionScales<'a> {
     None,
 }
 
-/// One row-major point-by-leader dot-product tile.
+/// One row-major point-to-leader dot-product tile.
 ///
-/// Matrix rows are points, columns are leaders, and [`Self::scales`] must match
-/// concrete metric selected by the enclosing build. This value only borrows
-/// input; the numerical kernel stores no tile state.
+/// Rows are points and columns are leaders. [`Self::scales`] must match concrete
+/// metric `M`. This value borrows all input and stores no kernel state.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionInput<'a> {
     /// One point per matrix row and one leader per column.
@@ -139,11 +136,10 @@ pub enum PartitionKernelError {
     },
 }
 
-/// Select nearest leader positions for every input point.
+/// Select the nearest leader positions for each input point.
 ///
-/// `output.nrows()` must equal `input.dots.nrows()` and fanout, represented by
-/// `output.ncols()`, must not exceed the leader count. `A` and `M` must already
-/// have been selected at the enclosing build boundary.
+/// `output.nrows()` must equal `input.dots.nrows()`. `output.ncols()` sets the
+/// fanout and must not exceed the leader count.
 pub(crate) fn nearest_leaders<A, M>(
     arch: A,
     input: PartitionInput<'_>,
@@ -181,23 +177,21 @@ where
     Ok(())
 }
 
-/// Validated scale slices in the storage form required by `M`.
+/// Checked norm slices in the storage form that `M` requires.
 ///
-/// Empty slices are intentional for metrics that omit a scale; consumers branch
-/// on associated `ScaleKind` constants that monomorphize out of hot loops.
+/// A metric that does not use a norm receives an empty slice. Associated
+/// `ScaleKind` constants remove these branches from concrete metric loops.
 #[derive(Clone, Copy)]
 struct ScaleSlices<'a> {
     point_scales: &'a [f32],
     leader_scales: &'a [f32],
 }
 
-/// Validate the complete partition-kernel safety and metric contract.
+/// Check the safety and metric conditions for partition selection.
 ///
-/// `MatrixView` and `MutMatrixView` construction guarantee exact,
-/// non-overflowing backing lengths. The `PartitionScales` variant must match
-/// concrete metric `M`, preventing plausible but incorrect norm units from
-/// crossing the interface. Success returns normalized scale slices and
-/// establishes representable leader IDs plus bounded fanout.
+/// The matrix views already prove their backing lengths. This function checks
+/// row counts, leader-ID range, fanout, scale variant, and scale lengths. A
+/// successful result contains norm slices in the units that `M` requires.
 fn validate<'a, M: KernelMetric>(
     input: PartitionInput<'a>,
     output: &MutMatrixView<'_, u32>,
@@ -223,9 +217,8 @@ fn validate<'a, M: KernelMetric>(
         });
     }
 
-    // Match the public enum against the concrete marker before erasing it to
-    // slices. This prevents squared point norms from being mistaken for leader
-    // norms even though both representations are `&[f32]`.
+    // Match the scale variant to concrete metric `M` before extracting slices.
+    // This prevents use of a squared point norm as a leader norm.
     let scales = match (M::METRIC, input.scales) {
         (
             Metric::L2,
@@ -266,8 +259,8 @@ fn validate<'a, M: KernelMetric>(
         }
     };
 
-    // After variant validation, associated scale kinds define exact lengths.
-    // Scale-free metrics must provide empty slices so stale data cannot be used.
+    // The associated scale kinds define the exact slice lengths. A metric that
+    // does not use a scale must receive an empty slice.
     check_length(
         "point scales",
         scales.point_scales.len(),
@@ -281,9 +274,9 @@ fn validate<'a, M: KernelMetric>(
     Ok(scales)
 }
 
-/// Return required scale length after metric specialization.
+/// Return the required norm-slice length for one concrete metric.
 ///
-/// Associated `ScaleKind` constants make this choice compile away.
+/// The compiler removes this choice from the metric loop.
 const fn expected_scale_len(kind: ScaleKind, count: usize) -> usize {
     if kind.is_some() { count } else { 0 }
 }
@@ -304,25 +297,21 @@ fn check_length(
     }
 }
 
-/// Convert each point's leader scores into sorted top-fanout IDs.
+/// Convert each point's leader scores into sorted leader IDs.
 ///
-/// Per-point flow:
+/// For each point, the function does these steps:
 ///
-/// 1. transform the point scale once according to concrete metric `M`;
-/// 2. process full SIMD leader groups, rejecting lanes against the last slot;
-/// 3. process the remaining leaders with the scalar metric operation;
-/// 4. copy the sorted tracker prefix to that point's output.
+/// 1. Convert the point norm to the unit that `M` requires.
+/// 2. Process complete SIMD groups.
+/// 3. Process the scalar tail.
+/// 4. Copy the sorted leader IDs to the output row.
 ///
-/// `tracker[..fanout]` remains sorted after every accepted candidate. Strict `<`
-/// preserves leader scan order for ties and makes NaNs non-rankable. L2 keeps
-/// historical bulk-FMA/scalar-tail rounding because changing it can alter graph
-/// assignment at near ties.
+/// `tracker` has `fanout` entries and stays sorted after each insertion. Strict
+/// comparisons keep leader scan order for equal scores. They do not rank NaN.
 ///
-/// `dots` supplies `p × l` scores, `scales` contains validated metric inputs,
-/// `fanout` is both tracker prefix length and output width, and `output` contains
-/// `p * fanout` slots. The function writes leader IDs in place and returns no
-/// value. It computes `p * l` scores; each competitive score may shift `O(fanout)`
-/// tracker entries. Tracker memory is fixed on the stack and no allocation occurs.
+/// The function computes `p * l` scores. One insertion can move `O(fanout)`
+/// entries. The caller allocates the runtime-sized tracker once and reuses it for
+/// all point rows.
 fn process_points<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
@@ -356,24 +345,24 @@ fn process_points<F, M>(
         );
     }
     let fanout = tracker.len();
-    // Each point is independent. Reset the caller-owned tracker so no assignment
-    // state or tie order leaks across rows.
+    // Reset the tracker for each point. No assignment state can pass from one
+    // output row to another.
     for (point, (point_dots, point_output)) in dots
         .row_iter()
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
         tracker.fill((u32::MAX, f32::INFINITY));
-        // Transform once per point rather than once per leader. For metrics
-        // without a point scale, specialization removes this branch and load.
+        // Convert the point norm once for this row. The compiler removes this
+        // branch and load from metrics that do not use a point norm.
         let point_scale = if M::PARTITION_POINT_SCALE.is_some() {
             M::PARTITION_POINT_SCALE.transform(scales.point_scales[point])
         } else {
             0.0
         };
         let point_scale_vector = F::splat(arch, point_scale);
-        // Split at the largest complete vector boundary. Scalar tail uses the
-        // metric's explicit scalar operation order, not a padded SIMD load.
+        // Process all complete SIMD groups first. The scalar tail uses the
+        // metric's scalar operation order.
         let full = leader_count / F::LANES * F::LANES;
 
         for base in (0..full).step_by(F::LANES) {
@@ -393,8 +382,8 @@ fn process_points<F, M>(
             );
         }
 
-        // Tail values use scalar metric functions intentionally. Padding a SIMD
-        // group would risk out-of-bounds scale loads and different L2 rounding.
+        // Use scalar formulas for the tail. A padded SIMD load can read past the
+        // norm slice and can change L2 rounding.
         for (leader, &dot) in point_dots.iter().enumerate().skip(full) {
             let leader_scale = if M::PARTITION_LEADER_SCALE.is_some() {
                 M::PARTITION_LEADER_SCALE.transform(scales.leader_scales[leader])
@@ -407,22 +396,20 @@ fn process_points<F, M>(
                 M::partition_distance_scalar(dot, point_scale, leader_scale),
             );
         }
-        // Distances are only tracker state; child-group construction needs leader
-        // column positions in deterministic nearest-first order.
+        // Distances stay in the workspace. Partition construction needs only the
+        // leader-column positions in nearest-first order.
         copy_leader_ids(tracker, point_output);
     }
 }
 
-/// Offer competitive SIMD lanes to a point tracker in increasing leader order.
+/// Insert competitive SIMD lanes in increasing leader order.
 ///
-/// The broadcast threshold avoids materializing lanes when none can improve the
-/// last slot. Bit iteration follows low-to-high lane order, preserving scalar tie
-/// behavior across SIMD widths.
+/// One broadcast comparison rejects a group that cannot improve the last slot.
+/// Bit iteration proceeds from low lane to high lane. This order matches scalar
+/// tie behavior for all SIMD widths.
 ///
-/// `distances` contains consecutive leaders beginning at `first_leader`;
-/// `tracker[..fanout]` is the point's sorted retained prefix. The function
-/// mutates that tracker and returns no value. Rejected groups cost one comparison
-/// and mask test; accepted lanes each pay `O(fanout)` worst-case insertion.
+/// `distances` starts at `first_leader`. `tracker` is sorted. Each accepted lane
+/// can move `O(fanout)` entries.
 fn insert_leader_lanes<F>(distances: F, first_leader: usize, tracker: &mut [(u32, f32)])
 where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
@@ -443,15 +430,14 @@ where
     }
 }
 
-/// Insert one strictly better candidate while preserving sorted-prefix state.
+/// Insert one better candidate into a sorted tracker.
 ///
-/// The last slot is overwritten, then bubbled left. Equal and NaN distances do
-/// not enter, so scan order is the deterministic tie breaker and the last slot
-/// remains both rejection threshold and underfill sentinel.
+/// The function replaces the last slot and moves the new value to the left.
+/// Equal scores and NaN do not enter. Thus, scan order resolves equal scores.
+/// The last slot is also the rejection threshold and underfill sentinel.
 ///
-/// `tracker[..fanout]` must already be sorted and `fanout` must be non-zero.
-/// `leader` is a local column position. The function returns no value and shifts
-/// at most `fanout - 1` entries without allocation.
+/// `tracker` must be sorted and non-empty. `leader` is a local column position.
+/// One insertion moves at most `fanout - 1` entries.
 #[inline(always)]
 fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
     let threshold = tracker.len() - 1;
@@ -467,10 +453,10 @@ fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
     }
 }
 
-/// Publish only leader IDs; distances stay private tracker state.
+/// Copy the retained leader IDs to one output row.
 ///
-/// `assignments.len()` is validated fanout. Copying costs `O(fanout)` and leaves
-/// tracker state available for the underfill sentinel check encoded in IDs.
+/// `assignments.len()` equals the checked fanout. The tracker keeps its distances
+/// for the underfill check.
 fn copy_leader_ids(tracker: &[(u32, f32)], assignments: &mut [u32]) {
     for (destination, &(leader, _)) in assignments.iter_mut().zip(tracker) {
         *destination = leader;
@@ -565,9 +551,8 @@ mod tests {
         }
     }
 
-    // Differential oracle for SIMD chunking, scalar tails, and tracker order.
-    // It intentionally shares `M::partition_distance_scalar`; public API tests
-    // independently spell out ranking formulas and full sorting behavior.
+    // This oracle checks SIMD chunking, scalar tails, and tracker order. It uses
+    // `M::partition_distance_scalar`. Separate tests define each formula directly.
     fn scalar_traversal_reference<M: KernelMetric>(
         input: PartitionInput<'_>,
         fanout: usize,

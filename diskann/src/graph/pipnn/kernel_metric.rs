@@ -3,29 +3,29 @@
  * Licensed under the MIT license.
  */
 
-//! Metric formulas shared by PiPNN partition and leaf kernels.
+//! Metric formulas for the PiPNN partition and leaf kernels.
 //!
-//! The build boundary converts runtime [`Metric`] into one zero-sized marker
-//! type. That concrete type is carried through partition and leaf construction,
-//! so scalar and SIMD hot loops contain neither metric matches nor trait objects.
+//! `build_graph` maps each runtime [`Metric`] to one zero-sized marker type. The
+//! partition and leaf functions receive that concrete type. Their hot loops use
+//! no metric match or trait object.
 //!
-//! All formulas produce ascending scores. L2 uses squared norms; unnormalized
-//! cosine uses norms with zero/subnormal inputs mapped to zero similarity;
-//! normalized cosine and inner product need no scales. Ordered comparisons leave
-//! NaN non-rankable. The L2 partition scalar tail deliberately keeps its
-//! non-fused operation order because rounding can change leader ties.
+//! Each formula returns an ascending score. L2 uses squared norms. Cosine uses
+//! norms and maps a zero norm to zero similarity. Normalized cosine and inner
+//! product do not use norms. Ordered comparisons do not rank NaN.
 //!
-//! [`ScaleKind`] records required scale representation and [`KernelMetric`]
-//! owns the leaf and partition formulas. Runtime selection belongs to the build
-//! entry point; this module contains no dispatch or type erasure.
+//! The L2 partition SIMD path uses fused arithmetic. Its scalar tail uses
+//! non-fused arithmetic. This operation order is part of the tie-order contract.
+//!
+//! [`ScaleKind`] defines the stored norm unit. [`KernelMetric`] defines the leaf
+//! and partition formulas.
 
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-/// Stored scale representation consumed by one kernel position.
+/// Stored norm representation for one kernel input.
 ///
-/// Associated constants on `KernelMetric` let the compiler remove unused scale
-/// loads and allocations after metric selection.
+/// `KernelMetric` uses associated constants for these values. The compiler
+/// removes unused norm loads and workspace from each concrete metric.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScaleKind {
     /// Metric does not read this scale position.
@@ -39,17 +39,14 @@ pub(crate) enum ScaleKind {
 }
 
 impl ScaleKind {
-    /// Convert stored scale to the arithmetic form required by a kernel.
+    /// Convert a stored norm to the unit that the kernel requires.
     ///
-    /// DiskANN treats squared norms below `f32::MIN_POSITIVE`, and norms below
-    /// `sqrt(f32::MIN_POSITIVE)`, as zero before division. Ordered comparisons
-    /// intentionally leave NaN unchanged so later distance comparisons keep it
-    /// non-rankable.
+    /// A squared norm below `f32::MIN_POSITIVE` becomes zero. A norm below
+    /// `sqrt(f32::MIN_POSITIVE)` also becomes zero. The function does not change
+    /// NaN, so the kernel does not rank it.
     ///
-    /// `stored` is interpreted according to `self`. The return value is zero,
-    /// the original norm, the original squared norm, or its square root. This
-    /// operation is constant-time and normally specializes to one match arm
-    /// because `ScaleKind` comes from a [`KernelMetric`] associated constant.
+    /// The concrete [`KernelMetric`] supplies `self` as an associated constant.
+    /// The compiler selects one match arm for each kernel instance.
     #[inline(always)]
     pub(crate) fn transform(self, stored: f32) -> f32 {
         match self {
@@ -72,26 +69,22 @@ impl ScaleKind {
         }
     }
 
-    /// Return whether callers must supply this scale position.
+    /// Return `true` when the metric requires this norm input.
     ///
-    /// Calls use an associated constant, so this test compiles out of hot loops.
+    /// The compiler removes this test from each concrete metric loop.
     pub(crate) const fn is_some(self) -> bool {
         !matches!(self, Self::None)
     }
 }
 
-/// Concrete metric contract shared by leaf and partition hot loops.
+/// Metric contract for the leaf and partition hot loops.
 ///
-/// Runtime `Metric` is converted to one implementor at the build boundary.
-/// Generic methods then inline metric arithmetic through the complete partition
-/// and leaf stages. Those operations remain separate because L2 partition
-/// ranking deliberately omits the point norm.
+/// `build_graph` selects one implementation. Generic calls inline its arithmetic
+/// through the complete build. Leaf and partition formulas are separate because
+/// L2 partition ranking does not need the point norm.
 ///
-/// All methods return scores ordered from nearest to farthest. Implementations
-/// follow the module-level zero/NaN contract; caller-side strict comparisons
-/// leave scores that remain NaN non-rankable. Marker types carry no data;
-/// associated scale constants and forced inlining
-/// remove metric branches from dispatched loops.
+/// Each method returns an ascending score. Strict comparisons do not rank NaN.
+/// Marker types contain no data. Associated constants remove unused norm work.
 pub(crate) trait KernelMetric: Send + Sync + 'static {
     /// Runtime tag represented by this marker.
     const METRIC: Metric;
@@ -102,39 +95,37 @@ pub(crate) trait KernelMetric: Send + Sync + 'static {
     /// Leader-column scale representation used by partition assignment.
     const PARTITION_LEADER_SCALE: ScaleKind;
 
-    /// SIMD distance for one leaf source against a lane group of earlier targets.
+    /// Compute SIMD distances from one leaf source to earlier targets.
     ///
-    /// `arch` is the selected architecture token. `dot` and `target_scale` hold
-    /// one target per lane; `source_scale` broadcasts the source scale. Scale
-    /// arguments are zero when [`Self::LEAF_SCALE`] is [`ScaleKind::None`]. The
-    /// return value contains one ascending-order distance per lane.
+    /// `dot` and `target_scale` contain one target per lane. `source_scale`
+    /// contains the source norm in each lane. A metric without norms receives
+    /// zero for both norm arguments. The result contains one distance per lane.
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_scale: F, target_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
-    /// Scalar-tail equivalent of `leaf_distance`.
+    /// Compute the scalar-tail equivalent of `leaf_distance`.
     ///
-    /// Inputs and return value represent one SIMD lane. Operation order is part
-    /// of graph determinism where an implementation documents it.
+    /// The inputs and result represent one SIMD lane. Each implementation
+    /// documents any required operation order.
     fn leaf_distance_scalar(dot: f32, source_scale: f32, target_scale: f32) -> f32;
 
-    /// SIMD ranking score for one point against a lane group of leaders.
+    /// Compute SIMD scores from one point to a group of leaders.
     ///
-    /// `arch` is the selected architecture token. `dot` and `leader_scale` hold
-    /// one leader per lane; `point_scale` broadcasts one point scale. Scale
-    /// arguments are zero when the corresponding associated kind is
-    /// [`ScaleKind::None`]. The return value contains one ascending-order score
-    /// per lane; point-constant terms may be omitted.
+    /// `dot` and `leader_scale` contain one leader per lane. `point_scale`
+    /// contains the point norm in each lane. A metric without a norm receives
+    /// zero for that argument. The formula can omit terms that are constant for
+    /// all leaders.
     fn partition_distance<F>(arch: F::Arch, dot: F, point_scale: F, leader_scale: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
-    /// Scalar-tail equivalent of `partition_distance`.
+    /// Compute the scalar-tail equivalent of `partition_distance`.
     ///
-    /// Inputs and return value represent one SIMD lane. Implementations preserve
-    /// any documented non-fused order used by existing graph builds.
+    /// The inputs and result represent one SIMD lane. Each implementation uses
+    /// its documented operation order.
     fn partition_distance_scalar(dot: f32, point_scale: f32, leader_scale: f32) -> f32;
 }
 
@@ -147,10 +138,10 @@ pub(crate) struct CosineNormalized;
 /// Negative-inner-product marker.
 pub(crate) struct InnerProduct;
 
-/// Clamp negative SIMD roundoff to zero while preserving NaN lanes.
+/// Clamp negative SIMD roundoff to zero and keep NaN lanes unchanged.
 ///
-/// One ordered self-comparison normalizes backend-specific SIMD `max` NaN
-/// behavior; no lane branches or allocations are introduced.
+/// SIMD `max` has architecture-specific NaN behavior. The ordered self-test
+/// selects the original value for each NaN lane.
 #[inline(always)]
 fn clamp_nonnegative<F>(arch: F::Arch, distance: F) -> F
 where
@@ -158,8 +149,8 @@ where
     F::Mask: SIMDSelect<F>,
 {
     let zero = F::default(arch);
-    // SIMD max has ISA-specific NaN behavior. Select the original NaN so it
-    // remains non-rankable on every backend.
+    // Select the original value for NaN lanes. This gives all architectures the
+    // same non-rankable NaN result.
     distance
         .eq_simd(distance)
         .select(zero.max_simd(distance), distance)
@@ -171,15 +162,14 @@ fn clamp_nonnegative_scalar(distance: f32) -> f32 {
     if distance < 0.0 { 0.0 } else { distance }
 }
 
-/// Compute cosine distance while preserving DiskANN zero/NaN semantics.
+/// Compute cosine distance with the DiskANN zero-norm and NaN rules.
 ///
-/// Zero lanes divide by one only to keep the operation defined, then explicitly
-/// select zero similarity. A NaN norm fails its own zero comparison and
-/// propagates through division unless the other endpoint takes the zero-norm
-/// path; in that case zero similarity takes precedence.
+/// A zero-norm lane divides by one and then selects zero similarity. A NaN norm
+/// propagates through division. If the other norm is zero, zero similarity takes
+/// precedence.
 ///
-/// `dot`, `source_norm`, and `target_norm` each contain one pair per lane. The
-/// return value is `1 - cosine_similarity`. All lane handling is branchless.
+/// Each input contains one point pair per lane. The result is
+/// `1 - cosine_similarity`. The function uses no lane branch.
 #[inline(always)]
 fn cosine_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
 where
@@ -238,15 +228,15 @@ impl KernelMetric for L2 {
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        // Point norm is constant for this ranking. Bulk lanes retain the
-        // historical fused multiply-add used by partition assignment.
+        // The point norm is constant for this ranking. The SIMD path uses the
+        // fused multiply-add operation that defines its tie order.
         F::splat(arch, -2.0).mul_add_simd(dot, leader_scale)
     }
 
     #[inline(always)]
     fn partition_distance_scalar(dot: f32, _: f32, leader_scale: f32) -> f32 {
-        // Preserve the scalar reduction shape used by the original partition
-        // kernel; changing this rounding can change leader tie order.
+        // The scalar tail uses non-fused subtraction. A fused operation can
+        // change rounding and select a different leader at a tie.
         leader_scale - 2.0 * dot
     }
 }
@@ -280,14 +270,14 @@ impl KernelMetric for Cosine {
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        // Partitioning consumes only score order, so no post-formula clamp is
-        // needed; omitting it preserves existing near-tie behavior.
+        // Partitioning uses only score order. Do not clamp the score because a
+        // clamp can change the order of near ties.
         cosine_distance(arch, dot, point_scale, leader_scale)
     }
 
     #[inline(always)]
     fn partition_distance_scalar(dot: f32, point_scale: f32, leader_scale: f32) -> f32 {
-        // Preserve the same unclamped ranking score in the scalar tail.
+        // Use the same unclamped score in the scalar tail.
         cosine_distance_scalar(dot, point_scale, leader_scale)
     }
 }
@@ -327,7 +317,7 @@ impl KernelMetric for CosineNormalized {
 
     #[inline(always)]
     fn partition_distance_scalar(dot: f32, _: f32, _: f32) -> f32 {
-        // Preserve the unclamped ranking score used by full SIMD groups.
+        // Use the same unclamped score as the SIMD path.
         1.0 - dot
     }
 }
