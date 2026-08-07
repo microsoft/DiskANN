@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Prepared leaf-local top-k selection over a lower-triangular Gram matrix.
+//! Leaf-local top-k selection over a lower-triangular Gram matrix.
 //!
 //! Caller supplies an `n × n` [`MatrixView`] produced by `sgemm_aat_lower`.
 //! Diagonal entries provide metric scales; only strict-lower pair dots are read.
@@ -15,8 +15,8 @@
 //! reject NaN. L2, cosine, normalized cosine, and inner product share the same
 //! scalar/SIMD traversal.
 //!
-//! Runtime callers may use [`LeafKernel`]; production dispatches once at the leaf
-//! stage boundary and calls the generic kernel directly. Every call validates
+//! Callers select architecture and metric once outside the leaf loop, then call
+//! [`nearest_neighbors`] with concrete `A` and `M` types. Every call validates
 //! square shape, row count, local-ID bounds, and output width before scratch
 //! mutation or unchecked SIMD loads. [`LeafKernelWorkspace`] retains per-worker
 //! norm and threshold buffers.
@@ -25,13 +25,9 @@
 //! scratch is `O(n)` and output is `O(nk)`.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_vector::distance::Metric;
-use diskann_wide::{
-    Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
-    arch::{self, Target1},
-};
+use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
 
-use super::kernel_metric::{KernelMetric, MetricVisitor, visit_metric};
+use super::kernel_metric::KernelMetric;
 
 /// Largest leaf-local neighbor count supported by the fixed insertion kernel.
 pub const MAX_LEAF_NEIGHBORS: usize = 3;
@@ -81,7 +77,7 @@ impl LeafKernelWorkspace {
     }
 }
 
-/// Validation or allocation error returned by [`LeafKernel::nearest_neighbors`].
+/// Validation or allocation error returned by [`nearest_neighbors`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LeafKernelError {
     /// The point count cannot be represented in leaf-local `u32` positions.
@@ -173,7 +169,7 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
     Ok(requested_k.min(points.saturating_sub(1)))
 }
 
-/// Return the required output length for [`LeafKernel::nearest_neighbors`].
+/// Return the required output length for [`nearest_neighbors`].
 ///
 /// `points` and `requested_k` have the same meaning as in
 /// [`leaf_neighbor_count`]. The return value is `points * effective_k`.
@@ -190,101 +186,19 @@ pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafK
     checked_area("output", points, leaf_neighbor_count(points, requested_k)?)
 }
 
-/// Inputs for one immediate architecture/metric dispatch.
-#[derive(Debug)]
-struct LeafCall<'a> {
-    input: MatrixView<'a, f32>,
-    output: MutMatrixView<'a, LeafNeighbor>,
-    workspace: &'a mut LeafKernelWorkspace,
-}
-
-/// Leaf-kernel convenience API for callers with a runtime [`Metric`].
+/// Select the nearest non-self leaf positions for every source point.
 ///
-/// Each call performs runtime architecture and metric selection, then invokes
-/// the same generic kernel used by the production stage-level dispatch.
-#[derive(Clone, Copy, Debug)]
-pub struct LeafKernel {
-    metric: Metric,
-}
-
-impl LeafKernel {
-    /// Construct a kernel selector for `metric`.
-    pub const fn new(metric: Metric) -> Self {
-        Self { metric }
-    }
-
-    /// Select the nearest non-self leaf positions for every source point.
-    ///
-    /// `output` must have one row per input point. Its column count is the
-    /// neighbor count for this leaf and must not exceed either `point_count - 1`
-    /// or [`MAX_LEAF_NEIGHBORS`]. Equal distances retain pair scan order.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LeafKernelError`] for incompatible shapes, excessive
-    /// point/neighbor counts, scratch allocation failure, or an underfilled
-    /// source caused by non-rankable distances.
-    pub fn nearest_neighbors(
-        &self,
-        input: MatrixView<'_, f32>,
-        output: MutMatrixView<'_, LeafNeighbor>,
-        workspace: &mut LeafKernelWorkspace,
-    ) -> Result<(), LeafKernelError> {
-        arch::dispatch1_no_features(
-            RunLeaf {
-                metric: self.metric,
-            },
-            LeafCall {
-                input,
-                output,
-                workspace,
-            },
-        )
-    }
-}
-
-struct RunLeaf {
-    metric: Metric,
-}
-
-impl<A> Target1<A, Result<(), LeafKernelError>, LeafCall<'_>> for RunLeaf
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    fn run(self, arch: A, call: LeafCall<'_>) -> Result<(), LeafKernelError> {
-        visit_metric(self.metric, ExecuteLeaf { arch, call })
-    }
-}
-
-struct ExecuteLeaf<'a, A> {
-    arch: A,
-    call: LeafCall<'a>,
-}
-
-impl<A> MetricVisitor for ExecuteLeaf<'_, A>
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    type Output = Result<(), LeafKernelError>;
-
-    fn visit<M: KernelMetric>(self) -> Self::Output {
-        nearest_neighbors_for::<A, M>(
-            self.arch,
-            self.call.input,
-            self.call.output,
-            self.call.workspace,
-        )
-    }
-}
-
-/// Architecture/metric-specialized leaf kernel used by stage-level dispatch.
-pub(crate) fn nearest_neighbors_for<A, M>(
+/// `output` must have one row per input point. Its column count is the neighbor
+/// count for this leaf and must not exceed either `point_count - 1` or
+/// [`MAX_LEAF_NEIGHBORS`]. Equal distances retain pair scan order. `A` and `M`
+/// must already have been selected at the enclosing build boundary.
+///
+/// # Errors
+///
+/// Returns [`LeafKernelError`] for incompatible shapes, excessive
+/// point/neighbor counts, scratch allocation failure, or an underfilled source
+/// caused by non-rankable distances.
+pub(crate) fn nearest_neighbors<A, M>(
     arch: A,
     input: MatrixView<'_, f32>,
     mut output: MutMatrixView<'_, LeafNeighbor>,
@@ -688,8 +602,67 @@ fn insert_fixed_neighbor<const N: usize>(
 }
 
 #[cfg(test)]
+struct DispatchedLeafCall<'a> {
+    input: MatrixView<'a, f32>,
+    output: MutMatrixView<'a, LeafNeighbor>,
+    workspace: &'a mut LeafKernelWorkspace,
+}
+
+#[cfg(test)]
+struct DispatchLeafForTest(diskann_vector::distance::Metric);
+
+#[cfg(test)]
+impl<A> diskann_wide::arch::Target1<A, Result<(), LeafKernelError>, DispatchedLeafCall<'_>>
+    for DispatchLeafForTest
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    fn run(self, arch: A, call: DispatchedLeafCall<'_>) -> Result<(), LeafKernelError> {
+        use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+        use diskann_vector::distance::Metric;
+
+        match self.0 {
+            Metric::L2 => nearest_neighbors::<A, L2>(arch, call.input, call.output, call.workspace),
+            Metric::Cosine => {
+                nearest_neighbors::<A, Cosine>(arch, call.input, call.output, call.workspace)
+            }
+            Metric::CosineNormalized => nearest_neighbors::<A, CosineNormalized>(
+                arch,
+                call.input,
+                call.output,
+                call.workspace,
+            ),
+            Metric::InnerProduct => {
+                nearest_neighbors::<A, InnerProduct>(arch, call.input, call.output, call.workspace)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn dispatch_nearest_neighbors(
+    metric: diskann_vector::distance::Metric,
+    input: MatrixView<'_, f32>,
+    output: MutMatrixView<'_, LeafNeighbor>,
+    workspace: &mut LeafKernelWorkspace,
+) -> Result<(), LeafKernelError> {
+    diskann_wide::arch::dispatch1_no_features(
+        DispatchLeafForTest(metric),
+        DispatchedLeafCall {
+            input,
+            output,
+            workspace,
+        },
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use diskann_vector::distance::Metric;
 
     fn test_dots(metric: Metric, points: usize) -> Vec<f32> {
         let mut dots = vec![f32::NAN; points * points];
@@ -766,40 +739,38 @@ mod tests {
     }
 
     #[test]
-    fn prepared_kernel_accepts_different_neighbor_counts() {
+    fn kernel_accepts_different_neighbor_counts() {
         let points = 7;
         let dots = test_dots(Metric::L2, points);
         let input = test_input(&dots, points);
-        let kernel = LeafKernel::new(Metric::L2);
         let mut workspace = LeafKernelWorkspace::new();
 
         for neighbor_count in [1, 3, 2] {
             let mut output = vec![LeafNeighbor::default(); points * neighbor_count];
-            kernel
-                .nearest_neighbors(
-                    input,
-                    MutMatrixView::try_from(output.as_mut_slice(), points, neighbor_count).unwrap(),
-                    &mut workspace,
-                )
-                .unwrap();
+            dispatch_nearest_neighbors(
+                Metric::L2,
+                input,
+                MutMatrixView::try_from(output.as_mut_slice(), points, neighbor_count).unwrap(),
+                &mut workspace,
+            )
+            .unwrap();
             assert!(output.iter().all(|neighbor| neighbor.target != u32::MAX));
         }
     }
 
     #[test]
     fn workspace_can_shrink_and_grow_between_calls() {
-        let kernel = LeafKernel::new(Metric::L2);
         let mut workspace = LeafKernelWorkspace::new();
         for points in [17, 7, 17] {
             let dots = test_dots(Metric::L2, points);
             let mut output = vec![LeafNeighbor::default(); points * 2];
-            kernel
-                .nearest_neighbors(
-                    test_input(&dots, points),
-                    MutMatrixView::try_from(output.as_mut_slice(), points, 2).unwrap(),
-                    &mut workspace,
-                )
-                .unwrap();
+            dispatch_nearest_neighbors(
+                Metric::L2,
+                test_input(&dots, points),
+                MutMatrixView::try_from(output.as_mut_slice(), points, 2).unwrap(),
+                &mut workspace,
+            )
+            .unwrap();
             assert!(output.iter().all(|neighbor| neighbor.target != u32::MAX));
         }
     }
@@ -814,8 +785,8 @@ mod integration_tests {
     use std::cmp::Ordering;
 
     use super::{
-        LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, MAX_LEAF_NEIGHBORS,
-        leaf_neighbor_count, leaf_output_len,
+        LeafKernelError, LeafKernelWorkspace, LeafNeighbor, MAX_LEAF_NEIGHBORS,
+        dispatch_nearest_neighbors, leaf_neighbor_count, leaf_output_len,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
@@ -937,18 +908,18 @@ mod integration_tests {
     ) -> (usize, Vec<LeafNeighbor>) {
         let leaf_k = leaf_neighbor_count(points, requested_k).unwrap();
         let mut output = vec![LeafNeighbor::default(); points * leaf_k];
-        LeafKernel::new(metric)
-            .nearest_neighbors(
-                test_input(dots, points),
-                MutMatrixView::try_from(output.as_mut_slice(), points, leaf_k).unwrap(),
-                &mut LeafKernelWorkspace::new(),
-            )
-            .unwrap();
+        dispatch_nearest_neighbors(
+            metric,
+            test_input(dots, points),
+            MutMatrixView::try_from(output.as_mut_slice(), points, leaf_k).unwrap(),
+            &mut LeafKernelWorkspace::new(),
+        )
+        .unwrap();
         (leaf_k, output)
     }
 
     #[test]
-    fn prepared_dispatch_matches_reference_across_simd_width_boundaries() {
+    fn dispatched_kernel_matches_reference_across_simd_width_boundaries() {
         for metric in [
             Metric::L2,
             Metric::Cosine,
@@ -1104,13 +1075,13 @@ mod integration_tests {
     fn rejects_sources_with_too_few_rankable_neighbors() {
         let dots = [1.0, 0.0, f32::NAN, 1.0];
         let mut output = [LeafNeighbor::default(); 2];
-        let error = LeafKernel::new(Metric::L2)
-            .nearest_neighbors(
-                test_input(&dots, 2),
-                MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
-                &mut LeafKernelWorkspace::new(),
-            )
-            .unwrap_err();
+        let error = dispatch_nearest_neighbors(
+            Metric::L2,
+            test_input(&dots, 2),
+            MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
+            &mut LeafKernelWorkspace::new(),
+        )
+        .unwrap_err();
 
         assert_eq!(
             error,
@@ -1157,9 +1128,9 @@ mod integration_tests {
         let dots = [0.0; 6];
         let non_square = MatrixView::try_from(&dots[..], 2, 3).unwrap();
         let mut output = [LeafNeighbor::default(); 2];
-        let kernel = LeafKernel::new(Metric::L2);
         assert_eq!(
-            kernel.nearest_neighbors(
+            dispatch_nearest_neighbors(
+                Metric::L2,
                 non_square,
                 MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
                 &mut LeafKernelWorkspace::new(),
@@ -1170,7 +1141,8 @@ mod integration_tests {
         let square = [0.0; 9];
         let mut wrong_rows = [LeafNeighbor::default(); 2];
         assert_eq!(
-            kernel.nearest_neighbors(
+            dispatch_nearest_neighbors(
+                Metric::L2,
                 test_input(&square, 3),
                 MutMatrixView::try_from(&mut wrong_rows[..], 2, 1).unwrap(),
                 &mut LeafKernelWorkspace::new(),
@@ -1184,7 +1156,8 @@ mod integration_tests {
 
         let mut too_many = [LeafNeighbor::default(); 9];
         assert_eq!(
-            kernel.nearest_neighbors(
+            dispatch_nearest_neighbors(
+                Metric::L2,
                 test_input(&square, 3),
                 MutMatrixView::try_from(&mut too_many[..], 3, 3).unwrap(),
                 &mut LeafKernelWorkspace::new(),
@@ -1199,7 +1172,8 @@ mod integration_tests {
         let square = [0.0; 25];
         let mut too_wide = [LeafNeighbor::default(); 20];
         assert_eq!(
-            kernel.nearest_neighbors(
+            dispatch_nearest_neighbors(
+                Metric::L2,
                 test_input(&square, 5),
                 MutMatrixView::try_from(&mut too_wide[..], 5, 4).unwrap(),
                 &mut LeafKernelWorkspace::new(),
