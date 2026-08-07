@@ -13,18 +13,7 @@
 //!    selects local neighbors and merges their global point IDs.
 //! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
 //!    longer than the graph degree.
-//!
-//! ```text
-//! build_graph<T>
-//!   └─ caller Rayon pool
-//!      └─ select architecture A and metric M                    once
-//!         └─ build_graph_for<A, M, T>
-//!            ├─ partitioning::partition<A, M, T>
-//!            │  └─ partition_kernel::nearest_leaders<A, M>     per stripe
-//!            ├─ leaf_build::build_leaf_candidates<A, M, T>
-//!            │  └─ leaf_kernel::nearest_neighbors<A, M>        per leaf
-//!            └─ finalization::prune_overfull
-//! ```
+
 //!
 //! `diskann-wide` selects architecture `A`. One match selects metric marker `M`.
 //! The build passes both concrete types through all replicas, recursive
@@ -39,7 +28,7 @@
 //! also does not quantize, serialize, or search the graph.
 //!
 //! Partition and leaf work use separate reusable buffers. The build consumes
-//! each stage output before it creates the next graph representation.
+//! each output before it creates another graph representation.
 
 mod kernel_metric;
 
