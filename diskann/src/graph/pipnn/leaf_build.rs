@@ -92,6 +92,12 @@ pub(crate) enum LeafBuildError {
     PoisonedCandidateList { point: u32 },
     #[error("leaf {leaf} produced too many directed edges")]
     TooManyEdges { leaf: usize },
+    #[error("HashPrune rejected the edge data for leaf {leaf}")]
+    HashPrune {
+        leaf: usize,
+        #[source]
+        source: crate::ANNError,
+    },
 }
 
 /// Reusable buffers for one Rayon leaf job.
@@ -320,13 +326,14 @@ where
                     cursor: &mut buffers.edge_cursor,
                 },
             )?;
-            hash_prune.add_leaf_edges(
-                point_ids,
-                &buffers.edge_offsets,
-                &buffers.edges[..edge_count],
-                &mut buffers.sketch_scratch,
-            );
-            Ok(())
+            hash_prune
+                .add_leaf_edges(
+                    point_ids,
+                    &buffers.edge_offsets,
+                    &buffers.edges[..edge_count],
+                    &mut buffers.sketch_scratch,
+                )
+                .map_err(|source| LeafBuildError::HashPrune { leaf, source })
         },
     )
 }

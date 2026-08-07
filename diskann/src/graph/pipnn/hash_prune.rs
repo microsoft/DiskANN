@@ -292,7 +292,7 @@ impl HotSlot {
     }
 }
 
-const _: () = assert!(std::mem::size_of::<LockedHotSlot>() == 16);
+const _: [(); 16] = [(); std::mem::size_of::<LockedHotSlot>()];
 
 // These pointers name one point's row in the three cold arrays. The caller must
 // hold that point's lock before it writes through a pointer.
@@ -411,9 +411,6 @@ where
     F: SIMDVector<Scalar = f32> + SIMDPartialOrd + std::ops::Sub<Output = F>,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    debug_assert!(args.len <= F::LANES);
-    debug_assert!(F::LANES <= u16::BITS as usize);
-
     // SAFETY: `src` and `dst` each contain `len` values. Construction checks
     // `len <= 16 <= F::LANES`. The masked load does not read inactive lanes.
     let dst = unsafe { F::load_simd_first(arch, args.dst, args.len) };
@@ -745,9 +742,23 @@ impl HashPrune {
     ///
     /// RAII unlocks the point after return or panic.
     #[inline(always)]
-    fn with_locked<R>(&self, idx: usize, f: impl FnOnce(&mut HotSlot, ColdSlotPtrs) -> R) -> R {
-        assert!(idx < self.hot.len(), "HashPrune point index out of bounds");
-        let off = idx * self.scan_lanes;
+    fn with_locked<R>(
+        &self,
+        idx: usize,
+        f: impl FnOnce(&mut HotSlot, ColdSlotPtrs) -> R,
+    ) -> ANNResult<R> {
+        let slot = self.hot.get(idx).ok_or_else(|| {
+            ANNError::message(format!(
+                "HashPrune point ID {idx} is outside {} reservoirs",
+                self.hot.len()
+            ))
+        })?;
+        let off = idx.checked_mul(self.scan_lanes).ok_or_else(|| {
+            ANNError::message(format!(
+                "HashPrune row offset {idx} x {} overflows usize",
+                self.scan_lanes
+            ))
+        })?;
         // SAFETY: `idx` is in bounds. Each slab has
         // `hot.len() * scan_lanes` elements. `UnsafeCell` permits these writes,
         // and `with_state` holds the point lock for the closure.
@@ -759,7 +770,7 @@ impl HashPrune {
                 scan_lanes: self.scan_lanes,
             }
         };
-        self.hot[idx].with_state(|hot| f(hot, cold))
+        Ok(slot.with_state(|hot| f(hot, cold)))
     }
 
     /// Merge one leaf's CSR edges into the point reservoirs.
@@ -771,19 +782,49 @@ impl HashPrune {
         edge_offsets: &[u32],
         edges: &[(u32, f32)],
         sketch_scratch: &mut Vec<f32>,
-    ) {
-        if edges.is_empty() {
-            return;
-        }
+    ) -> ANNResult<()> {
         let n = point_ids.len();
+        let expected_offsets = n.checked_add(1).ok_or_else(|| {
+            ANNError::message(format!("HashPrune point count {n} overflows usize"))
+        })?;
+        if edge_offsets.len() != expected_offsets {
+            return Err(ANNError::message(format!(
+                "HashPrune expected {expected_offsets} edge offsets, got {}",
+                edge_offsets.len()
+            )));
+        }
+        if edge_offsets.windows(2).any(|pair| pair[0] > pair[1])
+            || edge_offsets.last().copied().unwrap_or(0) as usize > edges.len()
+        {
+            return Err(ANNError::message("HashPrune received invalid CSR offsets"));
+        }
+        if let Some(&point) = point_ids
+            .iter()
+            .find(|&&point| point as usize >= self.hot.len())
+        {
+            return Err(ANNError::message(format!(
+                "HashPrune point ID {point} is outside {} reservoirs",
+                self.hot.len()
+            )));
+        }
+        if let Some(&(target, _)) = edges.iter().find(|&&(target, _)| target as usize >= n) {
+            return Err(ANNError::message(format!(
+                "HashPrune local target {target} is outside {n} leaf points"
+            )));
+        }
+        if edges.is_empty() {
+            return Ok(());
+        }
+
         let m = self.sketches.num_planes();
         let l_max = self.l_max as u8;
-        debug_assert_eq!(edge_offsets.len(), n + 1);
-        let sketch_len = n * m;
+        let sketch_len = n.checked_mul(m).ok_or_else(|| {
+            ANNError::message(format!("HashPrune sketch shape {n} x {m} overflows usize"))
+        })?;
         if sketch_scratch.len() < sketch_len {
             sketch_scratch.resize(sketch_len, 0.0);
         }
-        self.gather_sketches(point_ids, &mut sketch_scratch[..sketch_len]);
+        self.gather_sketches(point_ids, &mut sketch_scratch[..sketch_len])?;
 
         for local_src in 0..n {
             let start = edge_offsets[local_src] as usize;
@@ -817,7 +858,6 @@ impl HashPrune {
                     let global_dst = point_ids[dst_local as usize];
                     let dst_sketch =
                         &sketch_scratch[dst_local as usize * m..(dst_local as usize + 1) * m];
-                    debug_assert!(m <= 16, "num_planes <= 16 enforced by validate");
                     let hash = self.relative_hash.call(RelativeHashArgs {
                         src: src_sketch.as_ptr(),
                         dst: dst_sketch.as_ptr(),
@@ -831,18 +871,42 @@ impl HashPrune {
                         insert_locked(hot, cold, hash, global_dst, dist, l_max, self.find_hash)
                     };
                 }
-            });
+            })?;
         }
+        Ok(())
     }
 
-    fn gather_sketches(&self, indices: &[u32], out: &mut [f32]) {
+    fn gather_sketches(&self, indices: &[u32], out: &mut [f32]) -> ANNResult<()> {
         let m = self.sketches.num_planes();
-        let src = self.sketches.sketches();
-        debug_assert_eq!(out.len(), indices.len() * m);
-        for (i, &idx) in indices.iter().enumerate() {
-            let g = idx as usize;
-            out[i * m..(i + 1) * m].copy_from_slice(&src[g * m..(g + 1) * m]);
+        let expected = indices.len().checked_mul(m).ok_or_else(|| {
+            ANNError::message(format!(
+                "HashPrune sketch shape {} x {m} overflows usize",
+                indices.len()
+            ))
+        })?;
+        if out.len() != expected {
+            return Err(ANNError::message(format!(
+                "HashPrune expected {expected} gathered sketch values, got {}",
+                out.len()
+            )));
         }
+        let src = self.sketches.sketches();
+        for (i, &idx) in indices.iter().enumerate() {
+            let start = (idx as usize).checked_mul(m).ok_or_else(|| {
+                ANNError::message(format!(
+                    "HashPrune sketch offset {idx} x {m} overflows usize"
+                ))
+            })?;
+            let end = start.checked_add(m).ok_or_else(|| {
+                ANNError::message(format!("HashPrune sketch row {idx} overflows usize"))
+            })?;
+            let source = src.get(start..end).ok_or_else(|| {
+                ANNError::message(format!("HashPrune point ID {idx} has no sketch row"))
+            })?;
+            let output_start = i * m;
+            out[output_start..output_start + m].copy_from_slice(source);
+        }
+        Ok(())
     }
 
     /// Consume the reservoirs and return at most `max_degree` nearest IDs per point.
@@ -1056,9 +1120,10 @@ mod tests {
         });
         let l_max = hp.l_max as u8;
         hp.with_locked(src, |hot, cold| {
-            // SAFETY: with_locked guards the reservoir and supplies valid cold-slab pointers.
+            // SAFETY: `with_locked` holds the source lock and supplies valid cold rows.
             unsafe { insert_locked(hot, cold, hash, dst as u32, distance, l_max, hp.find_hash) };
-        });
+        })
+        .unwrap();
     }
 
     fn assert_sketch_source_type_matches_f32<T>(
@@ -1283,7 +1348,9 @@ mod tests {
         ];
         let mut scratch = Vec::new();
 
-        batched.add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch);
+        batched
+            .add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch)
+            .unwrap();
         for source in 0..point_ids.len() {
             for &(target, distance) in
                 &edges[offsets[source] as usize..offsets[source + 1] as usize]
@@ -1309,20 +1376,41 @@ mod tests {
     }
 
     #[test]
+    fn leaf_edges_reject_invalid_csr_and_point_ids() {
+        let data = [0.0_f32, 1.0];
+        let hp = hash_prune(&data, 2, 1, 1, 2).unwrap();
+        let mut scratch = Vec::new();
+
+        assert!(hp.add_leaf_edges(&[0], &[0], &[], &mut scratch).is_err());
+        assert!(hp.add_leaf_edges(&[2], &[0, 0], &[], &mut scratch).is_err());
+        assert!(
+            hp.add_leaf_edges(&[0, 1], &[0, 1, 1], &[(2, 1.0)], &mut scratch)
+                .is_err()
+        );
+        assert!(
+            hp.add_leaf_edges(&[0, 1], &[0, 1, 0], &[(1, 1.0)], &mut scratch)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn leaf_edges_grow_then_reuse_sketch_scratch() {
         let data = [0.0_f32, 1.0, 2.0, 3.0];
         let hp = hash_prune(&data, 4, 1, 8, 4).unwrap();
         let mut scratch = vec![99.0; 1];
 
-        hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
+        hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch)
+            .unwrap();
         assert_eq!(scratch.len(), 16);
         let capacity = scratch.capacity();
 
-        hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
+        hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch)
+            .unwrap();
         assert_eq!(scratch.len(), 16);
         assert_eq!(scratch.capacity(), capacity);
 
-        hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch);
+        hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch)
+            .unwrap();
         assert_eq!(scratch.len(), 16);
         assert_eq!(scratch.capacity(), capacity);
         assert!(
