@@ -537,11 +537,10 @@ where
     Ok(())
 }
 
-/// Convert point-major assignments into leader-major clusters.
+/// Group assigned point IDs by child partition.
 ///
-/// A small input uses one serial pass with exact capacities. A large input makes
-/// at most one partial cluster set for each Rayon worker. It then merges each
-/// leader independently. Stripe-order concatenation matches serial member order.
+/// Both the serial and parallel paths preserve point order inside each child.
+/// This order is required for deterministic recursive sampling.
 fn scatter_assignments(
     points: &[u32],
     assignments: &[u32],
@@ -750,9 +749,6 @@ fn filled_vec<T: Clone>(len: usize, value: T) -> ANNResult<Vec<T>> {
     Ok(values)
 }
 
-/// Grow `values` to at least `len` elements and do not shrink it.
-///
-/// Callers use an explicit active prefix.
 fn grow_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
     if values.len() >= len {
         return Ok(());
