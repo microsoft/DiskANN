@@ -604,7 +604,26 @@ fn process_points<F, M>(
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
+    let point_count = dots.nrows();
     let leader_count = dots.ncols();
+    assert!(
+        leader_count > 0,
+        "validated partition input must contain leaders"
+    );
+    if M::PARTITION_POINT_SCALE.is_some() {
+        assert_eq!(
+            scales.point_scales.len(),
+            point_count,
+            "validated point scales must match point count"
+        );
+    }
+    if M::PARTITION_LEADER_SCALE.is_some() {
+        assert_eq!(
+            scales.leader_scales.len(),
+            leader_count,
+            "validated leader scales must match leader count"
+        );
+    }
     // Each point is independent. Reinitialize the fixed tracker here so no
     // assignment state or tie order leaks across points.
     for (point, (point_dots, point_output)) in dots
@@ -630,7 +649,8 @@ fn process_points<F, M>(
             // SAFETY: `base + F::LANES <= full <= point_dots.len()`.
             let point_dots = unsafe { F::load_simd(arch, point_dots.as_ptr().add(base)) };
             let leader_scales = if M::PARTITION_LEADER_SCALE.is_some() {
-                // SAFETY: validation requires one scale per leader.
+                // SAFETY: the assertion above established one scale per leader, and
+                // `base + F::LANES <= full <= leader_count`.
                 unsafe { F::load_simd(arch, scales.leader_scales.as_ptr().add(base)) }
             } else {
                 F::default(arch)
