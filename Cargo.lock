@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-label-filter"
-version = "0.55.1-pre.1"
+version = "0.55.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -664,6 +664,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tracing",
+]
+
+[[package]]
+name = "diskann-label-index"
+version = "0.55.1-pre.1"
+dependencies = [
+ "diskann",
+ "roaring",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

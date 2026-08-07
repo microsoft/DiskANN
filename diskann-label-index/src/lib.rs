@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Versioned on-disk label-index encoding, loading, and query evaluation.
+//! Versioned on-disk label-index encoding, loading, and query evaluation for DiskANN.
 
 use diskann::graph::ext::labeled::QueryLabelProvider;
 use roaring::RoaringBitmap;
