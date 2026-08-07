@@ -83,6 +83,7 @@ pub use double::u32x8;
 pub use double::u32x16;
 
 pub use double::u64x4;
+pub use double::u64x8;
 
 // Internal helpers
 mod macros;

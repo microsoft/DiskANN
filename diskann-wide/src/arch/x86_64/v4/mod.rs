@@ -157,6 +157,9 @@ maybe_miri!(u64x2_, u64x2, u64, 2);
 pub mod u64x4_;
 maybe_miri!(u64x4_, u64x4, u64, 4);
 
+pub mod u64x8_;
+maybe_miri!(u64x8_, u64x8, u64, 8);
+
 // Conversions between intrinsics
 mod conversion;
 
