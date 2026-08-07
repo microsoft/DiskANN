@@ -376,10 +376,10 @@ where
     }
 }
 
-/// Find one `u16` hash with `i16` SIMD equality.
+/// Find an existing relative-direction bucket in one source reservoir.
 ///
-/// `diskann-wide` has no `u16` vector type. An `i16` load keeps each bit pattern,
-/// so equality gives the same result.
+/// The SIMD backend has no `u16` vector. An `i16` load keeps each hash bit
+/// pattern, so equality gives the same result.
 fn find_hash_simd<F>(arch: F::Arch, args: FindHashArgs) -> Option<usize>
 where
     F: SIMDVector<Scalar = i16> + SIMDPartialEq,
@@ -656,7 +656,7 @@ unsafe impl Send for HashPrune {}
 unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
-    /// Compute sketches and allocate one zero-initialized reservoir per point.
+    /// Create one empty direction reservoir and LSH sketch for each dataset point.
     pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: MatrixView<'_, T>,
         num_planes: usize,
@@ -742,7 +742,7 @@ impl HashPrune {
         })
     }
 
-    /// Lock one source reservoir and run `f` with its metadata and array rows.
+    /// Lock one source point's reservoir while `f` reads or updates it.
     ///
     /// RAII unlocks the point when the closure exits.
     ///
