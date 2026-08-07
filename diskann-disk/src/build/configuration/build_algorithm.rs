@@ -25,7 +25,7 @@ pub struct PiPNNParameters {
     pub p_samp: f64,
     /// Number of nearest leaders retained at each partition level.
     pub fanout: Vec<usize>,
-    /// Number of nearest neighbors selected within each leaf.
+    /// Number of nearest neighbors selected within each leaf (`1..=3`).
     pub k: usize,
     /// Number of independent partition passes.
     pub replicas: usize,
