@@ -709,6 +709,18 @@ mod tests {
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
+
+        // Redirect each build job's `save_path` into the tempdir so the disk index
+        // artifacts are not written relative to the process cwd (the repo tree).
+        let jobs = raw["jobs"]
+            .as_array_mut()
+            .expect("\"jobs\" should be an array");
+        for (i, job) in jobs.iter_mut().enumerate() {
+            let save_path = tempdir.path().join(format!("disk_index_filter_job_{i}"));
+            job["content"]["source"]["save_path"] =
+                serde_json::Value::String(save_path.to_str().unwrap().to_string());
+        }
+
         let input_path = tempdir.path().join("disk-index-filter.json");
         save_to_file(&input_path, &raw);
         let output_path = tempdir.path().join("output.json");
