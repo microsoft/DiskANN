@@ -7,39 +7,50 @@
 //!
 //! Caller supplies a row-major point-by-leader dot matrix plus metric-specific
 //! [`PartitionScales`]. Output contains sorted leader-column positions for each
-//! point; fanout is the output width and cannot exceed
-//! [`MAX_PARTITION_FANOUT`] or the leader count.
+//! point; fanout is the output width and cannot exceed the leader count.
 //!
-//! [`PartitionKernel::new`] selects metric and runtime architecture once and
-//! stores a direct function pointer reused by every point stripe. Calls validate
-//! row counts, scale variants and lengths, fanout, and leader-ID representation
-//! before output mutation or unchecked SIMD loads.
+//! Runtime callers may use [`PartitionKernel`]; production dispatches once at
+//! the partition-stage boundary and calls the generic kernel directly. Calls
+//! validate row counts, scale variants and lengths, fanout, and leader-ID
+//! representation before output mutation or unchecked SIMD loads.
 //!
 //! L2 omits the point norm because it cannot change one point's leader order.
 //! Strict comparisons preserve scan order for ties and leave NaN non-rankable.
-//! Each point evaluates every leader; competitive scores move through a fixed
-//! stack tracker of at most [`MAX_PARTITION_FANOUT`] entries.
-
-use std::marker::PhantomData;
+//! Each point evaluates every leader; competitive scores move through a
+//! caller-owned tracker reused across points.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
-    arch::{self, Dispatched2, FTarget2},
-    lifetime::AddLifetime,
+    arch::{self, Target1},
 };
 
 use super::kernel_metric::{KernelMetric, MetricVisitor, ScaleKind, visit_metric};
 
-/// Maximum number of leaders retained for one point.
-///
-/// Supported PiPNN partition fanouts fit within 16. Keeping this as a fixed
-/// stack tracker bounds per-point stack use and code size; larger requests are
-/// rejected rather than silently truncated.
-pub const MAX_PARTITION_FANOUT: usize = 16;
+/// Reusable nearest-leader tracker for one partition worker.
+#[derive(Debug, Default)]
+pub struct PartitionKernelWorkspace {
+    tracker: Vec<(u32, f32)>,
+}
 
-type LeaderTracker = [(u32, f32); MAX_PARTITION_FANOUT];
+impl PartitionKernelWorkspace {
+    /// Construct an empty allocation-free workspace.
+    pub const fn new() -> Self {
+        Self {
+            tracker: Vec::new(),
+        }
+    }
+
+    fn prepare(&mut self, fanout: usize) -> Result<(), PartitionKernelError> {
+        let additional = fanout.saturating_sub(self.tracker.len());
+        self.tracker
+            .try_reserve(additional)
+            .map_err(|_| PartitionKernelError::Allocation { additional })?;
+        self.tracker.resize(fanout, (u32::MAX, f32::INFINITY));
+        Ok(())
+    }
+}
 
 /// Metric-specific normalization inputs for one partition tile.
 ///
@@ -109,17 +120,19 @@ pub enum PartitionKernelError {
         /// Expected scale layout.
         expected: &'static str,
     },
-    /// The requested fanout cannot be represented by the fixed top-k tracker.
-    #[error(
-        "invalid fanout {fanout}: must not exceed {leader_count} leaders or kernel maximum {maximum}"
-    )]
+    /// The requested fanout exceeds the available leader count.
+    #[error("invalid fanout {fanout}: must not exceed {leader_count} leaders")]
     InvalidFanout {
         /// Requested number of leaders per point.
         fanout: usize,
         /// Available leader count.
         leader_count: usize,
-        /// Kernel maximum.
-        maximum: usize,
+    },
+    /// Reusable tracker storage could not be reserved.
+    #[error("failed to reserve {additional} partition tracker entries")]
+    Allocation {
+        /// Additional entries requested from the allocator.
+        additional: usize,
     },
     /// Leader positions cannot be represented as `u32`.
     #[error("leader count {0} exceeds the u32 position limit")]
@@ -134,147 +147,96 @@ pub enum PartitionKernelError {
     },
 }
 
-/// Lifetime families used by the direct function-pointer interface.
-///
-/// Input and output receive independent call lifetimes. The prepared handle
-/// stores neither view, so it remains `Copy + Send + Sync` across worker threads.
+/// Inputs for one immediate architecture/metric dispatch.
 #[derive(Debug)]
-struct PartitionInputArg;
-
-impl AddLifetime for PartitionInputArg {
-    type Of<'a> = PartitionInput<'a>;
+struct PartitionCall<'a> {
+    input: PartitionInput<'a>,
+    output: MutMatrixView<'a, u32>,
+    workspace: &'a mut PartitionKernelWorkspace,
 }
 
-#[derive(Debug)]
-struct PartitionOutput;
-
-impl AddLifetime for PartitionOutput {
-    type Of<'a> = MutMatrixView<'a, u32>;
-}
-
-type PartitionFn =
-    Dispatched2<Result<(), PartitionKernelError>, PartitionInputArg, PartitionOutput>;
-
-/// A partition kernel prepared for one metric and the current CPU.
-///
-/// Construct this once with [`PartitionKernel::new`] and reuse it for every
-/// point stripe. The handle is a direct function pointer and is `Copy`, `Send`,
-/// and `Sync`.
-///
-/// It stores no matrix or output borrow, so callers may share one handle across
-/// Rayon workers while each call owns independent views.
+/// Partition-kernel convenience API for callers with a runtime [`Metric`].
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionKernel {
-    run: PartitionFn,
+    metric: Metric,
 }
 
 impl PartitionKernel {
-    /// Prepare a partition kernel for `metric` and the current CPU.
-    ///
-    /// The return value contains one architecture/metric-specialized function
-    /// pointer and can process any valid stripe shape and fanout.
-    ///
-    /// # Performance
-    ///
-    /// Performs runtime architecture detection and one metric match once.
-    /// Reusing the handle removes both decisions from point and leader loops.
-    pub fn new(metric: Metric) -> Self {
-        diskann_wide::arch::dispatch1_no_features(PreparePartition, metric)
+    /// Construct a kernel selector for `metric`.
+    pub const fn new(metric: Metric) -> Self {
+        Self { metric }
     }
 
-    /// Select the nearest leader positions for every input point.
+    /// Select nearest leader positions for every input point.
     ///
-    /// `output.nrows()` must equal `input.dots.nrows()`; its column count is the
-    /// requested fanout. Results are ordered by ascending distance. For L2, the
-    /// score omits the point norm because it cannot affect that point's ranking.
-    ///
-    /// `input` supplies point-leader dots and typed metric scales. `output` is
-    /// overwritten with leader-local positions. Successful return guarantees
-    /// exactly `output.ncols()` rankable leaders for every point.
-    ///
-    /// # Core flow
-    ///
-    /// The prepared entry validates every view and scale slice before mutation,
-    /// runs one architecture/metric-specialized point traversal, then checks the
-    /// final tracker slot for underfill.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PartitionKernelError`] for overflowing or mismatched shapes,
-    /// wrong scale variants or lengths, excessive fanout/leader counts, or a
-    /// point with too few rankable scores. Validation errors leave output
-    /// unchanged.
-    ///
-    /// # Performance
-    ///
-    /// See module-level complexity. This call follows one prepared direct
-    /// function pointer and performs no runtime ISA or metric dispatch.
+    /// `output.nrows()` must equal `input.dots.nrows()` and fanout, represented
+    /// by `output.ncols()`, must not exceed the leader count.
     pub fn nearest_leaders(
         &self,
         input: PartitionInput<'_>,
         output: MutMatrixView<'_, u32>,
+        workspace: &mut PartitionKernelWorkspace,
     ) -> Result<(), PartitionKernelError> {
-        self.run.call(input, output)
+        arch::dispatch1_no_features(
+            RunPartition {
+                metric: self.metric,
+            },
+            PartitionCall {
+                input,
+                output,
+                workspace,
+            },
+        )
     }
 }
 
-/// First dispatch stage: select runtime architecture once.
-///
-/// `dispatch1_no_features` runs only this factory. The returned entry pointer is
-/// generated by the selected architecture and carries its required features.
-struct PreparePartition;
+struct RunPartition {
+    metric: Metric,
+}
 
-impl<A> arch::Target1<A, PartitionKernel, Metric> for PreparePartition
+impl<A> Target1<A, Result<(), PartitionKernelError>, PartitionCall<'_>> for RunPartition
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    fn run(self, arch: A, metric: Metric) -> PartitionKernel {
-        visit_metric(metric, BuildPartition(arch))
+    fn run(self, arch: A, call: PartitionCall<'_>) -> Result<(), PartitionKernelError> {
+        visit_metric(self.metric, ExecutePartition { arch, call })
     }
 }
 
-/// BYO-type-erasure visitor holding a concrete architecture.
-///
-/// `visit<M>` combines architecture `A` and concrete metric `M`, then produces
-/// one direct function pointer. No nested metric trait object remains at runtime.
-struct BuildPartition<A>(A);
+struct ExecutePartition<'a, A> {
+    arch: A,
+    call: PartitionCall<'a>,
+}
 
-impl<A> MetricVisitor for BuildPartition<A>
+impl<A> MetricVisitor for ExecutePartition<'_, A>
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    type Output = PartitionKernel;
+    type Output = Result<(), PartitionKernelError>;
 
     fn visit<M: KernelMetric>(self) -> Self::Output {
-        PartitionKernel {
-            run: self.0.dispatch2::<
-                PartitionEntry<M>,
-                Result<(), PartitionKernelError>,
-                PartitionInputArg,
-                PartitionOutput,
-            >(),
-        }
+        nearest_leaders_for::<A, M>(
+            self.arch,
+            self.call.input,
+            self.call.output,
+            self.call.workspace,
+        )
     }
 }
 
-/// Architecture/metric-specialized function-pointer destination.
-///
-/// The zero-sized entry receives all stripe state as arguments. Validation must
-/// complete before `process_points` reaches unchecked contiguous SIMD loads.
-///
-/// Call order is fixed: validate without mutation, handle empty work, execute one
-/// specialized traversal, then verify each point's last assignment. Keeping the
-/// phases together makes every unchecked load depend on one visible gate.
-struct PartitionEntry<M>(PhantomData<M>);
-
-impl<A, M> FTarget2<A, Result<(), PartitionKernelError>, PartitionInput<'_>, MutMatrixView<'_, u32>>
-    for PartitionEntry<M>
+/// Architecture/metric-specialized partition kernel used by stage dispatch.
+pub(crate) fn nearest_leaders_for<A, M>(
+    arch: A,
+    input: PartitionInput<'_>,
+    mut output: MutMatrixView<'_, u32>,
+    workspace: &mut PartitionKernelWorkspace,
+) -> Result<(), PartitionKernelError>
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
@@ -282,35 +244,28 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
     M: KernelMetric,
 {
-    fn run(
-        arch: A,
-        input: PartitionInput<'_>,
-        mut output: MutMatrixView<'_, u32>,
-    ) -> Result<(), PartitionKernelError> {
-        // Validation establishes matrix areas, backing lengths, scale units,
-        // and fanout bounds before any output mutation or unchecked load.
-        let scales = validate::<M>(input, &output)?;
-        let fanout = output.ncols();
-        // Zero fanout and empty stripes require no assignments. Return before
-        // constructing trackers or touching output.
-        if fanout == 0 || input.dots.nrows() == 0 {
-            return Ok(());
-        }
-
-        // Architecture and metric are concrete here; only stripe dimensions and
-        // fanout remain runtime values.
-        process_points::<A::f32x16, M>(arch, input.dots, scales, fanout, output.as_mut_slice());
-        // A sorted tracker can be underfilled only at its last slot. This keeps
-        // post-validation linear in points rather than scanning every output ID.
-        if let Some(point) = output
-            .as_slice()
-            .chunks_exact(fanout)
-            .position(|assignments| assignments[fanout - 1] == u32::MAX)
-        {
-            return Err(PartitionKernelError::InsufficientRankableLeaders { point, fanout });
-        }
-        Ok(())
+    let scales = validate::<M>(input, &output)?;
+    let fanout = output.ncols();
+    if fanout == 0 || input.dots.nrows() == 0 {
+        return Ok(());
     }
+
+    workspace.prepare(fanout)?;
+    process_points::<A::f32x16, M>(
+        arch,
+        input.dots,
+        scales,
+        output.as_mut_slice(),
+        &mut workspace.tracker,
+    );
+    if let Some(point) = output
+        .as_slice()
+        .chunks_exact(fanout)
+        .position(|assignments| assignments[fanout - 1] == u32::MAX)
+    {
+        return Err(PartitionKernelError::InsufficientRankableLeaders { point, fanout });
+    }
+    Ok(())
 }
 
 /// Validated scale slices in the storage form required by `M`.
@@ -348,11 +303,10 @@ fn validate<'a, M: KernelMetric>(
     if leader_count > u32::MAX as usize {
         return Err(PartitionKernelError::TooManyLeaders(leader_count));
     }
-    if fanout > MAX_PARTITION_FANOUT || fanout > leader_count {
+    if fanout > leader_count {
         return Err(PartitionKernelError::InvalidFanout {
             fanout,
             leader_count,
-            maximum: MAX_PARTITION_FANOUT,
         });
     }
 
@@ -460,8 +414,8 @@ fn process_points<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
     scales: ScaleSlices<'_>,
-    fanout: usize,
     output: &mut [u32],
+    tracker: &mut [(u32, f32)],
 ) where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
@@ -488,14 +442,15 @@ fn process_points<F, M>(
             "validated leader scales must match leader count"
         );
     }
-    // Each point is independent. Reinitialize the fixed tracker here so no
-    // assignment state or tie order leaks across points.
+    let fanout = tracker.len();
+    // Each point is independent. Reset the caller-owned tracker so no assignment
+    // state or tie order leaks across rows.
     for (point, (point_dots, point_output)) in dots
-        .as_slice()
-        .chunks_exact(leader_count)
+        .row_iter()
         .zip(output.chunks_exact_mut(fanout))
         .enumerate()
     {
+        tracker.fill((u32::MAX, f32::INFINITY));
         // Transform once per point rather than once per leader. For metrics
         // without a point scale, specialization removes this branch and load.
         let point_scale = if M::PARTITION_POINT_SCALE.is_some() {
@@ -504,7 +459,6 @@ fn process_points<F, M>(
             0.0
         };
         let point_scale_vector = F::splat(arch, point_scale);
-        let mut tracker = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
         // Split at the largest complete vector boundary. Scalar tail uses the
         // metric's explicit scalar operation order, not a padded SIMD load.
         let full = leader_count / F::LANES * F::LANES;
@@ -522,8 +476,7 @@ fn process_points<F, M>(
             insert_leader_lanes(
                 M::partition_distance(arch, point_dots, point_scale_vector, leader_scales),
                 base,
-                &mut tracker,
-                fanout,
+                tracker,
             );
         }
 
@@ -536,15 +489,14 @@ fn process_points<F, M>(
                 0.0
             };
             insert_leader(
-                &mut tracker,
-                fanout,
+                tracker,
                 leader as u32,
                 M::partition_distance_scalar(dot, point_scale, leader_scale),
             );
         }
         // Distances are only tracker state; child-group construction needs leader
         // column positions in deterministic nearest-first order.
-        copy_leader_ids(&tracker, point_output);
+        copy_leader_ids(tracker, point_output);
     }
 }
 
@@ -558,16 +510,12 @@ fn process_points<F, M>(
 /// `tracker[..fanout]` is the point's sorted retained prefix. The function
 /// mutates that tracker and returns no value. Rejected groups cost one comparison
 /// and mask test; accepted lanes each pay `O(fanout)` worst-case insertion.
-fn insert_leader_lanes<F>(
-    distances: F,
-    first_leader: usize,
-    tracker: &mut LeaderTracker,
-    fanout: usize,
-) where
+fn insert_leader_lanes<F>(distances: F, first_leader: usize, tracker: &mut [(u32, f32)])
+where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let threshold = F::splat(distances.arch(), tracker[fanout - 1].1);
+    let threshold = F::splat(distances.arch(), tracker[tracker.len() - 1].1);
     let eligible = distances.lt_simd(threshold);
     if eligible.none() {
         return;
@@ -578,7 +526,7 @@ fn insert_leader_lanes<F>(
     while lanes != 0 {
         let lane = lanes.trailing_zeros() as usize;
         lanes &= lanes - 1;
-        insert_leader(tracker, fanout, (first_leader + lane) as u32, values[lane]);
+        insert_leader(tracker, (first_leader + lane) as u32, values[lane]);
     }
 }
 
@@ -592,8 +540,8 @@ fn insert_leader_lanes<F>(
 /// `leader` is a local column position. The function returns no value and shifts
 /// at most `fanout - 1` entries without allocation.
 #[inline(always)]
-fn insert_leader(tracker: &mut LeaderTracker, fanout: usize, leader: u32, distance: f32) {
-    let threshold = fanout - 1;
+fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
+    let threshold = tracker.len() - 1;
     if distance.partial_cmp(&tracker[threshold].1) != Some(std::cmp::Ordering::Less) {
         return;
     }
@@ -610,7 +558,7 @@ fn insert_leader(tracker: &mut LeaderTracker, fanout: usize, leader: u32, distan
 ///
 /// `assignments.len()` is validated fanout. Copying costs `O(fanout)` and leaves
 /// tracker state available for the underfill sentinel check encoded in IDs.
-fn copy_leader_ids(tracker: &LeaderTracker, assignments: &mut [u32]) {
+fn copy_leader_ids(tracker: &[(u32, f32)], assignments: &mut [u32]) {
     for (destination, &(leader, _)) in assignments.iter_mut().zip(tracker) {
         *destination = leader;
     }
@@ -673,11 +621,9 @@ mod tests {
                 leader_scales: &[],
             },
         };
-        let leader_count = input.dots.ncols();
         for (point, (point_dots, point_output)) in input
             .dots
-            .as_slice()
-            .chunks_exact(leader_count)
+            .row_iter()
             .zip(output.chunks_exact_mut(fanout))
             .enumerate()
         {
@@ -686,7 +632,7 @@ mod tests {
             } else {
                 0.0
             };
-            let mut tracker = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
+            let mut tracker = vec![(u32::MAX, f32::INFINITY); fanout];
             for (leader, &dot) in point_dots.iter().enumerate() {
                 let leader_scale = if M::PARTITION_LEADER_SCALE.is_some() {
                     M::PARTITION_LEADER_SCALE.transform(scales.leader_scales[leader])
@@ -695,7 +641,6 @@ mod tests {
                 };
                 insert_leader(
                     &mut tracker,
-                    fanout,
                     leader as u32,
                     M::partition_distance_scalar(dot, point_scale, leader_scale),
                 );
@@ -744,6 +689,7 @@ mod tests {
             .nearest_leaders(
                 input,
                 MutMatrixView::try_from(actual.as_mut_slice(), point_scales.len(), 2).unwrap(),
+                &mut PartitionKernelWorkspace::new(),
             )
             .unwrap();
 
@@ -754,13 +700,13 @@ mod tests {
 
     #[test]
     fn scalar_topk_orders_candidates_and_preserves_ties() {
-        let mut tracker = [(u32::MAX, f32::INFINITY); MAX_PARTITION_FANOUT];
+        let mut tracker = vec![(u32::MAX, f32::INFINITY); 4];
         for (leader, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 1.0)] {
-            insert_leader(&mut tracker, 4, leader, distance);
+            insert_leader(&mut tracker, leader, distance);
         }
-        insert_leader(&mut tracker, 4, 5, f32::NAN);
+        insert_leader(&mut tracker, 5, f32::NAN);
 
-        assert_eq!(tracker[..4], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
+        assert_eq!(tracker[..], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
     }
 }
 #[cfg(test)]
@@ -771,7 +717,7 @@ mod tests {
 )]
 mod integration_tests {
     use super::{
-        MAX_PARTITION_FANOUT, PartitionInput, PartitionKernel, PartitionKernelError,
+        PartitionInput, PartitionKernel, PartitionKernelError, PartitionKernelWorkspace,
         PartitionScales,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -913,6 +859,7 @@ mod integration_tests {
         PartitionKernel::new(metric).nearest_leaders(
             input,
             MutMatrixView::try_from(output.as_mut_slice(), input.dots.nrows(), fanout).unwrap(),
+            &mut PartitionKernelWorkspace::new(),
         )?;
         Ok(output)
     }
@@ -1104,6 +1051,7 @@ mod integration_tests {
             PartitionKernel::new(Metric::InnerProduct).nearest_leaders(
                 valid_input,
                 MutMatrixView::try_from(&mut wrong_output[..], 1, 3).unwrap(),
+                &mut PartitionKernelWorkspace::new(),
             ),
             Err(PartitionKernelError::InvalidOutputShape {
                 expected_rows: 2,
@@ -1122,11 +1070,10 @@ mod integration_tests {
         );
 
         assert_eq!(
-            run(Metric::InnerProduct, valid_input, MAX_PARTITION_FANOUT + 1,),
+            run(Metric::InnerProduct, valid_input, 4),
             Err(PartitionKernelError::InvalidFanout {
-                fanout: MAX_PARTITION_FANOUT + 1,
+                fanout: 4,
                 leader_count: 3,
-                maximum: MAX_PARTITION_FANOUT,
             })
         );
 
@@ -1140,7 +1087,6 @@ mod integration_tests {
             Err(PartitionKernelError::InvalidFanout {
                 fanout: 2,
                 leader_count: 1,
-                maximum: MAX_PARTITION_FANOUT,
             })
         );
     }
