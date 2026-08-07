@@ -5,7 +5,8 @@
 
 //! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
-//! PiPNN builds graph candidates in three steps:
+//! PiPNN builds graph candidates in three steps. A leader is a sampled dataset
+//! point that acts as the center of one child partition.
 //!
 //! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
 //!    at most `c_max` points.
@@ -13,7 +14,6 @@
 //!    selects local neighbors and merges their global point IDs.
 //! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
 //!    longer than the graph degree.
-
 //!
 //! `diskann-wide` selects architecture `A`. One match selects metric marker `M`.
 //! The build passes both concrete types through all replicas, recursive
@@ -54,19 +54,18 @@ use rayon::ThreadPool;
 
 use self::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
 
-/// Configuration for PiPNN partitioning and local-neighbor selection.
+/// PiPNN partition and leaf-selection policy.
 ///
-/// [`PiPNNBuildContext`] supplies graph degree, prune policy, alpha, metric, and
-/// the Rayon pool.
+/// DiskANN graph policy separately supplies degree, alpha, and prune metric.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiPNNConfig {
     /// Maximum number of points in a leaf.
     pub c_max: usize,
     /// Minimum leaf size used by global small-leaf merging.
     pub c_min: usize,
-    /// Fraction of a cluster sampled as partition leaders.
+    /// Fraction of a cluster sampled as child-partition centers.
     pub p_samp: f64,
-    /// Number of nearest leaders retained at each overlapping partition level.
+    /// Number of nearest partition centers assigned to each point at each level.
     pub fanout: Vec<usize>,
     /// Number of nearest neighbors selected within each leaf (`1..=3`).
     pub k: usize,
@@ -115,7 +114,7 @@ impl PiPNNConfig {
     }
 }
 
-/// Checked policy and execution inputs for one PiPNN graph build.
+/// PiPNN policy and borrowed execution resources for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
     pub(crate) config: PiPNNConfig,
@@ -149,14 +148,13 @@ impl<'a> PiPNNBuildContext<'a> {
     }
 }
 
-/// Build PiPNN adjacency for all points in `data`.
+/// Build one PiPNN adjacency list for each point in `data`.
 ///
-/// The function does not select start or frozen points. It does not load a
-/// provider or write an index.
+/// This graph contains only real dataset points. Start-point selection and index
+/// serialization are separate operations.
 ///
 /// Raw `u8` and `i8` vectors are not unit-normalized after conversion to `f32`.
-/// Therefore, the function evaluates `CosineNormalized` as `Cosine` for these
-/// two input types.
+/// The build therefore uses norm-aware cosine for these two input types.
 pub fn build_graph<T>(
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
@@ -164,10 +162,13 @@ pub fn build_graph<T>(
 where
     T: VectorRepr + Send + Sync + 'static,
 {
-    context.pool.install(|| build_graph_inner(data, context))
+    context
+        .pool
+        .install(|| validate_and_dispatch_build(data, context))
 }
 
-fn build_graph_inner<T>(
+/// Check dataset bounds and select the architecture and metric implementation.
+fn validate_and_dispatch_build<T>(
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
