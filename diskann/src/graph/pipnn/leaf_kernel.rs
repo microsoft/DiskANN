@@ -291,9 +291,9 @@ where
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     match neighbor_count {
-        1 => run_neighbor_count::<F, M, 1>(arch, input, output, norms, worst),
-        2 => run_neighbor_count::<F, M, 2>(arch, input, output, norms, worst),
-        3 => run_neighbor_count::<F, M, 3>(arch, input, output, norms, worst),
+        1 => scan_pairs_for_neighbor_count::<F, M, 1>(arch, input, output, norms, worst),
+        2 => scan_pairs_for_neighbor_count::<F, M, 2>(arch, input, output, norms, worst),
+        3 => scan_pairs_for_neighbor_count::<F, M, 3>(arch, input, output, norms, worst),
         _ => {
             return Err(LeafKernelError::InvalidNeighborCount {
                 points: input.nrows(),
@@ -305,11 +305,8 @@ where
     Ok(())
 }
 
-/// Run leaf selection with compile-time neighbor count `N`.
-///
-/// The function views the flat output as one `[LeafNeighbor; N]` row per point.
-/// It then scans all point pairs.
-fn run_neighbor_count<F, M, const N: usize>(
+/// Scan all leaf point pairs while retaining `N` neighbors for each point.
+fn scan_pairs_for_neighbor_count<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
