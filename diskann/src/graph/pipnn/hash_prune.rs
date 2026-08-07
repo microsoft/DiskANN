@@ -437,9 +437,11 @@ fn ordered_key(distance: f32) -> u16 {
     if b & 0x8000 != 0 { !b } else { b | 0x8000 }
 }
 
+/// Update the cached farthest entry for one reservoir.
+///
 /// # Safety
 ///
-/// The source slot lock is held, `hot.len <= cold.scan_lanes`, and the first
+/// The caller holds the source lock. `hot.len <= cold.scan_lanes`. The first
 /// `hot.len` entries of every cold array are initialized.
 #[inline]
 unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
@@ -472,6 +474,11 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
     hot.farthest_idx = max_idx;
 }
 
+/// Insert one edge into a locked reservoir.
+///
+/// The function replaces a matching hash only when the new edge has a smaller
+/// total key. A full reservoir accepts only a key below its farthest key.
+///
 /// # Safety
 ///
 /// The caller holds the source lock. Each cold pointer is valid for
@@ -740,7 +747,10 @@ impl HashPrune {
 
     /// Lock point `idx` and run `f` with its mutable hot and cold state.
     ///
-    /// RAII unlocks the point after return or panic.
+    /// RAII unlocks the point when the closure exits.
+    ///
+    /// Returns an error when `idx` is outside the reservoir array or its row
+    /// offset overflows `usize`.
     #[inline(always)]
     fn with_locked<R>(
         &self,
@@ -775,7 +785,11 @@ impl HashPrune {
 
     /// Merge one leaf's CSR edges into the point reservoirs.
     ///
-    /// `sketch_scratch` stores the gathered sketches for this leaf.
+    /// `point_ids` maps leaf-local positions to dataset IDs. `edge_offsets` and
+    /// `edges` form a CSR matrix with leaf-local targets. `sketch_scratch` stores
+    /// the gathered sketches for this leaf.
+    ///
+    /// Returns an error for an invalid CSR shape, point ID, or local target.
     pub(crate) fn add_leaf_edges(
         &self,
         point_ids: &[u32],
@@ -943,7 +957,7 @@ impl HashPrune {
             .collect()
     }
 
-    /// Consume the reservoirs and return all retained candidate IDs.
+    /// Consume the reservoirs and return all retained IDs without sorting them.
     #[allow(clippy::disallowed_methods)] // build_graph installs the caller-owned pool.
     pub(crate) fn into_candidate_lists(self) -> Vec<AdjacencyList<u32>> {
         let cap = self.l_max;
