@@ -79,12 +79,13 @@ struct MmapSlab<T: Pod> {
 }
 
 #[cfg(target_os = "linux")]
-// SAFETY: the allocation contains only `Pod` values and ownership transfers
-// with the slab; mutation is synchronized by HashPrune's per-point locks.
+// SAFETY: the slab uniquely owns its mmap region until Drop; moving the slab
+// transfers that ownership, and `T: Send` permits its initialized values to move.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(target_os = "linux")]
-// SAFETY: shared access exposes only immutable pointers; HashPrune synchronizes
-// every mutation to a point reservoir.
+// SAFETY: safe shared access exposes only `*const T` or `&[T]`, and `T: Sync`.
+// Raw mutation is possible only inside this module and requires an unsafe block;
+// HashPrune places the slab in UnsafeCell before performing such mutation.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(target_os = "linux")]
@@ -136,7 +137,9 @@ impl<T: Pod> MmapSlab<T> {
 impl<T: Pod> Drop for MmapSlab<T> {
     fn drop(&mut self) {
         if self.len > 0 {
-            // SAFETY: ptr was returned by mmap with this byte count.
+            // SAFETY: this slab still uniquely owns the mmap base pointer and exact
+            // byte count established by `new_zeroed`; `self.len > 0` excludes the
+            // dangling zero-length representation.
             unsafe {
                 libc::munmap(self.ptr as *mut libc::c_void, self.bytes());
             }
@@ -148,7 +151,9 @@ impl<T: Pod> Drop for MmapSlab<T> {
 impl<T: Pod> std::ops::Deref for MmapSlab<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
-        // SAFETY: ptr+len describe a valid initialized slice (zero-init).
+        // SAFETY: `new_zeroed` stores an aligned mmap base covering
+        // `len * size_of::<T>()` live bytes; anonymous pages are zero-initialized,
+        // and every zero bit pattern is valid because `T: Pod`.
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 }
@@ -185,11 +190,12 @@ struct MmapSlab<T: Pod> {
 }
 
 #[cfg(windows)]
-// SAFETY: see the Linux implementation; Windows provides the same zeroed,
-// process-owned allocation semantics.
+// SAFETY: the slab uniquely owns its VirtualAlloc region until Drop; moving
+// transfers that ownership, and `T: Send` permits its initialized values to move.
 unsafe impl<T: Pod + Send> Send for MmapSlab<T> {}
 #[cfg(windows)]
-// SAFETY: shared mutation is synchronized by HashPrune's per-point locks.
+// SAFETY: safe shared access exposes only `*const T` or `&[T]`, and `T: Sync`.
+// HashPrune places the slab in UnsafeCell before any raw mutation.
 unsafe impl<T: Pod + Sync> Sync for MmapSlab<T> {}
 
 #[cfg(windows)]
@@ -244,7 +250,8 @@ impl<T: Pod> MmapSlab<T> {
 impl<T: Pod> Drop for MmapSlab<T> {
     fn drop(&mut self) {
         if self.len > 0 {
-            // SAFETY: ptr came from VirtualAlloc; MEM_RELEASE requires dwSize=0.
+            // SAFETY: this slab still uniquely owns the VirtualAlloc base pointer;
+            // MEM_RELEASE requires and receives `dwSize = 0`.
             unsafe {
                 winmem::VirtualFree(self.ptr as winmem::Lpvoid, 0, winmem::MEM_RELEASE);
             }
@@ -256,7 +263,9 @@ impl<T: Pod> Drop for MmapSlab<T> {
 impl<T: Pod> std::ops::Deref for MmapSlab<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
-        // SAFETY: ptr+len describe a valid initialized slice (zero-init).
+        // SAFETY: `new_zeroed` stores an aligned VirtualAlloc base covering
+        // `len * size_of::<T>()` live bytes; Windows zero-initializes the region,
+        // and every zero bit pattern is valid because `T: Pod`.
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 }
@@ -494,7 +503,9 @@ where
     let target = F::splat(arch, args.target as i16);
     let chunks = len.div_ceil(F::LANES).min(args.scan_lanes / F::LANES);
     for chunk in 0..chunks {
-        // SAFETY: every full load stays inside the padded hash segment.
+        // SAFETY: production args are created inside `insert_locked` from a
+        // `ColdSlotPtrs` hash segment valid for `scan_lanes` elements. `chunks`
+        // is capped at `scan_lanes / F::LANES`, so this full load stays inside it.
         let values = unsafe { F::load_simd(arch, args.hashes.add(chunk * F::LANES).cast::<i16>()) };
         if let Some(offset) = values.eq_simd(target).first() {
             let lane = chunk * F::LANES + offset;
@@ -516,8 +527,9 @@ where
     debug_assert!(args.len <= F::LANES);
     debug_assert!(F::LANES <= u16::BITS as usize);
 
-    // SAFETY: the first `len` lanes are valid and masked loads do not access
-    // inactive lanes. HashPrune limits sketches to 16 planes.
+    // SAFETY: the production constructor takes `src` and `dst` from slices of
+    // exactly `len` sketch values. HashPrune validates `len <= 16 <= F::LANES`,
+    // and masked loads do not access inactive lanes.
     let dst = unsafe { F::load_simd_first(arch, args.dst, args.len) };
     // SAFETY: as above.
     let src = unsafe { F::load_simd_first(arch, args.src, args.len) };
@@ -560,8 +572,10 @@ fn key_to_bf16(key: u16) -> u16 {
     }
 }
 
-/// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
-/// `scan_lanes` elements each.
+/// # Safety
+///
+/// The source slot lock is held, `hot.len <= cold.scan_lanes`, and the first
+/// `hot.len` entries of every cold array are initialized.
 #[inline]
 unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
     if hot.len == 0 {
@@ -595,8 +609,11 @@ unsafe fn update_farthest(hot: &mut HotSlot, cold: ColdSlotPtrs) {
     hot.farthest_idx = max_idx;
 }
 
-/// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
-/// `scan_lanes` elements each, and `l_max <= scan_lanes`.
+/// # Safety
+///
+/// The source slot lock is held; each cold pointer is valid for `scan_lanes`
+/// elements; `hot.len <= l_max <= scan_lanes`; and the first `hot.len` entries
+/// of every cold array are initialized.
 #[inline(always)]
 unsafe fn insert_locked(
     hot: &mut HotSlot,
@@ -695,8 +712,10 @@ unsafe fn insert_locked(
 /// A Rayon-owned scratch `Vec`, sized to the reservoir's runtime fill and
 /// reused within one extraction job, avoids per-reservoir allocation.
 ///
-/// SAFETY: caller holds the slot lock; `distances` and `neighbors` are valid
-/// for `hot.len` elements.
+/// # Safety
+///
+/// Mutation is excluded by the slot lock or unique ownership, and `distances`
+/// and `neighbors` each point to at least `hot.len` initialized entries.
 unsafe fn collect_sorted_neighbors(
     hot: &HotSlot,
     distances: *const u16,
@@ -725,8 +744,10 @@ unsafe fn collect_sorted_neighbors(
 /// lets the caller drop the hashes and distances slabs before extraction; any
 /// ordering required by a later graph-finalization policy belongs to that caller.
 ///
-/// SAFETY: caller holds the slot lock (or owns the reservoir); `neighbors` is
-/// valid for `hot.len` elements.
+/// # Safety
+///
+/// Mutation is excluded by the slot lock or unique ownership, and `neighbors`
+/// points to at least `hot.len` initialized entries.
 #[inline]
 unsafe fn collect_neighbor_ids(hot: &HotSlot, neighbors: *const u32, cap: usize) -> Vec<u32> {
     let out_len = (hot.len as usize).min(cap);
@@ -966,7 +987,10 @@ impl HashPrune {
                         dst: dst_sketch.as_ptr(),
                         len: m,
                     });
-                    // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
+                    // SAFETY: `with_locked` holds this source's lock for the
+                    // closure and supplies its exact `scan_lanes` cold segments.
+                    // `l_max` was validated at construction and `insert_locked`
+                    // maintains initialized entries through `hot.len`.
                     unsafe {
                         insert_locked(hot, cold, hash, global_dst, dist, l_max, self.find_hash)
                     };
@@ -1005,10 +1029,13 @@ impl HashPrune {
             .into_par_iter()
             .map_init(Vec::new, |scratch, i| {
                 let off = i * scan_lanes;
-                // SAFETY: extraction owns every reservoir, so no mutation remains.
+                // SAFETY: indexing proves `i` names a live slot, and consuming
+                // `self` gives this extraction unique ownership, so no mutable
+                // access can overlap the returned state reference.
                 let hot = unsafe { &*hot[i].get() };
-                // SAFETY: i < hot.len() == npoints, so off + scan_lanes is
-                // within both cold slabs.
+                // SAFETY: construction allocated `npoints * scan_lanes` entries;
+                // this loop keeps `i < npoints`, and insertion maintains
+                // `hot.len <= l_max <= scan_lanes` initialized entries.
                 let nbrs = unsafe {
                     collect_sorted_neighbors(
                         hot,
@@ -1053,10 +1080,13 @@ impl HashPrune {
             .into_par_iter()
             .map(|i| {
                 let neighbors = cold_neighbors.as_ptr().wrapping_add(i * scan_lanes);
-                // SAFETY: extraction owns every reservoir; no mutation remains.
+                // SAFETY: indexing proves `i` names a live slot, and consuming
+                // `self` gives this extraction unique ownership, so no mutable
+                // access can overlap the returned state reference.
                 let hot = unsafe { &*hot[i].get() };
-                // SAFETY: i < hot.len() == npoints; the hash segment spans scan_lanes
-                // slots and hot.len <= l_max <= scan_lanes.
+                // SAFETY: construction allocated `npoints * scan_lanes` entries;
+                // this loop keeps `i < npoints`, and insertion maintains
+                // `hot.len <= l_max <= scan_lanes` initialized entries.
                 let ids = unsafe { collect_neighbor_ids(hot, neighbors, cap) };
                 // Reservoir slots have unique hashes, and one neighbor cannot
                 // produce two hashes for the same source.
