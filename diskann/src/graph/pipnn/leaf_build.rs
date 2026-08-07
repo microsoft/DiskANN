@@ -5,18 +5,18 @@
 
 //! Leaf-local graph construction and candidate accumulation.
 //!
-//! Partitioning supplies strictly increasing, unique global point IDs per leaf.
-//! For each leaf this module:
+//! Partitioning supplies sorted, unique global point IDs for each leaf. One leaf
+//! job does these steps:
 //!
-//! 1. validates IDs and converts only those point vectors to reusable `f32` scratch;
-//! 2. computes the lower triangle of `A · Aᵀ`;
-//! 3. runs the dual-endpoint leaf top-k kernel; and
-//! 4. translates leaf-local positions back to dataset IDs.
+//! 1. Check each ID and convert its vector to reusable `f32` storage.
+//! 2. Compute the lower triangle of `A · Aᵀ`.
+//! 3. Select local neighbors for both points of each pair.
+//! 4. Convert local positions to global point IDs.
+//! 5. Add both edge directions to global candidate lists.
 //!
-//! The final step merges symmetric adjacency lists under per-point locks because
-//! overlapping leaves are processed concurrently. Numeric buffers retain their
-//! high-water length; every consumer therefore receives an explicit active
-//! prefix rather than treating `Vec::len()` as the current leaf shape.
+//! Overlapping leaves run concurrently. A worker locks one destination list only
+//! while it adds one leaf's IDs. Reusable buffers keep their largest allocation.
+//! Each operation uses an explicit active prefix.
 
 use std::{collections::TryReserveError, sync::Mutex};
 
@@ -92,12 +92,10 @@ pub(crate) enum LeafBuildError {
     PoisonedCandidateList { point: u32 },
 }
 
-/// Scratch leased to one Rayon job and reused for successive leaves.
+/// Reusable buffers for one Rayon leaf job.
 ///
-/// The three numerical vectors retain their largest observed leaf shape. The
-/// adjacency lists are prepared separately because zero-k/singleton leaves never
-/// write them, and because later candidate-merging modes do not necessarily use
-/// this representation.
+/// The numerical vectors keep the largest leaf shape that this job observed.
+/// The job creates local adjacency lists only when the effective `k` is not zero.
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
@@ -166,12 +164,11 @@ impl LeafBuffers {
     }
 }
 
-/// Concurrent accumulator indexed by global dataset ID.
+/// Concurrent candidate lists indexed by global point ID.
 ///
-/// A point may appear in several overlapping leaves, so workers lock only the
-/// destination list long enough to append one leaf's additions. Sorting and
-/// duplicate removal are deferred until all leaves finish; doing either under
-/// the lock would lengthen the contended section for no semantic benefit.
+/// A point can occur in several overlapping leaves. A worker locks one point's
+/// list and adds all IDs from one leaf. `AdjacencyList` removes duplicates during
+/// this append. The function sorts each list after all leaf jobs finish.
 struct DirectCandidates {
     lists: Vec<Mutex<AdjacencyList<u32>>>,
 }
@@ -192,7 +189,7 @@ impl DirectCandidates {
         local_adjacency: &[AdjacencyList<u32>],
     ) -> Result<(), LeafBuildError> {
         for (&source, additions) in point_ids.iter().zip(local_adjacency) {
-            // Every point ID is validated before leaf-local work begins.
+            // `build_leaf` checks every point ID before this append.
             let candidates = &self.lists[source as usize];
             let mut candidates = candidates
                 .lock()
@@ -218,9 +215,9 @@ impl DirectCandidates {
     }
 }
 
-/// Build symmetric leaf-local k-NN graphs and retain every unique global candidate.
+/// Build symmetric leaf-local k-NN graphs and return unique global candidates.
 ///
-/// The caller has already selected `A` and `M` for the complete graph build.
+/// The caller supplies concrete architecture `A` and metric `M`.
 #[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
 pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
@@ -261,11 +258,11 @@ where
     candidates.into_lists()
 }
 
-/// Build and publish one leaf's symmetric neighbor lists.
+/// Build and publish the symmetric neighbor lists for one leaf.
 ///
-/// Validation precedes all dataset indexing and rejects IDs that are not strictly
-/// increasing. Active lengths computed after `prepare` must be used for every
-/// later slice because reusable vectors may remain longer than this leaf.
+/// The function checks all IDs before it indexes the dataset. IDs must be
+/// strictly increasing. Reusable vectors can be longer than this leaf. Every
+/// read and write uses the active length from `prepare`.
 fn build_leaf<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
