@@ -57,20 +57,18 @@
 //!   reused by one worker across leaves.
 //! - [`LeafNeighbor`] is one output slot containing leaf-local target position
 //!   plus distance.
-//! - `process_neighbor_width` chooses fixed storage for widths one through three
-//!   or dynamic storage for larger widths.
+//! - `process_neighbor_width` chooses fixed storage for widths one through three.
 //! - `process_pairs` is the shared SIMD/scalar strict-lower traversal;
-//!   `insert_fixed_neighbor` and `insert_dynamic_neighbor` maintain stable sorted
-//!   output for both endpoints.
+//!   `insert_fixed_neighbor` maintains stable sorted output for both endpoints.
 //!
 //! # Inputs and output
 //!
 //! For `n` leaf points, the input is an `n × n` row-major matrix from
 //! `sgemm_aat_lower`. Diagonal entries provide norms when the metric needs them;
 //! only strict-lower entries `(source, target)` with `target < source` provide
-//! pair dots. Output is an `n × k` [`LeafNeighbor`] matrix. Every output row is
-//! sorted by ascending distance and stores leaf-local target positions, not
-//! dataset IDs.
+//! pair dots. Output is an `n × k` [`LeafNeighbor`] matrix with `k <= 3`. Every
+//! output row is sorted by ascending distance and stores leaf-local target
+//! positions, not dataset IDs.
 //!
 //! Distances are reconstructed from one pair dot and, when required, diagonal
 //! entries of the Gram matrix. Smaller is better:
@@ -98,12 +96,11 @@
 //! # Performance
 //!
 //! With `k > 0`, the kernel evaluates exactly `n(n - 1) / 2` pair distances;
-//! `k = 0` returns before traversal. Widths `k = 1, 2, 3` use fixed arrays and
-//! straight-line insertion, giving `O(n²)` work.
-//! Larger widths use `O(k)` insertion, giving `O(n²k)` worst-case work. Scratch
-//! is `O(n)` (`worst`, plus norms only when required); output is `O(nk)`. No
-//! allocation occurs after a worker workspace has sufficient capacity. Runtime
-//! architecture and metric selection happen once in [`LeafKernel::new`].
+//! `k = 0` returns before traversal. Supported widths `k = 1, 2, 3` use fixed
+//! arrays and straight-line insertion, giving `O(n²)` work. Scratch is `O(n)`
+//! (`worst`, plus norms only when required); output is `O(nk)`. No allocation
+//! occurs after a worker workspace has sufficient capacity. Runtime architecture
+//! and metric selection happen once in [`LeafKernel::new`].
 //!
 //! # Example
 //!
@@ -143,6 +140,9 @@ use diskann_wide::{
 };
 
 use super::kernel_metric::{KernelMetric, MetricVisitor, visit_metric};
+
+/// Largest leaf-local neighbor count supported by the fixed insertion kernel.
+pub const MAX_LEAF_NEIGHBORS: usize = 3;
 
 /// One leaf-local neighbor and its metric distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -233,7 +233,7 @@ pub enum LeafKernelError {
         /// Supplied neighbor columns.
         columns: usize,
     },
-    /// A source requests more non-self neighbors than the leaf contains.
+    /// A source requests more neighbors than the leaf or fixed kernel supports.
     #[error("invalid leaf neighbor count {neighbors} for {points} points; maximum is {maximum}")]
     InvalidNeighborCount {
         /// Point count in the leaf.
@@ -264,13 +264,15 @@ pub enum LeafKernelError {
 /// Return the usable non-self neighbor count for one leaf.
 ///
 /// `points` is the leaf point count and `requested_k` is the build-wide target.
-/// The returned width is `min(requested_k, points - 1)`, allowing empty,
-/// singleton, and small leaves without a second effective-k state.
+/// Values above [`MAX_LEAF_NEIGHBORS`] are rejected. Otherwise the returned
+/// width is `min(requested_k, points - 1)`, allowing empty, singleton, and small
+/// leaves without a second effective-k state.
 ///
 /// # Errors
 ///
 /// Returns [`LeafKernelError::TooManyPoints`] when leaf-local positions cannot
-/// fit in `u32`.
+/// fit in `u32`, or [`LeafKernelError::InvalidNeighborCount`] when `requested_k`
+/// exceeds [`MAX_LEAF_NEIGHBORS`].
 ///
 /// # Performance
 ///
@@ -278,6 +280,13 @@ pub enum LeafKernelError {
 pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
     if points > u32::MAX as usize {
         return Err(LeafKernelError::TooManyPoints(points));
+    }
+    if requested_k > MAX_LEAF_NEIGHBORS {
+        return Err(LeafKernelError::InvalidNeighborCount {
+            points,
+            neighbors: requested_k,
+            maximum: MAX_LEAF_NEIGHBORS,
+        });
     }
     Ok(requested_k.min(points.saturating_sub(1)))
 }
@@ -349,7 +358,8 @@ impl LeafKernel {
     /// Select the nearest non-self leaf positions for every source point.
     ///
     /// `output` must have one row per input point. Its column count is the
-    /// neighbor count for this leaf and must not exceed `point_count - 1`.
+    /// neighbor count for this leaf and must not exceed either `point_count - 1`
+    /// or [`MAX_LEAF_NEIGHBORS`].
     /// Equal distances retain pair scan order.
     ///
     /// `input` supplies the square lower-triangular dot matrix. `output` is
@@ -533,7 +543,7 @@ fn validate(
             columns: output.ncols(),
         });
     }
-    let maximum_neighbors = point_count.saturating_sub(1);
+    let maximum_neighbors = point_count.saturating_sub(1).min(MAX_LEAF_NEIGHBORS);
     let neighbor_count = output.ncols();
     if neighbor_count > maximum_neighbors {
         return Err(LeafKernelError::InvalidNeighborCount {
@@ -611,16 +621,12 @@ fn check_length(
     }
 }
 
-/// Convert neighbor count into fixed source storage or the dynamic fallback.
+/// Convert the validated neighbor count into fixed source storage.
 ///
-/// This branch runs once per leaf. Fixed conversion uses `as_chunks_mut` once,
-/// avoiding per-candidate slice-to-array checks while retaining safe insertion.
-///
-/// `output` contains `point_count * neighbor_count` initialized slots; `norms`
-/// and `worst` satisfy the invariants established by `prepare_workspace`. The
-/// function writes output and thresholds in place and returns no value. Widths
-/// one through three take the fixed path; all others pay one division per source
-/// insertion to locate its dynamic slice.
+/// This branch runs once per leaf. `as_chunks_mut` performs one safe conversion,
+/// avoiding per-candidate slice-to-array checks. `output` contains
+/// `point_count * neighbor_count` initialized slots; `norms` and `worst` satisfy
+/// the invariants established by `prepare_workspace`.
 fn process_neighbor_width<F, M>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
@@ -638,16 +644,7 @@ fn process_neighbor_width<F, M>(
         1 => process_fixed_width::<F, M, 1>(arch, input, output, norms, worst),
         2 => process_fixed_width::<F, M, 2>(arch, input, output, norms, worst),
         3 => process_fixed_width::<F, M, 3>(arch, input, output, norms, worst),
-        dynamic_count => process_pairs::<F, M, _>(
-            arch,
-            input,
-            DynamicNeighborStorage {
-                values: output,
-                neighbor_count: dynamic_count,
-            },
-            norms,
-            worst,
-        ),
+        _ => unreachable!("validated leaf neighbor count must be in 1..=3"),
     }
 }
 
@@ -670,61 +667,7 @@ fn process_fixed_width<F, M, const N: usize>(
 {
     let (neighbor_lists, remainder) = output.as_chunks_mut::<N>();
     debug_assert!(remainder.is_empty());
-    process_pairs::<F, M, _>(
-        arch,
-        input,
-        FixedNeighborStorage(neighbor_lists),
-        norms,
-        worst,
-    );
-}
-
-/// Mutable neighbor-list adapter used by the shared pair traversal.
-///
-/// Implementations own the exclusive output borrow for the whole scan. Each
-/// insertion borrows one source list briefly, so updates to the current source
-/// and earlier targets cannot alias simultaneously.
-trait NeighborStorage {
-    /// Number of source neighbor lists owned by this adapter.
-    fn source_count(&self) -> usize;
-
-    /// Insert one source-target candidate and return that source's new threshold.
-    fn insert(&mut self, source: usize, target: u32, distance: f32) -> f32;
-}
-
-struct FixedNeighborStorage<'a, const N: usize>(&'a mut [[LeafNeighbor; N]]);
-
-impl<const N: usize> NeighborStorage for FixedNeighborStorage<'_, N> {
-    #[inline(always)]
-    fn source_count(&self) -> usize {
-        self.0.len()
-    }
-
-    #[inline(always)]
-    fn insert(&mut self, source: usize, target: u32, distance: f32) -> f32 {
-        insert_fixed_neighbor(&mut self.0[source], target, distance)
-    }
-}
-
-struct DynamicNeighborStorage<'a> {
-    values: &'a mut [LeafNeighbor],
-    neighbor_count: usize,
-}
-
-impl NeighborStorage for DynamicNeighborStorage<'_> {
-    #[inline(always)]
-    fn source_count(&self) -> usize {
-        self.values.len() / self.neighbor_count
-    }
-
-    #[inline(always)]
-    fn insert(&mut self, source: usize, target: u32, distance: f32) -> f32 {
-        insert_dynamic_neighbor(
-            &mut self.values[source * self.neighbor_count..(source + 1) * self.neighbor_count],
-            target,
-            distance,
-        )
-    }
+    process_pairs::<F, M, N>(arch, input, neighbor_lists, norms, worst);
 }
 
 /// Scan the strict lower triangle once and update both endpoint sources.
@@ -742,28 +685,23 @@ impl NeighborStorage for DynamicNeighborStorage<'_> {
 /// source and can use the precomputed mask directly. Scalar tails call the
 /// matching scalar metric operation to preserve established rounding semantics.
 ///
-/// `M` is concrete before type erasure. `R` presents fixed neighbor arrays for
-/// common counts or safe dynamic slices for the uncommon fallback.
-///
-/// `input` supplies `n × n` dots, `output` owns `n` sorted lists, `norms` holds
-/// metric scales when required, and `worst` mirrors every list's final distance.
-/// The function mutates output and thresholds in place and returns no value.
-/// It evaluates exactly `n(n - 1) / 2` pairs. SIMD computes up to `F::LANES`
-/// distances together; accepted candidates still insert in scan order to keep
-/// deterministic ties. Fixed widths cost constant work per accepted endpoint;
-/// dynamic widths cost `O(k)` per insertion.
+/// `M` is concrete before type erasure and `N` is one through three. `input`
+/// supplies `n × n` dots, `output` owns `n` sorted fixed-size lists, `norms`
+/// holds metric scales when required, and `worst` mirrors every list's final
+/// distance. The function evaluates exactly `n(n - 1) / 2` pairs. SIMD computes
+/// up to `F::LANES` distances together; accepted candidates still insert in scan
+/// order to keep deterministic ties.
 #[inline(never)]
-fn process_pairs<F, M, R>(
+fn process_pairs<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
-    mut output: R,
+    output: &mut [[LeafNeighbor; N]],
     norms: &[f32],
     worst: &mut [f32],
 ) where
     F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
-    R: NeighborStorage,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let point_count = input.nrows();
@@ -773,7 +711,7 @@ fn process_pairs<F, M, R>(
         "validated leaf dot matrix must be square"
     );
     assert_eq!(
-        output.source_count(),
+        output.len(),
         point_count,
         "validated leaf output must have one list per point"
     );
@@ -838,7 +776,11 @@ fn process_pairs<F, M, R>(
                     source_bits &= source_bits - 1;
                     let distance = values[lane];
                     if distance < source_worst {
-                        source_worst = output.insert(source, (target + lane) as u32, distance);
+                        source_worst = insert_fixed_neighbor(
+                            &mut output[source],
+                            (target + lane) as u32,
+                            distance,
+                        );
                     }
                 }
 
@@ -847,7 +789,11 @@ fn process_pairs<F, M, R>(
                     let lane = target_bits.trailing_zeros() as usize;
                     target_bits &= target_bits - 1;
                     let target_source = target + lane;
-                    let new_worst = output.insert(target_source, source as u32, values[lane]);
+                    let new_worst = insert_fixed_neighbor(
+                        &mut output[target_source],
+                        source as u32,
+                        values[lane],
+                    );
                     // SAFETY: `target_source < source < worst.len()`.
                     unsafe { *worst_ptr.add(target_source) = new_worst };
                 }
@@ -866,12 +812,12 @@ fn process_pairs<F, M, R>(
             };
             let distance = M::leaf_distance_scalar(dot, source_scale, target_scale);
             if distance < source_worst {
-                source_worst = output.insert(source, target as u32, distance);
+                source_worst = insert_fixed_neighbor(&mut output[source], target as u32, distance);
             }
             // SAFETY: `target < source < worst.len()`.
             let target_worst = unsafe { *worst_ptr.add(target) };
             if distance < target_worst {
-                let new_worst = output.insert(target, source as u32, distance);
+                let new_worst = insert_fixed_neighbor(&mut output[target], source as u32, distance);
                 // SAFETY: `target < source < worst.len()`.
                 unsafe { *worst_ptr.add(target) = new_worst };
             }
@@ -881,7 +827,7 @@ fn process_pairs<F, M, R>(
         unsafe { *worst_ptr.add(source) = source_worst };
     }
 
-    debug_assert_eq!(output.source_count(), point_count);
+    debug_assert_eq!(output.len(), point_count);
 }
 
 /// Insert into a fixed-width neighbor list and return its new worst distance.
@@ -936,26 +882,6 @@ fn insert_fixed_neighbor<const N: usize>(
     }
 }
 
-/// Insert into a run-time-width neighbor list using the same stable ordering contract.
-///
-/// The candidate replaces the last slot, then bubbles toward the front. This
-/// path is used only for neighbor counts greater than three.
-///
-/// `neighbors` is one non-empty sorted source list. `target` and `distance` are
-/// already known to beat its final slot. The return value is the new final-slot
-/// distance. Work is `O(k)` worst-case and allocation-free.
-#[inline(always)]
-fn insert_dynamic_neighbor(neighbors: &mut [LeafNeighbor], target: u32, distance: f32) -> f32 {
-    let last = neighbors.len() - 1;
-    neighbors[last] = LeafNeighbor::new(target, distance);
-    let mut index = last;
-    while index > 0 && neighbors[index].distance < neighbors[index - 1].distance {
-        neighbors.swap(index, index - 1);
-        index -= 1;
-    }
-    neighbors[last].distance
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,33 +906,16 @@ mod tests {
         MatrixView::try_from(dots, points, points).unwrap()
     }
 
-    fn insert_reference(
-        output: &mut [LeafNeighbor],
-        worst: &mut [f32],
-        neighbor_count: usize,
-        source: usize,
-        target: u32,
-        distance: f32,
-    ) {
-        if distance.partial_cmp(&worst[source]) != Some(std::cmp::Ordering::Less) {
-            return;
-        }
-        worst[source] = insert_dynamic_neighbor(
-            &mut output[source * neighbor_count..(source + 1) * neighbor_count],
-            target,
-            distance,
-        );
-    }
-
     #[test]
-    fn scalar_insertion_orders_candidates_and_rejects_nan() {
-        let mut output = [LeafNeighbor::default(); 4];
-        let mut worst = [f32::INFINITY];
+    fn fixed_insertion_orders_candidates() {
+        let mut output = [LeafNeighbor::default(); 3];
+        let mut worst = f32::INFINITY;
 
         for (target, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 0.5)] {
-            insert_reference(&mut output, &mut worst, 4, 0, target, distance);
+            if distance < worst {
+                worst = insert_fixed_neighbor(&mut output, target, distance);
+            }
         }
-        insert_reference(&mut output, &mut worst, 4, 0, 5, f32::NAN);
 
         assert_eq!(
             output,
@@ -1014,17 +923,24 @@ mod tests {
                 LeafNeighbor::new(4, 0.5),
                 LeafNeighbor::new(1, 1.0),
                 LeafNeighbor::new(3, 2.0),
-                LeafNeighbor::new(2, 3.0),
             ]
         );
-        assert_eq!(worst, [3.0]);
+        assert_eq!(worst, 2.0);
     }
 
     #[test]
-    fn output_length_clamps_to_non_self_neighbors() {
+    fn output_length_clamps_to_non_self_neighbors_and_rejects_large_k() {
         assert_eq!(leaf_output_len(0, 3).unwrap(), 0);
         assert_eq!(leaf_output_len(1, 3).unwrap(), 0);
-        assert_eq!(leaf_output_len(4, 9).unwrap(), 12);
+        assert_eq!(leaf_output_len(4, 3).unwrap(), 12);
+        assert_eq!(
+            leaf_output_len(4, 4),
+            Err(LeafKernelError::InvalidNeighborCount {
+                points: 4,
+                neighbors: 4,
+                maximum: MAX_LEAF_NEIGHBORS,
+            })
+        );
         #[cfg(target_pointer_width = "64")]
         assert_eq!(
             leaf_output_len(u32::MAX as usize + 1, 1),
@@ -1093,8 +1009,8 @@ mod integration_tests {
     use std::cmp::Ordering;
 
     use super::{
-        LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count,
-        leaf_output_len,
+        LeafKernel, LeafKernelError, LeafKernelWorkspace, LeafNeighbor, MAX_LEAF_NEIGHBORS,
+        leaf_neighbor_count, leaf_output_len,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
@@ -1236,7 +1152,7 @@ mod integration_tests {
         ] {
             for points in SIMD_BOUNDARY_POINTS {
                 let dots = differential_dots(metric, points);
-                for requested_k in [1, 2, 3, 4, 5] {
+                for requested_k in [1, 2, 3] {
                     let expected = brute_force_reference(&dots, points, requested_k, metric);
                     let actual = run_kernel(&dots, points, requested_k, metric).1;
                     assert_eq!(actual, expected, "{metric:?}, n={points}, k={requested_k}");
@@ -1345,15 +1261,15 @@ mod integration_tests {
     }
 
     #[test]
-    fn finite_max_distance_fills_the_final_simd_slot() {
-        let points = 9;
+    fn finite_max_distance_fills_the_final_fixed_slot() {
+        let points = 4;
         let mut dots = vec![0.0; points * points];
-        dots[8 * points] = -f32::MAX;
+        dots[3 * points] = -f32::MAX;
 
-        let (leaf_k, output) = run_kernel(&dots, points, points - 1, Metric::InnerProduct);
-        assert_eq!(leaf_k, 8);
+        let (leaf_k, output) = run_kernel(&dots, points, MAX_LEAF_NEIGHBORS, Metric::InnerProduct);
+        assert_eq!(leaf_k, MAX_LEAF_NEIGHBORS);
         assert_eq!(
-            output[8 * leaf_k + leaf_k - 1],
+            output[3 * leaf_k + leaf_k - 1],
             LeafNeighbor::new(0, f32::MAX)
         );
     }
@@ -1408,7 +1324,7 @@ mod integration_tests {
             0.0, 1.0, 3.0,
             0.0, 0.0, 1.0,
         ];
-        let (leaf_k, output) = run_kernel(&dots, 3, 99, Metric::L2);
+        let (leaf_k, output) = run_kernel(&dots, 3, MAX_LEAF_NEIGHBORS, Metric::L2);
 
         assert_eq!(leaf_k, 2);
         for (source, neighbors) in output.chunks_exact(leaf_k).enumerate() {
@@ -1472,6 +1388,21 @@ mod integration_tests {
                 points: 3,
                 neighbors: 3,
                 maximum: 2,
+            })
+        );
+
+        let square = [0.0; 25];
+        let mut too_wide = [LeafNeighbor::default(); 20];
+        assert_eq!(
+            kernel.nearest_neighbors(
+                test_input(&square, 5),
+                MutMatrixView::try_from(&mut too_wide[..], 5, 4).unwrap(),
+                &mut LeafKernelWorkspace::new(),
+            ),
+            Err(LeafKernelError::InvalidNeighborCount {
+                points: 5,
+                neighbors: 4,
+                maximum: MAX_LEAF_NEIGHBORS,
             })
         );
     }
