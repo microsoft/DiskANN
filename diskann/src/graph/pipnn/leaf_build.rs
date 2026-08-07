@@ -5,7 +5,8 @@
 
 //! Leaf-local graph construction and candidate accumulation.
 //!
-//! Partitioning supplies leaves as global point IDs. For each leaf this module:
+//! Partitioning supplies strictly increasing, unique global point IDs per leaf.
+//! For each leaf this module:
 //!
 //! 1. validates IDs and converts only those point vectors to reusable `f32` scratch;
 //! 2. computes the lower triangle of `A · Aᵀ`;
@@ -17,10 +18,7 @@
 //! high-water length; every consumer therefore receives an explicit active
 //! prefix rather than treating `Vec::len()` as the current leaf shape.
 
-use std::{
-    collections::{HashSet, TryReserveError},
-    sync::Mutex,
-};
+use std::{collections::TryReserveError, sync::Mutex};
 
 use crate::{graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -49,12 +47,16 @@ pub(crate) enum LeafBuildError {
     },
     #[error("point ID {point} appears more than once in leaf {leaf}")]
     DuplicatePointId { leaf: usize, point: u32 },
+    #[error("point IDs in leaf {leaf} are not strictly increasing")]
+    UnsortedPointIds { leaf: usize },
     #[error("leaf {leaf} shape {rows} x {columns} overflows usize")]
     ShapeOverflow {
         leaf: usize,
         rows: usize,
         columns: usize,
     },
+    #[error("failed to form {buffer} view for leaf {leaf}")]
+    InvalidView { leaf: usize, buffer: &'static str },
     #[error("failed to reserve {additional} values for {buffer}")]
     Allocation {
         buffer: &'static str,
@@ -100,7 +102,6 @@ struct LeafBuffers {
     neighbors: Vec<LeafNeighbor>,
     local_adjacency: Vec<AdjacencyList<u32>>,
     kernel_workspace: LeafKernelWorkspace,
-    seen_ids: HashSet<u32>,
 }
 
 impl LeafBuffers {
@@ -283,24 +284,14 @@ where
             });
         }
     }
-    if point_ids.is_sorted() {
-        if let Some(pair) = point_ids.windows(2).find(|pair| pair[0] == pair[1]) {
+    if let Some(pair) = point_ids.windows(2).find(|pair| pair[0] >= pair[1]) {
+        if pair[0] == pair[1] {
             return Err(LeafBuildError::DuplicatePointId {
                 leaf,
                 point: pair[0],
             });
         }
-    } else {
-        buffers.seen_ids.clear();
-        buffers
-            .seen_ids
-            .try_reserve(point_ids.len())
-            .map_err(|source| allocation_error("leaf ID set", point_ids.len(), source))?;
-        for &point in point_ids {
-            if !buffers.seen_ids.insert(point) {
-                return Err(LeafBuildError::DuplicatePointId { leaf, point });
-            }
-        }
+        return Err(LeafBuildError::UnsortedPointIds { leaf });
     }
     let leaf_k = buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
     if leaf_k == 0 {
@@ -334,26 +325,18 @@ where
     )
     .map_err(|source| LeafBuildError::LowerAat { leaf, source })?;
     let dots = MatrixView::try_from(&buffers.dots[..dot_count], point_ids.len(), point_ids.len())
-        .map_err(|error| LeafBuildError::Kernel {
+        .map_err(|_| LeafBuildError::InvalidView {
         leaf,
-        source: LeafKernelError::InvalidBufferLength {
-            buffer: "leaf dot-product matrix",
-            expected: dot_count,
-            actual: error.into_inner().len(),
-        },
+        buffer: "leaf dot-product matrix",
     })?;
     let output = MutMatrixView::try_from(
         &mut buffers.neighbors[..neighbor_value_count],
         point_ids.len(),
         leaf_k,
     )
-    .map_err(|error| LeafBuildError::Kernel {
+    .map_err(|_| LeafBuildError::InvalidView {
         leaf,
-        source: LeafKernelError::InvalidBufferLength {
-            buffer: "output",
-            expected: neighbor_value_count,
-            actual: error.into_inner().len(),
-        },
+        buffer: "leaf output",
     })?;
     kernel
         .nearest_neighbors(dots, output, &mut buffers.kernel_workspace)
@@ -570,19 +553,6 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn global_id_translation_is_independent_of_leaf_order() {
-        let data = [0.0_f32, 10.0, 20.0, 30.0, 40.0];
-        let leaves = vec![vec![4, 1, 3]];
-
-        let graph = build(view(&data, 5, 1), &leaves, 2, Metric::L2).unwrap();
-
-        assert_eq!(
-            adjacency_lists(graph),
-            [vec![], vec![3, 4], vec![], vec![1, 4], vec![1, 3]]
-        );
-    }
-
     fn source_graph<T>(data: &[T], points: usize, dimensions: usize) -> Vec<Vec<u32>>
     where
         T: crate::utils::VectorRepr + 'static,
@@ -710,8 +680,8 @@ mod tests {
             Err(LeafBuildError::DuplicatePointId { leaf: 0, point: 0 })
         ));
         assert!(matches!(
-            build(view(&data, 2, 1), &[vec![1, 0, 1]], 1, Metric::L2),
-            Err(LeafBuildError::DuplicatePointId { leaf: 0, point: 1 })
+            build(view(&data, 2, 1), &[vec![1, 0]], 1, Metric::L2),
+            Err(LeafBuildError::UnsortedPointIds { leaf: 0 })
         ));
     }
 
