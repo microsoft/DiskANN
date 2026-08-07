@@ -375,6 +375,11 @@ where
     candidates.add_leaf(point_ids, &buffers.local_adjacency[..point_ids.len()])
 }
 
+/// Compute local nearest neighbors for one leaf.
+///
+/// The function checks point IDs, converts their vectors to `f32`, and computes
+/// the lower Gram matrix. It writes leaf-local neighbors to `buffers.neighbors`
+/// and returns the effective neighbor count.
 fn compute_leaf<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -502,6 +507,10 @@ struct EdgeBuffers<'a> {
     cursor: &'a mut Vec<u32>,
 }
 
+/// Build deduplicated symmetric CSR edges from leaf-local neighbor rows.
+///
+/// Each selected pair adds both directions. A repeated direction appears once.
+/// Targets remain leaf-local. The return value is the active length of `edges`.
 fn build_symmetric_edge_csr(
     leaf: usize,
     point_ids: &[u32],
