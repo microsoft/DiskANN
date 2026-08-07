@@ -6,8 +6,7 @@
 //! Metric formulas for the PiPNN partition and leaf kernels.
 //!
 //! `build_graph` maps each runtime [`Metric`] to one zero-sized marker type. The
-//! partition and leaf functions receive that concrete type. Their hot loops use
-//! no metric match or trait object.
+//! partition and leaf functions receive that concrete type.
 //!
 //! Each formula returns an ascending score. L2 uses squared norms. Cosine uses
 //! norms and maps a zero norm to zero similarity. Normalized cosine and inner
@@ -24,8 +23,7 @@ use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
 /// Stored norm representation for one kernel input.
 ///
-/// `KernelMetric` uses associated constants for these values. The compiler
-/// removes unused norm loads and workspace from each concrete metric.
+/// `KernelMetric` supplies this value as an associated constant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScaleKind {
     /// Metric does not read this scale position.
@@ -70,14 +68,12 @@ impl ScaleKind {
     }
 
     /// Return `true` when the metric requires this norm input.
-    ///
-    /// The compiler removes this test from each concrete metric loop.
     pub(crate) const fn is_some(self) -> bool {
         !matches!(self, Self::None)
     }
 }
 
-/// Metric contract for the leaf and partition hot loops.
+/// Metric contract for leaf and partition selection.
 ///
 /// `build_graph` selects one implementation. Generic calls inline its arithmetic
 /// through the complete build. Leaf and partition formulas are separate because

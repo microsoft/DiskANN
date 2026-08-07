@@ -20,9 +20,6 @@
 //! checks all shapes and local-ID bounds before it changes workspace or uses an
 //! unchecked SIMD load. [`LeafKernelWorkspace`] stores reusable norms and
 //! rejection thresholds.
-//!
-//! The kernel evaluates `n(n - 1) / 2` distances. Scratch size is `O(n)`. Output
-//! size is `O(nk)`.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
@@ -137,10 +134,6 @@ pub enum LeafKernelError {
 /// Returns [`LeafKernelError::TooManyPoints`] when leaf-local positions cannot
 /// fit in `u32`, or [`LeafKernelError::InvalidNeighborCount`] when `requested_k`
 /// exceeds [`MAX_LEAF_NEIGHBORS`].
-///
-/// # Performance
-///
-/// Constant-time and allocation-free.
 pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
     if points > u32::MAX as usize {
         return Err(LeafKernelError::TooManyPoints(points));
@@ -163,10 +156,6 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
 ///
 /// Returns [`LeafKernelError::TooManyPoints`] or
 /// [`LeafKernelError::ShapeOverflow`] instead of wrapping the output area.
-///
-/// # Performance
-///
-/// Constant-time and allocation-free.
 pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
     checked_area("output", points, leaf_neighbor_count(points, requested_k)?)
 }
@@ -269,8 +258,7 @@ fn validate(
 /// L2 uses each diagonal value as a squared norm. Cosine converts each diagonal
 /// value to a norm. Normalized cosine and inner product clear the norm buffer.
 ///
-/// The workspace keeps at most `O(n)` capacity in each buffer. An allocation
-/// error occurs before SIMD traversal.
+/// An allocation error occurs before SIMD traversal.
 fn prepare_workspace<M: KernelMetric>(
     input: MatrixView<'_, f32>,
     workspace: &mut LeafKernelWorkspace,
@@ -425,8 +413,6 @@ fn process_pairs<F, M, const N: usize>(
     // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        // `uses_norms` is an associated constant of `M`. The compiler removes
-        // this branch and all norm loads from metrics that do not use norms.
         let source_scale = if uses_norms {
             F::splat(arch, norms[source])
         } else {
@@ -525,9 +511,8 @@ fn process_pairs<F, M, const N: usize>(
 /// candidate is better than the last slot. Strict comparisons keep scan order
 /// for equal distances. The eligibility test has already rejected NaN.
 ///
-/// The function returns the new last-slot distance. Explicit shifts used 0.5%
-/// fewer estimated cycles than a generic bubble loop in the local `k=3`
-/// Callgrind fixture. An unsupported `N` returns the underfill sentinel.
+/// The function returns the new last-slot distance. An unsupported `N` returns
+/// the underfill sentinel.
 #[inline(always)]
 fn insert_fixed_neighbor<const N: usize>(
     neighbors: &mut [LeafNeighbor; N],
