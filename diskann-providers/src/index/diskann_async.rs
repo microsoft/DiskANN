@@ -182,7 +182,7 @@ pub(crate) mod tests {
     use diskann_utils::{test_data_root, views::Matrix};
     use diskann_vector::{
         DistanceFunction, PureDistanceFunction,
-        distance::{Metric, SquaredL2},
+        distance::{CosineNormalized, Metric, SquaredL2},
     };
     use rand::{distr::Distribution, rngs::StdRng, seq::SliceRandom};
     use rstest::rstest;
@@ -1378,29 +1378,36 @@ pub(crate) mod tests {
     }
 
     const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
+    const SIFTSMALL_NORMALIZED: &str = "/sift/siftsmall_learn_256pts_normalized.fbin";
 
     #[rstest]
     #[tokio::test]
     async fn test_sift_build_and_search<S>(
         #[values(FullPrecision, Hybrid::new(None))] build_strategy: S,
         #[values(1, 10)] batchsize: usize,
+        #[values(
+            (Metric::L2, SIFTSMALL),
+            (Metric::CosineNormalized, SIFTSMALL_NORMALIZED),
+        )]
+        metric_and_file: (Metric, &str),
     ) where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
             + MultiInsertStrategy<TestProvider, Matrix<f32>>
             + Clone,
     {
+        let (metric, file) = metric_and_file;
         let ctx = &DefaultContext;
         let parameters = InitParams {
             l_build: 64,
             max_degree: 16,
-            metric: Metric::L2,
+            metric,
             batchsize: NonZeroUsize::new(batchsize).unwrap(),
         };
 
         let (index, data) = init_from_file(
             build_strategy.clone(),
             parameters,
-            SIFTSMALL,
+            file,
             8,
             StartPointStrategy::RandomSamples {
                 nsamples: ONE,
@@ -1433,7 +1440,11 @@ pub(crate) mod tests {
         //
         // Because this dataset is small, we can expect exact equality.
         for (q, query) in data.row_iter().enumerate() {
-            let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
+            let gt = groundtruth(data.as_view(), query, |a, b| match metric {
+                Metric::L2 => SquaredL2::evaluate(a, b),
+                Metric::CosineNormalized => CosineNormalized::evaluate(a, b),
+                _ => unreachable!(),
+            });
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
@@ -2061,8 +2072,11 @@ pub(crate) mod tests {
     /// PQ only Build & Search ///
     //////////////////////////////
 
+    #[rstest]
+    #[case(Metric::L2, SIFTSMALL)]
+    #[case(Metric::CosineNormalized, SIFTSMALL_NORMALIZED)]
     #[tokio::test]
-    async fn test_sift_pq_only_build_and_search() {
+    async fn test_sift_pq_only_build_and_search(#[case] metric: Metric, #[case] file: &str) {
         let ctx = &DefaultContext;
         let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
             let pq_table = train_pq(
@@ -2074,8 +2088,7 @@ pub(crate) mod tests {
             .unwrap();
 
             let (config, parameters) =
-                simplified_builder(64, 16, Metric::L2, data.ncols(), data.nrows(), no_modify)
-                    .unwrap();
+                simplified_builder(64, 16, metric, data.ncols(), data.nrows(), no_modify).unwrap();
 
             let index =
                 Arc::new(new_quant_only_index(config, parameters, pq_table, NoDeletes).unwrap());
@@ -2086,7 +2099,7 @@ pub(crate) mod tests {
             index
         };
         let (index, data) =
-            init_and_build_index_from_file(SIFTSMALL, create_fn, build_using_single_insert).await;
+            init_and_build_index_from_file(file, create_fn, build_using_single_insert).await;
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // There should be one more reachable node than points in the dataset to account for
@@ -2131,7 +2144,17 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-            assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
+            if metric == Metric::CosineNormalized {
+                let expected: Vec<_> = gt
+                    .iter()
+                    .rev()
+                    .take(top_k)
+                    .map(|neighbor| *neighbor.id())
+                    .collect();
+                assert_eq!(expected, ids, "failed on query {q}");
+            } else {
+                assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
+            }
         }
     }
 
