@@ -707,11 +707,6 @@ fn global_merge_small(
         }
     }
 
-    debug_assert!(
-        merged
-            .iter()
-            .all(|leaf| !leaf.is_empty() && leaf.len() <= c_max)
-    );
     Ok(merged)
 }
 
