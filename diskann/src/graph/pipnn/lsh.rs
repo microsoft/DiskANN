@@ -34,8 +34,8 @@ pub(super) struct LshSketches {
 impl LshSketches {
     /// Compute one sketch row for each point in `data`.
     ///
-    /// Each worker converts one source row into reusable `f32` storage. The caller
-    /// must run this function inside `rayon::ThreadPool::install(...)`.
+    /// Each worker converts one source row into reusable `f32` storage. Parallel
+    /// sketch work uses the currently installed Rayon pool.
     pub(super) fn try_new<T: VectorRepr>(
         data: MatrixView<'_, T>,
         num_planes: usize,
