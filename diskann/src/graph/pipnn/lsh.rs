@@ -21,61 +21,22 @@
 //! | conversion scratch | `ndims` per Rayon job | reused across points |
 //! | sketches | `npoints × num_planes` | owned by `LshSketches` |
 //!
-//! Sketches are computed in parallel via Rayon, with caller-provided per-point
-//! `f32` conversion so f16, u8, and i8 storage does not require a full upfront
-//! f32 copy. `num_planes ≤ 16` keeps every relative hash in a `u16`.
+//! Sketches are computed in parallel via Rayon, with per-worker `VectorRepr`
+//! conversion so f16, u8, and i8 storage does not require a full upfront f32
+//! copy. `num_planes ≤ 16` keeps every relative hash in a `u16`.
 
+use crate::{ANNError, ANNResult, utils::VectorRepr};
+use diskann_utils::views::MatrixView;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 use rayon::prelude::*;
 
 /// Maximum number of hyperplanes (the hash output is `u16`).
-pub const MAX_PLANES: usize = 16;
-
-/// Failure while constructing LSH sketches.
-#[derive(Debug)]
-pub enum LshSketchError<E> {
-    /// The relative hash must use between one and 16 bits.
-    InvalidPlaneCount { actual: usize, max: usize },
-    /// A matrix shape overflowed `usize`.
-    ShapeOverflow { rows: usize, columns: usize },
-    /// A sketch buffer could not be allocated.
-    Allocation(std::collections::TryReserveError),
-    /// The caller could not materialize a point in `f32`.
-    Fill(E),
-}
-
-impl<E: std::fmt::Display> std::fmt::Display for LshSketchError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidPlaneCount { actual, max } => {
-                write!(f, "num_planes ({actual}) must be in 1..={max}")
-            }
-            Self::ShapeOverflow { rows, columns } => {
-                write!(f, "LSH matrix shape {rows} x {columns} overflows usize")
-            }
-            Self::Allocation(error) => write!(f, "LSH allocation failed: {error}"),
-            Self::Fill(error) => write!(f, "point conversion failed: {error}"),
-        }
-    }
-}
-
-impl<E> std::error::Error for LshSketchError<E>
-where
-    E: std::error::Error + 'static,
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidPlaneCount { .. } => None,
-            Self::ShapeOverflow { .. } => None,
-            Self::Allocation(error) => Some(error),
-            Self::Fill(error) => Some(error),
-        }
-    }
-}
+pub(super) const MAX_PLANES: usize = 16;
 
 /// Precomputed LSH sketches for `npoints` vectors.
-pub struct LshSketches {
+#[derive(Debug)]
+pub(super) struct LshSketches {
     num_planes: usize,
     /// Row-major `npoints × num_planes`: `sketches[i*m + j] = dot(point_i, plane_j)`.
     sketches: Vec<f32>,
@@ -84,87 +45,74 @@ pub struct LshSketches {
 impl LshSketches {
     /// Compute LSH sketches for `npoints` points of dimension `ndims`.
     ///
-    /// `fill_point` is called once per point with the point's destination
-    /// buffer of length `ndims` (the buffer is allocated per worker thread
-    /// and reused across calls). This avoids requiring a contiguous `&[f32]`
-    /// for the whole dataset when the caller stores points as f16, u8, etc.
+    /// Each worker converts one source row into reusable `f32` scratch, avoiding
+    /// a full-dataset conversion for f16, u8, and i8 inputs.
     ///
-    /// Caller MUST be inside a `rayon::ThreadPool::install(...)` scope —
-    /// parallel work runs on the current pool.
-    ///
-    /// Returns [`LshSketchError::InvalidPlaneCount`] unless `num_planes` fits
-    /// the non-empty 16-bit relative-hash representation.
-    pub fn try_new<F, E>(
-        npoints: usize,
-        ndims: usize,
+    /// Caller must be inside `rayon::ThreadPool::install(...)`; parallel work
+    /// runs on the current pool.
+    pub(super) fn try_new<T: VectorRepr>(
+        data: MatrixView<'_, T>,
         num_planes: usize,
         seed: u64,
-        fill_point: F,
-    ) -> Result<Self, LshSketchError<E>>
-    where
-        F: Fn(usize, &mut [f32]) -> Result<(), E> + Send + Sync,
-        E: Send,
-    {
+    ) -> ANNResult<Self> {
         if !(1..=MAX_PLANES).contains(&num_planes) {
-            return Err(LshSketchError::InvalidPlaneCount {
-                actual: num_planes,
-                max: MAX_PLANES,
-            });
+            return Err(ANNError::message(format!(
+                "num_planes ({num_planes}) must be in 1..={MAX_PLANES}"
+            )));
         }
-
-        let hyperplane_len =
-            num_planes
-                .checked_mul(ndims)
-                .ok_or(LshSketchError::ShapeOverflow {
-                    rows: num_planes,
-                    columns: ndims,
-                })?;
-        let sketch_len = npoints
-            .checked_mul(num_planes)
-            .ok_or(LshSketchError::ShapeOverflow {
-                rows: npoints,
-                columns: num_planes,
-            })?;
+        let npoints = data.nrows();
+        let ndims = data.ncols();
+        let hyperplane_len = num_planes.checked_mul(ndims).ok_or_else(|| {
+            ANNError::message(format!(
+                "LSH matrix shape {num_planes} x {ndims} overflows usize"
+            ))
+        })?;
+        let sketch_len = npoints.checked_mul(num_planes).ok_or_else(|| {
+            ANNError::message(format!(
+                "LSH matrix shape {npoints} x {num_planes} overflows usize"
+            ))
+        })?;
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        // Standard-normal hyperplanes, row-major `num_planes × ndims`.
         let mut hyperplanes: Vec<f32> = Vec::new();
         hyperplanes
             .try_reserve_exact(hyperplane_len)
-            .map_err(LshSketchError::Allocation)?;
+            .map_err(ANNError::new)?;
         hyperplanes.resize_with(hyperplane_len, || StandardNormal.sample(&mut rng));
 
         let mut sketches = Vec::new();
         sketches
             .try_reserve_exact(sketch_len)
-            .map_err(LshSketchError::Allocation)?;
+            .map_err(ANNError::new)?;
         sketches.resize(sketch_len, 0.0f32);
 
-        #[allow(clippy::disallowed_methods)] // see module docstring; caller is in pool.install().
+        #[allow(clippy::disallowed_methods)] // caller installs the complete build in its pool.
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
-            .try_for_each_init(Vec::new, |buffer, (i, sketch_row)| {
+            .try_for_each_init(Vec::new, |buffer, (point, sketch_row)| {
                 if buffer.len() < ndims {
-                    let additional = ndims - buffer.len();
                     buffer
-                        .try_reserve(additional)
-                        .map_err(LshSketchError::Allocation)?;
+                        .try_reserve(ndims - buffer.len())
+                        .map_err(ANNError::new)?;
                 }
                 buffer.resize(ndims, 0.0);
-                fill_point(i, &mut buffer[..ndims]).map_err(LshSketchError::Fill)?;
-                for j in 0..num_planes {
-                    let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
+                T::as_f32_into(data.row(point), &mut buffer[..ndims])
+                    .map_err(Into::<ANNError>::into)
+                    .map_err(|error| error.context(format!("converting LSH point {point}")))?;
+                for (plane_index, destination) in sketch_row.iter_mut().enumerate() {
+                    let plane = &hyperplanes[plane_index * ndims..(plane_index + 1) * ndims];
                     let mut dot = 0.0f32;
-                    for d in 0..ndims {
-                        // SAFETY: `d` is in 0..ndims; both buffers have length `ndims`.
+                    for dimension in 0..ndims {
+                        // SAFETY: both slices have exactly `ndims` elements.
                         unsafe {
-                            dot += *buffer.get_unchecked(d) * *plane.get_unchecked(d);
+                            dot +=
+                                *buffer.get_unchecked(dimension) * *plane.get_unchecked(dimension);
                         }
                     }
-                    sketch_row[j] = dot;
+                    *destination = dot;
                 }
-                Ok(())
+                Ok::<(), ANNError>(())
             })?;
 
         Ok(Self {
@@ -175,7 +123,7 @@ impl LshSketches {
 
     /// Number of hyperplanes (also the number of bits in the hash).
     #[inline]
-    pub fn num_planes(&self) -> usize {
+    pub(super) fn num_planes(&self) -> usize {
         self.num_planes
     }
 
@@ -183,7 +131,7 @@ impl LshSketches {
     /// Callers can scatter-gather a small per-leaf cache of sketches to avoid
     /// touching the multi-hundred-MB global buffer in tight inner loops.
     #[inline]
-    pub fn sketches(&self) -> &[f32] {
+    pub(super) fn sketches(&self) -> &[f32] {
         &self.sketches
     }
 }
@@ -199,20 +147,19 @@ mod tests {
             .unwrap()
     }
 
+    fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
+        MatrixView::try_from(data, rows, columns).unwrap()
+    }
+
     #[test]
     fn computes_expected_sketch_shape() {
-        let pool = build_pool(2);
-        let data: Vec<f32> = vec![1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let sk = pool
-            .install(|| {
-                LshSketches::try_new(3, 2, 4, 42, |i, out| {
-                    out.copy_from_slice(&data[i * 2..(i + 1) * 2]);
-                    Ok::<_, std::convert::Infallible>(())
-                })
-            })
+        let data = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
+        let sketches = build_pool(2)
+            .install(|| LshSketches::try_new(view(&data, 3, 2), 4, 42))
             .unwrap();
-        assert_eq!(sk.num_planes(), 4);
-        assert_eq!(sk.sketches().len(), 12);
+
+        assert_eq!(sketches.num_planes(), 4);
+        assert_eq!(sketches.sketches().len(), 12);
     }
 
     #[test]
@@ -226,132 +173,61 @@ mod tests {
 
         for seed in [42, 99] {
             let actual = build_pool(2)
-                .install(|| {
-                    LshSketches::try_new(npoints, ndims, planes, seed, |i, out| {
-                        out.copy_from_slice(&data[i * ndims..(i + 1) * ndims]);
-                        Ok::<_, std::convert::Infallible>(())
-                    })
-                })
+                .install(|| LshSketches::try_new(view(&data, npoints, ndims), planes, seed))
                 .unwrap();
 
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             let hyperplanes: Vec<f32> = (0..planes * ndims)
                 .map(|_| StandardNormal.sample(&mut rng))
                 .collect();
-            let mut expected = Vec::<f32>::new();
-            for point in data.chunks_exact(ndims) {
-                for plane in hyperplanes.chunks_exact(ndims) {
-                    expected.push(point.iter().zip(plane).map(|(x, h)| x * h).sum());
-                }
-            }
+            let expected: Vec<f32> = data
+                .chunks_exact(ndims)
+                .flat_map(|point| {
+                    hyperplanes
+                        .chunks_exact(ndims)
+                        .map(|plane| point.iter().zip(plane).map(|(x, h)| x * h).sum())
+                })
+                .collect();
             assert_eq!(actual.sketches(), expected, "seed={seed}");
         }
     }
 
     #[test]
-    fn zero_points_produces_an_empty_sketch_without_filling() {
+    fn zero_points_produce_an_empty_sketch() {
         let sketches = build_pool(2)
-            .install(|| {
-                LshSketches::try_new(
-                    0,
-                    7,
-                    4,
-                    42,
-                    |_, _| -> Result<(), std::convert::Infallible> {
-                        panic!("zero points must not invoke fill_point")
-                    },
-                )
-            })
+            .install(|| LshSketches::try_new(view(&[] as &[f32], 0, 7), 4, 42))
             .unwrap();
+
         assert_eq!(sketches.num_planes(), 4);
         assert!(sketches.sketches().is_empty());
     }
 
     #[test]
-    fn zero_dimensions_produces_zero_dot_products() {
-        let calls = std::sync::atomic::AtomicUsize::new(0);
+    fn zero_dimensions_produce_zero_dot_products() {
         let sketches = build_pool(2)
-            .install(|| {
-                LshSketches::try_new(3, 0, 2, 42, |_, out| {
-                    assert!(out.is_empty());
-                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    Ok::<_, std::convert::Infallible>(())
-                })
-            })
+            .install(|| LshSketches::try_new(view(&[] as &[f32], 3, 0), 2, 42))
             .unwrap();
-        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+
         assert_eq!(sketches.sketches(), &[0.0; 6]);
     }
 
     #[test]
-    fn reports_shape_overflow_and_formats_errors() {
-        let hyperplanes = match LshSketches::try_new(1, usize::MAX, 2, 42, |_, _| {
-            Ok::<_, std::convert::Infallible>(())
-        }) {
-            Ok(_) => panic!("hyperplane shape overflow must fail"),
-            Err(error) => error,
-        };
-        assert!(matches!(hyperplanes, LshSketchError::ShapeOverflow { .. }));
-        assert!(hyperplanes.to_string().contains("overflows"));
-
-        let sketches = match LshSketches::try_new(usize::MAX, 1, 2, 42, |_, _| {
-            Ok::<_, std::convert::Infallible>(())
-        }) {
-            Ok(_) => panic!("sketch shape overflow must fail"),
-            Err(error) => error,
-        };
-        assert!(matches!(sketches, LshSketchError::ShapeOverflow { .. }));
+    fn rejects_shape_overflow() {
+        for data in [
+            view(&[] as &[f32], 0, usize::MAX),
+            view(&[] as &[f32], usize::MAX, 0),
+        ] {
+            let error =
+                LshSketches::try_new(data, 2, 42).expect_err("overflowing LSH shape must fail");
+            assert!(error.to_string().contains("overflows"));
+        }
     }
 
     #[test]
-    fn propagates_fill_errors() {
-        #[derive(Debug, PartialEq, thiserror::Error)]
-        #[error("fill failed")]
-        struct FillError;
-
-        let pool = build_pool(1);
-        let error = match pool.install(|| LshSketches::try_new(1, 2, 4, 42, |_, _| Err(FillError)))
-        {
-            Ok(_) => panic!("fill error should be propagated"),
-            Err(error) => error,
-        };
-
-        assert!(matches!(&error, LshSketchError::Fill(FillError)));
-        assert!(std::error::Error::source(&error).is_some());
-    }
-
-    #[test]
-    fn rejects_plane_count_above_u16_capacity() {
-        let pool = build_pool(1);
-        let error = match pool.install(|| {
-            LshSketches::try_new(1, 2, 17, 42, |_, _| Ok::<_, std::convert::Infallible>(()))
-        }) {
-            Ok(_) => panic!("too many planes should be rejected"),
-            Err(error) => error,
-        };
-
-        assert!(matches!(
-            error,
-            LshSketchError::InvalidPlaneCount {
-                actual: 17,
-                max: 16
-            }
-        ));
-    }
-
-    #[test]
-    fn rejects_zero_planes() {
-        let pool = build_pool(1);
-        let error = match pool.install(|| {
-            LshSketches::try_new(1, 2, 0, 42, |_, _| Ok::<_, std::convert::Infallible>(()))
-        }) {
-            Ok(_) => panic!("zero planes should be rejected"),
-            Err(error) => error,
-        };
-
-        assert!(matches!(
-            error,
-            LshSketchError::InvalidPlaneCount { actual: 0, max: 16 }
-        ));
+    fn rejects_plane_counts_outside_u16_capacity() {
+        for planes in [0, MAX_PLANES + 1] {
+            let error = LshSketches::try_new(view(&[0.0_f32], 1, 1), planes, 42).unwrap_err();
+            assert!(error.to_string().contains("must be in 1..=16"));
+        }
     }
 }
