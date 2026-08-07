@@ -22,18 +22,14 @@ use std::{collections::TryReserveError, sync::Mutex};
 
 use crate::{graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_vector::distance::Metric;
-use diskann_wide::{
-    Architecture, SIMDMask, SIMDSelect, SIMDVector,
-    arch::{self, Target1},
-};
+use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::{KernelMetric, MetricVisitor, visit_metric},
+    kernel_metric::KernelMetric,
     leaf_kernel::{
         LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, leaf_output_len,
-        nearest_neighbors_for,
+        nearest_neighbors,
     },
 };
 
@@ -223,80 +219,10 @@ impl DirectCandidates {
 }
 
 /// Build symmetric leaf-local k-NN graphs and retain every unique global candidate.
-pub(crate) fn build_leaf_candidates<T>(
-    data: MatrixView<'_, T>,
-    leaves: Vec<Vec<u32>>,
-    requested_k: usize,
-    metric: Metric,
-) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
-where
-    T: VectorRepr + 'static,
-{
-    arch::dispatch1_no_features(
-        RunLeafStage,
-        LeafStageCall {
-            data,
-            leaves,
-            requested_k,
-            metric,
-        },
-    )
-}
-
-struct LeafStageCall<'a, T> {
-    data: MatrixView<'a, T>,
-    leaves: Vec<Vec<u32>>,
-    requested_k: usize,
-    metric: Metric,
-}
-
-struct RunLeafStage;
-
-impl<A, T> Target1<A, Result<Vec<AdjacencyList<u32>>, LeafBuildError>, LeafStageCall<'_, T>>
-    for RunLeafStage
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    T: VectorRepr + 'static,
-{
-    fn run(
-        self,
-        arch: A,
-        call: LeafStageCall<'_, T>,
-    ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError> {
-        visit_metric(call.metric, ExecuteLeafStage { arch, call })
-    }
-}
-
-struct ExecuteLeafStage<'a, A, T> {
-    arch: A,
-    call: LeafStageCall<'a, T>,
-}
-
-impl<A, T> MetricVisitor for ExecuteLeafStage<'_, A, T>
-where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    T: VectorRepr + 'static,
-{
-    type Output = Result<Vec<AdjacencyList<u32>>, LeafBuildError>;
-
-    fn visit<M: KernelMetric>(self) -> Self::Output {
-        build_leaf_candidates_for::<A, M, T>(
-            self.arch,
-            self.call.data,
-            self.call.leaves,
-            self.call.requested_k,
-        )
-    }
-}
-
+///
+/// The caller has already selected `A` and `M` for the complete graph build.
 #[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
-fn build_leaf_candidates_for<A, M, T>(
+pub(super) fn build_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     leaves: Vec<Vec<u32>>,
@@ -423,7 +349,7 @@ where
         leaf,
         buffer: "leaf output",
     })?;
-    nearest_neighbors_for::<A, M>(arch, dots, output, &mut buffers.kernel_workspace)
+    nearest_neighbors::<A, M>(arch, dots, output, &mut buffers.kernel_workspace)
         .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
 
     buffers.prepare_local_adjacency(point_ids.len())?;
@@ -507,6 +433,10 @@ fn poisoned_candidate_list(point: u32) -> LeafBuildError {
 mod tests {
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
+    use diskann_wide::{
+        Architecture, SIMDMask, SIMDSelect, SIMDVector,
+        arch::{self, Target1},
+    };
     use half::f16;
     use std::collections::BTreeSet;
 
@@ -526,6 +456,57 @@ mod tests {
             .unwrap()
     }
 
+    struct LeafBuildCall<'a, T> {
+        data: MatrixView<'a, T>,
+        leaves: Vec<Vec<u32>>,
+        k: usize,
+    }
+
+    struct DispatchLeafBuild(Metric);
+
+    impl<A, T>
+        Target1<
+            A,
+            Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError>,
+            LeafBuildCall<'_, T>,
+        > for DispatchLeafBuild
+    where
+        A: Architecture,
+        A::f32x16: std::ops::Div<Output = A::f32x16>,
+        <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+        u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+        T: crate::utils::VectorRepr + 'static,
+    {
+        fn run(
+            self,
+            arch: A,
+            call: LeafBuildCall<'_, T>,
+        ) -> Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError> {
+            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+
+            match self.0 {
+                Metric::L2 => {
+                    build_leaf_candidates::<A, L2, T>(arch, call.data, call.leaves, call.k)
+                }
+                Metric::Cosine => {
+                    build_leaf_candidates::<A, Cosine, T>(arch, call.data, call.leaves, call.k)
+                }
+                Metric::CosineNormalized => build_leaf_candidates::<A, CosineNormalized, T>(
+                    arch,
+                    call.data,
+                    call.leaves,
+                    call.k,
+                ),
+                Metric::InnerProduct => build_leaf_candidates::<A, InnerProduct, T>(
+                    arch,
+                    call.data,
+                    call.leaves,
+                    call.k,
+                ),
+            }
+        }
+    }
+
     fn build<T>(
         data: MatrixView<'_, T>,
         leaves: &[Vec<u32>],
@@ -535,7 +516,16 @@ mod tests {
     where
         T: crate::utils::VectorRepr + 'static,
     {
-        pool().install(|| build_leaf_candidates(data, leaves.to_vec(), k, metric))
+        pool().install(|| {
+            arch::dispatch1_no_features(
+                DispatchLeafBuild(metric),
+                LeafBuildCall {
+                    data,
+                    leaves: leaves.to_vec(),
+                    k,
+                },
+            )
+        })
     }
 
     fn adjacency_lists(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
@@ -718,17 +708,11 @@ mod tests {
         let leaves: Vec<Vec<u32>> = (0..32)
             .map(|offset| (0..16).map(|point| (point + offset) % 64).collect())
             .collect();
-        let pool = pool();
-        pool.install(|| {
-            let expected =
-                build_leaf_candidates(view(&data, 64, 1), leaves.clone(), 2, Metric::L2).unwrap();
-            for _ in 0..8 {
-                let actual =
-                    build_leaf_candidates(view(&data, 64, 1), leaves.clone(), 2, Metric::L2)
-                        .unwrap();
-                assert_eq!(actual, expected);
-            }
-        });
+        let expected = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+        for _ in 0..8 {
+            let actual = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
