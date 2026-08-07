@@ -28,7 +28,7 @@ use super::{
 /// - <https://users.rust-lang.org/t/limitation-of-associated-const-in-traits/73491/2>
 /// - <https://github.com/rust-lang/rust/issues/76560>
 pub trait ArrayType<T>: SupportedLaneCount {
-    type Type: AsRef<[T]> + AsMut<[T]>;
+    type Type;
 }
 
 /// Map scalar + lengths to arrays.

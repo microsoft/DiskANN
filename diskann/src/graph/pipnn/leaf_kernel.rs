@@ -29,7 +29,7 @@ use std::marker::PhantomData;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
-    Architecture, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
+    Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
     arch::{self, Dispatched1, FTarget1},
     lifetime::AddLifetime,
 };
@@ -495,7 +495,7 @@ fn process_neighbor_width<F, M>(
     worst: &mut [f32],
 ) -> Result<(), LeafKernelError>
 where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
@@ -527,7 +527,7 @@ fn process_fixed_width<F, M, const N: usize>(
     norms: &[f32],
     worst: &mut [f32],
 ) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
@@ -566,7 +566,7 @@ fn process_pairs<F, M, const N: usize>(
     norms: &[f32],
     worst: &mut [f32],
 ) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
@@ -635,8 +635,7 @@ fn process_pairs<F, M, const N: usize>(
             let target_bits = u64::from(target_eligible.bitmask().to_underlying());
 
             if source_bits | target_bits != 0 {
-                let values = distances.to_array();
-                let values = values.as_ref();
+                let values: [f32; 16] = distances.to_array();
                 let mut source_bits = source_bits;
                 while source_bits != 0 {
                     let lane = source_bits.trailing_zeros() as usize;
