@@ -761,7 +761,7 @@ mod integration_tests {
         output
     }
 
-    fn run_kernel(
+    fn run_leaf_kernel(
         dots: &[f32],
         points: usize,
         requested_k: usize,
@@ -791,7 +791,7 @@ mod integration_tests {
                 let dots = differential_dots(metric, points);
                 for requested_k in [1, 2, 3] {
                     let expected = brute_force_reference(&dots, points, requested_k, metric);
-                    let actual = run_kernel(&dots, points, requested_k, metric).1;
+                    let actual = run_leaf_kernel(&dots, points, requested_k, metric).1;
                     assert_eq!(actual, expected, "{metric:?}, n={points}, k={requested_k}");
                 }
             }
@@ -809,7 +809,7 @@ mod integration_tests {
         ];
 
         assert_eq!(
-            run_kernel(&dots, 4, 2, Metric::L2).1,
+            run_leaf_kernel(&dots, 4, 2, Metric::L2).1,
             [
                 LeafNeighbor::new(1, 1.0),
                 LeafNeighbor::new(2, 1.0),
@@ -837,7 +837,7 @@ mod integration_tests {
             (Metric::CosineNormalized, [1, 2, 1]),
             (Metric::InnerProduct, [1, 2, 1]),
         ] {
-            let positions: Vec<_> = run_kernel(&dots, 3, 1, metric)
+            let positions: Vec<_> = run_leaf_kernel(&dots, 3, 1, metric)
                 .1
                 .iter()
                 .map(|neighbor| neighbor.target)
@@ -855,7 +855,7 @@ mod integration_tests {
             0.0,  0.0,  1.0,
         ];
 
-        let output = run_kernel(&dots, 3, 2, Metric::Cosine).1;
+        let output = run_leaf_kernel(&dots, 3, 2, Metric::Cosine).1;
         assert_eq!(output[0], LeafNeighbor::new(1, 1.0));
         assert_eq!(output[1], LeafNeighbor::new(2, 1.0));
     }
@@ -865,34 +865,34 @@ mod integration_tests {
         #[rustfmt::skip]
         let out_of_range = [1.0, 0.0, 2.0, 1.0];
         assert_eq!(
-            run_kernel(&out_of_range, 2, 1, Metric::L2).1[0].distance,
+            run_leaf_kernel(&out_of_range, 2, 1, Metric::L2).1[0].distance,
             0.0
         );
         assert_eq!(
-            run_kernel(&out_of_range, 2, 1, Metric::CosineNormalized).1[0].distance,
+            run_leaf_kernel(&out_of_range, 2, 1, Metric::CosineNormalized).1[0].distance,
             0.0
         );
         assert_eq!(
-            run_kernel(&out_of_range, 2, 1, Metric::Cosine).1[0].distance,
+            run_leaf_kernel(&out_of_range, 2, 1, Metric::Cosine).1[0].distance,
             0.0
         );
 
         #[rustfmt::skip]
         let opposite = [1.0, 0.0, -2.0, 1.0];
         assert_eq!(
-            run_kernel(&opposite, 2, 1, Metric::Cosine).1[0].distance,
+            run_leaf_kernel(&opposite, 2, 1, Metric::Cosine).1[0].distance,
             3.0
         );
 
         let subnormal = [f32::MIN_POSITIVE / 2.0, 0.0, 1.0, 1.0];
         assert_eq!(
-            run_kernel(&subnormal, 2, 1, Metric::Cosine).1[0].distance,
+            run_leaf_kernel(&subnormal, 2, 1, Metric::Cosine).1[0].distance,
             1.0
         );
 
         let minimum_normal = [f32::MIN_POSITIVE, 0.0, f32::MIN_POSITIVE.sqrt(), 1.0];
         assert_eq!(
-            run_kernel(&minimum_normal, 2, 1, Metric::Cosine).1[0].distance,
+            run_leaf_kernel(&minimum_normal, 2, 1, Metric::Cosine).1[0].distance,
             0.0
         );
     }
@@ -903,7 +903,8 @@ mod integration_tests {
         let mut dots = vec![0.0; points * points];
         dots[3 * points] = -f32::MAX;
 
-        let (leaf_k, output) = run_kernel(&dots, points, MAX_LEAF_NEIGHBORS, Metric::InnerProduct);
+        let (leaf_k, output) =
+            run_leaf_kernel(&dots, points, MAX_LEAF_NEIGHBORS, Metric::InnerProduct);
         assert_eq!(leaf_k, MAX_LEAF_NEIGHBORS);
         assert_eq!(
             output[3 * leaf_k + leaf_k - 1],
@@ -926,7 +927,7 @@ mod integration_tests {
             Metric::CosineNormalized,
             Metric::InnerProduct,
         ] {
-            let output = run_kernel(&dots, 3, 1, metric).1;
+            let output = run_leaf_kernel(&dots, 3, 1, metric).1;
             assert_eq!(output[0].target, 2, "metric {metric:?}");
             assert_eq!(output[1].target, 2, "metric {metric:?}");
         }
@@ -961,7 +962,7 @@ mod integration_tests {
             0.0, 1.0, 3.0,
             0.0, 0.0, 1.0,
         ];
-        let (leaf_k, output) = run_kernel(&dots, 3, MAX_LEAF_NEIGHBORS, Metric::L2);
+        let (leaf_k, output) = run_leaf_kernel(&dots, 3, MAX_LEAF_NEIGHBORS, Metric::L2);
 
         assert_eq!(leaf_k, 2);
         for (source, neighbors) in output.chunks_exact(leaf_k).enumerate() {
@@ -980,7 +981,7 @@ mod integration_tests {
             (&[4.0][..], 1, 2, Metric::Cosine),
             (&[1.0, 0.0, 0.0, 1.0][..], 2, 0, Metric::InnerProduct),
         ] {
-            assert_eq!(run_kernel(dots, points, requested_k, metric).0, 0);
+            assert_eq!(run_leaf_kernel(dots, points, requested_k, metric).0, 0);
         }
     }
 
@@ -1055,7 +1056,7 @@ mod integration_tests {
                 dots[source * points + source] = f32::NAN;
             }
 
-            let output = run_kernel(&dots, points, 1, Metric::Cosine).1;
+            let output = run_leaf_kernel(&dots, points, 1, Metric::Cosine).1;
             for (source, neighbor) in output.iter().enumerate().skip(1) {
                 assert_eq!(
                     *neighbor,
