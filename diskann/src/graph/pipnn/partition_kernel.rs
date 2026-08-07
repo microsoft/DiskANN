@@ -25,7 +25,7 @@ use std::marker::PhantomData;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
-    Architecture, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
+    Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
     arch::{self, Dispatched2, FTarget2},
     lifetime::AddLifetime,
 };
@@ -463,7 +463,7 @@ fn process_points<F, M>(
     fanout: usize,
     output: &mut [u32],
 ) where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
+    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
@@ -564,7 +564,7 @@ fn insert_leader_lanes<F>(
     tracker: &mut LeaderTracker,
     fanout: usize,
 ) where
-    F: SIMDVector<Scalar = f32> + SIMDPartialOrd,
+    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let threshold = F::splat(distances.arch(), tracker[fanout - 1].1);
@@ -573,8 +573,7 @@ fn insert_leader_lanes<F>(
         return;
     }
 
-    let values = distances.to_array();
-    let values = values.as_ref();
+    let values: [f32; 16] = distances.to_array();
     let mut lanes = u64::from(eligible.bitmask().to_underlying());
     while lanes != 0 {
         let lane = lanes.trailing_zeros() as usize;
