@@ -3,17 +3,15 @@
  * Licensed under the MIT license.
  */
 
-//! Lossy `f32` ↔ `u16` (bf16) conversion for compact distance storage.
+//! Lossy conversion between `f32` and bf16 storage.
 //!
-//! `bf16` is the upper 16 bits of an IEEE-754 `f32`: same exponent, mantissa
-//! truncated from 23 to 7 bits. For non-negative values, `bf16` bit ordering
-//! matches `f32` ordering, so a packed `bf16` can be compared as `u16` to give
-//! the correct distance order. HashPrune stores signed distances through a
-//! separate order-preserving key transform before comparing these bits.
+//! A bf16 value contains the upper 16 bits of an IEEE-754 `f32`. It keeps the
+//! exponent and seven mantissa bits. For non-negative values, its `u16` bit order
+//! matches `f32` numeric order. HashPrune applies a separate ordered-key transform
+//! to signed distances.
 //!
-//! Conversion is truncation, not round-to-nearest. It preserves the sign bit,
-//! infinities, signed zero, and the upper NaN payload bits exactly; lower payload
-//! bits are discarded with the lower mantissa.
+//! Conversion truncates the lower 16 bits. It does not round. It preserves sign,
+//! infinity, signed zero, and the upper NaN payload bits.
 
 /// Convert `f32` → bf16 by truncating the lower 16 mantissa bits.
 #[inline(always)]
@@ -44,7 +42,7 @@ mod tests {
 
     #[test]
     fn truncation_is_within_relative_tolerance() {
-        // Values that aren't bf16-exact still round to within ~2^-7 relative.
+        // A non-exact finite value has at most about 2^-7 relative truncation error.
         use std::f32::consts::{E, PI};
         for &x in &[1e-10_f32, 1e10, PI, E] {
             let back = bf16_to_f32(f32_to_bf16(x));

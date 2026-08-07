@@ -46,7 +46,8 @@ cfg_if::cfg_if! {
         unsafe fn prefetch_exactly<const N: usize>(ptr: *const i8) {
             use std::arch::x86_64::*;
             for i in 0..N {
-                // SAFETY: the caller guarantees `N` cache-line starts are in bounds.
+                // SAFETY: the caller guarantees that all `N` computed addresses are
+                // inside the allocation.
                 unsafe { _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0) };
             }
         }
@@ -58,7 +59,7 @@ cfg_if::cfg_if! {
                 if CACHE_LINE_SIZE * i >= bytes {
                     break;
                 }
-                // SAFETY: the loop only visits cache-line starts below `bytes`.
+                // SAFETY: the loop uses only offsets below `bytes`.
                 unsafe { _mm_prefetch(ptr.add(i * CACHE_LINE_SIZE), _MM_HINT_T0) };
             }
         }
@@ -69,7 +70,7 @@ cfg_if::cfg_if! {
         pub fn prefetch_hint_max<const MAX_CACHE_LINES: usize, T>(vec: &[T]) {
             let vecsize = std::mem::size_of_val(vec);
             if vecsize >= MAX_CACHE_LINES * 64 {
-                // SAFETY: the slice covers every prefetched cache-line start.
+                // SAFETY: the slice contains every address passed to prefetch.
                 unsafe { prefetch_exactly::<MAX_CACHE_LINES>(vec.as_ptr().cast()) }
             } else {
                 // SAFETY: the slice covers `vecsize` bytes.
@@ -77,13 +78,13 @@ cfg_if::cfg_if! {
             }
         }
 
-        /// Prefetch cache-line starts in a raw byte range without creating a slice.
+        /// Prefetch a raw byte range without creating a slice.
         ///
         /// # Safety
         ///
-        /// `ptr` must point to an allocation that remains live for `bytes` bytes during
-        /// this call. The function creates no Rust reference, so the range may be
-        /// concurrently mutated under the caller's synchronization policy.
+        /// `ptr` must identify an allocation of at least `bytes` bytes. The allocation
+        /// must remain live for this call. The function creates no Rust reference.
+        /// The caller controls concurrent mutation of the range.
         #[inline]
         pub unsafe fn prefetch_hint_all_raw(ptr: *const u8, bytes: usize) {
             use std::arch::x86_64::*;
@@ -104,11 +105,11 @@ cfg_if::cfg_if! {
     } else {
         pub fn prefetch_hint_max<const MAX_CACHE_LINES: usize, T>(_vec: &[T]) {}
 
-        /// No-op raw-range prefetch on architectures without a prefetch implementation.
+        /// Accept a raw prefetch range and do nothing.
         ///
         /// # Safety
         ///
-        /// The pointer contract matches the x86-64 implementation.
+        /// The pointer contract is the same as the x86-64 implementation.
         pub unsafe fn prefetch_hint_all_raw(_ptr: *const u8, _bytes: usize) {}
 
         pub fn prefetch_hint_all<T>(_vec: &[T]) {}

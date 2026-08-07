@@ -12,9 +12,10 @@
 //! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
 //!    at most `c_max` points.
 //! 2. `leaf_build` computes a lower-triangular Gram matrix for each leaf. It
-//!    selects local neighbors and merges their global point IDs.
-//! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
-//!    longer than the graph degree.
+//!    selects local neighbors. The direct path merges their global point IDs.
+//!    The HashPrune path sends weighted edges to bounded point reservoirs.
+//! 3. `finalization` applies Vamana RobustPrune to direct candidates. It also
+//!    prunes HashPrune candidates when `final_prune` is true.
 //!
 //! `diskann-wide` selects architecture `A`. One match selects metric marker `M`.
 //! The build passes both concrete types through all replicas, recursive
@@ -147,7 +148,7 @@ impl HashPruneConfig {
         Ok(())
     }
 
-    /// Validate that the reservoir and hash space can cover `degree` neighbors.
+    /// Check that the reservoir and hash space can hold `degree` neighbors.
     pub fn validate_for_degree(&self, degree: usize) -> ANNResult<()> {
         self.validate()?;
         let hash_capacity = 1usize
@@ -343,13 +344,12 @@ where
             })
         }
         Some(config) => {
-            // Sketches and reservoir slabs must exist before leaf workers start;
-            // workers borrow this stage owner and mutate only one locked source
-            // reservoir at a time.
+            // `HashPrune` lives until all leaf jobs finish. A leaf job locks only
+            // one source reservoir at a time.
             let hash_prune =
                 hash_prune::HashPrune::new(data, config.num_hash_planes, config.l_max, 42)?;
-            // Leaves are consumed at this boundary. Their local weighted CSR
-            // lists are temporary; only bounded reservoir state survives.
+            // This call consumes the leaves. Each weighted CSR list exists only
+            // during its leaf job. The reservoirs retain the selected edges.
             tracing::info_span!("pipnn.leaf_build").in_scope(|| {
                 leaf_build::add_hash_prune_candidates::<A, M, T>(
                     arch,
@@ -712,8 +712,8 @@ mod build_graph_tests {
                 .collect::<Vec<_>>()
         };
 
-        // Parallel finalization may order equal candidates differently; retained
-        // neighbor sets are the graph-content contract.
+        // Parallel finalization can order equal candidates differently. Compare
+        // the retained neighbor sets.
         assert_eq!(canonicalize(&first), canonicalize(&second));
         assert_graph_invariants(&first, points, 8);
         assert!(first.iter().any(|row| !row.is_empty()));
