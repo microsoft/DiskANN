@@ -139,7 +139,7 @@ where
     /// are known to be unique.
     ///
     /// Uniqueness is checked in debug builds but not in release builds.
-    pub fn from_vec_trusted(edges: Vec<I>) -> Self
+    pub(crate) fn from_vec_trusted(edges: Vec<I>) -> Self
     where
         I: ContainsSimd,
     {
