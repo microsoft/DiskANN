@@ -15,23 +15,20 @@
 //! reject NaN. L2, cosine, normalized cosine, and inner product share the same
 //! scalar/SIMD traversal.
 //!
-//! [`LeafKernel::new`] selects metric and runtime architecture once, storing one
-//! direct function pointer reused across leaves. Every call validates square
-//! shape, row count, local-ID bounds, and output width before scratch mutation or
-//! unchecked SIMD loads. [`LeafKernelWorkspace`] retains per-worker norm and
-//! threshold buffers.
+//! Runtime callers may use [`LeafKernel`]; production dispatches once at the leaf
+//! stage boundary and calls the generic kernel directly. Every call validates
+//! square shape, row count, local-ID bounds, and output width before scratch
+//! mutation or unchecked SIMD loads. [`LeafKernelWorkspace`] retains per-worker
+//! norm and threshold buffers.
 //!
 //! Work is `n(n - 1) / 2` distance evaluations with constant bounded insertion;
 //! scratch is `O(n)` and output is `O(nk)`.
-
-use std::marker::PhantomData;
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
 use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector,
-    arch::{self, Dispatched1, FTarget1},
-    lifetime::AddLifetime,
+    arch::{self, Target1},
 };
 
 use super::kernel_metric::{KernelMetric, MetricVisitor, visit_metric};
@@ -193,11 +190,7 @@ pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafK
     checked_area("output", points, leaf_neighbor_count(points, requested_k)?)
 }
 
-/// One invocation bundled for `Dispatched1`.
-///
-/// `AddLifetime` can attach one lifetime to this aggregate, allowing the direct
-/// function-pointer interface to carry the input view, exclusive output view,
-/// and exclusive scratch lease without storing any of them in `LeafKernel`.
+/// Inputs for one immediate architecture/metric dispatch.
 #[derive(Debug)]
 struct LeafCall<'a> {
     input: MatrixView<'a, f32>,
@@ -205,140 +198,98 @@ struct LeafCall<'a> {
     workspace: &'a mut LeafKernelWorkspace,
 }
 
-#[derive(Debug)]
-struct LeafCallArg;
-
-impl AddLifetime for LeafCallArg {
-    type Of<'a> = LeafCall<'a>;
-}
-
-type LeafFn = Dispatched1<Result<(), LeafKernelError>, LeafCallArg>;
-
-/// A leaf kernel prepared for one metric and the current CPU.
+/// Leaf-kernel convenience API for callers with a runtime [`Metric`].
 ///
-/// Construct this once with [`LeafKernel::new`] and share it across leaf workers.
-/// Each output view carries its leaf-specific neighbor width.
-///
-/// The handle stores only one direct function pointer. It borrows no leaf data
-/// or workspace and is therefore `Copy`, `Send`, and `Sync`.
+/// Each call performs runtime architecture and metric selection, then invokes
+/// the same generic kernel used by the production stage-level dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct LeafKernel {
-    run: LeafFn,
+    metric: Metric,
 }
 
 impl LeafKernel {
-    /// Prepare a leaf kernel for `metric` and the current CPU.
-    ///
-    /// The returned handle contains one architecture/metric-specialized function
-    /// pointer and can process any valid leaf size or neighbor width.
-    ///
-    /// # Performance
-    ///
-    /// Performs runtime architecture detection and one metric match once.
-    /// Reusing the handle keeps both decisions out of per-leaf hot loops.
-    pub fn new(metric: Metric) -> Self {
-        diskann_wide::arch::dispatch1_no_features(PrepareLeaf, metric)
+    /// Construct a kernel selector for `metric`.
+    pub const fn new(metric: Metric) -> Self {
+        Self { metric }
     }
 
     /// Select the nearest non-self leaf positions for every source point.
     ///
     /// `output` must have one row per input point. Its column count is the
     /// neighbor count for this leaf and must not exceed either `point_count - 1`
-    /// or [`MAX_LEAF_NEIGHBORS`].
-    /// Equal distances retain pair scan order.
-    ///
-    /// `input` supplies the square lower-triangular dot matrix. `output` is
-    /// overwritten with sorted leaf-local neighbors. `workspace` is an exclusive
-    /// worker-owned scratch lease whose capacity is retained after return.
-    /// Successful return guarantees every source has exactly `output.ncols()`
-    /// rankable, non-self neighbors.
-    ///
-    /// # Core flow
-    ///
-    /// The prepared entry validates every view before mutation, prepares scales,
-    /// clears output and thresholds, scans the strict lower triangle once, then
-    /// verifies the final slot of every source. Each pair updates both endpoints.
+    /// or [`MAX_LEAF_NEIGHBORS`]. Equal distances retain pair scan order.
     ///
     /// # Errors
     ///
-    /// Returns [`LeafKernelError`] for invalid or overflowing shapes, excessive
+    /// Returns [`LeafKernelError`] for incompatible shapes, excessive
     /// point/neighbor counts, scratch allocation failure, or an underfilled
-    /// source caused by non-rankable distances. Validation errors leave output
-    /// and workspace contents unchanged.
-    ///
-    /// # Performance
-    ///
-    /// See module-level complexity. This call uses the prepared direct function
-    /// pointer; it performs no runtime ISA or metric dispatch.
+    /// source caused by non-rankable distances.
     pub fn nearest_neighbors(
         &self,
         input: MatrixView<'_, f32>,
         output: MutMatrixView<'_, LeafNeighbor>,
         workspace: &mut LeafKernelWorkspace,
     ) -> Result<(), LeafKernelError> {
-        self.run.call(LeafCall {
-            input,
-            output,
-            workspace,
-        })
+        arch::dispatch1_no_features(
+            RunLeaf {
+                metric: self.metric,
+            },
+            LeafCall {
+                input,
+                output,
+                workspace,
+            },
+        )
     }
 }
 
-/// First dispatch stage: choose the runtime architecture once.
-///
-/// The factory itself uses `dispatch1_no_features`; only the returned leaf entry
-/// needs target features, so architecture-specific code remains behind the final
-/// direct function pointer.
-struct PrepareLeaf;
+struct RunLeaf {
+    metric: Metric,
+}
 
-impl<A> arch::Target1<A, LeafKernel, Metric> for PrepareLeaf
+impl<A> Target1<A, Result<(), LeafKernelError>, LeafCall<'_>> for RunLeaf
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    fn run(self, arch: A, metric: Metric) -> LeafKernel {
-        visit_metric(metric, BuildLeaf(arch))
+    fn run(self, arch: A, call: LeafCall<'_>) -> Result<(), LeafKernelError> {
+        visit_metric(self.metric, ExecuteLeaf { arch, call })
     }
 }
 
-/// Metric visitor holding a concrete architecture.
-///
-/// `visit<M>` combines architecture `A` and concrete metric `M` into exactly
-/// one `Dispatched1`. Leaf width remains call data because it varies by leaf.
-struct BuildLeaf<A>(A);
+struct ExecuteLeaf<'a, A> {
+    arch: A,
+    call: LeafCall<'a>,
+}
 
-impl<A> MetricVisitor for BuildLeaf<A>
+impl<A> MetricVisitor for ExecuteLeaf<'_, A>
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    type Output = LeafKernel;
+    type Output = Result<(), LeafKernelError>;
 
     fn visit<M: KernelMetric>(self) -> Self::Output {
-        LeafKernel {
-            run: self
-                .0
-                .dispatch1::<LeafEntry<M>, Result<(), LeafKernelError>, LeafCallArg>(),
-        }
+        nearest_neighbors_for::<A, M>(
+            self.arch,
+            self.call.input,
+            self.call.output,
+            self.call.workspace,
+        )
     }
 }
 
-/// Architecture/metric-specialized function-pointer destination.
-///
-/// This type is zero-sized. All per-leaf state, including output width, arrives
-/// through `LeafCall`; validation completes before pointer-based SIMD executes.
-///
-/// Call order is fixed: validate without mutation, allocate/reset scratch,
-/// initialize output, execute one specialized traversal, then verify fill state.
-/// Keeping those phases in the dispatched destination makes every unchecked
-/// load depend on one visible validation gate.
-struct LeafEntry<M>(PhantomData<M>);
-
-impl<A, M> FTarget1<A, Result<(), LeafKernelError>, LeafCall<'_>> for LeafEntry<M>
+/// Architecture/metric-specialized leaf kernel used by stage-level dispatch.
+pub(crate) fn nearest_neighbors_for<A, M>(
+    arch: A,
+    input: MatrixView<'_, f32>,
+    mut output: MutMatrixView<'_, LeafNeighbor>,
+    workspace: &mut LeafKernelWorkspace,
+) -> Result<(), LeafKernelError>
 where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
@@ -346,48 +297,35 @@ where
     M: KernelMetric,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    fn run(arch: A, mut call: LeafCall<'_>) -> Result<(), LeafKernelError> {
-        // Validation establishes every shape and active-prefix invariant used by
-        // unchecked loads below. No output or scratch mutation occurs on error.
-        validate(call.input, &call.output)?;
-        let neighbor_count = call.output.ncols();
-        // Empty or singleton leaves request zero columns. Avoid touching scratch
-        // or output so this path remains allocation-free.
-        if neighbor_count == 0 {
-            return Ok(());
-        }
-
-        // Norm and threshold scratch are reset for this leaf, while Vec capacity
-        // remains reusable by the worker that owns the workspace.
-        prepare_workspace::<M>(call.input, call.workspace)?;
-        call.output.as_mut_slice().fill(LeafNeighbor::default());
-        call.workspace.worst.fill(f32::INFINITY);
-
-        // Width dispatch happens once per leaf. Common production widths become
-        // fixed arrays; uncommon widths retain the same traversal through slices.
-        process_neighbor_width::<A::f32x16, M>(
-            arch,
-            call.input,
-            neighbor_count,
-            call.output.as_mut_slice(),
-            &call.workspace.norms,
-            &mut call.workspace.worst,
-        )?;
-        // Sorted lists use the last slot as both worst-distance threshold and
-        // underfill sentinel, so one slot check per source proves full output.
-        if let Some(source) = call
-            .output
-            .as_slice()
-            .chunks_exact(neighbor_count)
-            .position(|neighbors| neighbors[neighbor_count - 1].target == u32::MAX)
-        {
-            return Err(LeafKernelError::InsufficientRankableNeighbors {
-                source_index: source,
-                neighbors: neighbor_count,
-            });
-        }
-        Ok(())
+    validate(input, &output)?;
+    let neighbor_count = output.ncols();
+    if neighbor_count == 0 {
+        return Ok(());
     }
+
+    prepare_workspace::<M>(input, workspace)?;
+    output.as_mut_slice().fill(LeafNeighbor::default());
+    workspace.worst.fill(f32::INFINITY);
+
+    process_neighbor_width::<A::f32x16, M>(
+        arch,
+        input,
+        neighbor_count,
+        output.as_mut_slice(),
+        &workspace.norms,
+        &mut workspace.worst,
+    )?;
+    if let Some(source) = output
+        .as_slice()
+        .chunks_exact(neighbor_count)
+        .position(|neighbors| neighbors[neighbor_count - 1].target == u32::MAX)
+    {
+        return Err(LeafKernelError::InsufficientRankableNeighbors {
+            source_index: source,
+            neighbors: neighbor_count,
+        });
+    }
+    Ok(())
 }
 
 /// Validate the complete safety contract before dispatched SIMD executes.
