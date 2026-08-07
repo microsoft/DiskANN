@@ -166,7 +166,7 @@ pub struct PiPNNConfig {
     pub p_samp: f64,
     /// Number of nearest leaders retained at each overlapping partition level.
     pub fanout: Vec<usize>,
-    /// Number of nearest neighbors selected within each leaf.
+    /// Number of nearest neighbors selected within each leaf (`1..=3`).
     pub k: usize,
     /// Number of independent partition passes over the dataset.
     pub replicas: usize,
@@ -206,8 +206,12 @@ impl PiPNNConfig {
                 partition_kernel::MAX_PARTITION_FANOUT
             )));
         }
-        if self.k == 0 {
-            return Err(config_error("k must be greater than zero"));
+        if !(1..=leaf_kernel::MAX_LEAF_NEIGHBORS).contains(&self.k) {
+            return Err(config_error(format!(
+                "k ({}) must be in [1, {}]",
+                self.k,
+                leaf_kernel::MAX_LEAF_NEIGHBORS
+            )));
         }
         if self.replicas == 0 {
             return Err(config_error("replicas must be greater than zero"));
@@ -361,7 +365,7 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod build_graph_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig, build_graph};
+    use super::{PiPNNBuildContext, PiPNNConfig, build_graph, leaf_kernel};
     use crate::graph::config::{self, MaxDegree};
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
@@ -441,7 +445,7 @@ mod build_graph_tests {
     }
 
     #[test]
-    fn prunes_complete_single_leaf_candidates_to_the_graph_degree() {
+    fn prunes_overfull_single_leaf_candidates_to_the_graph_degree() {
         let data = [0.0_f32, 1.0, 2.0, 3.0, 4.0];
         let data = MatrixView::try_from(&data[..], 5, 1).unwrap();
         let graph = graph_config(Metric::L2, 1);
@@ -451,7 +455,7 @@ mod build_graph_tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![2],
-            k: 4,
+            k: leaf_kernel::MAX_LEAF_NEIGHBORS,
             replicas: 1,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
@@ -593,7 +597,7 @@ mod build_graph_tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod config_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig};
+    use super::{PiPNNBuildContext, PiPNNConfig, leaf_kernel};
     use crate::graph::config::{self, MaxDegree};
     use diskann_vector::distance::Metric;
 
@@ -670,6 +674,10 @@ mod config_tests {
             },
             PiPNNConfig {
                 k: 0,
+                ..pipnn_config()
+            },
+            PiPNNConfig {
+                k: leaf_kernel::MAX_LEAF_NEIGHBORS + 1,
                 ..pipnn_config()
             },
             PiPNNConfig {
