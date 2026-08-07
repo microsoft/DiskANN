@@ -5,149 +5,54 @@
 
 //! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
-//! PiPNN means **Pick-in-Partitions Nearest Neighbors**. It builds a graph for
-//! approximate nearest-neighbor search: every input vector becomes one graph
-//! vertex, and its adjacency list stores other vectors worth visiting during a
-//! later query. This module constructs that adjacency; it does not execute queries.
+//! PiPNN builds graph candidates in bulk instead of searching a partially built
+//! graph for every insertion:
 //!
-//! Incremental builders such as Vamana find construction candidates by running
-//! beam search against a partially built graph: they repeatedly follow graph
-//! edges to discover nearby vertices, causing random memory access. PiPNN removes
-//! that search from construction and uses three bulk stages instead:
-//!
-//! 1. **Partition.** Randomized Ball Carving samples points called *leaders*.
-//!    Every point is assigned to its nearest `fanout` leaders. Assigning to more
-//!    than one leader makes child groups overlap. Oversized groups are processed
-//!    recursively until bounded groups called *leaves* remain.
-//! 2. **Pick within leaves.** Vectors in one leaf are contiguous enough for one
-//!    dense general matrix multiplication (GEMM) to compute all pair dot
-//!    products. Each point picks its nearest leaf companions; selected pairs
-//!    become candidate graph edges.
-//! 3. **Merge and prune.** Candidate edges from overlapping leaves are combined
-//!    into one unique list per source. Vamana RobustPrune then selects a bounded,
-//!    directionally diverse adjacency list.
+//! 1. `partitioning` recursively samples leaders and assigns each point to its
+//!    nearest configured fanout, producing overlapping leaves bounded by `c_max`.
+//! 2. `leaf_build` gathers each leaf, computes the lower triangle of `A · Aᵀ`,
+//!    selects up to three local neighbors per point, and merges symmetric global
+//!    candidate IDs across overlapping leaves.
+//! 3. `finalization` applies the shared Vamana RobustPrune policy only to
+//!    candidate lists that exceed the configured graph degree.
 //!
 //! ```text
-//! dataset points
-//!      │
-//!      v
-//! sample leaders + point/leader GEMM
-//!      │
-//!      v
-//! choose nearest leaders ──> overlapping child groups ──> recurse ──> leaves
-//!                                                                      │
-//!                                                    leaf all-pairs GEMM
-//!                                                                      │
-//!                                                                      v
-//!                                                     pick local neighbors
-//!                                                                      │
-//!                                                                      v
-//!                                                     merge/prune edges
-//!                                                                      │
-//!                                                                      v
-//!                                                          search graph
+//! build_graph<T>
+//!   └─ caller Rayon pool
+//!      └─ architecture dispatch + metric match                 once per build
+//!         └─ build_graph_for<A, M, T>
+//!            ├─ partitioning::partition<A, M, T>
+//!            │  └─ partition_kernel::nearest_leaders<A, M>     every stripe
+//!            ├─ leaf_build::build_leaf_candidates<A, M, T>
+//!            │  └─ leaf_kernel::nearest_neighbors<A, M>        every leaf
+//!            └─ finalization::prune_overfull
 //! ```
 //!
-//! This module keeps GEMM separate from score selection: callers compute dense
-//! dot-product matrices, then the kernels documented below convert those dots to
-//! metric scores and retain top candidates. A *point* is a vector being assigned
-//! during partitioning; a *leader* names a child group. In leaf selection,
-//! *source* names the point whose output list is being built and *target* names
-//! another point in that same leaf.
+//! `diskann-wide` selects concrete architecture `A`; one four-way match selects
+//! concrete metric marker `M`. Both types are then carried through every replica,
+//! recursive partition, Rayon job, stripe, and leaf. Numerical kernels therefore
+//! contain no runtime metric match, visitor, trait object, stored function pointer,
+//! or repeated ISA dispatch.
 //!
-//! The crate owns overlapping partition generation, leaf-local nearest-neighbor
-//! construction, candidate merging, and graph-degree finalization. The caller
-//! supplies a contiguous dataset view, DiskANN graph policy, and the Rayon pool.
-//! Providers, start/frozen points, quantization, persistence, and search remain
-//! outside this algorithm boundary.
+//! [`PiPNNConfig`] owns only partition and local-neighbor parameters.
+//! [`PiPNNBuildContext`] borrows DiskANN graph policy and the caller-owned Rayon
+//! pool. [`build_graph`] borrows a contiguous [`MatrixView`] and returns one
+//! dataset-ID adjacency list per real point. Providers, start/frozen points,
+//! quantization, persistence, and search remain outside this module.
 //!
-//! Numerical kernels include:
-//!
-//! - [`partition_kernel::PartitionKernel`] converts point-by-leader dot-product
-//!   tiles into nearest leader positions.
-//! - [`leaf_kernel::LeafKernel`] scans each leaf's lower-triangular dot-product
-//!   matrix once and retains nearest non-self neighbors for both endpoints.
-//!
-//! Both handles are prepared once per build metric and reused across stripes or
-//! leaves. Each output view supplies call-specific fanout or neighbor width.
-//! Preparation selects the runtime architecture and returns a direct function
-//! pointer; repeated calls do not repeat ISA or metric dispatch.
-//!
-//! # Main modules and structures
-//!
-//! ## Public build API
-//!
-//! - [`PiPNNConfig`] holds Randomized Ball Carving, fanout, leaf size, local `k`,
-//!   and replication parameters.
-//! - [`PiPNNBuildContext`] validates that algorithm parameters, graph pruning
-//!   policy, metric, and caller-owned Rayon pool agree.
-//! - [`build_graph`] runs the full pipeline over a borrowed row-major dataset and
-//!   returns one dataset-ID adjacency list per input point.
-//!
-//! ## [`partition_kernel`]
-//!
-//! Partition callers compute point-by-leader dots with GEMM.
-//! [`partition_kernel::PartitionInput`] bundles that tile with typed
-//! [`partition_kernel::PartitionScales`]. A prepared
-//! [`partition_kernel::PartitionKernel`] writes sorted leader-local positions to
-//! caller-owned output. Fanout is the output column count and cannot exceed the
-//! leaders available for that partition call.
-//!
-//! ## [`leaf_kernel`]
-//!
-//! Leaf callers compute a lower-triangular point-by-point dot matrix with
-//! `sgemm_aat_lower`. [`leaf_kernel::LeafKernelWorkspace`] owns reusable
-//! per-worker scratch, and
-//! [`leaf_kernel::LeafKernel`] writes sorted [`leaf_kernel::LeafNeighbor`] values
-//! to caller-owned output. [`leaf_kernel::leaf_neighbor_count`] derives each
-//! leaf's width from point count and requested `k`. Module documentation explains
-//! fixed-width selection, `process_pairs`, and stable endpoint insertion.
-//!
-//! ## Private pipeline stages
-//!
-//! - `partitioning` recursively samples leaders, invokes the partition kernel,
-//!   scatters points into overlapping children, and returns bounded leaves.
-//! - `leaf_build` gathers each leaf, computes its Gram matrix, invokes the leaf
-//!   kernel, translates local positions to dataset IDs, and merges candidates.
-//! - `finalization` applies shared Vamana RobustPrune to overfull candidate lists.
-//! - `kernel_metric` owns norm preparation, exact ranking inputs, and numerical
-//!   edge cases. The graph build selects one concrete metric for both kernels.
-//!
-//! # Typical use
-//!
-//! 1. Construct [`PiPNNConfig`] and DiskANN graph [`Config`].
-//! 2. Create [`PiPNNBuildContext`] with metric and caller-owned Rayon pool.
-//! 3. Call [`build_graph`] with one row-major [`MatrixView`] of dataset vectors.
-//! 4. The outer index builder chooses start/frozen points and serializes returned
-//!    adjacency; those policies are intentionally not part of this crate.
-//!
-//! Stage outputs are owned values. Leaves move into candidate construction;
-//! candidate lists move into finalization. Ownership releases each stage's large
-//! scratch before the next outer allocation.
-//!
-//! # Ownership and performance boundary
-//!
-//! Kernels borrow all matrices and mutate only caller-owned output/scratch. They
-//! do not own providers, thread pools, GEMM buffers, graph IDs, or persistence.
-//! Partition traversal performs one score per point-leader pair; leaf traversal
-//! performs one score per unordered point pair. Detailed complexity and scratch
-//! costs are documented in each module. PiPNN itself never names instruction
-//! sets; `diskann-wide` owns architecture selection.
+//! The partition and leaf stages own disjoint reusable scratch. Stage outputs move
+//! forward (`leaves → candidates → adjacency`) so large temporary allocations can
+//! drop at their consumption boundary. Kernel modules document validation,
+//! numerical edge cases, tie order, scalar tails, and unchecked SIMD preconditions.
 
-<<<<<<< HEAD
-=======
 mod kernel_metric;
 mod simd;
 
->>>>>>> a73b9c25c (docs(pipnn): document core stage invariants)
 mod finalization;
 mod leaf_build;
 mod leaf_kernel;
-mod leaf_metric;
 mod partition_kernel;
-mod partition_metric;
 mod partitioning;
-mod simd;
 
 use crate::{
     ANNError, ANNResult,
@@ -156,129 +61,13 @@ use crate::{
 };
 use diskann_utils::views::MatrixView;
 use diskann_vector::distance::Metric;
+use diskann_wide::{
+    Architecture, SIMDMask, SIMDSelect, SIMDVector,
+    arch::{self, Target1},
+};
 use rayon::ThreadPool;
 
-pub(super) struct L2;
-pub(super) struct Cosine;
-pub(super) struct CosineNormalized;
-pub(super) struct InnerProduct;
-
-/// Convert one dot product and two norms to cosine distance.
-///
-/// Treat a zero or subnormal norm as zero similarity. This rule takes precedence
-/// over the dot value. Clamp finite similarity to the cosine range. Otherwise,
-/// a NaN input produces a NaN distance.
-#[inline(always)]
-fn cosine_distance(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
-    if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {
-        1.0
-    } else {
-        1.0 - (dot / (source_norm * target_norm)).clamp(-1.0, 1.0)
-    }
-}
-
-#[cfg(test)]
-mod cosine_distance_contract_tests {
-    use super::cosine_distance;
-    use rstest::rstest;
-
-    mod cosine_distance_tests {
-        use super::*;
-
-        #[test]
-        fn zero_norm_takes_precedence_over_a_nan_dot_product() {
-            // Given
-            let dot = f32::NAN;
-            let source_norm = 0.0_f32;
-            let target_norm = 1.0_f32;
-            let zero_similarity = 0.0_f32;
-            let expected = 1.0 - zero_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::zero_source(0.0, 1.0)]
-        #[case::zero_target(1.0, 0.0)]
-        #[case::subnormal_source(f32::MIN_POSITIVE.sqrt() / 2.0, 1.0)]
-        #[case::subnormal_target(1.0, f32::MIN_POSITIVE.sqrt() / 2.0)]
-        #[trace]
-        fn zero_or_subnormal_norm_produces_unit_distance(
-            #[case] source_norm: f32,
-            #[case] target_norm: f32,
-        ) {
-            // Given
-            let dot = 0.0_f32;
-            let zero_similarity = 0.0_f32;
-            let expected = 1.0 - zero_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn minimum_normal_norm_uses_normalized_similarity() {
-            // Given
-            let source_norm = f32::MIN_POSITIVE.sqrt();
-            let target_norm = 1.0_f32;
-            let expected_similarity = 0.5_f32;
-            let dot = expected_similarity * source_norm * target_norm;
-            let expected = 1.0 - expected_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::above_one(1.0)]
-        #[case::below_negative_one(-1.0)]
-        #[trace]
-        fn finite_similarity_outside_the_cosine_range_is_clamped(#[case] bounded_similarity: f32) {
-            // Given
-            let source_norm = 2.0_f32;
-            let target_norm = 2.0_f32;
-            let norm_product = source_norm * target_norm;
-            let rounding_excess = f32::EPSILON * norm_product;
-            let dot = bounded_similarity * (norm_product + rounding_excess);
-            let expected = 1.0 - bounded_similarity;
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::nan_dot(f32::NAN, 1.0, 1.0)]
-        #[case::nan_source_norm(0.0, f32::NAN, 1.0)]
-        #[case::nan_target_norm(0.0, 1.0, f32::NAN)]
-        #[trace]
-        fn nan_without_a_zero_norm_produces_nan_distance(
-            #[case] dot: f32,
-            #[case] source_norm: f32,
-            #[case] target_norm: f32,
-        ) {
-            // Given: the case supplies one NaN. The other values do not select the zero-norm rule.
-
-            // When
-            let actual = cosine_distance(dot, source_norm, target_norm);
-
-            // Then
-            assert!(actual.is_nan());
-        }
-    }
-}
+use self::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
 
 /// Configuration of PiPNN's partitioning and local-neighbor algorithm.
 ///
@@ -415,19 +204,76 @@ where
     // Integer source vectors are not guaranteed unit-normalized after conversion,
     // so their normalized-cosine request must use the norm-aware formula.
     let metric = effective_metric::<T>(context.metric);
+    arch::dispatch1_no_features(
+        RunBuildGraph,
+        BuildGraphCall {
+            data,
+            context,
+            metric,
+        },
+    )
+}
 
+struct BuildGraphCall<'data, 'context, 'policy, T> {
+    data: MatrixView<'data, T>,
+    context: &'context PiPNNBuildContext<'policy>,
+    metric: Metric,
+}
+
+struct RunBuildGraph;
+
+impl<A, T> Target1<A, ANNResult<Vec<AdjacencyList<u32>>>, BuildGraphCall<'_, '_, '_, T>>
+    for RunBuildGraph
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    T: VectorRepr + Send + Sync + 'static,
+{
+    fn run(
+        self,
+        arch: A,
+        call: BuildGraphCall<'_, '_, '_, T>,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
+        match call.metric {
+            Metric::L2 => build_graph_for::<A, L2, T>(arch, call.data, call.context),
+            Metric::Cosine => build_graph_for::<A, Cosine, T>(arch, call.data, call.context),
+            Metric::CosineNormalized => {
+                build_graph_for::<A, CosineNormalized, T>(arch, call.data, call.context)
+            }
+            Metric::InnerProduct => {
+                build_graph_for::<A, InnerProduct, T>(arch, call.data, call.context)
+            }
+        }
+    }
+}
+
+fn build_graph_for<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    context: &PiPNNBuildContext<'_>,
+) -> ANNResult<Vec<AdjacencyList<u32>>>
+where
+    A: Architecture,
+    A::f32x16: std::ops::Div<Output = A::f32x16>,
+    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    M: KernelMetric,
+    T: VectorRepr + Send + Sync + 'static,
+{
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition(data, &context.config, metric))?;
+        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
     // `leaves` is consumed here. Workers borrow individual ID lists during the
     // parallel pass, and the complete partition allocation drops on return.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates(data, leaves, context.config.k, metric)
+        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.k)
             .map_err(ANNError::new)
     })?;
     // Finalization consumes candidate lists and reuses their allocations for the
     // resulting adjacency where possible.
     tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, M::METRIC))
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {
