@@ -507,10 +507,10 @@ struct EdgeBuffers<'a> {
     cursor: &'a mut Vec<u32>,
 }
 
-/// Build deduplicated symmetric CSR edges from leaf-local neighbor rows.
+/// Create directed leaf edges for HashPrune ingestion.
 ///
-/// Each selected pair adds both directions. A repeated direction appears once.
-/// Targets remain leaf-local. The return value is the active length of `edges`.
+/// Each selected neighbor pair contributes both directions. Duplicate directions
+/// appear once. Each target is a position in `point_ids`.
 fn build_symmetric_edge_csr(
     leaf: usize,
     point_ids: &[u32],
