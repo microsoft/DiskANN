@@ -140,6 +140,11 @@ pub enum PartitionKernelError {
 ///
 /// `output.nrows()` must equal `input.dots.nrows()`. `output.ncols()` sets the
 /// fanout and must not exceed the leader count.
+///
+/// # Errors
+///
+/// Returns an error for an invalid shape, scale input, fanout, or allocation.
+/// It also returns an error when fewer than `fanout` scores are rankable.
 pub(crate) fn nearest_leaders<A, M>(
     arch: A,
     input: PartitionInput<'_>,
@@ -160,7 +165,7 @@ where
     }
 
     workspace.prepare(fanout)?;
-    process_points::<A::f32x16, M>(arch, input.dots, scales, output, &mut workspace.tracker)
+    select_point_leaders::<A::f32x16, M>(arch, input.dots, scales, output, &mut workspace.tracker)
 }
 
 /// Checked norm slices in the storage form that `M` requires.
@@ -289,7 +294,7 @@ fn check_length(
 ///
 /// `tracker.len()` must equal `output.ncols()`. The function resets the tracker
 /// for each point and returns an error if rankable scores do not fill it.
-fn process_points<F, M>(
+fn select_point_leaders<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
     scales: ScaleSlices<'_>,

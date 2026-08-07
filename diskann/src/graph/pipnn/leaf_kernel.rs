@@ -171,7 +171,7 @@ where
     output.as_mut_slice().fill(LeafNeighbor::default());
     workspace.worst.fill(f32::INFINITY);
 
-    process_neighbor_width::<A::f32x16, M>(
+    dispatch_neighbor_count::<A::f32x16, M>(
         arch,
         input,
         neighbor_count,
@@ -272,11 +272,11 @@ fn resize<T: Clone>(
     Ok(())
 }
 
-/// Select fixed-width storage for the validated neighbor count.
+/// Dispatch a runtime neighbor count to a fixed-width leaf scan.
 ///
-/// This match runs once for each leaf. `as_chunks_mut` converts the output once.
-/// Candidate insertion does not convert slices to arrays.
-fn process_neighbor_width<F, M>(
+/// Valid counts are one, two, and three. Any other count returns
+/// [`LeafKernelError::InvalidNeighborCount`].
+fn dispatch_neighbor_count<F, M>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     neighbor_count: usize,
@@ -291,9 +291,9 @@ where
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     match neighbor_count {
-        1 => process_fixed_width::<F, M, 1>(arch, input, output, norms, worst),
-        2 => process_fixed_width::<F, M, 2>(arch, input, output, norms, worst),
-        3 => process_fixed_width::<F, M, 3>(arch, input, output, norms, worst),
+        1 => run_neighbor_count::<F, M, 1>(arch, input, output, norms, worst),
+        2 => run_neighbor_count::<F, M, 2>(arch, input, output, norms, worst),
+        3 => run_neighbor_count::<F, M, 3>(arch, input, output, norms, worst),
         _ => {
             return Err(LeafKernelError::InvalidNeighborCount {
                 points: input.nrows(),
@@ -305,11 +305,11 @@ where
     Ok(())
 }
 
-/// Split the validated output into one fixed array for each source.
+/// Run leaf selection with compile-time neighbor count `N`.
 ///
-/// `N` is one, two, or three. The function performs one safe split for each
-/// leaf. It then starts the shared pair traversal.
-fn process_fixed_width<F, M, const N: usize>(
+/// The function views the flat output as one `[LeafNeighbor; N]` row per point.
+/// It then scans all point pairs.
+fn run_neighbor_count<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
@@ -322,27 +322,18 @@ fn process_fixed_width<F, M, const N: usize>(
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let (neighbor_lists, _) = output.as_chunks_mut::<N>();
-    process_pairs::<F, M, N>(arch, input, neighbor_lists, norms, worst);
+    scan_point_pairs::<F, M, N>(arch, input, neighbor_lists, norms, worst);
 }
 
-/// Scan the strict lower triangle and update both points of each pair.
+/// Select neighbors from all unordered point pairs in one leaf.
 ///
-/// Entry conditions:
+/// The function reads the strict lower triangle once. It offers each distance to
+/// both endpoint lists. SIMD groups and the scalar tail preserve pair scan order.
 ///
-/// - `input` is a square row-major matrix.
-/// - `output` has one sorted list for each point.
-/// - `worst[source]` equals the distance in the last output slot.
-/// - `norms` has one value per point when metric `M` requires norms.
-///
-/// Each SIMD chunk computes both eligibility masks before it changes output.
-/// Several lanes can update the current source. Each such lane checks the current
-/// threshold again. Each target lane updates a different earlier source.
-///
-/// The scalar tail uses the scalar formula for `M`. This keeps its specified
-/// rounding order. The function evaluates exactly `n(n - 1) / 2` pairs. It
-/// inserts accepted candidates in scan order.
+/// `input` must be square. `output` and `worst` must have one row per point.
+/// `norms` must have one value per point when metric `M` requires norms.
 #[inline(never)]
-fn process_pairs<F, M, const N: usize>(
+fn scan_point_pairs<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [[LeafNeighbor; N]],
