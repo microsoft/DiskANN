@@ -708,6 +708,18 @@ mod tests {
 
         assert_eq!(tracker[..], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
     }
+
+    #[test]
+    fn workspace_reuses_runtime_fanout_capacity() {
+        let mut workspace = PartitionKernelWorkspace::new();
+        workspace.prepare(32).unwrap();
+        let allocation = workspace.tracker.as_ptr();
+
+        workspace.prepare(3).unwrap();
+
+        assert_eq!(workspace.tracker.as_ptr(), allocation);
+        assert_eq!(workspace.tracker.len(), 3);
+    }
 }
 #[cfg(test)]
 #[allow(
@@ -882,7 +894,7 @@ mod integration_tests {
                     &point_scales,
                     &leader_scales,
                 );
-                for fanout in [1, 2, 16] {
+                for fanout in [1, 2, 16, 17, 32] {
                     if fanout >= leader_count {
                         continue;
                     }
