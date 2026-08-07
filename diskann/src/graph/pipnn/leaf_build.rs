@@ -28,8 +28,7 @@ use rayon::prelude::*;
 use super::{
     kernel_metric::KernelMetric,
     leaf_kernel::{
-        LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, leaf_output_len,
-        nearest_neighbors,
+        LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, nearest_neighbors,
     },
 };
 
@@ -112,7 +111,7 @@ impl LeafBuffers {
         point_count: usize,
         dimension_count: usize,
         requested_k: usize,
-    ) -> Result<usize, LeafBuildError> {
+    ) -> Result<(usize, usize), LeafBuildError> {
         let point_value_count =
             point_count
                 .checked_mul(dimension_count)
@@ -131,8 +130,17 @@ impl LeafBuffers {
                 })?;
         let leaf_k = leaf_neighbor_count(point_count, requested_k)
             .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
-        let neighbor_count = leaf_output_len(point_count, requested_k)
-            .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
+        let neighbor_count =
+            point_count
+                .checked_mul(leaf_k)
+                .ok_or_else(|| LeafBuildError::Kernel {
+                    leaf,
+                    source: LeafKernelError::ShapeOverflow {
+                        buffer: "output",
+                        rows: point_count,
+                        cols: leaf_k,
+                    },
+                })?;
 
         grow(
             "leaf point values",
@@ -147,7 +155,7 @@ impl LeafBuffers {
             neighbor_count,
             LeafNeighbor::default(),
         )?;
-        Ok(leaf_k)
+        Ok((leaf_k, neighbor_count))
     }
 
     fn prepare_local_adjacency(&mut self, point_count: usize) -> Result<(), LeafBuildError> {
@@ -301,15 +309,14 @@ where
         }
         return Err(LeafBuildError::UnsortedPointIds { leaf });
     }
-    let leaf_k = buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
+    let (leaf_k, neighbor_value_count) =
+        buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
     if leaf_k == 0 {
         return Ok(());
     }
 
     let point_value_count = point_ids.len() * data.ncols();
     let dot_count = point_ids.len() * point_ids.len();
-    let neighbor_value_count = leaf_output_len(point_ids.len(), requested_k)
-        .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
 
     for (&point, point_output) in point_ids
         .iter()
