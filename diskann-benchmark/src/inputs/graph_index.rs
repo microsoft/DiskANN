@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::num::{NonZero, NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
@@ -680,6 +680,48 @@ pub(crate) struct IndexBuild {
     num_threads: usize,
     multi_insert: Option<MultiInsert>,
     save_path: Option<String>,
+    #[cfg(feature = "pipnn")]
+    #[serde(default)]
+    build_algorithm: diskann_disk::BuildAlgorithm,
+    #[cfg(not(feature = "pipnn"))]
+    #[serde(default)]
+    build_algorithm: Option<serde_json::Value>,
+}
+
+#[cfg(feature = "pipnn")]
+fn validate_dynamic_build_algorithm(
+    build_algorithm: &diskann_disk::BuildAlgorithm,
+) -> Result<(), anyhow::Error> {
+    match build_algorithm {
+        diskann_disk::BuildAlgorithm::Vamana => Ok(()),
+        diskann_disk::BuildAlgorithm::PiPNN(_) => Err(anyhow!(
+            "PiPNN is a batch builder and is not supported by graph-index-dynamic-run"
+        )),
+        _ => Err(anyhow!(
+            "the selected graph build algorithm is not supported by graph-index-dynamic-run"
+        )),
+    }
+}
+
+#[cfg(not(feature = "pipnn"))]
+fn validate_disabled_build_algorithm(
+    build_algorithm: Option<&serde_json::Value>,
+) -> Result<(), anyhow::Error> {
+    let Some(build_algorithm) = build_algorithm else {
+        return Ok(());
+    };
+    let algorithm = build_algorithm
+        .as_object()
+        .and_then(|object| object.get("algorithm"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("build_algorithm must be an object containing an algorithm tag"))?;
+    match algorithm {
+        "Vamana" => Ok(()),
+        "PiPNN" => Err(anyhow!(
+            "PiPNN graph construction requires the `pipnn` feature"
+        )),
+        other => Err(anyhow!("unrecognized graph build algorithm `{other}`")),
+    }
 }
 
 impl IndexBuild {
@@ -745,9 +787,12 @@ impl IndexBuild {
         num_points: usize,
         dim: usize,
     ) -> DefaultProviderParameters {
+        let frozen_points =
+            NonZeroUsize::new(self.start_point_strategy.count()).unwrap_or(NonZeroUsize::MIN);
+
         DefaultProviderParameters {
             max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
+            frozen_points,
             metric: self.distance.into(),
             dim,
             max_degree: self.exact_max_degree() as u32,
@@ -782,6 +827,9 @@ impl IndexBuild {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        #[cfg(not(feature = "pipnn"))]
+        validate_disabled_build_algorithm(self.build_algorithm.as_ref())?;
+
         self.data.resolve(checker)?;
 
         // We allow overwriting of already existing save paths, since users like to do this
@@ -813,7 +861,11 @@ impl IndexBuild {
         self.num_threads
     }
 
-    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    #[cfg(any(
+        feature = "spherical-quantization",
+        feature = "bftree",
+        feature = "pipnn"
+    ))]
     pub(crate) fn distance(&self) -> SimilarityMeasure {
         self.distance
     }
@@ -833,6 +885,11 @@ impl IndexBuild {
     pub(crate) fn save_path(&self) -> Option<&str> {
         self.save_path.as_deref()
     }
+
+    #[cfg(feature = "pipnn")]
+    pub(crate) fn build_algorithm(&self) -> &diskann_disk::BuildAlgorithm {
+        &self.build_algorithm
+    }
 }
 
 impl Example for IndexBuild {
@@ -850,6 +907,10 @@ impl Example for IndexBuild {
             insert_retry: None,
             start_point_strategy: StartPointStrategy::Medoid,
             save_path: None,
+            #[cfg(feature = "pipnn")]
+            build_algorithm: diskann_disk::BuildAlgorithm::Vamana,
+            #[cfg(not(feature = "pipnn"))]
+            build_algorithm: None,
         }
     }
 }
@@ -866,6 +927,10 @@ impl std::fmt::Display for IndexBuild {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "index-source")] // Use tagged enums for JSON
+#[allow(
+    clippy::large_enum_variant,
+    reason = "build configuration is parsed once; boxing would add indirection to every source access"
+)]
 pub enum IndexSource {
     Load(IndexLoad),
     Build(IndexBuild),
@@ -1393,6 +1458,9 @@ impl DynamicIndexRun {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        #[cfg(feature = "pipnn")]
+        validate_dynamic_build_algorithm(self.build.build_algorithm())?;
+
         self.build.validate(checker)?;
         self.runbook_params.validate(checker)?;
         self.search_phase.validate(checker)?;
@@ -1438,5 +1506,40 @@ impl std::fmt::Display for DynamicIndexRun {
         self.build.summarize_fields(f)?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "pipnn"))]
+mod dynamic_pipnn_tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_run_rejects_the_batch_only_pipnn_algorithm() {
+        let error = validate_dynamic_build_algorithm(&diskann_disk::BuildAlgorithm::PiPNN(
+            diskann_disk::PiPNNParameters::default(),
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("not supported"));
+        validate_dynamic_build_algorithm(&diskann_disk::BuildAlgorithm::Vamana).unwrap();
+    }
+}
+
+#[cfg(all(test, not(feature = "pipnn")))]
+mod disabled_pipnn_tests {
+    use super::*;
+
+    #[test]
+    fn pipnn_request_fails_closed_without_the_feature() {
+        let pipnn = serde_json::json!({
+            "algorithm": "PiPNN",
+            "c_max": 512,
+            "fanout": [8, 3]
+        });
+        let error = validate_disabled_build_algorithm(Some(&pipnn)).unwrap_err();
+        assert!(error.to_string().contains("requires the `pipnn` feature"));
+
+        let vamana = serde_json::json!({ "algorithm": "Vamana" });
+        validate_disabled_build_algorithm(Some(&vamana)).unwrap();
+        validate_disabled_build_algorithm(None).unwrap();
     }
 }

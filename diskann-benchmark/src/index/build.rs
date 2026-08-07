@@ -20,10 +20,17 @@ use diskann_providers::{
     model::{configuration::IndexConfiguration, graph::provider::async_::inmem::SetStartPoints},
     storage::{AsyncIndexMetadata, LoadWith, SaveWith},
 };
+#[cfg(feature = "pipnn")]
+use diskann_providers::{
+    index::diskann_async,
+    model::graph::provider::async_::common::{self, SetElementHelper},
+};
 use diskann_utils::{
     future::AsyncFriendly,
     views::{Matrix, MatrixView},
 };
+#[cfg(feature = "pipnn")]
+use diskann_vector::DistanceFunction;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
@@ -105,6 +112,124 @@ where
     }
 }
 
+#[cfg(feature = "pipnn")]
+/// Build a PiPNN graph and install it in a searchable provider.
+///
+/// PiPNN completes its graph before provider creation. The function also computes
+/// start vectors and their source IDs. It then installs vectors, edges, and start
+/// slots in a new `MemoryIndex`.
+///
+/// `BuildStats` includes graph construction and provider installation. It does
+/// not include provider allocation.
+pub(crate) fn pipnn_build<T>(
+    data: Arc<Matrix<T>>,
+    input: &IndexBuild,
+    parameters: &diskann_disk::PiPNNParameters,
+) -> anyhow::Result<(diskann_async::MemoryIndex<T>, BuildStats)>
+where
+    T: diskann::graph::SampleableForStart + diskann::utils::VectorRepr,
+{
+    use anyhow::Context;
+
+    let npoints = data.nrows();
+    let dimensions = data.ncols();
+    let metric = input.distance().into();
+    let graph = input.try_as_config()?.build()?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(input.num_threads())
+        .build()
+        .context("failed to create PiPNN build thread pool")?;
+
+    let started = std::time::Instant::now();
+    let adjacency = {
+        let context = diskann::graph::pipnn::PiPNNBuildContext::new(
+            parameters.into(),
+            &graph,
+            metric,
+            &pool,
+        )?;
+        diskann::graph::pipnn::build_graph(data.as_view(), &context)?
+    };
+    let start_points = input
+        .start_point_strategy()
+        .compute(data.as_view())
+        .map_err(ANNError::new)?;
+    let distance = T::distance(metric, Some(dimensions));
+    // Start vectors use frozen IDs outside the real point-ID range. Connect each
+    // frozen ID to its source row. For a synthetic start vector, connect it to
+    // the nearest real row. `total_cmp` gives a deterministic total order.
+    let start_sources = start_points
+        .row_iter()
+        .map(|start| {
+            let bytes: &[u8] = bytemuck::cast_slice(start);
+            data.row_iter()
+                .position(|row| bytemuck::cast_slice::<T, u8>(row) == bytes)
+                .or_else(|| {
+                    data.row_iter()
+                        .enumerate()
+                        .min_by(|(_, left), (_, right)| {
+                            distance
+                                .evaluate_similarity(start, left)
+                                .total_cmp(&distance.evaluate_similarity(start, right))
+                        })
+                        .map(|(index, _)| index)
+                })
+                .context("PiPNN cannot connect a start point to an empty dataset")
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    // A frozen slot stores the selected source vector. Its adjacency must equal
+    // that source row. Adding the source ID removes one graph edge because the
+    // row has a fixed degree.
+    let start_neighbors: Vec<_> = start_sources
+        .into_iter()
+        .map(|source| adjacency[source].clone())
+        .collect();
+    let batch_elapsed = started.elapsed();
+
+    let index = diskann_async::new_index::<T, _>(
+        graph,
+        input.inmem_parameters(npoints, dimensions),
+        common::NoDeletes,
+    )?;
+    // `BuildStats` excludes provider allocation and includes provider installation.
+    let install_started = std::time::Instant::now();
+    // Install vectors before edges. A returned index must contain a vector for
+    // every graph ID.
+    for (id, vector) in data.row_iter().enumerate() {
+        let id = u32::try_from(id).context("PiPNN point ID exceeds u32::MAX")?;
+        index.data_provider.base_vectors.set_element(&id, vector)?;
+    }
+    for (id, neighbors) in adjacency.into_iter().enumerate() {
+        index
+            .provider()
+            .neighbors()
+            .set_neighbors_sync(id, &neighbors)?;
+    }
+    index.provider().set_start_points(start_points.row_iter())?;
+    let start_ids = index.provider().starting_points()?;
+    anyhow::ensure!(
+        start_ids.len() == start_neighbors.len(),
+        "PiPNN provider created {} start slots for {} start vectors",
+        start_ids.len(),
+        start_neighbors.len()
+    );
+    for (start_id, neighbors) in start_ids.into_iter().zip(&start_neighbors) {
+        index
+            .provider()
+            .neighbors()
+            .set_neighbors_sync(start_id as usize, neighbors)?;
+    }
+
+    let total_time = MicroSeconds::from(batch_elapsed + install_started.elapsed());
+    let stats = BuildStats {
+        kind: BuildKind::PiPNN,
+        total_time,
+        vectors_inserted: npoints,
+        insert_latencies: None,
+    };
+    Ok((index, stats))
+}
+
 #[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]
 pub(crate) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
@@ -153,6 +278,8 @@ where
 pub(crate) enum BuildKind {
     SingleInsert,
     MultiInsert,
+    #[cfg(feature = "pipnn")]
+    PiPNN,
 }
 
 impl std::fmt::Display for BuildKind {
@@ -160,6 +287,8 @@ impl std::fmt::Display for BuildKind {
         match self {
             Self::SingleInsert => write!(f, "single insert"),
             Self::MultiInsert => write!(f, "multi insert"),
+            #[cfg(feature = "pipnn")]
+            Self::PiPNN => write!(f, "PiPNN"),
         }
     }
 }
@@ -169,7 +298,8 @@ pub(crate) struct BuildStats {
     pub(crate) kind: BuildKind,
     pub(crate) total_time: MicroSeconds,
     pub(crate) vectors_inserted: usize,
-    pub(crate) insert_latencies: percentiles::Percentiles<MicroSeconds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) insert_latencies: Option<percentiles::Percentiles<MicroSeconds>>,
 }
 
 impl BuildStats {
@@ -190,7 +320,7 @@ impl BuildStats {
             kind,
             total_time,
             vectors_inserted,
-            insert_latencies: percentiles::compute_percentiles(&mut latencies)?,
+            insert_latencies: Some(percentiles::compute_percentiles(&mut latencies)?),
         })
     }
 }
@@ -200,11 +330,15 @@ impl std::fmt::Display for BuildStats {
         writeln!(f, "Index Build Time: {}s", self.total_time.as_seconds())?;
         writeln!(f, "Vectors Inserted: {}", self.vectors_inserted)?;
         writeln!(f, "Kind: {}", self.kind)?;
-        write!(
-            f,
-            "Insert Latencies:\n  average: {}us\n      p90: {}\n      p99: {}\n\n",
-            self.insert_latencies.mean, self.insert_latencies.p90, self.insert_latencies.p99,
-        )
+        if let Some(latencies) = &self.insert_latencies {
+            write!(
+                f,
+                "Insert Latencies:\n  average: {}us\n      p90: {}\n      p99: {}\n\n",
+                latencies.mean, latencies.p90, latencies.p99,
+            )
+        } else {
+            writeln!(f, "Insert Latencies: not measured for batch construction\n")
+        }
     }
 }
 
@@ -284,4 +418,73 @@ where
     .await?;
 
     Ok(index)
+}
+
+#[cfg(all(test, feature = "pipnn"))]
+mod pipnn_tests {
+    use super::*;
+    use diskann::graph::AdjacencyList;
+
+    #[test]
+    fn dedicated_pipeline_respects_the_requested_start_strategy() {
+        let input: IndexBuild = serde_json::from_value(serde_json::json!({
+            "data_type": "float32",
+            "data": "unused.fbin",
+            "distance": "squared_l2",
+            "max_degree": 4,
+            "l_build": 8,
+            "start_point_strategy": "first_vector",
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 2,
+            "multi_insert": null,
+            "save_path": null,
+            "build_algorithm": {
+                "algorithm": "PiPNN",
+                "c_max": 8,
+                "c_min": 2,
+                "p_samp": 0.5,
+                "fanout": [2],
+                "k": 2,
+                "replicas": 1
+            }
+        }))
+        .unwrap();
+        let diskann_disk::BuildAlgorithm::PiPNN(parameters) = input.build_algorithm() else {
+            panic!("expected PiPNN parameters");
+        };
+        let mut data = Matrix::new(0.0_f32, 16, 2);
+        for (index, row) in data.row_iter_mut().enumerate() {
+            row.copy_from_slice(&[index as f32, (index % 3) as f32]);
+        }
+
+        let (index, stats) = pipnn_build(Arc::new(data), &input, parameters).unwrap();
+        assert_eq!(stats.vectors_inserted, 16);
+        assert!(stats.insert_latencies.is_none());
+        let starts = index.provider().starting_points().unwrap();
+        assert_eq!(starts.len(), 1);
+        // SAFETY: `starting_points` returns installed frozen IDs. Therefore,
+        // `starts[0] < base_vectors.total()`. The completed build has no vector
+        // writer, so the returned shared slice has no mutable alias.
+        let start = unsafe {
+            index
+                .data_provider
+                .base_vectors
+                .get_vector_sync(starts[0] as usize)
+        };
+        assert_eq!(start, [0.0, 0.0]);
+        let mut neighbors = AdjacencyList::new();
+        index
+            .provider()
+            .neighbors()
+            .get_neighbors_sync(starts[0] as usize, &mut neighbors)
+            .unwrap();
+        let mut source_neighbors = AdjacencyList::new();
+        index
+            .provider()
+            .neighbors()
+            .get_neighbors_sync(0, &mut source_neighbors)
+            .unwrap();
+        assert_eq!(neighbors, source_neighbors);
+    }
 }

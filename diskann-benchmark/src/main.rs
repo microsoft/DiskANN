@@ -264,7 +264,7 @@ mod tests {
         }
     }
 
-    fn run_integration_test(mut raw: serde_json::Value) {
+    fn run_integration_test(mut raw: serde_json::Value) -> Vec<Value> {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         // let mut raw = serde_json::from_str(json_string).unwrap();
@@ -299,6 +299,7 @@ mod tests {
 
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+        results
     }
 
     ////////////////////////////////
@@ -307,6 +308,29 @@ mod tests {
     #[test]
     fn graph_index_integration() {
         let raw = value_from_file(&example_directory().join("graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "pipnn")]
+    fn pipnn_graph_index_integration() {
+        let raw = value_from_file(&example_directory().join("pipnn-graph-index.json"));
+        let results = run_integration_test(raw);
+        let result = &results[0]["results"];
+        assert_eq!(result["build"]["kind"], "PiPNN");
+        assert_eq!(result["build"]["vectors_inserted"], 256);
+        assert_eq!(result["search"]["Topk"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    #[cfg(all(feature = "disk-index", feature = "pipnn"))]
+    fn pipnn_disk_index_integration() {
+        let mut raw = value_from_file(&example_directory().join("pipnn-disk-index.json"));
+        let directory = tempfile::tempdir().unwrap();
+        let save_path = directory.path().join("pipnn_disk_index");
+        *raw.pointer_mut("/jobs/0/content/source/save_path")
+            .expect("PiPNN disk example must declare save_path") =
+            Value::String(save_path.to_string_lossy().into_owned());
         run_integration_test(raw);
     }
 
