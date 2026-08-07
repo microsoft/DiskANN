@@ -3,63 +3,21 @@
  * Licensed under the MIT license.
  */
 
-//! Metric marker types shared by the partition and leaf kernels.
+//! Metric formulas shared by PiPNN partition and leaf kernels.
 //!
-//! PiPNN uses dense matrix multiplication to produce dot products in two places:
-//! partitioning compares dataset points with sampled leaders, while leaf building
-//! compares every pair of points inside one small group. A dot product alone is
-//! not always the requested distance. Squared L2 also needs squared norms;
-//! unnormalized cosine needs norms; normalized cosine and inner product do not.
-//! This module defines that conversion once so both kernels rank candidates with
-//! identical scale units, zero handling, NaN handling, and scalar/SIMD formulas.
+//! Runtime [`Metric`] selection happens once while preparing a dispatched
+//! kernel. Zero-sized marker types then monomorphize scalar and SIMD formulas,
+//! so hot loops contain neither metric matches nor trait objects.
 //!
-//! [`KernelMetric`] is private because callers choose public [`Metric`] values,
-//! not formula implementations. [`ScaleKind`] records what auxiliary value a
-//! formula consumes. Zero-sized markers ([`L2`], [`Cosine`],
-//! [`CosineNormalized`], [`InnerProduct`]) let dispatch compile one concrete
-//! formula into each prepared kernel. [`MetricVisitor`] and [`visit_metric`]
-//! perform the one-time runtime-to-concrete conversion.
+//! All formulas produce ascending scores. L2 uses squared norms; unnormalized
+//! cosine uses norms with zero/subnormal inputs mapped to zero similarity;
+//! normalized cosine and inner product need no scales. Ordered comparisons leave
+//! NaN non-rankable. The L2 partition scalar tail deliberately keeps its
+//! non-fused operation order because rounding can change leader ties.
 //!
-//! Runtime metric selection happens only while preparing a dispatched kernel.
-//! The hot loops receive a concrete marker type, allowing metric arithmetic and
-//! scale handling to inline without a per-point or per-chunk enum match.
-//!
-//! Every helper converts an already-computed dot product into an
-//! ascending-order score:
-//!
-//! | Metric | Leaf distance for source `s`, target `t` | Partition score for point `p`, leader `l` | Scale storage |
-//! | --- | --- | --- | --- |
-//! | squared L2 | `max(0, ‖s‖² + ‖t‖² - 2(s·t))` | `‖l‖² - 2(p·l)` | squared norms |
-//! | cosine | `max(0, 1 - (s·t)/(‖s‖‖t‖))` | `1 - (p·l)/(‖p‖‖l‖)` | squared source/point norms; leader norms |
-//! | normalized cosine | `max(0, 1 - s·t)` | `1 - p·l` | none |
-//! | inner product | `-(s·t)` | `-(p·l)` | none |
-//!
-//! L2 partition ranking omits `‖p‖²`: that term is constant across all leaders
-//! considered for one point and cannot change their order.
-//!
-//! # Core flow
-//!
-//! 1. [`visit_metric`] maps runtime [`Metric`] to a zero-sized marker.
-//! 2. Leaf or partition preparation combines that marker with selected CPU
-//!    architecture.
-//! 3. Final function pointer is monomorphized over both choices.
-//! 4. SIMD bulk and scalar-tail calls share this module's metric contract.
-//!
-//! # Numerical behavior
-//!
-//! Squared norms below [`f32::MIN_POSITIVE`], and norms below
-//! `sqrt(f32::MIN_POSITIVE)`, are treated as zero before cosine division. A
-//! zero-threshold endpoint forces zero similarity and distance `1.0`, even when
-//! the other endpoint or dot is NaN. Otherwise NaN remains NaN, allowing strict
-//! top-k comparisons to reject it. L2 scalar partition tails retain historical
-//! non-fused operation order because rounding can change leader assignment at
-//! near ties.
-//!
-//! # Performance
-//!
-//! Metric selection costs one match per prepared kernel, not per point or SIMD
-//! chunk. Associated [`ScaleKind`] constants remove unused scale loads after
-//! monomorphization. Distance helpers are constant-time and allocation-free.
+//! [`ScaleKind`] records required scale representation. [`KernelMetric`] owns
+//! leaf and partition formulas. [`MetricVisitor`] performs runtime-to-marker
+//! conversion before the final architecture-specific function pointer is stored.
 
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
