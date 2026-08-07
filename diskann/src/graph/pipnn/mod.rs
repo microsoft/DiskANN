@@ -5,45 +5,41 @@
 
 //! Provider-independent [PiPNN](https://arxiv.org/html/2602.21247v1) graph construction.
 //!
-//! PiPNN builds graph candidates in bulk instead of searching a partially built
-//! graph for every insertion:
+//! PiPNN builds graph candidates in three steps:
 //!
-//! 1. `partitioning` recursively samples leaders and assigns each point to its
-//!    nearest configured fanout, producing overlapping leaves bounded by `c_max`.
-//! 2. `leaf_build` gathers each leaf, computes the lower triangle of `A · Aᵀ`,
-//!    selects up to three local neighbors per point, and merges symmetric global
-//!    candidate IDs across overlapping leaves.
-//! 3. `finalization` applies the shared Vamana RobustPrune policy only to
-//!    candidate lists that exceed the configured graph degree.
+//! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
+//!    at most `c_max` points.
+//! 2. `leaf_build` computes a lower-triangular Gram matrix for each leaf. It
+//!    selects local neighbors and merges their global point IDs.
+//! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
+//!    longer than the graph degree.
 //!
 //! ```text
 //! build_graph<T>
 //!   └─ caller Rayon pool
-//!      └─ architecture dispatch + metric match                 once per build
+//!      └─ select architecture A and metric M                    once
 //!         └─ build_graph_for<A, M, T>
 //!            ├─ partitioning::partition<A, M, T>
-//!            │  └─ partition_kernel::nearest_leaders<A, M>     every stripe
+//!            │  └─ partition_kernel::nearest_leaders<A, M>     per stripe
 //!            ├─ leaf_build::build_leaf_candidates<A, M, T>
-//!            │  └─ leaf_kernel::nearest_neighbors<A, M>        every leaf
+//!            │  └─ leaf_kernel::nearest_neighbors<A, M>        per leaf
 //!            └─ finalization::prune_overfull
 //! ```
 //!
-//! `diskann-wide` selects concrete architecture `A`; one four-way match selects
-//! concrete metric marker `M`. Both types are then carried through every replica,
-//! recursive partition, Rayon job, stripe, and leaf. Numerical kernels therefore
-//! contain no runtime metric match, visitor, trait object, stored function pointer,
-//! or repeated ISA dispatch.
+//! `diskann-wide` selects architecture `A`. One match selects metric marker `M`.
+//! The build passes both concrete types through all replicas, recursive
+//! partitions, stripes, and leaves. The numerical loops do not dispatch again.
 //!
-//! [`PiPNNConfig`] owns only partition and local-neighbor parameters.
-//! [`PiPNNBuildContext`] borrows DiskANN graph policy and the caller-owned Rayon
-//! pool. [`build_graph`] borrows a contiguous [`MatrixView`] and returns one
-//! dataset-ID adjacency list per real point. Providers, start/frozen points,
-//! quantization, persistence, and search remain outside this module.
+//! [`PiPNNConfig`] contains partition and local-neighbor parameters.
+//! [`PiPNNBuildContext`] borrows graph policy and a Rayon pool. [`build_graph`]
+//! borrows one contiguous [`MatrixView`]. It returns one adjacency list for each
+//! input point.
 //!
-//! The partition and leaf stages own disjoint reusable scratch. Stage outputs move
-//! forward (`leaves → candidates → adjacency`) so large temporary allocations can
-//! drop at their consumption boundary. Kernel modules document validation,
-//! numerical edge cases, tie order, scalar tails, and unchecked SIMD preconditions.
+//! The function does not load providers or select start and frozen points. It
+//! also does not quantize, serialize, or search the graph.
+//!
+//! Partition and leaf work use separate reusable buffers. The build consumes
+//! each stage output before it creates the next graph representation.
 
 mod kernel_metric;
 mod simd;
@@ -69,10 +65,10 @@ use rayon::ThreadPool;
 
 use self::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
 
-/// Configuration of PiPNN's partitioning and local-neighbor algorithm.
+/// Configuration for PiPNN partitioning and local-neighbor selection.
 ///
-/// Graph degree, pruning policy, and alpha belong to DiskANN's graph
-/// configuration and are supplied separately through [`PiPNNBuildContext`].
+/// [`PiPNNBuildContext`] supplies graph degree, prune policy, alpha, metric, and
+/// the Rayon pool.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PiPNNConfig {
     /// Maximum number of points in a leaf.
@@ -130,7 +126,7 @@ impl PiPNNConfig {
     }
 }
 
-/// Validated, borrowed policy and execution context for one PiPNN graph build.
+/// Checked policy and execution inputs for one PiPNN graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
     pub(crate) config: PiPNNConfig,
@@ -140,7 +136,7 @@ pub struct PiPNNBuildContext<'a> {
 }
 
 impl<'a> PiPNNBuildContext<'a> {
-    /// Validate and combine PiPNN configuration with outer graph policy.
+    /// Check and combine PiPNN configuration with DiskANN graph policy.
     pub fn new(
         config: PiPNNConfig,
         graph: &'a Config,
@@ -164,12 +160,14 @@ impl<'a> PiPNNBuildContext<'a> {
     }
 }
 
-/// Build PiPNN adjacency for real points in `data`.
+/// Build PiPNN adjacency for all points in `data`.
 ///
-/// This is the core algorithm boundary. Search entry-point selection, frozen nodes,
-/// providers, serialization, and index writers belong to the outer build pipelines.
-/// For raw `u8` and `i8` vectors, `CosineNormalized` is evaluated as `Cosine` because
-/// those representations are converted to f32 scratch but are not unit-normalized.
+/// The function does not select start or frozen points. It does not load a
+/// provider or write an index.
+///
+/// Raw `u8` and `i8` vectors are not unit-normalized after conversion to `f32`.
+/// Therefore, the function evaluates `CosineNormalized` as `Cosine` for these
+/// two input types.
 pub fn build_graph<T>(
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
@@ -201,8 +199,8 @@ where
             data.nrows()
         )));
     }
-    // Integer source vectors are not guaranteed unit-normalized after conversion,
-    // so their normalized-cosine request must use the norm-aware formula.
+    // Conversion does not make integer vectors unit length. Use the norm-aware
+    // cosine formula for these vectors.
     let metric = effective_metric::<T>(context.metric);
     arch::dispatch1_no_features(
         RunBuildGraph,
@@ -264,14 +262,14 @@ where
 {
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
-    // `leaves` is consumed here. Workers borrow individual ID lists during the
-    // parallel pass, and the complete partition allocation drops on return.
+    // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
+    // so its complete allocation drops when leaf construction returns.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
         leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.k)
             .map_err(ANNError::new)
     })?;
-    // Finalization consumes candidate lists and reuses their allocations for the
-    // resulting adjacency where possible.
+    // Finalization consumes each candidate list. It reuses that list's allocation
+    // for the final adjacency when the graph policy permits it.
     tracing::info_span!("pipnn.finalization")
         .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, M::METRIC))
 }
