@@ -414,6 +414,7 @@ pub(crate) enum SearchPhase {
     TopkMultihopLiveFilterAuto(MultihopFilterSearchPhase),
     TopkMultihopLiveFilterBitslice(MultihopFilterSearchPhase),
     TopkMultihopLiveFilterBitsliceDnf(MultihopFilterSearchPhase),
+    TopkInlineLiveFilterBitsliceDnf(InlineFilterSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
@@ -451,6 +452,9 @@ impl SearchPhase {
             }
             Self::TopkMultihopLiveFilterBitsliceDnf(_) => {
                 SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf
+            }
+            Self::TopkInlineLiveFilterBitsliceDnf(_) => {
+                SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf
             }
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
             Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
@@ -583,6 +587,18 @@ impl SearchPhase {
         }
     }
 
+    pub(crate) fn as_topk_inline_live_filter_bitslice_dnf(
+        &self,
+    ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkInlineLiveFilterBitsliceDnf(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf,
+                self.kind(),
+            )),
+        }
+    }
+
     pub(crate) fn as_topk_determinant_diversity(
         &self,
     ) -> Result<&TopkDeterminantDiversityPhase, WrongSearchPhaseKind> {
@@ -609,6 +625,7 @@ impl SearchPhase {
             SearchPhase::TopkMultihopLiveFilterAuto(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterBitslice(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterBitsliceDnf(phase) => phase.validate(checker),
+            SearchPhase::TopkInlineLiveFilterBitsliceDnf(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
             SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
@@ -627,6 +644,7 @@ pub(crate) enum SearchPhaseKind {
     TopkMultihopLiveFilterAuto,
     TopkMultihopLiveFilterBitslice,
     TopkMultihopLiveFilterBitsliceDnf,
+    TopkInlineLiveFilterBitsliceDnf,
     TopkInlineFilter,
     TopkDeterminantDiversity,
 }
@@ -644,6 +662,7 @@ impl SearchPhaseKind {
             Self::TopkMultihopLiveFilterAuto => "topk-multihop-live-filter-auto",
             Self::TopkMultihopLiveFilterBitslice => "topk-multihop-live-filter-bitslice",
             Self::TopkMultihopLiveFilterBitsliceDnf => "topk-multihop-live-filter-bitslice-dnf",
+            Self::TopkInlineLiveFilterBitsliceDnf => "topk-inline-live-filter-bitslice-dnf",
             Self::TopkInlineFilter => "topk-inline-filter",
             Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }

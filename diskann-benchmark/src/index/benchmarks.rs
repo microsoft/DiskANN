@@ -84,6 +84,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::TopkMultihopLiveFilterAuto)
             .search(plugins::TopkMultihopLiveFilterBitslice)
             .search(plugins::TopkMultihopLiveFilterBitsliceDnf)
+            .search(plugins::TopkInlineLiveFilterBitsliceDnf)
             .search(plugins::TopkInlineFilter)
             .search(plugins::DeterminantDiversity),
     )?;
@@ -1084,6 +1085,72 @@ where
         )?;
 
         let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//---------------------------------//
+// InlineFilter (Bitslice DNF)      //
+//---------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>>
+    for plugins::TopkInlineLiveFilterBitsliceDnf
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let inline = phase.as_topk_inline_live_filter_bitslice_dnf()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&inline.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            inline.reps,
+            &inline.num_threads,
+            &inline.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_bitslice(&inline.data_labels)?;
+        let providers = utils::filters::make_live_providers_bitslice_dnf(
+            &attribute_index,
+            &inline.query_predicates,
+        )?;
+
+        let inline = benchmark_core::search::graph::InlineFilterSearch::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+            inline.adaptive_l()?,
+        )?;
+
+        let result = search::knn::run(&inline, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
     }
 }
