@@ -235,6 +235,10 @@ where
     }
 }
 
+/// Build the graph with concrete architecture `A` and metric `M`.
+///
+/// The function partitions the dataset, builds direct candidates, and applies
+/// final graph-degree pruning.
 fn build_graph_for<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
