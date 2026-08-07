@@ -275,8 +275,6 @@ fn validate<'a, M: KernelMetric>(
 }
 
 /// Return the required norm-slice length for one concrete metric.
-///
-/// The compiler removes this choice from the metric loop.
 const fn expected_scale_len(kind: ScaleKind, count: usize) -> usize {
     if kind.is_some() { count } else { 0 }
 }
@@ -309,9 +307,8 @@ fn check_length(
 /// `tracker` has `fanout` entries and stays sorted after each insertion. Strict
 /// comparisons keep leader scan order for equal scores. They do not rank NaN.
 ///
-/// The function computes `p * l` scores. One insertion can move `O(fanout)`
-/// entries. The caller allocates the runtime-sized tracker once and reuses it for
-/// all point rows.
+/// The caller allocates the runtime-sized tracker once and reuses it for all
+/// point rows.
 fn process_points<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
@@ -353,8 +350,8 @@ fn process_points<F, M>(
         .enumerate()
     {
         tracker.fill((u32::MAX, f32::INFINITY));
-        // Convert the point norm once for this row. The compiler removes this
-        // branch and load from metrics that do not use a point norm.
+        // Convert the point norm once for this row. Metrics without a point norm
+        // use zero.
         let point_scale = if M::PARTITION_POINT_SCALE.is_some() {
             M::PARTITION_POINT_SCALE.transform(scales.point_scales[point])
         } else {
@@ -408,8 +405,7 @@ fn process_points<F, M>(
 /// Bit iteration proceeds from low lane to high lane. This order matches scalar
 /// tie behavior for all SIMD widths.
 ///
-/// `distances` starts at `first_leader`. `tracker` is sorted. Each accepted lane
-/// can move `O(fanout)` entries.
+/// `distances` starts at `first_leader`. `tracker` is sorted.
 fn insert_leader_lanes<F>(distances: F, first_leader: usize, tracker: &mut [(u32, f32)])
 where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
