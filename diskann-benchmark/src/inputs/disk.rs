@@ -69,14 +69,14 @@ pub(crate) struct DiskIndexBuild {
     #[serde(default = "default_alpha")]
     pub(crate) alpha: f32,
     pub(crate) num_threads: usize,
-    /// Memory budget for bounded disk-index pipeline stages. Explicit PiPNN
-    /// graph construction remains one-shot and is not silently replaced.
+    /// Memory budget for disk-index stages that support bounded work.
+    /// PiPNN always uses its one-shot graph build.
     pub(crate) build_ram_limit_gb: f64,
     pub(crate) num_pq_chunks: NonZeroUsize,
     #[cfg(feature = "disk-index")]
     #[serde(default)]
     pub(crate) quantization_type: Option<QuantizationType>,
-    /// Build algorithm: "Vamana" (default) or "PiPNN" with config params.
+    /// Build algorithm: `Vamana` by default, or `PiPNN` with its parameters.
     #[cfg(feature = "disk-index")]
     #[serde(default)]
     pub(crate) build_algorithm: BuildAlgorithm,
