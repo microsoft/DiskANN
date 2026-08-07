@@ -5,9 +5,9 @@
 
 //! Metric formulas shared by PiPNN partition and leaf kernels.
 //!
-//! Runtime [`Metric`] selection happens once while preparing a dispatched
-//! kernel. Zero-sized marker types then monomorphize scalar and SIMD formulas,
-//! so hot loops contain neither metric matches nor trait objects.
+//! The build boundary converts runtime [`Metric`] into one zero-sized marker
+//! type. That concrete type is carried through partition and leaf construction,
+//! so scalar and SIMD hot loops contain neither metric matches nor trait objects.
 //!
 //! All formulas produce ascending scores. L2 uses squared norms; unnormalized
 //! cosine uses norms with zero/subnormal inputs mapped to zero similarity;
@@ -15,9 +15,9 @@
 //! NaN non-rankable. The L2 partition scalar tail deliberately keeps its
 //! non-fused operation order because rounding can change leader ties.
 //!
-//! [`ScaleKind`] records required scale representation. [`KernelMetric`] owns
-//! leaf and partition formulas. [`MetricVisitor`] performs runtime-to-marker
-//! conversion before the final architecture-specific function pointer is stored.
+//! [`ScaleKind`] records required scale representation and [`KernelMetric`]
+//! owns the leaf and partition formulas. Runtime selection belongs to the build
+//! entry point; this module contains no dispatch or type erasure.
 
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
@@ -82,10 +82,10 @@ impl ScaleKind {
 
 /// Concrete metric contract shared by leaf and partition hot loops.
 ///
-/// Runtime `Metric` is converted to one implementor before final type erasure.
-/// Generic methods then inline metric arithmetic into the architecture-specific
-/// function pointer. Leaf and partition operations remain separate because L2
-/// partition ranking deliberately omits the point norm.
+/// Runtime `Metric` is converted to one implementor at the build boundary.
+/// Generic methods then inline metric arithmetic through the complete partition
+/// and leaf stages. Those operations remain separate because L2 partition
+/// ranking deliberately omits the point norm.
 ///
 /// All methods return scores ordered from nearest to farthest. Implementations
 /// follow the module-level zero/NaN contract; caller-side strict comparisons
@@ -369,37 +369,6 @@ impl KernelMetric for InnerProduct {
     fn partition_distance_scalar(dot: f32, _: f32, _: f32) -> f32 {
         // Scalar tail uses the same ascending score.
         -dot
-    }
-}
-
-/// BYO-type-erasure visitor for runtime metric selection.
-///
-/// The visitor receives concrete `M`, allowing architecture and width wrappers
-/// to compose with metric arithmetic before producing the final function pointer.
-/// This avoids a nested metric trait object inside architecture dispatch.
-/// Visitor execution occurs once during preparation and allocates nothing.
-pub(crate) trait MetricVisitor {
-    /// Final caller-selected erased representation.
-    type Output;
-
-    /// Consume the visitor with one concrete metric marker.
-    ///
-    /// Returns the caller-defined erased representation, normally one prepared
-    /// architecture/metric-specific function pointer.
-    fn visit<M: KernelMetric>(self) -> Self::Output;
-}
-
-/// Visit the concrete marker represented by a runtime metric tag.
-///
-/// `metric` selects exactly one concrete marker; `visitor` constructs and
-/// returns its erased output. This performs one four-way match and no allocation
-/// during kernel preparation.
-pub(crate) fn visit_metric<V: MetricVisitor>(metric: Metric, visitor: V) -> V::Output {
-    match metric {
-        Metric::L2 => visitor.visit::<L2>(),
-        Metric::Cosine => visitor.visit::<Cosine>(),
-        Metric::CosineNormalized => visitor.visit::<CosineNormalized>(),
-        Metric::InnerProduct => visitor.visit::<InnerProduct>(),
     }
 }
 
