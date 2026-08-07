@@ -32,7 +32,7 @@ pub(super) struct LshSketches {
 }
 
 impl LshSketches {
-    /// Compute one sketch row for each point in `data`.
+    /// Compute random-hyperplane projections for every point in `data`.
     ///
     /// Each worker converts one source row into reusable `f32` storage. Parallel
     /// sketch work uses the currently installed Rayon pool.
