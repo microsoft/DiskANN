@@ -90,9 +90,8 @@
 //! [`partition_kernel::PartitionInput`] bundles that tile with typed
 //! [`partition_kernel::PartitionScales`]. A prepared
 //! [`partition_kernel::PartitionKernel`] writes sorted leader-local positions to
-//! caller-owned output. Fanout is output column count and is bounded by
-//! [`partition_kernel::MAX_PARTITION_FANOUT`]. Module documentation describes
-//! scale units, validation, `process_points`, and tracker insertion.
+//! caller-owned output. Fanout is the output column count and cannot exceed the
+//! leaders available for that partition call.
 //!
 //! ## [`leaf_kernel`]
 //!
@@ -197,15 +196,8 @@ impl PiPNNConfig {
         if self.fanout.is_empty() {
             return Err(config_error("fanout must not be empty"));
         }
-        if let Some(&fanout) = self
-            .fanout
-            .iter()
-            .find(|&&fanout| !(1..=partition_kernel::MAX_PARTITION_FANOUT).contains(&fanout))
-        {
-            return Err(config_error(format!(
-                "fanout ({fanout}) must be in [1, {}]",
-                partition_kernel::MAX_PARTITION_FANOUT
-            )));
+        if self.fanout.contains(&0) {
+            return Err(config_error("fanout values must be greater than zero"));
         }
         if !(1..=leaf_kernel::MAX_LEAF_NEIGHBORS).contains(&self.k) {
             return Err(config_error(format!(
@@ -660,10 +652,6 @@ mod config_tests {
             },
             PiPNNConfig {
                 fanout: vec![1, 0],
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                fanout: vec![17],
                 ..pipnn_config()
             },
             PiPNNConfig {
