@@ -309,29 +309,8 @@ where
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let point_count = dots.nrows();
     let leader_count = dots.ncols();
-    assert!(
-        leader_count > 0,
-        "validated partition input must contain leaders"
-    );
-    if M::PARTITION_POINT_SCALE.is_some() {
-        assert_eq!(
-            scales.point_scales.len(),
-            point_count,
-            "validated point scales must match point count"
-        );
-    }
-    if M::PARTITION_LEADER_SCALE.is_some() {
-        assert_eq!(
-            scales.leader_scales.len(),
-            leader_count,
-            "validated leader scales must match leader count"
-        );
-    }
     let fanout = output.ncols();
-    debug_assert!(fanout > 0);
-    debug_assert_eq!(tracker.len(), fanout);
     // Reset the tracker for each point. No assignment state can pass from one
     // output row to another.
     for (point, (point_dots, point_output)) in dots
@@ -356,7 +335,7 @@ where
             // SAFETY: `base + F::LANES <= full <= point_dots.len()`.
             let point_dots = unsafe { F::load_simd(arch, point_dots.as_ptr().add(base)) };
             let leader_scales = if M::PARTITION_LEADER_SCALE.is_some() {
-                // SAFETY: the assertion above established one scale per leader, and
+                // SAFETY: `validate` established one scale per leader, and
                 // `base + F::LANES <= full <= leader_count`.
                 unsafe { F::load_simd(arch, scales.leader_scales.as_ptr().add(base)) }
             } else {

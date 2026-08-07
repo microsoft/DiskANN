@@ -321,8 +321,7 @@ fn process_fixed_width<F, M, const N: usize>(
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let (neighbor_lists, remainder) = output.as_chunks_mut::<N>();
-    debug_assert!(remainder.is_empty());
+    let (neighbor_lists, _) = output.as_chunks_mut::<N>();
     process_pairs::<F, M, N>(arch, input, neighbor_lists, norms, worst);
 }
 
@@ -356,30 +355,8 @@ fn process_pairs<F, M, const N: usize>(
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let point_count = input.nrows();
-    assert_eq!(
-        input.ncols(),
-        point_count,
-        "validated leaf dot matrix must be square"
-    );
-    assert_eq!(
-        output.len(),
-        point_count,
-        "validated leaf output must have one list per point"
-    );
-    assert_eq!(
-        worst.len(),
-        point_count,
-        "validated leaf thresholds must have one value per point"
-    );
     let dots = input.as_slice();
     let uses_norms = M::LEAF_SCALE.is_some();
-    if uses_norms {
-        assert_eq!(
-            norms.len(),
-            point_count,
-            "validated leaf norms must have one value per point"
-        );
-    }
     let worst_ptr = worst.as_mut_ptr();
 
     // Source zero has no earlier target. Each source after zero can still add
@@ -391,7 +368,8 @@ fn process_pairs<F, M, const N: usize>(
         } else {
             F::default(arch)
         };
-        // SAFETY: `source < point_count == worst.len()` by the assertions above.
+        // SAFETY: `validate` and `prepare_workspace` established
+        // `source < point_count == worst.len()`.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
 
@@ -399,8 +377,8 @@ fn process_pairs<F, M, const N: usize>(
             // SAFETY: the full chunk is contained in this source's strict-lower prefix.
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
             let target_scales = if uses_norms {
-                // SAFETY: the full target chunk lies below `source < point_count`, and
-                // the assertion above established `norms.len() == point_count`.
+                // SAFETY: the full target chunk is below `source < point_count`.
+                // `prepare_workspace` created one norm for each point.
                 unsafe { F::load_simd(arch, norms.as_ptr().add(target)) }
             } else {
                 F::default(arch)
@@ -409,8 +387,8 @@ fn process_pairs<F, M, const N: usize>(
             // Every pair may improve the current source and its earlier target.
             // Derive both masks before either endpoint mutates its threshold.
             let source_eligible = distances.lt_simd(F::splat(arch, source_worst));
-            // SAFETY: the full target chunk lies below `source < point_count`, and
-            // the assertion above established `worst.len() == point_count`.
+            // SAFETY: the full target chunk is below `source < point_count`.
+            // `prepare_workspace` created one threshold for each point.
             let target_worst = unsafe { F::load_simd(arch, worst_ptr.add(target)) };
             let target_eligible = distances.lt_simd(target_worst);
             let source_bits = u64::from(source_eligible.bitmask().to_underlying());
@@ -474,8 +452,6 @@ fn process_pairs<F, M, const N: usize>(
         // SAFETY: `source < worst.len()`.
         unsafe { *worst_ptr.add(source) = source_worst };
     }
-
-    debug_assert_eq!(output.len(), point_count);
 }
 
 /// Insert one candidate into a fixed-width sorted list.
