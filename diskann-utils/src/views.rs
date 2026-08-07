@@ -195,8 +195,14 @@ impl<T> MatrixBase<Box<[T]>> {
     where
         U: Generator<T>,
     {
-        let data: Box<[T]> = (0..nrows * ncols).map(|_| generator.generate()).collect();
-        debug_assert_eq!(data.len(), nrows * ncols);
+        let len = nrows.checked_mul(ncols);
+        assert!(
+            len.is_some(),
+            "matrix shape {nrows} x {ncols} overflows usize"
+        );
+        let len = len.unwrap_or(0);
+        let data: Box<[T]> = (0..len).map(|_| generator.generate()).collect();
+        debug_assert_eq!(data.len(), len);
         Self { data, nrows, ncols }
     }
 }
@@ -211,7 +217,7 @@ where
     /// The length of the base must be equal to `nrows * ncols`.
     pub fn try_from(data: T, nrows: usize, ncols: usize) -> Result<Self, TryFromError<T>> {
         let len = data.as_slice().len();
-        if len != nrows * ncols {
+        if nrows.checked_mul(ncols) != Some(len) {
             Err(TryFromError { data, nrows, ncols })
         } else {
             Ok(Self { data, nrows, ncols })
@@ -1053,6 +1059,8 @@ mod tests {
             m.unwrap_err().to_string(),
             "tried to construct a matrix view with 5 rows and 4 columns over a slice of length 12"
         );
+
+        assert!(MatrixView::try_from(&[] as &[usize], usize::MAX, 2).is_err());
     }
 
     #[test]
@@ -1428,6 +1436,8 @@ mod tests {
         assert_eq!(m.nrows(), 5);
         assert_eq!(m.ncols(), 1);
         assert!(m.as_slice().iter().all(|&x| x == 9));
+
+        assert!(std::panic::catch_unwind(|| Matrix::new(0, usize::MAX, 2)).is_err());
     }
 
     #[test]

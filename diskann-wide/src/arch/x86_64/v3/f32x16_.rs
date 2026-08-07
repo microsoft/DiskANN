@@ -54,6 +54,7 @@ mod test_x86_f32 {
     test_utils::ops::test_add!(f32x16, 0xa8989b97ca888d11, V3::new_checked_uncached());
     test_utils::ops::test_sub!(f32x16, 0xb2554fc13fdc1182, V3::new_checked_uncached());
     test_utils::ops::test_mul!(f32x16, 0x23becaa968b0cd71, V3::new_checked_uncached());
+    test_utils::ops::test_div!(f32x16, 0x6fd16af08fa1f498, V3::new_checked_uncached());
     test_utils::ops::test_fma!(f32x16, 0x32a814070a93df4e, V3::new_checked_uncached());
     test_utils::ops::test_minmax!(f32x16, 0x6d7fc8ed6d852187, V3::new_checked_uncached());
     test_utils::ops::test_abs!(f32x16, 0x6799e60873a2efe2, V3::new_checked_uncached());

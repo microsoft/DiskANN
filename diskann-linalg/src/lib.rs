@@ -80,6 +80,30 @@ impl fmt::Display for SgemmError {
 
 impl std::error::Error for SgemmError {}
 
+fn check_matrix(
+    matrix_name: MatrixName,
+    actual_len: usize,
+    rows: usize,
+    cols: usize,
+) -> Result<(), SgemmError> {
+    let expected_len = rows
+        .checked_mul(cols)
+        .ok_or(SgemmError::DimensionOverflow {
+            matrix_name,
+            rows,
+            cols,
+        })?;
+    if actual_len != expected_len {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name,
+            expected_rows: rows,
+            expected_cols: cols,
+            actual_len,
+        });
+    }
+    Ok(())
+}
+
 // Make the reference implementation available for internal testing.
 #[cfg(test)]
 mod reference;
@@ -154,54 +178,30 @@ pub fn sgemm(
     beta: Option<f32>,
     c: &mut [f32],
 ) -> Result<(), SgemmError> {
-    // Check size requirements with overflow protection.
-    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::A,
-        rows: m,
-        cols: k,
-    })?;
-
-    if a.len() != expected_a_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::A,
-            expected_rows: m,
-            expected_cols: k,
-            actual_len: a.len(),
-        });
-    }
-
-    let expected_b_len = k.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::B,
-        rows: k,
-        cols: n,
-    })?;
-
-    if b.len() != expected_b_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::B,
-            expected_rows: k,
-            expected_cols: n,
-            actual_len: b.len(),
-        });
-    }
-
-    let expected_c_len = m.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        matrix_name: MatrixName::C,
-        rows: m,
-        cols: n,
-    })?;
-
-    if c.len() != expected_c_len {
-        return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: MatrixName::C,
-            expected_rows: m,
-            expected_cols: n,
-            actual_len: c.len(),
-        });
-    }
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::B, b.len(), k, n)?;
+    check_matrix(MatrixName::C, c.len(), m, n)?;
 
     // Invoke the actual implementation.
     sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
+    Ok(())
+}
+
+/// Compute the lower triangle of $C = A A^\mathsf{T}$.
+///
+/// `A` is a dense row-major $m \times k$ matrix. The function overwrites the
+/// lower triangle of `C`, including its diagonal. It does not change the upper
+/// triangle.
+///
+/// # Errors
+///
+/// Returns an error if a size product overflows. It also returns an error if a
+/// slice length does not match its declared matrix shape.
+pub fn sgemm_aat_lower(m: usize, k: usize, a: &[f32], c: &mut [f32]) -> Result<(), SgemmError> {
+    check_matrix(MatrixName::A, a.len(), m, k)?;
+    check_matrix(MatrixName::C, c.len(), m, m)?;
+
+    faer::sgemm_aat_lower_impl(m, k, a, c);
     Ok(())
 }
 
@@ -686,5 +686,117 @@ mod tests {
                 test_distance_preserving_matrix_impl(dim, &mut rng);
             }
         }
+    }
+}
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "deterministic test fixture construction must abort on invalid setup"
+)]
+mod sgemm_aat_lower_tests {
+    use super::{sgemm_aat_lower, MatrixName, SgemmError};
+
+    #[test]
+    fn computes_lower_triangle_and_preserves_upper_triangle() {
+        #[rustfmt::skip]
+        let a = [
+            1.0, 2.0,
+            3.0, 4.0,
+            5.0, 6.0,
+        ];
+        let untouched = -123.0;
+        let mut c = [untouched; 9];
+
+        sgemm_aat_lower(3, 2, &a, &mut c).unwrap();
+
+        #[rustfmt::skip]
+        assert_eq!(c, [
+             5.0, untouched, untouched,
+            11.0,     25.0, untouched,
+            17.0,     39.0,      61.0,
+        ]);
+    }
+
+    #[test]
+    fn accepts_a_matrix_with_no_rows() {
+        sgemm_aat_lower(0, 3, &[], &mut []).unwrap();
+    }
+
+    #[test]
+    fn zero_inner_dimension_zeros_only_the_lower_triangle() {
+        let untouched = -123.0;
+        let mut c = [untouched; 9];
+
+        sgemm_aat_lower(3, 0, &[], &mut c).unwrap();
+
+        #[rustfmt::skip]
+        assert_eq!(c, [
+            0.0, untouched, untouched,
+            0.0,       0.0, untouched,
+            0.0,       0.0,       0.0,
+        ]);
+    }
+
+    #[test]
+    fn rejects_invalid_input_dimensions() {
+        let mut c = [0.0; 4];
+
+        let error = sgemm_aat_lower(2, 2, &[0.0; 3], &mut c).unwrap_err();
+
+        assert_eq!(
+            error,
+            SgemmError::InvalidMatrixDimensions {
+                matrix_name: MatrixName::A,
+                expected_rows: 2,
+                expected_cols: 2,
+                actual_len: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_output_dimensions() {
+        let mut c = [0.0; 3];
+
+        let error = sgemm_aat_lower(2, 2, &[0.0; 4], &mut c).unwrap_err();
+
+        assert_eq!(
+            error,
+            SgemmError::InvalidMatrixDimensions {
+                matrix_name: MatrixName::C,
+                expected_rows: 2,
+                expected_cols: 2,
+                actual_len: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_input_size_overflow() {
+        let error = sgemm_aat_lower(usize::MAX, 2, &[], &mut []).unwrap_err();
+
+        assert_eq!(
+            error,
+            SgemmError::DimensionOverflow {
+                matrix_name: MatrixName::A,
+                rows: usize::MAX,
+                cols: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_output_size_overflow() {
+        let error = sgemm_aat_lower(usize::MAX, 0, &[], &mut []).unwrap_err();
+
+        assert_eq!(
+            error,
+            SgemmError::DimensionOverflow {
+                matrix_name: MatrixName::C,
+                rows: usize::MAX,
+                cols: usize::MAX,
+            }
+        );
     }
 }

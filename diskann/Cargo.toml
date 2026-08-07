@@ -56,6 +56,9 @@ panic = "warn"
 [features]
 default = ["tracing"]
 
+# Enable PiPNN batch graph construction.
+pipnn = []
+
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
 
