@@ -3,130 +3,22 @@
  * Licensed under the MIT license.
  */
 
-//! Prepared distance and top-k kernels for partition assignment.
+//! Prepared nearest-leader selection for PiPNN partition assignment.
 //!
-//! PiPNN recursively turns a dataset into small, overlapping groups called
-//! *leaves*. At one recursion node it samples several existing points as
-//! *leaders*. Each leader represents one child group. Every point is assigned to
-//! its nearest `fanout` leaders, so `fanout > 1` copies that point into multiple
-//! children and creates overlap. Children larger than the configured leaf limit
-//! are partitioned again.
+//! Caller supplies a row-major point-by-leader dot matrix plus metric-specific
+//! [`PartitionScales`]. Output contains sorted leader-column positions for each
+//! point; fanout is the output width and cannot exceed
+//! [`MAX_PARTITION_FANOUT`] or the leader count.
 //!
-//! This module performs only the nearest-leader selection inside that stage. It
-//! does not sample leaders, gather vectors, run GEMM, group point IDs, or recurse.
-//! The caller gathers a stripe of points and all leaders, computes their dot
-//! products as one general matrix multiplication (GEMM), and passes that matrix
-//! here.
-//! [`PartitionKernel::nearest_leaders`] converts dots to metric scores and writes
-//! leader column positions; the caller uses those positions to form child groups.
+//! [`PartitionKernel::new`] selects metric and runtime architecture once and
+//! stores a direct function pointer reused by every point stripe. Calls validate
+//! row counts, scale variants and lengths, fanout, and leader-ID representation
+//! before output mutation or unchecked SIMD loads.
 //!
-//! For example, output `[2, 5, 7]` for one point at fanout three means: add that
-//! point to children represented by leader columns 2, 5, and 7. It does not mean
-//! those leaders are final graph neighbors.
-//!
-//! The caller computes a row-major `points · leadersᵀ` tile with GEMM, then
-//! passes it to a [`PartitionKernel`] prepared once for the build metric. Kernel
-//! preparation selects the runtime architecture and concrete metric type once;
-//! repeated stripes call a direct `diskann-wide` function pointer with no ISA or
-//! metric branch in the point loop.
-//!
-//! L2 deliberately omits the point norm because it is constant across every
-//! leader for that point. Cosine consumes squared point norms and leader norms. NaN
-//! distances are not rankable, and equal distances retain leader scan order.
-//!
-//! ```text
-//! metric + runtime architecture
-//!             │
-//!             v
-//!   prepared Dispatched2 handle
-//!             │ reused for every point stripe
-//!             v
-//! shape/scale validation -> SIMD chunks + scalar tail -> sorted leader IDs
-//! ```
-//!
-//! Each point owns a fixed-capacity sorted tracker. Its last retained distance
-//! is the rejection threshold, so noncompetitive SIMD chunks avoid lane extraction.
-//!
-//! # Main structures
-//!
-//! - [`PartitionKernel`] is the reusable public handle containing one prepared
-//!   direct function pointer.
-//! - [`PartitionInput`] bundles borrowed point-leader dots with
-//!   [`PartitionScales`], whose variants make scale units explicit.
-//! - `PartitionEntry<M>` is the architecture/metric-specialized destination that
-//!   validates a call before entering pointer-based SIMD.
-//! - `process_points` is the shared point traversal. Concrete metric scale kinds
-//!   specialize unary/no-scale and binary-scale formulas without separate
-//!   runtime row processors.
-//! - `LeaderTracker`, `insert_leader_lanes`, and `insert_leader` maintain one
-//!   fixed-capacity, stable sorted prefix per point.
-//!
-//! # Inputs and output
-//!
-//! For `p` points and `l` leaders, [`PartitionInput::dots`] is the row-major
-//! `p × l` GEMM result. [`PartitionScales`] supplies exactly the scale units
-//! required by the prepared metric. Output is a `p × f` matrix of leader-local
-//! positions, where `f = output.ncols()` is requested fanout. Every point's
-//! output is sorted by ascending score.
-//!
-//! Scores are derived from one point-leader dot product. Smaller is better:
-//!
-//! | Prepared metric | Score | Required [`PartitionScales`] |
-//! | --- | --- | --- |
-//! | squared L2 | `‖leader‖² - 2(point·leader)` | [`PartitionScales::L2`] |
-//! | cosine | `1 - (point·leader)/(‖point‖‖leader‖)` | [`PartitionScales::Cosine`] |
-//! | normalized cosine | `1 - point·leader` | [`PartitionScales::None`] |
-//! | inner product | `-(point·leader)` | [`PartitionScales::None`] |
-//!
-//! Squared L2 omits `‖point‖²` because adding the same value to every leader
-//! cannot change their order. `CosineNormalized` assumes vectors were normalized
-//! before GEMM; this kernel does not verify vector norms.
-//!
-//! # Core flow
-//!
-//! 1. Validate matrix areas, backing lengths, fanout, and metric scale variant.
-//! 2. Transform one point scale outside its leader loop when required.
-//! 3. Score full SIMD leader groups and reject noncompetitive groups by mask.
-//! 4. Score scalar-tail leaders with the metric's scalar operation order.
-//! 5. Copy sorted leader IDs and reject underfilled points.
-//!
-//! # Performance
-//!
-//! With `p > 0` and `f > 0`, the kernel evaluates exactly `p * l` scores;
-//! empty stripes or zero fanout return before traversal. Competitive leaders
-//! bubble through at most `f <= MAX_PARTITION_FANOUT` tracker slots, giving
-//! `O(plf)` worst-case work and `O(pl)` score computation. Tracker storage is a
-//! fixed `O(MAX_PARTITION_FANOUT)` stack array per point; output is `O(pf)` and
-//! no heap allocation occurs. Whole SIMD groups with no score below the current
-//! threshold avoid lane materialization. Runtime architecture and metric selection happen
-//! once in [`PartitionKernel::new`], outside stripe processing.
-//!
-//! # Example
-//!
-//! ```
-//! use diskann::graph::pipnn::partition_kernel::{
-//!     PartitionInput, PartitionKernel, PartitionScales,
-//! };
-//! use diskann_utils::views::{MatrixView, MutMatrixView};
-//! use diskann_vector::distance::Metric;
-//!
-//! let dots = [
-//!     0.8, 0.2, 0.5,
-//!     0.1, 0.9, 0.3,
-//! ];
-//! let input = PartitionInput {
-//!     dots: MatrixView::try_from(&dots[..], 2, 3).unwrap(),
-//!     scales: PartitionScales::None,
-//! };
-//! let mut assignments = vec![u32::MAX; 2 * 2];
-//! let output = MutMatrixView::try_from(&mut assignments[..], 2, 2).unwrap();
-//!
-//! PartitionKernel::new(Metric::CosineNormalized)
-//!     .nearest_leaders(input, output)
-//!     .unwrap();
-//!
-//! assert_eq!(assignments, [0, 2, 1, 2]);
-//! ```
+//! L2 omits the point norm because it cannot change one point's leader order.
+//! Strict comparisons preserve scan order for ties and leave NaN non-rankable.
+//! Each point evaluates every leader; competitive scores move through a fixed
+//! stack tracker of at most [`MAX_PARTITION_FANOUT`] entries.
 
 use std::marker::PhantomData;
 
@@ -189,16 +81,6 @@ pub struct PartitionInput<'a> {
 /// Validation error returned by [`PartitionKernel::nearest_leaders`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PartitionKernelError {
-    /// A declared matrix shape overflowed `usize`.
-    #[error("{buffer} shape {rows} x {cols} overflows usize")]
-    ShapeOverflow {
-        /// Name of the buffer whose shape overflowed.
-        buffer: &'static str,
-        /// Declared row count.
-        rows: usize,
-        /// Declared column count.
-        cols: usize,
-    },
     /// The output matrix does not match the input row count.
     #[error(
         "invalid output shape: expected {expected_rows} rows, got {actual_rows} rows and {actual_cols} columns"
@@ -443,15 +325,11 @@ struct ScaleSlices<'a> {
 
 /// Validate the complete partition-kernel safety and metric contract.
 ///
-/// Matrix areas are recomputed with `checked_mul` before pointer loads. The
-/// `PartitionScales` variant must match concrete metric `M`, preventing plausible
-/// but incorrect norm units from crossing the interface.
-///
-/// `input` and `output` are inspected only. Success returns borrowed scale slices
-/// normalized to the storage layout expected by `M`; it establishes exact
-/// backing lengths, representable leader IDs, and bounded fanout. Failure returns
-/// [`PartitionKernelError`] before output mutation. Runtime is constant apart
-/// from view metadata checks; matrix and scale contents are not scanned.
+/// `MatrixView` and `MutMatrixView` construction guarantee exact,
+/// non-overflowing backing lengths. The `PartitionScales` variant must match
+/// concrete metric `M`, preventing plausible but incorrect norm units from
+/// crossing the interface. Success returns normalized scale slices and
+/// establishes representable leader IDs plus bounded fanout.
 fn validate<'a, M: KernelMetric>(
     input: PartitionInput<'a>,
     output: &MutMatrixView<'_, u32>,
@@ -459,11 +337,6 @@ fn validate<'a, M: KernelMetric>(
     let point_count = input.dots.nrows();
     let leader_count = input.dots.ncols();
     let fanout = output.ncols();
-
-    let dots_len = checked_area("dot-product tile", point_count, leader_count)?;
-    check_length("dot-product tile", input.dots.as_slice().len(), dots_len)?;
-    let output_len = checked_area("output", output.nrows(), fanout)?;
-    check_length("output", output.as_slice().len(), output_len)?;
 
     if output.nrows() != point_count {
         return Err(PartitionKernelError::InvalidOutputShape {
@@ -546,15 +419,6 @@ fn validate<'a, M: KernelMetric>(
 /// Associated `ScaleKind` constants make this choice compile away.
 const fn expected_scale_len(kind: ScaleKind, count: usize) -> usize {
     if kind.is_some() { count } else { 0 }
-}
-
-fn checked_area(
-    buffer: &'static str,
-    rows: usize,
-    cols: usize,
-) -> Result<usize, PartitionKernelError> {
-    rows.checked_mul(cols)
-        .ok_or(PartitionKernelError::ShapeOverflow { buffer, rows, cols })
 }
 
 fn check_length(
@@ -887,18 +751,6 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(&actual[..4], &[0, 1, 0, 1]);
         assert_eq!(&actual[6..], &[0, 1]);
-    }
-
-    #[test]
-    fn matrix_area_overflow_is_rejected_before_kernel_access() {
-        assert_eq!(
-            checked_area("dot-product tile", usize::MAX, 2),
-            Err(PartitionKernelError::ShapeOverflow {
-                buffer: "dot-product tile",
-                rows: usize::MAX,
-                cols: 2,
-            })
-        );
     }
 
     #[test]

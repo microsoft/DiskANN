@@ -3,131 +3,26 @@
  * Licensed under the MIT license.
  */
 
-//! Prepared nearest-neighbor kernels over a leaf's lower dot-product matrix.
+//! Prepared leaf-local top-k selection over a lower-triangular Gram matrix.
 //!
-//! PiPNN partitioning produces small, overlapping groups of dataset points
-//! called *leaves*. Points sharing a leaf are treated as likely neighbors. For
-//! each leaf, the builder gathers its vectors into a matrix `A` (one vector per
-//! row). `sgemm_aat_lower` computes the lower triangle of the Gram matrix
-//! `A · Aᵀ`, so entry `(i, j)` is the dot product of leaf points `i` and `j`.
-//! This module consumes that result and picks each point's `k` nearest non-self
-//! points in the leaf.
+//! Caller supplies an `n × n` [`MatrixView`] produced by `sgemm_aat_lower`.
+//! Diagonal entries provide metric scales; only strict-lower pair dots are read.
+//! Each pair is evaluated once and offered to both endpoint rows.
 //!
-//! This module does not gather vectors, run GEMM, translate dataset IDs, merge
-//! candidates from overlapping leaves, or prune final graph degree. Its output
-//! uses leaf-local positions. The caller maps those positions back through the
-//! leaf's dataset-ID array and normally offers each selected pair in both graph
-//! directions before cross-leaf merge/pruning.
+//! Output is an `n × k` matrix of sorted [`LeafNeighbor`] values with leaf-local
+//! targets. Supported `k` is zero through [`MAX_LEAF_NEIGHBORS`]; positive widths
+//! use fixed arrays. Strict comparisons preserve encounter order for ties and
+//! reject NaN. L2, cosine, normalized cosine, and inner product share the same
+//! scalar/SIMD traversal.
 //!
-//! Here *source* means the point whose `k`-neighbor output list is being built;
-//! *target* means another point in the same leaf. Pair distance is symmetric, so
-//! one strict-lower matrix entry is evaluated once and offered independently to
-//! both endpoint source lists.
+//! [`LeafKernel::new`] selects metric and runtime architecture once, storing one
+//! direct function pointer reused across leaves. Every call validates square
+//! shape, row count, local-ID bounds, and output width before scratch mutation or
+//! unchecked SIMD loads. [`LeafKernelWorkspace`] retains per-worker norm and
+//! threshold buffers.
 //!
-//! `sgemm_aat_lower` writes pair `(source, target)` only when `target <= source`.
-//! The kernel scans that strict lower triangle once and offers each distance to
-//! both endpoint points. A [`LeafKernel`] is prepared once for the build metric
-//! and runtime CPU; each output view supplies its leaf-specific neighbor count.
-//! Repeated leaves call a direct `diskann-wide` function pointer without ISA or
-//! metric dispatch in the loop.
-//! NaN distances are not rankable, and equal distances retain pair scan order.
-//!
-//! ```text
-//! metric + runtime architecture
-//!              │
-//!              v
-//!    prepared Dispatched1 handle
-//!              │ reused with input + output.ncols()
-//!              v
-//! shape validation -> scale scratch -> strict-lower scan -> sorted neighbor slots
-//! ```
-//!
-//! Between source iterations, `workspace.worst[point]` mirrors that point's last
-//! retained slot. While one source is scanned, its threshold lives in local
-//! `source_worst`; thresholds for earlier target points are updated in the
-//! workspace immediately. The SIMD loop snapshots both endpoint thresholds
-//! before either list changes, then writes the current source threshold back
-//! after its strict-lower prefix is complete.
-//!
-//! # Main structures
-//!
-//! - [`LeafKernel`] is the reusable handle containing one prepared direct
-//!   function pointer.
-//! - [`LeafKernelWorkspace`] owns norm and rejection-threshold scratch and is
-//!   reused by one worker across leaves.
-//! - [`LeafNeighbor`] is one output slot containing leaf-local target position
-//!   plus distance.
-//! - `process_neighbor_width` chooses fixed storage for widths one through three.
-//! - `process_pairs` is the shared SIMD/scalar strict-lower traversal;
-//!   `insert_fixed_neighbor` maintains stable sorted output for both endpoints.
-//!
-//! # Inputs and output
-//!
-//! For `n` leaf points, the input is an `n × n` row-major matrix from
-//! `sgemm_aat_lower`. Diagonal entries provide norms when the metric needs them;
-//! only strict-lower entries `(source, target)` with `target < source` provide
-//! pair dots. Output is an `n × k` [`LeafNeighbor`] matrix with `k <= 3`. Every
-//! output row is sorted by ascending distance and stores leaf-local target
-//! positions, not dataset IDs.
-//!
-//! Distances are reconstructed from one pair dot and, when required, diagonal
-//! entries of the Gram matrix. Smaller is better:
-//!
-//! | Prepared metric | Leaf distance |
-//! | --- | --- |
-//! | squared L2 | `max(0, ‖source‖² + ‖target‖² - 2(source·target))` |
-//! | cosine | `max(0, 1 - (source·target)/(‖source‖‖target‖))` |
-//! | normalized cosine | `max(0, 1 - source·target)` |
-//! | inner product | `-(source·target)` |
-//!
-//! `CosineNormalized` assumes leaf vectors were normalized before GEMM. For
-//! unnormalized cosine, a norm below `sqrt(f32::MIN_POSITIVE)` gives zero
-//! similarity. NaN scores never enter output because selection uses strict
-//! ordered comparisons.
-//!
-//! # Core flow
-//!
-//! 1. Validate matrix areas, backing lengths, point IDs, and output width.
-//! 2. Build metric scales from diagonal dots and reset per-source thresholds.
-//! 3. Scan every strict-lower pair once in SIMD groups plus scalar tails.
-//! 4. Offer that distance to both pair endpoints using stable top-k insertion.
-//! 5. Reject any source whose final slot remains unfilled.
-//!
-//! # Performance
-//!
-//! With `k > 0`, the kernel evaluates exactly `n(n - 1) / 2` pair distances;
-//! `k = 0` returns before traversal. Supported widths `k = 1, 2, 3` use fixed
-//! arrays and bounded insertion, giving `O(n²)` work. Scratch is `O(n)`
-//! (`worst`, plus norms only when required); output is `O(nk)`. No allocation
-//! occurs after a worker workspace has sufficient capacity. Runtime architecture
-//! and metric selection happen once in [`LeafKernel::new`].
-//!
-//! # Example
-//!
-//! ```
-//! use diskann::graph::pipnn::leaf_kernel::{
-//!     leaf_output_len, LeafKernel, LeafKernelWorkspace, LeafNeighbor,
-//! };
-//! use diskann_utils::views::{MatrixView, MutMatrixView};
-//! use diskann_vector::distance::Metric;
-//!
-//! // Only the diagonal and strict lower triangle are consumed.
-//! let dots = [
-//!     1.0, f32::NAN, f32::NAN,
-//!     0.9, 1.0,      f32::NAN,
-//!     0.1, 0.2,      1.0,
-//! ];
-//! let input = MatrixView::try_from(&dots[..], 3, 3).unwrap();
-//! let mut neighbors = vec![LeafNeighbor::default(); leaf_output_len(3, 1).unwrap()];
-//! let output = MutMatrixView::try_from(&mut neighbors[..], 3, 1).unwrap();
-//! let mut workspace = LeafKernelWorkspace::new();
-//!
-//! LeafKernel::new(Metric::CosineNormalized)
-//!     .nearest_neighbors(input, output, &mut workspace)
-//!     .unwrap();
-//!
-//! assert_eq!(neighbors.iter().map(|neighbor| neighbor.target).collect::<Vec<_>>(), [1, 0, 1]);
-//! ```
+//! Work is `n(n - 1) / 2` distance evaluations with constant bounded insertion;
+//! scratch is `O(n)` and output is `O(nk)`.
 
 use std::marker::PhantomData;
 
@@ -212,16 +107,6 @@ pub enum LeafKernelError {
         rows: usize,
         /// Declared column count.
         cols: usize,
-    },
-    /// A view's backing slice does not match its declared shape.
-    #[error("invalid {buffer} length: expected {expected}, got {actual}")]
-    InvalidBufferLength {
-        /// Name of the invalid buffer.
-        buffer: &'static str,
-        /// Required length.
-        expected: usize,
-        /// Supplied length.
-        actual: usize,
     },
     /// The output matrix does not have one row per input point.
     #[error("invalid output row count: expected {expected}, got {actual} with {columns} columns")]
@@ -507,15 +392,10 @@ where
 
 /// Validate the complete safety contract before dispatched SIMD executes.
 ///
-/// Matrix views are rechecked with `checked_mul` because the hot loop performs
-/// unchecked contiguous loads. Output columns are the leaf-specific neighbor
-/// width and cannot exceed the number of non-self points.
-///
-/// `input` and `output` are borrowed only for inspection. Success returns no
-/// value; it establishes square dots, exact backing lengths, representable local
-/// IDs, and valid output width. Failure returns [`LeafKernelError`] before any
-/// output or workspace mutation. Runtime is constant apart from view metadata
-/// checks; matrix contents are not scanned.
+/// `MatrixView` and `MutMatrixView` construction guarantee exact, non-overflowing
+/// backing lengths. This check establishes square dots, representable local IDs,
+/// and an output width bounded by the point count and fixed kernel capacity.
+/// Failure returns [`LeafKernelError`] before output or workspace mutation.
 fn validate(
     input: MatrixView<'_, f32>,
     output: &MutMatrixView<'_, LeafNeighbor>,
@@ -531,11 +411,6 @@ fn validate(
             cols: dot_columns,
         });
     }
-    let dots_len = checked_area("leaf dot-product matrix", point_count, dot_columns)?;
-    check_length("leaf dot-product matrix", input.as_slice().len(), dots_len)?;
-    let output_len = checked_area("output", output.nrows(), output.ncols())?;
-    check_length("output", output.as_slice().len(), output_len)?;
-
     if output.nrows() != point_count {
         return Err(LeafKernelError::InvalidOutputRows {
             expected: point_count,
@@ -603,22 +478,6 @@ fn resize<T: Clone>(
 fn checked_area(buffer: &'static str, rows: usize, cols: usize) -> Result<usize, LeafKernelError> {
     rows.checked_mul(cols)
         .ok_or(LeafKernelError::ShapeOverflow { buffer, rows, cols })
-}
-
-fn check_length(
-    buffer: &'static str,
-    actual: usize,
-    expected: usize,
-) -> Result<(), LeafKernelError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(LeafKernelError::InvalidBufferLength {
-            buffer,
-            expected,
-            actual,
-        })
-    }
 }
 
 /// Convert the validated neighbor count into fixed source storage.
