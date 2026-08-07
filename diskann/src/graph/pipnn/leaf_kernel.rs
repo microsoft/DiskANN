@@ -75,16 +75,6 @@ pub enum LeafKernelError {
         /// Supplied column count.
         cols: usize,
     },
-    /// A declared output shape overflowed `usize`.
-    #[error("{buffer} shape {rows} x {cols} overflows usize")]
-    ShapeOverflow {
-        /// Name of the buffer whose shape overflowed.
-        buffer: &'static str,
-        /// Declared row count.
-        rows: usize,
-        /// Declared column count.
-        cols: usize,
-    },
     /// The output matrix does not have one row per input point.
     #[error("invalid output row count: expected {expected}, got {actual} with {columns} columns")]
     InvalidOutputRows {
@@ -146,18 +136,6 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
         });
     }
     Ok(requested_k.min(points.saturating_sub(1)))
-}
-
-/// Return the required output length for [`nearest_neighbors`].
-///
-/// The result is `points * leaf_neighbor_count(points, requested_k)`.
-///
-/// # Errors
-///
-/// Returns [`LeafKernelError::TooManyPoints`] or
-/// [`LeafKernelError::ShapeOverflow`] instead of wrapping the output area.
-pub fn leaf_output_len(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
-    checked_area("output", points, leaf_neighbor_count(points, requested_k)?)
 }
 
 /// Select the nearest non-self positions for each point in a leaf.
@@ -292,11 +270,6 @@ fn resize<T: Clone>(
         .map_err(|_| LeafKernelError::Allocation { buffer, additional })?;
     values.resize(len, value);
     Ok(())
-}
-
-fn checked_area(buffer: &'static str, rows: usize, cols: usize) -> Result<usize, LeafKernelError> {
-    rows.checked_mul(cols)
-        .ok_or(LeafKernelError::ShapeOverflow { buffer, rows, cols })
 }
 
 /// Select fixed-width storage for the validated neighbor count.
@@ -661,12 +634,12 @@ mod tests {
     }
 
     #[test]
-    fn output_length_clamps_to_non_self_neighbors_and_rejects_large_k() {
-        assert_eq!(leaf_output_len(0, 3).unwrap(), 0);
-        assert_eq!(leaf_output_len(1, 3).unwrap(), 0);
-        assert_eq!(leaf_output_len(4, 3).unwrap(), 12);
+    fn neighbor_count_clamps_to_non_self_neighbors_and_rejects_large_k() {
+        assert_eq!(leaf_neighbor_count(0, 3).unwrap(), 0);
+        assert_eq!(leaf_neighbor_count(1, 3).unwrap(), 0);
+        assert_eq!(leaf_neighbor_count(4, 3).unwrap(), 3);
         assert_eq!(
-            leaf_output_len(4, 4),
+            leaf_neighbor_count(4, 4),
             Err(LeafKernelError::InvalidNeighborCount {
                 points: 4,
                 neighbors: 4,
@@ -675,20 +648,8 @@ mod tests {
         );
         #[cfg(target_pointer_width = "64")]
         assert_eq!(
-            leaf_output_len(u32::MAX as usize + 1, 1),
+            leaf_neighbor_count(u32::MAX as usize + 1, 1),
             Err(LeafKernelError::TooManyPoints(u32::MAX as usize + 1))
-        );
-    }
-
-    #[test]
-    fn matrix_area_overflow_is_rejected_before_kernel_access() {
-        assert_eq!(
-            checked_area("leaf dot-product matrix", usize::MAX, 2),
-            Err(LeafKernelError::ShapeOverflow {
-                buffer: "leaf dot-product matrix",
-                rows: usize::MAX,
-                cols: 2,
-            })
         );
     }
 
@@ -740,7 +701,7 @@ mod integration_tests {
 
     use super::{
         LeafKernelError, LeafKernelWorkspace, LeafNeighbor, MAX_LEAF_NEIGHBORS,
-        dispatch_nearest_neighbors, leaf_neighbor_count, leaf_output_len,
+        dispatch_nearest_neighbors, leaf_neighbor_count,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
@@ -1157,13 +1118,5 @@ mod integration_tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn output_length_rejects_unrepresentable_point_count() {
-        assert_eq!(
-            leaf_output_len(usize::MAX, 1),
-            Err(LeafKernelError::TooManyPoints(usize::MAX))
-        );
     }
 }
