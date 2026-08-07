@@ -60,8 +60,8 @@ flowchart LR
 
 - **In-memory build.** The driver loads the stored corpus `T` and decodes a full
   `f32` copy for clustering (row `pid` = point `pid`). It then "streams" points
-  by feeding row indices to `insert`; there is no per-insert disk I/O. This is
-  not an out-of-core builder, so budget memory for both representations.
+  by feeding row indices to `insert_batch`; there is no per-insert disk I/O. This
+  is not an out-of-core builder, so budget memory for both representations.
 - **Clustering is always squared-L2.** Routing, 2-means splits, and reassignment
   all run in full-precision `f32` under squared-L2. The configured
   [`Metric`](src/params.rs) controls search-time routing/scoring after load. For
@@ -99,6 +99,7 @@ the only required knob; everything else has a default (full field reference in t
       "distance": "squared_l2",
       "dim": 384,
       "split_threshold": 106,
+      "batch_size": 4096,
       "reassign_neighbors": 5,
       "max_clusters": 16384,
       "graph_degree": 32,
@@ -188,7 +189,7 @@ The initial centroids are inserted into a **mutable Vamana centroid graph**
 
 ### 2. Insert a point (route)
 
-For each streamed point `pid` (`insert`):
+For each streamed point `pid`:
 
 1. **Route** it to its nearest live centroid `c` by searching the centroid graph
    with search-list size `assign_l` (`assign_nearest`). Because splits leave
@@ -203,6 +204,9 @@ For each streamed point `pid` (`insert`):
 
 Routing an insert never changes the partition unless it triggers a split, so
 **splits are the only structural events** in the build.
+
+This is the semantics of `batch_size: 1`. Larger batches defer splitting to the
+end of the batch — see [Batched inserts](#3b-batched-inserts).
 
 
 ### 3. Split a cluster (split-and-reassign)
@@ -226,7 +230,11 @@ neighborhood:
    - *candidate points* = `c`'s members ∪ all points of the neighbor clusters
 
    and reassign every candidate point to its nearest candidate centroid by exact
-   squared-L2, rebuilding the affected lists. Every member of the retired cluster
+   squared-L2, rebuilding the affected lists. The distances are computed as
+   `‖p‖² − 2p·c + ‖c‖²` over a `tile × |candidates|` GEMM rather than a scalar
+   loop per point, which is what makes a large `reassign_neighbors` affordable;
+   points stream through a fixed-size tile so the gathered working set stays
+   bounded regardless of region size. Every member of the retired cluster
    necessarily moves (its old id is not a candidate); a neighbor point counts as
    "reassigned" only if it lands on a different centroid than before.
 
@@ -248,6 +256,71 @@ flowchart TD
 Only `c` and the `reassign_neighbors` clusters selected by graph search are
 touched; the rest of the partition is unchanged, keeping each split's cost
 **local**.
+
+### 3b. Batched inserts
+
+Steps 2 and 3 describe a batch of one. There is only one write path —
+`insert_batch`; `batch_size` says how many points the harness hands it at a time.
+A real writer arrives with thousands, and the larger the batch the more of the
+schedule opens up.
+
+The change that makes everything else possible is **deferring splits to the end
+of the batch**. Nothing mutates the centroid graph while a batch is being routed,
+so the batch is processed in three phases:
+
+1. **Route.** All `N` routes are read-only against a frozen graph, so a batch
+   large enough to fill more than one work unit is spread across the thread
+   pool (per-worker current-thread runtimes). A batch too small to be worth the
+   dispatch runs on the clusterer's own runtime.
+2. **Split jointly.** Every routed-to cluster now holding more than
+   `split_threshold` points is collected as a split parent `c₁ … c_l`. Their
+   inverted lists are unioned into `X = X₁ ∪ … ∪ X_l` and re-clustered by **one**
+   k-means into `2l` children — two seeds drawn per parent, `two_means_iters`
+   Lloyd iterations, centroids re-normalized each iteration if
+   `normalize_centroids`. With `l = 1` this is exactly the local 2-means of step
+   3.1. With more, clusters that overflow in the same batch are usually
+   adjacent, so the joint pass lets their boundaries settle against one another
+   instead of each parent bisecting itself greedily. The `l` parents are then
+   retired and the `2l` children published to the graph together.
+3. **Reassign per region.** Each parent's region is then reassigned in turn,
+   exactly as in step 3.5: the candidates are the parent's own two children plus
+   the `reassign_neighbors` nearest live centroids selected *before* the
+   mutation, and the candidate points are the parent's members plus everything
+   those neighbors hold. A neighbor that was itself a parent of this batch has
+   been retired and drops out — its region is covered by its own turn.
+
+Admission control still applies per batch: a split costs two ids and adds one
+live cluster, so when a batch would breach `max_clusters` or the id budget the
+most overfull clusters split first and the rest wait for a later batch.
+
+At `l = 1` every phase reduces to the serial description above, so `batch_size:
+1` is the reference semantics and larger batches differ only where the joint
+k-means and the deferred routing actually bite: points routed against the
+pre-batch partition (phase 3 re-examines exactly the regions that moved), and
+overflowing clusters bisected together rather than one at a time. Telemetry
+coarsens to match — one `SplitEvent` per split parent still, but every event from
+one batch shares that batch's `insert_index` and `live_after`, and
+`two_means_us` is the parent's share of the joint k-means prorated by member
+count.
+
+Measured on enron-1M (1,087,932 × 384 minmax8, `split_threshold` 759,
+`reassign_neighbors` 32, 16 threads), `batch_size: 4096` against the same build
+at `batch_size: 1`:
+
+| | `batch_size: 1` | `batch_size: 4096` |
+| --- | --- | --- |
+| build | 138.0 s | **84.7 s** (1.6×) |
+| routing | 52.5 s | 7.5 s |
+| split | 84.5 s | 77.1 s |
+| live clusters | 2012 | 2055 |
+| points reassigned | 1,873,198 | 1,933,702 |
+| residual | 6.345e5 | 6.347e5 |
+| recall@50, `nlist` 307 | 92.49 | 91.90 |
+
+Nearly all of it is routing: that phase is embarrassingly parallel once the
+graph is frozen and drops 7×, while splitting stays serial per parent and gains
+only what the joint k-means saves. Recall tracks the serial build to within a
+point, at the same residual.
 
 ### 4. Id budget & termination
 

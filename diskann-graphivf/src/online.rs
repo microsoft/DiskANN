@@ -5,12 +5,17 @@
 
 //! Online (incremental) graph-IVF clustering with split-and-reassign.
 //!
-//! [`OnlineClusterer`] builds the IVF partition one point at a time instead of
-//! in a single batch Lloyd pass. Points are streamed in; each is routed to its
-//! nearest centroid via a mutable centroid graph. When a cluster grows past a
-//! threshold it is split into two by a local 2-means, and the points of the
-//! split cluster together with the points of its graph-neighboring clusters are
-//! reassigned among the new and neighboring centroids.
+//! [`OnlineClusterer`] builds the IVF partition incrementally instead of in a
+//! single batch Lloyd pass. Points are routed to their nearest centroid via a
+//! mutable centroid graph; when a cluster grows past a threshold it is split,
+//! and the points of the split cluster together with the points of its
+//! graph-neighboring clusters are reassigned among the new and neighboring
+//! centroids.
+//!
+//! There is one write path, [`insert_batch`](OnlineClusterer::insert_batch):
+//! route the batch, then jointly split whichever clusters overflowed and
+//! reassign each split region. A batch large enough to be worth the dispatch
+//! routes across the thread pool; reassignment is always a GEMM.
 //!
 //! The whole IVF mapping (inverted lists and the point→centroid assignment) is
 //! kept in memory and mutated in place; [`OnlineClusterer::flush`] serializes it
@@ -19,17 +24,20 @@
 //! [`GraphIvfIndex`](crate::GraphIvfIndex) path.
 //!
 //! Points are preloaded as an `f32` matrix and "streamed" by feeding their row
-//! indices to [`OnlineClusterer::insert`]; this keeps the experiment free of
-//! disk I/O while still exercising the incremental build logic. For a
-//! normalizing metric (cosine) the caller must pre-normalize the points.
+//! indices to [`insert_batch`](OnlineClusterer::insert_batch); this keeps the
+//! experiment free of disk I/O while still exercising the incremental build
+//! logic. For a normalizing metric (cosine) the caller must pre-normalize the
+//! points.
 
 use std::path::Path;
 use std::time::Instant;
 
-use diskann_providers::utils::{create_thread_pool, RayonThreadPool};
+use diskann_disk::utils::compute_closest_centers;
+use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool, RayonThreadPool};
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric as VectorMetric;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use rayon::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::{
@@ -46,6 +54,43 @@ use diskann::{utils::VectorRepr, ANNError};
 /// Sentinel in [`OnlineClusterer::assignments`] for a point that has not been
 /// inserted yet.
 const UNASSIGNED: u32 = u32::MAX;
+
+/// Points routed per parallel work unit in [`OnlineClusterer::insert_batch`].
+const ROUTE_CHUNK: usize = 256;
+
+/// Maximum points gathered into one contiguous tile for a GEMM reassignment
+/// call. Reassigning a whole split region at once would need `|P| * dim` floats
+/// (gigabytes for a large `reassign_neighbors`), so points are streamed through
+/// a tile that bounds the scratch to `REASSIGN_TILE * dim` floats.
+const REASSIGN_TILE: usize = 4096;
+
+/// Route one point to its nearest live centroid via the centroid graph.
+///
+/// The mutable centroid graph accumulates soft-deleted (tombstoned) slots as
+/// clusters split — near the target cluster count roughly half the graph can be
+/// tombstones. A narrow beam can then occasionally exhaust its frontier on
+/// tombstoned nodes and return no live centroid, so the search is retried with
+/// `wide_l` before giving up and, as a last resort, falls back to a brute-force
+/// scan over the live centroids. Successful narrow-beam routes are unchanged.
+fn route_one(
+    graph: &MutableCentroidGraph,
+    runtime: &Runtime,
+    table: &CentroidTable,
+    point: &[f32],
+    base_l: usize,
+    wide_l: usize,
+) -> Result<u32> {
+    let mut ids = [0u32; 1];
+    let mut dist = [0.0f32; 1];
+    for l in [base_l, wide_l] {
+        if centroids::search_mut(graph, runtime, point, l, &mut ids, &mut dist)? > 0 {
+            return Ok(ids[0]);
+        }
+    }
+    table
+        .nearest(point)
+        .ok_or_else(|| GraphIvfError::invalid("no live centroid available for assignment"))
+}
 
 /// How the initial centroid set an [`OnlineClusterer`] starts from is produced.
 ///
@@ -161,25 +206,33 @@ fn warmup_kmeans(
 /// much reassignment work each split cost — enough to reconstruct, for any point
 /// in the stream, the live cluster count, cumulative reassignments, and split
 /// latency.
+///
+/// A batched insert splits every overflowing cluster together, so it emits one
+/// event per split parent that all share the batch's `insert_index` and
+/// `live_after`, and divide the batch's joint k-means time between them.
 #[derive(Debug, Clone, Copy)]
 pub struct SplitEvent {
     /// Number of inserts completed (inclusive) when this split fired. Serves as
-    /// the build-progress timestamp, in `[1, corpus_len]`.
+    /// the build-progress timestamp, in `[1, corpus_len]`. Every split of one
+    /// batch shares the timestamp of that batch's last point.
     pub insert_index: u64,
     /// The centroid id that was split (and retired).
     pub cluster: u32,
     /// Size of the split cluster at split time (the overflow that triggered it).
     pub cluster_size: usize,
-    /// Number of live graph-neighbor clusters drawn into the reassignment.
+    /// Number of live neighbor clusters drawn into the reassignment, besides the
+    /// split's own two children.
     pub num_neighbors: usize,
     /// Points that actually changed cluster in this split's reassignment pass.
-    /// Every member of the split (retired) cluster is counted (each moves to a
-    /// child centroid); a pooled neighbor point is counted only if it landed on
-    /// a different centroid than it held before.
+    /// A point re-examined but routed back to the centroid it already held is
+    /// not counted; every member of the split (retired) cluster is, since it
+    /// must move to a child.
     pub num_reassigned: usize,
-    /// Live centroid count immediately after the split (net `+1`).
+    /// Live centroid count immediately after the split (net `+1` per split).
     pub live_after: usize,
-    /// Wall-clock of the local 2-means, in microseconds.
+    /// Wall-clock of the 2-means, in microseconds. When a batch split several
+    /// clusters at once this is the parent's share of the joint k-means,
+    /// prorated by member count.
     pub two_means_us: u64,
     /// Wall-clock of the reassignment pass, in microseconds.
     pub reassign_us: u64,
@@ -304,9 +357,9 @@ impl CentroidTable {
         self.vecs.get(id as usize).and_then(|s| s.as_deref())
     }
 
-    /// Whether the id budget can accommodate `n` more [`alloc`](Self::alloc)s.
-    fn can_alloc(&self, n: usize) -> bool {
-        self.next_id as usize + n <= self.vecs.len()
+    /// Number of ids still available to [`alloc`](Self::alloc).
+    fn alloc_budget(&self) -> usize {
+        self.vecs.len().saturating_sub(self.next_id as usize)
     }
 
     /// Allocate the next id, storing `vec` as its centroid.
@@ -362,24 +415,6 @@ impl CentroidTable {
             if d < best_d {
                 best_d = d;
                 best = Some(id);
-            }
-        }
-        best
-    }
-
-    /// Nearest candidate centroid to `point` by squared-L2; retired candidates
-    /// are skipped. `cands` must be non-empty; if every candidate is retired the
-    /// first is returned.
-    fn nearest_among(&self, point: &[f32], cands: &[u32]) -> u32 {
-        let mut best = cands[0];
-        let mut best_d = f32::INFINITY;
-        for &cand in cands {
-            if let Some(v) = self.get(cand) {
-                let d = sq_l2(point, v);
-                if d < best_d {
-                    best_d = d;
-                    best = cand;
-                }
             }
         }
         best
@@ -458,12 +493,6 @@ impl IvfPartition {
     fn take_members(&mut self, cid: u32) -> Vec<u32> {
         std::mem::take(&mut self.lists[cid as usize])
     }
-
-    /// Restore centroid `cid`'s inverted list, rolling back a prior
-    /// [`take_members`](Self::take_members).
-    fn restore_members(&mut self, cid: u32, members: Vec<u32>) {
-        self.lists[cid as usize] = members;
-    }
 }
 
 /// An incremental graph-IVF clusterer driven by point insertion with
@@ -499,6 +528,13 @@ pub struct OnlineClusterer {
     scratch_neighbors: Vec<u32>,
     /// Scratch reused for the nearest-centroid search: the distance buffer.
     scratch_dist: Vec<f32>,
+    /// Scratch reused by the GEMM reassignment: the contiguous candidate-centroid
+    /// matrix.
+    scratch_cvecs: Vec<f32>,
+    /// Scratch reused by the GEMM reassignment: the contiguous point tile.
+    scratch_tile: Vec<f32>,
+    /// Scratch reused by the GEMM reassignment: the per-point argmin output.
+    scratch_best: Vec<u32>,
 }
 
 impl OnlineClusterer {
@@ -611,6 +647,9 @@ impl OnlineClusterer {
             scratch_cands: Vec::new(),
             scratch_neighbors: Vec::new(),
             scratch_dist: Vec::new(),
+            scratch_cvecs: Vec::new(),
+            scratch_tile: Vec::new(),
+            scratch_best: Vec::new(),
         })
     }
 
@@ -646,233 +685,380 @@ impl OnlineClusterer {
         sum
     }
 
-    /// Insert point `pid`: route it to its nearest centroid, then split that
-    /// cluster (with neighborhood reassignment) if it exceeds the threshold.
-    pub fn insert(&mut self, pid: u32) -> Result<()> {
-        let p = pid as usize;
-        if p >= self.points.nrows() {
+    /// Insert a batch of points, routing each to its nearest centroid and then
+    /// splitting whichever clusters that pushed past `split_threshold`.
+    ///
+    /// A batch is processed in phases rather than point by point:
+    ///
+    /// 1. **Route.** Splits are deferred to the end of the batch, so routing is
+    ///    read-only with respect to the centroid graph and a batch large enough
+    ///    to be worth the dispatch runs across the whole thread pool.
+    /// 2. **Split jointly.** Every routed-to cluster that now overflows is
+    ///    collected; their inverted lists are unioned and re-clustered in a
+    ///    *single* k-means into twice as many centroids (two per overflowing
+    ///    parent). With one parent this is exactly a local 2-means; with several
+    ///    it lets clusters that overflowed together — which are usually adjacent
+    ///    — resolve their shared boundaries jointly instead of greedily.
+    /// 3. **Reassign per split region.** Each split parent's neighborhood is
+    ///    then reassigned in turn, as a GEMM.
+    ///
+    /// Routes are computed against the pre-batch partition, so a point that
+    /// lands in a cluster which then splits is routed slightly stale; phase 3
+    /// re-examines exactly that cluster's region.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point id is out of range, or if routing,
+    /// clustering, or graph mutation fails.
+    pub fn insert_batch(&mut self, pids: &[u32]) -> Result<()> {
+        if pids.is_empty() {
+            return Ok(());
+        }
+        let num_points = self.points.nrows();
+        if pids.iter().any(|&pid| pid as usize >= num_points) {
             return Err(GraphIvfError::invalid("point id out of range"));
         }
 
+        // 1. Route the whole batch in parallel against the frozen graph.
         let route_start = Instant::now();
-        let c = self.assign_nearest(pid)?;
+        let mut routes = vec![0u32; pids.len()];
+        self.route_batch(pids, &mut routes)?;
         self.telemetry.routing_us += route_start.elapsed().as_micros() as u64;
 
-        self.partition.assign(pid, c);
-        self.telemetry.total_inserts += 1;
-
-        // Split when the cluster overflows, unless an explicit live-cluster cap
-        // is set and reached, or the id budget cannot fit two more children.
-        let under_cap = self
-            .params
-            .max_clusters
-            .is_none_or(|k| self.table.live_count() < k);
-        let id_budget_ok = self.table.can_alloc(2);
-        if self.partition.list_len(c) > self.params.split_threshold && under_cap && id_budget_ok {
-            self.split(c)?;
+        // 2. Append every point to its routed cluster.
+        for (&pid, &cid) in pids.iter().zip(routes.iter()) {
+            self.partition.assign(pid, cid);
         }
-        Ok(())
-    }
+        self.telemetry.total_inserts += pids.len() as u64;
 
-    /// Route point `pid` to its nearest live centroid via the centroid graph.
-    ///
-    /// The mutable centroid graph accumulates soft-deleted (tombstoned) slots as
-    /// clusters split — near the target cluster count roughly half the graph can
-    /// be tombstones. A narrow beam can then occasionally exhaust its frontier on
-    /// tombstoned nodes and return no live centroid, so we widen the search list
-    /// before giving up and, as a last resort, fall back to a brute-force scan
-    /// over the live centroids. Successful narrow-beam routes are unchanged.
-    fn assign_nearest(&self, pid: u32) -> Result<u32> {
-        let mut ids = [0u32; 1];
-        let mut dist = [0.0f32; 1];
-        let base_l = self.params.assign_l.max(1);
-        let wide_l = base_l.saturating_mul(8).max(512);
-        for l in [base_l, wide_l] {
-            let n = centroids::search_mut(
-                &self.graph,
-                &self.runtime,
-                self.points.row(pid as usize),
-                l,
-                &mut ids,
-                &mut dist,
-            )?;
-            if n > 0 {
-                return Ok(ids[0]);
-            }
-        }
-        self.table
-            .nearest(self.points.row(pid as usize))
-            .ok_or_else(|| GraphIvfError::invalid("no live centroid available for assignment"))
-    }
-
-    /// Split cluster `c` into two child centroids via a local 2-means, then
-    /// reassign the points of `c` and of its `reassign_neighbors` nearest
-    /// centroid clusters among the two children and those neighboring centroids.
-    fn split(&mut self, c: u32) -> Result<()> {
-        let split_start = Instant::now();
-
-        // Take C's members out; if too small to split, restore and bail.
-        let members = self.partition.take_members(c);
-        if members.len() < 2 {
-            self.partition.restore_members(c, members);
+        // 3. The routed-to clusters that overflowed. Only clusters that received
+        //    a point this batch can have grown, so the scan is over the batch's
+        //    distinct routes rather than the whole partition.
+        routes.sort_unstable();
+        routes.dedup();
+        let mut parents = routes;
+        parents.retain(|&c| self.partition.list_len(c) > self.params.split_threshold);
+        if parents.is_empty() {
             return Ok(());
         }
-        let cluster_size = members.len();
 
-        // 1. Two child centroids from a local 2-means over C.
-        let two_means_start = Instant::now();
-        let two = self.two_means(&members)?;
-        let two_means_us = two_means_start.elapsed().as_micros() as u64;
-        let child1: Box<[f32]> = two.row(0).to_vec().into_boxed_slice();
-        let child2: Box<[f32]> = two.row(1).to_vec().into_boxed_slice();
-
-        // 2. Candidate clusters: the `s` live centroids nearest to `c`, found by
-        //    searching `c`'s own centroid vector in the centroid graph. The
-        //    search runs before `c` is deleted and the children inserted, so it
-        //    sees the pre-split centroids; `c` itself (distance 0) is dropped
-        //    from the results below. `k = s + 1` reserves a slot for `c`.
-        let c_vec: Box<[f32]> = self
-            .table
-            .get(c)
-            .expect("splitting a live centroid")
-            .to_vec()
-            .into_boxed_slice();
-        let s = self.params.reassign_neighbors;
-        let k = s + 1;
-        let l = self.params.reassign_l.max(k);
-        let mut neighbors = std::mem::take(&mut self.scratch_neighbors);
-        let mut dist = std::mem::take(&mut self.scratch_dist);
-        neighbors.clear();
-        neighbors.resize(k, 0);
-        dist.clear();
-        dist.resize(k, 0.0);
-        let found = centroids::search_mut(
-            &self.graph,
-            &self.runtime,
-            &c_vec,
-            l,
-            &mut neighbors,
-            &mut dist,
-        )?;
-        neighbors.truncate(found);
-        neighbors.retain(|&x| x != c && self.table.is_live(x));
-        neighbors.truncate(s);
-        let num_neighbors = neighbors.len();
-
-        // 3. Allocate the two child ids and retire the parent.
-        let id1 = self.table.alloc(child1)?;
-        let id2 = self.table.alloc(child2)?;
-        self.table.retire(c);
-
-        // 4. Mutate the graph: delete c, insert the two children.
-        centroids::delete_centroid(&self.graph, &self.runtime, c)?;
-        {
-            let v1 = self.table.get(id1).expect("just set");
-            centroids::insert_centroid(&self.graph, &self.runtime, id1, v1)?;
+        // 4. Admission control. Each parent is replaced by two children, so a
+        //    split costs two ids and adds one live cluster. When the batch would
+        //    breach either bound, the most overfull clusters are split first and
+        //    the rest wait for a later batch.
+        let mut admitted = parents.len().min(self.table.alloc_budget() / 2);
+        if let Some(k) = self.params.max_clusters {
+            admitted = admitted.min(k.saturating_sub(self.table.live_count()));
         }
-        {
-            let v2 = self.table.get(id2).expect("just set");
-            centroids::insert_centroid(&self.graph, &self.runtime, id2, v2)?;
+        if admitted == 0 {
+            return Ok(());
+        }
+        if admitted < parents.len() {
+            parents.sort_unstable_by(|&a, &b| {
+                self.partition
+                    .list_len(b)
+                    .cmp(&self.partition.list_len(a))
+                    .then(a.cmp(&b))
+            });
+            parents.truncate(admitted);
+            parents.sort_unstable();
         }
 
-        // 5. Candidate centroids = neighbors ∪ {id1, id2}.
-        let mut cands = std::mem::take(&mut self.scratch_cands);
-        cands.clear();
-        cands.extend_from_slice(&neighbors);
-        cands.push(id1);
-        cands.push(id2);
-
-        // 6. Candidate points = C ∪ (points of every neighbor cluster).
-        let mut pool = std::mem::take(&mut self.scratch_pool);
-        pool.clear();
-        pool.extend_from_slice(&members);
-        for &nc in &neighbors {
-            let taken = self.partition.take_members(nc);
-            pool.extend_from_slice(&taken);
-        }
-        // c's list is already empty (members were taken); keep it empty.
-
-        // 7. Reassign every pooled point to its nearest candidate centroid and
-        //    rebuild the affected inverted lists. Only points that actually land
-        //    in a different cluster than before count as reassigned; a point
-        //    routed back to the same centroid it already held does not. (Every
-        //    member of the retired cluster `c` necessarily moves, since `c` is
-        //    not among the candidates.)
-        let reassign_start = Instant::now();
-        let mut num_reassigned = 0usize;
-        for &pid in &pool {
-            let best = self
-                .table
-                .nearest_among(self.points.row(pid as usize), &cands);
-            let prev = self.partition.assign(pid, best);
-            if best != prev {
-                num_reassigned += 1;
-            }
-        }
-        let reassign_us = reassign_start.elapsed().as_micros() as u64;
-
-        // Return the scratch buffers for reuse.
-        self.scratch_pool = pool;
-        self.scratch_cands = cands;
-        self.scratch_neighbors = neighbors;
-        self.scratch_dist = dist;
-
-        // Record the split in the build telemetry.
-        let total_us = split_start.elapsed().as_micros() as u64;
-        self.telemetry.total_splits += 1;
-        self.telemetry.total_reassigned += num_reassigned as u64;
-        self.telemetry.split_us += total_us;
-        self.telemetry.splits.push(SplitEvent {
-            insert_index: self.telemetry.total_inserts,
-            cluster: c,
-            cluster_size,
-            num_neighbors,
-            num_reassigned,
-            live_after: self.table.live_count(),
-            two_means_us,
-            reassign_us,
-            total_us,
-        });
-        Ok(())
+        self.split_batch(&parents)
     }
 
-    /// Run a 2-means over the given member points, returning the two child
-    /// centroids as a `2 x dim` matrix.
-    fn two_means(&mut self, members: &[u32]) -> Result<Matrix<f32>> {
-        let dim = self.dim;
-        let m = members.len();
-        debug_assert!(m >= 2);
+    /// Route every point of `pids` to its nearest live centroid, writing the
+    /// centroid ids into `out`.
+    ///
+    /// The graph is not mutated during a batch, so the searches are independent.
+    /// A batch large enough to fill more than one chunk is spread across the
+    /// thread pool, each worker driving its own current-thread runtime; a
+    /// smaller one is not worth the dispatch and the runtimes it would build, so
+    /// it runs on the clusterer's own runtime.
+    fn route_batch(&self, pids: &[u32], out: &mut [u32]) -> Result<()> {
+        debug_assert_eq!(pids.len(), out.len());
+        let graph = &self.graph;
+        let table = &self.table;
+        let points = &self.points;
+        let base_l = self.params.assign_l.max(1);
+        let wide_l = base_l.saturating_mul(8).max(512);
 
+        if pids.len() <= ROUTE_CHUNK {
+            for (pid, slot) in pids.iter().zip(out.iter_mut()) {
+                *slot = route_one(
+                    graph,
+                    &self.runtime,
+                    table,
+                    points.row(*pid as usize),
+                    base_l,
+                    wide_l,
+                )?;
+            }
+            return Ok(());
+        }
+
+        out.par_chunks_mut(ROUTE_CHUNK)
+            .enumerate()
+            .try_for_each_in_pool(self.pool.as_ref(), |(ci, chunk)| -> Result<()> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .map_err(ANNError::from)?;
+                for (j, slot) in chunk.iter_mut().enumerate() {
+                    let point = points.row(pids[ci * ROUTE_CHUNK + j] as usize);
+                    *slot = route_one(graph, &runtime, table, point, base_l, wide_l)?;
+                }
+                Ok(())
+            })
+    }
+
+    /// Split every cluster in `parents` at once.
+    ///
+    /// The members of all `l` parents are unioned and re-clustered by a *single*
+    /// k-means into `2l` children, rather than by `l` independent 2-means. The
+    /// union is seeded with two members drawn from each parent, so the run starts
+    /// from the same configuration `l` separate 2-means would, but the parents'
+    /// boundaries are then free to move against one another — clusters that
+    /// overflow together in one batch are usually adjacent, and the joint pass
+    /// resolves them jointly instead of greedily.
+    ///
+    /// Once the children exist, each parent's region is reassigned in turn (see
+    /// [`reassign_gemm`](Self::reassign_gemm)). `parents` must be sorted, live,
+    /// hold at least two members each, and fit the id budget and cluster cap —
+    /// [`insert_batch`](Self::insert_batch) guarantees all four.
+    fn split_batch(&mut self, parents: &[u32]) -> Result<()> {
+        let split_start = Instant::now();
+        let dim = self.dim;
+        let l = parents.len();
+
+        // The `reassign_neighbors` live centroids nearest each parent, found by
+        // searching the parent's own centroid vector. The searches run before the
+        // parents are retired and the children inserted, so they see the
+        // pre-split centroids; the parent itself (distance 0) is dropped, and its
+        // own two children join the candidate set once they exist. `k = s + 1`
+        // reserves the slot the parent takes.
+        let s = self.params.reassign_neighbors;
+        let search_k = s + 1;
+        let search_l = self.params.reassign_l.max(search_k);
+        let mut neighbor_sets: Vec<Vec<u32>> = Vec::with_capacity(l);
+        {
+            let mut ids = std::mem::take(&mut self.scratch_neighbors);
+            let mut dist = std::mem::take(&mut self.scratch_dist);
+            ids.clear();
+            ids.resize(search_k, 0);
+            dist.clear();
+            dist.resize(search_k, 0.0);
+            for &c in parents {
+                let c_vec = self.table.get(c).expect("splitting a live centroid");
+                let found = centroids::search_mut(
+                    &self.graph,
+                    &self.runtime,
+                    c_vec,
+                    search_l,
+                    &mut ids,
+                    &mut dist,
+                )?;
+                let mut neighbors = ids[..found].to_vec();
+                neighbors.retain(|&x| x != c && self.table.is_live(x));
+                neighbors.truncate(s);
+                neighbor_sets.push(neighbors);
+            }
+            self.scratch_neighbors = ids;
+            self.scratch_dist = dist;
+        }
+
+        // Union every parent's members; `spans[i]` is parent i's range in `x`.
+        let mut x: Vec<u32> = Vec::new();
+        let mut spans: Vec<(usize, usize)> = Vec::with_capacity(l);
+        for &c in parents {
+            let start = x.len();
+            let members = self.partition.take_members(c);
+            x.extend_from_slice(&members);
+            spans.push((start, x.len()));
+        }
+        let m = x.len();
+
+        // 1. One k-means over the union into `2l` children.
+        let kmeans_start = Instant::now();
         let mut buf = vec![0.0f32; m * dim];
-        for (i, &pid) in members.iter().enumerate() {
+        for (i, &pid) in x.iter().enumerate() {
             buf[i * dim..(i + 1) * dim].copy_from_slice(self.points.row(pid as usize));
         }
-        let sub = Matrix::try_from(buf.into_boxed_slice(), m, dim)
+        let data = Matrix::try_from(buf.into_boxed_slice(), m, dim)
             .map_err(|_| GraphIvfError::invalid("split sub-matrix shape mismatch"))?;
 
-        // Seed with two distinct member points.
-        let a = self.rng.random_range(0..m);
-        let mut b = self.rng.random_range(0..m);
-        if b == a {
-            b = (a + 1) % m;
+        // Seed each parent's two children with two distinct members of that
+        // parent, matching how a single split seeds its local 2-means.
+        let mut seed = vec![0.0f32; 2 * l * dim];
+        for (i, &(lo, hi)) in spans.iter().enumerate() {
+            let span = hi - lo;
+            debug_assert!(span >= 2);
+            let a = self.rng.random_range(0..span);
+            let mut b = self.rng.random_range(0..span);
+            if b == a {
+                b = (a + 1) % span;
+            }
+            seed[2 * i * dim..(2 * i + 1) * dim].copy_from_slice(data.row(lo + a));
+            seed[(2 * i + 1) * dim..(2 * i + 2) * dim].copy_from_slice(data.row(lo + b));
         }
-        let mut seed = vec![0.0f32; 2 * dim];
-        seed[0..dim].copy_from_slice(sub.row(a));
-        seed[dim..2 * dim].copy_from_slice(sub.row(b));
-        let mut centroids = Matrix::try_from(seed.into_boxed_slice(), 2, dim)
+        let mut children = Matrix::try_from(seed.into_boxed_slice(), 2 * l, dim)
             .map_err(|_| GraphIvfError::invalid("split seed shape mismatch"))?;
 
         let mut assigner = cluster::ExactAssigner::default();
         cluster::lloyd(
-            sub.as_view(),
-            &mut centroids,
+            data.as_view(),
+            &mut children,
             &mut assigner,
             self.params.two_means_iters.max(1),
             EmptyClusterPolicy::PreserveOld,
             self.params.normalize_centroids,
             &self.pool,
         )?;
-        Ok(centroids)
+        let kmeans_us = kmeans_start.elapsed().as_micros() as u64;
+
+        // 2. Publish the structural change: allocate the children, retire the
+        //    parents, and mirror both into the centroid graph.
+        let mut child_ids = Vec::with_capacity(2 * l);
+        for i in 0..2 * l {
+            child_ids.push(
+                self.table
+                    .alloc(children.row(i).to_vec().into_boxed_slice())?,
+            );
+        }
+        for &c in parents {
+            self.table.retire(c);
+            centroids::delete_centroid(&self.graph, &self.runtime, c)?;
+        }
+        for &id in &child_ids {
+            let v = self.table.get(id).expect("just allocated");
+            centroids::insert_centroid(&self.graph, &self.runtime, id, v)?;
+        }
+        let live_after = self.table.live_count();
+
+        // 3. Reassign each split region in turn. The candidates are the parent's
+        //    own two children plus the neighbors picked before the mutation, less
+        //    any neighbor that was itself a parent of this batch and has since
+        //    been retired — that region is covered by its own turn.
+        for (i, &parent) in parents.iter().enumerate() {
+            let (lo, hi) = spans[i];
+            let cluster_size = hi - lo;
+
+            let mut cands = std::mem::take(&mut self.scratch_cands);
+            cands.clear();
+            cands.extend(
+                neighbor_sets[i]
+                    .iter()
+                    .copied()
+                    .filter(|&c| self.table.is_live(c)),
+            );
+            let num_neighbors = cands.len();
+            cands.push(child_ids[2 * i]);
+            cands.push(child_ids[2 * i + 1]);
+
+            // Candidate points: the parent's own members plus everything its
+            // surviving neighbors hold. The children's lists are still empty —
+            // no other region can have placed a point on them — so the k-means
+            // assignment is not applied separately; reassignment places every
+            // member against the neighbors too, which strictly refines it.
+            let mut pool = std::mem::take(&mut self.scratch_pool);
+            pool.clear();
+            pool.extend_from_slice(&x[lo..hi]);
+            for &c in &cands[..num_neighbors] {
+                let taken = self.partition.take_members(c);
+                pool.extend_from_slice(&taken);
+            }
+
+            let reassign_start = Instant::now();
+            let num_reassigned = self.reassign_gemm(&cands, &pool)?;
+            let reassign_us = reassign_start.elapsed().as_micros() as u64;
+
+            self.scratch_pool = pool;
+            self.scratch_cands = cands;
+
+            // The joint k-means covered every parent at once; charge each parent
+            // the share of it proportional to the points it contributed.
+            let two_means_us = if m == 0 {
+                0
+            } else {
+                kmeans_us * cluster_size as u64 / m as u64
+            };
+            self.telemetry.total_splits += 1;
+            self.telemetry.total_reassigned += num_reassigned as u64;
+            self.telemetry.splits.push(SplitEvent {
+                insert_index: self.telemetry.total_inserts,
+                cluster: parent,
+                cluster_size,
+                num_neighbors,
+                num_reassigned,
+                live_after,
+                two_means_us,
+                reassign_us,
+                total_us: two_means_us + reassign_us,
+            });
+        }
+
+        self.telemetry.split_us += split_start.elapsed().as_micros() as u64;
+        Ok(())
+    }
+
+    /// Reassign every point of `pool` to its nearest centroid in `cands`,
+    /// returning how many actually changed cluster.
+    ///
+    /// Distances are computed as `‖p‖² - 2p·c + ‖c‖²` over a `tile x |cands|`
+    /// GEMM instead of a scalar loop per point, which is what makes a large
+    /// `reassign_neighbors` affordable. The caller must have emptied every
+    /// candidate's inverted list first (all of `pool` is re-appended here).
+    fn reassign_gemm(&mut self, cands: &[u32], pool: &[u32]) -> Result<usize> {
+        if cands.is_empty() || pool.is_empty() {
+            return Ok(0);
+        }
+        let dim = self.dim;
+        let nc = cands.len();
+
+        let mut cvecs = std::mem::take(&mut self.scratch_cvecs);
+        let mut tile = std::mem::take(&mut self.scratch_tile);
+        let mut best = std::mem::take(&mut self.scratch_best);
+        cvecs.clear();
+        cvecs.resize(nc * dim, 0.0);
+        for (i, &c) in cands.iter().enumerate() {
+            cvecs[i * dim..(i + 1) * dim]
+                .copy_from_slice(self.table.get(c).expect("candidate is live"));
+        }
+        let rows = REASSIGN_TILE.min(pool.len());
+        tile.clear();
+        tile.resize(rows * dim, 0.0);
+        best.clear();
+        best.resize(rows, 0);
+
+        let mut num_reassigned = 0usize;
+        for chunk in pool.chunks(rows) {
+            let n = chunk.len();
+            for (i, &pid) in chunk.iter().enumerate() {
+                tile[i * dim..(i + 1) * dim].copy_from_slice(self.points.row(pid as usize));
+            }
+            compute_closest_centers(
+                &tile[..n * dim],
+                n,
+                dim,
+                &cvecs,
+                nc,
+                1,
+                &mut best[..n],
+                None,
+                None,
+                self.pool.as_ref(),
+            )?;
+            for (i, &pid) in chunk.iter().enumerate() {
+                let cid = cands[best[i] as usize];
+                if self.partition.assign(pid, cid) != cid {
+                    num_reassigned += 1;
+                }
+            }
+        }
+
+        self.scratch_cvecs = cvecs;
+        self.scratch_tile = tile;
+        self.scratch_best = best;
+        Ok(num_reassigned)
     }
 
     /// Serialize the in-memory IVF mapping to `prefix` in the batch on-disk
@@ -1084,7 +1270,7 @@ mod tests {
         let initial = mat(vec![0.0, 0.0, 20.0, 20.0], 2, 2);
         let mut c = OnlineClusterer::new(points.clone(), initial, params(2, 10_000)).unwrap();
         for pid in 0..n as u32 {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
         assert_invariants(&c, n);
         assert_eq!(c.num_clusters(), 2);
@@ -1114,7 +1300,7 @@ mod tests {
             order.swap(i, rng.random_range(0..=i));
         }
         for &pid in &order {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
         assert_invariants(&c, n);
         assert_eq!(
@@ -1156,7 +1342,7 @@ mod tests {
 
         let mut c = OnlineClusterer::new(points.clone(), initial, params(16, 40)).unwrap();
         for pid in 0..nn as u32 {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
         assert_invariants(&c, nn);
         assert!(c.num_clusters() > 4, "expected some splits to occur");
@@ -1194,7 +1380,7 @@ mod tests {
 
         let mut c = OnlineClusterer::new(points, initial, p).unwrap();
         for pid in 0..nn as u32 {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
         assert_invariants(&c, nn);
 
@@ -1202,6 +1388,83 @@ mod tests {
         assert!(c.num_clusters() > 10, "got {}", c.num_clusters());
         let mean = nn as f64 / c.num_clusters() as f64;
         assert!(mean <= 21.0, "mean cluster size {mean} exceeds threshold");
+    }
+
+    #[test]
+    fn batched_inserts_preserve_invariants_and_split() {
+        // The batched path defers splitting to the end of a batch, so several
+        // clusters overflow at once and are re-clustered together. The partition
+        // it lands on differs from the streaming path's, but the structural
+        // invariants and the +1-live-cluster-per-split accounting are the same.
+        let mut rng = StdRng::seed_from_u64(13);
+        let (nn, dim) = (900usize, 8usize);
+        let mut v = vec![0.0f32; nn * dim];
+        for x in v.iter_mut() {
+            *x = rng.random_range(-1.0..1.0);
+        }
+        let points = mat(v, nn, dim);
+
+        let mut ib = vec![0.0f32; 4 * dim];
+        for i in 0..4 {
+            ib[i * dim..(i + 1) * dim].copy_from_slice(points.row(rng.random_range(0..nn)));
+        }
+        let initial = mat(ib, 4, dim);
+
+        let mut p = params(64, 40);
+        p.centroid_capacity = 4 * nn;
+
+        let mut c = OnlineClusterer::new(points.clone(), initial, p).unwrap();
+        let ids: Vec<u32> = (0..nn as u32).collect();
+        for batch in ids.chunks(128) {
+            c.insert_batch(batch).unwrap();
+        }
+
+        assert_invariants(&c, nn);
+        assert!(c.num_clusters() > 4, "batches should overflow clusters");
+        assert_eq!(
+            c.num_clusters(),
+            4 + c.telemetry().total_splits as usize,
+            "every split retires one parent and allocates two children"
+        );
+        assert_eq!(c.telemetry().total_inserts, nn as u64);
+
+        // A batch's splits are re-clustered jointly, so several events share one
+        // timestamp, but the timeline is still ordered.
+        let mut prev = 0u64;
+        for e in &c.telemetry().splits {
+            assert!(e.insert_index >= prev);
+            prev = e.insert_index;
+        }
+
+        // Local assignment can only be worse than the optimal one for the
+        // centroid set it produced.
+        let opt = optimal_residual(&points, &live_centroids(&c));
+        assert!(c.residual() >= opt - 1e-3);
+    }
+
+    #[test]
+    fn batched_inserts_respect_max_clusters() {
+        // Admission control has to hold even when a single batch overflows more
+        // clusters than the cap has room for.
+        let mut rng = StdRng::seed_from_u64(17);
+        let (nn, dim) = (800usize, 4usize);
+        let mut v = vec![0.0f32; nn * dim];
+        for x in v.iter_mut() {
+            *x = rng.random_range(-1.0..1.0);
+        }
+        let points = mat(v, nn, dim);
+        let initial = mat(points.row(0).to_vec(), 1, dim);
+
+        let mut p = params(6, 10);
+        p.centroid_capacity = 4 * nn;
+
+        let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+        let ids: Vec<u32> = (0..nn as u32).collect();
+        for batch in ids.chunks(200) {
+            c.insert_batch(batch).unwrap();
+        }
+        assert_invariants(&c, nn);
+        assert!(c.num_clusters() <= 6, "got {}", c.num_clusters());
     }
 
     #[test]
@@ -1218,7 +1481,7 @@ mod tests {
             order.swap(i, rng.random_range(0..=i));
         }
         for &pid in &order {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
 
         let t = c.telemetry();
@@ -1270,9 +1533,8 @@ mod tests {
         let initial = mat(vec![10.0, 10.0], 1, 2);
         let mut c = OnlineClusterer::new(points.clone(), initial, params(2, 25)).unwrap();
         for pid in 0..n as u32 {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
-        assert_eq!(c.num_clusters(), 2);
 
         let dir = std::env::temp_dir().join(format!("graphivf_online_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1329,7 +1591,7 @@ mod tests {
         assert_eq!(c.num_clusters(), 4);
 
         for pid in 0..n as u32 {
-            c.insert(pid).unwrap();
+            c.insert_batch(&[pid]).unwrap();
         }
         assert_invariants(&c, n);
 
