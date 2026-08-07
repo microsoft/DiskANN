@@ -3,20 +3,19 @@
  * Licensed under the MIT license.
  */
 
-//! Nearest-leader selection for PiPNN partition assignment.
+//! Select partition centers for PiPNN point assignment.
 //!
-//! The input contains a row-major point-to-leader dot matrix and
-//! metric-specific [`PartitionScales`]. The output contains sorted leader-column
-//! positions for each point. Its width sets the fanout and cannot exceed the
-//! leader count.
+//! A leader is a sampled dataset point that represents one child partition.
+//! Each input row contains dot products from one assigned point to all sampled
+//! leaders. Each output row contains the nearest leader-column IDs. The scatter
+//! step uses each column ID as a child-partition ID.
 //!
 //! The caller supplies concrete architecture `A` and metric `M`. The function
 //! checks row counts, scale units, scale lengths, fanout, and leader-ID range.
 //! These checks occur before output changes or unchecked SIMD loads.
 //!
-//! L2 omits the point norm because it is constant for one point. Strict
-//! comparisons keep leader scan order for equal scores. They do not rank NaN.
-//! One runtime-sized workspace tracks the nearest leaders for each point.
+//! L2 omits the assigned point's norm because it is constant across all sampled
+//! leaders. Equal scores keep sampled-leader order. NaN is not rankable.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_vector::distance::Metric;
@@ -26,7 +25,9 @@ use diskann_wide::{
 
 use super::kernel_metric::{KernelMetric, ScaleKind};
 
-/// Reusable nearest-leader tracker for one partition worker.
+/// Reusable nearest-center state for one partition worker.
+///
+/// Each entry contains a sampled leader's matrix-column ID and its metric score.
 #[derive(Debug, Default)]
 pub struct PartitionKernelWorkspace {
     tracker: Vec<(u32, f32)>,
@@ -43,36 +44,35 @@ impl PartitionKernelWorkspace {
     }
 }
 
-/// Metric-specific norm inputs for one partition tile.
+/// Metric norms for one point-to-leader tile.
 ///
-/// The kernel checks each slice length before it changes output. Cosine point
-/// values are squared norms from a matrix diagonal. Cosine leader values are
-/// norms that partition setup computes once.
+/// Cosine point values are squared norms for the points being assigned. Cosine
+/// leader values are norms for the sampled partition centers.
 #[derive(Clone, Copy, Debug)]
 pub enum PartitionScales<'a> {
-    /// L2 needs only squared leader norms; the point norm cannot affect ranking.
+    /// L2 uses the squared norm of each sampled partition center.
     L2 {
-        /// Squared norm for every leader column.
+        /// Squared norm for each sampled leader.
         leader_squared_norms: &'a [f32],
     },
-    /// Unnormalized cosine needs squared point norms and leader norms.
+    /// Unnormalized cosine uses norms for assigned points and sampled leaders.
     Cosine {
         /// Squared norm for every point.
         point_squared_norms: &'a [f32],
-        /// Norm for every leader column.
+        /// Norm for each sampled leader.
         leader_norms: &'a [f32],
     },
     /// Normalized cosine and inner product need no normalization inputs.
     None,
 }
 
-/// One row-major point-to-leader dot-product tile.
+/// Dot products between assigned points and sampled partition centers.
 ///
-/// Rows are points and columns are leaders. [`Self::scales`] must match concrete
-/// metric `M`. This value borrows all input and stores no kernel state.
+/// Each row is one point being assigned. Each column is one sampled leader.
+/// [`Self::scales`] supplies the norm layout for metric `M`.
 #[derive(Clone, Copy, Debug)]
 pub struct PartitionInput<'a> {
-    /// One point per matrix row and one leader per column.
+    /// One assigned point per row and one sampled leader per column.
     pub dots: MatrixView<'a, f32>,
     /// Normalization inputs matching concrete metric `M`.
     pub scales: PartitionScales<'a>,
@@ -136,10 +136,10 @@ pub enum PartitionKernelError {
     },
 }
 
-/// Select the nearest leader positions for each input point.
+/// Select the nearest sampled partition centers for each input point.
 ///
-/// `output.nrows()` must equal `input.dots.nrows()`. `output.ncols()` sets the
-/// fanout and must not exceed the leader count.
+/// The output width is the fanout. Each output value is a leader's column ID in
+/// `input.dots`. Partition scatter uses that ID to select a child partition.
 ///
 /// # Errors
 ///
@@ -286,14 +286,14 @@ fn check_length(
     }
 }
 
-/// Compute the nearest leader IDs for each point.
+/// Rank sampled partition centers for each assigned point.
 ///
-/// The function converts each dot-product row to metric `M` scores. It writes
-/// `output.ncols()` leader-column IDs in nearest-first order. Equal scores keep
-/// leader-column order. NaN and positive infinity do not enter the tracker.
+/// The function converts point-to-leader dot products to metric `M` scores. It
+/// keeps the nearest `output.ncols()` centers in sampled-leader order for ties.
+/// NaN and positive infinity are not rankable.
 ///
-/// `tracker.len()` must equal `output.ncols()`. The function resets the tracker
-/// for each point and returns an error if rankable scores do not fill it.
+/// `tracker` stores the retained center-column IDs and scores for the current
+/// point. The function resets this state before it processes another point.
 fn select_point_leaders<F, M>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
@@ -363,20 +363,17 @@ where
         if tracker[fanout - 1].0 == u32::MAX {
             return Err(PartitionKernelError::InsufficientRankableLeaders { point, fanout });
         }
-        // Distances stay in the workspace. Partition construction needs only the
-        // leader-column positions in nearest-first order.
+        // Scatter needs the sampled-center column IDs. Metric scores remain in
+        // the worker workspace.
         copy_leader_ids(tracker, point_output);
     }
     Ok(())
 }
 
-/// Insert competitive SIMD lanes in increasing leader order.
+/// Offer one SIMD group of sampled centers to the current point's tracker.
 ///
-/// One broadcast comparison rejects a group that cannot improve the last slot.
-/// Bit iteration proceeds from low lane to high lane. This order matches scalar
-/// tie behavior for all SIMD widths.
-///
-/// `distances` starts at `first_leader`. `tracker` is sorted.
+/// `first_leader` is the matrix-column ID of the first lane. Lanes enter in
+/// sampled-leader order, which preserves tie order.
 fn insert_leader_lanes<F>(distances: F, first_leader: usize, tracker: &mut [(u32, f32)])
 where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
@@ -397,14 +394,11 @@ where
     }
 }
 
-/// Insert one better candidate into a sorted tracker.
+/// Insert one sampled partition center into the current point's retained set.
 ///
-/// The function replaces the last slot and moves the new value to the left.
-/// Equal scores and NaN do not enter. Thus, scan order resolves equal scores.
-/// The last slot is also the rejection threshold and underfill sentinel.
-///
-/// `tracker` must be sorted and non-empty. `leader` is a local column position.
-/// One insertion moves at most `fanout - 1` entries.
+/// `leader` is the center's column ID in the point-to-leader matrix. `tracker`
+/// stores retained centers in nearest-first order. Equal scores and NaN do not
+/// enter, so sampled-leader order resolves ties.
 #[inline(always)]
 fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
     let threshold = tracker.len() - 1;
@@ -420,10 +414,9 @@ fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
     }
 }
 
-/// Copy the retained leader IDs to one output row.
+/// Write retained center-column IDs for partition scatter.
 ///
-/// `assignments.len()` equals the checked fanout. The tracker keeps its distances
-/// for the underfill check.
+/// `assignments` is the current point's fanout-sized output.
 fn copy_leader_ids(tracker: &[(u32, f32)], assignments: &mut [u32]) {
     for (destination, &(leader, _)) in assignments.iter_mut().zip(tracker) {
         *destination = leader;
