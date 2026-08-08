@@ -55,7 +55,7 @@ impl fmt::Display for GraphIvfBuildOutcome {
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct GraphIvfStats {
     pub(super) build: Option<GraphIvfBuildOutcome>,
-    pub(super) search: GraphIvfSearchStats,
+    pub(super) search: Option<GraphIvfSearchStats>,
 }
 
 impl<T> GraphIvf<T>
@@ -137,9 +137,15 @@ where
             writeln!(output, "{}", build_stats)?;
         }
 
-        writeln!(output, "{}", input.search_phase)?;
-        let search_stats = search_graph_ivf::<T>(&index_load, &input.search_phase)?;
-        writeln!(output, "{}", search_stats)?;
+        let search_stats = match &input.search_phase {
+            Some(search_phase) => {
+                writeln!(output, "{search_phase}")?;
+                let stats = search_graph_ivf::<T>(&index_load, search_phase)?;
+                writeln!(output, "{stats}")?;
+                Some(stats)
+            }
+            None => None,
+        };
 
         Ok(GraphIvfStats {
             build: build_stats,

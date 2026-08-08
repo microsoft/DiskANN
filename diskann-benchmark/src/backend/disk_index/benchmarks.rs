@@ -36,7 +36,7 @@ struct DiskIndex<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct DiskIndexStats {
     pub(super) build: Option<DiskBuildStats>,
-    pub(super) search: DiskSearchStats,
+    pub(super) search: Option<DiskSearchStats>,
 }
 
 impl<T> DiskIndex<T>
@@ -107,10 +107,16 @@ where
             writeln!(output, "{}", build_stats)?;
         }
 
-        writeln!(output, "{}", input.search_phase)?;
-        let search_stats =
-            search_disk_index::<T, _>(&index_load, &input.search_phase, &FileStorageProvider)?;
-        writeln!(output, "{}", search_stats)?;
+        let search_stats = match &input.search_phase {
+            Some(search_phase) => {
+                writeln!(output, "{search_phase}")?;
+                let stats =
+                    search_disk_index::<T, _>(&index_load, search_phase, &FileStorageProvider)?;
+                writeln!(output, "{stats}")?;
+                Some(stats)
+            }
+            None => None,
+        };
 
         Ok(DiskIndexStats {
             build: build_stats,
@@ -327,82 +333,83 @@ where
             ));
         }
 
-        // Check search metrics for each matching search_l
-        anyhow::ensure!(
-            before.search.search_results_per_l.len() == after.search.search_results_per_l.len(),
-            "before has {} search_l entries but after has {}",
-            before.search.search_results_per_l.len(),
-            after.search.search_results_per_l.len(),
-        );
-
-        for (b_sr, a_sr) in before
-            .search
-            .search_results_per_l
-            .iter()
-            .zip(after.search.search_results_per_l.iter())
-        {
+        // Check search metrics for each matching search_l, if both sides searched
+        if let (Some(b_search), Some(a_search)) = (&before.search, &after.search) {
             anyhow::ensure!(
-                b_sr.search_l == a_sr.search_l,
-                "search_l mismatch: before={} after={}",
-                b_sr.search_l,
-                a_sr.search_l,
+                b_search.search_results_per_l.len() == a_search.search_results_per_l.len(),
+                "before has {} search_l entries but after has {}",
+                b_search.search_results_per_l.len(),
+                a_search.search_results_per_l.len(),
             );
 
-            // Prefix metric names with L value when multiple search_l entries exist.
-            let prefix = if before.search.search_results_per_l.len() > 1 {
-                format!("L{}:", b_sr.search_l)
-            } else {
-                String::new()
-            };
+            for (b_sr, a_sr) in b_search
+                .search_results_per_l
+                .iter()
+                .zip(a_search.search_results_per_l.iter())
+            {
+                anyhow::ensure!(
+                    b_sr.search_l == a_sr.search_l,
+                    "search_l mismatch: before={} after={}",
+                    b_sr.search_l,
+                    a_sr.search_l,
+                );
 
-            comparisons.push(check_metric(
-                format!("{prefix}qps"),
-                HigherIsBetter,
-                b_sr.qps as f64,
-                a_sr.qps as f64,
-                tolerances.qps_regression,
-                &mut passed,
-            ));
-            comparisons.push(check_metric(
-                format!("{prefix}recall"),
-                HigherIsBetter,
-                b_sr.recall as f64,
-                a_sr.recall as f64,
-                tolerances.recall_regression,
-                &mut passed,
-            ));
-            comparisons.push(check_metric(
-                format!("{prefix}mean_latency"),
-                LowerIsBetter,
-                b_sr.mean_latency,
-                a_sr.mean_latency,
-                tolerances.mean_latency_regression,
-                &mut passed,
-            ));
-            comparisons.push(check_metric(
-                format!("{prefix}p95_latency"),
-                LowerIsBetter,
-                b_sr.p95_latency.as_f64(),
-                a_sr.p95_latency.as_f64(),
-                tolerances.p95_latency_regression,
-                &mut passed,
-            ));
-            comparisons.push(check_metric(
-                format!("{prefix}mean_ios"),
-                LowerIsBetter,
-                b_sr.mean_ios,
-                a_sr.mean_ios,
-                tolerances.mean_ios_regression,
-                &mut passed,
-            ));
-            comparisons.push(check_metric(
-                format!("{prefix}mean_comparisons"),
-                LowerIsBetter,
-                b_sr.mean_comparisons,
-                a_sr.mean_comparisons,
-                tolerances.mean_comps_regression,
-                &mut passed,
-            ));
+                // Prefix metric names with L value when multiple search_l entries exist.
+                let prefix = if b_search.search_results_per_l.len() > 1 {
+                    format!("L{}:", b_sr.search_l)
+                } else {
+                    String::new()
+                };
+
+                comparisons.push(check_metric(
+                    format!("{prefix}qps"),
+                    HigherIsBetter,
+                    b_sr.qps as f64,
+                    a_sr.qps as f64,
+                    tolerances.qps_regression,
+                    &mut passed,
+                ));
+                comparisons.push(check_metric(
+                    format!("{prefix}recall"),
+                    HigherIsBetter,
+                    b_sr.recall as f64,
+                    a_sr.recall as f64,
+                    tolerances.recall_regression,
+                    &mut passed,
+                ));
+                comparisons.push(check_metric(
+                    format!("{prefix}mean_latency"),
+                    LowerIsBetter,
+                    b_sr.mean_latency,
+                    a_sr.mean_latency,
+                    tolerances.mean_latency_regression,
+                    &mut passed,
+                ));
+                comparisons.push(check_metric(
+                    format!("{prefix}p95_latency"),
+                    LowerIsBetter,
+                    b_sr.p95_latency.as_f64(),
+                    a_sr.p95_latency.as_f64(),
+                    tolerances.p95_latency_regression,
+                    &mut passed,
+                ));
+                comparisons.push(check_metric(
+                    format!("{prefix}mean_ios"),
+                    LowerIsBetter,
+                    b_sr.mean_ios,
+                    a_sr.mean_ios,
+                    tolerances.mean_ios_regression,
+                    &mut passed,
+                ));
+                comparisons.push(check_metric(
+                    format!("{prefix}mean_comparisons"),
+                    LowerIsBetter,
+                    b_sr.mean_comparisons,
+                    a_sr.mean_comparisons,
+                    tolerances.mean_comps_regression,
+                    &mut passed,
+                ));
+            }
         }
 
         let result = DiskIndexCheckResult { comparisons };

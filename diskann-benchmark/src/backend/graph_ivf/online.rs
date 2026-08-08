@@ -34,7 +34,7 @@ pub(super) struct GraphIvfOnlineBuildStats {
     decompress: MicroSeconds,
     /// Time spent seeding the initial centroids.
     seed: MicroSeconds,
-    /// Time spent streaming every point through [`OnlineClusterer::insert`].
+    /// Time spent streaming every point through the clusterer.
     insert: MicroSeconds,
     /// Time spent writing the index to disk.
     flush: MicroSeconds,
@@ -45,6 +45,8 @@ pub(super) struct GraphIvfOnlineBuildStats {
     num_points: usize,
     /// Logical vector dimension (narrower than the stored row width for quantized types).
     dim: usize,
+    /// Points inserted per batch (`1` streams one at a time).
+    batch_size: usize,
     /// Centroid id slots pre-allocated, derived from the corpus size and `capacity_mult`.
     centroid_capacity: usize,
     /// Live centroids after the seed, before any insert.
@@ -77,6 +79,7 @@ impl fmt::Display for GraphIvfOnlineBuildStats {
         writeln!(f, "  flush:          {:.3}s", self.flush.as_seconds())?;
         writeln!(f, "  routing:        {:.3}s", self.routing.as_seconds())?;
         writeln!(f, "  split:          {:.3}s", self.split.as_seconds())?;
+        writeln!(f, "  batch size:     {}", self.batch_size)?;
         writeln!(f, "  id budget:      {}", self.centroid_capacity)?;
         writeln!(
             f,
@@ -162,8 +165,9 @@ where
     let seeded_clusters = clusterer.num_clusters();
 
     let insert_start = Instant::now();
-    for pid in 0..num_points as u32 {
-        clusterer.insert(pid)?;
+    let ids: Vec<u32> = (0..num_points as u32).collect();
+    for batch in ids.chunks(params.batch_size) {
+        clusterer.insert_batch(batch)?;
     }
     let insert: MicroSeconds = insert_start.elapsed().into();
 
@@ -193,6 +197,7 @@ where
         split: MicroSeconds::new(telemetry.split_us),
         num_points,
         dim,
+        batch_size: params.batch_size,
         centroid_capacity,
         seeded_clusters,
         final_clusters: clusterer.num_clusters(),
@@ -305,6 +310,7 @@ mod tests {
             distance: SimilarityMeasure::SquaredL2,
             dim: DIM,
             split_threshold,
+            batch_size: 1,
             max_clusters: None,
             warmup_centroids: 8,
             warmup_points: 200,
@@ -357,6 +363,28 @@ mod tests {
         assert!(
             stats.min_cluster_size > 0,
             "no cluster should be left empty"
+        );
+        assert!(stats.residual > 0.0);
+    }
+
+    #[test]
+    fn batched_inserts_partition_the_whole_corpus() {
+        // The batched path routes, splits, and reassigns on a different schedule
+        // than the streaming one, so it lands on a different partition; what must
+        // hold either way is that the cluster count grows by one per split and
+        // every point ends up in a live cluster.
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = fixture(dir.path());
+        let mut params = online_params(&fixture, 64);
+        params.batch_size = 256;
+
+        let stats = build_graph_ivf_online::<f32>(&params).unwrap();
+
+        assert_eq!(stats.batch_size, 256);
+        assert!(stats.total_splits > 0, "the batch must overflow clusters");
+        assert_eq!(
+            stats.final_clusters,
+            stats.seeded_clusters + stats.total_splits as usize
         );
         assert!(stats.residual > 0.0);
     }

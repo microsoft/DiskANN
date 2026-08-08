@@ -27,7 +27,9 @@ as_input!(GraphIvfOperation);
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct GraphIvfOperation {
     pub(crate) source: GraphIvfSource,
-    pub(crate) search_phase: GraphIvfSearchPhase,
+    /// Omit to build (or load) the index without searching it.
+    #[serde(default)]
+    pub(crate) search_phase: Option<GraphIvfSearchPhase>,
 }
 
 /// How the index under test comes into being.
@@ -118,6 +120,13 @@ pub(crate) struct GraphIvfOnlineBuild {
     pub(crate) dim: usize,
     /// A cluster is split once it holds strictly more than this many points.
     pub(crate) split_threshold: usize,
+    /// Points inserted per batch; a single insert is a batch of one, so `1` is
+    /// the reference semantics. Larger values route each batch in parallel and
+    /// split every cluster that overflowed with one joint k-means rather than
+    /// one bisection at a time; a few thousand matches how a real writer
+    /// arrives. That joint split changes the partition, and therefore recall.
+    #[serde(default = "default_batch_size")]
+    pub(crate) batch_size: usize,
     /// Hard cap on live clusters. Omit (or `null`) for uncapped, data-driven growth.
     #[serde(default)]
     pub(crate) max_clusters: Option<usize>,
@@ -190,6 +199,9 @@ const fn default_reassign_neighbors() -> usize {
 const fn default_capacity_mult() -> usize {
     3
 }
+const fn default_batch_size() -> usize {
+    1
+}
 
 /// Serializable mirror of `diskann_graphivf::AssignMethod` (the benchmark's
 /// `inputs` layer is compiled without the optional `graph-ivf` dependency, so
@@ -250,7 +262,9 @@ impl GraphIvfOperation {
             GraphIvfSource::Static(build) => build.validate(checker)?,
             GraphIvfSource::Online(online) => online.validate(checker)?,
         }
-        self.search_phase.validate(checker)?;
+        if let Some(search_phase) = &mut self.search_phase {
+            search_phase.validate(checker)?;
+        }
         Ok(())
     }
 }
@@ -332,6 +346,9 @@ impl GraphIvfOnlineBuild {
         // A cluster of 1 point cannot be split into two non-empty children.
         if self.split_threshold < 2 {
             anyhow::bail!("split_threshold must be >= 2");
+        }
+        if self.batch_size == 0 {
+            anyhow::bail!("batch_size must be positive");
         }
         if self.warmup_centroids == 0 {
             anyhow::bail!("warmup_centroids must be positive");
@@ -471,7 +488,7 @@ impl Example for GraphIvfOperation {
 
         Self {
             source: GraphIvfSource::Static(build),
-            search_phase: search,
+            search_phase: Some(search),
         }
     }
 }

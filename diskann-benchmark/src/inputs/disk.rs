@@ -30,7 +30,9 @@ as_input!(DiskIndexOperation);
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct DiskIndexOperation {
     pub(crate) source: DiskIndexSource, // either load or build
-    pub(crate) search_phase: DiskSearchPhase,
+    /// Omit to build (or load) the index without searching it.
+    #[serde(default)]
+    pub(crate) search_phase: Option<DiskSearchPhase>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,7 +94,9 @@ impl DiskIndexOperation {
             DiskIndexSource::Load(load) => load.validate(checker)?,
             DiskIndexSource::Build(build) => build.validate(checker)?,
         }
-        self.search_phase.validate(checker)?;
+        if let Some(search_phase) = &mut self.search_phase {
+            search_phase.validate(checker)?;
+        }
         Ok(())
     }
 }
@@ -252,7 +256,7 @@ impl Example for DiskIndexOperation {
 
         Self {
             source: DiskIndexSource::Build(build),
-            search_phase: search,
+            search_phase: Some(search),
         }
     }
 }

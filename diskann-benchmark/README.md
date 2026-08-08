@@ -318,8 +318,18 @@ the output, so a config and the results it produced name the same builder:
 | `graph-ivf-source` | What it does | Key fields |
 | --- | --- | --- |
 | `Static` | Batch build: fit `k` centroids by k-means over a corpus sample, then assign every point. | `num_clusters`, `sample_size`, `kmeans_iters`, `assign_method`, `empty_clusters`, `save_path` |
-| `Online` | Streaming build: insert points in corpus order, splitting a cluster whenever it overflows. The cluster count emerges from the data. | `split_threshold`, `max_clusters`, `reassign_neighbors`, `reassign_l`, `normalize`, `save_path`, `telemetry_csv` |
+| `Online` | Streaming build: insert points, splitting a cluster whenever it overflows. The cluster count emerges from the data. | `split_threshold`, `batch_size`, `max_clusters`, `reassign_neighbors`, `reassign_l`, `normalize`, `save_path`, `telemetry_csv` |
 | `Load` | Search an index built by an earlier job. | `load_path` |
+
+`batch_size` (default `1`) controls how many points an `Online` build consumes at
+a time. There is one write path and a single insert is a batch of one, so `1` is
+the reference semantics: route a point, split its cluster if it overflowed. A
+larger value — a few thousand matches how a real writer arrives — defers splitting
+to the end of each batch, which lets the batch be routed in parallel and lets
+every cluster that overflowed be re-clustered by one joint k-means instead of one
+bisection at a time. That last part changes the partition, so compare recall
+before switching. See
+[`diskann-graphivf/ONLINE.md`](../diskann-graphivf/ONLINE.md#3b-batched-inserts).
 
 All three sources take `data_type` (`float32` \| `float16` \| `uint8` \| `int8` \|
 `minmax8`), which is the on-disk element type of the inverted lists and selects the
