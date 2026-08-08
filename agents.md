@@ -28,6 +28,9 @@ This guide helps coding agents understand how to work efficiently with the DiskA
 ### Key Resources
 - **Contributing**: See [`CONTRIBUTING.md`](CONTRIBUTING.md) (requires CLA)
 - **Code of Conduct**: See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- **Running benchmark experiments**: See the `graph-ivf-experiments` skill in
+  [`.github/skills/graph-ivf-experiments/`](.github/skills/graph-ivf-experiments/SKILL.md)
+  for the end-to-end pipeline (dataset prep → groundtruth → configs → sweeps → plots)
 
 ---
 
