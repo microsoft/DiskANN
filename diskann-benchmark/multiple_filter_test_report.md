@@ -504,6 +504,47 @@ Bitslice-DNF rerun in section 8.4.6. Because traversal statistics are identical,
 run-to-run/system drift plus the new generic provider layer rather than a semantic difference;
 the matched within-run AST/DNF/precomputed comparisons are the authoritative result.
 
+### 8.4.9 Including per-query encoding and materialization
+
+The encoded benchmark providers were then changed to compile lazily on their first `is_match`
+inside timed ANN search. Each query row owns an independent `OnceLock`, and fresh providers are
+created for every repetition and search-L. The timed path therefore includes:
+
+- DNF: label-string lookup and flat clause-plan compilation;
+- Bitslice AST: JSON AST parsing, validation, label lookup, and recursive-plan compilation;
+- Bitmap AST: all AST costs plus Roaring set algebra, dense allocation/zeroing, and result
+  materialization.
+
+The persisted Bitslice/Roaring index load and benchmark predicate-file parsing remain index/setup
+costs outside query latency. The same counterbalanced S1-S9 configuration was rerun.
+
+| Case | DNF AVG | AST AVG | Bitmap AST AVG | DNF P99 | AST P99 | Bitmap P99 | DNF P99.9 | AST P99.9 | Bitmap P99.9 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | 2.698 | 2.651 | 46.479 | 9.836 | 9.470 | 57.984 | 13.368 | 12.521 | 76.905 |
+| S2 | 4.448 | 4.913 | 9.944 | 10.057 | 11.263 | 13.580 | 12.969 | 29.329 | 16.460 |
+| S3 | 4.561 | 4.781 | 14.694 | 11.687 | 11.945 | 20.159 | 17.175 | 15.934 | 24.612 |
+| S4 | 5.135 | 7.659 | 16.351 | 12.650 | 20.666 | 22.637 | 18.467 | 41.756 | 43.390 |
+| S5 | 3.145 | 2.796 | 43.062 | 9.698 | 8.590 | 54.658 | 14.802 | 11.736 | 76.852 |
+| S6 | 5.535 | 4.978 | 14.109 | 9.812 | 9.164 | 19.467 | 13.161 | 13.473 | 26.372 |
+| S7 | 6.675 | 5.837 | 7.771 | 10.772 | 9.471 | 11.038 | 33.984 | 14.685 | 16.343 |
+| S8 | 6.824 | 6.044 | **6.153** | 10.699 | 9.027 | 9.774 | 15.958 | 23.023 | **13.200** |
+| S9 | 4.338 | 4.677 | 8.646 | 8.158 | 8.846 | 12.546 | 9.367 | 11.445 | 15.766 |
+
+Recall, comparisons, and hops again matched exactly. Query-inclusive Bitslice AST remained almost
+tied with DNF: its geometric-mean AVG ratio was **1.014x**. The DNF/AST compilation costs are small
+relative to traversal and system noise; several query-inclusive means are lower than the
+setup-excluded run, so subtracting the independent runs is not a reliable microsecond estimate.
+
+Bitmap AST became **3.130x slower than DNF** by geometric-mean AVG once its per-query materialization
+was charged. The approximate setup-excluded-to-inclusive mean increase ranged from 0.585 ms for
+selective S8 to 44.043 ms for broad S1, averaging 14.675 ms across S1-S9. Its broad-filter
+S1/S5 means returned to 46.479/43.062 ms, while selective S8 remained competitive at 6.153 ms.
+
+These results reproduce the previous no-cache Roaring-materialized benchmark: the new Bitmap AST
+means are within the same range as section 8.4.6 and are 0.909x its geometric mean. The conclusion
+is unchanged: live Bitslice DNF/AST is normally preferable for unique queries, while
+materialization can compete for sufficiently selective filters or when its result is reused.
+
 ## 8.5 Exact-semantics multihop allocation reuse
 
 After optimizing filter evaluation, the current multihop implementation still created temporary
