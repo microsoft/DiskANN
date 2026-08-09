@@ -414,6 +414,15 @@ pub(crate) enum SearchPhase {
     TopkMultihopLiveFilterAuto(MultihopFilterSearchPhase),
     TopkMultihopLiveFilterBitslice(MultihopFilterSearchPhase),
     TopkMultihopLiveFilterBitsliceDnf(MultihopFilterSearchPhase),
+    /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
+    /// `diskann-label-index` artifact instead of the raw labels JSONL.
+    TopkMultihopEncodedBitsliceDnf(MultihopFilterSearchPhase),
+    /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
+    /// `diskann-label-index` artifact instead of the raw labels JSONL.
+    TopkMultihopEncodedBitsliceAst(MultihopFilterSearchPhase),
+    /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
+    /// `diskann-label-index` artifact instead of the raw labels JSONL.
+    TopkMultihopEncodedBitmapAst(MultihopFilterSearchPhase),
     TopkInlineLiveFilterBitsliceDnf(InlineFilterSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
@@ -453,6 +462,13 @@ impl SearchPhase {
             Self::TopkMultihopLiveFilterBitsliceDnf(_) => {
                 SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf
             }
+            Self::TopkMultihopEncodedBitsliceDnf(_) => {
+                SearchPhaseKind::TopkMultihopEncodedBitsliceDnf
+            }
+            Self::TopkMultihopEncodedBitsliceAst(_) => {
+                SearchPhaseKind::TopkMultihopEncodedBitsliceAst
+            }
+            Self::TopkMultihopEncodedBitmapAst(_) => SearchPhaseKind::TopkMultihopEncodedBitmapAst,
             Self::TopkInlineLiveFilterBitsliceDnf(_) => {
                 SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf
             }
@@ -575,6 +591,42 @@ impl SearchPhase {
         }
     }
 
+    pub(crate) fn as_topk_multihop_encoded_bitslice_dnf(
+        &self,
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopEncodedBitsliceDnf(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopEncodedBitsliceDnf,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_multihop_encoded_bitslice_ast(
+        &self,
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopEncodedBitsliceAst(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopEncodedBitsliceAst,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_multihop_encoded_bitmap_ast(
+        &self,
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopEncodedBitmapAst(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopEncodedBitmapAst,
+                self.kind(),
+            )),
+        }
+    }
+
     pub(crate) fn as_topk_inline_filter(
         &self,
     ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
@@ -625,6 +677,9 @@ impl SearchPhase {
             SearchPhase::TopkMultihopLiveFilterAuto(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterBitslice(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterBitsliceDnf(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopEncodedBitsliceDnf(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopEncodedBitsliceAst(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopEncodedBitmapAst(phase) => phase.validate(checker),
             SearchPhase::TopkInlineLiveFilterBitsliceDnf(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
             SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
@@ -644,6 +699,9 @@ pub(crate) enum SearchPhaseKind {
     TopkMultihopLiveFilterAuto,
     TopkMultihopLiveFilterBitslice,
     TopkMultihopLiveFilterBitsliceDnf,
+    TopkMultihopEncodedBitsliceDnf,
+    TopkMultihopEncodedBitsliceAst,
+    TopkMultihopEncodedBitmapAst,
     TopkInlineLiveFilterBitsliceDnf,
     TopkInlineFilter,
     TopkDeterminantDiversity,
@@ -662,6 +720,9 @@ impl SearchPhaseKind {
             Self::TopkMultihopLiveFilterAuto => "topk-multihop-live-filter-auto",
             Self::TopkMultihopLiveFilterBitslice => "topk-multihop-live-filter-bitslice",
             Self::TopkMultihopLiveFilterBitsliceDnf => "topk-multihop-live-filter-bitslice-dnf",
+            Self::TopkMultihopEncodedBitsliceDnf => "topk-multihop-encoded-bitslice-dnf",
+            Self::TopkMultihopEncodedBitsliceAst => "topk-multihop-encoded-bitslice-ast",
+            Self::TopkMultihopEncodedBitmapAst => "topk-multihop-encoded-bitmap-ast",
             Self::TopkInlineLiveFilterBitsliceDnf => "topk-inline-live-filter-bitslice-dnf",
             Self::TopkInlineFilter => "topk-inline-filter",
             Self::TopkDeterminantDiversity => "topk-determinant-diversity",

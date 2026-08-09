@@ -5,6 +5,7 @@
 
 use bit_set::BitSet;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use diskann::{
     graph::ext::labeled::QueryLabelProvider,
@@ -18,12 +19,14 @@ use diskann_label_filter::{
         posting_list_trait::{PostingList, RoaringPostingList},
         query_evaluator::QueryEvaluator,
     },
-    ASTExpr, DefaultKeyCodec,
+    ASTExpr, CompareOp, DefaultKeyCodec,
+};
+use diskann_label_index::{
+    EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType, LabelExpression,
 };
 use diskann_providers::model::graph::provider::layers::BetaFilter;
 
 use diskann_tools::utils::ground_truth::read_labels_and_compute_bitmap;
-use std::sync::Arc;
 
 use diskann_label_filter::attribute::Attribute;
 use diskann_label_filter::{
@@ -32,6 +35,7 @@ use diskann_label_filter::{
     InlineAttributeIndex, InlineAttributeIndexAuto, InlineAttributeIndexBitslice,
     InlineAttributeIndexCsr, InlineAttributeIndexPosting,
 };
+use serde_json::Value;
 
 pub struct QueryBitmapEvaluator {
     pub ast_expr: ASTExpr,
@@ -92,6 +96,21 @@ where
     }
 }
 
+#[derive(Debug)]
+struct EncodedQueryProvider(EncodedLabelQuery<'static>);
+
+impl QueryLabelProvider<u32> for EncodedQueryProvider {
+    fn is_match(&self, vec_id: u32) -> bool {
+        self.0.is_match(vec_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EncodedQueryMode {
+    Dnf,
+    Ast,
+}
+
 pub(crate) fn generate_bitmaps(
     query_predicates: &InputFile,
     data_labels: &InputFile,
@@ -127,9 +146,184 @@ pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider
     Arc::new(BitmapFilter(set))
 }
 
+pub(crate) fn load_encoded_label_index(
+    data_labels: &InputFile,
+) -> anyhow::Result<EncodedLabelIndex> {
+    EncodedLabelIndex::load(&**data_labels).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to load encoded label index {}: {e}",
+            data_labels.display()
+        )
+    })
+}
+
+pub(crate) fn make_encoded_query_providers(
+    index: &EncodedLabelIndex,
+    query_predicates: &InputFile,
+    mode: EncodedQueryMode,
+) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+    let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
+        .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
+    parsed
+        .into_iter()
+        .map(|(_query_id, ast)| {
+            let label_expression = ast_to_label_expression(&ast)?;
+            validate_encoded_benchmark_labels(index, &label_expression)?;
+            let query = match mode {
+                EncodedQueryMode::Dnf => {
+                    let clauses = flatten_dnf_clauses(&label_expression)?;
+                    index.query(&clauses, FilterExpressionType::DNF)
+                }
+                EncodedQueryMode::Ast => index.query_expression(&label_expression),
+            }
+            .map_err(|e| anyhow::anyhow!("failed to compile encoded label query: {e}"))?;
+            Ok(Arc::new(EncodedQueryProvider(query)) as Arc<dyn QueryLabelProvider<u32>>)
+        })
+        .collect()
+}
+
 fn checked_doc_id(doc_id: usize) -> anyhow::Result<u32> {
     u32::try_from(doc_id)
         .map_err(|_| anyhow::anyhow!("document id {doc_id} exceeds the u32 graph-id range"))
+}
+
+fn validate_encoded_benchmark_labels(
+    index: &EncodedLabelIndex,
+    expression: &LabelExpression,
+) -> anyhow::Result<()> {
+    let mut stack = vec![expression];
+    while let Some(expression) = stack.pop() {
+        match expression {
+            LabelExpression::Label(label) => {
+                if !index.contains_label(label) {
+                    anyhow::bail!(
+                        "encoded benchmark query references label '{label}' absent from the label index"
+                    );
+                }
+            }
+            LabelExpression::And(children) | LabelExpression::Or(children) => {
+                stack.extend(children);
+            }
+            LabelExpression::Not(child) => stack.push(child),
+        }
+    }
+    Ok(())
+}
+
+fn ast_to_label_expression(ast: &ASTExpr) -> anyhow::Result<LabelExpression> {
+    match ast {
+        ASTExpr::And(exprs) => Ok(LabelExpression::And(
+            exprs
+                .iter()
+                .map(ast_to_label_expression)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        )),
+        ASTExpr::Or(exprs) => Ok(LabelExpression::Or(
+            exprs
+                .iter()
+                .map(ast_to_label_expression)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        )),
+        ASTExpr::Not(expr) => Ok(LabelExpression::Not(Box::new(ast_to_label_expression(
+            expr,
+        )?))),
+        ASTExpr::Compare { field, op } => compare_to_label_expression(field, op),
+    }
+}
+
+fn compare_to_label_expression(field: &str, op: &CompareOp) -> anyhow::Result<LabelExpression> {
+    match op {
+        CompareOp::Eq(value) => eq_value_to_label_expression(field, value),
+        CompareOp::Ne(_)
+        | CompareOp::Lt(_)
+        | CompareOp::Lte(_)
+        | CompareOp::Gt(_)
+        | CompareOp::Gte(_) => Err(anyhow::anyhow!(
+            "encoded label-index queries only support equality/set-membership predicates; field '{field}' used unsupported operator {op}"
+        )),
+    }
+}
+
+fn eq_value_to_label_expression(field: &str, value: &Value) -> anyhow::Result<LabelExpression> {
+    match value {
+        Value::Bool(true) => Ok(LabelExpression::Label(field.to_string())),
+        Value::Bool(false) | Value::Number(_) | Value::String(_) => {
+            Ok(LabelExpression::Label(format!("{field}={}", value_repr(value))))
+        }
+        Value::Null => Err(anyhow::anyhow!(
+            "encoded benchmark equality predicates do not support null for field '{field}'"
+        )),
+        Value::Array(_) => Err(anyhow::anyhow!(
+            "encoded label-index equality predicates do not support array values for field '{field}'"
+        )),
+        Value::Object(_) => Err(anyhow::anyhow!(
+            "encoded label-index equality predicates require scalar or array values; field '{field}' used an object"
+        )),
+    }
+}
+
+fn value_repr(value: &Value) -> String {
+    match value {
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Null => "null".to_string(),
+        Value::Array(_) | Value::Object(_) => {
+            unreachable!("handled by eq_value_to_label_expression")
+        }
+    }
+}
+
+fn flatten_dnf_clauses(expression: &LabelExpression) -> anyhow::Result<Vec<String>> {
+    let mut clauses = Vec::new();
+    collect_dnf_clauses(expression, &mut clauses)?;
+    Ok(clauses)
+}
+
+fn collect_dnf_clauses(
+    expression: &LabelExpression,
+    clauses: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    match expression {
+        LabelExpression::Label(label) => clauses.push(label.clone()),
+        LabelExpression::And(children) => {
+            let mut terminals = Vec::new();
+            for child in children {
+                collect_dnf_conjunction(child, &mut terminals)?;
+            }
+            clauses.push(terminals.join("&"));
+        }
+        LabelExpression::Or(children) => {
+            for child in children {
+                collect_dnf_clauses(child, clauses)?;
+            }
+        }
+        LabelExpression::Not(_) => {
+            anyhow::bail!("encoded DNF queries require an OR-of-AND predicate shape; NOT expressions are unsupported")
+        }
+    }
+    Ok(())
+}
+
+fn collect_dnf_conjunction(
+    expression: &LabelExpression,
+    terminals: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    match expression {
+        LabelExpression::Label(label) => terminals.push(label.clone()),
+        LabelExpression::And(children) => {
+            for child in children {
+                collect_dnf_conjunction(child, terminals)?;
+            }
+        }
+        LabelExpression::Or(_) => {
+            anyhow::bail!("encoded DNF queries require an OR-of-AND predicate shape; OR expressions cannot appear inside a conjunction")
+        }
+        LabelExpression::Not(_) => {
+            anyhow::bail!("encoded DNF queries require an OR-of-AND predicate shape; NOT expressions are unsupported")
+        }
+    }
+    Ok(())
 }
 
 /// Build an in-memory inline attribute index from a jsonl label file (one document per line).
@@ -383,6 +577,27 @@ pub(crate) fn make_live_providers_bitslice_dnf(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs::File, io::Write};
+
+    use diskann_label_index::{encode_label_index_jsonl, LabelIndexFormat};
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    fn write_lines(path: &std::path::Path, lines: &[&str]) {
+        let mut file = File::create(path).unwrap();
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+    }
+
+    fn test_query_matches(
+        provider: &Arc<dyn QueryLabelProvider<u32>>,
+        num_vectors: u32,
+    ) -> Vec<u32> {
+        (0..num_vectors)
+            .filter(|&vec_id| provider.is_match(vec_id))
+            .collect()
+    }
 
     #[test]
     fn test_bitmap_filter_match() {
@@ -423,5 +638,133 @@ mod tests {
         if let Some(too_large) = (u32::MAX as usize).checked_add(1) {
             assert!(checked_doc_id(too_large).is_err());
         }
+    }
+
+    #[test]
+    fn test_encoded_providers_agree_for_dnf_and_ast() {
+        let dir = tempdir().unwrap();
+        let labels_jsonl = dir.path().join("labels.jsonl");
+        let bitslice_index = dir.path().join("labels.bitslice");
+        let bitmap_index = dir.path().join("labels.bitmap");
+        let queries_jsonl = dir.path().join("queries.jsonl");
+
+        write_lines(
+            &labels_jsonl,
+            &[
+                r#"{"doc_id":0,"brand":"A","color":"red","promo":true,"active":false,"score":2,"missing":null}"#,
+                r#"{"doc_id":1,"brand":"A","color":"blue","promo":false,"active":false,"score":3,"missing":"value"}"#,
+                r#"{"doc_id":2,"brand":"B","color":"red","promo":false,"active":true,"score":2,"missing":null}"#,
+                r#"{"doc_id":3,"brand":"C","color":"green","promo":true,"active":false,"score":5,"missing":null}"#,
+            ],
+        );
+        write_lines(
+            &queries_jsonl,
+            &[
+                r#"{"query_id":0,"filter":{"$or":[{"$and":[{"brand":{"$eq":"A"}},{"color":{"$eq":"red"}}]},{"promo":{"$eq":true}}]}}"#,
+                r#"{"query_id":1,"filter":{"active":{"$eq":false},"score":{"$eq":2}}}"#,
+                r#"{"query_id":2,"filter":{"$or":[{"brand":{"$eq":"B"}},{"color":{"$eq":"green"}}]}}"#,
+            ],
+        );
+
+        encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
+            .unwrap();
+        encode_label_index_jsonl(&labels_jsonl, &bitmap_index, LabelIndexFormat::Bitmap).unwrap();
+
+        let bitslice_index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
+        let bitmap_index = load_encoded_label_index(&InputFile::new(bitmap_index)).unwrap();
+        let query_file = InputFile::new(queries_jsonl);
+
+        let dnf = make_encoded_query_providers(&bitslice_index, &query_file, EncodedQueryMode::Dnf)
+            .unwrap();
+        let bitslice_ast =
+            make_encoded_query_providers(&bitslice_index, &query_file, EncodedQueryMode::Ast)
+                .unwrap();
+        let bitmap_ast =
+            make_encoded_query_providers(&bitmap_index, &query_file, EncodedQueryMode::Ast)
+                .unwrap();
+
+        assert_eq!(dnf.len(), bitslice_ast.len());
+        assert_eq!(dnf.len(), bitmap_ast.len());
+        for ((dnf, bitslice_ast), bitmap_ast) in dnf.iter().zip(&bitslice_ast).zip(&bitmap_ast) {
+            assert_eq!(
+                test_query_matches(dnf, 4),
+                test_query_matches(bitslice_ast, 4)
+            );
+            assert_eq!(
+                test_query_matches(dnf, 4),
+                test_query_matches(bitmap_ast, 4)
+            );
+        }
+    }
+
+    #[test]
+    fn test_encoded_query_rejects_unsupported_relational_operator() {
+        let error = ast_to_label_expression(&ASTExpr::Compare {
+            field: "score".to_string(),
+            op: CompareOp::Gt(2.0),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported operator >"));
+    }
+
+    #[test]
+    fn test_encoded_dnf_rejects_non_dnf_shape() {
+        let expression = ast_to_label_expression(&ASTExpr::And(vec![
+            ASTExpr::Compare {
+                field: "brand".to_string(),
+                op: CompareOp::Eq(json!("A")),
+            },
+            ASTExpr::Or(vec![
+                ASTExpr::Compare {
+                    field: "color".to_string(),
+                    op: CompareOp::Eq(json!("red")),
+                },
+                ASTExpr::Compare {
+                    field: "color".to_string(),
+                    op: CompareOp::Eq(json!("blue")),
+                },
+            ]),
+        ]))
+        .unwrap();
+
+        let error = flatten_dnf_clauses(&expression).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("OR expressions cannot appear inside a conjunction"));
+    }
+
+    #[test]
+    fn test_encoded_dnf_rejects_array_equality_explicitly() {
+        let error = ast_to_label_expression(&ASTExpr::Compare {
+            field: "brand".to_string(),
+            op: CompareOp::Eq(json!(["A", "B"])),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("do not support array values"));
+    }
+
+    #[test]
+    fn test_encoded_query_rejects_null_equality() {
+        let error = ast_to_label_expression(&ASTExpr::Compare {
+            field: "missing".to_string(),
+            op: CompareOp::Eq(Value::Null),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("do not support null"));
+    }
+
+    #[test]
+    fn test_encoded_benchmark_rejects_unknown_labels() {
+        let dir = tempdir().unwrap();
+        let labels_jsonl = dir.path().join("labels.jsonl");
+        let bitslice_index = dir.path().join("labels.bitslice");
+        write_lines(&labels_jsonl, &[r#"{"doc_id":0,"A":true}"#]);
+        encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
+            .unwrap();
+        let index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
+        let error =
+            validate_encoded_benchmark_labels(&index, &LabelExpression::Label("missing".into()))
+                .unwrap_err();
+        assert!(error.to_string().contains("absent from the label index"));
     }
 }

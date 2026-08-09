@@ -29,6 +29,7 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 diskann-vector.workspace = true
 diskann-wide.workspace = true
 diskann-label-filter.workspace = true
+diskann-label-index.workspace = true
 diskann-tools = { workspace = true }
 diskann-disk = { workspace = true, optional = true }
 diskann-bftree = { workspace = true, optional = true }

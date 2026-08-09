@@ -472,6 +472,7 @@ dependencies = [
  "diskann-disk",
  "diskann-inmem",
  "diskann-label-filter",
+ "diskann-label-index",
  "diskann-providers",
  "diskann-quantization",
  "diskann-tools",

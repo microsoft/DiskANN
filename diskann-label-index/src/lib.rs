@@ -12,7 +12,9 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Read, Seek, Write},
+    marker::PhantomData,
     path::Path,
+    sync::Arc,
 };
 use thiserror::Error;
 
@@ -283,10 +285,10 @@ pub enum EncodedLabelIndexError {
 enum LabelStorage {
     Bitslice {
         words_per_label: usize,
-        bits: Box<[u64]>,
+        bits: Arc<[u64]>,
     },
     Bitmap {
-        postings: Box<[RoaringBitmap]>,
+        postings: Arc<[RoaringBitmap]>,
     },
 }
 
@@ -330,10 +332,10 @@ enum CompiledExpression {
     Not(Box<CompiledExpression>),
 }
 
-enum QueryStorage<'a> {
+enum QueryStorage {
     Bitslice {
         words_per_label: usize,
-        bits: &'a [u64],
+        bits: Arc<[u64]>,
         expression: CompiledExpression,
     },
     DenseBitmap {
@@ -341,10 +343,14 @@ enum QueryStorage<'a> {
     },
 }
 
-/// Query-scoped label provider backed by an [`EncodedLabelIndex`].
+/// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
+///
+/// Bitslice queries share the index payload through [`Arc`] so the compiled query remains usable
+/// after the source [`EncodedLabelIndex`] is dropped.
 pub struct EncodedLabelQuery<'a> {
     num_vectors: u32,
-    storage: QueryStorage<'a>,
+    storage: QueryStorage,
+    _lifetime: PhantomData<&'a ()>,
 }
 
 impl std::fmt::Debug for EncodedLabelQuery<'_> {
@@ -423,6 +429,11 @@ impl CompiledExpression {
 }
 
 impl EncodedLabelIndex {
+    /// Return whether this index contains an encoded label.
+    pub fn contains_label(&self, label: &str) -> bool {
+        self.label_ids.contains_key(label)
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodedLabelIndexError> {
         let file = File::open(path)?;
         let file_len = file.metadata()?.len();
@@ -557,7 +568,7 @@ impl EncodedLabelIndex {
 
                 LabelStorage::Bitslice {
                     words_per_label,
-                    bits: bits.into_boxed_slice(),
+                    bits: Arc::from(bits),
                 }
             }
             LabelIndexFormat::Bitmap => {
@@ -594,7 +605,7 @@ impl EncodedLabelIndex {
                 }
 
                 LabelStorage::Bitmap {
-                    postings: postings.into_boxed_slice(),
+                    postings: Arc::from(postings),
                 }
             }
         };
@@ -617,12 +628,13 @@ impl EncodedLabelIndex {
     ///
     /// Use [`FilterExpressionType::DNF`] or [`FilterExpressionType::CNF`] for the preferred
     /// terminology. The legacy [`FilterExpressionType::ORMajor`] and
-    /// [`FilterExpressionType::ANDMajor`] variants remain supported for compatibility.
+    /// [`FilterExpressionType::ANDMajor`] variants remain supported for compatibility. The
+    /// returned [`EncodedLabelQuery`] owns its compiled expression and any shared storage handles.
     pub fn query<S>(
         &self,
         clauses: &[S],
         expression_type: FilterExpressionType,
-    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError>
+    ) -> Result<EncodedLabelQuery<'static>, EncodedLabelIndexError>
     where
         S: AsRef<str>,
     {
@@ -638,19 +650,19 @@ impl EncodedLabelIndex {
         self.build_query(expression)
     }
 
-    /// Compile a query from a recursive label expression.
+    /// Compile an owned query from a recursive label expression.
     pub fn query_expression(
         &self,
         expression: &LabelExpression,
-    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError> {
+    ) -> Result<EncodedLabelQuery<'static>, EncodedLabelIndexError> {
         self.build_query(compile_label_expression(expression, &self.label_ids)?)
     }
 
-    /// Compile a query from a JSON-encoded recursive label expression.
+    /// Compile an owned query from a JSON-encoded recursive label expression.
     pub fn query_ast_json(
         &self,
         expression_json: &str,
-    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError> {
+    ) -> Result<EncodedLabelQuery<'static>, EncodedLabelIndexError> {
         let expression = parse_label_expression_json(expression_json)?;
         self.query_expression(&expression)
     }
@@ -658,14 +670,14 @@ impl EncodedLabelIndex {
     fn build_query(
         &self,
         expression: CompiledExpression,
-    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError> {
+    ) -> Result<EncodedLabelQuery<'static>, EncodedLabelIndexError> {
         let storage = match &self.storage {
             LabelStorage::Bitslice {
                 words_per_label,
                 bits,
             } => QueryStorage::Bitslice {
                 words_per_label: *words_per_label,
-                bits,
+                bits: Arc::clone(bits),
                 expression,
             },
             LabelStorage::Bitmap { postings } => QueryStorage::DenseBitmap {
@@ -677,10 +689,12 @@ impl EncodedLabelIndex {
         Ok(EncodedLabelQuery {
             num_vectors: self.num_vectors,
             storage,
+            _lifetime: PhantomData,
         })
     }
 
-    fn format(&self) -> LabelIndexFormat {
+    /// Return the persisted storage format backing this index.
+    pub fn format(&self) -> LabelIndexFormat {
         match &self.storage {
             LabelStorage::Bitslice { .. } => LabelIndexFormat::Bitslice,
             LabelStorage::Bitmap { .. } => LabelIndexFormat::Bitmap,
@@ -1317,19 +1331,21 @@ mod tests {
         )
     }
 
-    fn compile<'a>(
-        index: &'a EncodedLabelIndex,
+    fn compile(
+        index: &EncodedLabelIndex,
         clauses: &[&str],
         expression_type: FilterExpressionType,
-    ) -> EncodedLabelQuery<'a> {
+    ) -> EncodedLabelQuery<'static> {
         index.query(clauses, expression_type).unwrap()
     }
 
-    fn matching_ids(query: &EncodedLabelQuery<'_>, num_vectors: u32) -> Vec<u32> {
+    fn matching_ids(query: &EncodedLabelQuery, num_vectors: u32) -> Vec<u32> {
         (0..num_vectors)
             .filter(|&vec_id| query.is_match(vec_id))
             .collect()
     }
+
+    fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}
 
     fn round_trip(format: LabelIndexFormat) -> EncodedLabelIndex {
         let dir = tempfile::tempdir().unwrap();
@@ -1456,7 +1472,6 @@ mod tests {
     fn ast_not_supports_known_and_unknown_labels() {
         for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
             let index = round_trip(format);
-
             let not_a = index.query_ast_json(r#"{"not":"A"}"#).unwrap();
             assert_eq!(matching_ids(&not_a, index.num_vectors), vec![1, 3]);
 
@@ -1465,6 +1480,22 @@ mod tests {
                 matching_ids(&not_missing, index.num_vectors),
                 vec![0, 1, 2, 3]
             );
+        }
+    }
+
+    #[test]
+    fn compiled_queries_remain_usable_after_index_drop() {
+        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+            let query = {
+                let index = round_trip(format);
+                Arc::new(
+                    index
+                        .query_ast_json(r#"{"or":[{"and":["A","B"]},{"and":["C","D"]}]}"#)
+                        .unwrap(),
+                )
+            };
+            assert_send_sync_static(query.as_ref());
+            assert_eq!(matching_ids(&query, 4), vec![2, 3]);
         }
     }
 
