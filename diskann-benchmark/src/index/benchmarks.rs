@@ -451,11 +451,12 @@ where
         GroundTruthMode::Flexible,
     );
 
-    // For the encoded-label-index search phases, `data_labels` intentionally points at the
-    // pre-encoded label-index file, not the raw labels JSONL. Query compilation/materialization
-    // (including bitmap densification for the bitmap-AST mode) happens once here during benchmark
-    // setup so the timed ANN search measures only the shared multi-hop traversal with membership
-    // checks against the compiled providers.
+    // For encoded-label-index search phases, `data_labels` intentionally points at the persisted
+    // encoded label-index file, not the raw labels JSONL. Loading that index and parsing/validating
+    // the predicate JSONL (including ASTExpr -> LabelExpression conversion plus AST-JSON or DNF
+    // source preparation) stay outside timing. Each timed repetition/search-L rebuilds fresh lazy
+    // providers so the first `is_match` includes `EncodedLabelIndex::{query, query_ast_json}`,
+    // label-id lookup, AST parsing/compilation, and bitmap AST dense materialization.
     let label_index = utils::filters::load_encoded_label_index(&phase.data_labels)?;
     if label_index.format() != expected_format {
         anyhow::bail!(
@@ -465,17 +466,23 @@ where
             label_index.format()
         );
     }
-    let providers =
-        utils::filters::make_encoded_query_providers(&label_index, &phase.query_predicates, mode)?;
-
-    let multihop = benchmark_core::search::graph::MultiHop::new(
-        index,
-        queries,
-        benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
-        providers.into(),
+    let query_sources = utils::filters::prepare_encoded_query_sources(
+        label_index.as_ref(),
+        &phase.query_predicates,
+        mode,
     )?;
+    let make_multihop = || {
+        let providers =
+            utils::filters::make_encoded_query_providers(label_index.clone(), &query_sources);
+        benchmark_core::search::graph::MultiHop::new(
+            index.clone(),
+            queries.clone(),
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )
+    };
 
-    let result = search::knn::run(&multihop, &groundtruth, steps)?;
+    let result = search::knn::run_fresh_multihop(make_multihop, &groundtruth, steps)?;
     Ok(AggregatedSearchResults::Topk(result))
 }
 

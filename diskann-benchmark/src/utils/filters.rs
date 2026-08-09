@@ -4,8 +4,13 @@
  */
 
 use bit_set::BitSet;
-use std::fmt::Debug;
-use std::sync::Arc;
+use std::{
+    fmt::{self, Debug},
+    sync::{Arc, OnceLock},
+};
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use diskann::{
     graph::ext::labeled::QueryLabelProvider,
@@ -22,7 +27,8 @@ use diskann_label_filter::{
     ASTExpr, CompareOp, DefaultKeyCodec,
 };
 use diskann_label_index::{
-    EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType, LabelExpression,
+    parse_label_expression_json, EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType,
+    LabelExpression,
 };
 use diskann_providers::model::graph::provider::layers::BetaFilter;
 
@@ -35,7 +41,7 @@ use diskann_label_filter::{
     InlineAttributeIndex, InlineAttributeIndexAuto, InlineAttributeIndexBitslice,
     InlineAttributeIndexCsr, InlineAttributeIndexPosting,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub struct QueryBitmapEvaluator {
     pub ast_expr: ASTExpr,
@@ -96,19 +102,78 @@ where
     }
 }
 
-#[derive(Debug)]
-struct EncodedQueryProvider(EncodedLabelQuery<'static>);
-
-impl QueryLabelProvider<u32> for EncodedQueryProvider {
-    fn is_match(&self, vec_id: u32) -> bool {
-        self.0.is_match(vec_id)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EncodedQueryMode {
     Dnf,
     Ast,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ValidatedEncodedQuerySource {
+    Dnf(Box<[String]>),
+    AstJson(String),
+}
+
+/// Per-query lazy encoded-label provider used by the encoded multihop benchmarks.
+///
+/// Outside timed search we only parse query JSONL, convert/validate the predicate shape, and store
+/// either validated DNF clauses or the recursive AST JSON string. The first `is_match` call inside
+/// timed ANN search performs the actual `EncodedLabelIndex::{query, query_ast_json}` compilation
+/// (plus bitmap AST materialization for bitmap-backed indexes); later probes reuse the cached
+/// [`EncodedLabelQuery`] for that one query row only.
+struct LazyEncodedQueryProvider {
+    index: Arc<EncodedLabelIndex>,
+    source: ValidatedEncodedQuerySource,
+    compiled: OnceLock<EncodedLabelQuery<'static>>,
+    #[cfg(test)]
+    compile_count: AtomicUsize,
+}
+
+impl LazyEncodedQueryProvider {
+    fn new(index: Arc<EncodedLabelIndex>, source: ValidatedEncodedQuerySource) -> Self {
+        Self {
+            index,
+            source,
+            compiled: OnceLock::new(),
+            #[cfg(test)]
+            compile_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn compile(&self) -> EncodedLabelQuery<'static> {
+        #[cfg(test)]
+        self.compile_count.fetch_add(1, Ordering::Relaxed);
+
+        compile_encoded_query(self.index.as_ref(), &self.source).unwrap_or_else(|e| {
+            panic!(
+                "validated encoded benchmark query failed lazy compilation for {:?}: {e}",
+                self.source
+            )
+        })
+    }
+
+    #[cfg(test)]
+    fn compile_count(&self) -> usize {
+        self.compile_count.load(Ordering::Relaxed)
+    }
+}
+
+impl fmt::Debug for LazyEncodedQueryProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LazyEncodedQueryProvider")
+            .field("format", &self.index.format())
+            .field("source", &self.source)
+            .field("compiled", &self.compiled.get().is_some())
+            .finish()
+    }
+}
+
+impl QueryLabelProvider<u32> for LazyEncodedQueryProvider {
+    fn is_match(&self, vec_id: u32) -> bool {
+        self.compiled
+            .get_or_init(|| self.compile())
+            .is_match(vec_id)
+    }
 }
 
 pub(crate) fn generate_bitmaps(
@@ -148,20 +213,28 @@ pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider
 
 pub(crate) fn load_encoded_label_index(
     data_labels: &InputFile,
-) -> anyhow::Result<EncodedLabelIndex> {
-    EncodedLabelIndex::load(&**data_labels).map_err(|e| {
-        anyhow::anyhow!(
-            "failed to load encoded label index {}: {e}",
-            data_labels.display()
-        )
-    })
+) -> anyhow::Result<Arc<EncodedLabelIndex>> {
+    EncodedLabelIndex::load(&**data_labels)
+        .map(Arc::new)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to load encoded label index {}: {e}",
+                data_labels.display()
+            )
+        })
 }
 
-pub(crate) fn make_encoded_query_providers(
+/// Parse/validate the benchmark predicate JSONL outside timed ANN search.
+///
+/// Setup still includes JSONL parsing, AST-to-`LabelExpression` conversion, supported-operator
+/// checks, null/unknown-label rejection, DNF-shape validation, and benchmark-local AST JSON
+/// serialization. Timed search begins only when the lazy provider first calls back into
+/// `EncodedLabelIndex::{query, query_ast_json}`.
+pub(crate) fn prepare_encoded_query_sources(
     index: &EncodedLabelIndex,
     query_predicates: &InputFile,
     mode: EncodedQueryMode,
-) -> anyhow::Result<Vec<Arc<dyn QueryLabelProvider<u32>>>> {
+) -> anyhow::Result<Vec<ValidatedEncodedQuerySource>> {
     let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
         .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
     parsed
@@ -169,17 +242,84 @@ pub(crate) fn make_encoded_query_providers(
         .map(|(_query_id, ast)| {
             let label_expression = ast_to_label_expression(&ast)?;
             validate_encoded_benchmark_labels(index, &label_expression)?;
-            let query = match mode {
-                EncodedQueryMode::Dnf => {
-                    let clauses = flatten_dnf_clauses(&label_expression)?;
-                    index.query(&clauses, FilterExpressionType::DNF)
-                }
-                EncodedQueryMode::Ast => index.query_expression(&label_expression),
-            }
-            .map_err(|e| anyhow::anyhow!("failed to compile encoded label query: {e}"))?;
-            Ok(Arc::new(EncodedQueryProvider(query)) as Arc<dyn QueryLabelProvider<u32>>)
+            encoded_query_source_from_expression(&label_expression, mode)
         })
         .collect()
+}
+
+/// Instantiate one independent lazy provider per query row.
+///
+/// Each provider receives its own [`OnceLock`], so filter compilation is never shared across query
+/// rows or across repeated benchmark executions.
+pub(crate) fn make_encoded_query_providers(
+    index: Arc<EncodedLabelIndex>,
+    query_sources: &[ValidatedEncodedQuerySource],
+) -> Vec<Arc<dyn QueryLabelProvider<u32>>> {
+    query_sources
+        .iter()
+        .cloned()
+        .map(|source| {
+            Arc::new(LazyEncodedQueryProvider::new(index.clone(), source))
+                as Arc<dyn QueryLabelProvider<u32>>
+        })
+        .collect()
+}
+
+fn encoded_query_source_from_expression(
+    expression: &LabelExpression,
+    mode: EncodedQueryMode,
+) -> anyhow::Result<ValidatedEncodedQuerySource> {
+    match mode {
+        EncodedQueryMode::Dnf => Ok(ValidatedEncodedQuerySource::Dnf(
+            flatten_dnf_clauses(expression)?.into_boxed_slice(),
+        )),
+        EncodedQueryMode::Ast => {
+            let expression_json = label_expression_to_ast_json(expression)?;
+            parse_label_expression_json(&expression_json)
+                .map_err(|e| anyhow::anyhow!("encoded AST source failed validation: {e}"))?;
+            Ok(ValidatedEncodedQuerySource::AstJson(expression_json))
+        }
+    }
+}
+
+fn compile_encoded_query(
+    index: &EncodedLabelIndex,
+    source: &ValidatedEncodedQuerySource,
+) -> anyhow::Result<EncodedLabelQuery<'static>> {
+    match source {
+        ValidatedEncodedQuerySource::Dnf(clauses) => index
+            .query(clauses.as_ref(), FilterExpressionType::DNF)
+            .map_err(|e| anyhow::anyhow!("failed to compile encoded DNF query: {e}")),
+        ValidatedEncodedQuerySource::AstJson(expression_json) => index
+            .query_ast_json(expression_json)
+            .map_err(|e| anyhow::anyhow!("failed to compile encoded AST query: {e}")),
+    }
+}
+
+fn label_expression_to_ast_json(expression: &LabelExpression) -> anyhow::Result<String> {
+    serde_json::to_string(&label_expression_to_ast_value(expression))
+        .map_err(|e| anyhow::anyhow!("failed to serialize encoded AST query: {e}"))
+}
+
+fn label_expression_to_ast_value(expression: &LabelExpression) -> Value {
+    match expression {
+        LabelExpression::Label(label) => Value::String(label.clone()),
+        LabelExpression::And(children) => json!({
+            "and": children
+                .iter()
+                .map(label_expression_to_ast_value)
+                .collect::<Vec<_>>()
+        }),
+        LabelExpression::Or(children) => json!({
+            "or": children
+                .iter()
+                .map(label_expression_to_ast_value)
+                .collect::<Vec<_>>()
+        }),
+        LabelExpression::Not(child) => json!({
+            "not": label_expression_to_ast_value(child)
+        }),
+    }
 }
 
 fn checked_doc_id(doc_id: usize) -> anyhow::Result<u32> {
@@ -599,6 +739,63 @@ mod tests {
             .collect()
     }
 
+    fn test_compiled_query_matches(query: &EncodedLabelQuery<'_>, num_vectors: u32) -> Vec<u32> {
+        (0..num_vectors)
+            .filter(|&vec_id| query.is_match(vec_id))
+            .collect()
+    }
+
+    fn encoded_fixture() -> (
+        tempfile::TempDir,
+        Arc<EncodedLabelIndex>,
+        Arc<EncodedLabelIndex>,
+        InputFile,
+    ) {
+        let dir = tempdir().unwrap();
+        let labels_jsonl = dir.path().join("labels.jsonl");
+        let bitslice_index = dir.path().join("labels.bitslice");
+        let bitmap_index = dir.path().join("labels.bitmap");
+        let queries_jsonl = dir.path().join("queries.jsonl");
+
+        write_lines(
+            &labels_jsonl,
+            &[
+                r#"{"doc_id":0,"brand":"A","color":"red","promo":true,"active":false,"score":2,"missing":null}"#,
+                r#"{"doc_id":1,"brand":"A","color":"blue","promo":false,"active":false,"score":3,"missing":"value"}"#,
+                r#"{"doc_id":2,"brand":"B","color":"red","promo":false,"active":true,"score":2,"missing":null}"#,
+                r#"{"doc_id":3,"brand":"C","color":"green","promo":true,"active":false,"score":5,"missing":null}"#,
+            ],
+        );
+        write_lines(
+            &queries_jsonl,
+            &[
+                r#"{"query_id":0,"filter":{"$or":[{"$and":[{"brand":{"$eq":"A"}},{"color":{"$eq":"red"}}]},{"promo":{"$eq":true}}]}}"#,
+                r#"{"query_id":1,"filter":{"active":{"$eq":false},"score":{"$eq":2}}}"#,
+                r#"{"query_id":2,"filter":{"$or":[{"brand":{"$eq":"B"}},{"color":{"$eq":"green"}}]}}"#,
+            ],
+        );
+
+        encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
+            .unwrap();
+        encode_label_index_jsonl(&labels_jsonl, &bitmap_index, LabelIndexFormat::Bitmap).unwrap();
+
+        (
+            dir,
+            load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap(),
+            load_encoded_label_index(&InputFile::new(bitmap_index)).unwrap(),
+            InputFile::new(queries_jsonl),
+        )
+    }
+
+    fn eager_encoded_matches(
+        index: &EncodedLabelIndex,
+        source: &ValidatedEncodedQuerySource,
+        num_vectors: u32,
+    ) -> Vec<u32> {
+        let query = compile_encoded_query(index, source).unwrap();
+        test_compiled_query_matches(&query, num_vectors)
+    }
+
     #[test]
     fn test_bitmap_filter_match() {
         let mut bitset = BitSet::new();
@@ -641,60 +838,124 @@ mod tests {
     }
 
     #[test]
-    fn test_encoded_providers_agree_for_dnf_and_ast() {
+    fn test_lazy_encoded_dnf_provider_matches_eager_query() {
+        let (_dir, bitslice_index, _bitmap_index, query_file) = encoded_fixture();
+        let sources = prepare_encoded_query_sources(
+            bitslice_index.as_ref(),
+            &query_file,
+            EncodedQueryMode::Dnf,
+        )
+        .unwrap();
+        let providers = make_encoded_query_providers(bitslice_index.clone(), &sources);
+
+        assert_eq!(providers.len(), sources.len());
+        for (provider, source) in providers.iter().zip(&sources) {
+            assert_eq!(
+                test_query_matches(provider, 4),
+                eager_encoded_matches(bitslice_index.as_ref(), source, 4)
+            );
+        }
+    }
+
+    #[test]
+    fn test_lazy_encoded_ast_provider_matches_eager_query_for_bitslice_and_bitmap() {
+        let (_dir, bitslice_index, bitmap_index, query_file) = encoded_fixture();
+        let bitslice_sources = prepare_encoded_query_sources(
+            bitslice_index.as_ref(),
+            &query_file,
+            EncodedQueryMode::Ast,
+        )
+        .unwrap();
+        let bitmap_sources = prepare_encoded_query_sources(
+            bitmap_index.as_ref(),
+            &query_file,
+            EncodedQueryMode::Ast,
+        )
+        .unwrap();
+        let bitslice_providers =
+            make_encoded_query_providers(bitslice_index.clone(), &bitslice_sources);
+        let bitmap_providers = make_encoded_query_providers(bitmap_index.clone(), &bitmap_sources);
+
+        assert_eq!(bitslice_providers.len(), bitslice_sources.len());
+        assert_eq!(bitmap_providers.len(), bitmap_sources.len());
+        for ((bitslice_provider, bitslice_source), (bitmap_provider, bitmap_source)) in
+            bitslice_providers
+                .iter()
+                .zip(&bitslice_sources)
+                .zip(bitmap_providers.iter().zip(&bitmap_sources))
+        {
+            assert_eq!(
+                test_query_matches(bitslice_provider, 4),
+                eager_encoded_matches(bitslice_index.as_ref(), bitslice_source, 4)
+            );
+            assert_eq!(
+                test_query_matches(bitmap_provider, 4),
+                eager_encoded_matches(bitmap_index.as_ref(), bitmap_source, 4)
+            );
+        }
+    }
+
+    #[test]
+    fn test_encoded_ast_source_json_shape() {
+        let expression = LabelExpression::Or(vec![
+            LabelExpression::And(vec![
+                LabelExpression::Label("brand=A".into()),
+                LabelExpression::Not(Box::new(LabelExpression::Label("promo".into()))),
+            ]),
+            LabelExpression::Label("color=red".into()),
+        ]);
+        let source =
+            encoded_query_source_from_expression(&expression, EncodedQueryMode::Ast).unwrap();
+        let ValidatedEncodedQuerySource::AstJson(expression_json) = source else {
+            panic!("expected AST JSON source");
+        };
+
+        assert_eq!(
+            serde_json::from_str::<Value>(&expression_json).unwrap(),
+            json!({
+                "or": [
+                    {
+                        "and": [
+                            "brand=A",
+                            { "not": "promo" }
+                        ]
+                    },
+                    "color=red"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_lazy_encoded_provider_reuses_compilation_per_instance() {
         let dir = tempdir().unwrap();
         let labels_jsonl = dir.path().join("labels.jsonl");
         let bitslice_index = dir.path().join("labels.bitslice");
-        let bitmap_index = dir.path().join("labels.bitmap");
-        let queries_jsonl = dir.path().join("queries.jsonl");
-
         write_lines(
             &labels_jsonl,
             &[
-                r#"{"doc_id":0,"brand":"A","color":"red","promo":true,"active":false,"score":2,"missing":null}"#,
-                r#"{"doc_id":1,"brand":"A","color":"blue","promo":false,"active":false,"score":3,"missing":"value"}"#,
-                r#"{"doc_id":2,"brand":"B","color":"red","promo":false,"active":true,"score":2,"missing":null}"#,
-                r#"{"doc_id":3,"brand":"C","color":"green","promo":true,"active":false,"score":5,"missing":null}"#,
+                r#"{"doc_id":0,"A":true,"B":true}"#,
+                r#"{"doc_id":1,"A":false,"B":true}"#,
             ],
         );
-        write_lines(
-            &queries_jsonl,
-            &[
-                r#"{"query_id":0,"filter":{"$or":[{"$and":[{"brand":{"$eq":"A"}},{"color":{"$eq":"red"}}]},{"promo":{"$eq":true}}]}}"#,
-                r#"{"query_id":1,"filter":{"active":{"$eq":false},"score":{"$eq":2}}}"#,
-                r#"{"query_id":2,"filter":{"$or":[{"brand":{"$eq":"B"}},{"color":{"$eq":"green"}}]}}"#,
-            ],
-        );
-
         encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
             .unwrap();
-        encode_label_index_jsonl(&labels_jsonl, &bitmap_index, LabelIndexFormat::Bitmap).unwrap();
+        let index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
+        let source = ValidatedEncodedQuerySource::AstJson(r#"{"and":["A","B"]}"#.to_string());
+        let provider_a = Arc::new(LazyEncodedQueryProvider::new(index.clone(), source.clone()));
+        let provider_b = Arc::new(LazyEncodedQueryProvider::new(index, source));
 
-        let bitslice_index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
-        let bitmap_index = load_encoded_label_index(&InputFile::new(bitmap_index)).unwrap();
-        let query_file = InputFile::new(queries_jsonl);
+        assert_eq!(provider_a.compile_count(), 0);
+        assert_eq!(provider_b.compile_count(), 0);
+        assert!(provider_a.is_match(0));
+        assert!(!provider_a.is_match(1));
+        assert!(provider_a.is_match(0));
+        assert_eq!(provider_a.compile_count(), 1);
+        assert_eq!(provider_b.compile_count(), 0);
 
-        let dnf = make_encoded_query_providers(&bitslice_index, &query_file, EncodedQueryMode::Dnf)
-            .unwrap();
-        let bitslice_ast =
-            make_encoded_query_providers(&bitslice_index, &query_file, EncodedQueryMode::Ast)
-                .unwrap();
-        let bitmap_ast =
-            make_encoded_query_providers(&bitmap_index, &query_file, EncodedQueryMode::Ast)
-                .unwrap();
-
-        assert_eq!(dnf.len(), bitslice_ast.len());
-        assert_eq!(dnf.len(), bitmap_ast.len());
-        for ((dnf, bitslice_ast), bitmap_ast) in dnf.iter().zip(&bitslice_ast).zip(&bitmap_ast) {
-            assert_eq!(
-                test_query_matches(dnf, 4),
-                test_query_matches(bitslice_ast, 4)
-            );
-            assert_eq!(
-                test_query_matches(dnf, 4),
-                test_query_matches(bitmap_ast, 4)
-            );
-        }
+        assert!(provider_b.is_match(0));
+        assert_eq!(provider_b.compile_count(), 1);
+        assert_eq!(provider_a.compile_count(), 1);
     }
 
     #[test]
