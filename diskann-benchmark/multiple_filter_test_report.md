@@ -461,6 +461,49 @@ The latency advantage therefore represents a different recall point, not an algo
 equal quality. Adaptive-L or an L sweep is required to compare recall-versus-latency curves and
 determine whether Inline can match multihop recall efficiently.
 
+### 8.4.8 Encoded-label library: DNF, AST, and precomputed AST
+
+The new `diskann-label-index` crate was benchmarked directly through three multihop modes:
+
+- `topk-multihop-encoded-bitslice-dnf`: contiguous Bitslice storage plus the flat DNF plan;
+- `topk-multihop-encoded-bitslice-ast`: the same Bitslice storage plus recursive AST evaluation;
+- `topk-multihop-encoded-bitmap-ast`: Roaring postings plus recursive AST materialization into one
+  dense query-result bitmap before timed ANN search.
+
+The full 596-label JSONL was encoded once into a 744,726,578-byte Bitslice file and a
+61,892,560-byte Roaring file. One counterbalanced 27-job runbook then covered S1-S9, k=150, L=150,
+one thread, 1,000 queries, and three repetitions. Values are milliseconds averaged across
+repetitions.
+
+| Case | Bitslice DNF AVG | Bitslice AST AVG | Precomputed AST AVG | DNF P99 | AST P99 | Pre P99 | DNF P99.9 | AST P99.9 | Pre P99.9 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | 2.616 | 2.499 | **2.435** | 9.200 | 8.665 | **7.816** | 14.442 | **11.585** | 19.243 |
+| S2 | 4.222 | 4.929 | **3.503** | 9.505 | 10.978 | **6.829** | 11.965 | 31.797 | **10.894** |
+| S3 | 4.497 | 4.904 | **3.503** | 11.440 | 12.349 | **8.099** | 17.361 | 15.686 | **9.759** |
+| S4 | 6.119 | 7.217 | **3.670** | 16.167 | 18.997 | **8.277** | 26.944 | 26.378 | **10.222** |
+| S5 | 3.009 | 3.049 | **2.882** | 9.364 | 9.773 | **8.411** | **12.126** | 14.358 | 10.654 |
+| S6 | 5.435 | 5.003 | **4.697** | 10.343 | 9.232 | **7.913** | 18.581 | 13.521 | **9.619** |
+| S7 | 7.486 | 6.673 | **5.259** | 12.626 | 11.813 | **8.569** | 16.570 | 39.672 | **11.013** |
+| S8 | 8.572 | 8.442 | **5.567** | 13.796 | 20.945 | **8.610** | 18.575 | 36.382 | **11.214** |
+| S9 | 5.004 | 4.789 | **3.616** | 9.496 | 9.225 | **6.404** | 28.355 | 16.517 | **13.191** |
+
+Recall, comparisons, and hops were exactly identical across all three modes for every case.
+Bitslice AST versus flat DNF had a **1.013x AVG latency ratio** (1.3% slower geometric mean), a
+**1.066x P99 ratio**, and a **1.180x P99.9 ratio**. This confirms that recursive AST evaluation is
+mean-latency competitive for the current one-to-four-terminal workload, while its tail is noisier;
+the S2/S7/S8 P99.9 values are dominated by isolated outliers.
+
+Precomputed AST was **1.294x faster in AVG**, **1.417x in P99**, and **1.528x in P99.9** versus
+Bitslice DNF by geometric mean. This is the expected warm/precomputed result: Roaring AST
+evaluation and dense bitmap construction occur during benchmark setup, so timed traversal pays
+only one membership lookup per visited node. Its 2.435-5.567 ms means are in the same range as the
+earlier precomputed-bitmap results in section 8.
+
+The new encoded Bitslice-DNF means were 1.218x slower by geometric mean than the immediately prior
+Bitslice-DNF rerun in section 8.4.6. Because traversal statistics are identical, this is
+run-to-run/system drift plus the new generic provider layer rather than a semantic difference;
+the matched within-run AST/DNF/precomputed comparisons are the authoritative result.
+
 ## 8.5 Exact-semantics multihop allocation reuse
 
 After optimizing filter evaluation, the current multihop implementation still created temporary
@@ -566,6 +609,7 @@ one-off searches and well-ordered selective predicates.
 - Adaptive + bit-sliced live code (section 8.3): `InlineAttributeIndexAuto` (search-type `topk-multihop-live-filter-auto`) and `InlineAttributeIndexBitslice` (search-type `topk-multihop-live-filter-bitslice`)
 - Flat DNF Bitslice code (section 8.4): `EncodedDnf`, `BitsliceSingleProvider`, and `BitsliceDnfProvider`; benchmark search-type `topk-multihop-live-filter-bitslice-dnf`; microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
 - Inline Bitslice-DNF comparison (section 8.4.7): benchmark search-type `topk-inline-live-filter-bitslice-dnf`, using the same `InlineAttributeIndexBitslice` and DNF providers with `InlineFilterSearch`
+- Encoded-label library comparison (section 8.4.8): `diskann-label-index`; benchmark search-types `topk-multihop-encoded-bitslice-dnf`, `topk-multihop-encoded-bitslice-ast`, and `topk-multihop-encoded-bitmap-ast`; local encoded files `data_labels_set.bitslice.bin` and `data_labels_set.bitmap.bin`
 - Index (reused): `idxsave_full`(+`.data`)
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
