@@ -6,6 +6,7 @@
 //! Versioned on-disk label-index encoding, loading, and query evaluation for DiskANN.
 
 use roaring::RoaringBitmap;
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -22,6 +23,8 @@ const MAX_LABEL_LENGTH: usize = 1 << 20;
 const MAX_POSTING_BYTES: usize = 512 << 20;
 const MAX_DENSE_BITMAP_BYTES: usize = 256 << 20;
 const MAX_BITMAP_VECTORS: u64 = (MAX_DENSE_BITMAP_BYTES as u64) * 8;
+const MAX_LABEL_EXPRESSION_DEPTH: usize = 64;
+const MAX_LABEL_EXPRESSION_NODES: usize = 4096;
 
 /// The persisted label-index storage format.
 #[repr(u32)]
@@ -40,10 +43,233 @@ pub enum LabelIndexFormat {
 pub enum FilterExpressionType {
     /// Outer OR with `&`-separated labels inside each string:
     /// `["A&B", "C&D"]` means `(A AND B) OR (C AND D)`.
-    ORMajor = 0,
+    DNF = 0,
     /// Outer AND with `|`-separated labels inside each string:
     /// `["A|B", "C|D"]` means `(A OR B) AND (C OR D)`.
-    ANDMajor = 1,
+    CNF = 1,
+    /// Exactly one JSON string containing a recursive abstract syntax tree.
+    AST = 2,
+}
+
+impl FilterExpressionType {
+    /// Backward-compatible alias for [`FilterExpressionType::DNF`].
+    #[allow(non_upper_case_globals)]
+    pub const ORMajor: Self = Self::DNF;
+
+    /// Backward-compatible alias for [`FilterExpressionType::CNF`].
+    #[allow(non_upper_case_globals)]
+    pub const ANDMajor: Self = Self::CNF;
+}
+
+/// A crate-owned Boolean label expression tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelExpression {
+    /// A terminal label.
+    Label(String),
+    /// A conjunction of child expressions.
+    And(Vec<LabelExpression>),
+    /// A disjunction of child expressions.
+    Or(Vec<LabelExpression>),
+    /// A negated child expression.
+    Not(Box<LabelExpression>),
+}
+
+struct LabelExpressionBudget {
+    remaining_nodes: usize,
+}
+
+impl LabelExpressionBudget {
+    fn new() -> Self {
+        Self {
+            remaining_nodes: MAX_LABEL_EXPRESSION_NODES,
+        }
+    }
+
+    fn reserve<E>(&mut self, depth: usize) -> Result<(), E>
+    where
+        E: de::Error,
+    {
+        if depth > MAX_LABEL_EXPRESSION_DEPTH {
+            return Err(E::custom(format!(
+                "label expression depth {depth} exceeds limit {MAX_LABEL_EXPRESSION_DEPTH}"
+            )));
+        }
+
+        if self.remaining_nodes == 0 {
+            let node_count = MAX_LABEL_EXPRESSION_NODES + 1;
+            return Err(E::custom(format!(
+                "label expression node count {node_count} exceeds limit {MAX_LABEL_EXPRESSION_NODES}"
+            )));
+        }
+
+        self.remaining_nodes -= 1;
+        Ok(())
+    }
+}
+
+struct LabelExpressionSeed<'a> {
+    budget: &'a mut LabelExpressionBudget,
+    depth: usize,
+}
+
+impl<'a, 'de> DeserializeSeed<'de> for LabelExpressionSeed<'a> {
+    type Value = LabelExpression;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(LabelExpressionVisitor {
+            budget: self.budget,
+            depth: self.depth,
+        })
+    }
+}
+
+struct LabelExpressionVisitor<'a> {
+    budget: &'a mut LabelExpressionBudget,
+    depth: usize,
+}
+
+impl<'de> Visitor<'de> for LabelExpressionVisitor<'_> {
+    type Value = LabelExpression;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a label string or a one-key and/or/not object")
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(value)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.budget.reserve::<E>(self.depth)?;
+        validate_label(value).map_err(E::custom)?;
+        Ok(LabelExpression::Label(value.to_string()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.budget.reserve::<E>(self.depth)?;
+        validate_label(&value).map_err(E::custom)?;
+        Ok(LabelExpression::Label(value))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let LabelExpressionVisitor { budget, depth } = self;
+        budget.reserve::<A::Error>(depth)?;
+
+        let Some(operator) = map.next_key::<String>()? else {
+            return Err(de::Error::custom(
+                "label expression objects must contain exactly one operator",
+            ));
+        };
+
+        let child_depth = depth + 1;
+        let expression = match operator.as_str() {
+            "and" | "$and" => {
+                LabelExpression::And(map.next_value_seed(LabelExpressionArraySeed {
+                    budget,
+                    depth: child_depth,
+                    operator: "and",
+                })?)
+            }
+            "or" | "$or" => LabelExpression::Or(map.next_value_seed(LabelExpressionArraySeed {
+                budget,
+                depth: child_depth,
+                operator: "or",
+            })?),
+            "not" | "$not" => {
+                LabelExpression::Not(Box::new(map.next_value_seed(LabelExpressionSeed {
+                    budget,
+                    depth: child_depth,
+                })?))
+            }
+            _ => {
+                return Err(de::Error::custom(format!(
+                    "unsupported label expression operator '{operator}'"
+                )));
+            }
+        };
+
+        if map.next_key::<String>()?.is_some() {
+            return Err(de::Error::custom(
+                "label expression objects must contain exactly one operator",
+            ));
+        }
+
+        Ok(expression)
+    }
+}
+
+struct LabelExpressionArraySeed<'a> {
+    budget: &'a mut LabelExpressionBudget,
+    depth: usize,
+    operator: &'static str,
+}
+
+impl<'a, 'de> DeserializeSeed<'de> for LabelExpressionArraySeed<'a> {
+    type Value = Vec<LabelExpression>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(LabelExpressionArrayVisitor {
+            budget: self.budget,
+            depth: self.depth,
+            operator: self.operator,
+        })
+    }
+}
+
+struct LabelExpressionArrayVisitor<'a> {
+    budget: &'a mut LabelExpressionBudget,
+    depth: usize,
+    operator: &'static str,
+}
+
+impl<'de> Visitor<'de> for LabelExpressionArrayVisitor<'_> {
+    type Value = Vec<LabelExpression>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a non-empty array of label expressions")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let LabelExpressionArrayVisitor {
+            budget,
+            depth,
+            operator,
+        } = self;
+        let Some(first) = seq.next_element_seed(LabelExpressionSeed { budget, depth })? else {
+            return Err(de::Error::custom(format!(
+                "label expression '{}' array cannot be empty",
+                operator
+            )));
+        };
+
+        let mut children = vec![first];
+        while let Some(child) = seq.next_element_seed(LabelExpressionSeed { budget, depth })? {
+            children.push(child);
+        }
+
+        Ok(children)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -86,17 +312,8 @@ impl std::fmt::Debug for EncodedLabelIndex {
 
 #[derive(Debug, Clone, Copy)]
 enum PlanKind {
-    OrMajor,
-    AndMajor,
-}
-
-impl From<FilterExpressionType> for PlanKind {
-    fn from(value: FilterExpressionType) -> Self {
-        match value {
-            FilterExpressionType::ORMajor => Self::OrMajor,
-            FilterExpressionType::ANDMajor => Self::AndMajor,
-        }
-    }
+    Dnf,
+    Cnf,
 }
 
 #[derive(Debug)]
@@ -106,11 +323,20 @@ struct CompiledPlan {
     label_ids: Box<[Option<u32>]>,
 }
 
+#[derive(Debug)]
+enum CompiledExpression {
+    Flat(CompiledPlan),
+    Label(Option<u32>),
+    And(Box<[CompiledExpression]>),
+    Or(Box<[CompiledExpression]>),
+    Not(Box<CompiledExpression>),
+}
+
 enum QueryStorage<'a> {
     Bitslice {
         words_per_label: usize,
         bits: &'a [u64],
-        plan: CompiledPlan,
+        expression: CompiledExpression,
     },
     DenseBitmap {
         bits: Box<[u64]>,
@@ -142,8 +368,8 @@ impl EncodedLabelQuery<'_> {
             QueryStorage::Bitslice {
                 words_per_label,
                 bits,
-                plan,
-            } => plan.matches_bitslice(*words_per_label, bits, vec_id),
+                expression,
+            } => expression.matches_bitslice(*words_per_label, bits, vec_id),
             QueryStorage::DenseBitmap { bits } => dense_contains(bits, vec_id),
         }
     }
@@ -161,18 +387,39 @@ impl CompiledPlan {
         };
 
         match self.kind {
-            PlanKind::OrMajor => self.clause_offsets.windows(2).any(|clause| {
+            PlanKind::Dnf => self.clause_offsets.windows(2).any(|clause| {
                 self.label_ids[clause[0]..clause[1]]
                     .iter()
                     .copied()
                     .all(terminal_matches)
             }),
-            PlanKind::AndMajor => self.clause_offsets.windows(2).all(|clause| {
+            PlanKind::Cnf => self.clause_offsets.windows(2).all(|clause| {
                 self.label_ids[clause[0]..clause[1]]
                     .iter()
                     .copied()
                     .any(terminal_matches)
             }),
+        }
+    }
+}
+
+impl CompiledExpression {
+    fn matches_bitslice(&self, words_per_label: usize, bits: &[u64], vec_id: u32) -> bool {
+        match self {
+            Self::Flat(plan) => plan.matches_bitslice(words_per_label, bits, vec_id),
+            Self::Label(label_id) => label_id.is_some_and(|label_id| {
+                let label_id = label_id as usize;
+                let vec_id = vec_id as usize;
+                let word = bits[label_id * words_per_label + vec_id / 64];
+                word & (1u64 << (vec_id % 64)) != 0
+            }),
+            Self::And(children) => children
+                .iter()
+                .all(|child| child.matches_bitslice(words_per_label, bits, vec_id)),
+            Self::Or(children) => children
+                .iter()
+                .any(|child| child.matches_bitslice(words_per_label, bits, vec_id)),
+            Self::Not(child) => !child.matches_bitslice(words_per_label, bits, vec_id),
         }
     }
 }
@@ -376,8 +623,48 @@ impl EncodedLabelIndex {
     where
         S: AsRef<str>,
     {
-        let plan = compile_plan(clauses, expression_type.into(), &self.label_ids)?;
+        let expression = match expression_type {
+            FilterExpressionType::DNF => {
+                CompiledExpression::Flat(compile_plan(clauses, PlanKind::Dnf, &self.label_ids)?)
+            }
+            FilterExpressionType::CNF => {
+                CompiledExpression::Flat(compile_plan(clauses, PlanKind::Cnf, &self.label_ids)?)
+            }
+            FilterExpressionType::AST => {
+                if clauses.len() != 1 {
+                    return Err(EncodedLabelIndexError::Invalid(
+                        "AST filters must contain exactly one JSON expression string".to_string(),
+                    ));
+                }
+                let expression = parse_label_expression_json(clauses[0].as_ref())?;
+                compile_label_expression(&expression, &self.label_ids)?
+            }
+        };
 
+        self.build_query(expression)
+    }
+
+    /// Compile a query from a recursive label expression.
+    pub fn query_expression(
+        &self,
+        expression: &LabelExpression,
+    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError> {
+        self.build_query(compile_label_expression(expression, &self.label_ids)?)
+    }
+
+    /// Compile a query from a JSON-encoded recursive label expression.
+    pub fn query_ast_json(
+        &self,
+        expression_json: &str,
+    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError> {
+        let expression = parse_label_expression_json(expression_json)?;
+        self.query_expression(&expression)
+    }
+
+    fn build_query(
+        &self,
+        expression: CompiledExpression,
+    ) -> Result<EncodedLabelQuery<'_>, EncodedLabelIndexError> {
         let storage = match &self.storage {
             LabelStorage::Bitslice {
                 words_per_label,
@@ -385,10 +672,11 @@ impl EncodedLabelIndex {
             } => QueryStorage::Bitslice {
                 words_per_label: *words_per_label,
                 bits,
-                plan,
+                expression,
             },
             LabelStorage::Bitmap { postings } => QueryStorage::DenseBitmap {
-                bits: materialize_bitmap(&plan, postings, self.num_vectors)?.into_boxed_slice(),
+                bits: materialize_bitmap(&expression, postings, self.num_vectors)?
+                    .into_boxed_slice(),
             },
         };
 
@@ -422,6 +710,22 @@ pub fn encode_label_index_jsonl(
     encode_jsonl(input_path, output_path, format)
 }
 
+/// Parse a JSON-encoded recursive label expression.
+pub fn parse_label_expression_json(
+    expression_json: &str,
+) -> Result<LabelExpression, EncodedLabelIndexError> {
+    let mut deserializer = serde_json::Deserializer::from_str(expression_json);
+    let mut budget = LabelExpressionBudget::new();
+    let expression = LabelExpressionSeed {
+        budget: &mut budget,
+        depth: 1,
+    }
+    .deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    validate_label_expression(&expression)?;
+    Ok(expression)
+}
+
 fn compile_plan<S: AsRef<str>>(
     clauses: &[S],
     kind: PlanKind,
@@ -434,8 +738,8 @@ fn compile_plan<S: AsRef<str>>(
     }
 
     let delimiter = match kind {
-        PlanKind::OrMajor => '&',
-        PlanKind::AndMajor => '|',
+        PlanKind::Dnf => '&',
+        PlanKind::Cnf => '|',
     };
     let mut clause_offsets = vec![0usize];
     let mut encoded = Vec::new();
@@ -463,13 +767,139 @@ fn compile_plan<S: AsRef<str>>(
     })
 }
 
+fn compile_label_expression(
+    expression: &LabelExpression,
+    label_ids: &HashMap<String, u32>,
+) -> Result<CompiledExpression, EncodedLabelIndexError> {
+    validate_label_expression(expression)?;
+    Ok(compile_label_expression_inner(expression, label_ids))
+}
+
+fn compile_label_expression_inner(
+    expression: &LabelExpression,
+    label_ids: &HashMap<String, u32>,
+) -> CompiledExpression {
+    match expression {
+        LabelExpression::Label(label) => CompiledExpression::Label(label_ids.get(label).copied()),
+        LabelExpression::And(children) => CompiledExpression::And(
+            children
+                .iter()
+                .map(|child| compile_label_expression_inner(child, label_ids))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        LabelExpression::Or(children) => CompiledExpression::Or(
+            children
+                .iter()
+                .map(|child| compile_label_expression_inner(child, label_ids))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        LabelExpression::Not(child) => {
+            CompiledExpression::Not(Box::new(compile_label_expression_inner(child, label_ids)))
+        }
+    }
+}
+
+fn validate_label_expression(expression: &LabelExpression) -> Result<(), EncodedLabelIndexError> {
+    let mut node_count = 0usize;
+    let mut stack = vec![(expression, 1usize)];
+
+    while let Some((expression, depth)) = stack.pop() {
+        if depth > MAX_LABEL_EXPRESSION_DEPTH {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "label expression depth {depth} exceeds limit {MAX_LABEL_EXPRESSION_DEPTH}"
+            )));
+        }
+
+        node_count += 1;
+        if node_count > MAX_LABEL_EXPRESSION_NODES {
+            return Err(EncodedLabelIndexError::Invalid(format!(
+                "label expression node count {node_count} exceeds limit {MAX_LABEL_EXPRESSION_NODES}"
+            )));
+        }
+
+        match expression {
+            LabelExpression::Label(label) => validate_label(label)?,
+            LabelExpression::And(children) => {
+                if children.is_empty() {
+                    return Err(EncodedLabelIndexError::Invalid(
+                        "label expression 'and' array cannot be empty".to_string(),
+                    ));
+                }
+                stack.extend(children.iter().rev().map(|child| (child, depth + 1)));
+            }
+            LabelExpression::Or(children) => {
+                if children.is_empty() {
+                    return Err(EncodedLabelIndexError::Invalid(
+                        "label expression 'or' array cannot be empty".to_string(),
+                    ));
+                }
+                stack.extend(children.iter().rev().map(|child| (child, depth + 1)));
+            }
+            LabelExpression::Not(child) => stack.push((child.as_ref(), depth + 1)),
+        }
+    }
+
+    Ok(())
+}
+
 fn materialize_bitmap(
-    plan: &CompiledPlan,
+    expression: &CompiledExpression,
     postings: &[RoaringBitmap],
     num_vectors: u32,
 ) -> Result<Vec<u64>, EncodedLabelIndexError> {
-    let result = match plan.kind {
-        PlanKind::OrMajor => {
+    let result = materialize_bitmap_expression(expression, postings, num_vectors)?;
+    densify(&result, num_vectors)
+}
+
+fn materialize_bitmap_expression(
+    expression: &CompiledExpression,
+    postings: &[RoaringBitmap],
+    num_vectors: u32,
+) -> Result<RoaringBitmap, EncodedLabelIndexError> {
+    match expression {
+        CompiledExpression::Flat(plan) => Ok(materialize_bitmap_plan(plan, postings)),
+        CompiledExpression::Label(Some(label_id)) => Ok(postings[*label_id as usize].clone()),
+        CompiledExpression::Label(None) => Ok(RoaringBitmap::new()),
+        CompiledExpression::And(children) => {
+            let Some((first, rest)) = children.split_first() else {
+                return Err(EncodedLabelIndexError::Invalid(
+                    "label expression 'and' array cannot be empty".to_string(),
+                ));
+            };
+            let mut result = materialize_bitmap_expression(first, postings, num_vectors)?;
+            for child in rest {
+                result &= materialize_bitmap_expression(child, postings, num_vectors)?;
+                if result.is_empty() {
+                    break;
+                }
+            }
+            Ok(result)
+        }
+        CompiledExpression::Or(children) => {
+            if children.is_empty() {
+                return Err(EncodedLabelIndexError::Invalid(
+                    "label expression 'or' array cannot be empty".to_string(),
+                ));
+            }
+            let mut result = RoaringBitmap::new();
+            for child in children.iter() {
+                result |= materialize_bitmap_expression(child, postings, num_vectors)?;
+            }
+            Ok(result)
+        }
+        CompiledExpression::Not(child) => {
+            let mut result = full_bitmap(num_vectors);
+            result -= materialize_bitmap_expression(child, postings, num_vectors)?;
+            Ok(result)
+        }
+    }
+}
+
+fn materialize_bitmap_plan(plan: &CompiledPlan, postings: &[RoaringBitmap]) -> RoaringBitmap {
+    match plan.kind {
+        PlanKind::Dnf => {
             let mut result = RoaringBitmap::new();
             for clause in plan.clause_offsets.windows(2) {
                 let labels = &plan.label_ids[clause[0]..clause[1]];
@@ -491,7 +921,7 @@ fn materialize_bitmap(
             }
             result
         }
-        PlanKind::AndMajor => {
+        PlanKind::Cnf => {
             let mut result: Option<RoaringBitmap> = None;
             for clause in plan.clause_offsets.windows(2) {
                 let mut clause_result = RoaringBitmap::new();
@@ -514,9 +944,13 @@ fn materialize_bitmap(
             }
             result.unwrap_or_default()
         }
-    };
+    }
+}
 
-    densify(&result, num_vectors)
+fn full_bitmap(num_vectors: u32) -> RoaringBitmap {
+    let mut result = RoaringBitmap::new();
+    result.insert_range(0..num_vectors);
+    result
 }
 
 fn dense_contains(bits: &[u64], vec_id: u32) -> bool {
@@ -897,6 +1331,12 @@ mod tests {
         index.query(clauses, expression_type).unwrap()
     }
 
+    fn matching_ids(query: &EncodedLabelQuery<'_>, num_vectors: u32) -> Vec<u32> {
+        (0..num_vectors)
+            .filter(|&vec_id| query.is_match(vec_id))
+            .collect()
+    }
+
     fn round_trip(format: LabelIndexFormat) -> EncodedLabelIndex {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("labels.jsonl");
@@ -906,11 +1346,27 @@ mod tests {
         EncodedLabelIndex::load(output).unwrap()
     }
 
+    fn nested_not_expression(wrappings: usize) -> LabelExpression {
+        let mut expression = LabelExpression::Label("A".to_string());
+        for _ in 0..wrappings {
+            expression = LabelExpression::Not(Box::new(expression));
+        }
+        expression
+    }
+
+    fn nested_not_json(wrappings: usize) -> String {
+        let mut expression_json = "\"A\"".to_string();
+        for _ in 0..wrappings {
+            expression_json = format!(r#"{{"not":{expression_json}}}"#);
+        }
+        expression_json
+    }
+
     #[test]
-    fn bitslice_and_bitmap_match_for_or_major() {
+    fn bitslice_and_bitmap_match_for_dnf() {
         for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
             let index = round_trip(format);
-            let query = compile(&index, &["A&B", "C&D"], FilterExpressionType::ORMajor);
+            let query = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
             assert!(!query.is_match(0));
             assert!(!query.is_match(1));
             assert!(query.is_match(2));
@@ -919,13 +1375,13 @@ mod tests {
     }
 
     #[test]
-    fn bitslice_and_bitmap_match_for_and_major() {
+    fn bitslice_and_bitmap_match_for_cnf() {
         for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
             let index = round_trip(format);
             let query = compile(
                 &index,
                 &["A|B", "group=x|score=2"],
-                FilterExpressionType::ANDMajor,
+                FilterExpressionType::CNF,
             );
             assert!(query.is_match(0));
             assert!(query.is_match(1));
@@ -938,9 +1394,7 @@ mod tests {
     fn query_accepts_owned_strings() {
         let index = round_trip(LabelIndexFormat::Bitmap);
         let clauses = vec!["A&B".to_string(), "C&D".to_string()];
-        let query = index
-            .query(&clauses, FilterExpressionType::ORMajor)
-            .unwrap();
+        let query = index.query(&clauses, FilterExpressionType::DNF).unwrap();
         assert!(!query.is_match(0));
         assert!(query.is_match(2));
         assert!(query.is_match(3));
@@ -949,10 +1403,167 @@ mod tests {
     #[test]
     fn unknown_labels_are_non_matches() {
         let index = round_trip(LabelIndexFormat::Bitslice);
-        let query = compile(&index, &["missing"], FilterExpressionType::ORMajor);
+        let query = compile(&index, &["missing"], FilterExpressionType::DNF);
         for id in 0..4 {
             assert!(!query.is_match(id));
         }
+    }
+
+    #[test]
+    fn ast_matches_nested_expression_for_bitslice_and_bitmap() {
+        let expression = r#"{"or":[{"and":["A","B"]},{"and":["C","D"]}]}"#;
+
+        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+            let index = round_trip(format);
+            let query = index.query_ast_json(expression).unwrap();
+            assert_eq!(matching_ids(&query, index.num_vectors), vec![2, 3]);
+        }
+    }
+
+    #[test]
+    fn ast_matches_equivalent_dnf_and_cnf_queries() {
+        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+            let index = round_trip(format);
+
+            let dnf = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
+            let ast_dnf = index
+                .query_ast_json(r#"{"or":[{"and":["A","B"]},{"and":["C","D"]}]}"#)
+                .unwrap();
+            assert_eq!(
+                matching_ids(&dnf, index.num_vectors),
+                matching_ids(&ast_dnf, index.num_vectors)
+            );
+
+            let cnf = compile(
+                &index,
+                &["A|B", "group=x|score=2"],
+                FilterExpressionType::CNF,
+            );
+            let ast_cnf = index
+                .query_expression(&LabelExpression::And(vec![
+                    LabelExpression::Or(vec![
+                        LabelExpression::Label("A".to_string()),
+                        LabelExpression::Label("B".to_string()),
+                    ]),
+                    LabelExpression::Or(vec![
+                        LabelExpression::Label("group=x".to_string()),
+                        LabelExpression::Label("score=2".to_string()),
+                    ]),
+                ]))
+                .unwrap();
+            assert_eq!(
+                matching_ids(&cnf, index.num_vectors),
+                matching_ids(&ast_cnf, index.num_vectors)
+            );
+        }
+    }
+
+    #[test]
+    fn ast_not_supports_known_and_unknown_labels() {
+        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+            let index = round_trip(format);
+
+            let not_a = index.query_ast_json(r#"{"not":"A"}"#).unwrap();
+            assert_eq!(matching_ids(&not_a, index.num_vectors), vec![1, 3]);
+
+            let not_missing = index.query_ast_json(r#"{"not":"missing"}"#).unwrap();
+            assert_eq!(
+                matching_ids(&not_missing, index.num_vectors),
+                vec![0, 1, 2, 3]
+            );
+        }
+    }
+
+    #[test]
+    fn parse_label_expression_json_rejects_malformed_inputs() {
+        assert!(parse_label_expression_json("{").is_err());
+        assert!(parse_label_expression_json(r#"{"and":[]}"#).is_err());
+        assert!(parse_label_expression_json(r#"{"or":[]}"#).is_err());
+        assert!(parse_label_expression_json(r#"{"and":["A"],"or":["B"]}"#).is_err());
+        assert!(parse_label_expression_json(r#"{"and":["A"],"and":["B"]}"#).is_err());
+    }
+
+    #[test]
+    fn parse_label_expression_json_rejects_expressions_that_exceed_depth_limit() {
+        let error =
+            parse_label_expression_json(&nested_not_json(MAX_LABEL_EXPRESSION_DEPTH)).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("label expression depth 65 exceeds limit 64"));
+    }
+
+    #[test]
+    fn parse_label_expression_json_rejects_expressions_that_exceed_node_limit() {
+        let labels = std::iter::repeat_n(r#""A""#, MAX_LABEL_EXPRESSION_NODES)
+            .collect::<Vec<_>>()
+            .join(",");
+        let expression_json = format!(r#"{{"or":[{labels}]}}"#);
+        let error = parse_label_expression_json(&expression_json).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("label expression node count 4097 exceeds limit 4096"));
+    }
+
+    #[test]
+    fn parse_label_expression_json_rejects_unknown_operator_before_consuming_its_value() {
+        let error = parse_label_expression_json(r#"{"xor":"#).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unsupported label expression operator 'xor'"));
+    }
+
+    #[test]
+    fn parse_label_expression_json_rejects_extra_keys_before_consuming_their_values() {
+        let error = parse_label_expression_json(r#"{"and":["A"],"or":"#).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("label expression objects must contain exactly one operator"));
+    }
+
+    #[test]
+    fn filter_expression_type_legacy_constants_match_current_variants() {
+        assert_eq!(FilterExpressionType::DNF as u32, 0);
+        assert_eq!(FilterExpressionType::CNF as u32, 1);
+        assert_eq!(FilterExpressionType::AST as u32, 2);
+        assert_eq!(FilterExpressionType::ORMajor, FilterExpressionType::DNF);
+        assert_eq!(FilterExpressionType::ANDMajor, FilterExpressionType::CNF);
+    }
+
+    #[test]
+    fn ast_query_requires_exactly_one_input_string() {
+        let index = round_trip(LabelIndexFormat::Bitslice);
+        assert!(index
+            .query(
+                &[r#"{"and":["A","B"]}"#, r#"{"and":["C","D"]}"#],
+                FilterExpressionType::AST,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn query_expression_rejects_invalid_programmatic_expressions() {
+        let index = round_trip(LabelIndexFormat::Bitslice);
+
+        assert!(index
+            .query_expression(&LabelExpression::Label(String::new()))
+            .is_err());
+        assert!(index
+            .query_expression(&LabelExpression::And(vec![]))
+            .is_err());
+        assert!(index
+            .query_expression(&LabelExpression::Or(vec![]))
+            .is_err());
+        assert!(index
+            .query_expression(&nested_not_expression(MAX_LABEL_EXPRESSION_DEPTH))
+            .is_err());
+        assert!(index
+            .query_expression(&LabelExpression::Or(vec![
+                LabelExpression::Label(
+                    "A".to_string()
+                );
+                MAX_LABEL_EXPRESSION_NODES
+            ]))
+            .is_err());
     }
 
     #[test]
@@ -973,18 +1584,18 @@ mod tests {
         encode_label_index_jsonl(&input, &output, LabelIndexFormat::Bitslice).unwrap();
         let index = EncodedLabelIndex::load(output).unwrap();
 
-        let raw = compile(&index, &["solo"], FilterExpressionType::ORMajor);
+        let raw = compile(&index, &["solo"], FilterExpressionType::DNF);
         assert!(raw.is_match(0));
         assert!(!raw.is_match(1));
 
-        let array = compile(&index, &["left&right"], FilterExpressionType::ORMajor);
+        let array = compile(&index, &["left&right"], FilterExpressionType::DNF);
         assert!(array.is_match(1));
         assert!(!array.is_match(0));
 
         let object = compile(
             &index,
             &["enabled&group=g&count=2&deleted=false&inline"],
-            FilterExpressionType::ORMajor,
+            FilterExpressionType::DNF,
         );
         assert!(object.is_match(4));
         assert!(!object.is_match(3));
@@ -999,8 +1610,8 @@ mod tests {
         encode_label_index_jsonl(&input, &output, LabelIndexFormat::Bitslice).unwrap();
         let index = EncodedLabelIndex::load(output).unwrap();
 
-        let a = compile(&index, &["A"], FilterExpressionType::ORMajor);
-        let b = compile(&index, &["B"], FilterExpressionType::ORMajor);
+        let a = compile(&index, &["A"], FilterExpressionType::DNF);
+        let b = compile(&index, &["B"], FilterExpressionType::DNF);
         assert!(a.is_match(0));
         assert!(!a.is_match(1));
         assert!(!b.is_match(0));
