@@ -41,24 +41,22 @@ pub enum LabelIndexFormat {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterExpressionType {
-    /// Outer OR with `&`-separated labels inside each string:
+    /// Historical name for outer OR with `&`-separated labels inside each string:
     /// `["A&B", "C&D"]` means `(A AND B) OR (C AND D)`.
-    DNF = 0,
-    /// Outer AND with `|`-separated labels inside each string:
+    ORMajor = 0,
+    /// Historical name for outer AND with `|`-separated labels inside each string:
     /// `["A|B", "C|D"]` means `(A OR B) AND (C OR D)`.
-    CNF = 1,
-    /// Exactly one JSON string containing a recursive abstract syntax tree.
-    AST = 2,
+    ANDMajor = 1,
 }
 
 impl FilterExpressionType {
-    /// Backward-compatible alias for [`FilterExpressionType::DNF`].
-    #[allow(non_upper_case_globals)]
-    pub const ORMajor: Self = Self::DNF;
+    /// Preferred alias for [`FilterExpressionType::ORMajor`] using Boolean normal-form
+    /// terminology.
+    pub const DNF: Self = Self::ORMajor;
 
-    /// Backward-compatible alias for [`FilterExpressionType::CNF`].
-    #[allow(non_upper_case_globals)]
-    pub const ANDMajor: Self = Self::CNF;
+    /// Preferred alias for [`FilterExpressionType::ANDMajor`] using Boolean normal-form
+    /// terminology.
+    pub const CNF: Self = Self::ANDMajor;
 }
 
 /// A crate-owned Boolean label expression tree.
@@ -615,6 +613,11 @@ impl EncodedLabelIndex {
         })
     }
 
+    /// Compile a clause-list query using DNF/CNF semantics.
+    ///
+    /// Use [`FilterExpressionType::DNF`] or [`FilterExpressionType::CNF`] for the preferred
+    /// terminology. The legacy [`FilterExpressionType::ORMajor`] and
+    /// [`FilterExpressionType::ANDMajor`] variants remain supported for compatibility.
     pub fn query<S>(
         &self,
         clauses: &[S],
@@ -624,20 +627,11 @@ impl EncodedLabelIndex {
         S: AsRef<str>,
     {
         let expression = match expression_type {
-            FilterExpressionType::DNF => {
+            FilterExpressionType::ORMajor => {
                 CompiledExpression::Flat(compile_plan(clauses, PlanKind::Dnf, &self.label_ids)?)
             }
-            FilterExpressionType::CNF => {
+            FilterExpressionType::ANDMajor => {
                 CompiledExpression::Flat(compile_plan(clauses, PlanKind::Cnf, &self.label_ids)?)
-            }
-            FilterExpressionType::AST => {
-                if clauses.len() != 1 {
-                    return Err(EncodedLabelIndexError::Invalid(
-                        "AST filters must contain exactly one JSON expression string".to_string(),
-                    ));
-                }
-                let expression = parse_label_expression_json(clauses[0].as_ref())?;
-                compile_label_expression(&expression, &self.label_ids)?
             }
         };
 
@@ -1521,23 +1515,38 @@ mod tests {
     }
 
     #[test]
-    fn filter_expression_type_legacy_constants_match_current_variants() {
-        assert_eq!(FilterExpressionType::DNF as u32, 0);
-        assert_eq!(FilterExpressionType::CNF as u32, 1);
-        assert_eq!(FilterExpressionType::AST as u32, 2);
-        assert_eq!(FilterExpressionType::ORMajor, FilterExpressionType::DNF);
-        assert_eq!(FilterExpressionType::ANDMajor, FilterExpressionType::CNF);
+    fn filter_expression_type_aliases_preserve_public_values() {
+        assert_eq!(FilterExpressionType::ORMajor as u32, 0);
+        assert_eq!(FilterExpressionType::ANDMajor as u32, 1);
+        assert_eq!(FilterExpressionType::DNF, FilterExpressionType::ORMajor);
+        assert_eq!(FilterExpressionType::CNF, FilterExpressionType::ANDMajor);
     }
 
     #[test]
-    fn ast_query_requires_exactly_one_input_string() {
+    fn query_supports_legacy_filter_expression_variant_names() {
         let index = round_trip(LabelIndexFormat::Bitslice);
-        assert!(index
-            .query(
-                &[r#"{"and":["A","B"]}"#, r#"{"and":["C","D"]}"#],
-                FilterExpressionType::AST,
-            )
-            .is_err());
+
+        let or_major = compile(&index, &["A&B", "C&D"], FilterExpressionType::ORMajor);
+        let dnf = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
+        assert_eq!(
+            matching_ids(&or_major, index.num_vectors),
+            matching_ids(&dnf, index.num_vectors)
+        );
+
+        let and_major = compile(
+            &index,
+            &["A|B", "group=x|score=2"],
+            FilterExpressionType::ANDMajor,
+        );
+        let cnf = compile(
+            &index,
+            &["A|B", "group=x|score=2"],
+            FilterExpressionType::CNF,
+        );
+        assert_eq!(
+            matching_ids(&and_major, index.num_vectors),
+            matching_ids(&cnf, index.num_vectors)
+        );
     }
 
     #[test]
