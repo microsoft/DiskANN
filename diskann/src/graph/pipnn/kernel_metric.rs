@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! This module defines metric markers and shared numerical functions.
+//! This module provides metric markers and shared numerical functions.
 
 mod leaf;
 mod partition;
@@ -20,8 +20,7 @@ pub(super) struct InnerProduct;
 
 /// This function converts a squared norm to a norm.
 ///
-/// The function maps subnormal squared norms to zero. It preserves NaN so that
-/// kernel comparisons do not rank an invalid value.
+/// It maps subnormal values to zero and preserves NaN.
 #[inline(always)]
 pub(super) fn norm_from_squared(squared_norm: f32) -> f32 {
     if squared_norm < f32::MIN_POSITIVE {
@@ -52,7 +51,6 @@ where
     one - cosine
 }
 
-/// This function computes scalar cosine distance with the DiskANN zero-norm rules.
 #[inline(always)]
 pub(super) fn cosine_distance_scalar(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
     if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {

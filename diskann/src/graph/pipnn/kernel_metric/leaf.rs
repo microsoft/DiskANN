@@ -3,15 +3,12 @@
  * Licensed under the MIT license.
  */
 
-//! This module defines metric formulas for leaf-local neighbor selection.
-
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
 use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar};
 
 /// Leaf formulas return ascending distances.
-///
-/// L2 uses squared norms. Cosine uses norms. Dot-only metrics ignore norms.
+/// L2 uses squared norms. Cosine uses norms. Other metrics ignore norms.
 pub(in super::super) trait LeafKernelMetric: Send + Sync + 'static {
     const USES_NORMS: bool;
 

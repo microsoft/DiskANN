@@ -44,24 +44,16 @@ impl PartitionKernelWorkspace {
     }
 }
 
-/// This enum stores norm values for one point-to-leader tile.
-///
-/// Cosine points use squared norms. Cosine leaders use norms.
+/// L2 uses squared leader norms. Cosine uses squared point norms and leader norms.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum PartitionNorms<'a> {
-    /// This variant stores squared norms for L2 leaders.
     L2 {
-        /// This slice contains one squared norm for each sampled leader.
         leader_squared_norms: &'a [f32],
     },
-    /// This variant stores norms for unnormalized cosine.
     Cosine {
-        /// This slice contains one squared norm for each point.
         point_squared_norms: &'a [f32],
-        /// This slice contains one norm for each sampled leader.
         leader_norms: &'a [f32],
     },
-    /// This variant provides no norms for normalized cosine or inner product.
     None,
 }
 
@@ -143,17 +135,13 @@ where
     select_point_leaders::<A::f32x16, M>(arch, input.dots, norms, output, &mut workspace.tracker)
 }
 
-/// This structure stores checked norm slices for one concrete metric.
 #[derive(Clone, Copy)]
 struct PartitionNormSlices<'a> {
     point_squared_norms: &'a [f32],
     leader_norm_values: &'a [f32],
 }
 
-/// This function checks safety and metric conditions for partition selection.
-///
-/// Matrix views prove their backing lengths. This function checks row counts,
-/// leader-ID range, fanout, norm variant, and norm lengths.
+/// This function checks row counts, leader IDs, fanout, and norm lengths.
 fn validate<'a, M: PartitionKernelMetric>(
     input: PartitionInput<'a>,
     output: &MutMatrixView<'_, u32>,
