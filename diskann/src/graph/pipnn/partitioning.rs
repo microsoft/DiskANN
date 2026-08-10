@@ -834,7 +834,7 @@ mod tests {
             c_min,
             p_samp: 0.25,
             fanout,
-            k: 1,
+            leaf_k: 1,
             replicas,
         }
     }
