@@ -298,7 +298,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: KernelMetric,
+    M: LeafKernelMetric,
     T: VectorRepr + 'static,
 {
     if data.ncols() == 0 {
@@ -400,7 +400,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: KernelMetric,
+    M: LeafKernelMetric,
     T: VectorRepr + 'static,
 {
     if point_ids.is_empty() {
