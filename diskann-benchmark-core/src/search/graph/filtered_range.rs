@@ -98,7 +98,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::search::Range;
+    type Parameters = graph::search::FilteredRange;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -106,7 +106,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l()))
+        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l().into()))
     }
 
     async fn search<O>(
@@ -119,13 +119,12 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let filtered_range_search = graph::search::FilteredRange::from(*parameters);
         let strategy =
             labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
         let _ = self
             .index
             .search(
-                filtered_range_search,
+                *parameters,
                 &strategy,
                 &context,
                 self.queries.row(index),
@@ -143,7 +142,7 @@ where
 #[non_exhaustive]
 pub struct Summary {
     pub setup: search::Setup,
-    pub parameters: graph::search::Range,
+    pub parameters: graph::search::FilteredRange,
     pub end_to_end_latencies: Vec<MicroSeconds>,
     pub mean_latencies: Vec<f64>,
     pub p90_latencies: Vec<MicroSeconds>,
@@ -163,7 +162,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<graph::search::Range, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<graph::search::FilteredRange, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -172,7 +171,7 @@ where
     #[inline(never)]
     fn aggregate(
         &mut self,
-        run: search::Run<graph::search::Range>,
+        run: search::Run<graph::search::FilteredRange>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         let average_precision = match results.first() {
@@ -265,7 +264,7 @@ mod tests {
             graph::search::Range::builder(10, 2.0)
                 .initial_slack(0.8)
                 .range_slack(1.2)
-                .build()
+                .build_filtered()
                 .unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
@@ -295,7 +294,7 @@ mod tests {
                 graph::search::Range::builder(10, 2.0)
                     .initial_slack(0.8)
                     .range_slack(1.2)
-                    .build()
+                    .build_filtered()
                     .unwrap(),
                 setup.clone(),
             ),
@@ -303,7 +302,7 @@ mod tests {
                 graph::search::Range::builder(15, 2.0)
                     .initial_slack(0.8)
                     .range_slack(1.2)
-                    .build()
+                    .build_filtered()
                     .unwrap(),
                 setup.clone(),
             ),

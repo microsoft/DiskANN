@@ -479,7 +479,7 @@ mod imp {
                 labels,
             )?;
 
-            let result = search::range::run(&filtered_range, &groundtruth, steps)?;
+            let result = search::range::run_filtered(&filtered_range, &groundtruth, steps)?;
 
             Ok(AggregatedSearchResults::Range(result))
         }

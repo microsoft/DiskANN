@@ -92,7 +92,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l()))
+        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l().into()))
     }
 
     async fn search<O>(

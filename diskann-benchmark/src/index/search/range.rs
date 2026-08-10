@@ -5,9 +5,8 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann::graph::search::Range as RangeParameters;
+use diskann::graph::search::{Range as RangeParameters, FilteredRange as FilteredRangeParameters};
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
-
 use crate::{index::result::RangeSearchResults, inputs::graph_index::GraphRangeSearch};
 
 #[derive(Debug, Clone, Copy)]
@@ -41,6 +40,37 @@ pub(crate) trait Range<I> {
     ) -> anyhow::Result<Vec<RangeSearchResults>>;
 }
 
+pub(crate) fn run_filtered<I>(
+    runner: &dyn Range<I, Parameters = FilteredRangeParameters>,
+    groundtruth: &dyn benchmark_core::recall::Rows<I>,
+    steps: RangeSearchSteps<'_>,
+) -> anyhow::Result<Vec<RangeSearchResults>> {
+    let mut all = Vec::new();
+
+    for threads in steps.num_tasks.iter() {
+        for run in steps.runs.iter() {
+            let setup = core_search::Setup {
+                threads: *threads,
+                tasks: *threads,
+                reps: steps.reps,
+            };
+
+            let parameters: Vec<_> = run
+                .construct_params()?
+                .into_iter()
+                .map(|range_search_params| {
+                    core_search::Run::new(FilteredRangeParameters::from(range_search_params), setup.clone())
+                })
+                .collect();
+
+            all.extend(runner.search_all(parameters, groundtruth)?);
+        }
+    }
+
+    Ok(all)
+}
+
+
 pub(crate) fn run<I>(
     runner: &dyn Range<I, Parameters = RangeParameters>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
@@ -70,6 +100,7 @@ pub(crate) fn run<I>(
 
     Ok(all)
 }
+
 ///////////
 // Impls //
 ///////////
@@ -106,11 +137,11 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::filtered_range::FilteredRange<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = RangeParameters,
+        Parameters = FilteredRangeParameters,
         Output = core_search::graph::filtered_range::Metrics,
     >,
 {
-    type Parameters = RangeParameters;
+    type Parameters = FilteredRangeParameters;
 
     fn search_all(
         &self,

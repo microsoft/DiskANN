@@ -260,7 +260,7 @@ impl RangeSearchResults {
 
         Self {
             num_tasks: setup.tasks.into(),
-            initial_l: parameters.starting_l(),
+            initial_l: parameters.starting_l().into(),
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,
@@ -289,7 +289,7 @@ impl RangeSearchResults {
 
         Self {
             num_tasks: setup.tasks.into(),
-            initial_l: parameters.starting_l(),
+            initial_l: parameters.starting_l().into(),
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,
