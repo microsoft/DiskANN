@@ -684,7 +684,7 @@ mod build_graph_tests {
             c_min: 4,
             p_samp: 0.25,
             fanout: vec![3, 2],
-            k: 3,
+            leaf_k: 3,
             replicas: 2,
         };
         let hash_prune = HashPruneConfig {
