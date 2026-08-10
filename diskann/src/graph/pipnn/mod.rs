@@ -55,7 +55,9 @@ use diskann_wide::{
 };
 use rayon::ThreadPool;
 
-use self::kernel_metric::{Cosine, CosineNormalized, InnerProduct, KernelMetric, L2};
+use self::kernel_metric::{
+    Cosine, CosineNormalized, InnerProduct, L2, LeafKernelMetric, MetricTag, PartitionKernelMetric,
+};
 
 /// PiPNN partition and leaf-selection policy.
 ///
@@ -255,7 +257,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: KernelMetric,
+    M: LeafKernelMetric + PartitionKernelMetric,
     T: VectorRepr + Send + Sync + 'static,
 {
     let leaves = tracing::info_span!("pipnn.partition")
@@ -268,8 +270,9 @@ where
     })?;
     // Finalization consumes each candidate list. It reuses that list's allocation
     // for the final adjacency when the graph policy permits it.
-    tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, M::METRIC))
+    tracing::info_span!("pipnn.finalization").in_scope(|| {
+        finalization::prune_overfull(data, candidates, context.graph, <M as MetricTag>::METRIC)
+    })
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {

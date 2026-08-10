@@ -26,7 +26,7 @@ use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::KernelMetric,
+    kernel_metric::LeafKernelMetric,
     leaf_kernel::{
         LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, nearest_neighbors,
     },
@@ -239,7 +239,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: KernelMetric,
+    M: LeafKernelMetric,
     T: VectorRepr + 'static,
 {
     if data.ncols() == 0 {
@@ -286,7 +286,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: KernelMetric,
+    M: LeafKernelMetric,
     T: VectorRepr + 'static,
 {
     if point_ids.is_empty() {
