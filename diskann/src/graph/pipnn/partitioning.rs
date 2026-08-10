@@ -614,6 +614,15 @@ fn scatter_serial(
     fanout: usize,
     leaders: usize,
 ) -> ANNResult<Vec<Vec<u32>>> {
+    let expected = checked_area("scatter assignments", points.len(), fanout)?;
+    if assignments.len() != expected {
+        return Err(ANNError::new(PartitionError::InvalidBufferLength {
+            buffer: "scatter assignments",
+            expected,
+            actual: assignments.len(),
+        }));
+    }
+
     let mut sizes = filled_vec(leaders, 0usize)?;
     for &leader in assignments {
         let Some(size) = sizes.get_mut(leader as usize) else {
@@ -1226,6 +1235,20 @@ mod tests {
             error.downcast::<PartitionError>().unwrap(),
             PartitionError::InvalidBufferLength {
                 buffer: "gather output",
+                expected: 4,
+                actual: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_assignment_length() {
+        let error = scatter_serial(&[7, 8], &[0, 1, 0], 2, 2).unwrap_err();
+
+        assert_eq!(
+            error.downcast::<PartitionError>().unwrap(),
+            PartitionError::InvalidBufferLength {
+                buffer: "scatter assignments",
                 expected: 4,
                 actual: 3,
             }
