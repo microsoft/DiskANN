@@ -23,7 +23,7 @@ use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
 };
 
-use super::kernel_metric::{MetricTag, PartitionKernelMetric, norm_from_squared};
+use super::kernel_metric::{MetricTag, PartitionKernelMetric};
 
 /// Reusable nearest-center state for one partition worker.
 ///
@@ -262,9 +262,8 @@ where
 {
     let leader_count = dots.ncols();
     let fanout = output.ncols();
-    let metric = <M as MetricTag>::METRIC;
-    let uses_point_norm = metric == Metric::Cosine;
-    let uses_leader_norm = matches!(metric, Metric::L2 | Metric::Cosine);
+    let uses_point_norm = M::USES_POINT_NORM;
+    let uses_leader_norm = M::USES_LEADER_NORMS;
     // Reset the tracker for each point. No assignment state can pass from one
     // output row to another.
     for (point, (point_dots, point_output)) in dots
@@ -274,7 +273,7 @@ where
     {
         tracker.fill((u32::MAX, f32::INFINITY));
         let point_norm = if uses_point_norm {
-            norm_from_squared(norms.point_squared_norms[point])
+            M::prepare_point_norm(norms.point_squared_norms[point])
         } else {
             0.0
         };
@@ -431,7 +430,7 @@ fn dispatch_nearest_leaders(
 #[cfg(test)]
 mod tests {
     use super::super::kernel_metric::{
-        Cosine, CosineNormalized, InnerProduct, L2, PartitionKernelMetric,
+        Cosine, CosineNormalized, InnerProduct, L2, PartitionKernelMetric, norm_from_squared,
     };
 
     use super::*;
@@ -596,9 +595,10 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod integration_tests {
+    use super::super::kernel_metric::norm_from_squared;
     use super::{
         PartitionInput, PartitionKernelError, PartitionKernelWorkspace, PartitionNorms,
-        dispatch_nearest_leaders, norm_from_squared,
+        dispatch_nearest_leaders,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;

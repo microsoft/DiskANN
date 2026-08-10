@@ -16,6 +16,15 @@ use super::{
 /// Each function returns an ascending score. L2 receives a squared leader norm.
 /// Cosine receives point and leader norms. Dot-only metrics receive zero norms.
 pub(in super::super) trait PartitionKernelMetric: MetricTag {
+    /// True when the metric reads a point norm.
+    const USES_POINT_NORM: bool;
+
+    /// True when the metric reads leader norm values.
+    const USES_LEADER_NORMS: bool;
+
+    /// Convert one squared point norm to the unit for this metric.
+    fn prepare_point_norm(squared_norm: f32) -> f32;
+
     /// Compute SIMD ranking scores for one point and multiple leaders.
     fn partition_ranking<F>(arch: F::Arch, dot: F, point_norm: F, leader_norm: F) -> F
     where
@@ -27,6 +36,14 @@ pub(in super::super) trait PartitionKernelMetric: MetricTag {
 }
 
 impl PartitionKernelMetric for L2 {
+    const USES_POINT_NORM: bool = false;
+    const USES_LEADER_NORMS: bool = true;
+
+    #[inline(always)]
+    fn prepare_point_norm(_: f32) -> f32 {
+        0.0
+    }
+
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, _: F, leader_norm: F) -> F
     where
@@ -46,6 +63,14 @@ impl PartitionKernelMetric for L2 {
 }
 
 impl PartitionKernelMetric for Cosine {
+    const USES_POINT_NORM: bool = true;
+    const USES_LEADER_NORMS: bool = true;
+
+    #[inline(always)]
+    fn prepare_point_norm(squared_norm: f32) -> f32 {
+        super::norm_from_squared(squared_norm)
+    }
+
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, point_norm: F, leader_norm: F) -> F
     where
@@ -62,6 +87,14 @@ impl PartitionKernelMetric for Cosine {
 }
 
 impl PartitionKernelMetric for CosineNormalized {
+    const USES_POINT_NORM: bool = false;
+    const USES_LEADER_NORMS: bool = false;
+
+    #[inline(always)]
+    fn prepare_point_norm(_: f32) -> f32 {
+        0.0
+    }
+
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where
@@ -78,6 +111,14 @@ impl PartitionKernelMetric for CosineNormalized {
 }
 
 impl PartitionKernelMetric for InnerProduct {
+    const USES_POINT_NORM: bool = false;
+    const USES_LEADER_NORMS: bool = false;
+
+    #[inline(always)]
+    fn prepare_point_norm(_: f32) -> f32 {
+        0.0
+    }
+
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where
