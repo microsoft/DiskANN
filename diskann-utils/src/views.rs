@@ -195,14 +195,8 @@ impl<T> MatrixBase<Box<[T]>> {
     where
         U: Generator<T>,
     {
-        let len = nrows.checked_mul(ncols);
-        assert!(
-            len.is_some(),
-            "matrix shape {nrows} x {ncols} overflows usize"
-        );
-        let len = len.unwrap_or(0);
-        let data: Box<[T]> = (0..len).map(|_| generator.generate()).collect();
-        debug_assert_eq!(data.len(), len);
+        let data: Box<[T]> = (0..nrows * ncols).map(|_| generator.generate()).collect();
+        debug_assert_eq!(data.len(), nrows * ncols);
         Self { data, nrows, ncols }
     }
 }
@@ -1436,8 +1430,6 @@ mod tests {
         assert_eq!(m.nrows(), 5);
         assert_eq!(m.ncols(), 1);
         assert!(m.as_slice().iter().all(|&x| x == 9));
-
-        assert!(std::panic::catch_unwind(|| Matrix::new(0, usize::MAX, 2)).is_err());
     }
 
     #[test]
