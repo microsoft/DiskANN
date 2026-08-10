@@ -10,10 +10,11 @@ use super::{
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
-    reference::{ReferenceAbs, ReferenceCast, ReferenceScalarOps, ReferenceShifts, TreeReduce},
+    reference::{ReferenceAbs, ReferenceCast, ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
     traits::{
         ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
-        SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret, SIMDSelect, SIMDSumTree, SIMDVector,
+        SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSumTree,
+        SIMDVector,
     },
 };
 
@@ -237,6 +238,16 @@ where
     }
 }
 
+impl<T, const N: usize, A> SIMDPopcount for Emulated<T, N, A>
+where
+    T: ReferenceIntegerOps,
+{
+    #[inline(always)]
+    fn popcount_simd(self) -> Self {
+        Self::from_arch_fn(self.1, |i| self.0[i].expected_popcount_())
+    }
+}
+
 /// SIMDPartialEq
 impl<T, const N: usize, A> SIMDPartialEq for Emulated<T, N, A>
 where
@@ -328,7 +339,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shl for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -339,7 +350,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shl<T> for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -350,7 +361,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shr for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -361,7 +372,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shr<T> for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -874,11 +885,13 @@ mod test_emulated {
             test_emulated!($type, $N);
 
             test_utils::ops::test_bitops!(Emulated<$type, $N>, 0x14fc7841e66bd162, SC);
+            test_utils::ops::test_popcount!(Emulated<$type, $N>, 0x78d19fb8aac40131, SC);
         };
         (signed, $type:ty, $N:literal) => {
             test_emulated!($type, $N);
 
             test_utils::ops::test_bitops!(Emulated<$type, $N>, 0x850435f89f86f3b0, SC);
+            test_utils::ops::test_popcount!(Emulated<$type, $N>, 0x904e10c5fd2d4380, SC);
             test_utils::ops::test_abs!(Emulated<$type, $N>, 0x1842a2b86dfd9ecb, SC);
         };
     }
