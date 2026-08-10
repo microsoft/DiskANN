@@ -156,14 +156,36 @@ where
     output.as_mut_slice().fill(LeafNeighbor::default());
     workspace.worst.fill(f32::INFINITY);
 
-    dispatch_neighbor_count::<A::f32x16, M>(
-        arch,
-        input,
-        neighbor_count,
-        output.as_mut_slice(),
-        &workspace.norms,
-        &mut workspace.worst,
-    )?;
+    match neighbor_count {
+        1 => scan_point_pairs::<A::f32x16, M, 1>(
+            arch,
+            input,
+            output.as_mut_slice(),
+            &workspace.norms,
+            &mut workspace.worst,
+        ),
+        2 => scan_point_pairs::<A::f32x16, M, 2>(
+            arch,
+            input,
+            output.as_mut_slice(),
+            &workspace.norms,
+            &mut workspace.worst,
+        ),
+        3 => scan_point_pairs::<A::f32x16, M, 3>(
+            arch,
+            input,
+            output.as_mut_slice(),
+            &workspace.norms,
+            &mut workspace.worst,
+        ),
+        _ => {
+            return Err(LeafKernelError::InvalidNeighborCount {
+                points: input.nrows(),
+                neighbors: neighbor_count,
+                maximum: MAX_LEAF_NEIGHBORS,
+            });
+        }
+    }
     if let Some(source) = output
         .as_slice()
         .chunks_exact(neighbor_count)
@@ -257,56 +279,6 @@ fn resize<T: Clone>(
     Ok(())
 }
 
-/// Dispatch a runtime neighbor count to a fixed-width leaf scan.
-///
-/// Valid counts are one, two, and three. Any other count returns
-/// [`LeafKernelError::InvalidNeighborCount`].
-fn dispatch_neighbor_count<F, M>(
-    arch: F::Arch,
-    input: MatrixView<'_, f32>,
-    neighbor_count: usize,
-    output: &mut [LeafNeighbor],
-    norms: &[f32],
-    worst: &mut [f32],
-) -> Result<(), LeafKernelError>
-where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-    M: KernelMetric,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    match neighbor_count {
-        1 => scan_pairs_for_neighbor_count::<F, M, 1>(arch, input, output, norms, worst),
-        2 => scan_pairs_for_neighbor_count::<F, M, 2>(arch, input, output, norms, worst),
-        3 => scan_pairs_for_neighbor_count::<F, M, 3>(arch, input, output, norms, worst),
-        _ => {
-            return Err(LeafKernelError::InvalidNeighborCount {
-                points: input.nrows(),
-                neighbors: neighbor_count,
-                maximum: MAX_LEAF_NEIGHBORS,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Scan all leaf point pairs while retaining `N` neighbors for each point.
-fn scan_pairs_for_neighbor_count<F, M, const N: usize>(
-    arch: F::Arch,
-    input: MatrixView<'_, f32>,
-    output: &mut [LeafNeighbor],
-    norms: &[f32],
-    worst: &mut [f32],
-) where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
-    M: KernelMetric,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    let (neighbor_lists, _) = output.as_chunks_mut::<N>();
-    scan_point_pairs::<F, M, N>(arch, input, neighbor_lists, norms, worst);
-}
-
 /// Select neighbors from all unordered point pairs in one leaf.
 ///
 /// The function reads the strict lower triangle once. It offers each distance to
@@ -318,7 +290,7 @@ fn scan_pairs_for_neighbor_count<F, M, const N: usize>(
 fn scan_point_pairs<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
-    output: &mut [[LeafNeighbor; N]],
+    output: &mut [LeafNeighbor],
     norms: &[f32],
     worst: &mut [f32],
 ) where
@@ -327,6 +299,7 @@ fn scan_point_pairs<F, M, const N: usize>(
     M: KernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
+    let (output, _) = output.as_chunks_mut::<N>();
     let point_count = input.nrows();
     let dots = input.as_slice();
     let uses_norms = M::LEAF_SCALE.is_some();
