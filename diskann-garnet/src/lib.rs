@@ -120,6 +120,10 @@ impl SearchResults<'_> {
             id_index,
         }
     }
+
+    fn push_id(&mut self, id: GarnetId) -> diskann::graph::BufferState {
+        self.push(Neighbor::new(id, 0.0))
+    }
 }
 
 impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
@@ -835,6 +839,38 @@ pub unsafe extern "C" fn check_external_id_valid(
     index.inner.external_id_exists(&ctx, &id)
 }
 
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn random_members(
+    ctx: u64,
+    index_ptr: *const c_void,
+    count: u32,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    // Dummy buffer for distances
+    let mut output_distances = vec![0f32; output_ids_len / 5];
+    let mut output = SearchResults::new(
+        output_ids,
+        output_ids_len,
+        output_distances.as_mut_ptr(),
+        output_distances.len(),
+    );
+
+    index.inner.random_members(&ctx, count, &mut output)
+}
+
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn search_neighbors() {}
+
 #[cfg(test)]
 mod tests {
     use std::{mem, ptr};
@@ -844,6 +880,7 @@ mod tests {
         neighbor::Neighbor,
     };
     use diskann_vector::distance::Metric;
+    use rand::Rng;
 
     use crate::{
         Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
@@ -1068,5 +1105,196 @@ mod tests {
         unsafe {
             drop_index(0, index_ptr);
         }
+    }
+
+    #[test]
+    fn random_members() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let ctx = Context::new(0);
+        let mut rng = rand::rng();
+
+        for id in 0..100 {
+            let mut v = vec![0u8; 2];
+            rng.fill(v.as_mut_slice());
+            let v = v.into_iter().map(|i| i as f32).collect::<Vec<f32>>();
+
+            let eid = GarnetId::from(bytemuck::bytes_of(&id));
+            assert_eq!(
+                unsafe {
+                    super::insert(
+                        ctx.get(),
+                        index_ptr,
+                        eid.as_ptr(),
+                        eid.len(),
+                        bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                        v.len(),
+                        ptr::null(),
+                        0,
+                    )
+                },
+                1
+            );
+        }
+
+        // Check basic correctness
+        let mut output_ids = vec![u32::MAX; 20];
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                10,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check undersized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                20,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check oversized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                5,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(output_ids.iter().enumerate().all(|(i, e)| if i < 10 {
+            if i.is_multiple_of(2) {
+                *e == 4
+            } else {
+                *e < 100
+            }
+        } else {
+            *e == u32::MAX
+        }));
+
+        // Delete 50 vectors at random
+        let ids = rand::seq::index::sample(&mut rng, 100, 50);
+        for id in ids {
+            let id = id as u32;
+            let eid = GarnetId::from(bytemuck::bytes_of(&id));
+
+            assert!(unsafe { super::remove(ctx.get(), index_ptr, eid.as_ptr(), eid.len()) });
+        }
+
+        // Check basic correctness
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                10,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check undersized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                20,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check oversized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                5,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(output_ids.iter().enumerate().all(|(i, e)| if i < 10 {
+            if i.is_multiple_of(2) {
+                *e == 4
+            } else {
+                *e < 100
+            }
+        } else {
+            *e == u32::MAX
+        }));
     }
 }

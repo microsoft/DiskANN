@@ -34,6 +34,7 @@ use diskann_vector::{
 };
 use std::{
     any::TypeId,
+    collections::HashSet,
     future,
     marker::PhantomData,
     mem,
@@ -46,7 +47,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    VectorQuantType,
+    SearchResults, VectorQuantType,
     alloc::AlignToEight,
     fsm::{FreeSpaceMap, FsmError},
     garnet::{Callbacks, Context, GarnetError, GarnetId, Term},
@@ -670,6 +671,55 @@ impl<T: VectorRepr> GarnetProvider<T> {
             // Signal to the index that it is now safe to operate in quantized mode.
             self.all_quantized.store(true, Ordering::Release);
         }
+    }
+
+    pub(crate) fn random_members(
+        &self,
+        context: &Context,
+        count: u32,
+        output: &mut SearchResults<'_>,
+    ) -> bool {
+        let mut rng = rand::rng();
+
+        let id_space = self.max_internal_id() as usize + 1;
+        let total_vectors = self.fsm.total_used();
+        let mut remaining = (count as usize).min(total_vectors);
+        let mut chosen = HashSet::new();
+
+        // Deletions leave holes in the ID space, so scale the first batch by the density of
+        // live IDs, then grow it until the request is satisfied or the whole space is covered.
+        let mut batch = remaining
+            .saturating_mul(id_space)
+            .div_ceil(total_vectors.max(1))
+            .clamp(1, id_space);
+
+        while remaining > 0 {
+            for samp in rand::seq::index::sample(&mut rng, id_space, batch) {
+                let samp = samp as u32;
+                if !chosen.insert(samp) {
+                    // Already considered on an earlier round.
+                    continue;
+                }
+                let Ok(eid) = self.to_external_id(context, samp) else {
+                    // Deleted or otherwise unreadable.
+                    continue;
+                };
+
+                let state = output.push_id(eid);
+                remaining -= 1;
+                if remaining == 0 || state == diskann::graph::BufferState::Full {
+                    return true;
+                }
+            }
+
+            if batch == id_space {
+                // The whole ID space was scanned; fewer live IDs exist than were requested.
+                break;
+            }
+            batch = batch.saturating_mul(2).min(id_space);
+        }
+
+        true
     }
 
     /// Returns the quantizer associated with the index.
