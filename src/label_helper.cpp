@@ -162,7 +162,8 @@ bool label_helper::read_bitmask_from_file(const std::string& bitmask_label_file,
     infile.read((char *)(&num_points_in_file), sizeof(std::uint32_t));
     infile.read((char *)(&bitmask_size), sizeof(std::uint32_t));
 
-    size_t bitmask_data_size = num_points_in_file * bitmask_size * sizeof(std::uint64_t);
+    size_t bitmask_data_size =
+        static_cast<size_t>(num_points_in_file) * bitmask_size * sizeof(std::uint64_t);
     if (file_size != (sizeof(std::uint32_t) * 2 + bitmask_data_size))
     {
         return false;
