@@ -13,13 +13,13 @@
 //! pair once and updates both points. Each point retains at most three local
 //! neighbors.
 //!
-//! `kernel_metric` defines the scalar and SIMD formulas. It also defines the
-//! required norm units for each metric.
+//! `kernel_metric` defines metric markers and shared math. Separate leaf and
+//! partition traits define each kernel's scalar and SIMD formulas.
 //!
 //! The graph builder selects architecture `A` and metric `M` once. It passes
 //! these concrete types to both kernels.
 //!
-//! Each kernel checks all view and scale relationships before unchecked SIMD
+//! Each kernel checks all view and norm relationships before unchecked SIMD
 //! access. The kernels borrow their matrices. They write only to caller-owned
 //! output and workspace.
 #[allow(dead_code)]

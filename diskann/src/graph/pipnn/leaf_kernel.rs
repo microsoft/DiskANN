@@ -22,20 +22,21 @@
 //! rejection thresholds.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
 
-use super::kernel_metric::KernelMetric;
+use super::kernel_metric::{LeafKernelMetric, MetricTag, norm_from_squared};
 
 /// Largest leaf-local neighbor count supported by the fixed insertion kernel.
-pub const MAX_LEAF_NEIGHBORS: usize = 3;
+pub(super) const MAX_LEAF_NEIGHBORS: usize = 3;
 
 /// One leaf-local neighbor and its metric distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LeafNeighbor {
+pub(super) struct LeafNeighbor {
     /// Target position in the leaf, not a dataset ID.
-    pub target: u32,
+    pub(super) target: u32,
     /// Distance from the source point to `target`.
-    pub distance: f32,
+    pub(super) distance: f32,
 }
 
 impl LeafNeighbor {
@@ -43,7 +44,7 @@ impl LeafNeighbor {
     ///
     /// `target` is a position in the leaf. `distance` is its score relative to
     /// the source of the output row.
-    pub const fn new(target: u32, distance: f32) -> Self {
+    pub(super) const fn new(target: u32, distance: f32) -> Self {
         Self { target, distance }
     }
 }
@@ -56,14 +57,14 @@ impl Default for LeafNeighbor {
 
 /// Reusable temporary storage for leaf top-k selection.
 #[derive(Debug, Default)]
-pub struct LeafKernelWorkspace {
+pub(super) struct LeafKernelWorkspace {
     norms: Vec<f32>,
     worst: Vec<f32>,
 }
 
 /// Validation or allocation error returned by [`nearest_neighbors`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum LeafKernelError {
+pub(super) enum LeafKernelError {
     /// The point count cannot be represented in leaf-local `u32` positions.
     #[error("point count {0} exceeds the u32 position limit")]
     TooManyPoints(usize),
@@ -109,7 +110,10 @@ pub enum LeafKernelError {
 /// Returns [`LeafKernelError::TooManyPoints`] when leaf-local positions cannot
 /// fit in `u32`, or [`LeafKernelError::InvalidNeighborCount`] when `requested_k`
 /// exceeds [`MAX_LEAF_NEIGHBORS`].
-pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, LeafKernelError> {
+pub(super) fn leaf_neighbor_count(
+    points: usize,
+    requested_k: usize,
+) -> Result<usize, LeafKernelError> {
     if points > u32::MAX as usize {
         return Err(LeafKernelError::TooManyPoints(points));
     }
@@ -133,7 +137,7 @@ pub fn leaf_neighbor_count(points: usize, requested_k: usize) -> Result<usize, L
 ///
 /// Returns [`LeafKernelError`] for an invalid shape or count. It also returns an
 /// error for allocation failure or insufficient rankable neighbors.
-pub(crate) fn nearest_neighbors<A, M>(
+pub(super) fn nearest_neighbors<A, M>(
     arch: A,
     input: MatrixView<'_, f32>,
     mut output: MutMatrixView<'_, LeafNeighbor>,
@@ -143,7 +147,7 @@ where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    M: KernelMetric,
+    M: LeafKernelMetric,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     validate(input, &output)?;
@@ -244,18 +248,24 @@ fn validate(
 /// value to a norm. Normalized cosine and inner product clear the norm buffer.
 ///
 /// An allocation error occurs before SIMD traversal.
-fn prepare_workspace<M: KernelMetric>(
+fn prepare_workspace<M: LeafKernelMetric>(
     input: MatrixView<'_, f32>,
     workspace: &mut LeafKernelWorkspace,
 ) -> Result<(), LeafKernelError> {
     let points = input.nrows();
-    if M::LEAF_SCALE.is_some() {
-        resize("norms", &mut workspace.norms, points, 0.0)?;
-        for (source, norm) in workspace.norms.iter_mut().enumerate() {
-            *norm = M::LEAF_SCALE.transform(input[(source, source)]);
+    match <M as MetricTag>::METRIC {
+        Metric::L2 | Metric::Cosine => {
+            resize("norms", &mut workspace.norms, points, 0.0)?;
+            for (source, norm) in workspace.norms.iter_mut().enumerate() {
+                let squared_norm = input[(source, source)];
+                *norm = if <M as MetricTag>::METRIC == Metric::Cosine {
+                    norm_from_squared(squared_norm)
+                } else {
+                    squared_norm
+                };
+            }
         }
-    } else {
-        workspace.norms.clear();
+        Metric::CosineNormalized | Metric::InnerProduct => workspace.norms.clear(),
     }
     resize(
         "worst distances",
@@ -296,20 +306,20 @@ fn scan_point_pairs<F, M, const N: usize>(
 ) where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
-    M: KernelMetric,
+    M: LeafKernelMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let (output, _) = output.as_chunks_mut::<N>();
     let point_count = input.nrows();
     let dots = input.as_slice();
-    let uses_norms = M::LEAF_SCALE.is_some();
+    let uses_norms = matches!(<M as MetricTag>::METRIC, Metric::L2 | Metric::Cosine);
     let worst_ptr = worst.as_mut_ptr();
 
     // Source zero has no earlier target. Each source after zero can still add
     // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_scale = if uses_norms {
+        let source_norm = if uses_norms {
             F::splat(arch, norms[source])
         } else {
             F::default(arch)
@@ -322,14 +332,14 @@ fn scan_point_pairs<F, M, const N: usize>(
         while target + F::LANES <= source {
             // SAFETY: the full chunk is contained in this source's strict-lower prefix.
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
-            let target_scales = if uses_norms {
+            let target_norms = if uses_norms {
                 // SAFETY: the full target chunk is below `source < point_count`.
                 // `prepare_workspace` created one norm for each point.
                 unsafe { F::load_simd(arch, norms.as_ptr().add(target)) }
             } else {
                 F::default(arch)
             };
-            let distances = M::leaf_distance(arch, pair_dots, source_scale, target_scales);
+            let distances = M::leaf_distance(arch, pair_dots, source_norm, target_norms);
             // Every pair may improve the current source and its earlier target.
             // Derive both masks before either endpoint mutates its threshold.
             let source_eligible = distances.lt_simd(F::splat(arch, source_worst));
@@ -376,13 +386,13 @@ fn scan_point_pairs<F, M, const N: usize>(
         while target < source {
             // SAFETY: the scalar target remains in this source's strict-lower prefix.
             let dot = unsafe { *dots.get_unchecked(source_start + target) };
-            let (source_scale, target_scale) = if uses_norms {
+            let (source_norm, target_norm) = if uses_norms {
                 // SAFETY: `target < source < point_count == norms.len()`.
                 (norms[source], unsafe { *norms.get_unchecked(target) })
             } else {
                 (0.0, 0.0)
             };
-            let distance = M::leaf_distance_scalar(dot, source_scale, target_scale);
+            let distance = M::leaf_distance_scalar(dot, source_norm, target_norm);
             if distance < source_worst {
                 source_worst = insert_fixed_neighbor(&mut output[source], target as u32, distance);
             }
