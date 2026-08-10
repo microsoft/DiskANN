@@ -5,9 +5,9 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann::graph::search::{Range as RangeParameters, FilteredRange as FilteredRangeParameters};
-use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 use crate::{index::result::RangeSearchResults, inputs::graph_index::GraphRangeSearch};
+use diskann::graph::search::{FilteredRange as FilteredRangeParameters, Range as RangeParameters};
+use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RangeSearchSteps<'a> {
@@ -59,7 +59,10 @@ pub(crate) fn run_filtered<I>(
                 .construct_params()?
                 .into_iter()
                 .map(|range_search_params| {
-                    core_search::Run::new(FilteredRangeParameters::from(range_search_params), setup.clone())
+                    core_search::Run::new(
+                        FilteredRangeParameters::from(range_search_params),
+                        setup.clone(),
+                    )
                 })
                 .collect();
 
@@ -69,7 +72,6 @@ pub(crate) fn run_filtered<I>(
 
     Ok(all)
 }
-
 
 pub(crate) fn run<I>(
     runner: &dyn Range<I, Parameters = RangeParameters>,
