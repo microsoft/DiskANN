@@ -321,8 +321,9 @@ fn scan_point_pairs<F, M, const N: usize>(
         // `source < point_count == worst.len()`.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
+        let full = source / F::LANES * F::LANES;
 
-        while target + F::LANES <= source {
+        while target < full {
             // SAFETY: the full chunk is contained in this source's strict-lower prefix.
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
             let target_norms = if uses_norms {
