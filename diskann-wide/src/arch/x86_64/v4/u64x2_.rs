@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDSumTree, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDSumTree, SIMDVector},
 };
 
 /////
@@ -30,6 +30,13 @@ macros::x86_retarget!(u64x2 => v3::u64x2);
 
 helpers::unsafe_map_binary_op!(u64x2, std::ops::Add, add, _mm_add_epi64, "sse2");
 helpers::unsafe_map_binary_op!(u64x2, std::ops::Sub, sub, _mm_sub_epi64, "sse2");
+helpers::unsafe_map_unary_op!(
+    u64x2,
+    SIMDPopcount,
+    popcount_simd,
+    _mm_popcnt_epi64,
+    "avx512vpopcntdq,avx512vl"
+);
 helpers::unsafe_map_binary_op!(
     u64x2,
     std::ops::Mul,
@@ -123,4 +130,5 @@ mod test_x86_u64 {
 
     // Bit ops
     test_utils::ops::test_bitops!(u64x2, 0xf9566b095125ca45, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(u64x2, 0xcc60798bf7130d7d, V4::new_checked_uncached());
 }
