@@ -23,7 +23,7 @@ use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
 };
 
-use super::kernel_metric::{MetricTag, PartitionKernelMetric};
+use super::kernel_metric::PartitionKernelMetric;
 
 /// Reusable nearest-center state for one partition worker.
 ///
@@ -179,7 +179,7 @@ fn validate<'a, M: PartitionKernelMetric>(
         });
     }
 
-    match (<M as MetricTag>::METRIC, input.norms) {
+    match (M::METRIC, input.norms) {
         (
             Metric::L2,
             PartitionNorms::L2 {
@@ -485,7 +485,7 @@ mod tests {
                 leader_norm_values: &[],
             },
         };
-        let metric = <M as MetricTag>::METRIC;
+        let metric = M::METRIC;
         for (point, (point_dots, point_output)) in input
             .dots
             .row_iter()

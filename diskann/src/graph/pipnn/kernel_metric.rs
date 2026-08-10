@@ -3,11 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! This module defines shared metrics for the PiPNN numerical kernels.
-//!
-//! `build_graph` maps each runtime [`Metric`] to one marker type. Leaf and
-//! partition kernels use separate traits for that marker. Both traits use the
-//! common cosine and norm functions in this module.
+//! This module defines metric markers and shared numerical functions.
 
 mod leaf;
 mod partition;
@@ -15,39 +11,12 @@ mod partition;
 pub(super) use leaf::LeafKernelMetric;
 pub(super) use partition::PartitionKernelMetric;
 
-use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-/// This trait identifies one metric across all PiPNN build stages.
-pub(super) trait MetricTag: Send + Sync + 'static {
-    /// This value identifies the runtime metric.
-    const METRIC: Metric;
-}
-
-/// This marker selects squared L2.
 pub(super) struct L2;
-/// This marker selects unnormalized cosine.
 pub(super) struct Cosine;
-/// This marker selects unit-normalized cosine.
 pub(super) struct CosineNormalized;
-/// This marker selects negative inner product.
 pub(super) struct InnerProduct;
-
-impl MetricTag for L2 {
-    const METRIC: Metric = Metric::L2;
-}
-
-impl MetricTag for Cosine {
-    const METRIC: Metric = Metric::Cosine;
-}
-
-impl MetricTag for CosineNormalized {
-    const METRIC: Metric = Metric::CosineNormalized;
-}
-
-impl MetricTag for InnerProduct {
-    const METRIC: Metric = Metric::InnerProduct;
-}
 
 /// This function converts a squared norm to a norm.
 ///

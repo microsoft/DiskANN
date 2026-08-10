@@ -7,28 +7,21 @@
 
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-use super::{
-    Cosine, CosineNormalized, InnerProduct, L2, MetricTag, cosine_distance, cosine_distance_scalar,
-};
+use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar};
 
-/// This trait defines metric operations for leaf-local neighbor selection.
+/// Leaf formulas return ascending distances.
 ///
-/// Each function returns an ascending distance. The leaf kernel supplies squared
-/// norms to L2 and norms to cosine. Dot-only metrics receive zero norm values.
-pub(in super::super) trait LeafKernelMetric: MetricTag {
-    /// This value is true when the metric reads leaf norms.
+/// L2 uses squared norms. Cosine uses norms. Dot-only metrics ignore norms.
+pub(in super::super) trait LeafKernelMetric: Send + Sync + 'static {
     const USES_NORMS: bool;
 
-    /// This function converts one Gram diagonal value to the required norm unit.
     fn prepare_norm(squared_norm: f32) -> f32;
 
-    /// This function computes SIMD distances from one source to earlier targets.
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
-    /// This function computes one scalar-tail leaf distance.
     fn leaf_distance_scalar(dot: f32, source_norm: f32, target_norm: f32) -> f32;
 }
 
