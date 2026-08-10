@@ -167,11 +167,8 @@ where
                 .or_else(|| {
                     data.row_iter()
                         .enumerate()
-                        .min_by(|(_, left), (_, right)| {
-                            distance
-                                .evaluate_similarity(start, left)
-                                .total_cmp(&distance.evaluate_similarity(start, right))
-                        })
+                        .map(|(index, row)| (index, distance.evaluate_similarity(start, row)))
+                        .min_by(|(_, left), (_, right)| left.total_cmp(right))
                         .map(|(index, _)| index)
                 })
                 .context("PiPNN cannot connect a start point to an empty dataset")
