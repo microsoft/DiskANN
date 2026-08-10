@@ -634,6 +634,9 @@ impl_little_endian_transmute_cast!(<u32, 16> => <i8, 64>);
 impl_little_endian_transmute_cast!(<u8, 64> => <u32, 16>);
 impl_little_endian_transmute_cast!(<i8, 64> => <u32, 16>);
 
+impl_little_endian_transmute_cast!(<u8, 64> => <u64, 8>);
+impl_little_endian_transmute_cast!(<u64, 8> => <u8, 64>);
+
 /////////////
 // Casting //
 /////////////

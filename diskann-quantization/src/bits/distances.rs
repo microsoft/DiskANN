@@ -64,7 +64,7 @@
 //!
 //! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 | Neon      |
 //! |---------------|---------------|-----------|-----------|---------------|-----------|-----------|
-//! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
+//! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Yes       | Optimized |
 //! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Yes       | Fallback  |
 //! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
@@ -111,7 +111,7 @@ use diskann_vector::PureDistanceFunction;
 use diskann_wide::{ARCH, Architecture, arch::Target2};
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::{
-    SIMDCast, SIMDDotProduct, SIMDMulAdd, SIMDReinterpret, SIMDSumTree, SIMDVector,
+    SIMDCast, SIMDDotProduct, SIMDMulAdd, SIMDPopcount, SIMDReinterpret, SIMDSumTree, SIMDVector,
 };
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
@@ -1565,16 +1565,174 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     }
 }
 
+/// Compute the inner product between bitvectors `x` and `y` using [`bitvector_op`].
+///
+/// A blanket implementation over all architectures cannot be used because
+/// [`diskann_wide::arch::x86_64::V4`] has a dedicated implementation.
+macro_rules! impl_bitvector_ip {
+    ($arch:path) => {
+        /// Compute the inner product between bitvectors `x` and `y`.
+        ///
+        /// Returns an error if the arguments have different lengths.
+        impl Target2<$arch, MathematicalResult<u32>, USlice<'_, 1>, USlice<'_, 1>>
+            for InnerProduct
+        {
+            #[inline(always)]
+            fn run(self, _: $arch, x: USlice<'_, 1>, y: USlice<'_, 1>) -> MathematicalResult<u32> {
+                bitvector_op::<Self, Unsigned>(x, y)
+            }
+        }
+    };
+}
+
+impl_bitvector_ip!(diskann_wide::arch::Scalar);
+
+#[cfg(target_arch = "x86_64")]
+impl_bitvector_ip!(diskann_wide::arch::x86_64::V3);
+
+#[cfg(target_arch = "aarch64")]
+impl_bitvector_ip!(diskann_wide::arch::aarch64::Neon);
+
 /// Compute the inner product between bitvectors `x` and `y`.
 ///
 /// Returns an error if the arguments have different lengths.
-impl<A> Target2<A, MathematicalResult<u32>, USlice<'_, 1>, USlice<'_, 1>> for InnerProduct
-where
-    A: Architecture,
+///
+/// # Implementation Notes
+///
+/// This implementation is optimized for x86 with the AVX-512 vector extension.
+///
+/// As described for [`BitVectorOp<Unsigned> for InnerProduct`][`InnerProduct`], the
+/// elementwise operation is a bitwise `and` and the result is the number of set bits in
+/// the product. Each 512-bit block therefore covers 512 encoded elements: the operands are
+/// `and`-ed together and `_mm512_popcnt_epi64` is applied via [`diskann_wide::SIMDPopcount`].
+///
+/// The final block of whole bytes is always handled by a predicated `u8x64` load, which
+/// zero-fills the inactive lanes. Zero is the identity for this kernel because `0 & y == 0`
+/// has a pop-count of zero, so the masked block folds into the reduction like any other.
+/// Byte granularity is only needed for the mask, so the `and` result is reinterpreted to
+/// `u64x8` before the pop-count.
+///
+/// A trailing partial byte (when `len` is not a multiple of 8) is handled with scalar code
+/// after masking off the bits beyond the end of the bit-slice.
+///
+/// ## Unrolling
+///
+/// The expected data for this kernel is at most 3072 bits, or six 512-bit blocks. Block
+/// counts of one through six therefore get dedicated, fully unrolled, straight-line
+/// implementations (LLVM lowers the `match` to a jump table) and only larger inputs fall
+/// back to a loop. The reduction of each arm is written out independently so that it can be
+/// tuned in isolation.
+#[cfg(target_arch = "x86_64")]
+impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_, 1>, USlice<'_, 1>>
+    for InnerProduct
 {
     #[inline(always)]
-    fn run(self, _: A, x: USlice<'_, 1>, y: USlice<'_, 1>) -> MathematicalResult<u32> {
-        bitvector_op::<Self, Unsigned>(x, y)
+    fn run(
+        self,
+        arch: diskann_wide::arch::x86_64::V4,
+        x: USlice<'_, 1>,
+        y: USlice<'_, 1>,
+    ) -> MathematicalResult<u32> {
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(u8s = <diskann_wide::arch::x86_64::V4>::u8x64);
+        diskann_wide::alias!(u64s = <diskann_wide::arch::x86_64::V4>::u64x8);
+
+        let px: *const u8 = x.as_ptr();
+        let py: *const u8 = y.as_ptr();
+
+        let qx: *const u64 = px.cast();
+        let qy: *const u64 = py.cast();
+
+        // The number of whole bytes in the bit-slice. Any trailing bits belong to a
+        // partial byte handled by the scalar epilogue below.
+        let bytes = len / 8;
+
+        let mut s: u32 = 0;
+        if bytes > 0 {
+            // The number of 512-bit blocks, where the last block may be partial.
+            let nblocks = bytes.div_ceil(64);
+
+            // The number of valid bytes in the final block, in the range `1..=64`.
+            let tail = bytes - 64 * (nblocks - 1);
+
+            // Pop-count the bitwise `and` of block `k` of each operand.
+            //
+            // # Safety
+            //
+            // Block `k` (bytes `64 * k` through `64 * k + 63`) must be dereferenceable from
+            // both operands.
+            let block = |k: usize| -> u64s {
+                // SAFETY: The caller asserts that block `k` is dereferenceable from both
+                // operands. Neither load has an alignment requirement.
+                let vx = unsafe { u64s::load_simd(arch, qx.add(8 * k)) };
+                // SAFETY: Same as above.
+                let vy = unsafe { u64s::load_simd(arch, qy.add(8 * k)) };
+                (vx & vy).popcount_simd()
+            };
+
+            // The same as `block`, but only the first `tail` bytes of the block are loaded.
+            //
+            // # Safety
+            //
+            // The first `tail` bytes of block `k` must be dereferenceable from both
+            // operands.
+            let partial_block = |k: usize| -> u64s {
+                // SAFETY: The caller asserts that the first `tail` bytes of block `k` are
+                // dereferenceable from both operands. The predicated load is guaranteed not
+                // to access memory beyond those bytes and has no alignment requirement.
+                let vx = unsafe { u8s::load_simd_first(arch, px.add(64 * k), tail) };
+                // SAFETY: Same as above.
+                let vy = unsafe { u8s::load_simd_first(arch, py.add(64 * k), tail) };
+                let p: u64s = (vx & vy).reinterpret_simd();
+                p.popcount_simd()
+            };
+
+            // SAFETY (all arms): An arm is selected when
+            // `64 * (nblocks - 1) < bytes <= 64 * nblocks`, so blocks `0` through
+            // `nblocks - 2` lie entirely within the slice underlying the bit-slice and the
+            // first `tail` bytes of block `nblocks - 1` are readable. The same holds for
+            // `y` because it has the same type as `x` and we have verified that it has the
+            // same length.
+            s = match nblocks {
+                1 => partial_block(0).sum_tree() as u32,
+                2 => (block(0) + partial_block(1)).sum_tree() as u32,
+                3 => (block(0) + block(1) + partial_block(2)).sum_tree() as u32,
+                4 => (block(0) + block(1) + block(2) + partial_block(3)).sum_tree() as u32,
+                5 => {
+                    (block(0) + block(1) + block(2) + block(3) + partial_block(4)).sum_tree() as u32
+                }
+                6 => (block(0) + block(1) + block(2) + block(3) + block(4) + partial_block(5))
+                    .sum_tree() as u32,
+                _ => {
+                    // Larger than expected inputs: loop over all but the final block, which
+                    // is handled by the same predicated load as the unrolled arms.
+                    //
+                    // Each lane of the accumulator grows by at most 64 per iteration, so it
+                    // cannot realistically overflow.
+                    let mut accum = u64s::default(arch);
+                    for k in 0..(nblocks - 1) {
+                        accum = accum + block(k);
+                    }
+                    (accum + partial_block(nblocks - 1)).sum_tree() as u32
+                }
+            };
+        }
+
+        // Handle a trailing partial byte, masking off bits beyond the end of the bit-slice.
+        if 8 * bytes != len {
+            // SAFETY: The underlying slice is readable in the range
+            // `[px, px + floor(len / 8) + 1)`. This accesses `px + floor(len / 8)`.
+            let vx = unsafe { px.add(bytes).read_unaligned() };
+
+            // SAFETY: Same as above.
+            let vy = unsafe { py.add(bytes).read_unaligned() };
+
+            let m = (0x01u8 << (len - 8 * bytes)) - 1;
+            s += (vx & vy & m).count_ones();
+        }
+
+        Ok(MV::new(s))
     }
 }
 
@@ -2928,7 +3086,10 @@ mod tests {
         [
             (Key::new(1, Scalar), Bounds::new(64, 64)),
             (Key::new(1, X86_64_V3), Bounds::new(256, 256)),
-            (Key::new(1, X86_64_V4), Bounds::new(256, 256)),
+            // The unrolled arms cover 1..=6 512-bit blocks, so the bound must reach well
+            // past 7 blocks (3584 bits) to also exercise the looping arm. 4608 bits is 9
+            // blocks, giving the loop several iterations.
+            (Key::new(1, X86_64_V4), Bounds::new(4608, 4608)),
             (Key::new(1, Neon), Bounds::new(64, 64)),
             (Key::new(2, Scalar), Bounds::new(64, 64)),
             // Need a higher miri-amount due to the larget block size
