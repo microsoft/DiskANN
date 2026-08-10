@@ -8,7 +8,7 @@
 
 use core::marker::PhantomData;
 
-use super::{Geo, NoTail, Paneled, TailIterator, TileAt, TileWalk};
+use super::{NoTail, Paneled, TailIterator, TileAt, TileWalk};
 use crate::bits::{Dynamic, Length, Static};
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
@@ -103,25 +103,17 @@ impl<T, const N: usize, L: Length> DPanel<'_, T, N, L> {
 pub(crate) struct QPanelIter<'a, T: Copy, const R: usize, const P: usize> {
     view: BlockTransposedRef<'a, T, R, P>,
     cur: usize,
-    base: Geo,
 }
 
 impl<'a, T: Copy, const R: usize, const P: usize> Iterator for QPanelIter<'a, T, R, P> {
-    type Item = (QPanel<'a, T, R>, Geo);
+    type Item = QPanel<'a, T, R>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let data = self.view.block_slice(self.cur)?;
-        // The trailing block is padded to a full `R`, so the real extent clamps to what
-        // the view says is real — the kernel still writes the whole panel.
-        let start = self.base.start + self.cur * R;
-        let geo = Geo {
-            start,
-            end: (start + R).min(self.base.end),
-        };
         self.cur += 1;
         let k = self.view.padded_ncols();
         // SAFETY: `block_slice` returns a checked `R * k` slice borrowed from the view.
-        Some((unsafe { QPanel::new(data.as_ptr(), k) }, geo))
+        Some(unsafe { QPanel::new(data.as_ptr(), k) })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -136,7 +128,7 @@ impl<T: Copy, const R: usize, const P: usize> ExactSizeIterator for QPanelIter<'
 
 impl<T: Copy, const R: usize, const P: usize> TailIterator for QPanelIter<'_, T, R, P> {
     type Tail = NoTail;
-    fn tail(self) -> Option<(NoTail, Geo)> {
+    fn tail(self) -> Option<NoTail> {
         None
     }
 }
@@ -144,44 +136,38 @@ impl<T: Copy, const R: usize, const P: usize> TailIterator for QPanelIter<'_, T,
 /// Walks a row-major matrix' full `N`-row panels; [`TailIterator::tail`] hands back the
 /// short trailer from the same cursor.
 ///
-/// `rest` is what has not been lent yet — the panel count and the trailer's height are
+/// `rows` is what has not been lent yet — the panel count and the trailer's height are
 /// read off it.
 ///
 /// # Safety invariants
 ///
-/// `ptr` is valid for reads of `rest.len() * k` `T` for `'a`. `ptr` and `rest.start`
-/// advance together — `N` rows *is* `N * k` elements — so the two cannot drift apart.
+/// `ptr` is valid for reads of `rows * k` `T` for `'a`. `ptr` and `rows` advance
+/// together — `N` rows *is* `N * k` elements — so the two cannot drift apart.
 pub(crate) struct DPanelIter<'a, T, const N: usize> {
     ptr: *const T,
     k: usize,
-    rest: Geo,
+    rows: usize,
     _lifetime: PhantomData<&'a [T]>,
 }
 
 impl<'a, T, const N: usize> Iterator for DPanelIter<'a, T, N> {
-    type Item = (DPanel<'a, T, N, Static<N>>, Geo);
+    type Item = DPanel<'a, T, N, Static<N>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.rest.len() < N {
+        if self.rows < N {
             return None;
         }
         let ptr = self.ptr;
-        // SAFETY: `rest.len() >= N`, so the invariant covers another `N * k` and the
-        // bump stays inside the allocation.
+        // SAFETY: `rows >= N`, so the invariant covers another `N * k` and the bump
+        // stays inside the allocation.
         self.ptr = unsafe { self.ptr.add(N * self.k) };
-        // A full panel is exactly `N` real rows — the short trailer belongs to the tail,
-        // so nothing here clamps.
-        let geo = Geo {
-            start: self.rest.start,
-            end: self.rest.start + N,
-        };
-        self.rest.start = geo.end;
+        self.rows -= N;
         // SAFETY: as above — `ptr` covers exactly `N * k` readable `T`.
-        Some((unsafe { DPanel::new(ptr, self.k, Static) }, geo))
+        Some(unsafe { DPanel::new(ptr, self.k, Static) })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.rest.len() / N;
+        let n = self.rows / N;
         (n, Some(n))
     }
 }
@@ -191,32 +177,24 @@ impl<T, const N: usize> ExactSizeIterator for DPanelIter<'_, T, N> {}
 impl<'a, T, const N: usize> TailIterator for DPanelIter<'a, T, N> {
     type Tail = DPanel<'a, T, N, Dynamic>;
 
-    fn tail(self) -> Option<(Self::Tail, Geo)> {
-        let rows = self.rest.len();
-        debug_assert!(rows < N, "tail taken before the panels are exhausted");
-        if rows == 0 {
+    fn tail(self) -> Option<Self::Tail> {
+        debug_assert!(self.rows < N, "tail taken before the panels are exhausted");
+        if self.rows == 0 {
             return None;
         }
         // SAFETY: the panels are exhausted, so the cursor sits on the trailer, which
         // the invariant covers for `rows * k` readable `T`.
-        let panel = unsafe { DPanel::new(self.ptr, self.k, Dynamic(rows)) };
-        // What is left over *is* the trailer, so the cursor's own extent is its geo.
-        Some((panel, self.rest))
+        Some(unsafe { DPanel::new(self.ptr, self.k, Dynamic(self.rows)) })
     }
 }
 
 // ── Views ────────────────────────────────────────────────────────
 
-/// A block-transposed sub-view plus where it came from. `block_range` hands back a view
-/// that has lost its origin, so the walk pairs it back up here — the same job
-/// [`RowPanels`] does on the B side.
-///
-/// The remainder block is zero-padded to a full `R` rows, hence [`NoTail`]; the padding
-/// rows are excluded from the [`Geo`]. `P` only widens `padded_ncols`, the contraction
-/// length the kernel sees.
+/// A block-transposed sub-view. The remainder block is zero-padded to a full `R` rows,
+/// hence [`NoTail`]. `P` only widens `padded_ncols`, the contraction length the kernel
+/// sees.
 pub(crate) struct BlockPanels<'a, T: Copy, const R: usize, const P: usize> {
     view: BlockTransposedRef<'a, T, R, P>,
-    start: usize,
 }
 
 impl<'a, T: Copy, const R: usize, const P: usize> Paneled for BlockPanels<'a, T, R, P> {
@@ -224,27 +202,17 @@ impl<'a, T: Copy, const R: usize, const P: usize> Paneled for BlockPanels<'a, T,
     type Tail = NoTail;
     type Panels = QPanelIter<'a, T, R, P>;
 
-    fn geo(&self) -> Geo {
-        Geo {
-            start: self.start,
-            end: self.start + self.view.nrows(),
-        }
-    }
-
     fn panels(&self) -> QPanelIter<'a, T, R, P> {
         QPanelIter {
             view: self.view,
             cur: 0,
-            base: self.geo(),
         }
     }
 }
 
-/// Cut a row-major matrix into `N`-row panels. All the geometry stays on the matrix;
-/// only the origin, which sub-viewing drops, is carried alongside.
+/// Cut a row-major matrix into `N`-row panels. All the geometry stays on the matrix.
 pub(crate) struct RowPanels<const N: usize, V> {
     view: V,
-    start: usize,
 }
 
 impl<'a, const N: usize, T: Copy> Paneled for RowPanels<N, MatRef<'a, Standard<T>>> {
@@ -252,19 +220,12 @@ impl<'a, const N: usize, T: Copy> Paneled for RowPanels<N, MatRef<'a, Standard<T
     type Tail = DPanel<'a, T, N, Dynamic>;
     type Panels = DPanelIter<'a, T, N>;
 
-    fn geo(&self) -> Geo {
-        Geo {
-            start: self.start,
-            end: self.start + self.view.num_vectors(),
-        }
-    }
-
     fn panels(&self) -> DPanelIter<'a, T, N> {
         // The checked slice is what establishes `DPanelIter`'s invariant.
         DPanelIter {
             ptr: self.view.as_slice().as_ptr(),
             k: self.view.vector_dim(),
-            rest: self.geo(),
+            rows: self.view.num_vectors(),
             _lifetime: PhantomData,
         }
     }
@@ -311,9 +272,8 @@ impl<'a, T: Copy, const R: usize, const P: usize> TileAt<'a> for QueryWalk<'_, T
 impl<T: Copy, const R: usize, const P: usize> TileWalk for QueryWalk<'_, T, R, P> {
     fn next(&mut self) -> Option<BlockPanels<'_, T, R, P>> {
         let view = self.src.block_range(self.cur, self.tile_panels)?;
-        let start = self.cur * R;
         self.cur += view.num_blocks();
-        Some(BlockPanels { view, start })
+        Some(BlockPanels { view })
     }
     fn reset(&mut self) {
         self.cur = 0;
@@ -326,9 +286,8 @@ impl<'a, T: Copy, const N: usize> TileAt<'a> for DocWalk<'_, T, N> {
 impl<T: Copy, const N: usize> TileWalk for DocWalk<'_, T, N> {
     fn next(&mut self) -> Option<RowPanels<N, MatRef<'_, Standard<T>>>> {
         let view = self.src.row_range(self.cur, self.tile_panels * N)?;
-        let start = self.cur;
         self.cur += view.num_vectors();
-        Some(RowPanels { view, start })
+        Some(RowPanels { view })
     }
     fn reset(&mut self) {
         self.cur = 0;

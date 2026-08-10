@@ -27,7 +27,7 @@
 use std::io::Write;
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     utils::{fmt::Table, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Output, Registry,
 };
@@ -56,11 +56,11 @@ impl Benchmark for PaneledF32Kernel {
     type Input = MultiVectorPaneledF32Op;
     type Output = Vec<F32RunResult>;
 
-    fn try_match(&self, _from: &MultiVectorPaneledF32Op) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, _from: &MultiVectorPaneledF32Op, context: &MatchContext) -> Score {
         if PaneledF32Query::is_supported() {
-            Ok(MatchScore(0))
+            context.success(0)
         } else {
-            Err(FailureScore(0))
+            context.fail(1, &"AVX2 (V3) unavailable on this CPU")
         }
     }
 
@@ -79,20 +79,8 @@ impl Benchmark for PaneledF32Kernel {
         Ok(results)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&MultiVectorPaneledF32Op>,
-    ) -> std::fmt::Result {
-        match input {
-            None => writeln!(f, "- f32 MaxSim, paneled / fused V3 / reference (V3/AVX2)")?,
-            Some(_) => {
-                if !PaneledF32Query::is_supported() {
-                    writeln!(f, "\n    - AVX2 (V3) unavailable on this CPU")?;
-                }
-            }
-        }
-        Ok(())
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- f32 MaxSim, paneled / fused V3 / reference (V3/AVX2)")
     }
 }
 

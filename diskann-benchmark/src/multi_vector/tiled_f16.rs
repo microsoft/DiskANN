@@ -19,7 +19,7 @@
 use std::io::Write;
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     utils::{fmt::Table, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Output, Registry,
 };
@@ -50,11 +50,11 @@ impl Benchmark for TiledF16Kernel {
     type Input = MultiVectorTiledF16Op;
     type Output = Vec<TiledF16RunResult>;
 
-    fn try_match(&self, _from: &MultiVectorTiledF16Op) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, _from: &MultiVectorTiledF16Op, context: &MatchContext) -> Score {
         if QuantTiledF16Query::is_supported() {
-            Ok(MatchScore(0))
+            context.success(0)
         } else {
-            Err(FailureScore(0))
+            context.fail(1, &"AVX2 (V3) unavailable on this CPU")
         }
     }
 
@@ -73,20 +73,8 @@ impl Benchmark for TiledF16Kernel {
         Ok(results)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&MultiVectorTiledF16Op>,
-    ) -> std::fmt::Result {
-        match input {
-            None => writeln!(f, "- f16 tiler vs f16.rs preprocess (V3/AVX2)")?,
-            Some(_) => {
-                if !QuantTiledF16Query::is_supported() {
-                    writeln!(f, "\n    - AVX2 (V3) unavailable on this CPU")?;
-                }
-            }
-        }
-        Ok(())
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "- f16 tiler vs f16.rs preprocess (V3/AVX2)")
     }
 }
 

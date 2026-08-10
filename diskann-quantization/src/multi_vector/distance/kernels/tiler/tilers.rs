@@ -86,16 +86,12 @@ impl<'a, T> Tile for QMat<'a, T> {
         self.offset
     }
     fn rows(&self) -> usize {
-        if self.k == 0 {
-            0
-        } else {
-            self.data.len() / self.k
-        }
+        self.data.len().checked_div(self.k).unwrap_or(0)
     }
     fn panels(&self) -> impl Iterator<Item = QPanel<'a, T>> + '_ {
         let (data, k) = (self.data, self.k);
         let block = A_PANEL * k;
-        let n = if block == 0 { 0 } else { data.len() / block };
+        let n = data.len().checked_div(block).unwrap_or(0);
         (0..n).map(move |p| QPanel {
             data: &data[p * block..(p + 1) * block],
             k,
@@ -113,11 +109,7 @@ impl<'a, T> Tile for DMat<'a, T> {
         self.offset
     }
     fn rows(&self) -> usize {
-        if self.k == 0 {
-            0
-        } else {
-            self.data.len() / self.k
-        }
+        self.data.len().checked_div(self.k).unwrap_or(0)
     }
     fn panels(&self) -> impl Iterator<Item = DPanel<'a, T>> + '_ {
         let (data, k) = (self.data, self.k);

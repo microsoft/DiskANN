@@ -71,11 +71,7 @@ impl<T> Strip<'_, T> {
         self.data.as_ptr()
     }
     fn cols(&self) -> usize {
-        if self.rows == 0 {
-            0
-        } else {
-            self.data.len() / self.rows
-        }
+        self.data.len().checked_div(self.rows).unwrap_or(0)
     }
 }
 impl<T> StripMut<'_, T> {

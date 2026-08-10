@@ -11,7 +11,7 @@ use diskann_wide::arch::x86_64::V3;
 use super::arena::ResettableArena;
 use super::leaves::{A_PANEL, B_PANEL};
 use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
-use super::{Accumulate, Block, Drain, Plan, Region, Strip, TileBudget, drive, leaves};
+use super::{Accumulate, Block, Drain, Plan, Strip, StripScratch, TileBudget, drive, leaves};
 use crate::alloc::{Poly, ScopedAllocator};
 use crate::bits::{Dynamic, Static};
 use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
@@ -82,10 +82,9 @@ impl<'o> RawMax<'o> {
 
 impl Drain<V3, Strip<'_, f32, A_PANEL, B_PANEL>> for RawMax<'_> {
     #[inline(always)]
-    fn drain(&mut self, arch: V3, acc: &Strip<'_, f32, A_PANEL, B_PANEL>, region: Region) {
-        // This output is padded to whole panels, so the stride is ours to state.
-        let out = &mut self.out[region.a.start..][..A_PANEL];
-        leaves::fold_strip(arch, out, acc, region.b.len());
+    fn drain(&mut self, arch: V3, tile: &Strip<'_, f32, A_PANEL, B_PANEL>) {
+        let out = tile.a_rows_mut(self.out);
+        leaves::fold_strip(arch, tile, out);
     }
 }
 
@@ -157,13 +156,21 @@ impl PaneledF32Query {
         let mut buf =
             Poly::<[f32], _>::new_uninit_slice(strip_len, ScopedAllocator::new(&self.arena))
                 .expect("strip fits the arena");
-        let mut scratch = Strip::<f32, A_PANEL, B_PANEL>::from_uninit(&mut buf, strip_len);
-        drive::<_, _, _, _, Strip<'_, f32, A_PANEL, B_PANEL>, _>(
+        // One plan, three consumers: the two walks cut the sources, and the scratch
+        // tracks the order they will be visited in.
+        let mut scratch = StripScratch::<f32, A_PANEL, B_PANEL>::from_uninit(
+            &mut buf,
+            strip_len,
+            plan,
+            padded,
+            docs.data.num_vectors(),
+        );
+        drive(
             self.arch,
             QueryWalk::new(self.query.as_view(), plan.a_panels),
             DocWalk::<f32, B_PANEL>::new(docs.data.as_view(), plan.b_panels),
-            &F32Kernel,
             &mut scratch,
+            &F32Kernel,
             &mut RawMax::new(&mut self.state[..padded]),
         );
 

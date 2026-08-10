@@ -23,7 +23,7 @@ use std::io::Write;
 use std::num::NonZeroUsize;
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     utils::{fmt::Table, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Output, Registry,
 };
@@ -62,12 +62,12 @@ impl Benchmark for QuantKernel {
     type Input = MultiVectorQuantOp;
     type Output = Vec<QuantRunResult>;
 
-    fn try_match(&self, _from: &MultiVectorQuantOp) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, _from: &MultiVectorQuantOp, context: &MatchContext) -> Score {
         // The staged integer kernel requires AVX2 (V3).
         if QuantStagedQuery::is_supported() {
-            Ok(MatchScore(0))
+            context.success(0)
         } else {
-            Err(FailureScore(0))
+            context.fail(1, &"AVX2 (V3) unavailable on this CPU")
         }
     }
 
@@ -86,23 +86,11 @@ impl Benchmark for QuantKernel {
         Ok(results)
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&MultiVectorQuantOp>,
-    ) -> std::fmt::Result {
-        match input {
-            None => writeln!(
-                f,
-                "- 4-bit MinMax quantized MaxSim, staged / tiled / paneled / reference (V3/AVX2)"
-            )?,
-            Some(_) => {
-                if !QuantStagedQuery::is_supported() {
-                    writeln!(f, "\n    - AVX2 (V3) unavailable on this CPU")?;
-                }
-            }
-        }
-        Ok(())
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "- 4-bit MinMax quantized MaxSim, staged / tiled / paneled / reference (V3/AVX2)"
+        )
     }
 }
 
