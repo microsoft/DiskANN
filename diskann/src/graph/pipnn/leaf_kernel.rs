@@ -637,7 +637,7 @@ mod integration_tests {
     const TARGET_MIXER: usize = 11;
     const MIX_MODULUS: usize = 23;
     const MIX_CENTER: f32 = 11.0;
-    const DOT_SCALE: f32 = 1.0 / 32.0;
+    const DOT_FACTOR: f32 = 1.0 / 32.0;
     const TIED_TARGETS: [usize; 2] = [1, 2];
 
     fn differential_dots(metric: Metric, points: usize) -> Vec<f32> {
@@ -657,7 +657,7 @@ mod integration_tests {
                 dots[source * points + target] = if TIED_TARGETS.contains(&target) {
                     0.5
                 } else {
-                    pair * DOT_SCALE
+                    pair * DOT_FACTOR
                 };
             }
         }
