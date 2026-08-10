@@ -722,6 +722,35 @@ impl<T: VectorRepr> GarnetProvider<T> {
         true
     }
 
+    pub(crate) fn neighbors(
+        &self,
+        context: &Context,
+        id: &GarnetId,
+    ) -> ANNResult<Vec<Neighbor<GarnetId>>> {
+        let iid = self.to_internal_id(context, id)?;
+        let v = self.get_full_vector(context, iid)?;
+        let mut neighbors = AdjacencyList::with_capacity(self.max_degree + 1);
+
+        if !self.get_neighbors(context, iid, &mut neighbors) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Read).into());
+        }
+
+        let d = <T as VectorRepr>::distance(self.metric_type, Some(self.dim));
+        let mut result = Vec::with_capacity(self.max_degree);
+        for &nbr_id in neighbors.iter() {
+            if nbr_id == 0 {
+                // Skip the start point
+                continue;
+            }
+            let nbr_v = self.get_full_vector(context, nbr_id)?;
+            let nbr_eid = self.to_external_id(context, nbr_id)?;
+            let nbr_d = d.evaluate_similarity(&v, &nbr_v);
+            result.push(Neighbor::new(nbr_eid, nbr_d));
+        }
+
+        Ok(result)
+    }
+
     /// Returns the quantizer associated with the index.
     fn quantizer(&self) -> Option<&dyn GarnetQuantizer> {
         if let Some(quantizer) = &self.quantizer {

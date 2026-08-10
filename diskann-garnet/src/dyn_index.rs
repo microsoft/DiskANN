@@ -11,6 +11,7 @@ use crate::{
 use diskann::{
     ANNResult,
     graph::{InplaceDeleteMethod, index::SearchStats, search},
+    neighbor::Neighbor,
     provider::DataProvider,
     utils::VectorRepr,
 };
@@ -73,6 +74,8 @@ pub(crate) trait DynIndex: Send + Sync {
 
     fn random_members(&self, context: &Context, count: u32, output: &mut SearchResults<'_>)
     -> bool;
+
+    fn neighbors(&self, context: &Context, id: &GarnetId) -> ANNResult<Vec<Neighbor<GarnetId>>>;
 }
 
 impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
@@ -198,5 +201,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         output: &mut SearchResults<'_>,
     ) -> bool {
         self.inner.provider().random_members(context, count, output)
+    }
+
+    fn neighbors(&self, context: &Context, id: &GarnetId) -> ANNResult<Vec<Neighbor<GarnetId>>> {
+        self.inner.provider().neighbors(context, id)
     }
 }

@@ -869,7 +869,37 @@ pub unsafe extern "C" fn random_members(
 ///
 /// FFI
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn search_neighbors() {}
+pub unsafe extern "C" fn search_neighbors(
+    ctx: u64,
+    index_ptr: *const c_void,
+    id_data: *const u8,
+    id_len: usize,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+    output_distances: *mut f32,
+    output_distances_len: usize,
+    _continuation: *mut c_void,
+) -> i32 {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+    let id = GarnetId::from(id_bytes);
+
+    let mut output = SearchResults::new(
+        output_ids,
+        output_ids_len,
+        output_distances,
+        output_distances_len,
+    );
+
+    let Ok(neighbors) = index.inner.neighbors(&ctx, &id) else {
+        return -1;
+    };
+
+    output.extend(neighbors);
+
+    output.current_len() as i32
+}
 
 #[cfg(test)]
 mod tests {
@@ -1296,5 +1326,101 @@ mod tests {
         } else {
             *e == u32::MAX
         }));
+    }
+
+    #[test]
+    fn search_neighbors() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let ctx = Context::new(0);
+        let mut rng = rand::rng();
+
+        for id in 0..100 {
+            let mut v = vec![0u8; 2];
+            rng.fill(v.as_mut_slice());
+            let v = v.into_iter().map(|i| i as f32).collect::<Vec<f32>>();
+
+            let eid = GarnetId::from(bytemuck::bytes_of(&id));
+            assert_eq!(
+                unsafe {
+                    super::insert(
+                        ctx.get(),
+                        index_ptr,
+                        eid.as_ptr(),
+                        eid.len(),
+                        bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                        v.len(),
+                        ptr::null(),
+                        0,
+                    )
+                },
+                1
+            );
+        }
+
+        let mut output_ids = vec![u32::MAX; 20];
+        let mut output_dists = vec![f32::MAX; 10];
+        let good_id = GarnetId::from(bytemuck::bytes_of(&25u32));
+        let bad_id = GarnetId::from(bytemuck::bytes_of(&250u32));
+
+        // check the good case
+        let count = unsafe {
+            super::search_neighbors(
+                ctx.get(),
+                index_ptr,
+                good_id.as_ptr(),
+                good_id.len(),
+                bytemuck::cast_slice_mut(&mut output_ids).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+
+        assert!(count > 0 && count <= 8, "count = {count}");
+
+        for i in 0..count as usize {
+            assert_eq!(output_ids[i * 2], 4);
+            assert!(output_ids[i * 2 + 1] < 100);
+            assert!(output_dists[i] < f32::MAX);
+        }
+
+        let count = unsafe {
+            super::search_neighbors(
+                ctx.get(),
+                index_ptr,
+                bad_id.as_ptr(),
+                bad_id.len(),
+                bytemuck::cast_slice_mut(&mut output_ids).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+
+        assert!(count < 0);
     }
 }
