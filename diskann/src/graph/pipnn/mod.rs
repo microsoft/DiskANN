@@ -54,7 +54,7 @@ use diskann_wide::{
 use rayon::ThreadPool;
 
 use self::kernel_metric::{
-    Cosine, CosineNormalized, InnerProduct, L2, LeafKernelMetric, MetricTag, PartitionKernelMetric,
+    Cosine, CosineNormalized, InnerProduct, L2, LeafKernelMetric, PartitionKernelMetric,
 };
 
 /// PiPNN partition and leaf-selection policy.
@@ -269,7 +269,12 @@ where
     // Finalization consumes each candidate list. It reuses that list's allocation
     // for the final adjacency when the graph policy permits it.
     tracing::info_span!("pipnn.finalization").in_scope(|| {
-        finalization::prune_overfull(data, candidates, context.graph, <M as MetricTag>::METRIC)
+        finalization::prune_overfull(
+            data,
+            candidates,
+            context.graph,
+            <M as PartitionKernelMetric>::METRIC,
+        )
     })
 }
 
