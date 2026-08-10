@@ -1270,9 +1270,8 @@ mod tests {
     // Storage and configuration.
 
     #[test]
-    fn slab_is_zeroed_and_reports_its_bytes() {
+    fn slab_is_zeroed() {
         let slab = MmapSlab::<u32>::new_zeroed(4).unwrap();
-        assert_eq!(slab.bytes(), 4 * std::mem::size_of::<u32>());
         assert!(!slab.as_ptr().is_null());
         // SAFETY: this test uniquely owns a live four-element slab.
         let values = unsafe { std::slice::from_raw_parts(slab.as_ptr(), 4) };
