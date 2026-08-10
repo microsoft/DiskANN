@@ -959,6 +959,83 @@ mod test_emulated {
         (Emulated<u8, 64>, Emulated<u8, 64>) => Emulated<u32, 16>, 0x3001f05604e96289, SC
     );
 
+    // split/join
+    test_utils::ops::test_splitjoin!(
+        Emulated<i8, 32> => Emulated<i8, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i8, 64> => Emulated<i8, 32>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i16, 16> => Emulated<i16, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i16, 32> => Emulated<i16, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i32, 8> => Emulated<i32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i32, 16> => Emulated<i32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u8, 32> => Emulated<u8, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u8, 64> => Emulated<u8, 32>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u32, 8> => Emulated<u32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u32, 16> => Emulated<u32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u64, 4> => Emulated<u64, 2>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u64, 8> => Emulated<u64, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f32, 8> => Emulated<f32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f32, 16> => Emulated<f32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f16, 16> => Emulated<f16, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+
     // reductions
     test_utils::ops::test_sumtree!(Emulated<f32, 1>, 0x410bad8207a8ccfc, SC);
     test_utils::ops::test_sumtree!(Emulated<f32, 2>, 0xf2fc4e4bbd193493, SC);
