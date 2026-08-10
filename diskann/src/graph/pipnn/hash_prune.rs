@@ -181,12 +181,6 @@ impl<T: Pod> MmapSlab<T> {
     fn as_ptr(&self) -> *const T {
         self.ptr
     }
-
-    #[inline]
-    #[allow(dead_code)]
-    fn bytes(&self) -> usize {
-        self.len * std::mem::size_of::<T>()
-    }
 }
 
 #[cfg(windows)]
@@ -220,10 +214,6 @@ impl<T: Pod + Default> MmapSlab<T> {
     #[inline]
     fn as_ptr(&self) -> *const T {
         self.0.as_ptr()
-    }
-    #[inline]
-    fn bytes(&self) -> usize {
-        self.0.len() * std::mem::size_of::<T>()
     }
 }
 
