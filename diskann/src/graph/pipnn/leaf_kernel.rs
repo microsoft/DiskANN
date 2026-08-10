@@ -22,10 +22,9 @@
 //! rejection thresholds.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
 
-use super::kernel_metric::{LeafKernelMetric, MetricTag, norm_from_squared};
+use super::kernel_metric::LeafKernelMetric;
 
 /// Largest leaf-local neighbor count supported by the fixed insertion kernel.
 pub(super) const MAX_LEAF_NEIGHBORS: usize = 3;
@@ -253,19 +252,13 @@ fn prepare_workspace<M: LeafKernelMetric>(
     workspace: &mut LeafKernelWorkspace,
 ) -> Result<(), LeafKernelError> {
     let points = input.nrows();
-    match <M as MetricTag>::METRIC {
-        Metric::L2 | Metric::Cosine => {
-            resize("norms", &mut workspace.norms, points, 0.0)?;
-            for (source, norm) in workspace.norms.iter_mut().enumerate() {
-                let squared_norm = input[(source, source)];
-                *norm = if <M as MetricTag>::METRIC == Metric::Cosine {
-                    norm_from_squared(squared_norm)
-                } else {
-                    squared_norm
-                };
-            }
+    if M::USES_NORMS {
+        resize("norms", &mut workspace.norms, points, 0.0)?;
+        for (source, norm) in workspace.norms.iter_mut().enumerate() {
+            *norm = M::prepare_norm(input[(source, source)]);
         }
-        Metric::CosineNormalized | Metric::InnerProduct => workspace.norms.clear(),
+    } else {
+        workspace.norms.clear();
     }
     resize(
         "worst distances",
@@ -312,7 +305,7 @@ fn scan_point_pairs<F, M, const N: usize>(
     let (output, _) = output.as_chunks_mut::<N>();
     let point_count = input.nrows();
     let dots = input.as_slice();
-    let uses_norms = matches!(<M as MetricTag>::METRIC, Metric::L2 | Metric::Cosine);
+    let uses_norms = M::USES_NORMS;
     let worst_ptr = worst.as_mut_ptr();
 
     // Source zero has no earlier target. Each source after zero can still add
