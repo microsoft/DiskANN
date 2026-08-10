@@ -340,7 +340,9 @@ where
         }
         // Scatter needs the sampled-center column IDs. Metric scores remain in
         // the worker workspace.
-        copy_leader_ids(tracker, point_output);
+        for (destination, &(leader, _)) in point_output.iter_mut().zip(tracker.iter()) {
+            *destination = leader;
+        }
     }
     Ok(())
 }
@@ -386,13 +388,6 @@ fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, distance: f32) {
     while slot > 0 && tracker[slot].1 < tracker[slot - 1].1 {
         tracker.swap(slot, slot - 1);
         slot -= 1;
-    }
-}
-
-/// Write retained center-column IDs for partition scatter.
-fn copy_leader_ids(tracker: &[(u32, f32)], assignments: &mut [u32]) {
-    for (destination, &(leader, _)) in assignments.iter_mut().zip(tracker) {
-        *destination = leader;
     }
 }
 
@@ -534,7 +529,9 @@ mod tests {
                     M::partition_distance_scalar(dot, point_scale, leader_scale),
                 );
             }
-            copy_leader_ids(&tracker, point_output);
+            for (destination, &(leader, _)) in point_output.iter_mut().zip(&tracker) {
+                *destination = leader;
+            }
         }
     }
 
