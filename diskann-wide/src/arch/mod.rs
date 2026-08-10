@@ -691,11 +691,13 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u64x2: <Self, u64, 2, mask_u64x2>
         + SIMDUnsigned
+        + SIMDSumTree
     );
     vector!(
         u64x4: <Self, u64, 4, mask_u64x4>
         + SplitJoin<Halved = Self::u64x2>
         + SIMDUnsigned
+        + SIMDSumTree
     );
 
     //---------//

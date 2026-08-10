@@ -16,7 +16,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDVector},
 };
 
 //////////////////
@@ -31,6 +31,13 @@ macros::x86_retarget!(i8x16 => v3::i8x16);
 helpers::unsafe_map_binary_op!(i8x16, std::ops::Add, add, _mm_add_epi8, "sse2");
 helpers::unsafe_map_binary_op!(i8x16, std::ops::Sub, sub, _mm_sub_epi8, "sse2");
 helpers::unsafe_map_unary_op!(i8x16, SIMDAbs, abs_simd, _mm_abs_epi8, "ssse3");
+helpers::unsafe_map_unary_op!(
+    i8x16,
+    SIMDPopcount,
+    popcount_simd,
+    _mm_popcnt_epi8,
+    "avx512bitalg,avx512vl"
+);
 
 impl std::ops::Mul for i8x16 {
     type Output = Self;
@@ -134,4 +141,5 @@ mod test_x86_i8 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i8x16, 0xeb7bb4da5b84ebbe, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i8x16, 0x9d61a6aa25b322cc, V4::new_checked_uncached());
 }
