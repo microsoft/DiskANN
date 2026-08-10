@@ -524,6 +524,14 @@ pub trait SIMDAbs {
     fn abs_simd(self) -> Self;
 }
 
+/// Count the set bits in each lane.
+///
+/// This trait is only implemented for vector/architecture pairs that have native support
+/// for popcounts. [`crate::Emulated`] is the exception and computes popcounts in scalar code.
+pub trait SIMDPopcount {
+    fn popcount_simd(self) -> Self;
+}
+
 /// A SIMD equivalent of `std::cmp::PartialEq`.
 ///
 /// Instead of a boolean, return `Self::Mask` containing the result of the element-wise

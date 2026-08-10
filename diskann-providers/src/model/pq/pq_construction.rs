@@ -340,29 +340,30 @@ where
 
     let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.into_dims();
 
-    let mut full_pivot_data: Vec<f32>;
-    let centroid: Vec<f32>;
-    let chunk_offsets: Vec<usize>;
     let full_dim: usize;
+    let table;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
         return Err(ANNError::message("ERROR: PQ k-means pivot file not found."));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        (full_pivot_data, centroid, chunk_offsets) = pq_storage.load_existing_pivot_data(
-            &num_pq_chunks,
-            &num_centers,
-            &full_dim,
-            storage_provider,
-        )?;
-    }
+        table = pq_storage.load_pivots(storage_provider)?;
 
-    // Instead of subtracting the center from each data set component, we instead
-    // add it to each center.
-    let mut full_pivot_data_mat =
-        MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
-            .bridge_err()?;
-    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
+        if table.nchunks() != num_pq_chunks
+            || table.ncenters() != num_centers
+            || table.dim() != full_dim
+        {
+            return Err(ANNError::message(format!(
+                "PQ pivot table mismatch: file has {} chunks, {} centers in {} dimensions but expected {} chunks, {} centers in {} dimensions.",
+                table.nchunks(),
+                table.ncenters(),
+                table.dim(),
+                num_pq_chunks,
+                num_centers,
+                full_dim
+            )));
+        }
+    }
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,
@@ -387,13 +388,8 @@ where
     ))?;
 
     // The compression table.
-    let table = TransposedTable::from_parts(
-        full_pivot_data_mat.as_view(),
-        diskann_quantization::views::ChunkOffsetsView::new(&chunk_offsets)
-            .bridge_err()?
-            .to_owned(),
-    )
-    .map_err(ANNError::new)?;
+    let table = TransposedTable::from_parts(table.view_pivots(), table.view_offsets().to_owned())
+        .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
@@ -452,76 +448,12 @@ where
     Ok(())
 }
 
-/// Compute the PQ codes for a single vector argument.
+/// Compute PQ codes for a batch of vectors using in-memory pivots.
 ///
-/// Given training data in train_data of dimensions `dim` and
-/// PQ pivots computed earlier, partition the co-ordinates into
-/// `num_pq_chunks`, and find the closest pivots for each point in each chunk.
-/// This API doesn't involve reading/writing to disk and is used for in-memory.
-///
-/// If `centroid` is `Some(_)` subtract the centroid from each point before finding the
-/// closest pivots.
-///
-/// Output `pq_out` which must be pre-allocated and will be used to determine
-/// `num_pq_chunks`.
-///
-/// # Arguments
-/// * `vector_data` - A single vector to be encoded.
-/// * `pivot_data` - A logical 2-dimensional array containing the PQ pivots in row-major
-///   order.
-/// * `num_pivots` - The size of the first dimension of the `pivot_data` matrix.
-/// * `centroid` - An optional centroid to use for zero centering `vector_data`.
-///
-///   If `Some(_)`, then `vector_data` will be transformed by subtracting each component by
-///   its corresponding entry in `centroid`.
-///
-///   If `None`, then no centering will take place.
-/// * `offsets` - A prefix-sum style encoding of the start and stop positions of each
-///   chunk in `pivot_data`.
-/// * `pq_out` - Output buffer for the PQ codes.
-///
-/// # Returns
-/// An `ANNResult<()>` indicating success or failure.
-pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
-    vector_data: &[T],
-    pivot_data: &[f32],
-    num_pivots: usize,
-    offsets: &[usize],
-    pq_out: &mut [u8],
-) -> ANNResult<()> {
-    // Number of dimensions in the vector to encode.
-    let dim = vector_data.len();
-
-    // Create a `BasicTableView` of the pivots.
-    //
-    // This does not allocate memory, but does validate the following invariants:
-    // * `pivot_data.len() == num_pivots * dim`.
-    // * `offsets` begins at zero, ends at `dim`, and is monotonic.
-    let table = BasicTableView::new(
-        MatrixView::try_from(pivot_data, num_pivots, dim).bridge_err()?,
-        diskann_quantization::views::ChunkOffsetsView::new(offsets).bridge_err()?,
-    )
-    .map_err(ANNError::new)?;
-
-    let data = vector_data
-        .iter()
-        .map(|x| (*x).into())
-        .collect::<Vec<f32>>();
-
-    table
-        .compress_into(data.as_slice(), pq_out)
-        .map_err(ANNError::new)
-}
-
-/// Legacy compatibility function for providing an batch data generation.
-///
-/// Compute the PQ codes for a single vector argument.
-///
-/// Given training data in train_data of dimensions `dim` and
-/// PQ pivots computed earlier, partition the co-ordinates into
-/// `num_pq_chunks`, and find the closest pivots for each point in each chunk.
-/// This API doesn't involve reading/writing to disk and is used for in-memory.
-pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>>(
+/// Given vector data with dimensions from `parameters` and PQ pivots computed
+/// earlier, partition the coordinates into `num_pq_chunks` and find the closest
+/// pivot for each vector chunk. This API does not read or write storage.
+pub fn generate_pq_data_from_pivots_from_membuf_batch<T: VectorRepr + Sync>(
     parameters: &GeneratePivotArguments,
     vector_data: &[T],
     pivot_data: &[f32],
@@ -532,7 +464,7 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
     // Perform minimal error checking at this level, mainly on the sizes of `vector_data`
     // and `pq_out`.
     //
-    // More dimentionality checking is deferred to the inner function.
+    // More dimensionality checking is deferred to the table construction.
     let num_train = parameters.num_train();
     let num_pq_chunks = parameters.num_pq_chunks();
     let dim = parameters.dim();
@@ -546,17 +478,18 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
         return Err(ANNError::message("Error: Invalid PQ buffer input size."));
     }
 
+    let table = BasicTableView::new(
+        MatrixView::try_from(pivot_data, parameters.num_centers(), dim).bridge_err()?,
+        ChunkOffsetsView::new(offsets).bridge_err()?,
+    )
+    .map_err(|err| ANNError::message(diskann_quantization::error::format(&err)))?;
+
     pq_out
         .par_chunks_mut(num_pq_chunks)
         .zip(vector_data.par_chunks(dim))
-        .try_for_each_in_pool(pool, |(pq_slice, vector_slice)| {
-            generate_pq_data_from_pivots_from_membuf(
-                vector_slice,
-                pivot_data,
-                parameters.num_centers(),
-                offsets,
-                pq_slice,
-            )
+        .try_for_each_in_pool(pool, |(pq_slice, vector)| {
+            let data = T::as_f32(vector).map_err(ANNError::new)?;
+            table.compress_into(&*data, pq_slice).map_err(ANNError::new)
         })
 }
 
@@ -850,26 +783,16 @@ mod pq_test {
         )
         .unwrap();
 
+        let table = FixedChunkPQTable::new(dim, pivot_data.into(), offsets.into()).unwrap();
         let mut pq: Vec<u8> = vec![0; num_pq_chunks];
         for i in 0..num_train {
-            generate_pq_data_from_pivots_from_membuf(
-                &train_data[dim * i..dim * (i + 1)],
-                &pivot_data,
-                num_centers,
-                &offsets,
-                &mut pq,
-            )
-            .unwrap();
+            table
+                .compress_into(&train_data[dim * i..dim * (i + 1)], &mut pq)
+                .unwrap();
         }
 
-        assert!(
-            !offsets.contains(&usize::MAX),
-            "offsets contains max value!"
-        );
-        assert!(
-            !pivot_data.contains(&f32::MAX),
-            "pivot_data contains max value!"
-        );
+        assert!(!table.get_chunk_offsets().contains(&usize::MAX));
+        assert!(!table.get_pq_table().contains(&f32::MAX));
     }
 
     #[rstest]
@@ -931,15 +854,10 @@ mod pq_test {
         // use membuf function to generate pq
 
         // use pivot data generated by original function
-        let (full_pivot_data, centroid, offsets) = pq_storage
-            .load_existing_pivot_data(
-                &num_pq_chunks,
-                &NUM_PQ_CENTROIDS,
-                &train_dim,
-                &storage_provider,
-            )
-            .unwrap();
-
+        let table = pq_storage.load_pivots(&storage_provider).unwrap();
+        assert_eq!(table.nchunks(), num_pq_chunks);
+        assert_eq!(table.ncenters(), NUM_PQ_CENTROIDS);
+        assert_eq!(table.dim(), train_dim);
         let mut membuf_pq_data: Vec<u8> = vec![0; num_pq_chunks * num_train];
 
         // `from_membuf` switched to an implementation optimized for a single vector.
@@ -950,14 +868,12 @@ mod pq_test {
             .par_chunks_mut(num_pq_chunks)
             .enumerate()
             .for_each_in_pool(pool.as_ref(), |(i, membuf_slice)| {
-                generate_pq_data_from_pivots_from_membuf(
-                    &full_data_vector[train_dim * i..train_dim * (i + 1)],
-                    &full_pivot_data,
-                    NUM_PQ_CENTROIDS,
-                    &offsets,
-                    membuf_slice,
-                )
-                .unwrap();
+                table
+                    .compress_into(
+                        &full_data_vector[train_dim * i..train_dim * (i + 1)],
+                        membuf_slice,
+                    )
+                    .unwrap();
             });
 
         // use pq generated by original function as the gt
@@ -985,8 +901,8 @@ mod pq_test {
         let offset_view = chunk_offsets.as_view();
         let full_data =
             MatrixView::try_from(full_data_vector.as_slice(), num_train, train_dim).unwrap();
-        let pivot_view =
-            MatrixView::try_from(full_pivot_data.as_slice(), NUM_PQ_CENTROIDS, train_dim).unwrap();
+        let pivot_view = table.view_pivots();
+        let centroid = vec![0.0; train_dim];
 
         // Due to difference in numerical rounding, the results between the two APIs can
         // vary slightly.
@@ -1107,13 +1023,11 @@ mod pq_test {
         );
         assert!(result.is_ok());
 
+        let table = FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
         let mut membuf_pq_data: Vec<u8> = vec![0; num_pq_chunks];
         for i in 0..npts {
-            let result = generate_pq_data_from_pivots_from_membuf(
+            let result = table.compress_into(
                 &full_data_vector[(dim * i)..(dim * (i + 1))],
-                &full_pivot_data,
-                NUM_PQ_CENTROIDS,
-                &offsets,
                 &mut membuf_pq_data,
             );
             assert!(result.is_ok());
