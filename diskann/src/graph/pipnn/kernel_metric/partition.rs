@@ -3,15 +3,12 @@
  * Licensed under the MIT license.
  */
 
-//! This module defines metric formulas for partition-leader ranking.
-
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
 use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar};
 
-/// Partition formulas return ascending ranking scores.
-///
+/// Partition formulas return ascending scores.
 /// L2 uses squared leader norms. Cosine uses point and leader norms.
 pub(in super::super) trait PartitionKernelMetric: Send + Sync + 'static {
     const METRIC: Metric;
