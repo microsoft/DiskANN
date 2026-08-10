@@ -5,37 +5,31 @@
 
 //! This module defines metric formulas for partition-leader ranking.
 
+use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-use super::{
-    Cosine, CosineNormalized, InnerProduct, L2, MetricTag, cosine_distance, cosine_distance_scalar,
-};
+use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar};
 
-/// This trait defines metric operations for partition-leader ranking.
+/// Partition formulas return ascending ranking scores.
 ///
-/// Each function returns an ascending score. L2 receives a squared leader norm.
-/// Cosine receives point and leader norms. Dot-only metrics receive zero norms.
-pub(in super::super) trait PartitionKernelMetric: MetricTag {
-    /// This value is true when the metric reads a point norm.
+/// L2 uses squared leader norms. Cosine uses point and leader norms.
+pub(in super::super) trait PartitionKernelMetric: Send + Sync + 'static {
+    const METRIC: Metric;
     const USES_POINT_NORM: bool;
-
-    /// This value is true when the metric reads leader norm values.
     const USES_LEADER_NORMS: bool;
 
-    /// This function converts one squared point norm to the required unit.
     fn prepare_point_norm(squared_norm: f32) -> f32;
 
-    /// This function computes SIMD ranking scores for one point and multiple leaders.
     fn partition_ranking<F>(arch: F::Arch, dot: F, point_norm: F, leader_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
-    /// This function computes one scalar-tail partition ranking score.
     fn partition_ranking_scalar(dot: f32, point_norm: f32, leader_norm: f32) -> f32;
 }
 
 impl PartitionKernelMetric for L2 {
+    const METRIC: Metric = Metric::L2;
     const USES_POINT_NORM: bool = false;
     const USES_LEADER_NORMS: bool = true;
 
@@ -63,6 +57,7 @@ impl PartitionKernelMetric for L2 {
 }
 
 impl PartitionKernelMetric for Cosine {
+    const METRIC: Metric = Metric::Cosine;
     const USES_POINT_NORM: bool = true;
     const USES_LEADER_NORMS: bool = true;
 
@@ -87,6 +82,7 @@ impl PartitionKernelMetric for Cosine {
 }
 
 impl PartitionKernelMetric for CosineNormalized {
+    const METRIC: Metric = Metric::CosineNormalized;
     const USES_POINT_NORM: bool = false;
     const USES_LEADER_NORMS: bool = false;
 
@@ -111,6 +107,7 @@ impl PartitionKernelMetric for CosineNormalized {
 }
 
 impl PartitionKernelMetric for InnerProduct {
+    const METRIC: Metric = Metric::InnerProduct;
     const USES_POINT_NORM: bool = false;
     const USES_LEADER_NORMS: bool = false;
 
