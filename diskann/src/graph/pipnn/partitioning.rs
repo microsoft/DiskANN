@@ -31,7 +31,7 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::{MetricTag, PartitionKernelMetric},
+    kernel_metric::PartitionKernelMetric,
     partition_kernel::{PartitionInput, PartitionKernelWorkspace, PartitionNorms, nearest_leaders},
 };
 
@@ -350,7 +350,7 @@ where
     M: PartitionKernelMetric,
     T: VectorRepr + Send + Sync,
 {
-    let metric = <M as MetricTag>::METRIC;
+    let metric = M::METRIC;
     let dimension_count = data.ncols();
     let leader_values_len = checked_area("leader data", leader_ids.len(), dimension_count)?;
     let mut leader_values = filled_vec(leader_values_len, 0.0f32)?;
@@ -472,7 +472,7 @@ where
     )
     .map_err(ANNError::new)?;
 
-    let metric = <M as MetricTag>::METRIC;
+    let metric = M::METRIC;
     let point_squared_norms = if metric == Metric::Cosine {
         grow_fallible(point_squared_norm_buffer, point_count, 0.0)?;
         let point_squared_norms = &mut point_squared_norm_buffer[..point_count];
