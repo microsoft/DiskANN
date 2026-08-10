@@ -198,7 +198,7 @@ impl DirectCandidates {
             let candidates = &self.lists[source as usize];
             let mut candidates = candidates
                 .lock()
-                .map_err(|_| poisoned_candidate_list(source))?;
+                .map_err(|_| LeafBuildError::PoisonedCandidateList { point: source })?;
             candidates.extend_from_slice(additions);
         }
         Ok(())
@@ -210,9 +210,12 @@ impl DirectCandidates {
             .try_reserve_exact(self.lists.len())
             .map_err(|source| allocation_error("candidate output", self.lists.len(), source))?;
         for (point, candidates) in self.lists.into_iter().enumerate() {
-            let mut candidates = candidates
-                .into_inner()
-                .map_err(|_| poisoned_candidate_list(point as u32))?;
+            let mut candidates =
+                candidates
+                    .into_inner()
+                    .map_err(|_| LeafBuildError::PoisonedCandidateList {
+                        point: point as u32,
+                    })?;
             candidates.sort();
             output.push(candidates);
         }
@@ -425,10 +428,6 @@ fn allocation_error(
         additional,
         source,
     }
-}
-
-fn poisoned_candidate_list(point: u32) -> LeafBuildError {
-    LeafBuildError::PoisonedCandidateList { point }
 }
 
 #[cfg(test)]
