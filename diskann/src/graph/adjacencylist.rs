@@ -138,6 +138,7 @@ where
     /// Take ownership of a vector that contains unique items.
     ///
     /// The caller must supply unique items. Debug builds check this condition.
+    #[cfg(feature = "pipnn")]
     pub(crate) fn from_vec_trusted(edges: Vec<I>) -> Self
     where
         I: ContainsSimd,
@@ -679,6 +680,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "pipnn")]
     #[test]
     fn test_from_vec_trusted_preserves_order_and_allocation() {
         let edges = vec![3_u32, 1, 2];
