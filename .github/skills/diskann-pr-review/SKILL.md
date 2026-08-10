@@ -59,18 +59,18 @@ These are the items that stop a merge. Verify each explicitly — do not assume.
 |---|---|---|
 | 1 | **Patch coverage ≥ 90%** on changed lines | `.codecov.yml` (`informational: false`) |
 | 2 | Every `unsafe` block has a `// SAFETY:` comment naming the invariant | workspace clippy lint `undocumented_unsafe_blocks` |
-| 4 | No new crate-level catch-all error enum | AGENTS.md ("Do Not") |
-| 5 | Error type matches the crate's tier (bespoke / `ANNError` / `anyhow`) | AGENTS.md |
-| 6 | No `unwrap()` / `expect()` / `panic!` in non-test library code | crate-level `cfg_attr` lints |
-| 7 | New/changed algorithm behavior has a **baseline** test, not an eyeball test | `diskann/src/test/cache.rs` |
-| 8 | Crate tier dependency rules respected (no Tier 3 → benchmark-runner/core/simd) | AGENTS.md |
-| 9 | License header present on every new file | `.github/copilot-instructions.md` |
-| 10 | No unit tests deleted without stated justification | `.github/copilot-instructions.md` |
-| 11 | New dependencies justified; no gratuitous transitive bloat | `.github/copilot-instructions.md` |
-| 12 | Public struct fields don't bypass constructor validation | recurring maintainer objection |
-| 13 | Concurrency: lock ordering consistent, atomics not split across signals, races documented | recurring maintainer objection |
-| 14 | Arch-specific intrinsics validated cross-platform (SDE / QEMU) | AGENTS.md, `diskann-wide/README.md` |
-| 15 | `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean | CI |
+| 3 | No new crate-level catch-all error enum | AGENTS.md ("Do Not") |
+| 4 | Error type matches the crate's tier (bespoke / `ANNError` / `anyhow`) | AGENTS.md |
+| 5 | No `unwrap()` / `expect()` / `panic!` in non-test library code | crate-level `cfg_attr` lints |
+| 6 | New/changed algorithm behavior has a **baseline** test, not an eyeball test | `diskann/src/test/cache.rs` |
+| 7 | Crate tier dependency rules respected (no Tier 3 → benchmark-runner/core/simd) | AGENTS.md |
+| 8 | License header present on every new file | `.github/copilot-instructions.md` |
+| 9 | No unit tests deleted without stated justification | `.github/copilot-instructions.md` |
+| 10 | New dependencies justified; no gratuitous transitive bloat | `.github/copilot-instructions.md` |
+| 11 | Public struct fields don't bypass constructor validation | recurring maintainer objection |
+| 12 | Concurrency: lock ordering consistent, atomics not split across signals, races documented | recurring maintainer objection |
+| 13 | Arch-specific intrinsics validated cross-platform (SDE / QEMU) | AGENTS.md, `diskann-wide/README.md` |
+| 14 | `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean | CI |
 
 ### 3. Apply the evidence bar for the change type
 
