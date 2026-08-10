@@ -24,7 +24,7 @@ absent a good reason · `NIT` is non-blocking · `NOTE` is context rather than a
 
 The third form exists so you are never blocked on research: if you know a rule is right, write it
 and sign it. An agent updating this file may use only the first two — anything it contributes must
-stay independently checkable. See [MAINTENANCE.md](MAINTENANCE.md) for the refresh procedure.
+stay independently checkable.
 
 ---
 

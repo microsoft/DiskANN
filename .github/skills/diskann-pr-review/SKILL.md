@@ -9,10 +9,8 @@ Review changes the way DiskANN maintainers actually review them. This skill enco
 distilled from the review history of merged PRs, the repo's own written conventions and judgements/values 
 from the core contributors to the repo.
 
-**Companion files:**
-- [rules.md](rules.md) — full rule catalog with rationale and evidence. Read this when you need
-  depth on a category, or when a rule needs justification in a review comment.
-- [MAINTENANCE.md](MAINTENANCE.md) — how to refresh this skill from new PR data.
+**Companion file:** [rules.md](rules.md) — the full rule catalog with rationale and evidence. Read
+it when you need depth on a category, or when a rule needs justification in a review comment.
 
 **Authoritative sources this skill defers to** (read them if a rule seems to conflict):
 [AGENTS.md](../../../AGENTS.md) · [rfcs/00109-unsafe-rust.md](../../../rfcs/00109-unsafe-rust.md) ·
@@ -20,24 +18,6 @@ from the core contributors to the repo.
 [.github/copilot-instructions.md](../../copilot-instructions.md) ·
 [rfcs/README.md](../../../rfcs/README.md)
 
----
-
-## The three things that matter most
-
-DiskANN review culture is high-discipline and architecture-first. Ranked by how often and how
-forcefully maintainers push back:
-
-1. **Evidence over assertion.** Performance claims need benchmark numbers. Algorithm changes need
-   baseline regression tests. `unsafe` for speed needs a measured win. "It should be faster" and
-   "looks about right" get rejected.
-2. **Invariants belong in types.** Private fields + validating constructors, enums instead of
-   `Option` where variants may grow, checked conversions instead of `as`, fail at load/parse time
-   rather than mid-run.
-3. **Abstraction boundaries are debated seriously.** Crate tiering, trait shape, and public surface
-   get more scrutiny than implementation details. Duplicated logic across index types is a
-   recurring blocker.
-
----
 
 ## Review workflow
 
@@ -79,7 +59,6 @@ These are the items that stop a merge. Verify each explicitly — do not assume.
 |---|---|---|
 | 1 | **Patch coverage ≥ 90%** on changed lines | `.codecov.yml` (`informational: false`) |
 | 2 | Every `unsafe` block has a `// SAFETY:` comment naming the invariant | workspace clippy lint `undocumented_unsafe_blocks` |
-| 3 | `unsafe` added for *performance* has benchmark evidence (~10%+) and a safe wrapper | RFC 00109 |
 | 4 | No new crate-level catch-all error enum | AGENTS.md ("Do Not") |
 | 5 | Error type matches the crate's tier (bespoke / `ANNError` / `anyhow`) | AGENTS.md |
 | 6 | No `unwrap()` / `expect()` / `panic!` in non-test library code | crate-level `cfg_attr` lints |
