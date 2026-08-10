@@ -95,13 +95,15 @@ pub(crate) struct State {
     pub(in crate::graph) neighbor: u16,
 }
 
-/// Select positions from source-distance-sorted candidates.
+/// Select a degree-bounded neighbor set with Vamana RobustPrune.
 ///
-/// `pool` enforces nondecreasing source-distance order. `cache[i].1` contains the
-/// optional value for `pool[i]`; `None` marks an excluded or unavailable candidate while
-/// preserving its position. `states` must contain one
-/// default-initialized entry per candidate. The caller owns allocation, ID translation,
-/// and saturation.
+/// `pool` contains candidates in nearest-first order from the source point.
+/// `cache` contains the vector for the candidate at the same position. `None`
+/// excludes that candidate without changing positional alignment. `states` has
+/// one entry for each candidate position.
+///
+/// The function writes selected candidate indexes to `states[..result]` and
+/// returns `result`. The caller converts those indexes to graph IDs.
 pub(in crate::graph) fn robust_prune<I, V, D>(
     pool: &SortedNeighbors<'_, I>,
     cache: &[(f32, Option<V>)],
@@ -115,17 +117,6 @@ where
     I: Eq,
     D: FnMut(&V, &V) -> f32,
 {
-    assert_eq!(
-        pool.len(),
-        cache.len(),
-        "RobustPrune cache must have one entry per sorted candidate"
-    );
-    assert_eq!(
-        cache.len(),
-        states.len(),
-        "RobustPrune state must have one entry per sorted candidate"
-    );
-
     let mut current_alpha = 1.0f32;
     let increment_factor = alpha.min(1.2);
 
