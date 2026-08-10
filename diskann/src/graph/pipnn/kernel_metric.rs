@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Shared metric definitions for the PiPNN numerical kernels.
+//! This module defines shared metrics for the PiPNN numerical kernels.
 //!
 //! `build_graph` maps each runtime [`Metric`] to one marker type. Leaf and
 //! partition kernels use separate traits for that marker. Both traits use the
@@ -18,19 +18,19 @@ pub(super) use partition::PartitionKernelMetric;
 use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-/// Identify one metric across all PiPNN build stages.
+/// This trait identifies one metric across all PiPNN build stages.
 pub(super) trait MetricTag: Send + Sync + 'static {
-    /// Runtime metric represented by this marker.
+    /// This value identifies the runtime metric.
     const METRIC: Metric;
 }
 
-/// Squared-L2 marker.
+/// This marker selects squared L2.
 pub(super) struct L2;
-/// Unnormalized-cosine marker.
+/// This marker selects unnormalized cosine.
 pub(super) struct Cosine;
-/// Unit-normalized-cosine marker.
+/// This marker selects unit-normalized cosine.
 pub(super) struct CosineNormalized;
-/// Negative-inner-product marker.
+/// This marker selects negative inner product.
 pub(super) struct InnerProduct;
 
 impl MetricTag for L2 {
@@ -49,7 +49,7 @@ impl MetricTag for InnerProduct {
     const METRIC: Metric = Metric::InnerProduct;
 }
 
-/// Convert a squared norm to a norm.
+/// This function converts a squared norm to a norm.
 ///
 /// The function maps subnormal squared norms to zero. It preserves NaN so that
 /// kernel comparisons do not rank an invalid value.
@@ -62,7 +62,7 @@ pub(super) fn norm_from_squared(squared_norm: f32) -> f32 {
     }
 }
 
-/// Compute cosine distance with the DiskANN zero-norm and NaN rules.
+/// This function computes cosine distance with the DiskANN zero-norm and NaN rules.
 ///
 /// Each lane contains one point pair. A zero norm produces zero similarity. A
 /// NaN norm remains NaN unless the other norm is zero.
@@ -83,7 +83,7 @@ where
     one - cosine
 }
 
-/// Compute scalar cosine distance with the DiskANN zero-norm rules.
+/// This function computes scalar cosine distance with the DiskANN zero-norm rules.
 #[inline(always)]
 pub(super) fn cosine_distance_scalar(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
     if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {

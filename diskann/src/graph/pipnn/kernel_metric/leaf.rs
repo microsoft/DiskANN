@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Metric formulas for leaf-local neighbor selection.
+//! This module defines metric formulas for leaf-local neighbor selection.
 
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
@@ -11,28 +11,28 @@ use super::{
     Cosine, CosineNormalized, InnerProduct, L2, MetricTag, cosine_distance, cosine_distance_scalar,
 };
 
-/// Metric contract for leaf-local neighbor selection.
+/// This trait defines metric operations for leaf-local neighbor selection.
 ///
 /// Each function returns an ascending distance. The leaf kernel supplies squared
 /// norms to L2 and norms to cosine. Dot-only metrics receive zero norm values.
 pub(in super::super) trait LeafKernelMetric: MetricTag {
-    /// True when the metric reads leaf norms.
+    /// This value is true when the metric reads leaf norms.
     const USES_NORMS: bool;
 
-    /// Convert one Gram diagonal value to the norm unit for this metric.
+    /// This function converts one Gram diagonal value to the required norm unit.
     fn prepare_norm(squared_norm: f32) -> f32;
 
-    /// Compute SIMD distances from one source to earlier leaf targets.
+    /// This function computes SIMD distances from one source to earlier targets.
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
-    /// Compute one scalar-tail leaf distance.
+    /// This function computes one scalar-tail leaf distance.
     fn leaf_distance_scalar(dot: f32, source_norm: f32, target_norm: f32) -> f32;
 }
 
-/// Clamp negative SIMD roundoff to zero and preserve NaN lanes.
+/// This function clamps negative SIMD roundoff to zero and preserves NaN lanes.
 #[inline(always)]
 fn clamp_nonnegative<F>(arch: F::Arch, distance: F) -> F
 where
@@ -45,7 +45,7 @@ where
         .select(zero.max_simd(distance), distance)
 }
 
-/// Clamp negative scalar roundoff to zero and preserve NaN.
+/// This function clamps negative scalar roundoff to zero and preserves NaN.
 #[inline(always)]
 fn clamp_nonnegative_scalar(distance: f32) -> f32 {
     if distance < 0.0 { 0.0 } else { distance }

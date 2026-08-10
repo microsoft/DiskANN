@@ -44,24 +44,24 @@ impl PartitionKernelWorkspace {
     }
 }
 
-/// Norm values for one point-to-leader tile.
+/// This enum stores norm values for one point-to-leader tile.
 ///
-/// Cosine point values are squared norms. Cosine leader values are norms.
+/// Cosine points use squared norms. Cosine leaders use norms.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum PartitionNorms<'a> {
-    /// L2 uses the squared norm of each sampled partition center.
+    /// This variant stores squared norms for L2 leaders.
     L2 {
-        /// Squared norm for each sampled leader.
+        /// This slice contains one squared norm for each sampled leader.
         leader_squared_norms: &'a [f32],
     },
-    /// Unnormalized cosine uses norms for assigned points and sampled leaders.
+    /// This variant stores norms for unnormalized cosine.
     Cosine {
-        /// Squared norm for every point.
+        /// This slice contains one squared norm for each point.
         point_squared_norms: &'a [f32],
-        /// Norm for each sampled leader.
+        /// This slice contains one norm for each sampled leader.
         leader_norms: &'a [f32],
     },
-    /// Normalized cosine and inner product need no normalization inputs.
+    /// This variant provides no norms for normalized cosine or inner product.
     None,
 }
 
@@ -118,7 +118,7 @@ pub(super) enum PartitionKernelError {
 ///
 /// # Errors
 ///
-/// Returns an error for an invalid shape, norm input, fanout, or allocation.
+/// The function returns an error for an invalid shape, norm input, fanout, or allocation.
 /// It also returns an error when fewer than `fanout` scores are rankable.
 pub(super) fn nearest_leaders<A, M>(
     arch: A,
@@ -143,14 +143,14 @@ where
     select_point_leaders::<A::f32x16, M>(arch, input.dots, norms, output, &mut workspace.tracker)
 }
 
-/// Checked norm slices for one concrete metric.
+/// This structure stores checked norm slices for one concrete metric.
 #[derive(Clone, Copy)]
 struct PartitionNormSlices<'a> {
     point_squared_norms: &'a [f32],
     leader_norm_values: &'a [f32],
 }
 
-/// Check the safety and metric conditions for partition selection.
+/// This function checks safety and metric conditions for partition selection.
 ///
 /// Matrix views prove their backing lengths. This function checks row counts,
 /// leader-ID range, fanout, norm variant, and norm lengths.
