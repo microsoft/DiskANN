@@ -3,13 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use azure_core::{credentials::TokenCredential, time::OffsetDateTime};
 use azure_identity::AzureCliCredential;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use loader::DatasetLoader;
-use redis::{AsyncTypedCommands, Pipeline, ToRedisArgs, aio::MultiplexedConnection};
+use redis::{
+    AsyncTypedCommands, IntoConnectionInfo, Pipeline, ToRedisArgs, aio::MultiplexedConnection,
+};
 use serde::Deserialize;
 use std::{
     collections::HashSet,
@@ -40,7 +42,7 @@ struct Config {
     ips: Vec<String>,
     port: Option<u16>,
     secure: bool,
-    scope: String,
+    scope: Option<String>,
     username: Option<String>,
 }
 
@@ -246,7 +248,7 @@ impl ToRedisArgs for DistanceMetric {
         let q = match self {
             DistanceMetric::L2 => b"L2".as_slice(),
             DistanceMetric::Cosine => b"COSINE".as_slice(),
-            DistanceMetric::CosineNormalized => b"COSINE_NORMALIZED".as_slice(),
+            DistanceMetric::CosineNormalized => b"XCOSINE_NORMALIZED".as_slice(),
             DistanceMetric::InnerProduct => b"IP".as_slice(),
         };
         out.write_arg(q);
@@ -345,30 +347,37 @@ async fn async_main(opts: Options) -> Result<()> {
         addrs.push(addr);
     }
 
-    let (password, expires) = if config.username.is_some() {
+    let (password, expires, scope) = if config.username.is_some() {
         let credentials = AzureCliCredential::new(None)?;
-        let res = credentials.get_token(&[&config.scope], None).await?;
-        (Some(res.token.secret().to_string()), Some(res.expires_on))
+        let Some(scope) = &config.scope else {
+            return Err(anyhow!("missing scope in config"));
+        };
+        let res = credentials.get_token(&[scope], None).await?;
+        (
+            Some(res.token.secret().to_string()),
+            Some(res.expires_on),
+            Some(scope.to_owned()),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let mut infos = Vec::new();
     for addr in addrs.into_iter() {
-        let info = redis::ConnectionInfo {
-            addr,
-            redis: redis::RedisConnectionInfo {
-                username: config.username.clone(),
-                password: password.clone(),
-                ..Default::default()
-            },
-        };
+        let mut redis_info = redis::RedisConnectionInfo::default();
+        if let Some(username) = config.username.as_ref() {
+            redis_info = redis_info.set_username(username.clone());
+        }
+        if let Some(password) = password.as_ref() {
+            redis_info = redis_info.set_password(password.clone());
+        }
+        let info = addr.into_connection_info()?.set_redis_settings(redis_info);
         infos.push(info);
     }
 
     let cred = if config.username.is_some() {
         Some(ExpiringCredential::new(
-            config.scope.clone(),
+            scope.unwrap(),
             config.username.clone().unwrap(),
             AzureCliCredential::new(None)?,
             expires.unwrap(),

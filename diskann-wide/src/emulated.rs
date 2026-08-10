@@ -544,6 +544,8 @@ macro_rules! impl_sumtree {
 impl_sumtree!(f32, 1, 2, 4, 8, 16);
 impl_sumtree!(i32, 4, 8, 16);
 impl_sumtree!(u32, 4, 8, 16);
+impl_sumtree!(i64, 2, 4);
+impl_sumtree!(u64, 2, 4);
 
 ////////////////
 // Conversion //
@@ -970,6 +972,12 @@ mod test_emulated {
     test_utils::ops::test_sumtree!(Emulated<u32, 4>, 0x5e4cffc86a21e90d, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 8>, 0xf43f19adb43bc611, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 16>, 0xa43dfe10aa9de860, SC);
+
+    test_utils::ops::test_sumtree!(Emulated<i64, 2>, 0xbef8abe303356cc3, SC);
+    test_utils::ops::test_sumtree!(Emulated<i64, 4>, 0x9aef214494ff5cd2, SC);
+
+    test_utils::ops::test_sumtree!(Emulated<u64, 2>, 0xe1dc2d07ae014508, SC);
+    test_utils::ops::test_sumtree!(Emulated<u64, 4>, 0x529c27f62ea171ec, SC);
 
     /////////////////
     // conversions //

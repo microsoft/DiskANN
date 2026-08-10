@@ -30,7 +30,7 @@ The steps below assume a Linux environment with SDE installed. On Windows, use
 ```bash
 WIDE_TEST_MIN_ARCH=x86-64-v4 \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="${PATH_TO_SDE} -spr --" \
-  cargo test --profile ci --package diskann-wide
+  cargo test --package diskann-wide
 ```
 
 - `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER` tells Cargo to run every test
@@ -48,7 +48,7 @@ instructions, run under a Nehalem model:
 ```bash
 RUSTFLAGS="-Ctarget-cpu=x86-64" \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="${PATH_TO_SDE} -nhm --" \
-  cargo test --profile ci --package diskann-wide
+  cargo test --package diskann-wide
 ```
 
 SDE will abort if any AVX instruction is executed, catching accidental use of
@@ -72,7 +72,7 @@ Then run tests:
 WIDE_TEST_MIN_ARCH=neon \
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -L /usr/aarch64-linux-gnu" \
-  cargo test --profile ci --package diskann-wide --target aarch64-unknown-linux-gnu
+  cargo test --package diskann-wide --target aarch64-unknown-linux-gnu
 ```
 
 - `-L /usr/aarch64-linux-gnu` sets the sysroot so QEMU can find the AArch64

@@ -1,8 +1,0 @@
-/*
- * Copyright (c) Microsoft Corporation.
- * Licensed under the MIT license.
- */
-
-pub mod compute_pq_bench;
-pub mod diskann_bench;
-pub mod neighbor_bench;

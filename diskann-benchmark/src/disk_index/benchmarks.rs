@@ -8,7 +8,7 @@ use std::{fmt, io::Write};
 
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     output::Output,
     utils::{
         datatype::AsDataType,
@@ -57,29 +57,18 @@ where
     type Input = DiskIndexOperation;
     type Output = DiskIndexStats;
 
-    fn try_match(&self, input: &DiskIndexOperation) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &DiskIndexOperation, context: &MatchContext) -> Score {
         let data_type = match &input.source {
             DiskIndexSource::Load(load) => load.data_type,
             DiskIndexSource::Build(build) => build.data_type,
         };
-        crate::utils::match_data_type::<T>(data_type)
+        let mut score = context.success(0);
+        crate::utils::match_data_type::<T>(&mut score, data_type);
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DiskIndexOperation>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(arg) => {
-                let desc = match &arg.source {
-                    DiskIndexSource::Load(load) => T::describe(load.data_type),
-                    DiskIndexSource::Build(build) => T::describe(build.data_type),
-                };
-                write!(f, "{}", desc)
-            }
-            None => write!(f, "{}", T::DATA_TYPE),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", T::DATA_TYPE)
     }
 
     fn run(

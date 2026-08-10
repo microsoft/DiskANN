@@ -8,7 +8,7 @@
 use std::{future::Future, sync::Mutex};
 
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult, default_post_processor,
+    ANNError, ANNResult, convert_error, default_post_processor,
     error::IntoANNResult,
     graph::{
         AdjacencyList,
@@ -50,45 +50,17 @@ use crate::{
 // Error Promotion //
 /////////////////////
 
-impl From<Bridge<QueryComputerError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<QueryComputerError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<diskann_quantization::spherical::CompressionError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::CompressionError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<diskann_quantization::spherical::iface::QueryDistanceError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::iface::QueryDistanceError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<spherical::UnsupportedMetric>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<spherical::UnsupportedMetric>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+convert_error!(Bridge<QueryComputerError>);
+convert_error!(Bridge<spherical::CompressionError>);
+convert_error!(Bridge<spherical::iface::QueryDistanceError>);
+convert_error!(Bridge<spherical::UnsupportedMetric>);
 
 /// An allocator error scoped to the spherical store.
 #[derive(Debug, Clone, Copy, Error)]
 #[error(transparent)]
 pub struct AllocatorError(#[from] diskann_quantization::alloc::AllocatorError);
 
-impl From<AllocatorError> for ANNError {
-    #[track_caller]
-    fn from(err: AllocatorError) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+convert_error!(AllocatorError);
 
 ///////////
 // Error //
@@ -707,13 +679,7 @@ pub enum RQError {
     FullPrecisionConversionErr(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl From<RQError> for ANNError {
-    #[cold]
-    #[track_caller]
-    fn from(err: RQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
+diskann::convert_error!(RQError);
 
 ///////////
 // Tests //

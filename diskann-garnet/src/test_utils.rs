@@ -3,28 +3,51 @@
  * Licensed under the MIT license.
  */
 
-use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK};
+use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK, Term};
 use core::slice;
 use dashmap::DashMap;
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 thread_local! {
     pub static STORE: DashMap<Vec<u8>, Vec<u8>> = DashMap::new();
+    pub static FULL_READS: AtomicUsize = const { AtomicUsize::new(0) };
+    pub static QUANT_READS: AtomicUsize = const { AtomicUsize::new(0) };
 }
 
-pub struct Store;
+/// Mock storage for testing.
+///
+/// Wraps a `()` to force use of the constructor and ensures storage starts empty.
+///
+/// This is implemented as a thread local DashMap.
+pub struct Store(());
 
 impl Store {
+    pub fn new() -> Store {
+        let store = Store(());
+        store.clear();
+        store
+    }
+
+    pub fn attach() -> Store {
+        Store(())
+    }
+
     pub fn callbacks(&self) -> Callbacks {
         Callbacks::new(test_read, test_write, test_delete, test_rmw, test_filter)
     }
 
     pub fn clear(&self) {
         STORE.with(|s| s.clear());
+        FULL_READS.with(|fr| fr.store(0, Ordering::Release));
+        QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
     }
 
     pub fn set(&self, context: u64, key: &[u8], value: &[u8]) {
         let context = context & TERM_BITMASK;
+
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
@@ -33,6 +56,13 @@ impl Store {
 
     pub fn get(&self, context: u64, key: &[u8]) -> Option<Vec<u8>> {
         let context = context & TERM_BITMASK;
+
+        if context == Term::Vector as u64 {
+            FULL_READS.with(|fr| fr.fetch_add(1, Ordering::AcqRel));
+        } else if context == Term::Quantized as u64 {
+            QUANT_READS.with(|qr| qr.fetch_add(1, Ordering::AcqRel));
+        }
+
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
@@ -52,6 +82,19 @@ impl Store {
                 false
             }
         })
+    }
+
+    pub fn clear_read_counts(&self) {
+        FULL_READS.with(|fr| fr.store(0, Ordering::Release));
+        QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
+    }
+
+    pub fn full_reads(&self) -> usize {
+        FULL_READS.with(|fr| fr.load(Ordering::Acquire))
+    }
+
+    pub fn quant_reads(&self) -> usize {
+        QUANT_READS.with(|qr| qr.load(Ordering::Acquire))
     }
 }
 
@@ -76,7 +119,7 @@ unsafe extern "C" fn test_read(
         let id = &ids[pos..pos + len as usize];
         pos += len as usize;
 
-        let store = Store;
+        let store = Store::attach();
         if let Some(v) = store.get(ctx, id) {
             unsafe {
                 cb(idx, cb_ctx, v.as_ptr(), v.len());
@@ -95,7 +138,7 @@ unsafe extern "C" fn test_write(
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
     let val = unsafe { slice::from_raw_parts(val_bytes, val_len) };
 
-    let store = Store;
+    let store = Store::attach();
     store.set(ctx, id, val);
     true
 }
@@ -103,7 +146,7 @@ unsafe extern "C" fn test_write(
 unsafe extern "C" fn test_delete(ctx: u64, id_bytes: *const u8, id_len: usize) -> bool {
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
-    let store = Store;
+    let store = Store::attach();
     store.delete(ctx, id)
 }
 
@@ -117,7 +160,7 @@ unsafe extern "C" fn test_rmw(
 ) -> bool {
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
-    let store = Store;
+    let store = Store::attach();
     let mut val = if let Some(v) = store.get(ctx, id) {
         v
     } else {
@@ -148,8 +191,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        let store = Store;
-        store.clear();
+        let store = Store::new();
         let callbacks = store.callbacks();
         let ctx = Context::new(0);
 
@@ -206,8 +248,7 @@ mod tests {
         use crate::provider::GarnetProvider;
         use diskann_vector::distance::Metric;
 
-        let store: Store = Store;
-        store.clear();
+        let store: Store = Store::new();
         let callbacks = store.callbacks();
         let ctx: Context = Context::new(0);
 

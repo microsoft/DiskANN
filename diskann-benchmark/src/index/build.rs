@@ -6,7 +6,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    error::DiskANNError::StartPointComputeError,
     graph::{DiskANNIndex, StartPointStrategy},
     provider::{self, DataProvider, DefaultContext},
     ANNError, ANNResult,
@@ -41,13 +40,9 @@ pub(crate) fn set_start_points<DP, T>(
 ) -> ANNResult<()>
 where
     DP: SetStartPoints<[T]>,
-    T: diskann::graph::SampleableForStart
-        + diskann_utils::sampling::WithApproximateNorm
-        + AsyncFriendly,
+    T: diskann::graph::SampleableForStart + AsyncFriendly,
 {
-    let start_points = start_strategy
-        .compute(data)
-        .map_err(|e| ANNError::new(diskann::ANNErrorKind::DiskANN(StartPointComputeError), e))?;
+    let start_points = start_strategy.compute(data).map_err(ANNError::new)?;
     provider.set_start_points(start_points.row_iter())
 }
 

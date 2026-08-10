@@ -14,22 +14,16 @@ use diskann::{
     utils::VectorRepr,
     ANNError, ANNResult,
 };
-use diskann_providers::storage::{DynWriteProvider, StorageReadProvider, WriteProviderWrapper};
+use diskann_providers::storage::{DynWriteProvider, WriteProviderWrapper};
 use diskann_providers::{
     index::diskann_async,
-    model::{
-        graph::provider::async_::{
-            common::{FullPrecision, NoDeletes, NoStore, Quantized, SetElementHelper, VectorStore},
-            inmem::{
-                DefaultProvider, DefaultProviderParameters, DefaultQuant, FullPrecisionProvider,
-                SQStore, SetStartPoints,
-            },
+    model::graph::provider::async_::{
+        common::{FullPrecision, NoDeletes, NoStore, Quantized, SetElementHelper, VectorStore},
+        inmem::{
+            DefaultProvider, DefaultProviderParameters, FullPrecisionProvider, SetStartPoints,
         },
-        IndexConfiguration,
     },
-    storage::{
-        index_storage::load_index, load_fp_index, AsyncIndexMetadata, DiskGraphOnly, SaveWith,
-    },
+    storage::{DiskGraphOnly, SaveWith},
 };
 use diskann_utils::future::{AsyncFriendly, SendFuture};
 
@@ -65,13 +59,6 @@ pub(super) trait InmemIndexBuilder<T: Sized>: Send + Sync {
         &self,
         range: core::ops::Range<u32>,
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + '_>>;
-
-    /// Persist the full index layout and metadata.
-    fn save_index<'a>(
-        &'a self,
-        storage_provider: &'a dyn DynWriteProvider,
-        metadata: &'a AsyncIndexMetadata,
-    ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>>;
 
     /// Persist only the graph file set.
     fn save_graph<'a>(
@@ -131,17 +118,6 @@ where
         Box::pin(async move {
             self.prune_range(&FullPrecision, &DefaultContext, range)
                 .await
-        })
-    }
-
-    fn save_index<'a>(
-        &'a self,
-        storage_provider: &'a dyn DynWriteProvider,
-        metadata: &'a AsyncIndexMetadata,
-    ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        Box::pin(async move {
-            let wrapper = WriteProviderWrapper::new(storage_provider);
-            self.save_with(&wrapper, metadata).await
         })
     }
 
@@ -207,7 +183,7 @@ where
     Q: AsyncFriendly + VectorStore + SetElementHelper<T>,
     Quantized: for<'a> InsertStrategy<'a, DefaultProvider<NoStore, Q>, &'a [T]>
         + PruneStrategy<DefaultProvider<NoStore, Q>>,
-    DefaultProvider<NoStore, Q>: SaveWith<(u32, AsyncIndexMetadata), Error = ANNError>,
+    DefaultProvider<NoStore, Q>: SaveWith<(u32, u32, DiskGraphOnly), Error = ANNError>,
 {
     fn capacity(&self) -> usize {
         self.index().provider().capacity()
@@ -243,17 +219,6 @@ where
             self.index()
                 .prune_range(&Quantized, &DefaultContext, range)
                 .await
-        })
-    }
-
-    fn save_index<'a>(
-        &'a self,
-        storage_provider: &'a dyn DynWriteProvider,
-        metadata: &'a AsyncIndexMetadata,
-    ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        Box::pin(async move {
-            let wrapper = WriteProviderWrapper::new(storage_provider);
-            self.index().save_with(&wrapper, metadata).await
         })
     }
 
@@ -319,59 +284,6 @@ where
         BuildQuantizer::PQ(table) => {
             let index =
                 diskann_async::new_quant_only_index(config, params, table.clone(), NoDeletes)?;
-            Ok(Arc::new(QuantInMemBuilder::<T, _>::new(index)))
-        }
-    }
-}
-
-/// Loads an in memory index builder from storage based on the given `BuildQuantizer`.
-///
-/// Depending on the quantizer type:
-/// - `NoQuant` loads a full precision index with `NoStore`.
-/// - `Scalar1Bit` loads a quant only index with `SQStore<1>`.
-/// - `PQ` loads a quant only index with `DefaultQuant`.
-///
-/// # Type Parameters
-/// - `T`: Vector element type, must implement `VectorRepr`.
-/// - `P`: Storage provider, must implement `StorageReadProvider`.
-///
-/// # Arguments
-/// - `storage_provider`: Source to read index data.
-/// - `build_quantizer`: Selects which index to load.
-/// - `config`: Index configuration.
-/// - `index_path_prefix`: Path prefix for index files.
-///
-/// # Returns
-/// An `Arc<dyn InmemIndexBuilder>` ready for use, or an error if loading fails.
-///
-/// # Async
-/// This function is async and must be awaited.
-pub(super) async fn load_inmem_index_builder<T, P>(
-    storage_provider: &P,
-    build_quantizer: &BuildQuantizer,
-    config: IndexConfiguration,
-    index_path_prefix: &str,
-) -> ANNResult<Arc<dyn InmemIndexBuilder<T>>>
-where
-    P: StorageReadProvider,
-    T: VectorRepr,
-{
-    match build_quantizer {
-        BuildQuantizer::NoQuant(_) => {
-            load_fp_index::<T, _, NoStore>(storage_provider, index_path_prefix, config)
-                .await
-                .map(|index| Arc::new(index) as Arc<dyn InmemIndexBuilder<T>>)
-        }
-        BuildQuantizer::Scalar1Bit(_) => {
-            let index =
-                load_index::<_, NoStore, SQStore<1>>(storage_provider, index_path_prefix, config)
-                    .await?;
-            Ok(Arc::new(QuantInMemBuilder::<T, _>::new(index)))
-        }
-        BuildQuantizer::PQ(_) => {
-            let index =
-                load_index::<_, NoStore, DefaultQuant>(storage_provider, index_path_prefix, config)
-                    .await?;
             Ok(Arc::new(QuantInMemBuilder::<T, _>::new(index)))
         }
     }

@@ -6,6 +6,7 @@
 use anyhow::Context;
 
 pub(crate) mod regression;
+pub(crate) mod visibility;
 
 /// Attempt to load and deserialize from a JSON file on disk identified with `path`.
 pub(crate) fn load_from_disk<T>(path: &std::path::Path) -> anyhow::Result<T>

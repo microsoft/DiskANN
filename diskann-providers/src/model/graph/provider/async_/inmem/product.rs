@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 
 use diskann::default_post_processor;
 use diskann::{
@@ -85,7 +85,7 @@ where
 pub struct PruneAccessor<'a> {
     provider: &'a FastMemoryQuantVectorProviderAsync,
     neighbors: &'a SimpleNeighborProviderAsync,
-    distance: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
+    distance: pq::distance::DistanceComputer<'a>,
 }
 
 impl HasId for PruneAccessor<'_> {
@@ -101,7 +101,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Self: 'a;
 
     type Distance<'a>
-        = &'a pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>
+        = &'a pq::distance::DistanceComputer<'a>
     where
         Self: 'a;
 
@@ -148,7 +148,7 @@ where
     full: &'a FastMemoryVectorProviderAsync<T>,
     quant: &'a FastMemoryQuantVectorProviderAsync,
     neighbors: &'a SimpleNeighborProviderAsync,
-    distance: distances::pq::HybridComputer<T>,
+    distance: distances::pq::HybridComputer<'a, T>,
 
     // During pruning, we make the first `max_fp_vecs_per_prune` are full-precision with
     // the rest being quantized. This hash set records which IDs should be full-precision.
@@ -173,7 +173,7 @@ where
     where
         Self: 'a;
     type Distance<'a>
-        = &'a distances::pq::HybridComputer<T>
+        = &'a distances::pq::HybridComputer<'a, T>
     where
         Self: 'a;
     type Neighbors<'a>
@@ -232,7 +232,7 @@ where
 /// * [`BuildQueryComputer`].
 pub struct QuantAccessor<'a, V, D, Ctx> {
     provider: &'a DefaultProvider<V, DefaultQuant, D, Ctx>,
-    computer: pq::distance::QueryComputer<Arc<FixedChunkPQTable>>,
+    computer: pq::distance::QueryComputer<'a>,
 }
 
 impl<'a, V, D, Ctx> QuantAccessor<'a, V, D, Ctx>

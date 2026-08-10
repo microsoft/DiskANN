@@ -9,7 +9,10 @@ use diskann_quantization::{
     product::{self, BasicTable},
     views::ChunkOffsetsBase,
 };
-use diskann_utils::views::{self, MatrixBase, MatrixView};
+use diskann_utils::{
+    lazy_format,
+    views::{self, MatrixBase, MatrixView},
+};
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
 
@@ -136,7 +139,7 @@ impl FixedChunkPQTable {
             MatrixBase::try_from(pq_table, len / dim, dim).bridge_err()?,
             ChunkOffsetsBase::new(chunk_offsets).bridge_err()?,
         )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        .map_err(ANNError::new)?;
 
         Ok(Self { table })
     }
@@ -159,7 +162,7 @@ impl FixedChunkPQTable {
         let dim = self.get_dim();
         debug_assert_eq!(query.len(), dim);
         if aligned_pq_table_dist_scratch.len() < num_chunks * num_centers {
-            return Err(ANNError::log_pq_error(
+            return Err(ANNError::message(
                 "aligned_pq_table_dist_scratch.len() should at least be num_pq_chunks * num_centers",
             ));
         }
@@ -427,15 +430,27 @@ impl FixedChunkPQTable {
     }
 }
 
+impl TryFrom<BasicTable> for FixedChunkPQTable {
+    type Error = ANNError;
+
+    fn try_from(table: BasicTable) -> Result<Self, Self::Error> {
+        if table.ncenters() > NUM_PQ_CENTROIDS {
+            return Err(ANNError::message(format!(
+                "PQ pivot table mismatch: file has {} centers but supports at most {} centers.",
+                table.ncenters(),
+                NUM_PQ_CENTROIDS
+            )));
+        }
+
+        Ok(Self { table })
+    }
+}
+
 // This goes against Rust's Orphan rule, so we cannot implement it directly.
 // However, we can use a wrapper type to implement the conversion.
 // This is a workaround to allow the conversion from `product::TableCompressionError` to
 // `ANNError` without violating the orphan rule.
-impl From<Bridge<product::TableCompressionError>> for ANNError {
-    fn from(value: Bridge<product::TableCompressionError>) -> ANNError {
-        ANNError::log_pq_error(diskann_quantization::error::format(&value.into_inner()))
-    }
-}
+diskann::convert_error!(Bridge<product::TableCompressionError>);
 
 impl<T> CompressInto<&[T], &mut [u8]> for FixedChunkPQTable
 where
@@ -492,9 +507,11 @@ fn pq_dist_lookup(
 
     let dists_out = match dists_out.get_mut(..n_pts) {
         None => {
-            return Err(ANNError::log_pq_error(format_args!(
+            let dists_out_len = dists_out.len();
+            return Err(ANNError::message(lazy_format!(
+                move,
                 "ERROR: dists_out length: {} is less than n_pts: {}",
-                dists_out.len(),
+                dists_out_len,
                 n_pts
             )));
         }
@@ -604,10 +621,13 @@ fn aggregate_coords(
     pq_coordinate_scratch: &mut [u8],
 ) -> ANNResult<()> {
     if pq_coordinate_scratch.len() < ids.len() * num_pq_chunks {
-        return Err(ANNError::log_pq_error(format_args!(
+        let found_len = pq_coordinate_scratch.len();
+        let expected_len = ids.len() * num_pq_chunks;
+        return Err(ANNError::message(lazy_format!(
+            move,
             "pq_coordinate_scratch doesn't have enough length. It has length {} but requires length {}",
-            pq_coordinate_scratch.len(),
-            ids.len() * num_pq_chunks
+            found_len,
+            expected_len,
         )));
     }
 
@@ -671,9 +691,8 @@ pub fn compute_pq_distance_for_pq_coordinates(
 mod fixed_chunk_pq_table_test {
     use core::ops::Range;
 
-    use crate::storage::{StorageReadProvider, VirtualStorageProvider};
+    use crate::storage::{PQStorage, VirtualStorageProvider};
     use approx::assert_relative_eq;
-    use diskann::error::ErrorContext;
     use diskann_utils::test_data_root;
     use diskann_vector::{
         PureDistanceFunction,
@@ -682,9 +701,19 @@ mod fixed_chunk_pq_table_test {
     use itertools::iproduct;
 
     use super::*;
-    use crate::{model::NUM_PQ_CENTROIDS, utils::read_bin_from};
+    use crate::model::NUM_PQ_CENTROIDS;
 
     const DIM: usize = 128;
+    const PQ_PIVOTS_PATH: &str = "/sift/siftsmall_learn_pq_pivots.bin";
+
+    fn load_test_pivots() -> FixedChunkPQTable {
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
+        PQStorage::new(PQ_PIVOTS_PATH, "", None)
+            .load_pivots(&storage_provider)
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
 
     #[test]
     fn constructor_errors() {
@@ -742,6 +771,23 @@ mod fixed_chunk_pq_table_test {
             let chunk_offsets = Box::new([0, 1, 2, dim, dim + 1]);
             assert!(FixedChunkPQTable::new(dim, pq_table, chunk_offsets).is_err());
         }
+    }
+
+    #[test]
+    fn conversion_rejects_too_many_centers() {
+        let dim = 5;
+        let table = BasicTable::new(
+            MatrixBase::try_from(
+                vec![0.0; dim * (NUM_PQ_CENTROIDS + 1)].into_boxed_slice(),
+                NUM_PQ_CENTROIDS + 1,
+                dim,
+            )
+            .unwrap(),
+            ChunkOffsetsBase::new(vec![0, 2, dim].into_boxed_slice()).unwrap(),
+        )
+        .unwrap();
+
+        assert!(FixedChunkPQTable::try_from(table).is_err());
     }
 
     #[test]
@@ -807,14 +853,8 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn load_pivot_test() {
-        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
-        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
-        let (dim, pq_table, chunk_offsets) =
-            load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
-        let fixed_chunk_pq_table =
-            FixedChunkPQTable::new(dim, pq_table.into(), chunk_offsets.into()).unwrap();
+        let fixed_chunk_pq_table = load_test_pivots();
 
-        assert_eq!(dim, DIM);
         assert_eq!(fixed_chunk_pq_table.table.dim(), DIM);
         assert_eq!(fixed_chunk_pq_table.table.ncenters(), NUM_PQ_CENTROIDS);
 
@@ -834,14 +874,7 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn calculate_distances_tests() {
-        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
-
-        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
-
-        let (dim, pq_table, chunk_offsets) =
-            load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
-        let fixed_chunk_pq_table =
-            FixedChunkPQTable::new(dim, pq_table.into(), chunk_offsets.into()).unwrap();
+        let fixed_chunk_pq_table = load_test_pivots();
 
         let query_vec: Vec<f32> = vec![
             32.39f32, 78.57f32, 50.32f32, 80.46f32, 6.47f32, 69.76f32, 94.2f32, 83.36f32, 5.8f32,
@@ -988,75 +1021,6 @@ mod fixed_chunk_pq_table_test {
                 );
             }
         }
-    }
-
-    type LoadPQPivotResult = (usize, Vec<f32>, Vec<usize>);
-    fn load_pq_pivots_bin<StorageProvider: StorageReadProvider>(
-        pq_pivots_path: &str,
-        num_pq_chunks: &usize,
-        storage_provider: &StorageProvider,
-    ) -> ANNResult<LoadPQPivotResult> {
-        let mut reader = storage_provider
-            .open_reader(pq_pivots_path)
-            .with_context(|| format!("ERROR: Opening PQ k-means pivot file {}", pq_pivots_path))?;
-
-        let offsets = read_bin_from::<u64>(&mut reader, 0)?;
-        if offsets.nrows() != 4 {
-            return Err(ANNError::log_pq_error(format_args!(
-                "Error reading pq_pivots file {}. \
-                 Offsets don't contain correct metadata, \
-                 # offsets = {}, but expecting 4.",
-                pq_pivots_path,
-                offsets.nrows()
-            )));
-        }
-        let file_offset_data = offsets.map(|x| x.into_usize());
-
-        let mut pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
-
-        if pivots.nrows() != NUM_PQ_CENTROIDS {
-            return Err(ANNError::log_pq_error(format_args!(
-                "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
-                pq_pivots_path,
-                pivots.nrows(),
-                NUM_PQ_CENTROIDS
-            )));
-        }
-        let dim = pivots.ncols();
-
-        let centroids = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
-        if centroids.nrows() != dim || centroids.ncols() != 1 {
-            return Err(ANNError::log_pq_error(format_args!(
-                "Error reading pq_pivots file {}. file_dim = {}, \
-                 file_cols = {} but expecting {} entries in 1 dimension.",
-                pq_pivots_path,
-                centroids.nrows(),
-                centroids.ncols(),
-                dim
-            )));
-        }
-
-        pivots.row_iter_mut().for_each(|row| {
-            std::iter::zip(row.iter_mut(), centroids.as_slice().iter()).for_each(|(p, c)| *p += *c);
-        });
-
-        let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
-        if chunk_offsets_m.nrows() != num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
-            return Err(ANNError::log_pq_error(format_args!(
-                "Error reading pq_pivots file at chunk offsets; \
-                 file has nr={}, nc={} but expecting nr={} and nc=1.",
-                chunk_offsets_m.nrows(),
-                chunk_offsets_m.ncols(),
-                num_pq_chunks + 1
-            )));
-        }
-        let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
-
-        Ok((
-            dim,
-            pivots.into_inner().into_vec(),
-            chunk_offsets.into_inner().into_vec(),
-        ))
     }
 
     #[test]

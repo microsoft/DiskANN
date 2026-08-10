@@ -13,10 +13,11 @@ use diskann::{
 };
 use diskann_benchmark_core::{
     self as benchmark_core,
+    recall::GroundTruthMode,
     streaming::{executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::datatype::AsDataType,
     Benchmark, Checkpoint, Registry,
@@ -30,7 +31,6 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    sampling::WithApproximateNorm,
     views::{Matrix, MatrixView},
 };
 use half::f16;
@@ -171,53 +171,31 @@ where
 
 impl<T> Benchmark for FullPrecision<T>
 where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart
-        + AsDataType,
+    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = IndexOperation;
     type Output = BuildResult;
 
-    fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        let score = utils::match_data_type::<T>(*input.source.data_type());
-        if self.plugins.is_match(&input.search_phase) {
-            score
-        } else {
-            match score {
-                Ok(_) => Err(FailureScore(0)),
-                Err(score) => Err(score),
-            }
+    fn try_match(&self, input: &IndexOperation, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        utils::match_data_type::<T>(&mut score, *input.source.data_type());
+        if !self.plugins.is_match(&input.search_phase) {
+            score.fail(
+                1,
+                &format_args!(
+                    "Unsupported search phase: \"{}\" - expected one of {}",
+                    input.search_phase.kind(),
+                    self.plugins.format_kinds(),
+                ),
+            );
         }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&IndexOperation>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(arg) => {
-                let desc = T::describe(*arg.source.data_type());
-                if !desc.is_match() {
-                    writeln!(f, "Data/Query Type: {}", desc)?;
-                }
-
-                if !self.plugins.is_match(&arg.search_phase) {
-                    writeln!(
-                        f,
-                        "Unsupported search phase: \"{}\" - expected one of {}",
-                        arg.search_phase.kind(),
-                        self.plugins.format_kinds(),
-                    )?;
-                }
-                Ok(())
-            }
-            None => {
-                writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
-                writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
+        writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
     }
 
     fn run(
@@ -298,27 +276,19 @@ impl<T> DynamicFullPrecision<T> {
 
 impl<T> Benchmark for DynamicFullPrecision<T>
 where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart
-        + AsDataType,
+    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = DynamicIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
-    fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        utils::match_data_type::<T>(input.build.data_type())
+    fn try_match(&self, input: &DynamicIndexRun, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+        utils::match_data_type::<T>(&mut score, input.build.data_type());
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DynamicIndexRun>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(i) => write!(f, "{}", T::describe(i.build.data_type())),
-            None => write!(f, "{}", T::DATA_TYPE),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", T::DATA_TYPE)
     }
 
     fn run(
@@ -477,7 +447,12 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             inmem::DeterminantDiversity::new(params),
         )?;
 
-        let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);
+        let steps = search::knn::SearchSteps::new(
+            phase.reps,
+            &phase.num_threads,
+            &phase.runs,
+            GroundTruthMode::Fixed,
+        );
         let results = search::knn::run(&knn, &groundtruth, steps)?;
 
         Ok(AggregatedSearchResults::Topk(results))
@@ -526,7 +501,12 @@ where
             benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
         )?;
 
-        let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+        let steps = search::knn::SearchSteps::new(
+            topk.reps,
+            &topk.num_threads,
+            &topk.runs,
+            GroundTruthMode::Fixed,
+        );
 
         let results = search::knn::run(&knn, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(results))
@@ -641,6 +621,7 @@ where
             beta_filter.reps,
             &beta_filter.num_threads,
             &beta_filter.runs,
+            GroundTruthMode::Flexible,
         );
 
         let result = search::knn::run(&knn, &groundtruth, steps)?;
@@ -686,8 +667,12 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
-        let steps =
-            search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
 
         let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -744,7 +729,12 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-        let steps = search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+        let steps = search::knn::SearchSteps::new(
+            inline.reps,
+            &inline.num_threads,
+            &inline.runs,
+            GroundTruthMode::Flexible,
+        );
 
         let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 
@@ -778,7 +768,7 @@ fn full_precision_streaming<T>(
     max_points: usize,
 ) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
 where
-    T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
+    T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
     let topk = input.search_phase.as_topk()?;
 

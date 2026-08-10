@@ -78,6 +78,11 @@ pub(crate) mod spherical {
     import_schema!(quantizer_generated, "spherical/quantizer_generated.rs");
 }
 
+pub(crate) mod minmax {
+    use super::*;
+    import_schema!(quantizer_generated, "minmax/quantizer_generated.rs");
+}
+
 /// Create a `FlatBufferBuilder` and pass it to the closure.
 ///
 /// After the closure runs, finish the serialization with the returned offset and pass

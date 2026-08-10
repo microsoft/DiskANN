@@ -86,25 +86,25 @@ verbose_eq!(RangeSearchBaseline {
 fn assert_no_duplicates(results: &[Neighbor<u32>]) {
     let mut seen = std::collections::HashSet::new();
     for n in results {
-        assert!(seen.insert(n.id), "duplicate result id {}", n.id);
+        assert!(seen.insert(*n.id()), "duplicate result id {}", n.id());
     }
 }
 
 fn assert_range_invariants(results: &[Neighbor<u32>], radius: f32, inner_radius: Option<f32>) {
     for n in results {
         assert!(
-            n.distance <= radius,
+            *n.distance() <= radius,
             "result {} distance {} exceeds radius {}",
-            n.id,
-            n.distance,
+            n.id(),
+            n.distance(),
             radius
         );
         if let Some(inner) = inner_radius {
             assert!(
-                n.distance > inner,
+                *n.distance() > inner,
                 "result {} distance {} is within inner radius {}",
-                n.id,
-                n.distance,
+                n.id(),
+                n.distance(),
                 inner
             );
         }
@@ -142,7 +142,7 @@ fn basic_range_search() {
         radius,
         inner_radius: None,
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -189,7 +189,7 @@ fn inner_radius_filtering() {
         radius,
         inner_radius: Some(inner_radius),
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -234,7 +234,7 @@ fn two_round_search() {
         radius,
         inner_radius: None,
         starting_l,
-        results: results.iter().map(|n| (n.id, n.distance)).collect(),
+        results: results.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
         result_count: results.len(),
@@ -283,4 +283,121 @@ fn empty_results() {
         !stats.range_search_second_round,
         "empty results shouldn't trigger a second round"
     );
+}
+
+#[test]
+fn max_results_respected_means_no_second_round() {
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("max_results_respected_means_no_second_round");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 1.0e9; // every point will be in range with this radius
+    let starting_l = 4; // small set to trigger multiple rounds
+    let max_results = 4; // max_returned = starting_l, so second round should not be triggered
+
+    let range_search =
+        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| n.as_tuple()).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        results.len() <= max_results,
+        "result count {} exceeds max_results {}",
+        results.len(),
+        max_results
+    );
+
+    assert!(
+        !stats.range_search_second_round,
+        "If max_results is respected, a second round should not be triggered"
+    );
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn max_results_respected_and_second_round_triggered() {
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("max_results_respected_and_second_round_triggered");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 1.0e9; // every point will be in range with this radius
+    let starting_l = 4; // small set to trigger multiple rounds
+    let max_results = 5; // max_returned greater than starting_l, so second round should be triggered
+
+    let range_search =
+        Range::with_options(Some(max_results), starting_l, None, radius, None, 1.0, 1.0).unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| n.as_tuple()).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        results.len() <= max_results,
+        "result count {} exceeds max_results {}",
+        results.len(),
+        max_results
+    );
+
+    assert!(
+        stats.range_search_second_round,
+        "If max_results is respected, a second round should be triggered"
+    );
+
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
 }

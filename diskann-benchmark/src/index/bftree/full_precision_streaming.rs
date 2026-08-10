@@ -8,9 +8,13 @@ use diskann::{
     graph::{DiskANNIndex, InplaceDeleteMethod, SampleableForStart},
     utils::{VectorRepr, ONE},
 };
-use diskann_benchmark_core::{self as benchmark_core, recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::{
+    self as benchmark_core,
+    recall::{GroundTruthMode, Rows},
+    streaming::executors::bigann,
+};
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
     utils::datatype::AsDataType,
     Benchmark, Checkpoint,
@@ -20,10 +24,7 @@ use diskann_providers::{
     model::graph::provider::async_::common::FullPrecision,
     storage::{FileStorageProvider, SaveWith},
 };
-use diskann_utils::{
-    sampling::WithApproximateNorm,
-    views::{Matrix, MatrixView},
-};
+use diskann_utils::views::{Matrix, MatrixView};
 
 use crate::{
     index::{
@@ -106,6 +107,7 @@ where
             self.search.reps,
             &self.search.num_threads,
             &self.search.runs,
+            GroundTruthMode::Fixed,
         );
         let results = knn::run(&knn, groundtruth, steps)?;
         Ok(StreamStats::Search(results))
@@ -161,37 +163,31 @@ impl<T> StreamingFullPrecision<T> {
 
 impl<T> Benchmark for StreamingFullPrecision<T>
 where
-    T: VectorRepr + WithApproximateNorm + SampleableForStart + AsDataType + bytemuck::Pod,
+    T: VectorRepr + SampleableForStart + AsDataType + bytemuck::Pod,
 {
     type Input = BfTreeDynamicRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
-    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
-        let mut failure_score: Option<u32> = None;
+    fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
 
-        if let Err(s) = utils::match_data_type::<T>(input.data_type()) {
-            failure_score = Some(s.0);
-        }
+        utils::match_data_type::<T>(&mut score, input.data_type());
 
         if !matches!(input.search_phase(), SearchPhase::Topk(_)) {
-            *failure_score.get_or_insert(0) += 1;
+            score.fail(
+                1,
+                &format_args!(
+                    "Only \"topk\" is supported for search - got \"{}\"",
+                    input.search_phase().kind()
+                ),
+            )
         }
 
-        match failure_score {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
-        }
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(i) => write!(f, "{}", T::describe(i.build().data_type())),
-            None => write!(f, "{}", T::DATA_TYPE),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", T::DATA_TYPE)
     }
 
     fn run(
@@ -228,15 +224,17 @@ where
     }
 }
 
+type BfTreeStreamingPayload<T> = (
+    bigann::WithData<T, u32, Managed<T, StreamStats>>,
+    BfTreeFPIndex<T>,
+);
+
 fn bftree_streaming<T>(
     input: &BfTreeDynamicRun,
     max_points: usize,
-) -> anyhow::Result<(
-    bigann::WithData<T, u32, Managed<T, StreamStats>>,
-    BfTreeFPIndex<T>,
-)>
+) -> anyhow::Result<BfTreeStreamingPayload<T>>
 where
-    T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
+    T: bytemuck::Pod + VectorRepr + SampleableForStart,
 {
     let topk = match &input.search_phase() {
         SearchPhase::Topk(topk) => topk,

@@ -46,10 +46,14 @@ cfg_if::cfg_if! {
             Ok(())
         }
     } else {
-        crate::utils::stub_impl!("multi-vector", inputs::multi_vector::MultiVectorOp);
-
         pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-            imp::register("multi-vector-op", registry)
+            registry.register_partially_gated::<crate::inputs::multi_vector::MultiVectorOp>(
+                "multi-vector-op",
+                diskann_benchmark_runner::Features::new("multi-vector"),
+                "Multi-vector distance function benchmarks",
+            )?;
+
+            Ok(())
         }
     }
 }

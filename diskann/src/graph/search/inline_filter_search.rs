@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
@@ -18,7 +18,7 @@ use crate::{
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::DataProvider,
     utils::VectorId,
 };
@@ -31,12 +31,7 @@ pub enum AdaptiveLSearchError {
     SampleCountZero,
 }
 
-impl From<AdaptiveLSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: AdaptiveLSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
+convert_error!(AdaptiveLSearchError);
 
 /// Adaptive L for inline filtered search.
 #[derive(Debug, Clone)]
@@ -223,7 +218,7 @@ where
                 break;
             };
             search_record.record(closest_node, scratch.hops, scratch.cmps);
-            scratch.beam_nodes.push(closest_node.id);
+            scratch.beam_nodes.push(*closest_node.id());
         }
 
         // Exit if no nodes to process
@@ -276,11 +271,7 @@ where
         }
     }
 
-    matched_results.sort_unstable_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    matched_results.sort_unstable_by(neighbor::ord::fast_distance);
 
     Ok(Ret {
         cmps: scratch.cmps,
