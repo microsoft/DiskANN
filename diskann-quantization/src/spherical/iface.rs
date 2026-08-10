@@ -1414,7 +1414,7 @@ cfg_if::cfg_if! {
         dispatch_map!(4, AsFull, V4, downcast_to_v3);
         dispatch_map!(8, AsFull, V4, downcast_to_v3);
 
-        dispatch_map!(1, AsData<1>, V4, downcast_to_v3);
+        dispatch_map!(1, AsData<1>, V4); // specialized
         dispatch_map!(2, AsData<2>, V4); // specialized
         dispatch_map!(4, AsData<4>, V4); // specialized
         dispatch_map!(8, AsData<8>, V4, downcast_to_v3);
