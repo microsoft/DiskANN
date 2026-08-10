@@ -347,14 +347,6 @@ where
     }
 }
 
-fn select_find_hash() -> FindHash {
-    arch::dispatch(SelectFindHash)
-}
-
-fn select_relative_hash() -> RelativeHash {
-    arch::dispatch(SelectRelativeHash)
-}
-
 impl<A> FTarget1<A, Option<usize>, FindHashArgs> for FindHashKernel
 where
     A: Architecture,
@@ -737,8 +729,8 @@ impl HashPrune {
             row_stride,
             sketches,
             l_max,
-            find_hash: select_find_hash(),
-            relative_hash: select_relative_hash(),
+            find_hash: arch::dispatch(SelectFindHash),
+            relative_hash: arch::dispatch(SelectRelativeHash),
         })
     }
 
@@ -1063,7 +1055,7 @@ mod tests {
                     neighbor,
                     distance,
                     self.l_max,
-                    select_find_hash(),
+                    arch::dispatch(SelectFindHash),
                 )
             }
         }
@@ -1212,7 +1204,7 @@ mod tests {
 
     #[test]
     fn relative_hash_matches_numeric_reference() {
-        let dispatched = select_relative_hash();
+        let dispatched = arch::dispatch(SelectRelativeHash);
 
         let src = [
             1.0, -2.0, 0.0, 7.5, -0.0, 3.25, -9.0, 4.0, 8.0, -1.5, 2.0, 0.0, 6.0, -3.0, 5.5, -7.25,
@@ -1248,7 +1240,7 @@ mod tests {
         ];
 
         assert_eq!(
-            select_relative_hash().call(RelativeHashArgs {
+            arch::dispatch(SelectRelativeHash).call(RelativeHashArgs {
                 src: src.as_ptr(),
                 dst: dst.as_ptr(),
                 len: dst.len(),
@@ -1259,7 +1251,7 @@ mod tests {
 
     #[test]
     fn find_hash_handles_padded_boundaries_and_all_bit_patterns() {
-        let dispatched = select_find_hash();
+        let dispatched = arch::dispatch(SelectFindHash);
 
         for target in [0, 0xF00D] {
             for len in [0usize, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 254, 255] {
