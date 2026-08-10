@@ -325,7 +325,6 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 }
                 medoid_writer.close();
             }
-
             if (_use_universal_label)
             {
                 std::ofstream universal_label_writer(std::string(filename) + "_universal_label.txt");
@@ -333,22 +332,96 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 universal_label_writer << _universal_label << std::endl;
                 universal_label_writer.close();
             }
-
             if (_location_to_labels.size() > 0)
             {
-                std::ofstream label_writer(std::string(filename) + "_labels.txt");
+                // Original code: `label_writer << x << ',' ... << std::endl;`
+                // for 88M lines, which triggers a flush per line (~1700s on
+                // 88M rows). Replace with a manual buffered writer that
+                // formats into a big char buffer and flushes in 32MB chunks.
+                //
+                // Use binary mode because the batch emits CRLF explicitly on
+                // Windows, preserving the original on-disk byte layout.
+                std::ofstream label_writer(std::string(filename) + "_labels.txt", std::ios::binary);
                 assert(label_writer.is_open());
+
+                constexpr size_t kStdioBufSize = 16 * 1024 * 1024; // 16 MB
+                std::vector<char> stdio_buf(kStdioBufSize);
+                label_writer.rdbuf()->pubsetbuf(stdio_buf.data(), stdio_buf.size());
+
+                // Per-label max digits: LabelT is typically uint32_t/uint16_t.
+                // 20 digits covers uint64. +1 for comma or newline. +1 for
+                // Windows CR (\r before \n).
+                constexpr size_t kMaxLabelBytes = 22;
+                constexpr size_t kBatchSize = 32 * 1024 * 1024; // 32 MB
+                std::vector<char> batch;
+                batch.reserve(kBatchSize + kMaxLabelBytes * 128);
+
+                auto flush_batch = [&]() {
+                    if (!batch.empty())
+                    {
+                        label_writer.write(batch.data(), batch.size());
+                        batch.clear();
+                    }
+                };
+
+                // Convert a LabelT to decimal into a stack buffer. Returns
+                // the number of chars written. Handles unsigned only, which
+                // is fine because LabelT is always unsigned in this codebase.
+                auto write_label = [](char *dst, uint64_t v) -> size_t {
+                    if (v == 0)
+                    {
+                        dst[0] = '0';
+                        return 1;
+                    }
+                    char tmp[24];
+                    size_t n = 0;
+                    while (v > 0)
+                    {
+                        tmp[n++] = static_cast<char>('0' + (v % 10));
+                        v /= 10;
+                    }
+                    for (size_t k = 0; k < n; ++k)
+                    {
+                        dst[k] = tmp[n - 1 - k];
+                    }
+                    return n;
+                };
+
                 for (uint32_t i = 0; i < _nd; i++)
                 {
-                    for (uint32_t j = 0; j + 1 < _location_to_labels[i].size(); j++)
-                    {
-                        label_writer << _location_to_labels[i][j] << ",";
-                    }
-                    if (_location_to_labels[i].size() != 0)
-                        label_writer << _location_to_labels[i][_location_to_labels[i].size() - 1];
+                    const auto &labels = _location_to_labels[i];
+                    const size_t line_max_bytes = labels.size() * kMaxLabelBytes + 1;
+                    size_t old_size = batch.size();
+                    batch.resize(old_size + line_max_bytes);
+                    char *cursor = batch.data() + old_size;
+                    const char *cursor_start = cursor;
 
-                    label_writer << std::endl;
+                    for (size_t j = 0; j + 1 < labels.size(); j++)
+                    {
+                        cursor += write_label(cursor, static_cast<uint64_t>(labels[j]));
+                        *cursor++ = ',';
+                    }
+                    if (!labels.empty())
+                    {
+                        cursor += write_label(cursor, static_cast<uint64_t>(labels.back()));
+                    }
+                    // Preserve the exact byte layout of the original text-mode
+                    // ofstream: on Windows every '\n' becomes "\r\n". We
+                    // bypass stdio here so we emit CRLF explicitly.
+#ifdef _WIN32
+                    *cursor++ = '\r';
+#endif
+                    *cursor++ = '\n';
+
+                    // Shrink batch to actually-used size.
+                    batch.resize(old_size + (cursor - cursor_start));
+
+                    if (batch.size() >= kBatchSize)
+                    {
+                        flush_batch();
+                    }
                 }
+                flush_batch();
                 label_writer.close();
 
                 // write compacted raw_labels if data hence _location_to_labels was also compacted
@@ -380,7 +453,6 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                     raw_label_writer.close();
                 }
             }
-
             if (_bitmask_buf._buf.size() > 0)
             {
                 std::string bitmask_label_file = std::string(filename) + "_bitmask_labels.bin";
@@ -395,7 +467,6 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                     throw diskann::ANNException(std::string("Failed to save bitmask labels to ") + bitmask_label_file, -1);
                 }
             }
-
             if (_use_integer_labels)
             {
                 std::string integer_label_file = std::string(filename) + "_integer_labels.bin";
@@ -1255,28 +1326,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             _locks[n].unlock_shared();
         }
 
-        // Sliding-window prefetch (lookahead=8) + compute + immediate insert.
-        // Pre-prefetch the first batch, then maintain the window during the loop.
-        constexpr size_t PREFETCH_LOOKAHEAD = 8;
-        cmps += (uint32_t)id_scratch.size();
-        const size_t id_count = id_scratch.size();
-        const size_t prefetch_init = std::min(PREFETCH_LOOKAHEAD, id_count);
-        for (size_t p = 0; p < prefetch_init; ++p)
+        // Evaluate newly discovered neighbours as one PQ batch. The old path
+        // called aggregate_coords and pq_dist_lookup once per neighbour. A
+        // batch reuses each PQ chunk's distance table across the neighbour
+        // list and removes the per-neighbour virtual-call/memset overhead.
+        // dist_scratch is per-thread and retains its capacity between hops.
+        cmps += static_cast<uint32_t>(id_scratch.size());
+        if (!id_scratch.empty())
         {
-            _pq_data_store->prefetch_vector(id_scratch[p]);
-        }
-        for (size_t m = 0; m < id_count; ++m)
-        {
-            if (m + PREFETCH_LOOKAHEAD < id_count)
+            std::vector<float> &distances = scratch->dist_scratch();
+            distances.resize(id_scratch.size());
+
+            _pq_data_store->get_distance(aligned_query, id_scratch.data(),
+                                         static_cast<uint32_t>(id_scratch.size()), distances.data(), scratch);
+
+            // Preserve the original insertion order so tie handling and graph
+            // construction semantics remain unchanged.
+            for (size_t m = 0; m < id_scratch.size(); ++m)
             {
-                _pq_data_store->prefetch_vector(id_scratch[m + PREFETCH_LOOKAHEAD]);
+                best_L_nodes->insert(Neighbor(id_scratch[m], distances[m]));
+                if (debug_info != nullptr)
+                    debug_info->record_visited(id_scratch[m], distances[m]);
             }
-            float distances[] = {std::numeric_limits<float>::max()};
-            uint32_t ids[] = {id_scratch[m]};
-            _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-            best_L_nodes->insert(Neighbor(id_scratch[m], distances[0]));
-            if (debug_info != nullptr)
-                debug_info->record_visited(id_scratch[m], distances[0]);
         }
     }
     return std::make_pair(hops, cmps);
@@ -1608,7 +1679,6 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
         for (auto &ngh : pool)
             ngh.distance = _data_store->get_distance(ngh.id, location);
     }
-
     // sort the pool based on distance to query and prune it with occlude_list
     std::sort(pool.begin(), pool.end());
     pruned_list.clear();
@@ -1739,9 +1809,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         auto node = visit_order[node_ctr];
 
-        // Find and add appropriate graph edges
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
+
         std::vector<uint32_t> pruned_list;
         if (_filtered_index)
         {
