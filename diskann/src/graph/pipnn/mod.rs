@@ -65,10 +65,11 @@ pub struct PiPNNConfig {
     pub c_min: usize,
     /// Fraction of a cluster sampled as child-partition centers.
     pub p_samp: f64,
-    /// Number of nearest partition centers assigned to each point at each level.
+    /// Number of nearest centers assigned at each recursive partition level.
+    /// Levels after this schedule assign each point to one center.
     pub fanout: Vec<usize>,
     /// Number of nearest neighbors selected within each leaf (`1..=3`).
-    pub k: usize,
+    pub leaf_k: usize,
     /// Number of independent partition passes over the dataset.
     pub replicas: usize,
 }
@@ -88,9 +89,9 @@ impl PiPNNConfig {
                 self.c_min, self.c_max
             )));
         }
-        if !self.p_samp.is_finite() || !(0.0..=1.0).contains(&self.p_samp) || self.p_samp == 0.0 {
+        if !(0.0 < self.p_samp && self.p_samp <= 1.0) {
             return Err(config_error(format!(
-                "p_samp ({}) must be finite and in (0, 1]",
+                "p_samp ({}) must be in (0, 1]",
                 self.p_samp
             )));
         }
@@ -100,10 +101,10 @@ impl PiPNNConfig {
         if self.fanout.contains(&0) {
             return Err(config_error("fanout values must be greater than zero"));
         }
-        if !(1..=leaf_kernel::MAX_LEAF_NEIGHBORS).contains(&self.k) {
+        if !(1..=leaf_kernel::MAX_LEAF_NEIGHBORS).contains(&self.leaf_k) {
             return Err(config_error(format!(
-                "k ({}) must be in [1, {}]",
-                self.k,
+                "leaf_k ({}) must be in [1, {}]",
+                self.leaf_k,
                 leaf_kernel::MAX_LEAF_NEIGHBORS
             )));
         }
@@ -259,7 +260,7 @@ where
     // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
     // so its complete allocation drops when leaf construction returns.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.k)
+        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.leaf_k)
             .map_err(ANNError::new)
     })?;
     // Finalization consumes each candidate list. It reuses that list's allocation
@@ -330,7 +331,7 @@ mod build_graph_tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![2],
-            k: 1,
+            leaf_k: 1,
             replicas: 1,
         }
     }
@@ -407,7 +408,7 @@ mod build_graph_tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![2],
-            k: leaf_kernel::MAX_LEAF_NEIGHBORS,
+            leaf_k: leaf_kernel::MAX_LEAF_NEIGHBORS,
             replicas: 1,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
@@ -473,7 +474,7 @@ mod build_graph_tests {
                     c_min: 1,
                     p_samp: 0.5,
                     fanout: vec![2],
-                    k: 1,
+                    leaf_k: 1,
                     replicas: 1,
                 };
                 let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
@@ -499,7 +500,7 @@ mod build_graph_tests {
             c_min: 4,
             p_samp: 0.25,
             fanout: vec![3, 2],
-            k: 3,
+            leaf_k: 3,
             replicas: 2,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
@@ -531,7 +532,7 @@ mod build_graph_tests {
                 c_min,
                 p_samp: 0.5,
                 fanout: vec![2],
-                k: rng.random_range(1..=3),
+                leaf_k: rng.random_range(1..=3),
                 replicas: rng.random_range(1..=2),
             };
             let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
@@ -559,7 +560,7 @@ mod config_tests {
             c_min: 64,
             p_samp: 0.01,
             fanout: vec![10, 3],
-            k: 2,
+            leaf_k: 2,
             replicas: 1,
         }
     }
@@ -621,11 +622,11 @@ mod config_tests {
                 ..pipnn_config()
             },
             PiPNNConfig {
-                k: 0,
+                leaf_k: 0,
                 ..pipnn_config()
             },
             PiPNNConfig {
-                k: leaf_kernel::MAX_LEAF_NEIGHBORS + 1,
+                leaf_k: leaf_kernel::MAX_LEAF_NEIGHBORS + 1,
                 ..pipnn_config()
             },
             PiPNNConfig {
