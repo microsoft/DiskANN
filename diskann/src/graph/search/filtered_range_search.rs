@@ -43,6 +43,8 @@ impl FilteredRange {
     /// Create a builder for filtered range search parameters.
     ///
     /// The builder starts with the same defaults as [`Self::new`].
+    ///
+    /// Use [`RangeBuilder::build_filtered`].
     pub fn builder(starting_l: usize, radius: f32) -> RangeBuilder {
         Range::builder(starting_l, radius)
     }
