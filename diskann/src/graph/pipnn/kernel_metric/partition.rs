@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Metric formulas for partition-leader ranking.
+//! This module defines metric formulas for partition-leader ranking.
 
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
@@ -11,27 +11,27 @@ use super::{
     Cosine, CosineNormalized, InnerProduct, L2, MetricTag, cosine_distance, cosine_distance_scalar,
 };
 
-/// Metric contract for partition-leader ranking.
+/// This trait defines metric operations for partition-leader ranking.
 ///
 /// Each function returns an ascending score. L2 receives a squared leader norm.
 /// Cosine receives point and leader norms. Dot-only metrics receive zero norms.
 pub(in super::super) trait PartitionKernelMetric: MetricTag {
-    /// True when the metric reads a point norm.
+    /// This value is true when the metric reads a point norm.
     const USES_POINT_NORM: bool;
 
-    /// True when the metric reads leader norm values.
+    /// This value is true when the metric reads leader norm values.
     const USES_LEADER_NORMS: bool;
 
-    /// Convert one squared point norm to the unit for this metric.
+    /// This function converts one squared point norm to the required unit.
     fn prepare_point_norm(squared_norm: f32) -> f32;
 
-    /// Compute SIMD ranking scores for one point and multiple leaders.
+    /// This function computes SIMD ranking scores for one point and multiple leaders.
     fn partition_ranking<F>(arch: F::Arch, dot: F, point_norm: F, leader_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
-    /// Compute one scalar-tail partition ranking score.
+    /// This function computes one scalar-tail partition ranking score.
     fn partition_ranking_scalar(dot: f32, point_norm: f32, leader_norm: f32) -> f32;
 }
 
