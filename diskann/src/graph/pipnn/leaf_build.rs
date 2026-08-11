@@ -26,7 +26,7 @@ use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafMetric,
+    kernel_metric::{LeafMetric, NormPreparation},
     leaf_kernel::{
         LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, nearest_neighbors,
     },
@@ -347,8 +347,11 @@ where
         leaf,
         buffer: "leaf dot-product matrix",
     })?;
-    M::prepare_norms(dots, &mut buffers.norms)
-        .map_err(|source| allocation_error("leaf norms", point_ids.len(), source))?;
+    M::prepare_norms(NormPreparation {
+        values: dots,
+        norms: &mut buffers.norms,
+    })
+    .map_err(|source| allocation_error("leaf norms", point_ids.len(), source))?;
     let norms = &*buffers.norms;
     let output = MutMatrixView::try_from(
         &mut buffers.neighbors[..neighbor_value_count],
