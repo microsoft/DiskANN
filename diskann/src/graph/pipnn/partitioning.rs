@@ -30,8 +30,8 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::PartitionMetric,
-    partition_kernel::{PartitionInput, PartitionKernelWorkspace, PartitionNorms, nearest_leaders},
+    kernel_metric::{NormPreparation, PartitionMetric, PartitionNorms},
+    partition_kernel::{PartitionInput, nearest_leaders},
 };
 
 // These constants control internal batching and deterministic seed generation.
@@ -89,7 +89,7 @@ struct StripeBuffers {
     point_values: Vec<f32>,
     dot_values: Vec<f32>,
     point_norms: Vec<f32>,
-    kernel_workspace: PartitionKernelWorkspace,
+    ranked_leaders: Vec<(u32, f32)>,
 }
 
 impl AsPooled<()> for StripeBuffers {
@@ -365,7 +365,11 @@ where
             },
         )?;
     let mut leader_norm_values = Vec::new();
-    M::prepare_leader_norms(leader_matrix, &mut leader_norm_values).map_err(ANNError::new)?;
+    M::prepare_leader_norms(NormPreparation {
+        values: leader_matrix,
+        norms: &mut leader_norm_values,
+    })
+    .map_err(ANNError::new)?;
 
     let fanout = fanout.min(leader_ids.len());
     let assignment_len = checked_area("partition assignments", point_ids.len(), fanout)?;
@@ -447,7 +451,7 @@ where
         point_values: point_buffer,
         dot_values: dot_buffer,
         point_norms: point_norm_buffer,
-        kernel_workspace,
+        ranked_leaders,
     } = buffers;
     let mut point_matrix = MutMatrixView::try_from(
         &mut point_buffer[..point_values_len],
@@ -477,7 +481,11 @@ where
     )
     .map_err(ANNError::new)?;
 
-    M::prepare_point_norms(point_matrix.as_view(), point_norm_buffer).map_err(ANNError::new)?;
+    M::prepare_point_norms(NormPreparation {
+        values: point_matrix.as_view(),
+        norms: point_norm_buffer,
+    })
+    .map_err(ANNError::new)?;
     let point_norms = &*point_norm_buffer;
     let norms = PartitionNorms {
         point_norms,
@@ -497,13 +505,8 @@ where
             actual: error.into_inner().len(),
         })
     })?;
-    nearest_leaders::<A, M>(
-        arch,
-        PartitionInput { dots, norms },
-        output,
-        kernel_workspace,
-    )
-    .map_err(ANNError::new)
+    nearest_leaders::<A, M>(arch, PartitionInput { dots, norms }, output, ranked_leaders)
+        .map_err(ANNError::new)
 }
 
 fn gather_vectors<T>(data: MatrixView<'_, T>, indices: &[u32], output: &mut [f32]) -> ANNResult<()>
@@ -1063,7 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn l2_leader_norms_preserve_scalar_reduction_order() {
+    fn l2_leader_norms_preserve_sequential_reduction_order() {
         fn next(state: &mut u64) -> f32 {
             *state ^= *state << 13;
             *state ^= *state >> 7;
@@ -1071,7 +1074,7 @@ mod tests {
             (((*state >> 40) as f32 / 8_388_608.0) - 1.0) * 1_000.0
         }
 
-        // Scalar and SIMD-reassociated leader norms select different top-1
+        // Sequential and SIMD-reassociated leader norms select different top-1
         // leaders for this case. Dot products still use the production GEMM. The
         // test changes only the leader-norm reduction.
         let dimensions = 129;
