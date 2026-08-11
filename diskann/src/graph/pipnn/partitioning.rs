@@ -24,14 +24,13 @@ use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
 };
-use diskann_vector::{Norm, distance::Metric, norm::FastL2NormSquared};
 use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rand::{SeedableRng, prelude::IndexedRandom};
 use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::{PartitionKernelMetric, norm_from_squared},
+    kernel_metric::PartitionMetric,
     partition_kernel::{PartitionInput, PartitionKernelWorkspace, PartitionNorms, nearest_leaders},
 };
 
@@ -119,7 +118,6 @@ type StripeBufferPool = ObjectPool<StripeBuffers>;
 pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    metric: Metric,
     config: &PiPNNConfig,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
@@ -127,7 +125,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
     let points = data.nrows();
@@ -146,7 +144,7 @@ where
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves =
-            partition_replica::<A, M, T>(arch, data, metric, config, seed, &stripe_buffers)?;
+            partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
         leaves
             .try_reserve(replica_leaves.len())
             .map_err(ANNError::new)?;
@@ -162,7 +160,6 @@ where
 fn partition_replica<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    metric: Metric,
     config: &PiPNNConfig,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
@@ -172,7 +169,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
     let initial_indices = point_ids(data.nrows())?;
@@ -212,7 +209,6 @@ where
                 *slot = Some(partition_work_item::<A, M, T>(
                     arch,
                     data,
-                    metric,
                     config,
                     item,
                     stripe_buffers,
@@ -254,7 +250,6 @@ where
 fn partition_work_item<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    metric: Metric,
     config: &PiPNNConfig,
     item: WorkItem,
     stripe_buffers: &StripeBufferPool,
@@ -264,7 +259,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
     let points = item.indices.len();
@@ -274,15 +269,8 @@ where
         config.p_samp,
         mix_seed(item.seed, points as u64),
     )?;
-    let clusters = assign_to_leaders::<A, M, T>(
-        arch,
-        data,
-        metric,
-        &item.indices,
-        &leaders,
-        fanout,
-        stripe_buffers,
-    )?;
+    let clusters =
+        assign_to_leaders::<A, M, T>(arch, data, &item.indices, &leaders, fanout, stripe_buffers)?;
 
     let mut pending = Vec::new();
     let mut finished = Vec::new();
@@ -348,7 +336,6 @@ fn mix_seed(seed: u64, salt: u64) -> u64 {
 fn assign_to_leaders<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    metric: Metric,
     point_ids: &[u32],
     leader_ids: &[u32],
     fanout: usize,
@@ -359,7 +346,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
     let dimension_count = data.ncols();
@@ -367,22 +354,18 @@ where
     let mut leader_values = filled_vec(leader_values_len, 0.0f32)?;
     gather_vectors(data, leader_ids, &mut leader_values)?;
 
-    let mut leader_norm_values = if matches!(metric, Metric::L2 | Metric::Cosine) {
-        filled_vec(leader_ids.len(), 0.0f32)?
-    } else {
-        Vec::new()
-    };
-    for (norm_value, leader_vector) in leader_norm_values
-        .iter_mut()
-        .zip(leader_values.chunks_exact(dimension_count))
-    {
-        // Leader norms affect top-k order. Use this scalar reduction order.
-        // SIMD reassociation changes low bits and can change a near-tie branch.
-        *norm_value = leader_vector.iter().map(|value| value * value).sum();
-        if metric == Metric::Cosine {
-            *norm_value = norm_from_squared(*norm_value);
-        }
-    }
+    let leader_matrix =
+        MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count).map_err(
+            |error| {
+                ANNError::new(PartitionError::InvalidBufferLength {
+                    buffer: "leader data",
+                    expected: leader_values_len,
+                    actual: error.into_inner().len(),
+                })
+            },
+        )?;
+    let mut leader_norm_values = Vec::new();
+    M::prepare_leader_norms(leader_matrix, &mut leader_norm_values).map_err(ANNError::new)?;
 
     let fanout = fanout.min(leader_ids.len());
     let assignment_len = checked_area("partition assignments", point_ids.len(), fanout)?;
@@ -412,7 +395,6 @@ where
                 assign_point_stripe::<A, M, T>(
                     arch,
                     data,
-                    metric,
                     &point_ids[first_point..first_point + stripe_point_count],
                     &leader_values,
                     &leader_norm_values,
@@ -436,7 +418,6 @@ where
 fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
-    metric: Metric,
     point_ids: &[u32],
     leader_values: &[f32],
     leader_norm_values: &[f32],
@@ -449,7 +430,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
     T: VectorRepr,
 {
     let point_count = point_ids.len();
@@ -496,19 +477,8 @@ where
     )
     .map_err(ANNError::new)?;
 
-    let point_norms = if metric == Metric::Cosine {
-        grow_fallible(point_norm_buffer, point_count, 0.0)?;
-        let point_norms = &mut point_norm_buffer[..point_count];
-        for (norm_value, point_values) in point_norms
-            .iter_mut()
-            .zip(point_matrix.as_slice().chunks_exact(dimensions))
-        {
-            *norm_value = norm_from_squared(FastL2NormSquared.evaluate(point_values));
-        }
-        &*point_norms
-    } else {
-        &[]
-    };
+    M::prepare_point_norms(point_matrix.as_view(), point_norm_buffer).map_err(ANNError::new)?;
+    let point_norms = &*point_norm_buffer;
     let norms = PartitionNorms {
         point_norms,
         leader_norms: leader_norm_values,
@@ -529,7 +499,6 @@ where
     })?;
     nearest_leaders::<A, M>(
         arch,
-        metric,
         PartitionInput { dots, norms },
         output,
         kernel_workspace,
@@ -832,22 +801,14 @@ mod tests {
             use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
-                Metric::L2 => partition::<A, L2, T>(arch, call.data, Metric::L2, call.config),
-                Metric::Cosine => {
-                    partition::<A, Cosine, T>(arch, call.data, Metric::Cosine, call.config)
+                Metric::L2 => partition::<A, L2, T>(arch, call.data, call.config),
+                Metric::Cosine => partition::<A, Cosine, T>(arch, call.data, call.config),
+                Metric::CosineNormalized => {
+                    partition::<A, CosineNormalized, T>(arch, call.data, call.config)
                 }
-                Metric::CosineNormalized => partition::<A, CosineNormalized, T>(
-                    arch,
-                    call.data,
-                    Metric::CosineNormalized,
-                    call.config,
-                ),
-                Metric::InnerProduct => partition::<A, InnerProduct, T>(
-                    arch,
-                    call.data,
-                    Metric::InnerProduct,
-                    call.config,
-                ),
+                Metric::InnerProduct => {
+                    partition::<A, InnerProduct, T>(arch, call.data, call.config)
+                }
             }
         }
     }
@@ -1128,7 +1089,6 @@ mod tests {
         let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
             diskann_wide::ARCH,
             data,
-            Metric::L2,
             &[2],
             &[0, 1],
             1,
@@ -1202,7 +1162,6 @@ mod tests {
         let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
             diskann_wide::ARCH,
             data,
-            Metric::L2,
             &point_ids,
             &[0, 2_047],
             1,
