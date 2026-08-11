@@ -771,7 +771,7 @@ mod tests {
             let mut got = vec![0.0f32; nq];
             query.compute_max_sim(&docs, &mut got);
 
-            // ── Path B: scalar MinMax MaxSim reference (identical quantization). ──
+            // ── Path B: MinMax MaxSim reference (identical quantization). ──
             let q = quantizer(dim);
             let q_mat = quantize(&q, &q_data, nq, dim);
             let d_mat = quantize(&q, &d_data, nd, dim);
@@ -902,7 +902,7 @@ mod tests {
     /// `nd > 4` this forces **multiple A-tiles and multiple B-tiles**, exercising
     /// the cross-tile `a_row_offset`/`b_row_offset` carry that the default-budget
     /// reference test (one giant A-tile) never reaches — yet still matching the
-    /// scalar reference.
+    /// `MinMaxKernel` reference.
     #[test]
     fn staged_i8_multi_tile_tiny_budget() {
         let Some(arch) = V3::new_checked() else {

@@ -7,6 +7,7 @@
 //! reaches memory.
 
 use core::mem::size_of;
+use core::ops::Range;
 use std::num::NonZeroUsize;
 
 use diskann_utils::ReborrowMut;
@@ -15,7 +16,7 @@ use diskann_wide::arch::x86_64::V3;
 use super::arena::ResettableArena;
 use super::leaves::{A_PANEL, B_PANEL};
 use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
-use super::{Accumulate, Block, Drain, Plan, Strip, StripScratch, TileBudget, drive, leaves};
+use super::{Accumulate, Block, Drain, Plan, Strip, TileBudget, drive, leaves};
 use crate::CompressInto;
 use crate::algorithms::Transform;
 use crate::algorithms::transforms::NullTransform;
@@ -106,11 +107,26 @@ impl<'m, 'o> MinMaxMax<'m, 'o> {
 
 impl Drain<V3, Strip<'_, i32, A_PANEL, B_PANEL>> for MinMaxMax<'_, '_> {
     #[inline(always)]
-    fn drain(&mut self, arch: V3, tile: &Strip<'_, i32, A_PANEL, B_PANEL>) {
-        let q = tile.a_rows(self.query_meta);
-        let d = tile.b_rows(self.doc_meta);
-        let out = tile.a_rows_mut(self.out);
-        leaves::score_fold_strip(arch, tile, out, q, d, self.dim);
+    fn drain(
+        &mut self,
+        arch: V3,
+        scratch: &Strip<'_, i32, A_PANEL, B_PANEL>,
+        a_panel: usize,
+        b_panels: Range<usize>,
+    ) {
+        // A's metadata is padded to whole panels, so its cut never clamps; the doc
+        // metadata is one entry per real vector, so it states the live width.
+        let a0 = a_panel * A_PANEL;
+        let d = &self.doc_meta
+            [b_panels.start * B_PANEL..(b_panels.end * B_PANEL).min(self.doc_meta.len())];
+        leaves::score_fold_strip(
+            arch,
+            scratch.columns(d.len()),
+            &mut self.out[a0..][..A_PANEL],
+            &self.query_meta[a0..][..A_PANEL],
+            d,
+            self.dim,
+        );
     }
 }
 
@@ -229,13 +245,7 @@ impl PaneledQuantQuery {
                 .expect("strip fits the arena");
         // One plan, three consumers: the two walks cut the sources, and the scratch
         // tracks the order they will be visited in.
-        let mut scratch = StripScratch::<i32, A_PANEL, B_PANEL>::from_uninit(
-            &mut buf,
-            strip_len,
-            plan,
-            padded,
-            docs.codes.num_vectors(),
-        );
+        let mut scratch = Strip::<i32, A_PANEL, B_PANEL>::from_uninit(&mut buf, strip_len);
         drive(
             self.arch,
             QueryWalk::new(self.query.as_view(), plan.a_panels),

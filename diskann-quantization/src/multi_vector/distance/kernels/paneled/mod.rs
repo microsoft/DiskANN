@@ -7,17 +7,17 @@
 //! into output it owns. [`Scratch`] is the write-side mirror of [`Paneled`], so the
 //! driver assumes no layout on either side.
 //!
-//! Position has one owner. The views state extents only — how much they hold, never
-//! where it sits — and [`Scratch`] tracks the visit order itself, so each tile it lends
-//! already knows where it belongs. The address a result is written to and the memory it
-//! is written into are therefore decided by the same value, and a scratch that maps
-//! tiles somewhere else (a matmul writing into `C`) is a different implementation
-//! rather than a different driver.
+//! Position is ordinal: [`drive`] counts the panels it passes and hands a [`Drain`] an
+//! A-panel index and a B-panel range, never a stride or an address. Each consumer cuts
+//! for itself — `index * PANEL` starts it, and the end clamps against its own extent,
+//! so a side whose type proves it never tails ([`NoTail`]) need not clamp.
 //!
 //! Panel widths live with the leaves that impose them, reaching the panel and
 //! accumulator types as const parameters (`R` = A rows, `N` = B rows).
 //!
 //! Sibling to [`tiler`](super::tiler), which keeps postprocess and reduce separate.
+
+use core::ops::Range;
 
 use super::TileBudget;
 
@@ -28,7 +28,7 @@ mod minmax;
 mod strip;
 mod views;
 
-pub(crate) use strip::{Block, Strip, StripScratch};
+pub(crate) use strip::{Block, Strip};
 
 pub use float::{PaneledF32Docs, PaneledF32Query};
 pub use minmax::{PaneledQuantDocs, PaneledQuantQuery};
@@ -64,55 +64,20 @@ impl<const R: usize, const N: usize> Plan<R, N> {
 // ── Accumulator ──────────────────────────────────────────────────
 
 /// Per-lifetime half of [`Scratch`] — same implied-bound trick as [`TileAt`].
-pub(crate) trait ScratchAt<'a, B = &'a mut Self> {
-    type Tile: ScratchTile;
-}
-
-/// Lends output tiles in the driver's visit order, each stamped with where it belongs.
-///
-/// Exhaustive, not infallible: this is a cursor over the whole problem, so "ran out" is
-/// the terminal state rather than an error. The driver is steered by the walks, so it
-/// reaches the end first — a `None` there means the scratch was built for a different
-/// problem than the walks were, and [`drive`] treats it as such.
-pub(crate) trait Scratch: for<'a> ScratchAt<'a> {
-    fn next(&mut self) -> Option<<Self as ScratchAt<'_>>::Tile>;
-}
-
-/// Per-lifetime half of [`ScratchTile`].
-///
-/// `Block` is the tile's own type, so what a slot carries is the scratch's choice: a
-/// kernel that must know where it writes (a matmul landing in `C`) gets a `Block` that
-/// says so, while MaxSim's stays a bare pointer. The driver is unaffected either way —
-/// it only projects the type through.
 pub(crate) trait SlotsAt<'s, B = &'s mut Self> {
-    /// One B-panel's slot. Named here, rather than reached through [`Slots`], so the
-    /// driver's bounds project it off the tile.
+    /// One B-panel's slot. Named here, rather than reached through the iterator, so the
+    /// driver's bounds project it off the scratch.
     type Block;
-    type Slots: Slots<Block = Self::Block>;
+    /// Plain rather than lending: slots partition one buffer within a single call, so
+    /// none of them borrows the cursor — unlike [`TileWalk`], which reuses one buffer
+    /// *across* calls.
+    type Slots: Iterator<Item = Self::Block>;
 }
 
-/// One tile of output: the memory a fill writes into.
-///
-/// Where that memory belongs is deliberately *not* here. Position is the concrete
-/// scratch's own vocabulary, and a scratch is always instantiated alongside the
-/// [`Drain`] that reads it, so each pair agrees on its own terms.
-pub(crate) trait ScratchTile: for<'s> SlotsAt<'s> {
+/// The write-side mirror of [`Paneled`]: memory a fill carves into one slot per
+/// B-panel, each disjoint from the last.
+pub(crate) trait Scratch: for<'s> SlotsAt<'s> {
     fn slots(&mut self) -> <Self as SlotsAt<'_>>::Slots;
-}
-
-/// Hands out one accumulator slot per B-panel, each disjoint from the last.
-///
-/// Exhaustive for the same reason as [`Scratch`]: the tile derives its own width, so a
-/// tile narrower than the B-panels the walk yields is now reachable rather than
-/// impossible, and silently aliasing a slot would corrupt the answer.
-///
-/// Alone among the write-side traits this needs no lifetime parameter, because an
-/// implementor can move its buffer out of itself rather than reborrow — see
-/// `BlockSlots`. That keeps the slot's own lifetime and spares the driver a third
-/// binder; [`ScratchTile`] cannot do the same, since the tile must outlive `slots()`.
-pub(crate) trait Slots {
-    type Block;
-    fn next(&mut self) -> Option<Self::Block>;
 }
 
 // ── Data side ────────────────────────────────────────────────────
@@ -173,8 +138,7 @@ pub(crate) trait Accumulate<Arch, A, B, O> {
 }
 
 /// [`NoTail`] is uninhabited, so this discharges the driver's A-tail bounds for every
-/// kernel — and, by coherence, forbids any kernel from writing its own. Both follow
-/// from the same fact: an A-tail arm is unreachable.
+/// kernel — and, by coherence, forbids any kernel from writing its own.
 impl<Arch, B, O, K> Accumulate<Arch, NoTail, B, O> for K {
     #[inline(always)]
     fn accumulate(&self, _: Arch, a: NoTail, _: B, _: O) {
@@ -182,55 +146,47 @@ impl<Arch, B, O, K> Accumulate<Arch, NoTail, B, O> for K {
     }
 }
 
-/// Consume a finished tile. The drain owns its output, so dequant, reduction and
+/// Consume a finished accumulator. The drain owns its output, so dequant, reduction and
 /// scatter all live behind this one call and may be fused.
 ///
-/// Generic over the tile type, so a drain reads position in whatever terms its scratch
-/// states it — there is no common accessor to agree on.
-pub(crate) trait Drain<Arch, T> {
-    fn drain(&mut self, arch: Arch, tile: &T);
+/// `a_panel` and `b_panels` are ordinals in [`drive`]'s visit order, not addresses.
+pub(crate) trait Drain<Arch, S> {
+    fn drain(&mut self, arch: Arch, scratch: &S, a_panel: usize, b_panels: Range<usize>);
 }
 
 // ── Driver ───────────────────────────────────────────────────────
 
 type PanelOf<'a, W> = <<W as TileAt<'a>>::View as Paneled>::Panel;
 type TailOf<'a, W> = <<W as TileAt<'a>>::View as Paneled>::Tail;
-type TileOf<'a, S> = <S as ScratchAt<'a>>::Tile;
-type BlockOf<'s, T> = <T as SlotsAt<'s>>::Block;
-
-/// Cold, so the check costs no more than the branch the exhaustive contract already
-/// pays for, and the panic's formatting machinery stays out of the inlined body.
-#[cold]
-#[inline(never)]
-fn scratch_exhausted() -> ! {
-    unreachable!("scratch ran out before the walks did — it was built for a different problem")
-}
+type BlockOf<'s, S> = <S as SlotsAt<'s>>::Block;
 
 #[cold]
 #[inline(never)]
 fn slots_exhausted() -> ! {
-    unreachable!("tile ran out of slots — its B-tile is narrower than the walk's")
+    unreachable!("scratch ran out of slots — it is narrower than the walk's B-tile")
 }
 
-/// One A-panel against a whole B-tile. Factored out so the driver's A-panel and
-/// A-tail arms share the tail-dispatch.
+/// One A-panel against a whole B-tile. Returns the slots it filled, which is the
+/// B-tile's panel count — the driver's only measure of how far B advanced.
 #[inline(always)]
-fn fill<Arch, A, BV, T, K>(arch: Arch, kernel: &K, a: A, b_view: &BV, tile: &mut T)
+fn fill<Arch, A, BV, S, K>(arch: Arch, kernel: &K, a: A, b_view: &BV, scratch: &mut S) -> usize
 where
     Arch: Copy,
     A: Copy,
     BV: Paneled,
-    T: ScratchTile,
-    K: for<'s> Accumulate<Arch, A, BV::Panel, BlockOf<'s, T>>
-        + for<'s> Accumulate<Arch, A, BV::Tail, BlockOf<'s, T>>,
+    S: Scratch,
+    K: for<'s> Accumulate<Arch, A, BV::Panel, BlockOf<'s, S>>
+        + for<'s> Accumulate<Arch, A, BV::Tail, BlockOf<'s, S>>,
 {
     let mut panels = b_view.panels();
-    let mut slots = tile.slots();
+    let mut slots = scratch.slots();
+    let mut filled = 0;
     for b in panels.by_ref() {
         let Some(out) = slots.next() else {
             slots_exhausted()
         };
         kernel.accumulate(arch, a, b, out);
+        filled += 1;
     }
     // The tail draws from the same cursor as the full panels.
     if let Some(b) = panels.tail() {
@@ -238,22 +194,20 @@ where
             slots_exhausted()
         };
         kernel.accumulate(arch, a, b, out);
+        filled += 1;
     }
+    filled
 }
 
 /// Drive one A source against one B source. The walks carry the plan, `scratch` the
-/// accumulator and where its results belong, `drain` the output — so this does no
-/// stride arithmetic and knows nothing about position. B is re-walked once per A-tile.
+/// accumulator, `drain` the output — so this does no stride arithmetic and knows
+/// nothing about position beyond counting the panels it has passed. B is re-walked once
+/// per A-tile.
 ///
 /// `scratch` precedes `kernel` deliberately. The kernel's bounds project through all
 /// three sources, and arguments type-check left to right, so a `scratch` placed after
 /// it would still be an inference variable when those bounds are proved — forcing
 /// every call site to turbofish `S`.
-///
-/// # Panics
-///
-/// If `scratch` runs out while the walks still have work — its geometry disagrees with
-/// theirs, and finishing early would return a wrong answer rather than fail.
 pub(super) fn drive<Arch, AW, BW, K, S, D>(
     arch: Arch,
     mut a_walk: AW,
@@ -266,55 +220,40 @@ pub(super) fn drive<Arch, AW, BW, K, S, D>(
     AW: TileWalk,
     BW: TileWalk,
     S: Scratch,
-    K: for<'a, 'b, 'x, 's> Accumulate<
-            Arch,
-            PanelOf<'a, AW>,
-            PanelOf<'b, BW>,
-            BlockOf<'s, TileOf<'x, S>>,
-        > + for<'a, 'b, 'x, 's> Accumulate<
-            Arch,
-            PanelOf<'a, AW>,
-            TailOf<'b, BW>,
-            BlockOf<'s, TileOf<'x, S>>,
-        > + for<'a, 'b, 'x, 's> Accumulate<
-            Arch,
-            TailOf<'a, AW>,
-            PanelOf<'b, BW>,
-            BlockOf<'s, TileOf<'x, S>>,
-        > + for<'a, 'b, 'x, 's> Accumulate<
-            Arch,
-            TailOf<'a, AW>,
-            TailOf<'b, BW>,
-            BlockOf<'s, TileOf<'x, S>>,
-        >,
-    D: for<'x> Drain<Arch, TileOf<'x, S>>,
+    K: for<'a, 'b, 's> Accumulate<Arch, PanelOf<'a, AW>, PanelOf<'b, BW>, BlockOf<'s, S>>
+        + for<'a, 'b, 's> Accumulate<Arch, PanelOf<'a, AW>, TailOf<'b, BW>, BlockOf<'s, S>>
+        + for<'a, 'b, 's> Accumulate<Arch, TailOf<'a, AW>, PanelOf<'b, BW>, BlockOf<'s, S>>
+        + for<'a, 'b, 's> Accumulate<Arch, TailOf<'a, AW>, TailOf<'b, BW>, BlockOf<'s, S>>,
+    D: Drain<Arch, S>,
 {
+    let mut a_base = 0;
     while let Some(a_view) = a_walk.next() {
         b_walk.reset();
+        let mut b_base = 0;
+        // Every B-tile re-sweeps the same A-panels, so both are rewritten identically
+        // each pass and read after the last. An A-tile with no B-tiles advances
+        // neither, which is unobservable: no drain fires, and a B source empty for one
+        // A-tile is empty for all.
+        let mut a_end = a_base;
+        let mut b_used = 0;
         while let Some(b_view) = b_walk.next() {
+            let mut a_panel = a_base;
             let mut a_panels = a_view.panels();
             for panel in a_panels.by_ref() {
-                let Some(mut tile) = scratch.next() else {
-                    scratch_exhausted()
-                };
-                fill(arch, kernel, panel, &b_view, &mut tile);
-                drain.drain(arch, &tile);
+                b_used = fill(arch, kernel, panel, &b_view, scratch);
+                drain.drain(arch, scratch, a_panel, b_base..b_base + b_used);
+                a_panel += 1;
             }
             if let Some(panel) = a_panels.tail() {
-                let Some(mut tile) = scratch.next() else {
-                    scratch_exhausted()
-                };
-                fill(arch, kernel, panel, &b_view, &mut tile);
-                drain.drain(arch, &tile);
+                b_used = fill(arch, kernel, panel, &b_view, scratch);
+                drain.drain(arch, scratch, a_panel, b_base..b_base + b_used);
+                a_panel += 1;
             }
+            a_end = a_panel;
+            b_base += b_used;
         }
+        a_base = a_end;
     }
-    // The other half of the bracket: over-running panics above, under-running lands
-    // here. Not a wrong answer, so it need not cost anything in release.
-    debug_assert!(
-        scratch.next().is_none(),
-        "scratch outlived the walks — it was built for a different problem"
-    );
 }
 
 #[cfg(test)]
@@ -330,13 +269,15 @@ mod tests {
     /// so only what is genuinely runtime — the contraction length, and a tail's row
     /// count — is ever stored.
     ///
-    /// A guard, not a curiosity: each side lost this once to a refactor that swapped a
-    /// pointer for a slice, and neither showed up in a correctness test.
+    /// Each side lost this once already to a refactor that swapped a pointer for a
+    /// slice, and neither showed up in a test. The difference is too small for an A/B
+    /// of two builds to resolve, so diff the emitted asm rather than re-benchmarking.
     #[test]
     fn handles_stay_thin() {
         let word = size_of::<*const u8>();
 
-        // Both carry `k` rather than borrowing the other's — what makes the leaves safe.
+        // Both panels carry `k`: the price of each stating its own extent rather than
+        // borrowing the other's, which is what lets the leaves be safe.
         assert_eq!(size_of::<QPanel<'static, f32, A_PANEL>>(), 2 * word);
         assert_eq!(
             size_of::<DPanel<'static, f32, B_PANEL, Static<B_PANEL>>>(),
@@ -349,9 +290,9 @@ mod tests {
             3 * word
         );
 
-        // The slot's extent is in the type; the tile is the checked anchor it is carved
-        // from, so it keeps a length, plus the three scalars its cuts need.
+        // The slot's extent is in the type; the strip is the checked anchor it is
+        // carved from, so it keeps a length.
         assert_eq!(size_of::<Block<'static, f32, A_PANEL, B_PANEL>>(), word);
-        assert_eq!(size_of::<Strip<'static, f32, A_PANEL, B_PANEL>>(), 5 * word);
+        assert_eq!(size_of::<Strip<'static, f32, A_PANEL, B_PANEL>>(), 2 * word);
     }
 }

@@ -31,6 +31,9 @@ cfg_if::cfg_if! {
         // The f32 A/B op: paneled vs the production fused V3 kernel vs reference.
         #[cfg(target_arch = "x86_64")]
         mod paneled_f32;
+        // Paneled structure held fixed, element precision varied: f32 vs 4-bit MinMax.
+        #[cfg(target_arch = "x86_64")]
+        mod paneled_precision;
         // The f16 A/B op: coarse tiler vs the f16.rs preprocess path (V3-only).
         #[cfg(target_arch = "x86_64")]
         mod tiled_f16;
@@ -41,6 +44,8 @@ cfg_if::cfg_if! {
             quant::register(registry)?;
             #[cfg(target_arch = "x86_64")]
             paneled_f32::register(registry)?;
+            #[cfg(target_arch = "x86_64")]
+            paneled_precision::register(registry)?;
             #[cfg(target_arch = "x86_64")]
             tiled_f16::register(registry)?;
             Ok(())

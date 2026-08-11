@@ -3,28 +3,33 @@
  * Licensed under the MIT license.
  */
 
-//! A/B benchmark for **f32** multi-vector MaxSim across three paths at identical
-//! shapes over identical data:
+//! A/B benchmark holding the **paneled structure fixed and varying the element
+//! precision**, so the f32-vs-MinMax ratio is measured in one process:
 //!
-//! - **Paneled** — the paneled rebuild (views own their panel decomposition, one
-//!   `Drain` seam), driven through `PaneledF32Query`.
-//! - **Fused** — the production block-transposed V3 kernel via the public factory
-//!   (`MaxSimIsa::X86_64_V3`).
-//! - **Reference** — the `MaxSimIsa::Reference` baseline. Despite the name it is
-//!   *not* scalar: it is a naive double loop over `(q, d)` pairs whose per-pair
-//!   inner product is itself SIMD. What it lacks is fusion across queries,
-//!   register-resident accumulators across the dim loop, and tile-level cache
-//!   management.
+//! - **f32** — `PaneledF32Query` / `PaneledF32Docs`, exact f32 MaxSim.
+//! - **MinMax** — `PaneledQuantQuery` / `PaneledQuantDocs`, MaxSim over 4-bit
+//!   MinMax codes with the dequant fused into the `Drain`.
+//! - **Fused V3** — the production block-transposed f32 kernel, as a calibration
+//!   anchor: it appears in `multi-vector-paneled-f32.json` too, so its column
+//!   cross-checks this job's numbers against that one, and it answers whether
+//!   either paneled path beats production.
 //!
-//! The coarse tiler is deliberately absent: it has no f32 instantiation (only 4-bit
-//! MinMax and f16), so there is nothing to time.
+//! Both paneled paths are built from the *same* random f32 matrices; the MinMax
+//! path quantizes internally at build, which is excluded from the timing.
 //!
 //! # Reading the numbers
 //!
-//! Not perfectly apples-to-apples. The paneled path pre-materializes its doc side
-//! once in `build` (excluded from the timing), while the fused kernel is handed a
-//! `MatRef` per call. Treat `Paneled/Fused` as a ceiling on the paneled structure's
-//! win, not a pure abstraction delta.
+//! **The two paneled paths do not compute the same thing.** f32 is exact; MinMax
+//! is a 4-bit approximation. `f32/MinMax` is therefore the *cost of precision* at
+//! a fixed kernel structure, not a like-for-like kernel delta — a value near
+//! `1.00x` means dropping to 4 bits bought no speed, not that the two kernels are
+//! equally good at the same task.
+//!
+//! Why this job exists: running the f32 and quantized benchmarks separately puts
+//! the two numbers in different processes, and this box shifts clock state
+//! mid-run (levels ~1.3x apart), which swamps the ratio. Timing them adjacently
+//! within one shape protects it, exactly as the existing jobs do for their own
+//! internal ratios.
 //!
 //! x86_64 (V3/AVX2) only.
 
@@ -35,12 +40,14 @@ use diskann_benchmark_runner::{
     utils::{fmt::Table, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Output, Registry,
 };
-use diskann_quantization::multi_vector::distance::{PaneledF32Docs, PaneledF32Query};
+use diskann_quantization::multi_vector::distance::{
+    PaneledF32Docs, PaneledF32Query, PaneledQuantDocs, PaneledQuantQuery,
+};
 use diskann_quantization::multi_vector::{build_max_sim, BoxErase, MaxSimIsa};
 use serde::{Deserialize, Serialize};
 
 use super::driver::Data;
-use crate::inputs::multi_vector::{MultiVectorPaneledF32Op, Run};
+use crate::inputs::multi_vector::{MultiVectorPaneledPrecisionOp, Run};
 use crate::utils::DisplayWrapper;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -48,20 +55,20 @@ use crate::utils::DisplayWrapper;
 // ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-pub(super) struct PaneledF32Kernel;
+pub(super) struct PaneledPrecisionKernel;
 
-impl PaneledF32Kernel {
+impl PaneledPrecisionKernel {
     pub(super) const fn new() -> Self {
         Self
     }
 }
 
-impl Benchmark for PaneledF32Kernel {
-    type Input = MultiVectorPaneledF32Op;
-    type Output = Vec<F32RunResult>;
+impl Benchmark for PaneledPrecisionKernel {
+    type Input = MultiVectorPaneledPrecisionOp;
+    type Output = Vec<PrecisionRunResult>;
 
-    fn try_match(&self, _from: &MultiVectorPaneledF32Op, context: &MatchContext) -> Score {
-        if PaneledF32Query::is_supported() {
+    fn try_match(&self, _from: &MultiVectorPaneledPrecisionOp, context: &MatchContext) -> Score {
+        if PaneledF32Query::is_supported() && PaneledQuantQuery::is_supported() {
             context.success(0)
         } else {
             context.fail(1, &"AVX2 (V3) unavailable on this CPU")
@@ -70,7 +77,7 @@ impl Benchmark for PaneledF32Kernel {
 
     fn run(
         &self,
-        input: &MultiVectorPaneledF32Op,
+        input: &MultiVectorPaneledPrecisionOp,
         _: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
@@ -84,7 +91,10 @@ impl Benchmark for PaneledF32Kernel {
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "- f32 MaxSim, paneled / fused V3 / reference (V3/AVX2)")
+        writeln!(
+            f,
+            "- Paneled MaxSim at f32 vs 4-bit MinMax, plus fused V3 anchor (V3/AVX2)"
+        )
     }
 }
 
@@ -110,35 +120,47 @@ fn measure(run: &Run, mut f: impl FnMut()) -> Series {
     }
 }
 
-/// Build all three paths for one shape and time them (build cost excluded).
-fn run_ab(run: &Run) -> anyhow::Result<F32RunResult> {
+/// Build all three paths for one shape and time them (build / quantize excluded).
+fn run_ab(run: &Run) -> anyhow::Result<PrecisionRunResult> {
     let data = Data::<f32>::new(run)?;
 
-    // Path A — the paneled rebuild.
-    let mut paneled_query = PaneledF32Query::build(data.queries.as_view())
+    // Path A — paneled at f32.
+    let mut f32_query = PaneledF32Query::build(data.queries.as_view())
         .ok_or_else(|| anyhow::anyhow!("AVX2 (V3) unavailable for the paneled f32 kernel"))?;
-    let paneled_docs = PaneledF32Docs::build(data.docs.as_view());
+    let f32_docs = PaneledF32Docs::build(data.docs.as_view());
 
-    // Path B / C — the production factory kernels over the same query matrix.
+    // Path B — paneled at 4-bit MinMax over the same source matrices (each side
+    // quantizes internally at build).
+    let mut minmax_query = PaneledQuantQuery::build(data.queries.as_view())
+        .ok_or_else(|| anyhow::anyhow!("AVX2 (V3) unavailable for the paneled quantized kernel"))?;
+    let minmax_docs = PaneledQuantDocs::build(data.docs.as_view());
+
+    // Path C — the production fused V3 f32 kernel, as a calibration anchor.
     let fused_kernel =
         build_max_sim::<f32, _>(MaxSimIsa::X86_64_V3, data.queries.as_view(), BoxErase)?;
-    let ref_kernel =
-        build_max_sim::<f32, _>(MaxSimIsa::Reference, data.queries.as_view(), BoxErase)?;
 
     let nq = run.num_query_vectors.get();
     let mut scores = vec![0.0f32; nq];
     let doc_view = data.docs.as_view();
 
-    // Launder inputs *and* output through `black_box` each iteration, matching the
-    // quantized A/B: the factory kernels are opaque cross-crate calls, but the
-    // paneled path is in-crate and could otherwise be hoisted out of the loop.
-    let paneled = measure(run, || {
-        let docs = std::hint::black_box(&paneled_docs);
-        paneled_query.compute_max_sim(docs, &mut scores);
+    // Launder inputs *and* output through `black_box` each iteration: the paneled
+    // paths are in-crate with loop-invariant inputs and could otherwise be hoisted
+    // out of the measured loop, while the factory kernel is an opaque cross-crate
+    // call that cannot be — which would make the comparison asymmetric.
+    let paneled_f32 = measure(run, || {
+        let docs = std::hint::black_box(&f32_docs);
+        f32_query.compute_max_sim(docs, &mut scores);
         std::hint::black_box(&mut scores);
     });
 
-    // Timed adjacent to `paneled` so the ratio survives cross-run clock variance.
+    // Timed adjacent to `paneled_f32` — this adjacency is the whole point of the
+    // job, and is what the separate f32 and quantized jobs cannot give.
+    let paneled_minmax = measure(run, || {
+        let docs = std::hint::black_box(&minmax_docs);
+        minmax_query.compute_max_sim(docs, &mut scores);
+        std::hint::black_box(&mut scores);
+    });
+
     let fused = measure(run, || {
         let doc_view = std::hint::black_box(doc_view);
         fused_kernel
@@ -147,19 +169,11 @@ fn run_ab(run: &Run) -> anyhow::Result<F32RunResult> {
         std::hint::black_box(&mut scores);
     });
 
-    let reference = measure(run, || {
-        let doc_view = std::hint::black_box(doc_view);
-        ref_kernel
-            .compute_max_sim(doc_view, &mut scores)
-            .expect("scores.len() == kernel.nrows() by construction");
-        std::hint::black_box(&mut scores);
-    });
-
-    Ok(F32RunResult {
+    Ok(PrecisionRunResult {
         run: run.clone(),
-        paneled,
+        paneled_f32,
+        paneled_minmax,
         fused,
-        reference,
     })
 }
 
@@ -186,16 +200,16 @@ impl Series {
     }
 }
 
-/// Paneled-vs-fused-vs-reference result for one shape.
+/// f32-vs-MinMax-vs-fused result for one shape.
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct F32RunResult {
+pub(super) struct PrecisionRunResult {
     pub(super) run: Run,
-    pub(super) paneled: Series,
+    pub(super) paneled_f32: Series,
+    pub(super) paneled_minmax: Series,
     pub(super) fused: Series,
-    pub(super) reference: Series,
 }
 
-impl F32RunResult {
+impl PrecisionRunResult {
     fn computations(&self) -> f64 {
         (self.run.num_query_vectors.get()
             * self.run.num_doc_vectors.get()
@@ -203,7 +217,7 @@ impl F32RunResult {
     }
 }
 
-impl std::fmt::Display for DisplayWrapper<'_, [F32RunResult]> {
+impl std::fmt::Display for DisplayWrapper<'_, [PrecisionRunResult]> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_empty() {
             return Ok(());
@@ -212,43 +226,38 @@ impl std::fmt::Display for DisplayWrapper<'_, [F32RunResult]> {
         writeln!(
             f,
             "ns/IP = min time per (query, doc) inner-product call. \
-             Panel/Fused < 1 ⇒ paneled faster than the production V3 kernel. \
-             Speedup = reference ÷ paneled."
+             f32/MinMax > 1 ⇒ dropping to 4-bit codes is faster — it is the cost of \
+             precision at a fixed kernel structure, NOT a like-for-like kernel delta \
+             (the f32 path is exact, the MinMax path is a 4-bit approximation). \
+             Fused V3 is an f32 calibration anchor shared with the paneled-f32 job."
         )?;
 
         let header = [
             "Q",
             "D",
             "Dim",
-            "Paneled",
+            "Paneled f32",
+            "Paneled MinMax",
+            "f32/MinMax",
             "Fused V3",
-            "Panel/Fused",
-            "Reference",
-            "Ref/Panel",
         ];
         let mut table = Table::new(header, self.len());
 
         self.iter().enumerate().for_each(|(row, r)| {
             let comps = r.computations();
-            let paneled = r.paneled.min_us() / comps * 1000.0;
+            let as_f32 = r.paneled_f32.min_us() / comps * 1000.0;
+            let minmax = r.paneled_minmax.min_us() / comps * 1000.0;
             let fused = r.fused.min_us() / comps * 1000.0;
-            let reference = r.reference.min_us() / comps * 1000.0;
-            let vs_fused = if fused > 0.0 { paneled / fused } else { 0.0 };
-            let speedup = if paneled > 0.0 {
-                reference / paneled
-            } else {
-                0.0
-            };
+            let ratio = if minmax > 0.0 { as_f32 / minmax } else { 0.0 };
 
             let mut row = table.row(row);
             row.insert(r.run.num_query_vectors, 0);
             row.insert(r.run.num_doc_vectors, 1);
             row.insert(r.run.dim, 2);
-            row.insert(format!("{:.3}", paneled), 3);
-            row.insert(format!("{:.3}", fused), 4);
-            row.insert(format!("{:.2}x", vs_fused), 5);
-            row.insert(format!("{:.3}", reference), 6);
-            row.insert(format!("{:.2}x", speedup), 7);
+            row.insert(format!("{:.3}", as_f32), 3);
+            row.insert(format!("{:.3}", minmax), 4);
+            row.insert(format!("{:.2}x", ratio), 5);
+            row.insert(format!("{:.3}", fused), 6);
         });
 
         table.fmt(f)
@@ -260,6 +269,9 @@ impl std::fmt::Display for DisplayWrapper<'_, [F32RunResult]> {
 // ─────────────────────────────────────────────────────────────────────────
 
 pub(super) fn register(registry: &mut Registry) -> anyhow::Result<()> {
-    registry.register("multi-vector-paneled-f32-op", PaneledF32Kernel::new())?;
+    registry.register(
+        "multi-vector-paneled-precision-op",
+        PaneledPrecisionKernel::new(),
+    )?;
     Ok(())
 }

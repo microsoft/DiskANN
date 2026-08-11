@@ -5,13 +5,14 @@
 //! already the score, so [`RawMax`] is a bare reduction — the degenerate [`Drain`].
 
 use core::mem::size_of;
+use core::ops::Range;
 
 use diskann_wide::arch::x86_64::V3;
 
 use super::arena::ResettableArena;
 use super::leaves::{A_PANEL, B_PANEL};
 use super::views::{DPanel, DocWalk, QPanel, QueryWalk};
-use super::{Accumulate, Block, Drain, Plan, Strip, StripScratch, TileBudget, drive, leaves};
+use super::{Accumulate, Block, Drain, Plan, Strip, TileBudget, drive, leaves};
 use crate::alloc::{Poly, ScopedAllocator};
 use crate::bits::{Dynamic, Static};
 use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
@@ -69,22 +70,34 @@ impl<'a, 'b, 'x>
 // ── Drain ────────────────────────────────────────────────────────
 
 /// Running max, over an output the caller has padded to whole A-panels.
+///
+/// `nd` is the real B extent, which the strip does not record.
 pub(crate) struct RawMax<'o> {
     out: &'o mut [f32],
+    nd: usize,
 }
 
 impl<'o> RawMax<'o> {
-    fn new(out: &'o mut [f32]) -> Self {
+    fn new(out: &'o mut [f32], nd: usize) -> Self {
         out.fill(f32::MIN);
-        Self { out }
+        Self { out, nd }
     }
 }
 
 impl Drain<V3, Strip<'_, f32, A_PANEL, B_PANEL>> for RawMax<'_> {
     #[inline(always)]
-    fn drain(&mut self, arch: V3, tile: &Strip<'_, f32, A_PANEL, B_PANEL>) {
-        let out = tile.a_rows_mut(self.out);
-        leaves::fold_strip(arch, tile, out);
+    fn drain(
+        &mut self,
+        arch: V3,
+        scratch: &Strip<'_, f32, A_PANEL, B_PANEL>,
+        a_panel: usize,
+        b_panels: Range<usize>,
+    ) {
+        // A is padded to whole panels, so the output cut never clamps; B is not, so the
+        // live width does.
+        let a0 = a_panel * A_PANEL;
+        let live = (b_panels.end * B_PANEL).min(self.nd) - b_panels.start * B_PANEL;
+        leaves::fold_strip(arch, scratch.columns(live), &mut self.out[a0..][..A_PANEL]);
     }
 }
 
@@ -156,22 +169,16 @@ impl PaneledF32Query {
         let mut buf =
             Poly::<[f32], _>::new_uninit_slice(strip_len, ScopedAllocator::new(&self.arena))
                 .expect("strip fits the arena");
-        // One plan, three consumers: the two walks cut the sources, and the scratch
-        // tracks the order they will be visited in.
-        let mut scratch = StripScratch::<f32, A_PANEL, B_PANEL>::from_uninit(
-            &mut buf,
-            strip_len,
-            plan,
-            padded,
-            docs.data.num_vectors(),
-        );
+        // One plan, two consumers: the walks cut the sources; the scratch is sized by
+        // it but never positioned, since the driver counts panels itself.
+        let mut scratch = Strip::<f32, A_PANEL, B_PANEL>::from_uninit(&mut buf, strip_len);
         drive(
             self.arch,
             QueryWalk::new(self.query.as_view(), plan.a_panels),
             DocWalk::<f32, B_PANEL>::new(docs.data.as_view(), plan.b_panels),
             &mut scratch,
             &F32Kernel,
-            &mut RawMax::new(&mut self.state[..padded]),
+            &mut RawMax::new(&mut self.state[..padded], docs.data.num_vectors()),
         );
 
         scores.copy_from_slice(&self.state[..nq]);

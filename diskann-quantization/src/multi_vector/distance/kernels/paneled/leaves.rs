@@ -13,7 +13,7 @@
 use diskann_wide::arch::x86_64::V3;
 use diskann_wide::{SIMDCast, SIMDDotProduct, SIMDMinMax, SIMDMulAdd, SIMDReinterpret, SIMDVector};
 
-use super::strip::{Block, Strip};
+use super::strip::Block;
 use super::views::{DPanel, QPanel};
 use crate::bits::Length;
 use crate::minmax::MinMaxCompensation;
@@ -169,17 +169,16 @@ pub(super) fn f32_store_microkernel<const UNROLL: usize, L: Length>(
     }
 }
 
-/// Fold an [`A_PANEL`]×`cols` A-major f32 strip into the running max. `cols` is the
-/// strip's own live width, so capacity from a wider tile cannot be folded in.
+/// Fold an [`A_PANEL`]×`cols` A-major f32 accumulator into the running max. `acc` is
+/// the strip's live prefix, so capacity from a wider tile cannot be folded in.
 ///
 /// # Panics
 ///
 /// If `state` is not exactly one A-panel.
 #[inline(always)]
-pub(super) fn fold_strip(arch: V3, strip: &Strip<'_, f32, A_PANEL, B_PANEL>, state: &mut [f32]) {
+pub(super) fn fold_strip(arch: V3, acc: &[f32], state: &mut [f32]) {
     let lanes = f32s::LANES;
-    // The slicing is the bounds check: both loads below are inside these lengths.
-    let acc = strip.columns();
+    // The caller's slicing is the bounds check: both loads below are inside it.
     let cols = acc.len() / A_PANEL;
     assert_eq!(state.len(), A_PANEL, "the fold writes a whole A-panel");
     let (state, acc) = (state.as_mut_ptr(), acc.as_ptr());
@@ -199,30 +198,35 @@ pub(super) fn fold_strip(arch: V3, strip: &Strip<'_, f32, A_PANEL, B_PANEL>, sta
     }
 }
 
-/// 4-bit MinMax dequant of an [`A_PANEL`]×`cols` A-major `i32` strip, folded straight
-/// into the running max — the score never reaches memory. `cols` is the strip's own
-/// live width, so capacity from a wider tile cannot be folded in.
+/// 4-bit MinMax dequant of an [`A_PANEL`]×`cols` A-major `i32` accumulator, folded
+/// straight into the running max — the score never reaches memory. `acc` is the strip's
+/// live prefix, so capacity from a wider tile cannot be folded in.
 ///
 /// # Panics
 ///
-/// If `state` or `q_meta` is not one A-panel, or `d_meta` is not one entry per strip
-/// column.
+/// If `state` or `q_meta` is not one A-panel, or `d_meta` is not one entry per
+/// accumulator column.
 #[inline(always)]
 pub(super) fn score_fold_strip(
     arch: V3,
-    strip: &Strip<'_, i32, A_PANEL, B_PANEL>,
+    acc: &[i32],
     state: &mut [f32],
     q_meta: &[MinMaxCompensation],
     d_meta: &[MinMaxCompensation],
     dim: f32,
 ) {
     let lanes = f32s::LANES;
-    // The slicing is the bounds check: every load below is inside these lengths.
-    let acc = strip.columns();
+    // The caller's slicing is the bounds check: every load below is inside it.
     let cols = acc.len() / A_PANEL;
     assert_eq!(state.len(), A_PANEL, "the fold writes a whole A-panel");
     assert_eq!(q_meta.len(), A_PANEL, "one compensation per A-panel row");
-    assert_eq!(d_meta.len(), cols, "one compensation per strip column");
+    // Not redundant: `d_meta` drives the loop that indexes `acc`, so this is what
+    // bounds the reads below.
+    assert_eq!(
+        d_meta.len(),
+        cols,
+        "one compensation per accumulator column"
+    );
     let (state, acc) = (state.as_mut_ptr(), acc.as_ptr());
 
     let mut qa = [0.0f32; A_PANEL];

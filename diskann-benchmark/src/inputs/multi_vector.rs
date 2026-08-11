@@ -160,8 +160,9 @@ impl std::fmt::Display for MultiVectorOp {
 ///////////////////////////////
 
 /// A 4-bit MinMax **quantized** multi-vector MaxSim A/B benchmark job: the
-/// experimental staged integer kernel vs the scalar `MinMaxKernel` reference,
-/// at identical shapes and quantization.
+/// experimental staged integer kernel vs the `MinMaxKernel` reference, at
+/// identical shapes and quantization. That reference is *not* scalar — it is a
+/// double loop over an already-SIMD per-pair inner product.
 ///
 /// The element type is implicitly f32 input → 4-bit MinMax codes, and the ISA is
 /// fixed to V3/AVX2 (the only quantized staged kernel), so neither is a JSON
@@ -237,8 +238,9 @@ impl std::fmt::Display for MultiVectorQuantOp {
 ///////////////////////////////
 
 /// An **f32** multi-vector MaxSim A/B benchmark job: the paneled rebuild vs the
-/// production block-transposed fused V3 kernel vs the non-SIMD reference, at
-/// identical shapes over identical data.
+/// production block-transposed fused V3 kernel vs the `MaxSimIsa::Reference`
+/// baseline, at identical shapes over identical data. That reference is *not*
+/// non-SIMD — it is a double loop over an already-SIMD per-pair inner product.
 ///
 /// Not fully apples-to-apples — the paneled path pre-materializes its doc side once
 /// at build (excluded from timing), while the fused kernel takes a `MatRef` per call.
@@ -307,6 +309,83 @@ impl Input for MultiVectorPaneledF32Op {
 impl std::fmt::Display for MultiVectorPaneledF32Op {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Multi-Vector Paneled f32 Operation\n")?;
+        write_field!(f, "tag", Self::tag())?;
+        write_field!(f, "number of runs", self.runs.len())?;
+        Ok(())
+    }
+}
+
+///////////////////////////////////
+// Multi-Vector Paneled Precision //
+///////////////////////////////////
+
+/// A **precision** A/B benchmark job: the same paneled structure at f32 vs at
+/// 4-bit MinMax codes, over identical source data, timed adjacently in one
+/// process so the f32÷MinMax ratio survives this box's clock variance.
+///
+/// The two paths do *not* compute the same thing — exact f32 MaxSim vs MaxSim
+/// over 4-bit codes — so the ratio is a cost-of-precision measure, not a
+/// like-for-like kernel delta. x86_64-only, like the kernels it drives.
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MultiVectorPaneledPrecisionOp {
+    pub(crate) runs: Vec<Run>,
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl MultiVectorPaneledPrecisionOp {
+    pub(crate) const fn tag() -> &'static str {
+        "multi-vector-paneled-precision-op"
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl Input for MultiVectorPaneledPrecisionOp {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        Self::tag()
+    }
+
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
+        const NUM_DOC_VECTORS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+        const DIM: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+        const LOOPS_PER_MEASUREMENT: NonZeroUsize = NonZeroUsize::new(50).unwrap();
+        const NUM_MEASUREMENTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
+
+        let runs = vec![
+            Run {
+                num_query_vectors: NonZeroUsize::new(32).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+            Run {
+                num_query_vectors: NonZeroUsize::new(64).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+        ];
+
+        Self { runs }
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl std::fmt::Display for MultiVectorPaneledPrecisionOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Multi-Vector Paneled Precision Operation\n")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "number of runs", self.runs.len())?;
         Ok(())

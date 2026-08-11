@@ -11,7 +11,11 @@
 //! - **Tiled** — the coarse tiler rebuild (accumulate → postprocess → reduce).
 //! - **Paneled** — the paneled rebuild (views own their panel decomposition; one
 //!   `Drain` seam fuses dequant + reduce).
-//! - **Reference** — the scalar [`MinMaxKernel`] baseline.
+//! - **Reference** — the [`MinMaxKernel`] baseline. Despite how it is usually
+//!   described, it is *not* scalar: it is a naive double loop over `(q, d)` pairs
+//!   whose per-pair inner product over the 4-bit codes is itself SIMD. What it
+//!   lacks is fusion across queries, register-resident accumulators across the dim
+//!   loop, and tile-level cache management.
 //!
 //! All four consume the *same* random f32 multi-vectors quantized to 4-bit MinMax
 //! (Null transform, scale 1.0), so the comparison isolates the distance kernel. The
@@ -151,7 +155,8 @@ fn run_ab(run: &Run) -> anyhow::Result<QuantRunResult> {
         .ok_or_else(|| anyhow::anyhow!("AVX2 (V3) unavailable for the paneled quantized kernel"))?;
     let paneled_docs = PaneledQuantDocs::build(data.docs.as_view());
 
-    // Path D — scalar MinMax reference over the same quantization.
+    // Path D — the MinMax reference over the same quantization. Not scalar: a
+    // double loop over an already-SIMD per-pair inner product.
     let q_ref = quantize(data.queries.as_view());
     let d_ref = quantize(data.docs.as_view());
 

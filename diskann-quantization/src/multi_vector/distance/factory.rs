@@ -118,7 +118,8 @@ where
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  ReferenceKernel<T> — non-SIMD fallback that wraps MaxSim::evaluate.
+//  ReferenceKernel<T> — untiled fallback that wraps MaxSim::evaluate. Not scalar:
+//  the per-pair inner product is SIMD; what this lacks is fusion and tiling.
 // ─────────────────────────────────────────────────────────────────────────
 
 struct ReferenceKernel<T: Copy> {
