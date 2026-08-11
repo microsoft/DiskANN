@@ -138,6 +138,9 @@ where
                 workspace
                     .prune_states
                     .resize(workspace.candidate_slots.len(), prune::State::default());
+                // Each candidate list starts a separate RobustPrune state machine.
+                // Reset retained entries because resize initializes only new entries.
+                workspace.prune_states.fill(prune::State::default());
 
                 let selected = prune::robust_prune(
                     &sorted,
@@ -245,6 +248,41 @@ mod tests {
         let actual = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
 
         assert_eq!(&*actual[0], &[1, 3]);
+    }
+
+    #[test]
+    fn reused_workspace_matches_fresh_pruning() {
+        let data = [0.0_f32, 1.0, 2.0, -3.0, 4.0];
+        let data = MatrixView::try_from(&data[..], 5, 1).unwrap();
+        let first = [3, 2, 1];
+        let second = [4, 3, 2];
+        let candidates = |first: &[u32], second: &[u32]| {
+            vec![
+                candidate_list(first.iter().copied()),
+                candidate_list(second.iter().copied()),
+                candidate_list([]),
+                candidate_list([]),
+                candidate_list([]),
+            ]
+        };
+        let graph = graph_config(2);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let fresh_first = pool
+            .install(|| prune_overfull(data, candidates(&first, &[]), &graph, Metric::L2))
+            .unwrap();
+        let fresh_second = pool
+            .install(|| prune_overfull(data, candidates(&[], &second), &graph, Metric::L2))
+            .unwrap();
+
+        let reused = pool
+            .install(|| prune_overfull(data, candidates(&first, &second), &graph, Metric::L2))
+            .unwrap();
+
+        assert_eq!(&*reused[0], &*fresh_first[0]);
+        assert_eq!(&*reused[1], &*fresh_second[1]);
     }
 
     #[test]
