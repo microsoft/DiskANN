@@ -319,13 +319,9 @@ fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
     // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_norm = if USES_NORMS {
-            F::splat(arch, norms[source])
-        } else {
-            F::default(arch)
-        };
-        // SAFETY: `validate` and `prepare_workspace` established
-        // `source < point_count == worst.len()`.
+        let source_norm = if USES_NORMS { norms[source] } else { 0.0 };
+        let source_norms = F::splat(arch, source_norm);
+        // SAFETY: `nearest_neighbors` created one threshold for each point.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
         let full = source / F::LANES * F::LANES;
@@ -335,17 +331,16 @@ fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
             let target_norms = if USES_NORMS {
                 // SAFETY: the full target chunk is below `source < point_count`.
-                // `prepare_workspace` created one norm for each point.
                 unsafe { F::load_simd(arch, norms.as_ptr().add(target)) }
             } else {
                 F::default(arch)
             };
-            let distances = M::leaf_distance(arch, pair_dots, source_norm, target_norms);
+            let distances = M::leaf_distance(arch, pair_dots, source_norms, target_norms);
             // Every pair may improve the current source and its earlier target.
             // Derive both masks before either endpoint mutates its threshold.
             let source_eligible = distances.lt_simd(F::splat(arch, source_worst));
             // SAFETY: the full target chunk is below `source < point_count`.
-            // `prepare_workspace` created one threshold for each point.
+            // `nearest_neighbors` created one threshold for each point.
             let target_worst = unsafe { F::load_simd(arch, worst_ptr.add(target)) };
             let target_eligible = distances.lt_simd(target_worst);
             let source_bits = u64::from(source_eligible.bitmask().to_underlying());
@@ -387,11 +382,11 @@ fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
         while target < source {
             // SAFETY: the scalar target remains in this source's strict-lower prefix.
             let dot = unsafe { *dots.get_unchecked(source_start + target) };
-            let (source_norm, target_norm) = if USES_NORMS {
+            let target_norm = if USES_NORMS {
                 // SAFETY: `target < source < point_count == norms.len()`.
-                (norms[source], unsafe { *norms.get_unchecked(target) })
+                unsafe { *norms.get_unchecked(target) }
             } else {
-                (0.0, 0.0)
+                0.0
             };
             let distance = M::leaf_distance_scalar(dot, source_norm, target_norm);
             if distance < source_worst {
