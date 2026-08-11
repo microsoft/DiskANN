@@ -54,7 +54,7 @@ use diskann_wide::{
 use rayon::ThreadPool;
 
 use self::kernel_metric::{
-    Cosine, CosineNormalized, InnerProduct, L2, LeafKernelMetric, PartitionKernelMetric,
+    Cosine, CosineNormalized, InnerProduct, L2, LeafMetric, PartitionMetric,
 };
 
 /// PiPNN partition and leaf-selection policy.
@@ -264,22 +264,16 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: LeafKernelMetric + PartitionKernelMetric,
+    M: LeafMetric + PartitionMetric,
     T: VectorRepr + Send + Sync + 'static,
 {
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, metric, &context.config))?;
+        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
     // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
     // so its complete allocation drops when leaf construction returns.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(
-            arch,
-            data,
-            leaves,
-            context.config.leaf_k,
-            metric,
-        )
-        .map_err(ANNError::new)
+        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.leaf_k)
+            .map_err(ANNError::new)
     })?;
     // Finalization consumes each candidate list. It reuses that list's allocation
     // for the final adjacency when the graph policy permits it.
