@@ -31,7 +31,7 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::PartitionKernelMetric,
+    kernel_metric::{PartitionKernelMetric, norm_from_squared},
     partition_kernel::{PartitionInput, PartitionKernelWorkspace, PartitionNorms, nearest_leaders},
 };
 
@@ -87,10 +87,10 @@ struct WorkItem {
 
 #[derive(Default)]
 struct StripeBuffers {
-    points: Vec<f32>,
-    dots: Vec<f32>,
-    point_squared_norms: Vec<f32>,
-    kernel: PartitionKernelWorkspace,
+    point_values: Vec<f32>,
+    dot_values: Vec<f32>,
+    point_norms: Vec<f32>,
+    kernel_workspace: PartitionKernelWorkspace,
 }
 
 impl AsPooled<()> for StripeBuffers {
@@ -119,6 +119,7 @@ type StripeBufferPool = ObjectPool<StripeBuffers>;
 pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    metric: Metric,
     config: &PiPNNConfig,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
@@ -145,7 +146,7 @@ where
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves =
-            partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
+            partition_replica::<A, M, T>(arch, data, metric, config, seed, &stripe_buffers)?;
         leaves
             .try_reserve(replica_leaves.len())
             .map_err(ANNError::new)?;
@@ -161,6 +162,7 @@ where
 fn partition_replica<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    metric: Metric,
     config: &PiPNNConfig,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
@@ -210,6 +212,7 @@ where
                 *slot = Some(partition_work_item::<A, M, T>(
                     arch,
                     data,
+                    metric,
                     config,
                     item,
                     stripe_buffers,
@@ -251,6 +254,7 @@ where
 fn partition_work_item<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    metric: Metric,
     config: &PiPNNConfig,
     item: WorkItem,
     stripe_buffers: &StripeBufferPool,
@@ -270,8 +274,15 @@ where
         config.p_samp,
         mix_seed(item.seed, points as u64),
     )?;
-    let clusters =
-        assign_to_leaders::<A, M, T>(arch, data, &item.indices, &leaders, fanout, stripe_buffers)?;
+    let clusters = assign_to_leaders::<A, M, T>(
+        arch,
+        data,
+        metric,
+        &item.indices,
+        &leaders,
+        fanout,
+        stripe_buffers,
+    )?;
 
     let mut pending = Vec::new();
     let mut finished = Vec::new();
@@ -337,6 +348,7 @@ fn mix_seed(seed: u64, salt: u64) -> u64 {
 fn assign_to_leaders<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    metric: Metric,
     point_ids: &[u32],
     leader_ids: &[u32],
     fanout: usize,
@@ -350,7 +362,6 @@ where
     M: PartitionKernelMetric,
     T: VectorRepr + Send + Sync,
 {
-    let metric = M::METRIC;
     let dimension_count = data.ncols();
     let leader_values_len = checked_area("leader data", leader_ids.len(), dimension_count)?;
     let mut leader_values = filled_vec(leader_values_len, 0.0f32)?;
@@ -369,7 +380,7 @@ where
         // SIMD reassociation changes low bits and can change a near-tie branch.
         *norm_value = leader_vector.iter().map(|value| value * value).sum();
         if metric == Metric::Cosine {
-            *norm_value = norm_value.sqrt();
+            *norm_value = norm_from_squared(*norm_value);
         }
     }
 
@@ -401,6 +412,7 @@ where
                 assign_point_stripe::<A, M, T>(
                     arch,
                     data,
+                    metric,
                     &point_ids[first_point..first_point + stripe_point_count],
                     &leader_values,
                     &leader_norm_values,
@@ -424,6 +436,7 @@ where
 fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    metric: Metric,
     point_ids: &[u32],
     leader_values: &[f32],
     leader_norm_values: &[f32],
@@ -447,17 +460,28 @@ where
     let output_len = checked_area("partition assignments", point_count, fanout)?;
     // Keep each buffer at its largest length. Every operation uses an explicit
     // active prefix.
-    grow_fallible(&mut buffers.points, point_values_len, 0.0)?;
-    grow_fallible(&mut buffers.dots, dots_len, 0.0)?;
+    grow_fallible(&mut buffers.point_values, point_values_len, 0.0)?;
+    grow_fallible(&mut buffers.dot_values, dots_len, 0.0)?;
     let StripeBuffers {
-        points: point_buffer,
-        dots: dot_buffer,
-        point_squared_norms: point_squared_norm_buffer,
-        kernel: kernel_workspace,
+        point_values: point_buffer,
+        dot_values: dot_buffer,
+        point_norms: point_norm_buffer,
+        kernel_workspace,
     } = buffers;
-    let point_values = &mut point_buffer[..point_values_len];
+    let mut point_matrix = MutMatrixView::try_from(
+        &mut point_buffer[..point_values_len],
+        point_count,
+        dimensions,
+    )
+    .map_err(|error| {
+        ANNError::new(PartitionError::InvalidBufferLength {
+            buffer: "point stripe",
+            expected: point_values_len,
+            actual: error.into_inner().len(),
+        })
+    })?;
     let dots = &mut dot_buffer[..dots_len];
-    gather_vectors(data, point_ids, point_values)?;
+    gather_vectors(data, point_ids, point_matrix.as_mut_slice())?;
     diskann_linalg::sgemm(
         Transpose::None,
         Transpose::Ordinary,
@@ -465,36 +489,29 @@ where
         leader_count,
         dimensions,
         1.0,
-        point_values,
+        point_matrix.as_slice(),
         leader_values,
         None,
         dots,
     )
     .map_err(ANNError::new)?;
 
-    let metric = M::METRIC;
-    let point_squared_norms = if metric == Metric::Cosine {
-        grow_fallible(point_squared_norm_buffer, point_count, 0.0)?;
-        let point_squared_norms = &mut point_squared_norm_buffer[..point_count];
-        for (norm_value, point_values) in point_squared_norms
+    let point_norms = if metric == Metric::Cosine {
+        grow_fallible(point_norm_buffer, point_count, 0.0)?;
+        let point_norms = &mut point_norm_buffer[..point_count];
+        for (norm_value, point_values) in point_norms
             .iter_mut()
-            .zip(point_values.chunks_exact(dimensions))
+            .zip(point_matrix.as_slice().chunks_exact(dimensions))
         {
-            *norm_value = FastL2NormSquared.evaluate(point_values);
+            *norm_value = norm_from_squared(FastL2NormSquared.evaluate(point_values));
         }
-        &*point_squared_norms
+        &*point_norms
     } else {
         &[]
     };
-    let norms = match metric {
-        Metric::L2 => PartitionNorms::L2 {
-            leader_squared_norms: leader_norm_values,
-        },
-        Metric::Cosine => PartitionNorms::Cosine {
-            point_squared_norms,
-            leader_norms: leader_norm_values,
-        },
-        Metric::CosineNormalized | Metric::InnerProduct => PartitionNorms::None,
+    let norms = PartitionNorms {
+        point_norms,
+        leader_norms: leader_norm_values,
     };
     let dots = MatrixView::try_from(&*dots, point_count, leader_count).map_err(|_| {
         ANNError::new(PartitionError::InvalidBufferLength {
@@ -512,6 +529,7 @@ where
     })?;
     nearest_leaders::<A, M>(
         arch,
+        metric,
         PartitionInput { dots, norms },
         output,
         kernel_workspace,
@@ -814,14 +832,22 @@ mod tests {
             use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
-                Metric::L2 => partition::<A, L2, T>(arch, call.data, call.config),
-                Metric::Cosine => partition::<A, Cosine, T>(arch, call.data, call.config),
-                Metric::CosineNormalized => {
-                    partition::<A, CosineNormalized, T>(arch, call.data, call.config)
+                Metric::L2 => partition::<A, L2, T>(arch, call.data, Metric::L2, call.config),
+                Metric::Cosine => {
+                    partition::<A, Cosine, T>(arch, call.data, Metric::Cosine, call.config)
                 }
-                Metric::InnerProduct => {
-                    partition::<A, InnerProduct, T>(arch, call.data, call.config)
-                }
+                Metric::CosineNormalized => partition::<A, CosineNormalized, T>(
+                    arch,
+                    call.data,
+                    Metric::CosineNormalized,
+                    call.config,
+                ),
+                Metric::InnerProduct => partition::<A, InnerProduct, T>(
+                    arch,
+                    call.data,
+                    Metric::InnerProduct,
+                    call.config,
+                ),
             }
         }
     }
@@ -1102,6 +1128,7 @@ mod tests {
         let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
             diskann_wide::ARCH,
             data,
+            Metric::L2,
             &[2],
             &[0, 1],
             1,
@@ -1156,13 +1183,13 @@ mod tests {
         let pool = StripeBufferPool::new((), 0, None);
         let points = {
             let mut buffers = pool.get_ref(());
-            buffers.points.resize(16, 0.0);
-            buffers.points.as_ptr()
+            buffers.point_values.resize(16, 0.0);
+            buffers.point_values.as_ptr()
         };
 
         let buffers = pool.get_ref(());
-        assert_eq!(buffers.points.as_ptr(), points);
-        assert_eq!(buffers.points.len(), 16);
+        assert_eq!(buffers.point_values.as_ptr(), points);
+        assert_eq!(buffers.point_values.len(), 16);
     }
 
     #[test]
@@ -1175,6 +1202,7 @@ mod tests {
         let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
             diskann_wide::ARCH,
             data,
+            Metric::L2,
             &point_ids,
             &[0, 2_047],
             1,
