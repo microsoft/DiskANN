@@ -24,33 +24,7 @@ use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
 };
 
-use super::kernel_metric::PartitionMetric;
-
-/// Reusable nearest-center state for one partition worker.
-///
-/// Each entry contains a sampled leader's matrix-column ID and its metric score.
-#[derive(Debug, Default)]
-pub(super) struct PartitionKernelWorkspace {
-    tracker: Vec<(u32, f32)>,
-}
-
-impl PartitionKernelWorkspace {
-    fn prepare(&mut self, fanout: usize) -> Result<(), PartitionKernelError> {
-        let additional = fanout.saturating_sub(self.tracker.len());
-        self.tracker
-            .try_reserve(additional)
-            .map_err(|_| PartitionKernelError::Allocation { additional })?;
-        self.tracker.resize(fanout, (u32::MAX, f32::INFINITY));
-        Ok(())
-    }
-}
-
-/// L2 uses squared leader norms. Cosine uses point and leader norms.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct PartitionNorms<'a> {
-    pub(super) point_norms: &'a [f32],
-    pub(super) leader_norms: &'a [f32],
-}
+use super::kernel_metric::{PartitionMetric, PartitionNorms};
 
 /// Dot products between assigned points and sampled partition centers.
 ///
@@ -84,8 +58,8 @@ pub(super) enum PartitionKernelError {
     /// The requested fanout exceeds the available leader count.
     #[error("invalid fanout {fanout}: must not exceed {leader_count} leaders")]
     InvalidFanout { fanout: usize, leader_count: usize },
-    /// Reusable tracker storage could not be reserved.
-    #[error("failed to reserve {additional} partition tracker entries")]
+    /// Reusable ranked-leader storage could not be reserved.
+    #[error("failed to reserve {additional} partition ranked-leader entries")]
     Allocation { additional: usize },
     /// Leader positions cannot be represented as `u32`.
     #[error("leader count {0} exceeds the u32 position limit")]
@@ -108,7 +82,7 @@ pub(super) fn nearest_leaders<A, M>(
     arch: A,
     input: PartitionInput<'_>,
     output: MutMatrixView<'_, u32>,
-    workspace: &mut PartitionKernelWorkspace,
+    ranked_leaders: &mut Vec<(u32, f32)>,
 ) -> Result<(), PartitionKernelError>
 where
     A: Architecture,
@@ -123,35 +97,44 @@ where
         return Ok(());
     }
 
-    workspace.prepare(fanout)?;
+    let additional = fanout.saturating_sub(ranked_leaders.len());
+    ranked_leaders
+        .try_reserve(additional)
+        .map_err(|_| PartitionKernelError::Allocation { additional })?;
+    ranked_leaders.resize(fanout, (u32::MAX, f32::INFINITY));
+
     match (norms.point_norms.is_empty(), norms.leader_norms.is_empty()) {
-        (true, true) => select_point_leaders::<A::f32x16, M, false, false>(
+        (false, false) => select_point_leaders::<A::f32x16, M, _, _>(
             arch,
             input.dots,
-            norms,
+            PreparedNorms(norms.point_norms),
+            PreparedNorms(norms.leader_norms),
             output,
-            &mut workspace.tracker,
+            ranked_leaders,
         ),
-        (true, false) => select_point_leaders::<A::f32x16, M, false, true>(
+        (false, true) => select_point_leaders::<A::f32x16, M, _, _>(
             arch,
             input.dots,
-            norms,
+            PreparedNorms(norms.point_norms),
+            EmptyNorms,
             output,
-            &mut workspace.tracker,
+            ranked_leaders,
         ),
-        (false, false) => select_point_leaders::<A::f32x16, M, true, true>(
+        (true, false) => select_point_leaders::<A::f32x16, M, _, _>(
             arch,
             input.dots,
-            norms,
+            EmptyNorms,
+            PreparedNorms(norms.leader_norms),
             output,
-            &mut workspace.tracker,
+            ranked_leaders,
         ),
-        (false, true) => select_point_leaders::<A::f32x16, M, true, false>(
+        (true, true) => select_point_leaders::<A::f32x16, M, _, _>(
             arch,
             input.dots,
-            norms,
+            EmptyNorms,
+            EmptyNorms,
             output,
-            &mut workspace.tracker,
+            ranked_leaders,
         ),
     }
 }
@@ -182,28 +165,97 @@ fn validate<'a>(
         });
     }
 
-    if !input.norms.point_norms.is_empty() {
-        check_length("point norms", input.norms.point_norms.len(), point_count)?;
-    }
-    if !input.norms.leader_norms.is_empty() {
-        check_length("leader norms", input.norms.leader_norms.len(), leader_count)?;
-    }
+    check_norm_count("point norms", input.norms.point_norms, point_count)?;
+    check_norm_count("leader norms", input.norms.leader_norms, leader_count)?;
     Ok(input.norms)
 }
 
-fn check_length(
+/// Check one optional norm buffer.
+///
+/// An empty slice means that the active metric does not use this norm.
+fn check_norm_count(
     buffer: &'static str,
-    actual: usize,
+    norms: &[f32],
     expected: usize,
 ) -> Result<(), PartitionKernelError> {
-    if actual == expected {
+    if norms.is_empty() || norms.len() == expected {
         Ok(())
     } else {
         Err(PartitionKernelError::InvalidBufferLength {
             buffer,
             expected,
-            actual,
+            actual: norms.len(),
         })
+    }
+}
+
+/// Provide norm values for partition ranking.
+trait NormValues<F>
+where
+    F: SIMDVector<Scalar = f32>,
+{
+    /// Repeat one norm in all SIMD lanes.
+    fn repeat_simd(self, arch: F::Arch, point: usize) -> F;
+
+    /// Load one complete SIMD group of norms.
+    fn load_simd(self, arch: F::Arch, first_point: usize) -> F;
+
+    /// Read one norm.
+    fn read(self, point: usize) -> f32;
+}
+
+/// Prepared norm values for points or sampled leaders.
+#[derive(Clone, Copy)]
+struct PreparedNorms<'a>(&'a [f32]);
+
+impl<F> NormValues<F> for PreparedNorms<'_>
+where
+    F: SIMDVector<Scalar = f32>,
+{
+    #[inline(always)]
+    fn repeat_simd(self, arch: F::Arch, point: usize) -> F {
+        F::splat(arch, self.0[point])
+    }
+
+    #[inline(always)]
+    fn load_simd(self, arch: F::Arch, first_point: usize) -> F {
+        let last_point = first_point + F::LANES;
+        let norm_group = &self.0[first_point..last_point];
+
+        // SAFETY: `norm_group` contains one complete SIMD group.
+        unsafe { F::load_simd(arch, norm_group.as_ptr()) }
+    }
+
+    #[inline(always)]
+    fn read(self, point: usize) -> f32 {
+        self.0[point]
+    }
+}
+
+/// Zero norm values for a metric that does not use one norm type.
+#[derive(Clone, Copy)]
+struct EmptyNorms;
+
+impl<F> NormValues<F> for EmptyNorms
+where
+    F: SIMDVector<Scalar = f32>,
+{
+    #[inline(always)]
+    fn repeat_simd(self, arch: F::Arch, point: usize) -> F {
+        let _ = point;
+        F::default(arch)
+    }
+
+    #[inline(always)]
+    fn load_simd(self, arch: F::Arch, first_point: usize) -> F {
+        let _ = first_point;
+        F::default(arch)
+    }
+
+    #[inline(always)]
+    fn read(self, point: usize) -> f32 {
+        let _ = point;
+        0.0
     }
 }
 
@@ -213,94 +265,79 @@ fn check_length(
 /// keeps the nearest `output.ncols()` centers in sampled-leader order for ties.
 /// NaN and positive infinity are not rankable.
 ///
-/// `tracker` stores the retained center-column IDs and scores for the current
+/// `ranked_leaders` stores the retained center-column IDs and scores for the current
 /// point. The function resets this state before it processes another point.
-fn select_point_leaders<F, M, const HAS_POINT_NORMS: bool, const HAS_LEADER_NORMS: bool>(
+fn select_point_leaders<F, M, P, L>(
     arch: F::Arch,
     dots: MatrixView<'_, f32>,
-    norms: PartitionNorms<'_>,
+    point_norms: P,
+    leader_norms: L,
     mut output: MutMatrixView<'_, u32>,
-    tracker: &mut [(u32, f32)],
+    ranked_leaders: &mut [(u32, f32)],
 ) -> Result<(), PartitionKernelError>
 where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: PartitionMetric,
+    P: NormValues<F> + Copy,
+    L: NormValues<F> + Copy,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let leader_count = dots.ncols();
     let fanout = output.ncols();
-    // Reset the tracker for each point. No assignment state can pass from one
-    // output row to another.
+    // Reset the retained leaders for each point. No assignment state can pass
+    // from one output row to another.
     for (point, (point_dots, point_output)) in dots
         .row_iter()
         .zip(output.as_mut_slice().chunks_exact_mut(fanout))
         .enumerate()
     {
-        tracker.fill((u32::MAX, f32::INFINITY));
-        let point_norm = if HAS_POINT_NORMS {
-            norms.point_norms[point]
-        } else {
-            0.0
-        };
-        let point_norm_vector = F::splat(arch, point_norm);
-        // Process all complete SIMD groups first. The scalar tail uses the
-        // metric's scalar operation order.
+        ranked_leaders.fill((u32::MAX, f32::INFINITY));
+        let point_norm_values = point_norms.repeat_simd(arch, point);
+        let point_norm = point_norms.read(point);
+        // Process all complete SIMD groups first. Single-value rankings use the
+        // non-vector operation order.
         let full = leader_count / F::LANES * F::LANES;
 
-        for base in (0..full).step_by(F::LANES) {
-            // SAFETY: `base + F::LANES <= full <= point_dots.len()`.
-            let point_dots = unsafe { F::load_simd(arch, point_dots.as_ptr().add(base)) };
-            let leader_norms = if HAS_LEADER_NORMS {
-                // SAFETY: `validate` established one norm value per leader.
-                // `base + F::LANES <= full <= leader_count`.
-                unsafe { F::load_simd(arch, norms.leader_norms.as_ptr().add(base)) }
-            } else {
-                F::default(arch)
-            };
-            insert_leader_lanes(
-                M::partition_ranking(arch, point_dots, point_norm_vector, leader_norms),
-                base,
-                tracker,
-            );
+        for first_leader in (0..full).step_by(F::LANES) {
+            // SAFETY: `first_leader + F::LANES <= full <= point_dots.len()`.
+            let dot = unsafe { F::load_simd(arch, point_dots.as_ptr().add(first_leader)) };
+            let leader_norm_values = leader_norms.load_simd(arch, first_leader);
+            let scores =
+                M::partition_ranking_simd(arch, dot, point_norm_values, leader_norm_values);
+            insert_leader_lanes(scores, first_leader, ranked_leaders);
         }
 
-        // Use scalar formulas for the tail. A padded SIMD load can read past the
-        // norm slice and can change L2 rounding.
+        // Use single-value formulas because SIMD padding can change L2 rounding.
         for (leader, &dot) in point_dots.iter().enumerate().skip(full) {
-            let leader_norm = if HAS_LEADER_NORMS {
-                norms.leader_norms[leader]
-            } else {
-                0.0
-            };
+            let leader_norm = leader_norms.read(leader);
             insert_leader(
-                tracker,
+                ranked_leaders,
                 leader as u32,
-                M::partition_ranking_scalar(dot, point_norm, leader_norm),
+                M::partition_ranking_single(dot, point_norm, leader_norm),
             );
         }
-        if tracker[fanout - 1].0 == u32::MAX {
+        if ranked_leaders[fanout - 1].0 == u32::MAX {
             return Err(PartitionKernelError::InsufficientRankableLeaders { point, fanout });
         }
-        // Scatter needs the sampled-center column IDs. Metric scores remain in
-        // the worker workspace.
-        for (destination, &(leader, _)) in point_output.iter_mut().zip(tracker.iter()) {
+        // Scatter needs sampled-center column IDs. Scores remain in scratch.
+        for (destination, &(leader, _)) in point_output.iter_mut().zip(ranked_leaders.iter()) {
             *destination = leader;
         }
     }
     Ok(())
 }
 
-/// Offer one SIMD group of sampled centers to the current point's tracker.
+/// Offer one SIMD group of sampled centers to the current point's ranked_leaders.
 ///
 /// `first_leader` is the matrix-column ID of the first lane. Lanes enter in
 /// sampled-leader order, which preserves tie order.
-fn insert_leader_lanes<F>(scores: F, first_leader: usize, tracker: &mut [(u32, f32)])
+fn insert_leader_lanes<F>(scores: F, first_leader: usize, ranked_leaders: &mut [(u32, f32)])
 where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    let threshold = F::splat(scores.arch(), tracker[tracker.len() - 1].1);
+    let threshold = F::splat(scores.arch(), ranked_leaders[ranked_leaders.len() - 1].1);
     let eligible = scores.lt_simd(threshold);
     if eligible.none() {
         return;
@@ -311,26 +348,26 @@ where
     while lanes != 0 {
         let lane = lanes.trailing_zeros() as usize;
         lanes &= lanes - 1;
-        insert_leader(tracker, (first_leader + lane) as u32, values[lane]);
+        insert_leader(ranked_leaders, (first_leader + lane) as u32, values[lane]);
     }
 }
 
 /// Insert one sampled partition center into the current point's retained set.
 ///
-/// `leader` is the center's column ID in the point-to-leader matrix. `tracker`
+/// `leader` is the center's column ID in the point-to-leader matrix. `ranked_leaders`
 /// stores retained centers in nearest-first order. Equal scores and NaN do not
 /// enter, so sampled-leader order resolves ties.
 #[inline(always)]
-fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, score: f32) {
-    let threshold = tracker.len() - 1;
-    if score.partial_cmp(&tracker[threshold].1) != Some(std::cmp::Ordering::Less) {
+fn insert_leader(ranked_leaders: &mut [(u32, f32)], leader: u32, score: f32) {
+    let threshold = ranked_leaders.len() - 1;
+    if score.partial_cmp(&ranked_leaders[threshold].1) != Some(std::cmp::Ordering::Less) {
         return;
     }
 
-    tracker[threshold] = (leader, score);
+    ranked_leaders[threshold] = (leader, score);
     let mut slot = threshold;
-    while slot > 0 && tracker[slot].1 < tracker[slot - 1].1 {
-        tracker.swap(slot, slot - 1);
+    while slot > 0 && ranked_leaders[slot].1 < ranked_leaders[slot - 1].1 {
+        ranked_leaders.swap(slot, slot - 1);
         slot -= 1;
     }
 }
@@ -339,7 +376,7 @@ fn insert_leader(tracker: &mut [(u32, f32)], leader: u32, score: f32) {
 struct DispatchedPartitionCall<'a> {
     input: PartitionInput<'a>,
     output: MutMatrixView<'a, u32>,
-    workspace: &'a mut PartitionKernelWorkspace,
+    ranked_leaders: &'a mut Vec<(u32, f32)>,
 }
 
 #[cfg(test)]
@@ -359,19 +396,24 @@ where
         use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
         match self.0 {
-            Metric::L2 => nearest_leaders::<A, L2>(arch, call.input, call.output, call.workspace),
+            Metric::L2 => {
+                nearest_leaders::<A, L2>(arch, call.input, call.output, call.ranked_leaders)
+            }
             Metric::Cosine => {
-                nearest_leaders::<A, Cosine>(arch, call.input, call.output, call.workspace)
+                nearest_leaders::<A, Cosine>(arch, call.input, call.output, call.ranked_leaders)
             }
             Metric::CosineNormalized => nearest_leaders::<A, CosineNormalized>(
                 arch,
                 call.input,
                 call.output,
-                call.workspace,
+                call.ranked_leaders,
             ),
-            Metric::InnerProduct => {
-                nearest_leaders::<A, InnerProduct>(arch, call.input, call.output, call.workspace)
-            }
+            Metric::InnerProduct => nearest_leaders::<A, InnerProduct>(
+                arch,
+                call.input,
+                call.output,
+                call.ranked_leaders,
+            ),
         }
     }
 }
@@ -381,14 +423,14 @@ fn dispatch_nearest_leaders(
     metric: Metric,
     input: PartitionInput<'_>,
     output: MutMatrixView<'_, u32>,
-    workspace: &mut PartitionKernelWorkspace,
+    ranked_leaders: &mut Vec<(u32, f32)>,
 ) -> Result<(), PartitionKernelError> {
     diskann_wide::arch::dispatch1_no_features(
         DispatchPartitionForTest(metric),
         DispatchedPartitionCall {
             input,
             output,
-            workspace,
+            ranked_leaders,
         },
     )
 }
@@ -403,7 +445,6 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     fn test_input<'a>(
-        _metric: Metric,
         dots: &'a [f32],
         point_count: usize,
         leader_count: usize,
@@ -419,10 +460,9 @@ mod tests {
         }
     }
 
-    // This oracle checks SIMD chunking, scalar tails, and tracker order. It uses
-    // the scalar ranking formula for metric `M`.
-    fn scalar_traversal_reference<M: PartitionMetric>(
-        metric: Metric,
+    // This oracle checks SIMD groups, single values, and retained-leader order.
+    // It uses the single-value ranking formula for metric `M`.
+    fn ranking_reference<M: PartitionMetric>(
         input: PartitionInput<'_>,
         fanout: usize,
         output: &mut [u32],
@@ -434,40 +474,48 @@ mod tests {
             .enumerate()
         {
             let point_norm = input.norms.point_norms.get(point).copied().unwrap_or(0.0);
-            let mut tracker = vec![(u32::MAX, f32::INFINITY); fanout];
+            let mut ranked_leaders = vec![(u32::MAX, f32::INFINITY); fanout];
             for (leader, &dot) in point_dots.iter().enumerate() {
-                let leader_norm = if matches!(metric, Metric::L2 | Metric::Cosine) {
-                    input.norms.leader_norms[leader]
-                } else {
-                    0.0
-                };
                 insert_leader(
-                    &mut tracker,
+                    &mut ranked_leaders,
                     leader as u32,
-                    M::partition_ranking_scalar(dot, point_norm, leader_norm),
+                    M::partition_ranking_single(
+                        dot,
+                        point_norm,
+                        input.norms.leader_norms.get(leader).copied().unwrap_or(0.0),
+                    ),
                 );
             }
-            for (destination, &(leader, _)) in point_output.iter_mut().zip(&tracker) {
+            for (destination, &(leader, _)) in point_output.iter_mut().zip(&ranked_leaders) {
                 *destination = leader;
             }
         }
     }
 
-    #[test]
-    fn scalar_ranking_matches_metric_contract() {
-        assert_eq!(L2::partition_ranking_scalar(2.0, 0.0, 9.0), 5.0);
-        assert_eq!(
-            CosineNormalized::partition_ranking_scalar(0.25, 0.0, 0.0),
-            0.75
-        );
-        assert_eq!(InnerProduct::partition_ranking_scalar(3.0, 0.0, 0.0), -3.0);
-        assert_eq!(Cosine::partition_ranking_scalar(4.0, 2.0, 4.0), 0.5);
-        assert_eq!(Cosine::partition_ranking_scalar(4.0, 0.0, 4.0), 1.0);
-        assert!(Cosine::partition_ranking_scalar(1.0, f32::NAN, 1.0).is_nan());
+    fn single_ranking<M: PartitionMetric>(
+        dot_product: f32,
+        point_norms: &[f32],
+        leader_norms: &[f32],
+    ) -> f32 {
+        M::partition_ranking_single(
+            dot_product,
+            point_norms.first().copied().unwrap_or(0.0),
+            leader_norms.first().copied().unwrap_or(0.0),
+        )
     }
 
     #[test]
-    fn cosine_special_norms_match_scalar_and_dispatched_kernel() {
+    fn single_ranking_matches_metric_contract() {
+        assert_eq!(single_ranking::<L2>(2.0, &[], &[9.0]), 5.0);
+        assert_eq!(single_ranking::<CosineNormalized>(0.25, &[], &[]), 0.75);
+        assert_eq!(single_ranking::<InnerProduct>(3.0, &[], &[]), -3.0);
+        assert_eq!(single_ranking::<Cosine>(4.0, &[2.0], &[4.0]), 0.5);
+        assert_eq!(single_ranking::<Cosine>(4.0, &[0.0], &[4.0]), 1.0);
+        assert!(single_ranking::<Cosine>(1.0, &[f32::NAN], &[1.0]).is_nan());
+    }
+
+    #[test]
+    fn cosine_special_norms_match_single_and_dispatched_kernel() {
         let leader_count = 17;
         let point_norms = [0.0, 0.0, f32::MIN_POSITIVE.sqrt(), f32::NAN];
         let dots = vec![1.0; point_norms.len() * leader_count];
@@ -479,7 +527,6 @@ mod tests {
             f32::NAN,
         ]);
         let input = test_input(
-            Metric::Cosine,
             &dots,
             point_norms.len(),
             leader_count,
@@ -487,13 +534,13 @@ mod tests {
             &leader_norms,
         );
         let mut expected = vec![u32::MAX; point_norms.len() * 2];
-        scalar_traversal_reference::<Cosine>(Metric::Cosine, input, 2, &mut expected);
+        ranking_reference::<Cosine>(input, 2, &mut expected);
         let mut actual = vec![u32::MAX; point_norms.len() * 2];
         dispatch_nearest_leaders(
             Metric::Cosine,
             input,
             MutMatrixView::try_from(actual.as_mut_slice(), point_norms.len(), 2).unwrap(),
-            &mut PartitionKernelWorkspace::default(),
+            &mut Vec::new(),
         )
         .unwrap();
 
@@ -503,26 +550,42 @@ mod tests {
     }
 
     #[test]
-    fn scalar_topk_orders_candidates_and_preserves_ties() {
-        let mut tracker = vec![(u32::MAX, f32::INFINITY); 4];
+    fn topk_orders_candidates_and_preserves_ties() {
+        let mut ranked_leaders = vec![(u32::MAX, f32::INFINITY); 4];
         for (leader, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 1.0)] {
-            insert_leader(&mut tracker, leader, distance);
+            insert_leader(&mut ranked_leaders, leader, distance);
         }
-        insert_leader(&mut tracker, 5, f32::NAN);
+        insert_leader(&mut ranked_leaders, 5, f32::NAN);
 
-        assert_eq!(tracker[..], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
+        assert_eq!(ranked_leaders[..], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
     }
 
     #[test]
-    fn workspace_reuses_runtime_fanout_capacity() {
-        let mut workspace = PartitionKernelWorkspace::default();
-        workspace.prepare(32).unwrap();
-        let allocation = workspace.tracker.as_ptr();
+    fn ranked_leaders_reuses_runtime_fanout_capacity() {
+        let dots = [0.0; 32];
+        let input = test_input(&dots, 1, 32, &[], &[]);
+        let mut ranked_leaders = Vec::new();
+        let mut wide_output = [u32::MAX; 32];
+        dispatch_nearest_leaders(
+            Metric::InnerProduct,
+            input,
+            MutMatrixView::try_from(&mut wide_output[..], 1, 32).unwrap(),
+            &mut ranked_leaders,
+        )
+        .unwrap();
+        let allocation = ranked_leaders.as_ptr();
 
-        workspace.prepare(3).unwrap();
+        let mut narrow_output = [u32::MAX; 3];
+        dispatch_nearest_leaders(
+            Metric::InnerProduct,
+            input,
+            MutMatrixView::try_from(&mut narrow_output[..], 1, 3).unwrap(),
+            &mut ranked_leaders,
+        )
+        .unwrap();
 
-        assert_eq!(workspace.tracker.as_ptr(), allocation);
-        assert_eq!(workspace.tracker.len(), 3);
+        assert_eq!(ranked_leaders.as_ptr(), allocation);
+        assert_eq!(ranked_leaders.len(), 3);
     }
 }
 #[cfg(test)]
@@ -532,15 +595,11 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod integration_tests {
-    use super::{
-        PartitionInput, PartitionKernelError, PartitionKernelWorkspace, PartitionNorms,
-        dispatch_nearest_leaders,
-    };
+    use super::{PartitionInput, PartitionKernelError, PartitionNorms, dispatch_nearest_leaders};
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
 
     fn test_input<'a>(
-        _metric: Metric,
         dots: &'a [f32],
         point_count: usize,
         leader_count: usize,
@@ -656,7 +715,7 @@ mod integration_tests {
             metric,
             input,
             MutMatrixView::try_from(output.as_mut_slice(), input.dots.nrows(), fanout).unwrap(),
-            &mut PartitionKernelWorkspace::default(),
+            &mut Vec::new(),
         )?;
         Ok(output)
     }
@@ -671,7 +730,7 @@ mod integration_tests {
         ] {
             for leader_count in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
                 let (dots, point_norms, leader_norms) = differential_data(metric, leader_count);
-                let input = test_input(metric, &dots, 2, leader_count, &point_norms, &leader_norms);
+                let input = test_input(&dots, 2, leader_count, &point_norms, &leader_norms);
                 for fanout in [1, 2, 16, 17, 32] {
                     if fanout >= leader_count {
                         continue;
@@ -696,18 +755,13 @@ mod integration_tests {
         let norms = [0.0, 1.0, 4.0, 9.0];
 
         assert_eq!(
-            run_partition_kernel(
-                Metric::L2,
-                test_input(Metric::L2, &dots, 2, 4, &[], &norms),
-                2
-            )
-            .unwrap(),
+            run_partition_kernel(Metric::L2, test_input(&dots, 2, 4, &[], &norms), 2).unwrap(),
             [0, 1, 2, 1]
         );
     }
 
     #[test]
-    fn l2_scalar_tail_can_outrank_a_fused_simd_lane() {
+    fn l2_single_can_outrank_a_fused_simd_lane() {
         let mut dots = [0.0; 17];
         dots[0] = f32::MAX;
         dots[16] = f32::MAX;
@@ -716,7 +770,7 @@ mod integration_tests {
         assert_eq!(
             run_partition_kernel(
                 Metric::L2,
-                test_input(Metric::L2, &dots, 1, 17, &[], &leader_squared_norms,),
+                test_input(&dots, 1, 17, &[], &leader_squared_norms,),
                 1,
             )
             .unwrap(),
@@ -745,7 +799,7 @@ mod integration_tests {
             assert_eq!(
                 run_partition_kernel(
                     metric,
-                    test_input(metric, &dots, 2, 3, point_norms, leader_norms),
+                    test_input(&dots, 2, 3, point_norms, leader_norms),
                     2,
                 )
                 .unwrap(),
@@ -760,7 +814,7 @@ mod integration_tests {
         assert_eq!(
             run_partition_kernel(
                 Metric::Cosine,
-                test_input(Metric::Cosine, &[100.0, -100.0], 1, 2, &[0.0], &[1.0, 1.0]),
+                test_input(&[100.0, -100.0], 1, 2, &[0.0], &[1.0, 1.0]),
                 2,
             )
             .unwrap(),
@@ -773,12 +827,8 @@ mod integration_tests {
         let mut dots = [0.0; 8];
         dots[7] = -f32::MAX;
         assert_eq!(
-            run_partition_kernel(
-                Metric::InnerProduct,
-                test_input(Metric::InnerProduct, &dots, 1, 8, &[], &[]),
-                8
-            )
-            .unwrap(),
+            run_partition_kernel(Metric::InnerProduct, test_input(&dots, 1, 8, &[], &[]), 8)
+                .unwrap(),
             [0, 1, 2, 3, 4, 5, 6, 7]
         );
     }
@@ -788,7 +838,7 @@ mod integration_tests {
         assert_eq!(
             run_partition_kernel(
                 Metric::InnerProduct,
-                test_input(Metric::InnerProduct, &[f32::NAN, 3.0, 2.0], 1, 3, &[], &[]),
+                test_input(&[f32::NAN, 3.0, 2.0], 1, 3, &[], &[]),
                 2,
             )
             .unwrap(),
@@ -801,7 +851,7 @@ mod integration_tests {
         assert_eq!(
             run_partition_kernel(
                 Metric::InnerProduct,
-                test_input(Metric::InnerProduct, &[f32::NAN, 3.0], 1, 2, &[], &[]),
+                test_input(&[f32::NAN, 3.0], 1, 2, &[], &[]),
                 2,
             ),
             Err(PartitionKernelError::InsufficientRankableLeaders {
@@ -813,21 +863,16 @@ mod integration_tests {
 
     #[test]
     fn accepts_empty_points_zero_fanout_and_largest_leader_id() {
+        run_partition_kernel(Metric::InnerProduct, test_input(&[], 0, 3, &[], &[]), 2).unwrap();
         run_partition_kernel(
             Metric::InnerProduct,
-            test_input(Metric::InnerProduct, &[], 0, 3, &[], &[]),
-            2,
-        )
-        .unwrap();
-        run_partition_kernel(
-            Metric::InnerProduct,
-            test_input(Metric::InnerProduct, &[1.0, 2.0, 3.0], 1, 3, &[], &[]),
+            test_input(&[1.0, 2.0, 3.0], 1, 3, &[], &[]),
             0,
         )
         .unwrap();
         run_partition_kernel(
             Metric::InnerProduct,
-            test_input(Metric::InnerProduct, &[], 0, u32::MAX as usize, &[], &[]),
+            test_input(&[], 0, u32::MAX as usize, &[], &[]),
             0,
         )
         .unwrap();
@@ -836,14 +881,7 @@ mod integration_tests {
         assert_eq!(
             run_partition_kernel(
                 Metric::InnerProduct,
-                test_input(
-                    Metric::InnerProduct,
-                    &[],
-                    0,
-                    u32::MAX as usize + 1,
-                    &[],
-                    &[],
-                ),
+                test_input(&[], 0, u32::MAX as usize + 1, &[], &[],),
                 0,
             ),
             Err(PartitionKernelError::TooManyLeaders(u32::MAX as usize + 1))
@@ -853,14 +891,14 @@ mod integration_tests {
     #[test]
     fn rejects_wrong_output_norms_and_fanout() {
         let dots = [0.0; 6];
-        let valid_input = test_input(Metric::InnerProduct, &dots, 2, 3, &[], &[]);
+        let valid_input = test_input(&dots, 2, 3, &[], &[]);
         let mut wrong_output = [u32::MAX; 3];
         assert_eq!(
             dispatch_nearest_leaders(
                 Metric::InnerProduct,
                 valid_input,
                 MutMatrixView::try_from(&mut wrong_output[..], 1, 3).unwrap(),
-                &mut PartitionKernelWorkspace::default(),
+                &mut Vec::new(),
             ),
             Err(PartitionKernelError::InvalidOutputShape {
                 expected_rows: 2,
@@ -885,7 +923,6 @@ mod integration_tests {
                 actual: 2,
             })
         );
-
         assert_eq!(
             run_partition_kernel(Metric::InnerProduct, valid_input, 4),
             Err(PartitionKernelError::InvalidFanout {
@@ -896,11 +933,7 @@ mod integration_tests {
 
         let one = [0.0];
         assert_eq!(
-            run_partition_kernel(
-                Metric::InnerProduct,
-                test_input(Metric::InnerProduct, &one, 1, 1, &[], &[]),
-                2,
-            ),
+            run_partition_kernel(Metric::InnerProduct, test_input(&one, 1, 1, &[], &[]), 2,),
             Err(PartitionKernelError::InvalidFanout {
                 fanout: 2,
                 leader_count: 1,

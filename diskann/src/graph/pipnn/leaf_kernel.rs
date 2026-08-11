@@ -14,12 +14,12 @@
 //! [`MAX_LEAF_NEIGHBORS`]. Positive widths use fixed arrays.
 //!
 //! Strict comparisons keep scan order for equal distances. They do not rank NaN.
-//! All supported metrics use the same scalar and SIMD traversal.
+//! All supported metrics use the same SIMD-group and single-value traversal.
 //!
 //! The caller supplies concrete architecture `A` and metric `M`. The function
 //! checks all shapes and local-ID bounds before it changes workspace or uses an
-//! unchecked SIMD load. [`LeafKernelWorkspace`] stores reusable norms and
-//! rejection thresholds.
+//! unchecked SIMD load. [`LeafKernelWorkspace`] stores reusable rejection
+//! thresholds.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
@@ -168,46 +168,46 @@ where
     workspace.worst.fill(f32::INFINITY);
 
     match (norms.is_empty(), neighbor_count) {
-        (false, 1) => scan_point_pairs::<A::f32x16, M, 1, true>(
+        (false, 1) => scan_point_pairs::<A::f32x16, M, _, 1>(
             arch,
             input,
             output.as_mut_slice(),
-            norms,
+            PreparedLeafNorms(norms),
             &mut workspace.worst,
         ),
-        (false, 2) => scan_point_pairs::<A::f32x16, M, 2, true>(
+        (false, 2) => scan_point_pairs::<A::f32x16, M, _, 2>(
             arch,
             input,
             output.as_mut_slice(),
-            norms,
+            PreparedLeafNorms(norms),
             &mut workspace.worst,
         ),
-        (false, 3) => scan_point_pairs::<A::f32x16, M, 3, true>(
+        (false, 3) => scan_point_pairs::<A::f32x16, M, _, 3>(
             arch,
             input,
             output.as_mut_slice(),
-            norms,
+            PreparedLeafNorms(norms),
             &mut workspace.worst,
         ),
-        (true, 1) => scan_point_pairs::<A::f32x16, M, 1, false>(
+        (true, 1) => scan_point_pairs::<A::f32x16, M, _, 1>(
             arch,
             input,
             output.as_mut_slice(),
-            norms,
+            EmptyLeafNorms,
             &mut workspace.worst,
         ),
-        (true, 2) => scan_point_pairs::<A::f32x16, M, 2, false>(
+        (true, 2) => scan_point_pairs::<A::f32x16, M, _, 2>(
             arch,
             input,
             output.as_mut_slice(),
-            norms,
+            EmptyLeafNorms,
             &mut workspace.worst,
         ),
-        (true, 3) => scan_point_pairs::<A::f32x16, M, 3, false>(
+        (true, 3) => scan_point_pairs::<A::f32x16, M, _, 3>(
             arch,
             input,
             output.as_mut_slice(),
-            norms,
+            EmptyLeafNorms,
             &mut workspace.worst,
         ),
         _ => {
@@ -291,23 +291,94 @@ fn resize<T: Clone>(
     Ok(())
 }
 
+/// Provide norm values for one leaf scan.
+trait LeafNormAccess<F>
+where
+    F: SIMDVector<Scalar = f32>,
+{
+    /// Repeat one point norm in all SIMD lanes.
+    fn repeat_simd(self, arch: F::Arch, point: usize) -> F;
+
+    /// Load one complete SIMD group of point norms.
+    fn load_simd(self, arch: F::Arch, first_point: usize) -> F;
+
+    /// Read one point norm.
+    fn read(self, point: usize) -> f32;
+}
+
+/// Prepared norm values for all points in one leaf.
+#[derive(Clone, Copy)]
+struct PreparedLeafNorms<'a>(&'a [f32]);
+
+impl<F> LeafNormAccess<F> for PreparedLeafNorms<'_>
+where
+    F: SIMDVector<Scalar = f32>,
+{
+    #[inline(always)]
+    fn repeat_simd(self, arch: F::Arch, point: usize) -> F {
+        F::splat(arch, self.0[point])
+    }
+
+    #[inline(always)]
+    fn load_simd(self, arch: F::Arch, first_point: usize) -> F {
+        let last_point = first_point + F::LANES;
+        let norm_group = &self.0[first_point..last_point];
+
+        // SAFETY: `norm_group` contains one complete SIMD group.
+        unsafe { F::load_simd(arch, norm_group.as_ptr()) }
+    }
+
+    #[inline(always)]
+    fn read(self, point: usize) -> f32 {
+        self.0[point]
+    }
+}
+
+/// Zero norm values for a metric that does not use leaf norms.
+#[derive(Clone, Copy)]
+struct EmptyLeafNorms;
+
+impl<F> LeafNormAccess<F> for EmptyLeafNorms
+where
+    F: SIMDVector<Scalar = f32>,
+{
+    #[inline(always)]
+    fn repeat_simd(self, arch: F::Arch, point: usize) -> F {
+        let _ = point;
+        F::default(arch)
+    }
+
+    #[inline(always)]
+    fn load_simd(self, arch: F::Arch, first_point: usize) -> F {
+        let _ = first_point;
+        F::default(arch)
+    }
+
+    #[inline(always)]
+    fn read(self, point: usize) -> f32 {
+        let _ = point;
+        0.0
+    }
+}
+
 /// Select neighbors from all unordered point pairs in one leaf.
 ///
 /// The function reads the strict lower triangle once. It offers each distance to
-/// both endpoint lists. SIMD groups and the scalar tail preserve pair scan order.
+/// both endpoint lists. SIMD groups and single values preserve pair scan order.
 ///
-/// `input` supplies square dot products. `norms` contains prepared norm values.
+/// `input` supplies square dot products. `norms` supplies metric norm values.
 #[inline(never)]
-fn scan_point_pairs<F, M, const N: usize, const HAS_NORMS: bool>(
+fn scan_point_pairs<F, M, R, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
-    norms: &[f32],
+    norms: R,
     worst: &mut [f32],
 ) where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
     M: LeafMetric,
+    R: LeafNormAccess<F> + Copy,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let (output, _) = output.as_chunks_mut::<N>();
@@ -319,27 +390,22 @@ fn scan_point_pairs<F, M, const N: usize, const HAS_NORMS: bool>(
     // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_norm = if HAS_NORMS { norms[source] } else { 0.0 };
-        let source_norms = F::splat(arch, source_norm);
+        let source_norms = norms.repeat_simd(arch, source);
+        let source_norm = norms.read(source);
         // SAFETY: `nearest_neighbors` created one threshold for each point.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
         let full = source / F::LANES * F::LANES;
 
         while target < full {
-            // SAFETY: the full chunk is contained in this source's strict-lower prefix.
+            // SAFETY: The full chunk is in this source's strict-lower prefix.
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
-            let target_norms = if HAS_NORMS {
-                // SAFETY: the full target chunk is below `source < point_count`.
-                unsafe { F::load_simd(arch, norms.as_ptr().add(target)) }
-            } else {
-                F::default(arch)
-            };
-            let distances = M::leaf_distance(arch, pair_dots, source_norms, target_norms);
+            let target_norms = norms.load_simd(arch, target);
+            let distances = M::leaf_distance_simd(arch, pair_dots, source_norms, target_norms);
             // Every pair may improve the current source and its earlier target.
             // Derive both masks before either endpoint mutates its threshold.
             let source_eligible = distances.lt_simd(F::splat(arch, source_worst));
-            // SAFETY: the full target chunk is below `source < point_count`.
+            // SAFETY: The full target chunk is below `source < point_count`.
             // `nearest_neighbors` created one threshold for each point.
             let target_worst = unsafe { F::load_simd(arch, worst_ptr.add(target)) };
             let target_eligible = distances.lt_simd(target_worst);
@@ -380,15 +446,10 @@ fn scan_point_pairs<F, M, const N: usize, const HAS_NORMS: bool>(
         }
 
         while target < source {
-            // SAFETY: the scalar target remains in this source's strict-lower prefix.
+            // SAFETY: The target is in this source's strict-lower prefix.
             let dot = unsafe { *dots.get_unchecked(source_start + target) };
-            let target_norm = if HAS_NORMS {
-                // SAFETY: `target < source < point_count == norms.len()`.
-                unsafe { *norms.get_unchecked(target) }
-            } else {
-                0.0
-            };
-            let distance = M::leaf_distance_scalar(dot, source_norm, target_norm);
+            let target_norm = norms.read(target);
+            let distance = M::leaf_distance_single(dot, source_norm, target_norm);
             if distance < source_worst {
                 source_worst = insert_fixed_neighbor(&mut output[source], target as u32, distance);
             }
@@ -534,16 +595,24 @@ fn prepared_test_norms(
     metric: diskann_vector::distance::Metric,
     input: MatrixView<'_, f32>,
 ) -> Vec<f32> {
+    use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2, NormPreparation};
     use diskann_vector::distance::Metric;
 
+    fn prepare<M: LeafMetric>(input: MatrixView<'_, f32>) -> Vec<f32> {
+        let mut norms = Vec::new();
+        M::prepare_leaf_norms(NormPreparation {
+            values: input,
+            norms: &mut norms,
+        })
+        .unwrap();
+        norms
+    }
+
     match metric {
-        Metric::L2 => (0..input.nrows())
-            .map(|point| input[(point, point)])
-            .collect(),
-        Metric::Cosine => (0..input.nrows())
-            .map(|point| super::kernel_metric::norm_from_squared(input[(point, point)]))
-            .collect(),
-        Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
+        Metric::L2 => prepare::<L2>(input),
+        Metric::Cosine => prepare::<Cosine>(input),
+        Metric::CosineNormalized => prepare::<CosineNormalized>(input),
+        Metric::InnerProduct => prepare::<InnerProduct>(input),
     }
 }
 

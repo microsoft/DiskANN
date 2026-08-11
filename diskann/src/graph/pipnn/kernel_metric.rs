@@ -13,12 +13,25 @@ pub(super) use partition::PartitionMetric;
 
 use std::collections::TryReserveError;
 
+use diskann_utils::views::MatrixView;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
 pub(super) struct L2;
 pub(super) struct Cosine;
 pub(super) struct CosineNormalized;
 pub(super) struct InnerProduct;
+
+pub(super) struct NormPreparation<'a, 'b> {
+    pub(super) values: MatrixView<'a, f32>,
+    pub(super) norms: &'b mut Vec<f32>,
+}
+
+/// Prepared norms for one point stripe and its sampled leaders.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PartitionNorms<'a> {
+    pub(super) point_norms: &'a [f32],
+    pub(super) leader_norms: &'a [f32],
+}
 
 pub(super) fn resize_norms(norms: &mut Vec<f32>, len: usize) -> Result<(), TryReserveError> {
     norms.try_reserve(len.saturating_sub(norms.len()))?;
@@ -38,12 +51,12 @@ pub(super) fn norm_from_squared(squared_norm: f32) -> f32 {
     }
 }
 
-/// This function computes cosine distance with the DiskANN zero-norm and NaN rules.
+/// Compute SIMD cosine distance with the DiskANN zero-norm and NaN rules.
 ///
 /// Each lane contains one point pair. A zero norm produces zero similarity. A
 /// NaN norm remains NaN unless the other norm is zero.
 #[inline(always)]
-pub(super) fn cosine_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
+pub(super) fn cosine_distance_simd<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
 where
     F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
@@ -59,8 +72,9 @@ where
     one - cosine
 }
 
+/// Compute one cosine distance with the DiskANN zero-norm and NaN rules.
 #[inline(always)]
-pub(super) fn cosine_distance_scalar(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
+pub(super) fn cosine_distance_single(dot: f32, source_norm: f32, target_norm: f32) -> f32 {
     if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {
         1.0
     } else {

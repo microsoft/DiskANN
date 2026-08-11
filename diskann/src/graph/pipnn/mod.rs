@@ -6,15 +6,15 @@
 //! Numerical kernels for PiPNN graph construction.
 //!
 //! [`partition_kernel`] converts point-to-leader dot products into sorted leader
-//! positions. The output width sets the fanout. One workspace stores the
-//! runtime-sized tracker and reuses it for each point.
+//! positions. The output width sets the fanout. A scratch vector stores the
+//! ranked leaders and reuses its allocation for each point.
 //!
 //! [`leaf_kernel`] reads a lower-triangular Gram matrix. It evaluates each point
 //! pair once and updates both points. Each point retains at most three local
 //! neighbors.
 //!
 //! `kernel_metric` defines metric markers and shared math. Separate leaf and
-//! partition traits define each kernel's scalar and SIMD formulas.
+//! partition traits define norm preparation and ranking formulas.
 //!
 //! The graph builder selects architecture `A` and metric `M` once. It passes
 //! these concrete types to both kernels.
