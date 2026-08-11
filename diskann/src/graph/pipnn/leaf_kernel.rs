@@ -24,7 +24,7 @@
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
 
-use super::kernel_metric::LeafKernelMetric;
+use super::kernel_metric::LeafMetric;
 
 /// Largest leaf-local neighbor count supported by the fixed insertion kernel.
 pub(super) const MAX_LEAF_NEIGHBORS: usize = 3;
@@ -149,7 +149,7 @@ where
     A: Architecture,
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    M: LeafKernelMetric,
+    M: LeafMetric,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     validate(input, norms, &output)?;
@@ -307,7 +307,7 @@ fn scan_point_pairs<F, M, const N: usize, const HAS_NORMS: bool>(
 ) where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
-    M: LeafKernelMetric,
+    M: LeafMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let (output, _) = output.as_chunks_mut::<N>();

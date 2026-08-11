@@ -23,7 +23,7 @@ use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
 };
 
-use super::kernel_metric::PartitionKernelMetric;
+use super::kernel_metric::PartitionMetric;
 
 /// Reusable nearest-center state for one partition worker.
 ///
@@ -115,7 +115,7 @@ where
     A::f32x16: std::ops::Div<Output = A::f32x16>,
     <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
 {
     let norms = validate(metric, input, &output)?;
     let fanout = output.ncols();
@@ -230,7 +230,7 @@ fn select_point_leaders<F, M, const HAS_POINT_NORMS: bool, const HAS_LEADER_NORM
 where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
     F::Mask: SIMDSelect<F>,
-    M: PartitionKernelMetric,
+    M: PartitionMetric,
     u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let leader_count = dots.ncols();
@@ -412,7 +412,7 @@ fn dispatch_nearest_leaders(
 #[cfg(test)]
 mod tests {
     use super::super::kernel_metric::{
-        Cosine, CosineNormalized, InnerProduct, L2, PartitionKernelMetric,
+        Cosine, CosineNormalized, InnerProduct, L2, PartitionMetric,
     };
 
     use super::*;
@@ -436,7 +436,7 @@ mod tests {
 
     // This oracle checks SIMD chunking, scalar tails, and tracker order. It uses
     // the scalar ranking formula for metric `M`.
-    fn scalar_traversal_reference<M: PartitionKernelMetric>(
+    fn scalar_traversal_reference<M: PartitionMetric>(
         metric: Metric,
         input: PartitionInput<'_>,
         fanout: usize,
