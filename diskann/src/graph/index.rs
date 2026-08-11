@@ -2599,9 +2599,9 @@ where
         // To avoid many hash lookups, we pull out just the candidates we're going to prune
         // into an auxiliary vector which can be accessed linearly.
         //
-        // During the pruning phase, we store results by their relative position in the
-        // cache, and only resolve to their `local_id` at the end.
-        let cache: Vec<(f32, Option<_>)> = pool
+        // Iteration preserves the pool's nearest-first order. Pruning stores results
+        // by cache position and resolves each position to `local_id` afterward.
+        let sorted_cache: Vec<(f32, Option<_>)> = pool
             .iter()
             .map(|neighbor| {
                 // Filter out self loops.
@@ -2615,8 +2615,7 @@ where
             .collect();
 
         let found = prune::robust_prune(
-            pool,
-            &cache,
+            &sorted_cache,
             states,
             degree,
             alpha,

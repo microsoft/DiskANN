@@ -97,16 +97,14 @@ pub(crate) struct State {
 
 /// Select a degree-bounded neighbor set with Vamana RobustPrune.
 ///
-/// `pool` contains candidates in nearest-first order from the source point.
-/// `cache` contains the vector for the candidate at the same position. `None`
-/// excludes that candidate without changing positional alignment. `states` has
-/// one entry for each candidate position.
+/// `sorted_cache` stores each source distance and candidate vector in ascending
+/// source-distance order. `None` excludes that candidate without changing
+/// positional alignment. `states` has one entry for each candidate position.
 ///
 /// The function writes selected candidate indexes to `states[..result]` and
 /// returns `result`. The caller converts those indexes to graph IDs.
-pub(in crate::graph) fn robust_prune<I, V, D>(
-    pool: &SortedNeighbors<'_, I>,
-    cache: &[(f32, Option<V>)],
+pub(in crate::graph) fn robust_prune<V, D>(
+    sorted_cache: &[(f32, Option<V>)],
     states: &mut [State],
     degree: usize,
     alpha: f32,
@@ -114,9 +112,13 @@ pub(in crate::graph) fn robust_prune<I, V, D>(
     mut compute_distance: D,
 ) -> usize
 where
-    I: Eq,
     D: FnMut(&V, &V) -> f32,
 {
+    debug_assert!(
+        sorted_cache.is_sorted_by_key(|(distance, _)| distance),
+        "candidate cache must be sorted by source distance"
+    );
+
     let mut current_alpha = 1.0f32;
     let increment_factor = alpha.min(1.2);
 
@@ -136,11 +138,11 @@ where
     //
     // On the implementation side, we use `states` in the following way:
     //
-    // * `states[n].neighbor` is the **index** in `pool` of the `n`th **neighbor**.
+    // * `states[n].neighbor` is the **index** in `sorted_cache` of the `n`th **neighbor**.
     //   Note that a "neighbor" is a candidate that passes pruning.
     //
     //   Very important: to get the index `j` in the above description, we need to
-    //   check `pool[states[n].neighbor]`.
+    //   check `sorted_cache[states[n].neighbor]`.
     //
     //   This indexing naturally skips candidates `j` that have not been promoted to
     //   neighbors.
@@ -150,19 +152,17 @@ where
     //   excludes it from future consideration.
     //
     // * `states[i].last_checked` is the highest value of `n` against which the
-    //   occlude factor for `j = pool[states[n].neighbor]` has been checked.
+    //   occlude factor for `j = sorted_cache[states[n].neighbor]` has been checked.
     //
     //   The maximum value this should reach is `i`.
     //
     // Note that we use `states` for both "candidate" and "neighbor" tracking.
     let mut found = 0;
     while found < degree {
-        for (i, (_, neighbor)) in cache.iter().enumerate() {
+        for (i, (neighbor_distance, neighbor)) in sorted_cache.iter().enumerate() {
             if found >= degree {
                 break;
             }
-
-            let neighbor_distance = pool[i].distance();
 
             // The tracking states for candidate `i`.
             let State {
@@ -198,8 +198,8 @@ where
                 let result_position = states[last_checked as usize].neighbor.into_usize();
                 last_checked += 1;
 
-                // If the position of this result in `pool` is greater than or equal
-                // the current working position, then skip this candidate.
+                // If the position of this result in `sorted_cache` is greater than or equal
+                // to the current working position, then skip this candidate.
                 if result_position >= i {
                     debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
                     // SAFETY: We've already checked `states[i]`.
@@ -209,7 +209,7 @@ where
 
                 // Otherwise, compute the distance between the result and this neighbor
                 // and update the occlude factor.
-                let distance = match &cache[result_position] {
+                let distance = match &sorted_cache[result_position] {
                     (_, Some(v)) => compute_distance(neighbor, v),
                     (_, None) => f32::MAX,
                 };
