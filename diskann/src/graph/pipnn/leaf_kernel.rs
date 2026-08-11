@@ -167,29 +167,47 @@ where
     output.as_mut_slice().fill(LeafNeighbor::default());
     workspace.worst.fill(f32::INFINITY);
 
-    match neighbor_count {
-        1 => scan_point_pairs::<A::f32x16, M, 1>(
+    match (norms.is_empty(), neighbor_count) {
+        (false, 1) => scan_point_pairs::<A::f32x16, M, 1, true>(
             arch,
             input,
             output.as_mut_slice(),
             norms,
-            !norms.is_empty(),
             &mut workspace.worst,
         ),
-        2 => scan_point_pairs::<A::f32x16, M, 2>(
+        (false, 2) => scan_point_pairs::<A::f32x16, M, 2, true>(
             arch,
             input,
             output.as_mut_slice(),
             norms,
-            !norms.is_empty(),
             &mut workspace.worst,
         ),
-        3 => scan_point_pairs::<A::f32x16, M, 3>(
+        (false, 3) => scan_point_pairs::<A::f32x16, M, 3, true>(
             arch,
             input,
             output.as_mut_slice(),
             norms,
-            !norms.is_empty(),
+            &mut workspace.worst,
+        ),
+        (true, 1) => scan_point_pairs::<A::f32x16, M, 1, false>(
+            arch,
+            input,
+            output.as_mut_slice(),
+            norms,
+            &mut workspace.worst,
+        ),
+        (true, 2) => scan_point_pairs::<A::f32x16, M, 2, false>(
+            arch,
+            input,
+            output.as_mut_slice(),
+            norms,
+            &mut workspace.worst,
+        ),
+        (true, 3) => scan_point_pairs::<A::f32x16, M, 3, false>(
+            arch,
+            input,
+            output.as_mut_slice(),
+            norms,
             &mut workspace.worst,
         ),
         _ => {
@@ -280,12 +298,11 @@ fn resize<T: Clone>(
 ///
 /// `input` supplies square dot products. `norms` contains prepared norm values.
 #[inline(never)]
-fn scan_point_pairs<F, M, const N: usize>(
+fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
     norms: &[f32],
-    uses_norms: bool,
     worst: &mut [f32],
 ) where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
@@ -302,7 +319,7 @@ fn scan_point_pairs<F, M, const N: usize>(
     // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_norm = if uses_norms {
+        let source_norm = if USES_NORMS {
             F::splat(arch, norms[source])
         } else {
             F::default(arch)
@@ -316,7 +333,7 @@ fn scan_point_pairs<F, M, const N: usize>(
         while target < full {
             // SAFETY: the full chunk is contained in this source's strict-lower prefix.
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
-            let target_norms = if uses_norms {
+            let target_norms = if USES_NORMS {
                 // SAFETY: the full target chunk is below `source < point_count`.
                 // `prepare_workspace` created one norm for each point.
                 unsafe { F::load_simd(arch, norms.as_ptr().add(target)) }
@@ -370,7 +387,7 @@ fn scan_point_pairs<F, M, const N: usize>(
         while target < source {
             // SAFETY: the scalar target remains in this source's strict-lower prefix.
             let dot = unsafe { *dots.get_unchecked(source_start + target) };
-            let (source_norm, target_norm) = if uses_norms {
+            let (source_norm, target_norm) = if USES_NORMS {
                 // SAFETY: `target < source < point_count == norms.len()`.
                 (norms[source], unsafe { *norms.get_unchecked(target) })
             } else {

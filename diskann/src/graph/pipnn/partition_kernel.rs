@@ -124,14 +124,31 @@ where
     }
 
     workspace.prepare(fanout)?;
-    select_point_leaders::<A::f32x16, M>(
-        arch,
-        metric,
-        input.dots,
-        norms,
-        output,
-        &mut workspace.tracker,
-    )
+    match metric {
+        Metric::L2 => select_point_leaders::<A::f32x16, M, false, true>(
+            arch,
+            input.dots,
+            norms,
+            output,
+            &mut workspace.tracker,
+        ),
+        Metric::Cosine => select_point_leaders::<A::f32x16, M, true, true>(
+            arch,
+            input.dots,
+            norms,
+            output,
+            &mut workspace.tracker,
+        ),
+        Metric::CosineNormalized | Metric::InnerProduct => {
+            select_point_leaders::<A::f32x16, M, false, false>(
+                arch,
+                input.dots,
+                norms,
+                output,
+                &mut workspace.tracker,
+            )
+        }
+    }
 }
 
 /// This function checks row counts, leader IDs, fanout, and norm lengths.
@@ -203,9 +220,8 @@ fn check_length(
 ///
 /// `tracker` stores the retained center-column IDs and scores for the current
 /// point. The function resets this state before it processes another point.
-fn select_point_leaders<F, M>(
+fn select_point_leaders<F, M, const USES_POINT_NORMS: bool, const USES_LEADER_NORMS: bool>(
     arch: F::Arch,
-    metric: Metric,
     dots: MatrixView<'_, f32>,
     norms: PartitionNorms<'_>,
     mut output: MutMatrixView<'_, u32>,
@@ -219,8 +235,6 @@ where
 {
     let leader_count = dots.ncols();
     let fanout = output.ncols();
-    let uses_point_norm = metric == Metric::Cosine;
-    let uses_leader_norm = matches!(metric, Metric::L2 | Metric::Cosine);
     // Reset the tracker for each point. No assignment state can pass from one
     // output row to another.
     for (point, (point_dots, point_output)) in dots
@@ -229,7 +243,7 @@ where
         .enumerate()
     {
         tracker.fill((u32::MAX, f32::INFINITY));
-        let point_norm = if uses_point_norm {
+        let point_norm = if USES_POINT_NORMS {
             norms.point_norms[point]
         } else {
             0.0
@@ -242,7 +256,7 @@ where
         for base in (0..full).step_by(F::LANES) {
             // SAFETY: `base + F::LANES <= full <= point_dots.len()`.
             let point_dots = unsafe { F::load_simd(arch, point_dots.as_ptr().add(base)) };
-            let leader_norms = if uses_leader_norm {
+            let leader_norms = if USES_LEADER_NORMS {
                 // SAFETY: `validate` established one norm value per leader.
                 // `base + F::LANES <= full <= leader_count`.
                 unsafe { F::load_simd(arch, norms.leader_norms.as_ptr().add(base)) }
@@ -259,7 +273,7 @@ where
         // Use scalar formulas for the tail. A padded SIMD load can read past the
         // norm slice and can change L2 rounding.
         for (leader, &dot) in point_dots.iter().enumerate().skip(full) {
-            let leader_norm = if uses_leader_norm {
+            let leader_norm = if USES_LEADER_NORMS {
                 norms.leader_norms[leader]
             } else {
                 0.0
