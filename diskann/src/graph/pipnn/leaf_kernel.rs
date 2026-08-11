@@ -298,7 +298,7 @@ fn resize<T: Clone>(
 ///
 /// `input` supplies square dot products. `norms` contains prepared norm values.
 #[inline(never)]
-fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
+fn scan_point_pairs<F, M, const N: usize, const HAS_NORMS: bool>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
@@ -319,7 +319,7 @@ fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
     // itself to the neighbor list of source zero.
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_norm = if USES_NORMS { norms[source] } else { 0.0 };
+        let source_norm = if HAS_NORMS { norms[source] } else { 0.0 };
         let source_norms = F::splat(arch, source_norm);
         // SAFETY: `nearest_neighbors` created one threshold for each point.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
@@ -329,7 +329,7 @@ fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
         while target < full {
             // SAFETY: the full chunk is contained in this source's strict-lower prefix.
             let pair_dots = unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
-            let target_norms = if USES_NORMS {
+            let target_norms = if HAS_NORMS {
                 // SAFETY: the full target chunk is below `source < point_count`.
                 unsafe { F::load_simd(arch, norms.as_ptr().add(target)) }
             } else {
@@ -382,7 +382,7 @@ fn scan_point_pairs<F, M, const N: usize, const USES_NORMS: bool>(
         while target < source {
             // SAFETY: the scalar target remains in this source's strict-lower prefix.
             let dot = unsafe { *dots.get_unchecked(source_start + target) };
-            let target_norm = if USES_NORMS {
+            let target_norm = if HAS_NORMS {
                 // SAFETY: `target < source < point_count == norms.len()`.
                 unsafe { *norms.get_unchecked(target) }
             } else {
