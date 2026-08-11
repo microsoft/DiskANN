@@ -1054,7 +1054,7 @@ mod tests {
             "tried to construct a matrix view with 5 rows and 4 columns over a slice of length 12"
         );
 
-        assert!(MatrixView::try_from(&[] as &[usize], usize::MAX, 2).is_err());
+        assert!(MatrixView::try_from(&[] as &[usize], usize::MAX / 2 + 1, 2).is_err());
     }
 
     #[test]
