@@ -18,6 +18,7 @@
 //! leaders. Equal scores keep sampled-leader order. NaN is not rankable.
 
 use diskann_utils::views::{MatrixView, MutMatrixView};
+#[cfg(test)]
 use diskann_vector::distance::Metric;
 use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
@@ -105,7 +106,6 @@ pub(super) enum PartitionKernelError {
 /// It also returns an error when fewer than `fanout` scores are rankable.
 pub(super) fn nearest_leaders<A, M>(
     arch: A,
-    metric: Metric,
     input: PartitionInput<'_>,
     output: MutMatrixView<'_, u32>,
     workspace: &mut PartitionKernelWorkspace,
@@ -117,43 +117,47 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
     M: PartitionMetric,
 {
-    let norms = validate(metric, input, &output)?;
+    let norms = validate(input, &output)?;
     let fanout = output.ncols();
     if fanout == 0 || input.dots.nrows() == 0 {
         return Ok(());
     }
 
     workspace.prepare(fanout)?;
-    match metric {
-        Metric::L2 => select_point_leaders::<A::f32x16, M, false, true>(
+    match (norms.point_norms.is_empty(), norms.leader_norms.is_empty()) {
+        (true, true) => select_point_leaders::<A::f32x16, M, false, false>(
             arch,
             input.dots,
             norms,
             output,
             &mut workspace.tracker,
         ),
-        Metric::Cosine => select_point_leaders::<A::f32x16, M, true, true>(
+        (true, false) => select_point_leaders::<A::f32x16, M, false, true>(
             arch,
             input.dots,
             norms,
             output,
             &mut workspace.tracker,
         ),
-        Metric::CosineNormalized | Metric::InnerProduct => {
-            select_point_leaders::<A::f32x16, M, false, false>(
-                arch,
-                input.dots,
-                norms,
-                output,
-                &mut workspace.tracker,
-            )
-        }
+        (false, false) => select_point_leaders::<A::f32x16, M, true, true>(
+            arch,
+            input.dots,
+            norms,
+            output,
+            &mut workspace.tracker,
+        ),
+        (false, true) => select_point_leaders::<A::f32x16, M, true, false>(
+            arch,
+            input.dots,
+            norms,
+            output,
+            &mut workspace.tracker,
+        ),
     }
 }
 
 /// This function checks row counts, leader IDs, fanout, and norm lengths.
 fn validate<'a>(
-    metric: Metric,
     input: PartitionInput<'a>,
     output: &MutMatrixView<'_, u32>,
 ) -> Result<PartitionNorms<'a>, PartitionKernelError> {
@@ -178,21 +182,12 @@ fn validate<'a>(
         });
     }
 
-    let (point_norm_count, leader_norm_count) = match metric {
-        Metric::L2 => (0, leader_count),
-        Metric::Cosine => (point_count, leader_count),
-        Metric::CosineNormalized | Metric::InnerProduct => (0, 0),
-    };
-    check_length(
-        "point norms",
-        input.norms.point_norms.len(),
-        point_norm_count,
-    )?;
-    check_length(
-        "leader norms",
-        input.norms.leader_norms.len(),
-        leader_norm_count,
-    )?;
+    if !input.norms.point_norms.is_empty() {
+        check_length("point norms", input.norms.point_norms.len(), point_count)?;
+    }
+    if !input.norms.leader_norms.is_empty() {
+        check_length("leader norms", input.norms.leader_norms.len(), leader_count)?;
+    }
     Ok(input.norms)
 }
 
@@ -364,30 +359,19 @@ where
         use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
         match self.0 {
-            Metric::L2 => {
-                nearest_leaders::<A, L2>(arch, Metric::L2, call.input, call.output, call.workspace)
+            Metric::L2 => nearest_leaders::<A, L2>(arch, call.input, call.output, call.workspace),
+            Metric::Cosine => {
+                nearest_leaders::<A, Cosine>(arch, call.input, call.output, call.workspace)
             }
-            Metric::Cosine => nearest_leaders::<A, Cosine>(
-                arch,
-                Metric::Cosine,
-                call.input,
-                call.output,
-                call.workspace,
-            ),
             Metric::CosineNormalized => nearest_leaders::<A, CosineNormalized>(
                 arch,
-                Metric::CosineNormalized,
                 call.input,
                 call.output,
                 call.workspace,
             ),
-            Metric::InnerProduct => nearest_leaders::<A, InnerProduct>(
-                arch,
-                Metric::InnerProduct,
-                call.input,
-                call.output,
-                call.workspace,
-            ),
+            Metric::InnerProduct => {
+                nearest_leaders::<A, InnerProduct>(arch, call.input, call.output, call.workspace)
+            }
         }
     }
 }
@@ -416,6 +400,7 @@ mod tests {
     };
 
     use super::*;
+    use diskann_vector::distance::Metric;
 
     fn test_input<'a>(
         _metric: Metric,
@@ -884,11 +869,12 @@ mod integration_tests {
             })
         );
 
+        let short_norms = [0.0; 2];
         let wrong_norms = PartitionInput {
             dots: MatrixView::try_from(&dots[..], 2, 3).unwrap(),
             norms: PartitionNorms {
                 point_norms: &[],
-                leader_norms: &[],
+                leader_norms: &short_norms,
             },
         };
         assert_eq!(
@@ -896,7 +882,7 @@ mod integration_tests {
             Err(PartitionKernelError::InvalidBufferLength {
                 buffer: "leader norms",
                 expected: 3,
-                actual: 0,
+                actual: 2,
             })
         );
 
