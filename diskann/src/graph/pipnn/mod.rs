@@ -229,14 +229,22 @@ where
         call: BuildGraphCall<'_, '_, '_, T>,
     ) -> ANNResult<Vec<AdjacencyList<u32>>> {
         match call.metric {
-            Metric::L2 => build_graph_for::<A, L2, T>(arch, call.data, call.context),
-            Metric::Cosine => build_graph_for::<A, Cosine, T>(arch, call.data, call.context),
-            Metric::CosineNormalized => {
-                build_graph_for::<A, CosineNormalized, T>(arch, call.data, call.context)
+            Metric::L2 => build_graph_for::<A, L2, T>(arch, call.data, call.context, Metric::L2),
+            Metric::Cosine => {
+                build_graph_for::<A, Cosine, T>(arch, call.data, call.context, Metric::Cosine)
             }
-            Metric::InnerProduct => {
-                build_graph_for::<A, InnerProduct, T>(arch, call.data, call.context)
-            }
+            Metric::CosineNormalized => build_graph_for::<A, CosineNormalized, T>(
+                arch,
+                call.data,
+                call.context,
+                Metric::CosineNormalized,
+            ),
+            Metric::InnerProduct => build_graph_for::<A, InnerProduct, T>(
+                arch,
+                call.data,
+                call.context,
+                Metric::InnerProduct,
+            ),
         }
     }
 }
@@ -249,6 +257,7 @@ fn build_graph_for<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     context: &PiPNNBuildContext<'_>,
+    metric: Metric,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
     A: Architecture,
@@ -259,23 +268,23 @@ where
     T: VectorRepr + Send + Sync + 'static,
 {
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
+        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, metric, &context.config))?;
     // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
     // so its complete allocation drops when leaf construction returns.
     let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.leaf_k)
-            .map_err(ANNError::new)
+        leaf_build::build_leaf_candidates::<A, M, T>(
+            arch,
+            data,
+            leaves,
+            context.config.leaf_k,
+            metric,
+        )
+        .map_err(ANNError::new)
     })?;
     // Finalization consumes each candidate list. It reuses that list's allocation
     // for the final adjacency when the graph policy permits it.
-    tracing::info_span!("pipnn.finalization").in_scope(|| {
-        finalization::prune_overfull(
-            data,
-            candidates,
-            context.graph,
-            <M as PartitionKernelMetric>::METRIC,
-        )
-    })
+    tracing::info_span!("pipnn.finalization")
+        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {
