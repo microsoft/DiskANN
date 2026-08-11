@@ -345,7 +345,7 @@ impl arch::Architecture for Neon {
         T0: AddLifetime,
         F: for<'a> FTarget1<Self, R, T0::Of<'a>>,
     {
-        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
+        let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, T0, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
@@ -360,7 +360,7 @@ impl arch::Architecture for Neon {
         F: for<'a, 'b> FTarget2<Self, R, T0::Of<'a>, T1::Of<'b>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
-            Self::run_function_with_2::<F, _, _, _>;
+            Self::run_function_with_2::<F, T0, T1, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
@@ -376,7 +376,7 @@ impl arch::Architecture for Neon {
         F: for<'a, 'b, 'c> FTarget3<Self, R, T0::Of<'a>, T1::Of<'b>, T2::Of<'c>>,
     {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
-            Self::run_function_with_3::<F, _, _, _, _>;
+            Self::run_function_with_3::<F, T0, T1, T2, R>;
 
         // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
