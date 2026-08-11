@@ -8,8 +8,10 @@
 mod leaf;
 mod partition;
 
-pub(super) use leaf::LeafKernelMetric;
-pub(super) use partition::PartitionKernelMetric;
+pub(super) use leaf::LeafMetric;
+pub(super) use partition::PartitionMetric;
+
+use std::collections::TryReserveError;
 
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
@@ -17,6 +19,12 @@ pub(super) struct L2;
 pub(super) struct Cosine;
 pub(super) struct CosineNormalized;
 pub(super) struct InnerProduct;
+
+pub(super) fn resize_norms(norms: &mut Vec<f32>, len: usize) -> Result<(), TryReserveError> {
+    norms.try_reserve(len.saturating_sub(norms.len()))?;
+    norms.resize(len, 0.0);
+    Ok(())
+}
 
 /// This function converts a squared norm to a norm.
 ///

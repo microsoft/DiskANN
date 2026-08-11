@@ -3,13 +3,36 @@
  * Licensed under the MIT license.
  */
 
+use std::collections::TryReserveError;
+
+use diskann_utils::views::MatrixView;
+use diskann_vector::{Norm, norm::FastL2NormSquared};
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar};
+use super::{
+    Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar,
+    norm_from_squared, resize_norms,
+};
 
 /// Partition formulas return ascending scores.
 /// L2 uses squared leader norms. Cosine uses point and leader norms.
-pub(in super::super) trait PartitionKernelMetric: Send + Sync + 'static {
+pub(in super::super) trait PartitionMetric: Send + Sync + 'static {
+    fn prepare_point_norms(
+        _: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        norms.clear();
+        Ok(())
+    }
+
+    fn prepare_leader_norms(
+        _: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        norms.clear();
+        Ok(())
+    }
+
     fn partition_ranking<F>(arch: F::Arch, dot: F, point_norm: F, leader_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -18,7 +41,18 @@ pub(in super::super) trait PartitionKernelMetric: Send + Sync + 'static {
     fn partition_ranking_scalar(dot: f32, point_norm: f32, leader_norm: f32) -> f32;
 }
 
-impl PartitionKernelMetric for L2 {
+impl PartitionMetric for L2 {
+    fn prepare_leader_norms(
+        leader_values: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        resize_norms(norms, leader_values.nrows())?;
+        for (norm, leader) in norms.iter_mut().zip(leader_values.row_iter()) {
+            *norm = leader.iter().map(|value| value * value).sum();
+        }
+        Ok(())
+    }
+
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, _: F, leader_norm: F) -> F
     where
@@ -37,7 +71,30 @@ impl PartitionKernelMetric for L2 {
     }
 }
 
-impl PartitionKernelMetric for Cosine {
+impl PartitionMetric for Cosine {
+    fn prepare_point_norms(
+        point_values: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        resize_norms(norms, point_values.nrows())?;
+        for (norm, point) in norms.iter_mut().zip(point_values.row_iter()) {
+            *norm = norm_from_squared(FastL2NormSquared.evaluate(point));
+        }
+        Ok(())
+    }
+
+    fn prepare_leader_norms(
+        leader_values: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        resize_norms(norms, leader_values.nrows())?;
+        for (norm, leader) in norms.iter_mut().zip(leader_values.row_iter()) {
+            let squared_norm = leader.iter().map(|value| value * value).sum();
+            *norm = norm_from_squared(squared_norm);
+        }
+        Ok(())
+    }
+
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, point_norm: F, leader_norm: F) -> F
     where
@@ -53,7 +110,7 @@ impl PartitionKernelMetric for Cosine {
     }
 }
 
-impl PartitionKernelMetric for CosineNormalized {
+impl PartitionMetric for CosineNormalized {
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where
@@ -69,7 +126,7 @@ impl PartitionKernelMetric for CosineNormalized {
     }
 }
 
-impl PartitionKernelMetric for InnerProduct {
+impl PartitionMetric for InnerProduct {
     #[inline(always)]
     fn partition_ranking<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where

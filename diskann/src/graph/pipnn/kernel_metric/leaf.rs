@@ -3,13 +3,24 @@
  * Licensed under the MIT license.
  */
 
+use std::collections::TryReserveError;
+
+use diskann_utils::views::MatrixView;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
-use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar};
+use super::{
+    Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_distance_scalar,
+    norm_from_squared, resize_norms,
+};
 
 /// Leaf formulas return ascending distances.
 /// L2 uses squared norms. Cosine uses norms. Other metrics ignore norms.
-pub(in super::super) trait LeafKernelMetric: Send + Sync + 'static {
+pub(in super::super) trait LeafMetric: Send + Sync + 'static {
+    fn prepare_norms(_: MatrixView<'_, f32>, norms: &mut Vec<f32>) -> Result<(), TryReserveError> {
+        norms.clear();
+        Ok(())
+    }
+
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -37,7 +48,18 @@ fn clamp_nonnegative_scalar(distance: f32) -> f32 {
     if distance < 0.0 { 0.0 } else { distance }
 }
 
-impl LeafKernelMetric for L2 {
+impl LeafMetric for L2 {
+    fn prepare_norms(
+        dots: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        resize_norms(norms, dots.nrows())?;
+        for (point, norm) in norms.iter_mut().enumerate() {
+            *norm = dots[(point, point)];
+        }
+        Ok(())
+    }
+
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
@@ -53,7 +75,18 @@ impl LeafKernelMetric for L2 {
     }
 }
 
-impl LeafKernelMetric for Cosine {
+impl LeafMetric for Cosine {
+    fn prepare_norms(
+        dots: MatrixView<'_, f32>,
+        norms: &mut Vec<f32>,
+    ) -> Result<(), TryReserveError> {
+        resize_norms(norms, dots.nrows())?;
+        for (point, norm) in norms.iter_mut().enumerate() {
+            *norm = norm_from_squared(dots[(point, point)]);
+        }
+        Ok(())
+    }
+
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
@@ -69,7 +102,7 @@ impl LeafKernelMetric for Cosine {
     }
 }
 
-impl LeafKernelMetric for CosineNormalized {
+impl LeafMetric for CosineNormalized {
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where
@@ -85,7 +118,7 @@ impl LeafKernelMetric for CosineNormalized {
     }
 }
 
-impl LeafKernelMetric for InnerProduct {
+impl LeafMetric for InnerProduct {
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where
