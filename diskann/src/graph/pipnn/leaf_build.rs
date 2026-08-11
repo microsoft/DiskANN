@@ -22,11 +22,12 @@ use std::{collections::TryReserveError, sync::Mutex};
 
 use crate::{graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_vector::distance::Metric;
 use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafKernelMetric,
+    kernel_metric::{LeafKernelMetric, norm_from_squared},
     leaf_kernel::{
         LeafKernelError, LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, nearest_neighbors,
     },
@@ -99,6 +100,7 @@ pub(crate) enum LeafBuildError {
 struct LeafBuffers {
     point_values: Vec<f32>,
     dots: Vec<f32>,
+    norms: Vec<f32>,
     neighbors: Vec<LeafNeighbor>,
     local_adjacency: Vec<AdjacencyList<u32>>,
     kernel_workspace: LeafKernelWorkspace,
@@ -233,6 +235,7 @@ pub(super) fn build_leaf_candidates<A, M, T>(
     data: MatrixView<'_, T>,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
+    metric: Metric,
 ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
 where
     A: Architecture,
@@ -256,6 +259,7 @@ where
             add_direct_leaf_candidates::<A, M, T>(
                 arch,
                 data,
+                metric,
                 leaf,
                 point_ids,
                 requested_k,
@@ -272,9 +276,11 @@ where
 /// The function rejects empty, duplicate, unsorted, or out-of-range point IDs.
 /// Reusable buffers can be longer than this leaf, so all accesses use the current
 /// leaf shape.
+#[allow(clippy::too_many_arguments)]
 fn add_direct_leaf_candidates<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
+    metric: Metric,
     leaf: usize,
     point_ids: &[u32],
     requested_k: usize,
@@ -345,6 +351,21 @@ where
         leaf,
         buffer: "leaf dot-product matrix",
     })?;
+    let norm_count = if matches!(metric, Metric::L2 | Metric::Cosine) {
+        point_ids.len()
+    } else {
+        0
+    };
+    grow("leaf norms", &mut buffers.norms, norm_count, 0.0)?;
+    for (point, norm) in buffers.norms[..norm_count].iter_mut().enumerate() {
+        let squared_norm = dots[(point, point)];
+        *norm = if metric == Metric::Cosine {
+            norm_from_squared(squared_norm)
+        } else {
+            squared_norm
+        };
+    }
+    let norms = &buffers.norms[..norm_count];
     let output = MutMatrixView::try_from(
         &mut buffers.neighbors[..neighbor_value_count],
         point_ids.len(),
@@ -354,7 +375,7 @@ where
         leaf,
         buffer: "leaf output",
     })?;
-    nearest_neighbors::<A, M>(arch, dots, output, &mut buffers.kernel_workspace)
+    nearest_neighbors::<A, M>(arch, dots, norms, output, &mut buffers.kernel_workspace)
         .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
 
     buffers.prepare_local_adjacency(point_ids.len())?;
@@ -486,23 +507,33 @@ mod tests {
             use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
-                Metric::L2 => {
-                    build_leaf_candidates::<A, L2, T>(arch, call.data, call.leaves, call.k)
-                }
-                Metric::Cosine => {
-                    build_leaf_candidates::<A, Cosine, T>(arch, call.data, call.leaves, call.k)
-                }
+                Metric::L2 => build_leaf_candidates::<A, L2, T>(
+                    arch,
+                    call.data,
+                    call.leaves,
+                    call.k,
+                    Metric::L2,
+                ),
+                Metric::Cosine => build_leaf_candidates::<A, Cosine, T>(
+                    arch,
+                    call.data,
+                    call.leaves,
+                    call.k,
+                    Metric::Cosine,
+                ),
                 Metric::CosineNormalized => build_leaf_candidates::<A, CosineNormalized, T>(
                     arch,
                     call.data,
                     call.leaves,
                     call.k,
+                    Metric::CosineNormalized,
                 ),
                 Metric::InnerProduct => build_leaf_candidates::<A, InnerProduct, T>(
                     arch,
                     call.data,
                     call.leaves,
                     call.k,
+                    Metric::InnerProduct,
                 ),
             }
         }
