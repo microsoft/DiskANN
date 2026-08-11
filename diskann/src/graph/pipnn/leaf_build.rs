@@ -347,7 +347,7 @@ where
         leaf,
         buffer: "leaf dot-product matrix",
     })?;
-    M::prepare_norms(NormPreparation {
+    M::prepare_leaf_norms(NormPreparation {
         values: dots,
         norms: &mut buffers.norms,
     })
