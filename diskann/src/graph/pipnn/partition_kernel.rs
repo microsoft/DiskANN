@@ -44,17 +44,11 @@ impl PartitionKernelWorkspace {
     }
 }
 
-/// L2 uses squared leader norms. Cosine uses squared point norms and leader norms.
+/// L2 uses squared leader norms. Cosine uses point and leader norms.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum PartitionNorms<'a> {
-    L2 {
-        leader_squared_norms: &'a [f32],
-    },
-    Cosine {
-        point_squared_norms: &'a [f32],
-        leader_norms: &'a [f32],
-    },
-    None,
+pub(super) struct PartitionNorms<'a> {
+    pub(super) point_norms: &'a [f32],
+    pub(super) leader_norms: &'a [f32],
 }
 
 /// Dot products between assigned points and sampled partition centers.
@@ -86,9 +80,6 @@ pub(super) enum PartitionKernelError {
         expected: usize,
         actual: usize,
     },
-    /// Norm inputs do not match concrete metric `M`.
-    #[error("partition norms do not match selected {expected} metric")]
-    InvalidNorms { expected: &'static str },
     /// The requested fanout exceeds the available leader count.
     #[error("invalid fanout {fanout}: must not exceed {leader_count} leaders")]
     InvalidFanout { fanout: usize, leader_count: usize },
@@ -114,6 +105,7 @@ pub(super) enum PartitionKernelError {
 /// It also returns an error when fewer than `fanout` scores are rankable.
 pub(super) fn nearest_leaders<A, M>(
     arch: A,
+    metric: Metric,
     input: PartitionInput<'_>,
     output: MutMatrixView<'_, u32>,
     workspace: &mut PartitionKernelWorkspace,
@@ -125,27 +117,29 @@ where
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
     M: PartitionKernelMetric,
 {
-    let norms = validate::<M>(input, &output)?;
+    let norms = validate(metric, input, &output)?;
     let fanout = output.ncols();
     if fanout == 0 || input.dots.nrows() == 0 {
         return Ok(());
     }
 
     workspace.prepare(fanout)?;
-    select_point_leaders::<A::f32x16, M>(arch, input.dots, norms, output, &mut workspace.tracker)
-}
-
-#[derive(Clone, Copy)]
-struct PartitionNormSlices<'a> {
-    point_squared_norms: &'a [f32],
-    leader_norm_values: &'a [f32],
+    select_point_leaders::<A::f32x16, M>(
+        arch,
+        metric,
+        input.dots,
+        norms,
+        output,
+        &mut workspace.tracker,
+    )
 }
 
 /// This function checks row counts, leader IDs, fanout, and norm lengths.
-fn validate<'a, M: PartitionKernelMetric>(
+fn validate<'a>(
+    metric: Metric,
     input: PartitionInput<'a>,
     output: &MutMatrixView<'_, u32>,
-) -> Result<PartitionNormSlices<'a>, PartitionKernelError> {
+) -> Result<PartitionNorms<'a>, PartitionKernelError> {
     let point_count = input.dots.nrows();
     let leader_count = input.dots.ncols();
     let fanout = output.ncols();
@@ -167,48 +161,22 @@ fn validate<'a, M: PartitionKernelMetric>(
         });
     }
 
-    match (M::METRIC, input.norms) {
-        (
-            Metric::L2,
-            PartitionNorms::L2 {
-                leader_squared_norms,
-            },
-        ) => {
-            check_length("leader norms", leader_squared_norms.len(), leader_count)?;
-            Ok(PartitionNormSlices {
-                point_squared_norms: &[],
-                leader_norm_values: leader_squared_norms,
-            })
-        }
-        (
-            Metric::Cosine,
-            PartitionNorms::Cosine {
-                point_squared_norms,
-                leader_norms,
-            },
-        ) => {
-            check_length("point norms", point_squared_norms.len(), point_count)?;
-            check_length("leader norms", leader_norms.len(), leader_count)?;
-            Ok(PartitionNormSlices {
-                point_squared_norms,
-                leader_norm_values: leader_norms,
-            })
-        }
-        (Metric::CosineNormalized | Metric::InnerProduct, PartitionNorms::None) => {
-            Ok(PartitionNormSlices {
-                point_squared_norms: &[],
-                leader_norm_values: &[],
-            })
-        }
-        (Metric::L2, _) => Err(PartitionKernelError::InvalidNorms { expected: "L2" }),
-        (Metric::Cosine, _) => Err(PartitionKernelError::InvalidNorms { expected: "cosine" }),
-        (Metric::CosineNormalized, _) => Err(PartitionKernelError::InvalidNorms {
-            expected: "normalized cosine",
-        }),
-        (Metric::InnerProduct, _) => Err(PartitionKernelError::InvalidNorms {
-            expected: "inner product",
-        }),
-    }
+    let (point_norm_count, leader_norm_count) = match metric {
+        Metric::L2 => (0, leader_count),
+        Metric::Cosine => (point_count, leader_count),
+        Metric::CosineNormalized | Metric::InnerProduct => (0, 0),
+    };
+    check_length(
+        "point norms",
+        input.norms.point_norms.len(),
+        point_norm_count,
+    )?;
+    check_length(
+        "leader norms",
+        input.norms.leader_norms.len(),
+        leader_norm_count,
+    )?;
+    Ok(input.norms)
 }
 
 fn check_length(
@@ -237,8 +205,9 @@ fn check_length(
 /// point. The function resets this state before it processes another point.
 fn select_point_leaders<F, M>(
     arch: F::Arch,
+    metric: Metric,
     dots: MatrixView<'_, f32>,
-    norms: PartitionNormSlices<'_>,
+    norms: PartitionNorms<'_>,
     mut output: MutMatrixView<'_, u32>,
     tracker: &mut [(u32, f32)],
 ) -> Result<(), PartitionKernelError>
@@ -250,8 +219,8 @@ where
 {
     let leader_count = dots.ncols();
     let fanout = output.ncols();
-    let uses_point_norm = M::USES_POINT_NORM;
-    let uses_leader_norm = M::USES_LEADER_NORMS;
+    let uses_point_norm = metric == Metric::Cosine;
+    let uses_leader_norm = matches!(metric, Metric::L2 | Metric::Cosine);
     // Reset the tracker for each point. No assignment state can pass from one
     // output row to another.
     for (point, (point_dots, point_output)) in dots
@@ -261,7 +230,7 @@ where
     {
         tracker.fill((u32::MAX, f32::INFINITY));
         let point_norm = if uses_point_norm {
-            M::prepare_point_norm(norms.point_squared_norms[point])
+            norms.point_norms[point]
         } else {
             0.0
         };
@@ -276,7 +245,7 @@ where
             let leader_norms = if uses_leader_norm {
                 // SAFETY: `validate` established one norm value per leader.
                 // `base + F::LANES <= full <= leader_count`.
-                unsafe { F::load_simd(arch, norms.leader_norm_values.as_ptr().add(base)) }
+                unsafe { F::load_simd(arch, norms.leader_norms.as_ptr().add(base)) }
             } else {
                 F::default(arch)
             };
@@ -291,7 +260,7 @@ where
         // norm slice and can change L2 rounding.
         for (leader, &dot) in point_dots.iter().enumerate().skip(full) {
             let leader_norm = if uses_leader_norm {
-                norms.leader_norm_values[leader]
+                norms.leader_norms[leader]
             } else {
                 0.0
             };
@@ -381,19 +350,30 @@ where
         use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
         match self.0 {
-            Metric::L2 => nearest_leaders::<A, L2>(arch, call.input, call.output, call.workspace),
-            Metric::Cosine => {
-                nearest_leaders::<A, Cosine>(arch, call.input, call.output, call.workspace)
+            Metric::L2 => {
+                nearest_leaders::<A, L2>(arch, Metric::L2, call.input, call.output, call.workspace)
             }
-            Metric::CosineNormalized => nearest_leaders::<A, CosineNormalized>(
+            Metric::Cosine => nearest_leaders::<A, Cosine>(
                 arch,
+                Metric::Cosine,
                 call.input,
                 call.output,
                 call.workspace,
             ),
-            Metric::InnerProduct => {
-                nearest_leaders::<A, InnerProduct>(arch, call.input, call.output, call.workspace)
-            }
+            Metric::CosineNormalized => nearest_leaders::<A, CosineNormalized>(
+                arch,
+                Metric::CosineNormalized,
+                call.input,
+                call.output,
+                call.workspace,
+            ),
+            Metric::InnerProduct => nearest_leaders::<A, InnerProduct>(
+                arch,
+                Metric::InnerProduct,
+                call.input,
+                call.output,
+                call.workspace,
+            ),
         }
     }
 }
@@ -418,77 +398,47 @@ fn dispatch_nearest_leaders(
 #[cfg(test)]
 mod tests {
     use super::super::kernel_metric::{
-        Cosine, CosineNormalized, InnerProduct, L2, PartitionKernelMetric, norm_from_squared,
+        Cosine, CosineNormalized, InnerProduct, L2, PartitionKernelMetric,
     };
 
     use super::*;
 
     fn test_input<'a>(
-        metric: Metric,
+        _metric: Metric,
         dots: &'a [f32],
         point_count: usize,
         leader_count: usize,
-        point_squared_norms: &'a [f32],
-        leader_norm_values: &'a [f32],
+        point_norms: &'a [f32],
+        leader_norms: &'a [f32],
     ) -> PartitionInput<'a> {
-        let norms = match metric {
-            Metric::L2 => PartitionNorms::L2 {
-                leader_squared_norms: leader_norm_values,
-            },
-            Metric::Cosine => PartitionNorms::Cosine {
-                point_squared_norms,
-                leader_norms: leader_norm_values,
-            },
-            Metric::CosineNormalized | Metric::InnerProduct => PartitionNorms::None,
-        };
         PartitionInput {
             dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
-            norms,
+            norms: PartitionNorms {
+                point_norms,
+                leader_norms,
+            },
         }
     }
 
     // This oracle checks SIMD chunking, scalar tails, and tracker order. It uses
     // the scalar ranking formula for metric `M`.
     fn scalar_traversal_reference<M: PartitionKernelMetric>(
+        metric: Metric,
         input: PartitionInput<'_>,
         fanout: usize,
         output: &mut [u32],
     ) {
-        let norms = match input.norms {
-            PartitionNorms::L2 {
-                leader_squared_norms,
-            } => PartitionNormSlices {
-                point_squared_norms: &[],
-                leader_norm_values: leader_squared_norms,
-            },
-            PartitionNorms::Cosine {
-                point_squared_norms,
-                leader_norms,
-            } => PartitionNormSlices {
-                point_squared_norms,
-                leader_norm_values: leader_norms,
-            },
-            PartitionNorms::None => PartitionNormSlices {
-                point_squared_norms: &[],
-                leader_norm_values: &[],
-            },
-        };
-        let metric = M::METRIC;
         for (point, (point_dots, point_output)) in input
             .dots
             .row_iter()
             .zip(output.chunks_exact_mut(fanout))
             .enumerate()
         {
-            let point_norm = if metric == Metric::Cosine {
-                norm_from_squared(norms.point_squared_norms[point])
-            } else {
-                0.0
-            };
+            let point_norm = input.norms.point_norms.get(point).copied().unwrap_or(0.0);
             let mut tracker = vec![(u32::MAX, f32::INFINITY); fanout];
             for (leader, &dot) in point_dots.iter().enumerate() {
                 let leader_norm = if matches!(metric, Metric::L2 | Metric::Cosine) {
-                    norms.leader_norm_values[leader]
+                    input.norms.leader_norms[leader]
                 } else {
                     0.0
                 };
@@ -520,8 +470,8 @@ mod tests {
     #[test]
     fn cosine_special_norms_match_scalar_and_dispatched_kernel() {
         let leader_count = 17;
-        let point_squared_norms = [0.0, f32::MIN_POSITIVE / 2.0, f32::MIN_POSITIVE, f32::NAN];
-        let dots = vec![1.0; point_squared_norms.len() * leader_count];
+        let point_norms = [0.0, 0.0, f32::MIN_POSITIVE.sqrt(), f32::NAN];
+        let dots = vec![1.0; point_norms.len() * leader_count];
         let mut leader_norms = vec![1.0; leader_count];
         leader_norms[..4].copy_from_slice(&[
             0.0,
@@ -532,18 +482,18 @@ mod tests {
         let input = test_input(
             Metric::Cosine,
             &dots,
-            point_squared_norms.len(),
+            point_norms.len(),
             leader_count,
-            &point_squared_norms,
+            &point_norms,
             &leader_norms,
         );
-        let mut expected = vec![u32::MAX; point_squared_norms.len() * 2];
-        scalar_traversal_reference::<Cosine>(input, 2, &mut expected);
-        let mut actual = vec![u32::MAX; point_squared_norms.len() * 2];
+        let mut expected = vec![u32::MAX; point_norms.len() * 2];
+        scalar_traversal_reference::<Cosine>(Metric::Cosine, input, 2, &mut expected);
+        let mut actual = vec![u32::MAX; point_norms.len() * 2];
         dispatch_nearest_leaders(
             Metric::Cosine,
             input,
-            MutMatrixView::try_from(actual.as_mut_slice(), point_squared_norms.len(), 2).unwrap(),
+            MutMatrixView::try_from(actual.as_mut_slice(), point_norms.len(), 2).unwrap(),
             &mut PartitionKernelWorkspace::default(),
         )
         .unwrap();
@@ -583,7 +533,6 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod integration_tests {
-    use super::super::kernel_metric::norm_from_squared;
     use super::{
         PartitionInput, PartitionKernelError, PartitionKernelWorkspace, PartitionNorms,
         dispatch_nearest_leaders,
@@ -592,42 +541,27 @@ mod integration_tests {
     use diskann_vector::distance::Metric;
 
     fn test_input<'a>(
-        metric: Metric,
+        _metric: Metric,
         dots: &'a [f32],
         point_count: usize,
         leader_count: usize,
-        point_squared_norms: &'a [f32],
-        leader_norm_values: &'a [f32],
+        point_norms: &'a [f32],
+        leader_norms: &'a [f32],
     ) -> PartitionInput<'a> {
-        let norms = match metric {
-            Metric::L2 => PartitionNorms::L2 {
-                leader_squared_norms: leader_norm_values,
-            },
-            Metric::Cosine => PartitionNorms::Cosine {
-                point_squared_norms,
-                leader_norms: leader_norm_values,
-            },
-            Metric::CosineNormalized | Metric::InnerProduct => PartitionNorms::None,
-        };
         PartitionInput {
             dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
-            norms,
+            norms: PartitionNorms {
+                point_norms,
+                leader_norms,
+            },
         }
     }
 
     fn brute_force_reference(input: PartitionInput<'_>, fanout: usize, metric: Metric) -> Vec<u32> {
         let point_count = input.dots.nrows();
         let leader_count = input.dots.ncols();
-        let (point_squared_norms, leader_norm_values) = match input.norms {
-            PartitionNorms::L2 {
-                leader_squared_norms,
-            } => (&[][..], leader_squared_norms),
-            PartitionNorms::Cosine {
-                point_squared_norms,
-                leader_norms,
-            } => (point_squared_norms, leader_norms),
-            PartitionNorms::None => (&[][..], &[][..]),
-        };
+        let point_norms = input.norms.point_norms;
+        let leader_norms = input.norms.leader_norms;
         let mut assignments = vec![u32::MAX; point_count * fanout];
         for (point, (point_dots, point_assignments)) in input
             .dots
@@ -636,18 +570,17 @@ mod integration_tests {
             .zip(assignments.chunks_exact_mut(fanout))
             .enumerate()
         {
-            let point_squared_norm = point_squared_norms.get(point).copied().unwrap_or(0.0);
+            let point_norm = point_norms.get(point).copied().unwrap_or(0.0);
             let mut candidates: Vec<_> = point_dots
                 .iter()
                 .enumerate()
                 .filter_map(|(leader, &dot)| {
-                    let leader_norm = leader_norm_values.get(leader).copied().unwrap_or(0.0);
+                    let leader_norm = leader_norms.get(leader).copied().unwrap_or(0.0);
                     let score = match metric {
                         Metric::L2 => leader_norm - 2.0 * dot,
                         Metric::CosineNormalized => 1.0 - dot,
                         Metric::InnerProduct => -dot,
                         Metric::Cosine => {
-                            let point_norm = norm_from_squared(point_squared_norm);
                             1.0 - if point_norm == 0.0 || leader_norm == 0.0 {
                                 0.0
                             } else {
@@ -682,12 +615,12 @@ mod integration_tests {
                 }
             })
             .collect();
-        let point_squared_norms = if metric == Metric::Cosine {
-            vec![0.0, 16.0]
+        let point_norms = if metric == Metric::Cosine {
+            vec![0.0, 4.0]
         } else {
             Vec::new()
         };
-        let leader_norm_values = match metric {
+        let leader_norms = match metric {
             Metric::Cosine => (0..leader_count)
                 .map(|leader| {
                     if leader == 1 {
@@ -711,7 +644,7 @@ mod integration_tests {
                 .collect(),
             Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
         };
-        (dots, point_squared_norms, leader_norm_values)
+        (dots, point_norms, leader_norms)
     }
 
     fn run_partition_kernel(
@@ -738,16 +671,8 @@ mod integration_tests {
             Metric::InnerProduct,
         ] {
             for leader_count in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
-                let (dots, point_squared_norms, leader_norm_values) =
-                    differential_data(metric, leader_count);
-                let input = test_input(
-                    metric,
-                    &dots,
-                    2,
-                    leader_count,
-                    &point_squared_norms,
-                    &leader_norm_values,
-                );
+                let (dots, point_norms, leader_norms) = differential_data(metric, leader_count);
+                let input = test_input(metric, &dots, 2, leader_count, &point_norms, &leader_norms);
                 for fanout in [1, 2, 16, 17, 32] {
                     if fanout >= leader_count {
                         continue;
@@ -807,7 +732,7 @@ mod integration_tests {
             1.0, 0.0, -1.0,
             2.0, 6.0, 0.0,
         ];
-        for (metric, point_squared_norms, leader_norm_values, expected) in [
+        for (metric, point_norms, leader_norms, expected) in [
             (Metric::L2, &[][..], &[1.0, 4.0, 9.0][..], [0, 1, 1, 0]),
             (
                 Metric::Cosine,
@@ -821,7 +746,7 @@ mod integration_tests {
             assert_eq!(
                 run_partition_kernel(
                     metric,
-                    test_input(metric, &dots, 2, 3, point_squared_norms, leader_norm_values),
+                    test_input(metric, &dots, 2, 3, point_norms, leader_norms),
                     2,
                 )
                 .unwrap(),
@@ -947,11 +872,18 @@ mod integration_tests {
 
         let wrong_norms = PartitionInput {
             dots: MatrixView::try_from(&dots[..], 2, 3).unwrap(),
-            norms: PartitionNorms::None,
+            norms: PartitionNorms {
+                point_norms: &[],
+                leader_norms: &[],
+            },
         };
         assert_eq!(
             run_partition_kernel(Metric::L2, wrong_norms, 2),
-            Err(PartitionKernelError::InvalidNorms { expected: "L2" })
+            Err(PartitionKernelError::InvalidBufferLength {
+                buffer: "leader norms",
+                expected: 3,
+                actual: 0,
+            })
         );
 
         assert_eq!(

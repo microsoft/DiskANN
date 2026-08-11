@@ -10,10 +10,6 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, cosine_
 /// Leaf formulas return ascending distances.
 /// L2 uses squared norms. Cosine uses norms. Other metrics ignore norms.
 pub(in super::super) trait LeafKernelMetric: Send + Sync + 'static {
-    const USES_NORMS: bool;
-
-    fn prepare_norm(squared_norm: f32) -> f32;
-
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
@@ -42,13 +38,6 @@ fn clamp_nonnegative_scalar(distance: f32) -> f32 {
 }
 
 impl LeafKernelMetric for L2 {
-    const USES_NORMS: bool = true;
-
-    #[inline(always)]
-    fn prepare_norm(squared_norm: f32) -> f32 {
-        squared_norm
-    }
-
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
@@ -65,13 +54,6 @@ impl LeafKernelMetric for L2 {
 }
 
 impl LeafKernelMetric for Cosine {
-    const USES_NORMS: bool = true;
-
-    #[inline(always)]
-    fn prepare_norm(squared_norm: f32) -> f32 {
-        super::norm_from_squared(squared_norm)
-    }
-
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
     where
@@ -88,13 +70,6 @@ impl LeafKernelMetric for Cosine {
 }
 
 impl LeafKernelMetric for CosineNormalized {
-    const USES_NORMS: bool = false;
-
-    #[inline(always)]
-    fn prepare_norm(_: f32) -> f32 {
-        0.0
-    }
-
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where
@@ -111,13 +86,6 @@ impl LeafKernelMetric for CosineNormalized {
 }
 
 impl LeafKernelMetric for InnerProduct {
-    const USES_NORMS: bool = false;
-
-    #[inline(always)]
-    fn prepare_norm(_: f32) -> f32 {
-        0.0
-    }
-
     #[inline(always)]
     fn leaf_distance<F>(arch: F::Arch, dot: F, _: F, _: F) -> F
     where

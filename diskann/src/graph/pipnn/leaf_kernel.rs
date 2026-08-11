@@ -57,7 +57,6 @@ impl Default for LeafNeighbor {
 /// Reusable temporary storage for leaf top-k selection.
 #[derive(Debug, Default)]
 pub(super) struct LeafKernelWorkspace {
-    norms: Vec<f32>,
     worst: Vec<f32>,
 }
 
@@ -84,6 +83,9 @@ pub(super) enum LeafKernelError {
         neighbors: usize,
         maximum: usize,
     },
+    /// The prepared norm count does not match the point count.
+    #[error("invalid leaf norm count: expected {expected}, got {actual}")]
+    InvalidNormCount { expected: usize, actual: usize },
     /// Temporary storage could not be reserved.
     #[error("failed to reserve {additional} values for {buffer}")]
     Allocation {
@@ -139,6 +141,7 @@ pub(super) fn leaf_neighbor_count(
 pub(super) fn nearest_neighbors<A, M>(
     arch: A,
     input: MatrixView<'_, f32>,
+    norms: &[f32],
     mut output: MutMatrixView<'_, LeafNeighbor>,
     workspace: &mut LeafKernelWorkspace,
 ) -> Result<(), LeafKernelError>
@@ -149,13 +152,18 @@ where
     M: LeafKernelMetric,
     u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    validate(input, &output)?;
+    validate(input, norms, &output)?;
     let neighbor_count = output.ncols();
     if neighbor_count == 0 {
         return Ok(());
     }
 
-    prepare_workspace::<M>(input, workspace)?;
+    resize(
+        "worst distances",
+        &mut workspace.worst,
+        input.nrows(),
+        f32::INFINITY,
+    )?;
     output.as_mut_slice().fill(LeafNeighbor::default());
     workspace.worst.fill(f32::INFINITY);
 
@@ -164,21 +172,24 @@ where
             arch,
             input,
             output.as_mut_slice(),
-            &workspace.norms,
+            norms,
+            !norms.is_empty(),
             &mut workspace.worst,
         ),
         2 => scan_point_pairs::<A::f32x16, M, 2>(
             arch,
             input,
             output.as_mut_slice(),
-            &workspace.norms,
+            norms,
+            !norms.is_empty(),
             &mut workspace.worst,
         ),
         3 => scan_point_pairs::<A::f32x16, M, 3>(
             arch,
             input,
             output.as_mut_slice(),
-            &workspace.norms,
+            norms,
+            !norms.is_empty(),
             &mut workspace.worst,
         ),
         _ => {
@@ -209,6 +220,7 @@ where
 /// An error occurs before the kernel changes output or workspace.
 fn validate(
     input: MatrixView<'_, f32>,
+    norms: &[f32],
     output: &MutMatrixView<'_, LeafNeighbor>,
 ) -> Result<(), LeafKernelError> {
     let point_count = input.nrows();
@@ -220,6 +232,12 @@ fn validate(
         return Err(LeafKernelError::NonSquareDots {
             rows: point_count,
             cols: dot_columns,
+        });
+    }
+    if !norms.is_empty() && norms.len() != point_count {
+        return Err(LeafKernelError::InvalidNormCount {
+            expected: point_count,
+            actual: norms.len(),
         });
     }
     if output.nrows() != point_count {
@@ -241,33 +259,6 @@ fn validate(
     Ok(())
 }
 
-/// Prepare metric norms and rejection thresholds.
-///
-/// L2 uses each diagonal value as a squared norm. Cosine converts each diagonal
-/// value to a norm. Normalized cosine and inner product clear the norm buffer.
-///
-/// An allocation error occurs before SIMD traversal.
-fn prepare_workspace<M: LeafKernelMetric>(
-    input: MatrixView<'_, f32>,
-    workspace: &mut LeafKernelWorkspace,
-) -> Result<(), LeafKernelError> {
-    let points = input.nrows();
-    if M::USES_NORMS {
-        resize("norms", &mut workspace.norms, points, 0.0)?;
-        for (source, norm) in workspace.norms.iter_mut().enumerate() {
-            *norm = M::prepare_norm(input[(source, source)]);
-        }
-    } else {
-        workspace.norms.clear();
-    }
-    resize(
-        "worst distances",
-        &mut workspace.worst,
-        points,
-        f32::INFINITY,
-    )
-}
-
 fn resize<T: Clone>(
     buffer: &'static str,
     values: &mut Vec<T>,
@@ -287,14 +278,14 @@ fn resize<T: Clone>(
 /// The function reads the strict lower triangle once. It offers each distance to
 /// both endpoint lists. SIMD groups and the scalar tail preserve pair scan order.
 ///
-/// `input` supplies square dot products. `output` and `worst` contain one row
-/// for each point. `norms` contains one value per point when `M` uses norms.
+/// `input` supplies square dot products. `norms` contains prepared norm values.
 #[inline(never)]
 fn scan_point_pairs<F, M, const N: usize>(
     arch: F::Arch,
     input: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
     norms: &[f32],
+    uses_norms: bool,
     worst: &mut [f32],
 ) where
     F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
@@ -305,7 +296,6 @@ fn scan_point_pairs<F, M, const N: usize>(
     let (output, _) = output.as_chunks_mut::<N>();
     let point_count = input.nrows();
     let dots = input.as_slice();
-    let uses_norms = M::USES_NORMS;
     let worst_ptr = worst.as_mut_ptr();
 
     // Source zero has no earlier target. Each source after zero can still add
@@ -454,6 +444,7 @@ fn insert_fixed_neighbor<const N: usize>(
 #[cfg(test)]
 struct DispatchedLeafCall<'a> {
     input: MatrixView<'a, f32>,
+    norms: &'a [f32],
     output: MutMatrixView<'a, LeafNeighbor>,
     workspace: &'a mut LeafKernelWorkspace,
 }
@@ -475,19 +466,34 @@ where
         use diskann_vector::distance::Metric;
 
         match self.0 {
-            Metric::L2 => nearest_neighbors::<A, L2>(arch, call.input, call.output, call.workspace),
-            Metric::Cosine => {
-                nearest_neighbors::<A, Cosine>(arch, call.input, call.output, call.workspace)
-            }
-            Metric::CosineNormalized => nearest_neighbors::<A, CosineNormalized>(
+            Metric::L2 => nearest_neighbors::<A, L2>(
                 arch,
                 call.input,
+                call.norms,
                 call.output,
                 call.workspace,
             ),
-            Metric::InnerProduct => {
-                nearest_neighbors::<A, InnerProduct>(arch, call.input, call.output, call.workspace)
-            }
+            Metric::Cosine => nearest_neighbors::<A, Cosine>(
+                arch,
+                call.input,
+                call.norms,
+                call.output,
+                call.workspace,
+            ),
+            Metric::CosineNormalized => nearest_neighbors::<A, CosineNormalized>(
+                arch,
+                call.input,
+                call.norms,
+                call.output,
+                call.workspace,
+            ),
+            Metric::InnerProduct => nearest_neighbors::<A, InnerProduct>(
+                arch,
+                call.input,
+                call.norms,
+                call.output,
+                call.workspace,
+            ),
         }
     }
 }
@@ -496,6 +502,7 @@ where
 fn dispatch_nearest_neighbors(
     metric: diskann_vector::distance::Metric,
     input: MatrixView<'_, f32>,
+    norms: &[f32],
     output: MutMatrixView<'_, LeafNeighbor>,
     workspace: &mut LeafKernelWorkspace,
 ) -> Result<(), LeafKernelError> {
@@ -503,10 +510,29 @@ fn dispatch_nearest_neighbors(
         DispatchLeafForTest(metric),
         DispatchedLeafCall {
             input,
+            norms,
             output,
             workspace,
         },
     )
+}
+
+#[cfg(test)]
+fn prepared_test_norms(
+    metric: diskann_vector::distance::Metric,
+    input: MatrixView<'_, f32>,
+) -> Vec<f32> {
+    use diskann_vector::distance::Metric;
+
+    match metric {
+        Metric::L2 => (0..input.nrows())
+            .map(|point| input[(point, point)])
+            .collect(),
+        Metric::Cosine => (0..input.nrows())
+            .map(|point| super::kernel_metric::norm_from_squared(input[(point, point)]))
+            .collect(),
+        Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -581,6 +607,7 @@ mod tests {
         let points = 7;
         let dots = test_dots(Metric::L2, points);
         let input = test_input(&dots, points);
+        let norms = prepared_test_norms(Metric::L2, input);
         let mut workspace = LeafKernelWorkspace::default();
 
         for neighbor_count in [1, 3, 2] {
@@ -588,6 +615,7 @@ mod tests {
             dispatch_nearest_neighbors(
                 Metric::L2,
                 input,
+                &norms,
                 MutMatrixView::try_from(output.as_mut_slice(), points, neighbor_count).unwrap(),
                 &mut workspace,
             )
@@ -602,9 +630,12 @@ mod tests {
         for points in [17, 7, 17] {
             let dots = test_dots(Metric::L2, points);
             let mut output = vec![LeafNeighbor::default(); points * 2];
+            let input = test_input(&dots, points);
+            let norms = prepared_test_norms(Metric::L2, input);
             dispatch_nearest_neighbors(
                 Metric::L2,
-                test_input(&dots, points),
+                input,
+                &norms,
                 MutMatrixView::try_from(output.as_mut_slice(), points, 2).unwrap(),
                 &mut workspace,
             )
@@ -624,7 +655,7 @@ mod integration_tests {
 
     use super::{
         LeafKernelError, LeafKernelWorkspace, LeafNeighbor, MAX_LEAF_NEIGHBORS,
-        dispatch_nearest_neighbors, leaf_neighbor_count,
+        dispatch_nearest_neighbors, leaf_neighbor_count, prepared_test_norms,
     };
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
@@ -745,10 +776,13 @@ mod integration_tests {
         metric: Metric,
     ) -> (usize, Vec<LeafNeighbor>) {
         let leaf_k = leaf_neighbor_count(points, requested_k).unwrap();
+        let input = test_input(dots, points);
+        let norms = prepared_test_norms(metric, input);
         let mut output = vec![LeafNeighbor::default(); points * leaf_k];
         dispatch_nearest_neighbors(
             metric,
-            test_input(dots, points),
+            input,
+            &norms,
             MutMatrixView::try_from(output.as_mut_slice(), points, leaf_k).unwrap(),
             &mut LeafKernelWorkspace::default(),
         )
@@ -914,9 +948,12 @@ mod integration_tests {
     fn rejects_sources_with_too_few_rankable_neighbors() {
         let dots = [1.0, 0.0, f32::NAN, 1.0];
         let mut output = [LeafNeighbor::default(); 2];
+        let input = test_input(&dots, 2);
+        let norms = prepared_test_norms(Metric::L2, input);
         let error = dispatch_nearest_neighbors(
             Metric::L2,
-            test_input(&dots, 2),
+            input,
+            &norms,
             MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
             &mut LeafKernelWorkspace::default(),
         )
@@ -971,6 +1008,7 @@ mod integration_tests {
             dispatch_nearest_neighbors(
                 Metric::L2,
                 non_square,
+                &[],
                 MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
                 &mut LeafKernelWorkspace::default(),
             ),
@@ -978,11 +1016,29 @@ mod integration_tests {
         );
 
         let square = [0.0; 9];
+        let square_input = test_input(&square, 3);
+        let square_norms = prepared_test_norms(Metric::L2, square_input);
+        let mut valid_output = [LeafNeighbor::default(); 3];
+        assert_eq!(
+            dispatch_nearest_neighbors(
+                Metric::L2,
+                square_input,
+                &square_norms[..2],
+                MutMatrixView::try_from(&mut valid_output[..], 3, 1).unwrap(),
+                &mut LeafKernelWorkspace::default(),
+            ),
+            Err(LeafKernelError::InvalidNormCount {
+                expected: 3,
+                actual: 2,
+            })
+        );
+
         let mut wrong_rows = [LeafNeighbor::default(); 2];
         assert_eq!(
             dispatch_nearest_neighbors(
                 Metric::L2,
-                test_input(&square, 3),
+                square_input,
+                &square_norms,
                 MutMatrixView::try_from(&mut wrong_rows[..], 2, 1).unwrap(),
                 &mut LeafKernelWorkspace::default(),
             ),
@@ -997,7 +1053,8 @@ mod integration_tests {
         assert_eq!(
             dispatch_nearest_neighbors(
                 Metric::L2,
-                test_input(&square, 3),
+                square_input,
+                &square_norms,
                 MutMatrixView::try_from(&mut too_many[..], 3, 3).unwrap(),
                 &mut LeafKernelWorkspace::default(),
             ),
@@ -1009,11 +1066,14 @@ mod integration_tests {
         );
 
         let square = [0.0; 25];
+        let square_input = test_input(&square, 5);
+        let square_norms = prepared_test_norms(Metric::L2, square_input);
         let mut too_wide = [LeafNeighbor::default(); 20];
         assert_eq!(
             dispatch_nearest_neighbors(
                 Metric::L2,
-                test_input(&square, 5),
+                square_input,
+                &square_norms,
                 MutMatrixView::try_from(&mut too_wide[..], 5, 4).unwrap(),
                 &mut LeafKernelWorkspace::default(),
             ),
