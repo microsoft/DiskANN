@@ -80,7 +80,7 @@ only sets how the *loaded* index scores at search time:
 | --- | --- |
 | `nlist` | numbers of nearest clusters (lists) to probe — one search per value |
 | `centroid_search_l` | centroid-graph search-list size; effective L is `max(centroid_search_l, nlist)` |
-| `recall_at` | the single `k` recall is measured at |
+| `recall_at` | the `k` recall is measured at — one value, or a list scored from a single search |
 
 A `Load` job needs only `data_type` and the index prefix — the same `data_type` the index
 was built with, since it selects the backend that decodes the lists.
@@ -144,10 +144,12 @@ Example — ~16384 clusters (`th=106`), `s=5` reassignment neighbors:
 ```
 
 The job's `search_phase` then sweeps `nlist` over the index it just built, printing one
-row per value: recall@`recall_at`, mean/p95/p999 latency (µs), bytes read/query,
-IOs/query, request bytes, QPS, and a per-stage latency breakdown (preprocess, centroid
-search, plan I/O, disk read, score, top-k). Point a later `Load` job at the same prefix
-to re-sweep without rebuilding.
+row per value: one recall column per `recall_at`, mean/p95/p999 latency (µs), bytes
+read/query, IOs/query, request bytes, QPS, and a per-stage latency breakdown (preprocess,
+centroid search, plan I/O, disk read, score, top-k). Each search runs to the largest
+`recall_at` and every listed `k` is scored from that one result set, so `[50, 1000]`
+costs what `50` alone did. Point a later `Load` job at the same prefix to re-sweep
+without rebuilding.
 
 ---
 

@@ -7,7 +7,7 @@ use std::{fmt, path::Path};
 
 use anyhow::Context;
 use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     inputs::{as_input, Example},
@@ -19,6 +19,81 @@ use crate::{
 //////////////
 
 as_input!(GraphIvfOperation);
+
+/////////////
+// Recall@ //
+/////////////
+
+/// The `k` values recall is reported at.
+///
+/// Accepts either `50` or `[50, 1000]`. A sweep searches once to the largest
+/// value and scores every value from that one result set, so a second `k` costs
+/// a set intersection rather than another pass over the queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecallAt(Vec<u32>);
+
+/// Wire form of [`RecallAt`]. Untagged so a bare number and a list both parse,
+/// which keeps every config written against the single-valued field working.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RecallAtRepr {
+    One(u32),
+    Many(Vec<u32>),
+}
+
+impl RecallAt {
+    pub(crate) fn new(values: Vec<u32>) -> Self {
+        Self(values)
+    }
+
+    /// The depth every search must run to for all configured `k` to be scorable.
+    pub(crate) fn max(&self) -> u32 {
+        self.0.iter().copied().max().unwrap_or(0)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.iter().copied()
+    }
+
+    /// Sorted ascending and deduplicated, so reported columns are ordered by
+    /// depth however the config listed them.
+    fn validate(&mut self) -> Result<(), anyhow::Error> {
+        if self.0.is_empty() {
+            anyhow::bail!("recall_at must have at least one value");
+        }
+        if self.0.contains(&0) {
+            anyhow::bail!("recall_at values must be positive");
+        }
+        self.0.sort_unstable();
+        self.0.dedup();
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for RecallAt {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match RecallAtRepr::deserialize(deserializer)? {
+            RecallAtRepr::One(k) => Self(vec![k]),
+            RecallAtRepr::Many(ks) => Self(ks),
+        })
+    }
+}
+
+impl Serialize for RecallAt {
+    /// Round-trips the form it was written in: a lone value stays a number.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0.as_slice() {
+            [k] => k.serialize(serializer),
+            ks => ks.serialize(serializer),
+        }
+    }
+}
+
+impl fmt::Display for RecallAt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        CommaList(&self.0).fmt(f)
+    }
+}
 
 ///////////
 // Input //
@@ -42,6 +117,7 @@ pub(crate) enum GraphIvfSource {
     Load(GraphIvfLoad),
     Static(GraphIvfStaticBuild),
     Online(GraphIvfOnlineBuild),
+    OnlineRunbook(GraphIvfOnlineRunbook),
 }
 
 #[cfg(feature = "graph-ivf")]
@@ -52,6 +128,7 @@ impl GraphIvfSource {
             Self::Load(load) => load.data_type,
             Self::Static(build) => build.data_type,
             Self::Online(online) => online.data_type,
+            Self::OnlineRunbook(runbook) => runbook.build.data_type,
         }
     }
 }
@@ -148,6 +225,17 @@ pub(crate) struct GraphIvfOnlineBuild {
     /// Nearest clusters pooled as reassignment candidates when a cluster splits (`s`).
     #[serde(default = "default_reassign_neighbors")]
     pub(crate) reassign_neighbors: usize,
+    /// A cluster is retired once deletes drop it below this many points: it
+    /// leaves the centroid graph and its members are scattered onto their
+    /// nearest surviving clusters. `0` disables merging, which is the only
+    /// sensible setting for a run that never deletes. Must leave hysteresis
+    /// below `split_threshold`: `2 * merge_threshold <= split_threshold`, so a
+    /// freshly split cluster is not immediately a merge candidate.
+    #[serde(default)]
+    pub(crate) merge_threshold: usize,
+    /// Floor on live clusters that merging will not go below.
+    #[serde(default = "default_min_clusters")]
+    pub(crate) min_clusters: usize,
     /// Search-list size selecting those neighbors. Resolved during validation to
     /// `max(reassign_neighbors, assign_l)` when omitted, so the effective value is
     /// always recorded in the job's serialized input.
@@ -202,6 +290,62 @@ const fn default_capacity_mult() -> usize {
 const fn default_batch_size() -> usize {
     1
 }
+const fn default_min_clusters() -> usize {
+    1
+}
+
+/// An online build driven by a BigANN streaming runbook rather than by a single
+/// pass over the corpus.
+///
+/// The runbook's stages are replayed against a live
+/// `diskann_graphivf::OnlineClusterer`: insert stages feed corpus rows in,
+/// delete stages take them back out, and search stages measure recall against
+/// the stage's own groundtruth. The index is flushed once the runbook ends, so a
+/// job may still attach a `search_phase` to measure the on-disk result.
+///
+/// The clustering knobs live in [`build`](Self::build), unchanged from a plain
+/// online build; only `merge_threshold` there has any effect in a run that never
+/// deletes.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GraphIvfOnlineRunbook {
+    /// Corpus, clustering, and save-path configuration. Its `batch_size` sets
+    /// how a stage's range is sub-batched, not the stage boundaries themselves.
+    pub(crate) build: GraphIvfOnlineBuild,
+    pub(crate) runbook: GraphIvfRunbookConfig,
+    pub(crate) search: GraphIvfRunbookSearch,
+}
+
+/// Which runbook to replay, and where its per-stage groundtruth lives.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GraphIvfRunbookConfig {
+    pub(crate) runbook_path: InputFile,
+    /// Key of the dataset section within the runbook YAML.
+    pub(crate) dataset_name: String,
+    /// Directory holding the groundtruth file each search stage names.
+    pub(crate) gt_directory: String,
+    /// Resolved during validation; never part of the serialized config.
+    #[serde(skip)]
+    pub(crate) resolved_gt_directory: Option<std::path::PathBuf>,
+}
+
+/// How every search stage of the runbook is measured.
+///
+/// Searches run single-threaded against the in-memory clusterer, so the reported
+/// latency is a clean per-query cost rather than a throughput figure; the point
+/// of a runbook run is recall as the index churns.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GraphIvfRunbookSearch {
+    pub(crate) queries: InputFile,
+    /// Numbers of nearest clusters to probe — one sweep per value, at every
+    /// search stage.
+    pub(crate) nlist: Vec<usize>,
+    /// Search-list size for the centroid graph search (`>= nlist`).
+    pub(crate) centroid_search_l: usize,
+    pub(crate) recall_at: RecallAt,
+}
 
 /// Serializable mirror of `diskann_graphivf::AssignMethod` (the benchmark's
 /// `inputs` layer is compiled without the optional `graph-ivf` dependency, so
@@ -243,7 +387,7 @@ pub(crate) struct GraphIvfSearchPhase {
     pub(crate) nlist: Vec<usize>,
     /// Search-list size for the centroid graph search (`>= nlist`).
     pub(crate) centroid_search_l: usize,
-    pub(crate) recall_at: u32,
+    pub(crate) recall_at: RecallAt,
     pub(crate) distance: SimilarityMeasure,
 }
 
@@ -261,6 +405,7 @@ impl GraphIvfOperation {
             GraphIvfSource::Load(load) => load.validate(checker)?,
             GraphIvfSource::Static(build) => build.validate(checker)?,
             GraphIvfSource::Online(online) => online.validate(checker)?,
+            GraphIvfSource::OnlineRunbook(runbook) => runbook.validate(checker)?,
         }
         if let Some(search_phase) = &mut self.search_phase {
             search_phase.validate(checker)?;
@@ -368,6 +513,19 @@ impl GraphIvfOnlineBuild {
         if self.capacity_mult == 0 {
             anyhow::bail!("capacity_mult must be positive");
         }
+        if self.min_clusters == 0 {
+            anyhow::bail!("min_clusters must be positive");
+        }
+        // Without hysteresis a cluster that just split is already small enough
+        // to be merged back, so a single delete could undo the split.
+        if self.merge_threshold > 0 && 2 * self.merge_threshold > self.split_threshold {
+            anyhow::bail!(
+                "merge_threshold ({}) leaves no hysteresis below split_threshold ({}); \
+                 require 2 * merge_threshold <= split_threshold",
+                self.merge_threshold,
+                self.split_threshold
+            );
+        }
         if self.graph_degree == 0 {
             anyhow::bail!("graph_degree must be positive");
         }
@@ -422,6 +580,76 @@ impl GraphIvfOnlineBuild {
     }
 }
 
+/// Shared validation for all search configs that have `nlist`, `centroid_search_l`,
+/// and `recall_at`. Called by both [`GraphIvfRunbookSearch`] and [`GraphIvfSearchPhase`].
+fn validate_nlist_and_recall(
+    nlist: &[usize],
+    centroid_search_l: usize,
+    recall_at: &mut RecallAt,
+) -> Result<(), anyhow::Error> {
+    if nlist.is_empty() {
+        anyhow::bail!("nlist must have at least one value");
+    }
+    if nlist.contains(&0) {
+        anyhow::bail!("nlist values must be positive");
+    }
+    if centroid_search_l == 0 {
+        anyhow::bail!("centroid_search_l must be positive");
+    }
+    recall_at.validate()
+}
+
+impl GraphIvfOnlineRunbook {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.build.validate(checker)?;
+        self.runbook.validate(checker)?;
+        self.search.validate(checker)?;
+        Ok(())
+    }
+}
+
+impl GraphIvfRunbookConfig {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.runbook_path
+            .resolve(checker)
+            .context("invalid runbook file")?;
+
+        // Mirrors `InputFile::resolve`: an absolute path must exist as given, a
+        // relative one is looked up under each search directory in turn.
+        let gt_path = Path::new(&self.gt_directory);
+        let resolved = if gt_path.is_dir() {
+            Some(gt_path.to_path_buf())
+        } else if gt_path.is_absolute() {
+            None
+        } else {
+            checker
+                .search_directories()
+                .iter()
+                .map(|dir| dir.join(gt_path))
+                .find(|candidate| candidate.is_dir())
+        };
+
+        self.resolved_gt_directory = Some(resolved.ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not find groundtruth directory \"{}\" in the search directories: {:?}",
+                self.gt_directory,
+                checker.search_directories()
+            )
+        })?);
+
+        Ok(())
+    }
+}
+
+impl GraphIvfRunbookSearch {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries
+            .resolve(checker)
+            .context("invalid queries file")?;
+        validate_nlist_and_recall(&self.nlist, self.centroid_search_l, &mut self.recall_at)
+    }
+}
+
 impl GraphIvfSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries
@@ -430,19 +658,7 @@ impl GraphIvfSearchPhase {
         self.groundtruth
             .resolve(checker)
             .context("invalid groundtruth file")?;
-
-        if self.nlist.is_empty() {
-            anyhow::bail!("nlist must have at least one value");
-        }
-        if self.nlist.contains(&0) {
-            anyhow::bail!("nlist values must be positive");
-        }
-        if self.centroid_search_l == 0 {
-            anyhow::bail!("centroid_search_l must be positive");
-        }
-        if self.recall_at == 0 {
-            anyhow::bail!("recall_at must be positive");
-        }
+        validate_nlist_and_recall(&self.nlist, self.centroid_search_l, &mut self.recall_at)?;
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
         }
@@ -482,7 +698,7 @@ impl Example for GraphIvfOperation {
             num_threads: 8,
             nlist: vec![8, 16, 32],
             centroid_search_l: 64,
-            recall_at: 10,
+            recall_at: RecallAt::new(vec![10]),
             distance: SimilarityMeasure::SquaredL2,
         };
 
@@ -511,6 +727,7 @@ impl fmt::Display for GraphIvfSource {
             GraphIvfSource::Load(load) => load.fmt(f),
             GraphIvfSource::Static(build) => build.fmt(f),
             GraphIvfSource::Online(online) => online.fmt(f),
+            GraphIvfSource::OnlineRunbook(runbook) => runbook.fmt(f),
         }
     }
 }
@@ -565,6 +782,12 @@ impl fmt::Display for GraphIvfOnlineBuild {
         write_field!(f, "Two Means Iters", self.two_means_iters)?;
         write_field!(f, "Reassign S", self.reassign_neighbors)?;
         write_field!(f, "Reassign L", self.effective_reassign_l())?;
+        if self.merge_threshold > 0 {
+            write_field!(f, "Merge Threshold", self.merge_threshold)?;
+            write_field!(f, "Min Clusters", self.min_clusters)?;
+        } else {
+            write_field!(f, "Merge Threshold", "disabled")?;
+        }
         write_field!(f, "Capacity Mult", self.capacity_mult)?;
         write_field!(f, "Normalize", self.normalize)?;
         write_field!(f, "Graph Degree", self.graph_degree)?;
@@ -581,23 +804,56 @@ impl fmt::Display for GraphIvfOnlineBuild {
     }
 }
 
+/// Comma-separated sweep values, rendered like any other labelled field.
+struct CommaList<'a, T>(&'a [T]);
+
+impl<T: fmt::Display> fmt::Display for CommaList<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, v) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{v}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for GraphIvfOnlineRunbook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.build.fmt(f)?;
+        self.runbook.fmt(f)?;
+        self.search.fmt(f)
+    }
+}
+
+impl fmt::Display for GraphIvfRunbookConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Graph-IVF Runbook")?;
+        write_field!(f, "Runbook", self.runbook_path.display())?;
+        write_field!(f, "Dataset", self.dataset_name)?;
+        write_field!(f, "GT Directory", self.gt_directory)?;
+        Ok(())
+    }
+}
+
+impl fmt::Display for GraphIvfRunbookSearch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Graph-IVF Runbook Search")?;
+        write_field!(f, "Queries", self.queries.display())?;
+        write_field!(f, "NList", CommaList(&self.nlist))?;
+        write_field!(f, "Centroid L", self.centroid_search_l)?;
+        write_field!(f, "Recall@", self.recall_at)?;
+        Ok(())
+    }
+}
+
 impl fmt::Display for GraphIvfSearchPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Graph-IVF Search Phase")?;
         write_field!(f, "Queries", self.queries.display())?;
         write_field!(f, "Groundtruth", self.groundtruth.display())?;
-        {
-            let mut first = true;
-            write!(f, "{:>PRINT_WIDTH$}: ", "NList")?;
-            for v in &self.nlist {
-                if !first {
-                    write!(f, ",")?;
-                }
-                write!(f, "{}", v)?;
-                first = false;
-            }
-            writeln!(f)?;
-        }
+        write_field!(f, "NList", CommaList(&self.nlist))?;
         write_field!(f, "Centroid L", self.centroid_search_l)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
@@ -950,5 +1206,48 @@ mod tests {
         assert!(decoded.normalize);
         assert_eq!(decoded.split_threshold, online.split_threshold);
         assert_eq!(decoded.seed, online.seed);
+    }
+
+    /// Parse a `recall_at` payload on its own, then validate it.
+    fn recall_at(json: &str) -> anyhow::Result<RecallAt> {
+        let mut parsed: RecallAt = serde_json::from_str(json)?;
+        parsed.validate()?;
+        Ok(parsed)
+    }
+
+    #[test]
+    fn recall_at_accepts_a_scalar_or_a_list() {
+        assert_eq!(recall_at("50").unwrap().iter().collect::<Vec<_>>(), [50]);
+        assert_eq!(
+            recall_at("[50, 1000]").unwrap().iter().collect::<Vec<_>>(),
+            [50, 1000]
+        );
+    }
+
+    #[test]
+    fn recall_at_is_sorted_and_deduplicated() {
+        // The deepest value sets the search depth, and ordering the rest by depth
+        // keeps the reported columns stable however the config listed them.
+        let parsed = recall_at("[1000, 50, 1000]").unwrap();
+        assert_eq!(parsed.iter().collect::<Vec<_>>(), [50, 1000]);
+        assert_eq!(parsed.max(), 1000);
+    }
+
+    #[test]
+    fn recall_at_rejects_empty_and_zero() {
+        assert!(recall_at("[]").is_err(), "no k means nothing to measure");
+        assert!(recall_at("0").is_err());
+        assert!(recall_at("[50, 0]").is_err());
+    }
+
+    #[test]
+    fn recall_at_round_trips_in_the_form_it_was_written() {
+        // A single value must stay a bare number so configs written against the
+        // scalar field are reproduced unchanged from a run's own output.
+        let one: RecallAt = serde_json::from_str("50").unwrap();
+        assert_eq!(serde_json::to_string(&one).unwrap(), "50");
+
+        let many: RecallAt = serde_json::from_str("[50,1000]").unwrap();
+        assert_eq!(serde_json::to_string(&many).unwrap(), "[50,1000]");
     }
 }

@@ -87,7 +87,7 @@ Loads the saved index and sweeps `nlist`. Never rebuilds.
         "num_threads": 1,
         "nlist": [60, 100, 140, 180, 220, 280, 350, 450, 600, 800, 1000, 1300, 1700, 2000],
         "centroid_search_l": 2048,
-        "recall_at": 1000,
+        "recall_at": [50, 1000],
         "distance": "squared_l2"
       }
     }
@@ -100,15 +100,17 @@ Loads the saved index and sweeps `nlist`. Never rebuilds.
 **`nlist <= centroid_search_l`.** Hard constraint. Size the beam to the largest `nlist` in
 the band.
 
-**One `recall_at` per run.** Produce an `-r50` and an `-r1000` config per index. Analysis
-joins them on `nlist`; an `nlist` present in only one is dropped rather than half-plotted,
-so keep the two lists identical unless you deliberately extend one.
+**List every depth in one config.** `"recall_at": [50, 1000]` searches once per `nlist`,
+to the deepest value, and scores both from that result set — one run instead of two.
+Results predating this were measured as an `-r50` and an `-r1000` run per index, and
+analysis still joins those on `nlist`; an `nlist` present in only one is dropped rather
+than half-plotted.
 
 **`num_threads: 1` for sweeps.** Latency, QPS and per-query I/O are only comparable
 single-threaded. Builds use 16.
 
-**Groundtruth `K` must be ≥ the largest `recall_at`.** All these studies use
-`recall_1000` groundtruth and measure at 50 and 1000.
+**Groundtruth `K` must be ≥ the largest `recall_at`.** Checked before the sweep runs.
+All these studies use `recall_1000` groundtruth and measure at 50 and 1000.
 
 **The build config's `save_path` and the sweep config's `load_path` must match exactly.**
 A typo produces a "no run matching" gap in the analysis, not an error at run time.

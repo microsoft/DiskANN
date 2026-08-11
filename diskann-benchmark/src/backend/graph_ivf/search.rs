@@ -19,19 +19,62 @@ use diskann_providers::{
     storage::FileStorageProvider,
     utils::{create_thread_pool, ParallelIteratorInPool},
 };
-use diskann_tools::utils::{search_index_utils, KRecallAtN};
+use diskann_tools::utils::{search_index_utils, KRecallAtN, TruthSet};
 use diskann_utils::views::Matrix;
 
 use crate::{
     backend::graph_ivf::{build::to_graphivf_metric, element::GraphIvfElement},
-    inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase},
+    inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
     utils::{datafiles, SimilarityMeasure},
 };
+
+/// Recall at one `k`, as a percentage.
+#[derive(Serialize, Deserialize, Debug)]
+pub(super) struct RecallPoint {
+    pub(super) at: u32,
+    pub(super) recall: f32,
+}
+
+/// Score one result buffer at every configured `k`.
+///
+/// `result_ids` is `k_max` deep and distance-ordered, so its first `k` entries
+/// are exactly what a search of depth `k` would have returned. That is what
+/// lets a single sweep answer for every `k` instead of one sweep per `k`.
+pub(super) fn recall_points(
+    recall_at: &RecallAt,
+    num_queries: usize,
+    gt: &TruthSet,
+    result_ids: &[u32],
+    k_max: usize,
+) -> anyhow::Result<Vec<RecallPoint>> {
+    // `calculate_recall` reads `k` ids per groundtruth row; a row shorter than
+    // that would silently spill into the next query's row rather than fail.
+    anyhow::ensure!(
+        gt.index_dimension >= k_max,
+        "groundtruth has {} neighbors per query but recall_at asks for {k_max}",
+        gt.index_dimension,
+    );
+    recall_at
+        .iter()
+        .map(|k| {
+            let recall = search_index_utils::calculate_recall(
+                num_queries,
+                &gt.index_nodes,
+                gt.distances.as_ref(),
+                gt.index_dimension,
+                result_ids,
+                k_max as u32,
+                KRecallAtN::new(k, k)?,
+            )? as f32;
+            Ok(RecallPoint { at: k, recall })
+        })
+        .collect()
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct GraphIvfSearchStats {
     pub(super) num_threads: usize,
-    pub(super) recall_at: u32,
+    pub(super) recall_at: Vec<u32>,
     pub(super) distance: SimilarityMeasure,
     pub(super) centroid_search_l: usize,
     pub(super) search_results_per_nlist: Vec<GraphIvfSearchResult>,
@@ -44,7 +87,8 @@ pub(super) struct GraphIvfSearchResult {
     pub(super) mean_latency: MicroSeconds,
     pub(super) p95_latency: MicroSeconds,
     pub(super) p999_latency: MicroSeconds,
-    pub(super) recall: f32,
+    /// One entry per configured `recall_at`, all from the same sweep.
+    pub(super) recalls: Vec<RecallPoint>,
     /// Mean per-query, per-stage latency breakdown (a "layer cake").
     pub(super) breakdown: GraphIvfLatencyBreakdown,
 }
@@ -139,7 +183,8 @@ where
     // per-thread initializer below reuses the same fallible call.
     let _ = index.searcher()?;
 
-    let recall_at = search_params.recall_at as usize;
+    let recall_at = &search_params.recall_at;
+    let k_max = recall_at.max() as usize;
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_nlist = Vec::with_capacity(search_params.nlist.len());
 
@@ -154,14 +199,14 @@ where
             centroid_search_l: search_params.centroid_search_l,
         };
 
-        let mut result_ids: Vec<u32> = vec![0; recall_at * num_queries];
+        let mut result_ids: Vec<u32> = vec![0; k_max * num_queries];
         let mut latencies_us: Vec<u64> = vec![0; num_queries];
         let failed = AtomicBool::new(false);
         let accum = PhaseAccum::default();
 
         let zipped = prepared
             .par_chunks(dim)
-            .zip(result_ids.par_chunks_mut(recall_at))
+            .zip(result_ids.par_chunks_mut(k_max))
             .zip(latencies_us.par_iter_mut());
 
         let start = Instant::now();
@@ -176,7 +221,7 @@ where
             },
             |searcher, ((query, id_chunk), latency)| {
                 let q_start = Instant::now();
-                match searcher.search_profiled(query, recall_at, &params) {
+                match searcher.search_profiled(query, k_max, &params) {
                     Ok((results, profile)) => {
                         for (slot, (id, _dist)) in id_chunk.iter_mut().zip(results.iter()) {
                             *slot = *id;
@@ -225,15 +270,7 @@ where
             anyhow::bail!("one or more graph-ivf searches failed; see logs for details");
         }
 
-        let recall = search_index_utils::calculate_recall(
-            num_queries,
-            &gt.index_nodes,
-            gt.distances.as_ref(),
-            gt.index_dimension,
-            &result_ids,
-            recall_at as u32,
-            KRecallAtN::new(recall_at as u32, recall_at as u32)?,
-        )? as f32;
+        let recalls = recall_points(recall_at, num_queries, &gt, &result_ids, k_max)?;
 
         latencies_us.sort_unstable();
         let percentile = |p: f64| -> u64 {
@@ -282,14 +319,14 @@ where
             mean_latency: MicroSeconds::new(mean_us),
             p95_latency: MicroSeconds::new(percentile(0.95)),
             p999_latency: MicroSeconds::new(percentile(0.999)),
-            recall,
+            recalls,
             breakdown,
         });
     }
 
     Ok(GraphIvfSearchStats {
         num_threads: search_params.num_threads,
-        recall_at: search_params.recall_at,
+        recall_at: recall_at.iter().collect(),
         distance: search_params.distance,
         centroid_search_l: search_params.centroid_search_l,
         search_results_per_nlist,
@@ -321,16 +358,23 @@ fn prepare_normalized_queries<T: VectorRepr>(queries: &Matrix<T>) -> anyhow::Res
 
 impl fmt::Display for GraphIvfSearchStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let header = ["NList", "QPS", "Recall", "MeanUs", "P95Us", "P999Us"];
+        // One recall column per configured `k`, between QPS and the latencies.
+        let mut header: Vec<String> = vec!["NList".into(), "QPS".into()];
+        header.extend(self.recall_at.iter().map(|k| format!("R@{k}")));
+        header.extend(["MeanUs".into(), "P95Us".into(), "P999Us".into()]);
+        let latency_col = 2 + self.recall_at.len();
+
         let mut table = Table::new(header, self.search_results_per_nlist.len());
         for (i, r) in self.search_results_per_nlist.iter().enumerate() {
             let mut row = table.row(i);
             row.insert(r.nlist.to_string(), 0);
             row.insert(format!("{:.1}", r.qps), 1);
-            row.insert(format!("{:.2}", r.recall), 2);
-            row.insert(format!("{}", r.mean_latency.as_micros()), 3);
-            row.insert(format!("{}", r.p95_latency.as_micros()), 4);
-            row.insert(format!("{}", r.p999_latency.as_micros()), 5);
+            for (j, p) in r.recalls.iter().enumerate() {
+                row.insert(format!("{:.2}", p.recall), 2 + j);
+            }
+            row.insert(format!("{}", r.mean_latency.as_micros()), latency_col);
+            row.insert(format!("{}", r.p95_latency.as_micros()), latency_col + 1);
+            row.insert(format!("{}", r.p999_latency.as_micros()), latency_col + 2);
         }
         table.fmt(f)?;
 

@@ -5,20 +5,21 @@
 
 //! On-disk layout for the inverted lists and the index metadata.
 //!
-//! Two files are written next to a user-supplied path prefix:
+//! Three files are written next to a user-supplied path prefix:
 //!
 //! * `<prefix>.graphivf_lists` — the inverted lists. For every cluster, in
 //!   ascending cluster-id order, the bytes are `[ids: u32 x count][vectors:
-//!   f32 x dim x count]`, packed back-to-back with no per-list padding. The
+//!   T x dim x count]`, packed back-to-back with no per-list padding. The
 //!   whole file is zero-padded up to a 512-byte multiple so that sector-aligned
 //!   reads never run past the end of the file.
 //! * `<prefix>.graphivf_meta` — a compact header plus the per-cluster point
 //!   counts. Byte offsets are recomputed from the counts on load.
+//! * `<prefix>.graphivf_centroids.fbin` — the centroid matrix, always `f32`.
 //!
 //! Because every list is variable length, a read for cluster `c` reads the
 //! smallest 512-aligned byte window that fully contains the list and indexes
 //! into it; this avoids wasting disk space on padding when lists are tiny (the
-//! expected regime, with one centroid per ~10-20 points).
+//! expected regime, with only tens of points per centroid).
 
 use std::{
     fs::File,
@@ -47,6 +48,11 @@ const RECORD_ALIGN: u64 = 4;
 
 const MAGIC: u32 = 0x4756_4947; // "GIVF" little-endian
 const VERSION: u32 = 1;
+
+/// Assignment sentinel for a corpus row that is not in the index — either never
+/// inserted or since deleted. [`write_lists_stored`] skips these rows, so a
+/// build that does not cover the whole corpus still writes a well-formed index.
+pub(crate) const NOT_INDEXED: u32 = u32::MAX;
 
 /// Bytes of a cluster's list actually occupied by its ids and vectors (no
 /// trailing record padding): `count` u32 ids followed by `count * dim`
@@ -214,6 +220,11 @@ pub(crate) fn write_lists<T: VectorRepr>(
 /// whole-vector quantized formats this is the canonical width, e.g. 404 for
 /// 8-bit MinMax at dimension 384, not the logical dimension). This is the
 /// counterpart used when the corpus is supplied pre-compressed.
+///
+/// Rows whose assignment is [`NOT_INDEXED`] are skipped, which is how an online
+/// build flushes a corpus some of whose points were deleted or never inserted.
+/// The ids written into each list are the original row indices either way, so a
+/// partial index still refers to points by their corpus position.
 pub(crate) fn write_lists_stored<T: VectorRepr>(
     path: &Path,
     data: MatrixView<'_, T>,
@@ -225,6 +236,9 @@ pub(crate) fn write_lists_stored<T: VectorRepr>(
 
     let mut buckets: Vec<Vec<u32>> = vec![Vec::new(); num_clusters];
     for (pid, &c) in assignments.iter().enumerate() {
+        if c == NOT_INDEXED {
+            continue;
+        }
         buckets[c as usize].push(pid as u32);
     }
     let counts: Vec<u32> = buckets.iter().map(|b| b.len() as u32).collect();

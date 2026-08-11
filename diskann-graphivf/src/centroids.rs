@@ -254,3 +254,80 @@ pub(crate) fn search_mut(
 
     Ok(buffer.current_len())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mat(data: Vec<f32>, nrows: usize, ncols: usize) -> Matrix<f32> {
+        Matrix::try_from(data.into_boxed_slice(), nrows, ncols).unwrap()
+    }
+
+    /// Four centroids at the corners of a 10x10 square, with spare capacity.
+    fn square(capacity: usize) -> (MutableCentroidGraph, Runtime) {
+        let cents = mat(vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 10.0], 4, 2);
+        let graph = build_mutable(
+            cents,
+            &GraphParams::default(),
+            2,
+            capacity,
+            VectorMetric::L2,
+        )
+        .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        (graph, rt)
+    }
+
+    fn nearest(graph: &MutableCentroidGraph, rt: &Runtime, q: &[f32], k: usize) -> Vec<u32> {
+        let mut ids = vec![0u32; k];
+        let mut dist = vec![0.0f32; k];
+        let n = search_mut(graph, rt, q, k.max(16), &mut ids, &mut dist).unwrap();
+        ids.truncate(n);
+        ids
+    }
+
+    /// A soft-deleted centroid is no longer returned by search, and a fresh id
+    /// can be inserted afterwards.
+    #[test]
+    fn delete_then_insert_fresh_id() {
+        let (graph, rt) = square(8);
+        delete_centroid(&graph, &rt, 1).unwrap();
+        assert!(!nearest(&graph, &rt, &[10.0, 0.0], 4).contains(&1));
+
+        insert_centroid(&graph, &rt, 4, &[9.0, 1.0]).unwrap();
+        assert!(nearest(&graph, &rt, &[10.0, 0.0], 4).contains(&4));
+    }
+
+    /// Centroid ids are **not** reusable: re-inserting the id of a soft-deleted
+    /// centroid silently appears to succeed, but the centroid is never returned
+    /// by a search — the tombstone wins.
+    ///
+    /// This is why [`CentroidTable`] hands out ids monotonically and
+    /// `centroid_capacity` must cover every id ever allocated, not just the
+    /// peak live count. Recycling ids would silently lose clusters.
+    ///
+    /// [`CentroidTable`]: crate::online::OnlineClusterer
+    #[test]
+    fn deleted_centroid_ids_are_not_reusable() {
+        let (graph, rt) = square(8);
+        delete_centroid(&graph, &rt, 1).unwrap();
+
+        // Re-inserting a retired id reports success ...
+        insert_centroid(&graph, &rt, 1, &[-5.0, -5.0]).unwrap();
+
+        // ... but the centroid is unreachable: a query sitting exactly on it
+        // returns every *other* centroid instead.
+        let found = nearest(&graph, &rt, &[-5.0, -5.0], 4);
+        assert!(
+            !found.contains(&1),
+            "id reuse unexpectedly worked; revisit the monotonic id allocation \
+             in OnlineClusterer (found {found:?})"
+        );
+        assert!(
+            !found.is_empty(),
+            "the surviving centroids remain reachable"
+        );
+    }
+}

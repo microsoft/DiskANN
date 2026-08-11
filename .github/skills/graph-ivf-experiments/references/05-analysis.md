@@ -22,7 +22,8 @@ anything new** — a filename only the author can decode goes stale silently.
 | `concat_bands(specs, runs)` | splice sweep bands into one curve |
 | `ios_and_bytes_at(rows, key)` | interpolate to the 90% recall target, clamped if unattained |
 
-`Run.params` flattens the job source plus `recall_at`, `search_num_threads` and
+`Run.params` flattens the job source plus `recall_at` (always a list, even for a run that
+measured one depth), `search_num_threads` and
 `search_centroid_search_l`, so runs are selected by *what they were*, not what they were
 named.
 
@@ -31,12 +32,13 @@ named.
 | Shape | Meaning |
 |---|---|
 | `"sweep_x.txt"` | legacy log |
-| `{...}` | `online_rows` criteria matching one index's @50 and @1000 runs |
+| `{...}` | `online_rows` criteria matching one index — a run scored at both depths, else its @50 and @1000 runs |
 | `(spec50, spec1000)` | the two depths selected separately |
 | `[spec, ...]` | bands concatenated into one curve |
 
 Row columns: `nlist, qps, mean_us, p95_us, p999_us, recall, recall50, recall1000, bytes_q,
 ios_q, reqbytes, preproc_us, centroid_us, planio_us, diskread_us, score_us, topk_us`.
+A `recall<k>` column exists for each measured depth, and `recall` aliases the shallowest.
 Legacy rows carry `p99_us`; JSON rows carry `p999_us`. Neither has both.
 
 ## The dataset registry

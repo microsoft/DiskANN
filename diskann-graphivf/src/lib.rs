@@ -13,21 +13,28 @@
 //! 2. An on-disk file holding, for every cluster, the corpus vectors assigned to
 //!    that cluster laid out contiguously so a single read fetches a whole list.
 //!
-//! Build: sample the corpus, run k-means to obtain centroids, build a graph over
-//! the centroids, assign every corpus point to its nearest centroid via graph
-//! search, then stream the per-cluster inverted lists to disk.
+//! Two build paths produce the same on-disk format and share one search path:
+//!
+//! * **Static** ([`GraphIvfIndex::build`]): sample the corpus, run k-means to
+//!   obtain a fixed number of centroids, build a graph over them, assign every
+//!   corpus point to its nearest centroid, then stream the lists to disk.
+//! * **Online** ([`OnlineClusterer`]): stream points one at a time, routing each
+//!   through the centroid graph and splitting a cluster (with local
+//!   reassignment) whenever it overflows, so the cluster count emerges from the
+//!   data. See `ONLINE.md` for the algorithm.
 //!
 //! Search: find the `nlist` nearest centroids via graph search, fetch those
 //! lists from disk in one batched read, and exhaustively score the query against
 //! the fetched vectors to produce the top-k.
 //!
 //! The inverted-list vectors can be stored in any [`VectorRepr`] element type
-//! ([`GraphIvfIndex`]'s type parameter, default `f32`; [`Half`] for `f16`, and
-//! `i8`/`u8` are also supported). The `f32` query is encoded into the stored
-//! element type and preprocessed once into a distance scorer reused across every
-//! candidate, via the shared SIMD distance kernels. The centroid graph is always
-//! full-precision `f32`. Cosine similarity is implemented by L2-normalizing
-//! vectors at build and query time (spherical reduction to L2).
+//! ([`GraphIvfIndex`]'s type parameter, default `f32`; [`Half`] for `f16`,
+//! `MinMaxElement<8>` for 8-bit MinMax-quantized rows, and `i8`/`u8` are also
+//! supported). Queries are supplied in that same stored type and preprocessed
+//! once into a distance scorer reused across every candidate, via the shared
+//! SIMD distance kernels. The centroid graph is always full-precision `f32`.
+//! Cosine similarity is implemented by L2-normalizing vectors at build and query
+//! time (spherical reduction to L2).
 
 // Retained for reference / future re-integration; not currently wired into the
 // index or search path.
@@ -46,7 +53,9 @@ pub use diskann::utils::VectorRepr;
 pub use diskann_vector::Half;
 pub use error::{GraphIvfError, Result};
 pub use index::{CentroidInit, GraphIvfIndex, Searcher};
-pub use online::{BuildTelemetry, OnlineClusterer, SeedStrategy, SplitEvent};
+pub use online::{
+    BuildTelemetry, MergeEvent, OnlineClusterer, OnlineSearcher, SeedStrategy, SplitEvent,
+};
 pub use params::{
     AssignMethod, BuildParams, EmptyClusterPolicy, GraphParams, Metric, OnlineParams, SearchParams,
 };

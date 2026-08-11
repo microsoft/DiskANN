@@ -29,11 +29,13 @@ is produced, not in how it is stored or searched.
 - **Search = route then scan.** A query navigates the centroid graph to its
   `nlist` nearest centroids, reads those lists from disk, and exhaustively scores
   the query against their members.
-- **Online build = stream, route, split.** Points are streamed in insert order;
-  each is routed to its nearest centroid via the same graph. When a cluster
-  overflows a confugrable size threshold it is **split** in two and its neighborhood is
-  locally **reassigned**. The centroid count is not fixed up front — it grows
-  with the data.
+- **Online build = stream, route, split/merge.** Points stream in and out:
+  each insert is routed to its nearest centroid and appended; each delete removes
+  the point from its list. When a cluster overflows `split_threshold` it is
+  **split** and its neighbourhood locally **reassigned**. When one falls below
+  `merge_threshold` it is **merged** — retired from the centroid graph and its
+  members scattered onto the survivors. The centroid count grows with inserts and
+  contracts with merges; it is not fixed up front.
 
 ```mermaid
 flowchart LR
@@ -117,7 +119,7 @@ the only required knob; everything else has a default (full field reference in t
       "num_threads": 1,
       "nlist": [164, 410, 656, 901, 1147, 1638, 2458],
       "centroid_search_l": 1024,
-      "recall_at": 50,
+      "recall_at": [50, 1000],
       "distance": "squared_l2"
     }
   }
@@ -130,7 +132,9 @@ cargo run --release --package diskann-benchmark --features graph-ivf -- \
 ```
 
 The build writes `<save_path>.graphivf_*` plus the telemetry CSV if one was asked for.
-Queries must be in the same element type as the corpus. A later `Load` job pointed at
+Queries must be in the same element type as the corpus, and the groundtruth must reach at
+least the largest `recall_at` — every listed `k` is scored from one search per `nlist`,
+so a list costs no more queries than a single value. A later `Load` job pointed at
 the same prefix re-sweeps the index without rebuilding it; give it the same `data_type`
 the index was built with.
 
@@ -322,11 +326,55 @@ graph is frozen and drops 7×, while splitting stays serial per parent and gains
 only what the joint k-means saves. Recall tracks the serial build to within a
 point, at the same residual.
 
+### 3c. Delete a point (remove, maybe merge)
+
+`delete_batch(pids)` mirrors `insert_batch` in three phases:
+
+1. **Group.** Each point is paired with the cluster it currently sits in
+   (`assignments[pid]`). The batch is sorted by (cluster, pid) so each touched
+   cluster's victims are already in order for the next phase. A repeated pid
+   in one batch is deduplicated silently — removing a point twice is idempotent.
+2. **Remove.** Each touched cluster's inverted list is filtered in one `retain`
+   pass and each point's assignment is reset to `UNASSIGNED`. Cost is
+   `O(|list|)` per touched cluster regardless of how many deletes hit it.
+   A deleted point's id is free and may be re-inserted later.
+3. **Maybe merge.** Any touched cluster now holding fewer than `merge_threshold`
+   points is a **victim**. `merge_threshold = 0` (the default) disables merging;
+   deletes still remove points but the partition only ever gains clusters.
+
+The **merge operator** retires a victim and scatters its members:
+
+1. Snapshot each victim's centroid vector and member list.
+2. **Retire the whole batch first** — remove every victim from the centroid
+   graph before placing any point. With victims already out of the graph the
+   landing-site search can only return survivors, so a batch retiring mutually
+   adjacent clusters needs no claiming or exclusion bookkeeping.
+3. For each victim: search for the `reassign_neighbors` nearest surviving
+   centroids from the victim's own centroid vector, then place the victim's
+   members onto those survivors via the same `reassign_gemm` the split path uses.
+
+A merge is a net **−1** to the live-cluster count, fits no new centroid, and
+consumes **no centroid id** — merges are free against the id budget
+(see [§4](#4-id-budget--termination)).
+
+**The cascade rule:** `insert_batch` never merges; `delete_batch` never splits.
+A survivor that absorbs a dissolved cluster's members may end up over
+`split_threshold` — it waits for the next insert routed to it. This makes
+split/merge cascades structurally impossible rather than bounded by a counter.
+
+The `min_clusters` floor prevents the partition from collapsing entirely: merges
+are admitted emptiest-first until the live count would fall below `min_clusters`.
+The hysteresis requirement `2 × merge_threshold ≤ split_threshold` is validated
+at construction to prevent a freshly-split child from immediately being eligible
+for merging.
+
 ### 4. Id budget & termination
 
 - `centroid_capacity` is the **total** id budget (live + retired). Ids consumed
-  over a build is `initial + 2 · splits`; size it to roughly **2×** the expected
-  final live-cluster count. Splitting stops when the budget is exhausted.
+  over a build is `initial + 2 · splits`; merges retire an id but never allocate
+  one, so merges are free. Under long streaming churn, splits accumulate without
+  bound — size `centroid_capacity` to cover the expected total over the full
+  workload, not just the peak live count.
 - `max_clusters = Some(k)` stops splitting at `k` live clusters (fixed
   granularity). `None` lets the count grow driven solely by `split_threshold`;
   the natural equilibrium is `≈ 2 · num_points / split_threshold` live clusters.
@@ -343,7 +391,11 @@ cluster cap. Users of the library API provide `centroid_capacity` directly.
 2. Write the `k × dim` centroids (`f32`).
 3. Write the inverted lists from the **stored** corpus `T` (verbatim) in remapped
    id order, and write the metadata (counts, `dim`, `metric`, element size,
-   graph params).
+   graph params). Points not currently in the index — never inserted, or deleted
+   since the last flush — are marked `UNASSIGNED` and **skipped**. The ids
+   written into each list are the original corpus row indices either way, so a
+   partial index refers to points by their corpus position and groundtruth keeps
+   lining up.
 
 The output loads through
 [`GraphIvfIndex::<T>::load`](src/index.rs) exactly like a batch-built index.
@@ -402,6 +454,8 @@ Online build ([`OnlineParams`](src/params.rs)):
 | Parameter | Role |
 | --- | --- |
 | `split_threshold` | A cluster splits once it holds **more** than this many points (`≥ 2`). The dominant knob on final granularity. |
+| `merge_threshold` | A cluster is retired once deletes shrink it below this many points. `0` (the default) disables merging. Requires `2 × merge_threshold ≤ split_threshold`. |
+| `min_clusters` | Live-cluster floor: merges stop before taking the count below this (clamped to `≥ 1` internally). |
 | `max_clusters` | Optional hard cap on live clusters (`None` = data-driven growth). |
 | `centroid_capacity` | Total id budget (live + retired); size to `≈ 2×` expected final clusters. |
 | `assign_l` | Centroid-graph search-list size for routing inserts. |
@@ -437,9 +491,18 @@ The complete field/default table is in the [graph-IVF section of
 
 ## Telemetry
 
-[`BuildTelemetry`](src/online.rs) records routing/split totals and one event per
-split: triggering insert, retired cluster and size, neighbor count, points that
-changed cluster, resulting live-cluster count, and 2-means/reassignment/total
-latencies. Setting `telemetry_csv` on the job writes those events out. Because splits
-are the only structural events, the CSV is a complete timeline of cluster-count growth
-and split cost.
+[`BuildTelemetry`](src/online.rs) records routing, split, delete, and merge
+totals and one event per structural change. Setting `telemetry_csv` on the job
+writes two files:
+
+- **`<telemetry_csv>`** — one row per split, written by `write_csv`. Fields:
+  triggering insert index, retired cluster and size, neighbor count, points that
+  changed cluster, resulting live count, and 2-means/reassignment/total
+  latencies.
+- **`<stem>_merges.<ext>`** — one row per merge, written by `write_merges_csv`
+  (sibling path derived automatically). Fields: operation index, retired cluster
+  and its size, neighbor count, points re-placed, live count after the merge,
+  and search/reassignment/total latencies.
+
+The two files have different schemas and are kept separate so existing split
+analysis scripts continue to work unchanged.

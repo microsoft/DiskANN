@@ -69,8 +69,9 @@ Violating any of these produces results that look plausible and are wrong, or co
   vectors from empty documents) land *inside* the retrieval band under squared L2 and
   silently cap recall. See [stage 2](./references/02-groundtruth.md).
 - **`nlist` must be `<= centroid_search_l`.** The runner rejects configs that violate it.
-- **A run measures one `recall_at`.** recall@50 and recall@1000 are separate runs of the
-  same index, joined on `nlist` during analysis.
+- **`recall_at` takes a list.** `[50, 1000]` scores both depths from one search per
+  `nlist`, so measure them together rather than as two runs. Older results measured one
+  depth apiece and are still joined on `nlist` during analysis.
 - **Sweep single-threaded** (`num_threads: 1`) so latency and per-query I/O are comparable.
 
 **Process**

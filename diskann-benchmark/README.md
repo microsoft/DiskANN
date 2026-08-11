@@ -354,21 +354,24 @@ search per value:
   "num_threads": 1,
   "nlist": [1, 2, 4, 8, 16],
   "centroid_search_l": 64,
-  "recall_at": 10,
+  "recall_at": [10, 100],
   "distance": "squared_l2"
 }
 ```
 Each sweep reports recall, QPS, mean/p95/p999 latency, bytes read and IOs per query, plus
 a per-stage latency breakdown (preprocess, centroid search, plan I/O, disk read, score,
-top-k). A job measures a single `recall_at`; to compare recall@50 and recall@1000, run two
-jobs. Online builds can also write `telemetry_csv`, one row per split, which is a complete
-timeline of cluster growth and split cost.
+top-k). `recall_at` takes a single `k` or a list of them: a sweep searches once to the
+largest and scores every listed `k` from that one result set, so comparing recall@50 and
+recall@1000 costs one job rather than two. Online builds can also write `telemetry_csv`,
+one row per split, which is a complete timeline of cluster growth and split cost.
 
-Three constraints are worth calling out because they are checked up front:
+Four constraints are worth calling out because they are checked up front:
 
 - No `nlist` may exceed the index's cluster count. For an online build that count emerges
   from the data rather than being declared, so size the sweep against what the build
   actually produced (or cap it with `max_clusters`).
+- The groundtruth must carry at least the largest `recall_at` neighbors per query, since
+  scoring deeper than it reaches would silently read another query's row.
 - Online builds store corpus rows verbatim and cannot normalize them, so `cosine` is
   rejected — pre-normalize the corpus and use `cosine_normalized`.
 - For `minmax8` indexes the corpus and queries must both already be quantized; see

@@ -15,6 +15,7 @@ use std::{fmt, path::Path, time::Instant};
 
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_graphivf::{GraphParams, OnlineClusterer, OnlineParams, SeedStrategy};
+use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -115,9 +116,23 @@ fn centroid_capacity(params: &GraphIvfOnlineBuild, num_points: usize) -> usize {
         )
 }
 
-pub(super) fn build_graph_ivf_online<T>(
-    params: &GraphIvfOnlineBuild,
-) -> anyhow::Result<GraphIvfOnlineBuildStats>
+/// Everything an online run needs before its first insert: the stored corpus to
+/// flush from, and a seeded clusterer over the `f32` clustering copy.
+///
+/// Shared by the corpus-order build and the runbook-driven one so both derive
+/// the id budget, the metric, and the warmup seed the same way.
+pub(super) struct OnlineSetup<T: GraphIvfElement> {
+    pub(super) corpus: Matrix<T>,
+    pub(super) clusterer: OnlineClusterer,
+    pub(super) dim: usize,
+    pub(super) centroid_capacity: usize,
+    pub(super) seeded_clusters: usize,
+    pub(super) corpus_load: MicroSeconds,
+    pub(super) decompress: MicroSeconds,
+    pub(super) seed: MicroSeconds,
+}
+
+pub(super) fn online_setup<T>(params: &GraphIvfOnlineBuild) -> anyhow::Result<OnlineSetup<T>>
 where
     T: GraphIvfElement,
 {
@@ -141,6 +156,8 @@ where
         reassign_neighbors: params.reassign_neighbors,
         reassign_l: params.effective_reassign_l(),
         two_means_iters: params.two_means_iters,
+        merge_threshold: params.merge_threshold,
+        min_clusters: params.min_clusters,
         graph: GraphParams {
             degree: params.graph_degree,
             slack: params.graph_slack,
@@ -160,9 +177,39 @@ where
     };
 
     let seed_start = Instant::now();
-    let mut clusterer = OnlineClusterer::with_seed(points, seed_strategy, online_params)?;
-    let seed_elapsed: MicroSeconds = seed_start.elapsed().into();
+    let clusterer = OnlineClusterer::with_seed(points, seed_strategy, online_params)?;
+    let seed: MicroSeconds = seed_start.elapsed().into();
     let seeded_clusters = clusterer.num_clusters();
+
+    Ok(OnlineSetup {
+        corpus,
+        clusterer,
+        dim,
+        centroid_capacity,
+        seeded_clusters,
+        corpus_load,
+        decompress,
+        seed,
+    })
+}
+
+pub(super) fn build_graph_ivf_online<T>(
+    params: &GraphIvfOnlineBuild,
+) -> anyhow::Result<GraphIvfOnlineBuildStats>
+where
+    T: GraphIvfElement,
+{
+    let OnlineSetup {
+        corpus,
+        mut clusterer,
+        dim,
+        centroid_capacity,
+        seeded_clusters,
+        corpus_load,
+        decompress,
+        seed: seed_elapsed,
+    } = online_setup::<T>(params)?;
+    let num_points = corpus.nrows();
 
     let insert_start = Instant::now();
     let ids: Vec<u32> = (0..num_points as u32).collect();
@@ -223,8 +270,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        backend::graph_ivf::search::search_graph_ivf,
-        inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase},
+        backend::graph_ivf::search::{search_graph_ivf, GraphIvfSearchResult},
+        inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
         utils::SimilarityMeasure,
     };
 
@@ -319,6 +366,8 @@ mod tests {
             two_means_iters: 8,
             reassign_neighbors: 4,
             reassign_l: Some(32),
+            merge_threshold: 0,
+            min_clusters: 1,
             capacity_mult: 3,
             normalize: false,
             graph_degree: 16,
@@ -472,26 +521,39 @@ mod tests {
             // should be worse, which is what makes the recall number meaningful.
             nlist: vec![1, stats.final_clusters],
             centroid_search_l: 128,
-            recall_at: RECALL_AT as u32,
+            // Two depths from one sweep: the shallower must be scored from the
+            // prefix of the deeper search's results, not from a second search.
+            recall_at: RecallAt::new(vec![5, RECALL_AT as u32]),
             distance: SimilarityMeasure::SquaredL2,
         };
 
         let results = search_graph_ivf::<f32>(&load, &search).unwrap();
         assert_eq!(results.search_results_per_nlist.len(), 2);
+        assert_eq!(results.recall_at, vec![5, RECALL_AT as u32]);
         let narrow = &results.search_results_per_nlist[0];
         let exhaustive = &results.search_results_per_nlist[1];
 
+        let at = |r: &GraphIvfSearchResult, k: u32| {
+            r.recalls
+                .iter()
+                .find(|p| p.at == k)
+                .unwrap_or_else(|| panic!("no recall reported at {k}"))
+                .recall
+        };
+
+        for k in [5, RECALL_AT as u32] {
+            assert!(
+                (at(exhaustive, k) - 100.0).abs() < 1e-3,
+                "probing all {} clusters should be exact at k={k}, got recall {}",
+                stats.final_clusters,
+                at(exhaustive, k)
+            );
+        }
         assert!(
-            (exhaustive.recall - 100.0).abs() < 1e-3,
-            "probing all {} clusters should be exact, got recall {}",
-            stats.final_clusters,
-            exhaustive.recall
-        );
-        assert!(
-            narrow.recall < exhaustive.recall,
+            at(narrow, RECALL_AT as u32) < at(exhaustive, RECALL_AT as u32),
             "probing one cluster should lose recall: {} vs {}",
-            narrow.recall,
-            exhaustive.recall
+            at(narrow, RECALL_AT as u32),
+            at(exhaustive, RECALL_AT as u32)
         );
     }
 }

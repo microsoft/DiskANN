@@ -12,6 +12,7 @@ cfg_if::cfg_if! {
         mod element;
         mod online;
         mod search;
+        mod streaming;
 
         /// Register graph-IVF benchmarks when the `graph-ivf` feature is enabled.
         pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {

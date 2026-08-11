@@ -22,6 +22,7 @@ use crate::{
         element::GraphIvfElement,
         online::{build_graph_ivf_online, GraphIvfOnlineBuildStats},
         search::{search_graph_ivf, GraphIvfSearchStats},
+        streaming::{build_graph_ivf_runbook, GraphIvfRunbookStats},
     },
     inputs::graph_ivf::{GraphIvfLoad, GraphIvfOperation, GraphIvfSource},
 };
@@ -33,14 +34,15 @@ struct GraphIvf<T> {
 
 /// Build statistics, tagged by how the index was constructed.
 ///
-/// The two builders share no parameters and report disjoint telemetry, so a single
-/// flattened struct would be mostly-null either way; the tag keeps the output
+/// The builders share no parameters and report disjoint telemetry, so a single
+/// flattened struct would be mostly-null whichever ran; the tag keeps the output
 /// self-describing for downstream analysis.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "build_kind")]
 pub(super) enum GraphIvfBuildOutcome {
     Static(GraphIvfBuildStats),
     Online(GraphIvfOnlineBuildStats),
+    OnlineRunbook(GraphIvfRunbookStats),
 }
 
 impl fmt::Display for GraphIvfBuildOutcome {
@@ -48,6 +50,7 @@ impl fmt::Display for GraphIvfBuildOutcome {
         match self {
             Self::Static(stats) => stats.fmt(f),
             Self::Online(stats) => stats.fmt(f),
+            Self::OnlineRunbook(stats) => stats.fmt(f),
         }
     }
 }
@@ -129,6 +132,16 @@ where
                     GraphIvfLoad {
                         data_type: online.data_type,
                         load_path: online.save_path.clone(),
+                    },
+                )
+            }
+            GraphIvfSource::OnlineRunbook(runbook) => {
+                let stats = build_graph_ivf_runbook::<T>(runbook)?;
+                (
+                    Some(GraphIvfBuildOutcome::OnlineRunbook(stats)),
+                    GraphIvfLoad {
+                        data_type: runbook.build.data_type,
+                        load_path: runbook.build.save_path.clone(),
                     },
                 )
             }

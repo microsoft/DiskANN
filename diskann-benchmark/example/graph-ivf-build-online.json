@@ -13,6 +13,7 @@
                     "distance": "squared_l2",
                     "dim": 128,
                     "split_threshold": 32,
+                    "batch_size": 64,
                     "warmup_centroids": 4,
                     "warmup_points": 64,
                     "warmup_iters": 15,

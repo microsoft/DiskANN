@@ -244,6 +244,24 @@ pub struct OnlineParams {
     pub reassign_l: usize,
     /// Number of 2-means iterations used to split a cluster.
     pub two_means_iters: usize,
+    /// A cluster is retired once deletes drop it below this many points. `0`
+    /// disables merging entirely: deletes still remove points, but the
+    /// partition only ever gains clusters.
+    ///
+    /// Retiring dissolves the cluster: it is removed from the centroid graph
+    /// and its members are scattered onto their nearest survivors. No centroid
+    /// is fitted and no id is consumed, so deletes are free against the
+    /// [`centroid_capacity`](Self::centroid_capacity) budget.
+    ///
+    /// Must leave a hysteresis gap below
+    /// [`split_threshold`](Self::split_threshold) — `2 * merge_threshold <=
+    /// split_threshold` — so that the children of a fresh split cannot
+    /// immediately be merged again.
+    pub merge_threshold: usize,
+    /// Floor on the live cluster count: a merge is skipped if it would take the
+    /// partition below this. Clamped to `>= 1` internally — orphans need at
+    /// least one surviving cluster to land on.
+    pub min_clusters: usize,
     /// Centroid-graph construction parameters.
     pub graph: GraphParams,
     /// Metric recorded in the flushed index metadata. Clustering and graph
@@ -257,6 +275,44 @@ pub struct OnlineParams {
     pub num_threads: usize,
     /// RNG seed for split seeding (reproducibility).
     pub seed: u64,
+}
+
+impl Default for OnlineParams {
+    /// Insert-only defaults: splitting enabled, merging off
+    /// (`merge_threshold: 0`).
+    ///
+    /// Exists so callers can set the handful of fields they care about with
+    /// `..Default::default()` rather than restating every knob.
+    fn default() -> Self {
+        Self {
+            max_clusters: None,
+            centroid_capacity: 1024,
+            split_threshold: 256,
+            assign_l: 32,
+            reassign_neighbors: 8,
+            reassign_l: 32,
+            two_means_iters: 10,
+            merge_threshold: 0,
+            min_clusters: 1,
+            graph: GraphParams::default(),
+            metric: Metric::L2,
+            normalize_centroids: false,
+            num_threads: 1,
+            seed: 0,
+        }
+    }
+}
+
+impl OnlineParams {
+    /// Live-cluster floor, never below one.
+    pub(crate) fn effective_min_clusters(&self) -> usize {
+        self.min_clusters.max(1)
+    }
+
+    /// Whether delete-driven cluster retirement is enabled.
+    pub(crate) fn merges_enabled(&self) -> bool {
+        self.merge_threshold > 0
+    }
 }
 
 /// Parameters controlling a single search.
