@@ -340,9 +340,8 @@ where
                 )
                 .map_err(ANNError::new)
             })?;
-            tracing::info_span!("pipnn.finalization").in_scope(|| {
-                finalization::prune_overfull(data, candidates, context.graph, metric)
-            })
+            tracing::info_span!("pipnn.finalization")
+                .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
         }
         Some(config) => {
             // `HashPrune` lives until all leaf jobs finish. A leaf job locks only
