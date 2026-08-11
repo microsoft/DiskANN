@@ -99,17 +99,19 @@ macro_rules! finite {
 
                 // Preserve the sign bit and mask out all other values that do not belong to
                 // the kind of floating point number we are generating.
-                value &= <$T>::SIGN_MASK | mask;
-                let exponent = value & <$T>::EXPONENT_MASK;
+                value &= <$T as Layout>::SIGN_MASK | mask;
+                let exponent = value & <$T as Layout>::EXPONENT_MASK;
 
                 // If the all zeros or all ones pattern is not allowed, set it to 0.
-                if !allow_edge_exponent && (exponent == 0 || exponent == <$T>::EXPONENT_MASK) {
+                if !allow_edge_exponent
+                    && (exponent == 0 || exponent == <$T as Layout>::EXPONENT_MASK)
+                {
                     // Clear the exponent bits and set it to the zero value.
-                    value &= !<$T>::EXPONENT_MASK;
-                    value |= <$T>::EXPONENT_ZERO;
+                    value &= !<$T as Layout>::EXPONENT_MASK;
+                    value |= <$T as Layout>::EXPONENT_ZERO;
                 }
 
-                if !allow_zero_mantissa && (value & <$T>::MANTISSA_MASK == 0) {
+                if !allow_zero_mantissa && (value & <$T as Layout>::MANTISSA_MASK == 0) {
                     // Make the mantissa non-zero.
                     value |= 1;
                 }
