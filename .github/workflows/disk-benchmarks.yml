@@ -88,13 +88,13 @@ jobs:
           ln -s /mnt/nvme/baseline baseline
 
       - name: Checkout current branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: diskann_rust
           lfs: true
 
       - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.baseline_ref || 'main' }}
           path: baseline
@@ -137,7 +137,7 @@ jobs:
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()  # Upload even if validation fails
         with:
           name: benchmark-results-${{ matrix.dataset }}
