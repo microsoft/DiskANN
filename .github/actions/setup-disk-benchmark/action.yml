@@ -14,6 +14,9 @@ inputs:
   archive:
     description: 'Archive filename to download (e.g. wikipedia-100K.tar.gz)'
     required: true
+  sha256:
+    description: 'Expected SHA-256 digest of the dataset archive'
+    required: true
   extract-to:
     description: 'Directory to extract the dataset into'
     required: true
@@ -42,8 +45,13 @@ runs:
     - name: Download ${{ inputs.dataset }} dataset
       shell: bash
       env:
+        ARCHIVE: ${{ inputs.archive }}
         BAB_RELEASE_URL: https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0
+        EXTRACT_TO: ${{ inputs.extract-to }}
+        SHA256: ${{ inputs.sha256 }}
       run: |
-        mkdir -p ${{ inputs.extract-to }}
-        curl -L -o ${{ inputs.archive }} ${{ env.BAB_RELEASE_URL }}/${{ inputs.archive }}
-        tar xzf ${{ inputs.archive }} -C ${{ inputs.extract-to }}
+        set -euo pipefail
+        mkdir -p "$EXTRACT_TO"
+        curl --fail --location --output "$ARCHIVE" "$BAB_RELEASE_URL/$ARCHIVE"
+        echo "$SHA256  $ARCHIVE" | sha256sum --check
+        tar xzf "$ARCHIVE" -C "$EXTRACT_TO"
