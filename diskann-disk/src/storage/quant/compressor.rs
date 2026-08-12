@@ -20,7 +20,8 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 /// - [`CompressorContext`]: An overloadable type that provides initialization parameters for the compressor
 ///
 /// # Methods
-/// - `prepare`: Performs any setup needed before compression and returns a compressor.
+/// - `new`: Constructs a compressor with the provided context.
+/// - `generate`: Generates any data needed before compression.
 /// - `compress`: Compresses a batch of vectors into the output buffer.
 /// - `compressed_bytes`: Returns the size in bytes of each compressed vector
 pub trait QuantCompressor<T>: Sized + Sync
@@ -29,7 +30,8 @@ where
 {
     type CompressorContext;
 
-    fn prepare(context: &Self::CompressorContext) -> ANNResult<Self>;
+    fn new(context: Self::CompressorContext) -> Self;
+    fn generate(&self) -> ANNResult<()>;
     fn compress(&self, vector: MatrixView<f32>, output: MutMatrixView<u8>) -> ANNResult<()>;
     fn compressed_bytes(&self) -> usize;
 }

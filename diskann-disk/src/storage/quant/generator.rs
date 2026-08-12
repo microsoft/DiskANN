@@ -25,18 +25,18 @@ use crate::{
 
 /// [`QuantDataGenerator`] orchestrates the process of reading vector data, applying quantization,
 /// and writing compressed results to storage in batches.
-pub struct QuantDataGenerator<'a, T, Q>
+pub struct QuantDataGenerator<T, Q>
 where
     T: Copy + VectorRepr,
     Q: QuantCompressor<T>,
 {
-    quantizer_context: &'a Q::CompressorContext,
+    pub quantizer: Q,
     pub data_path: String,
     pub compressed_data_path: String,
     phantom: PhantomData<T>,
 }
 
-impl<'a, T, Q> QuantDataGenerator<'a, T, Q>
+impl<T, Q> QuantDataGenerator<T, Q>
 where
     T: Copy + VectorRepr,
     Q: QuantCompressor<T>,
@@ -44,12 +44,13 @@ where
     pub fn new(
         data_path: String,
         compressed_data_path: String,
-        quantizer_context: &'a Q::CompressorContext,
+        quantizer_context: Q::CompressorContext,
     ) -> Self {
+        let quantizer = Q::new(quantizer_context);
         Self {
             data_path,
             compressed_data_path,
-            quantizer_context,
+            quantizer,
             phantom: PhantomData,
         }
     }
@@ -92,8 +93,7 @@ where
             ));
         }
 
-        let quantizer = Q::prepare(self.quantizer_context)?;
-        let compressed_size = quantizer.compressed_bytes();
+        self.quantizer.generate()?;
         let compressed_path = self.compressed_data_path.as_str();
 
         if storage_provider.exists(compressed_path) {
@@ -106,8 +106,10 @@ where
         data_reader.seek(SeekFrom::Start((std::mem::size_of::<i32>() * 2) as u64))?;
 
         let mut compressed_data_writer = storage_provider.create_for_write(compressed_path)?;
-        Metadata::new(num_points, compressed_size)?.write(&mut compressed_data_writer)?;
+        Metadata::new(num_points, self.quantizer.compressed_bytes())?
+            .write(&mut compressed_data_writer)?;
 
+        let compressed_size = self.quantizer.compressed_bytes();
         let block_size = std::cmp::min(num_points, max_block_size);
         let num_blocks = num_points / block_size + !num_points.is_multiple_of(block_size) as usize;
 
@@ -162,7 +164,7 @@ where
             base_block
                 .par_window_iter(BATCH_SIZE)
                 .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
-                .try_for_each_in_pool(pool, |(src, dst)| quantizer.compress(src, dst))?;
+                .try_for_each_in_pool(pool, |(src, dst)| self.quantizer.compress(src, dst))?;
 
             let write_offset = start_index * compressed_size + std::mem::size_of::<i32>() * 2;
             compressed_data_writer.seek(SeekFrom::Start(write_offset as u64))?;
@@ -190,10 +192,7 @@ where
 
 #[cfg(test)]
 mod generator_tests {
-    use std::{
-        io::BufReader,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::io::BufReader;
 
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
@@ -206,24 +205,6 @@ mod generator_tests {
     use vfs::{FileSystem, MemoryFS};
 
     use super::*;
-    pub struct DummyCompressorContext {
-        pub output_dim: u32,
-        pub prepare_calls: AtomicUsize,
-    }
-
-    impl DummyCompressorContext {
-        pub fn new(output_dim: u32) -> Self {
-            Self {
-                output_dim,
-                prepare_calls: AtomicUsize::new(0),
-            }
-        }
-
-        pub fn prepare_calls(&self) -> usize {
-            self.prepare_calls.load(Ordering::SeqCst)
-        }
-    }
-
     pub struct DummyCompressor {
         pub output_dim: u32,
         pub code: Vec<u8>,
@@ -237,11 +218,14 @@ mod generator_tests {
         }
     }
     impl QuantCompressor<f32> for DummyCompressor {
-        type CompressorContext = DummyCompressorContext;
+        type CompressorContext = u32;
 
-        fn prepare(context: &Self::CompressorContext) -> ANNResult<Self> {
-            context.prepare_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(Self::new(context.output_dim))
+        fn new(context: Self::CompressorContext) -> Self {
+            Self::new(context)
+        }
+
+        fn generate(&self) -> ANNResult<()> {
+            Ok(())
         }
 
         fn compress(
@@ -297,16 +281,16 @@ mod generator_tests {
         Ok((storage_provider, data_path, compressed_path))
     }
 
-    fn create_and_call_generator<'a, F: vfs::FileSystem>(
+    fn create_and_call_generator<F: vfs::FileSystem>(
         compressed_path: String,
         storage_provider: &VirtualStorageProvider<F>,
         data_path: String,
-        context: &'a DummyCompressorContext,
+        output_dim: u32,
         max_block_size: usize,
-    ) -> (QuantDataGenerator<'a, f32, DummyCompressor>, ANNResult<()>) {
+    ) -> (QuantDataGenerator<f32, DummyCompressor>, ANNResult<()>) {
         let pool: diskann_providers::utils::RayonThreadPool = create_thread_pool_for_test();
         let generator =
-            QuantDataGenerator::<f32, DummyCompressor>::new(data_path, compressed_path, context);
+            QuantDataGenerator::<f32, DummyCompressor>::new(data_path, compressed_path, output_dim);
         let result = generator.generate_data(storage_provider, pool.as_ref(), max_block_size);
         (generator, result)
     }
@@ -321,17 +305,15 @@ mod generator_tests {
         #[case] output_dim: u32,
     ) -> ANNResult<()> {
         let (storage_provider, data_path, compressed_path) = generate_data_files(num_points, dim)?;
-        let context = DummyCompressorContext::new(output_dim);
-        let (_generator, result) = create_and_call_generator(
+        let (generator, result) = create_and_call_generator(
             compressed_path.clone(),
             &storage_provider,
             data_path,
-            &context,
+            output_dim,
             10_000,
         );
 
         result?;
-        assert_eq!(context.prepare_calls(), 1);
         assert!(storage_provider.exists(&compressed_path));
 
         let expected_size = num_points * output_dim as usize;
@@ -347,9 +329,8 @@ mod generator_tests {
         assert_eq!(metadata.ndims_u32(), output_dim);
         assert_eq!(metadata.npoints(), num_points);
 
-        let expected_code: Vec<u8> = (0..output_dim).map(|x| (x % 256) as u8).collect();
         data.chunks_exact(output_dim as usize)
-            .for_each(|chunk| assert_eq!(chunk, expected_code.as_slice()));
+            .for_each(|chunk| assert_eq!(chunk, generator.quantizer.code.as_slice()));
 
         Ok(())
     }
@@ -365,18 +346,15 @@ mod generator_tests {
         let data_path = "/test_data/empty.bin".to_string();
         let compressed_path = "/test_data/empty_compressed.bin".to_string();
         Metadata::new(0, 8)?.write(&mut storage_provider.create_for_write(data_path.as_str())?)?;
-        let context = DummyCompressorContext::new(4);
 
         let (_, result) = create_and_call_generator(
             compressed_path.clone(),
             &storage_provider,
             data_path,
-            &context,
+            4,
             10_000,
         );
-
         assert!(result.is_err());
-        assert_eq!(context.prepare_calls(), 0);
         assert!(!storage_provider.exists(&compressed_path));
         Ok(())
     }
@@ -384,18 +362,11 @@ mod generator_tests {
     #[test]
     fn generate_data_rejects_zero_chunk_size() -> ANNResult<()> {
         let (storage_provider, data_path, compressed_path) = generate_data_files(1, 8)?;
-        let context = DummyCompressorContext::new(4);
 
-        let (_, result) = create_and_call_generator(
-            compressed_path.clone(),
-            &storage_provider,
-            data_path,
-            &context,
-            0,
-        );
+        let (_, result) =
+            create_and_call_generator(compressed_path.clone(), &storage_provider, data_path, 4, 0);
 
         assert!(result.is_err());
-        assert_eq!(context.prepare_calls(), 0);
         assert!(!storage_provider.exists(&compressed_path));
         Ok(())
     }
