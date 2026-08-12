@@ -1,8 +1,8 @@
 {
-  "file": "diskann/src/graph/test/cases/range_search.rs",
-  "test": "graph/test/cases/range_search/inner_radius_filtering",
+  "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
+  "test": "graph/test/cases/filtered_range_search/inner_radius_filtering",
   "payload": {
-    "comparisons": 54,
+    "comparisons": 53,
     "description": "Inner radius filtering test to validate that the range search correctly excludes neighbors within the inner radius.",
     "grid_dims": 3,
     "grid_size": 5,
@@ -18,7 +18,7 @@
     "result_count": 22,
     "results": [
       [
-        94,
+        98,
         9.0
       ],
       [
@@ -26,11 +26,11 @@
         9.0
       ],
       [
-        98,
+        94,
         9.0
       ],
       [
-        74,
+        122,
         11.0
       ],
       [
@@ -38,7 +38,7 @@
         11.0
       ],
       [
-        122,
+        74,
         11.0
       ],
       [
@@ -46,19 +46,7 @@
         12.0
       ],
       [
-        97,
-        14.0
-      ],
-      [
-        73,
-        14.0
-      ],
-      [
-        117,
-        14.0
-      ],
-      [
-        113,
+        69,
         14.0
       ],
       [
@@ -66,11 +54,23 @@
         14.0
       ],
       [
-        69,
+        113,
         14.0
       ],
       [
-        92,
+        117,
+        14.0
+      ],
+      [
+        73,
+        14.0
+      ],
+      [
+        97,
+        14.0
+      ],
+      [
+        68,
         17.0
       ],
       [
@@ -78,12 +78,8 @@
         17.0
       ],
       [
-        68,
+        92,
         17.0
-      ],
-      [
-        121,
-        18.0
       ],
       [
         109,
@@ -94,15 +90,19 @@
         18.0
       ],
       [
+        121,
+        18.0
+      ],
+      [
+        72,
+        19.0
+      ],
+      [
         64,
         19.0
       ],
       [
         112,
-        19.0
-      ],
-      [
-        72,
         19.0
       ]
     ],
