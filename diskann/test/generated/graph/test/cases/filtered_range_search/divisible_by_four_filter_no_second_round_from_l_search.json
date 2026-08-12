@@ -4,6 +4,7 @@
   "payload": {
     "comparisons": 53,
     "description": "Test of divisible-by-4 filter with a larger starting L. Since only 1/4 of discovered points will satisfy the filter, the second round of search should not be triggered.",
+    "grid_dims": 3,
     "grid_size": 5,
     "hops": 33,
     "inner_radius": null,

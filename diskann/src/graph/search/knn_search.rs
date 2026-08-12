@@ -111,7 +111,7 @@ impl Knn {
         self.beam_width
     }
 
-    pub(crate) fn new_unchecked(l_value: NonZeroUsize, beam_width: NonZeroUsize) -> Self {
+    pub(crate) fn new_infallible(l_value: NonZeroUsize, beam_width: NonZeroUsize) -> Self {
         Self {
             l_value,
             beam_width,

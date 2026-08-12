@@ -4,6 +4,7 @@
   "payload": {
     "comparisons": 11,
     "description": "Two round search test to validate that max_results > starting_l means a second round is triggered.",
+    "grid_dims": 3,
     "grid_size": 5,
     "hops": 12,
     "inner_radius": null,

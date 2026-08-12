@@ -35,6 +35,7 @@ pub(super) struct RangeSearchBaseline {
     /// a reviewer may need to either understand why this test is checked in or to validate
     /// any changes that occur in the checked-in file.
     pub(super) description: String,
+    pub(super) grid_dims: u8,
     pub(super) grid_size: usize,
     pub(super) query: Vec<f32>,
     pub(super) radius: f32,
@@ -52,12 +53,14 @@ impl RangeSearchBaseline {
         range: &Range,
         results: &[Neighbor<u32>],
         stats: SearchStats,
+        grid_dims: Grid,
         grid_size: usize,
         description: impl Into<String>,
         query: Vec<f32>,
     ) -> Self {
         Self {
             description: description.into(),
+            grid_dims: grid_dims.dim(),
             grid_size,
             query,
             radius: range.radius(),
@@ -74,6 +77,7 @@ impl RangeSearchBaseline {
 
 verbose_eq!(RangeSearchBaseline {
     description,
+    grid_dims,
     grid_size,
     query,
     radius,
@@ -180,6 +184,7 @@ fn basic_range_search() {
 
     let baseline = RangeSearchBaseline {
         description: description.to_string(),
+        grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
         radius,
@@ -233,6 +238,7 @@ fn inner_radius_filtering() {
 
     let baseline = RangeSearchBaseline {
         description: description.to_string(),
+        grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
         radius,
@@ -283,6 +289,7 @@ fn two_round_search() {
 
     let baseline = RangeSearchBaseline {
         description: description.to_string(),
+        grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
         radius,
@@ -374,6 +381,7 @@ fn max_results_respected_means_no_second_round() {
 
     let baseline = RangeSearchBaseline {
         description: description.to_string(),
+        grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
         radius,
@@ -439,6 +447,7 @@ fn max_results_respected_and_second_round_triggered() {
 
     let baseline = RangeSearchBaseline {
         description: description.to_string(),
+        grid_dims: Grid::Three.dim(),
         grid_size,
         query: query.clone(),
         radius,

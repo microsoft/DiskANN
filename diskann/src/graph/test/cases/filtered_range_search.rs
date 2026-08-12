@@ -91,7 +91,7 @@ fn assert_divisible_by_four(results: &[Neighbor<u32>]) {
 // using an always-true filter, because the filtered //
 // initial search returns every predicate-satisfying //
 // point it finds as opposed to only those in        //
-// `scratch.best`.                                   //
+// the best candidates found so far                  //
 ///////////////////////////////////////////////////////
 
 #[test]
@@ -117,6 +117,7 @@ fn basic_range_search() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),
@@ -157,6 +158,7 @@ fn inner_radius_filtering() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),
@@ -194,6 +196,7 @@ fn two_round_search() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),
@@ -272,6 +275,7 @@ fn max_results_respected_means_no_second_round() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),
@@ -324,6 +328,7 @@ fn max_results_respected_and_second_round_triggered() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),
@@ -379,6 +384,7 @@ fn divisible_by_four_filter_second_round_triggered() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),
@@ -421,6 +427,7 @@ fn divisible_by_four_filter_no_second_round_from_l_search() {
         &filtered_range.range(),
         &filtered_results,
         filtered_stats,
+        Grid::Three,
         grid_size,
         description,
         query.clone(),

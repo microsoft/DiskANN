@@ -4,6 +4,7 @@
   "payload": {
     "comparisons": 10,
     "description": "Test of `max_results` that sets `initial_l_search` equal to `max_results`, with a permissive radius so that `max_results` is met without needing a second round.",
+    "grid_dims": 3,
     "grid_size": 5,
     "hops": 5,
     "inner_radius": null,

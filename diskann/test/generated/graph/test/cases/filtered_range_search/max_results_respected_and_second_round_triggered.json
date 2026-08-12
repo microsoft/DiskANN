@@ -2,10 +2,11 @@
   "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
   "test": "graph/test/cases/filtered_range_search/max_results_respected_and_second_round_triggered",
   "payload": {
-    "comparisons": 131,
+    "comparisons": 121,
     "description": "Test of `max_results` that sets `initial_l_search` below `max_results` so that a second round of search is triggered. Note that the result set size is expected to be below `max_results` due to filtering out start points during `post_process`.",
+    "grid_dims": 3,
     "grid_size": 5,
-    "hops": 120,
+    "hops": 115,
     "inner_radius": null,
     "query": [
       5.0,

@@ -2,10 +2,11 @@
   "file": "diskann/src/graph/test/cases/filtered_range_search.rs",
   "test": "graph/test/cases/filtered_range_search/divisible_by_four_filter_second_round_triggered",
   "payload": {
-    "comparisons": 138,
+    "comparisons": 128,
     "description": "Test that a small starting L triggers a second round of search when using the divisible-by-4 filter. Tests for no duplicates, respect for the radius, and respect for the filter.",
+    "grid_dims": 3,
     "grid_size": 5,
-    "hops": 120,
+    "hops": 115,
     "inner_radius": null,
     "query": [
       5.0,

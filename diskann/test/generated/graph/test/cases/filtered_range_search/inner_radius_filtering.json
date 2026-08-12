@@ -4,6 +4,7 @@
   "payload": {
     "comparisons": 53,
     "description": "Inner radius filtering test to validate that the range search correctly excludes neighbors within the inner radius.",
+    "grid_dims": 3,
     "grid_size": 5,
     "hops": 33,
     "inner_radius": 6.0,

@@ -177,7 +177,7 @@ impl Range {
 
     /// Returns a [`Knn`] search parameter set with the same starting_l and beam_width.
     pub(super) fn to_knn(self) -> Knn {
-        Knn::new_unchecked(self.starting_l, self.beam_width)
+        Knn::new_infallible(self.starting_l, self.beam_width)
     }
 }
 

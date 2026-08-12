@@ -204,8 +204,8 @@ where
                 .await?;
 
                 InternalSearchStats {
-                    cmps: cmps + range_stats.cmps,
-                    hops: hops + range_stats.hops,
+                    cmps: range_stats.cmps,
+                    hops: range_stats.hops,
                     range_search_second_round: true,
                 }
             } else {
