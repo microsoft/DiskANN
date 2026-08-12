@@ -446,6 +446,7 @@ dependencies = [
  "half",
  "hashbrown 0.16.1",
  "num-traits",
+ "parking_lot",
  "pin-project",
  "rand",
  "rayon",
