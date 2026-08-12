@@ -192,12 +192,12 @@ mod tests {
         }
     }
 
-    trait TestDistribution {
-        fn test_distribution(num_trials: usize, seed: u64) -> Counts;
+    trait TestFinite {
+        fn test_finite(num_trials: usize, seed: u64) -> Counts;
     }
 
-    impl TestDistribution for f32 {
-        fn test_distribution(num_trials: usize, seed: u64) -> Counts {
+    impl TestFinite for f32 {
+        fn test_finite(num_trials: usize, seed: u64) -> Counts {
             let mut counts = Counts::default();
             let mut rng = StdRng::seed_from_u64(seed);
             for _ in 0..num_trials {
@@ -224,8 +224,8 @@ mod tests {
         }
     }
 
-    impl TestDistribution for half::f16 {
-        fn test_distribution(num_trials: usize, seed: u64) -> Counts {
+    impl TestFinite for half::f16 {
+        fn test_finite(num_trials: usize, seed: u64) -> Counts {
             let mut counts = Counts::default();
             let mut rng = StdRng::seed_from_u64(seed);
 
@@ -261,7 +261,7 @@ mod tests {
 
     fn test_end_to_end<T>(seed: u64)
     where
-        T: TestDistribution,
+        T: TestFihnite,
     {
         let normal_weight = 90;
         let subnormal_weight = 5;
@@ -270,7 +270,7 @@ mod tests {
 
         let num_trials: i64 = 1_000_000;
         let margin = num_trials / 500;
-        let counts = T::test_distribution(num_trials as usize, seed);
+        let counts = T::test_finite(num_trials as usize, seed);
 
         let positive_count = counts.positive.sum();
         let negative_count = counts.negative.sum();
