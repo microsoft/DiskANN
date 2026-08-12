@@ -1,3 +1,7 @@
+# V0 becomes the default symbol mangling scheme in Rust 1.97, so this can be removed after upgrading.
+[target.'cfg(all())']
+rustflags = ["-C", "symbol-mangling-version=v0"]
+
 [target.'cfg(target_os = "windows")']
 rustflags = ["-C", "control-flow-guard"]
 
