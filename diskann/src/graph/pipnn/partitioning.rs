@@ -8,9 +8,9 @@
 //! A leader is a sampled point that acts as the center of one child partition.
 //! A point can join several leaders, so child partitions can overlap.
 //!
-//! This module recursively splits dataset point IDs into bounded leaves. It uses
-//! dense GEMM to compare points with sampled leaders. An `ObjectPool` supplies
-//! reusable buffers to Rayon worker chunks.
+//! This module owns recursive splitting, leader sampling, row gathering, and
+//! assignment scatter. The partition kernel owns GEMM, norm preparation, and
+//! local ranking. An `ObjectPool` supplies reusable scratch to Rayon workers.
 //!
 //! A configured level assigns each point to `fanout[level]` leaders. A deeper
 //! level assigns each point to one leader. Each replica uses a different
@@ -19,7 +19,6 @@
 use std::collections::HashSet;
 
 use crate::{ANNError, ANNResult, utils::VectorRepr};
-use diskann_linalg::Transpose;
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
@@ -30,8 +29,8 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::{NormPreparation, PartitionMetric, PartitionNorms},
-    partition_kernel::{PartitionInput, nearest_leaders},
+    kernel_metric::PartitionMetric,
+    partition_kernel::{PartitionKernelWorkspace, PreparedLeaders, assign_leaders},
 };
 
 // These constants control internal batching and deterministic seed generation.
@@ -44,15 +43,9 @@ const MAX_ASSIGNMENT_STRIPE_POINTS: usize = 1_024;
 const PARALLEL_SCATTER_MIN_POINTS: usize = 100_000;
 const MAX_PARTITION_ITERATIONS: usize = 30;
 
-/// Error from partition input checks, allocation, or recursion progress.
+/// Error from partition shape checks or recursion progress.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum PartitionError {
-    #[error("PiPNN cannot partition an empty dataset")]
-    EmptyDataset,
-    #[error("PiPNN cannot partition vectors with zero dimensions")]
-    EmptyDimensions,
-    #[error("dataset has {0} points, which exceeds the u32 ID limit")]
-    TooManyPoints(usize),
     #[error("{buffer} shape {rows} x {cols} overflows usize")]
     ShapeOverflow {
         buffer: &'static str,
@@ -68,14 +61,6 @@ pub(crate) enum PartitionError {
         level: usize,
         limit: usize,
     },
-    #[error("invalid {buffer} length: expected {expected}, got {actual}")]
-    InvalidBufferLength {
-        buffer: &'static str,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("partition worker did not publish its result")]
-    MissingWorkerResult,
 }
 
 struct WorkItem {
@@ -87,9 +72,7 @@ struct WorkItem {
 #[derive(Default)]
 struct StripeBuffers {
     point_values: Vec<f32>,
-    dot_values: Vec<f32>,
-    point_norms: Vec<f32>,
-    ranked_leaders: Vec<(u32, f32)>,
+    kernel_workspace: PartitionKernelWorkspace,
 }
 
 impl AsPooled<()> for StripeBuffers {
@@ -128,26 +111,12 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let points = data.nrows();
-    if points == 0 {
-        return Err(ANNError::new(PartitionError::EmptyDataset));
-    }
-    if data.ncols() == 0 {
-        return Err(ANNError::new(PartitionError::EmptyDimensions));
-    }
-    if points > u32::MAX as usize {
-        return Err(ANNError::new(PartitionError::TooManyPoints(points)));
-    }
-
     let mut leaves = Vec::new();
     let stripe_buffers = StripeBufferPool::new((), 0, None);
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves =
             partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
-        leaves
-            .try_reserve(replica_leaves.len())
-            .map_err(ANNError::new)?;
         leaves.append(&mut replica_leaves);
     }
     Ok(leaves)
@@ -172,67 +141,38 @@ where
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
-    let initial_indices = point_ids(data.nrows())?;
+    let initial_indices = point_ids(data.nrows());
     if data.nrows() <= config.c_max {
-        let mut leaves = Vec::new();
-        leaves.try_reserve_exact(1).map_err(ANNError::new)?;
-        leaves.push(initial_indices);
-        return Ok(leaves);
+        return Ok(vec![initial_indices]);
     }
 
     let mut leaves = Vec::new();
-    let mut work = Vec::new();
-    work.try_reserve_exact(1).map_err(ANNError::new)?;
-    work.push(WorkItem {
+    let mut work = vec![WorkItem {
         indices: initial_indices,
         level: 0,
         seed,
-    });
+    }];
 
     for _ in 0..MAX_PARTITION_ITERATIONS {
         if work.is_empty() {
             return merge_undersized_leaves(leaves, config.c_min, config.c_max);
         }
 
-        let mut results = Vec::new();
-        results
-            .try_reserve_exact(work.len())
-            .map_err(ANNError::new)?;
-        results.resize_with(work.len(), || None);
-        // `build_graph` runs this Rayon operation in the pool from the build
-        // context. Each worker writes only to its indexed result slot.
+        // Indexed parallel collection preserves work-item order.
         #[allow(clippy::disallowed_methods)]
-        results
-            .par_iter_mut()
-            .zip(work.into_par_iter())
-            .try_for_each(|(slot, item)| {
-                *slot = Some(partition_work_item::<A, M, T>(
-                    arch,
-                    data,
-                    config,
-                    item,
-                    stripe_buffers,
-                )?);
-                Ok::<(), ANNError>(())
-            })?;
+        let results: ANNResult<Vec<_>> = work
+            .into_par_iter()
+            .map(|item| partition_work_item::<A, M, T>(arch, data, config, item, stripe_buffers))
+            .collect();
 
         let mut next_work = Vec::new();
-        for result in results {
-            let (mut pending, mut finished) =
-                result.ok_or_else(|| ANNError::new(PartitionError::MissingWorkerResult))?;
-            next_work
-                .try_reserve(pending.len())
-                .map_err(ANNError::new)?;
-            leaves.try_reserve(finished.len()).map_err(ANNError::new)?;
+        for (mut pending, mut finished) in results? {
             next_work.append(&mut pending);
             leaves.append(&mut finished);
         }
         work = next_work;
     }
 
-    if work.is_empty() {
-        return merge_undersized_leaves(leaves, config.c_min, config.c_max);
-    }
     let Some(largest) = work.iter().max_by_key(|item| item.indices.len()) else {
         return merge_undersized_leaves(leaves, config.c_min, config.c_max);
     };
@@ -268,16 +208,12 @@ where
         &item.indices,
         config.p_samp,
         mix_seed(item.seed, points as u64),
-    )?;
+    );
     let clusters =
         assign_to_leaders::<A, M, T>(arch, data, &item.indices, &leaders, fanout, stripe_buffers)?;
 
     let mut pending = Vec::new();
     let mut finished = Vec::new();
-    pending.try_reserve(clusters.len()).map_err(ANNError::new)?;
-    finished
-        .try_reserve(clusters.len())
-        .map_err(ANNError::new)?;
     let child_seed = mix_seed(item.seed, points as u64);
     for cluster in clusters {
         if cluster.is_empty() {
@@ -297,13 +233,10 @@ where
 }
 
 /// Sample point IDs that act as centers for one partition split.
-fn sample_leaders(points: &[u32], sampling_fraction: f64, seed: u64) -> ANNResult<Vec<u32>> {
+fn sample_leaders(points: &[u32], sampling_fraction: f64, seed: u64) -> Vec<u32> {
     let count = sampled_leader_count(points.len(), sampling_fraction);
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut leaders = Vec::new();
-    leaders.try_reserve_exact(count).map_err(ANNError::new)?;
-    leaders.extend(points.choose_multiple(&mut rng, count).copied());
-    Ok(leaders)
+    points.choose_multiple(&mut rng, count).copied().collect()
 }
 
 /// Return the number of centers to sample from one cluster.
@@ -351,30 +284,18 @@ where
 {
     let dimension_count = data.ncols();
     let leader_values_len = checked_area("leader data", leader_ids.len(), dimension_count)?;
-    let mut leader_values = filled_vec(leader_values_len, 0.0f32)?;
+    let mut leader_values = vec![0.0f32; leader_values_len];
     gather_vectors(data, leader_ids, &mut leader_values)?;
 
     let leader_matrix =
-        MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count).map_err(
-            |error| {
-                ANNError::new(PartitionError::InvalidBufferLength {
-                    buffer: "leader data",
-                    expected: leader_values_len,
-                    actual: error.into_inner().len(),
-                })
-            },
-        )?;
-    let mut leader_norm_values = Vec::new();
-    M::prepare_leader_norms(NormPreparation {
-        values: leader_matrix,
-        norms: &mut leader_norm_values,
-    })
-    .map_err(ANNError::new)?;
+        MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count)
+            .map_err(|error| ANNError::new(error.as_static()))?;
+    let leaders = PreparedLeaders::<M>::new(leader_matrix);
 
-    let fanout = fanout.min(leader_ids.len());
+    let fanout = fanout.min(leaders.len());
     let assignment_len = checked_area("partition assignments", point_ids.len(), fanout)?;
-    let mut assignments = filled_vec(assignment_len, 0u32)?;
-    let stripe_points = assignment_stripe_point_count(leader_ids.len());
+    let mut assignments = vec![0u32; assignment_len];
+    let stripe_points = assignment_stripe_point_count(leaders.len());
     let stripe_assignment_count = checked_area("assignment stripe", stripe_points, fanout)?;
     let stripe_count = point_ids.len().div_ceil(stripe_points);
     let worker_stripe_count = stripe_count.div_ceil(rayon::current_num_threads().max(1));
@@ -400,8 +321,7 @@ where
                     arch,
                     data,
                     &point_ids[first_point..first_point + stripe_point_count],
-                    &leader_values,
-                    &leader_norm_values,
+                    &leaders,
                     fanout,
                     &mut buffers,
                     stripe_assignments,
@@ -415,16 +335,15 @@ where
 
 /// Assign one point stripe to sampled partition centers.
 ///
-/// The function gathers point vectors and computes point-to-center dot products.
-/// It writes center-column IDs for partition scatter.
+/// The function gathers point IDs into a packed `f32` matrix. The partition
+/// kernel owns dot products, point norms, and ranking. This function writes the
+/// returned leader-column IDs for partition scatter.
 #[inline]
-#[allow(clippy::too_many_arguments)]
 fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
-    leader_values: &[f32],
-    leader_norm_values: &[f32],
+    leaders: &PreparedLeaders<'_, M>,
     fanout: usize,
     buffers: &mut StripeBuffers,
     assignments: &mut [u32],
@@ -439,88 +358,30 @@ where
 {
     let point_count = point_ids.len();
     let dimensions = data.ncols();
-    let leader_count = leader_values.len() / dimensions;
     let point_values_len = checked_area("point stripe", point_count, dimensions)?;
-    let dots_len = checked_area("dot-product stripe", point_count, leader_count)?;
-    let output_len = checked_area("partition assignments", point_count, fanout)?;
     // Keep each buffer at its largest length. Every operation uses an explicit
     // active prefix.
-    grow_fallible(&mut buffers.point_values, point_values_len, 0.0)?;
-    grow_fallible(&mut buffers.dot_values, dots_len, 0.0)?;
+    grow(&mut buffers.point_values, point_values_len, 0.0);
     let StripeBuffers {
-        point_values: point_buffer,
-        dot_values: dot_buffer,
-        point_norms: point_norm_buffer,
-        ranked_leaders,
+        point_values,
+        kernel_workspace,
     } = buffers;
-    let mut point_matrix = MutMatrixView::try_from(
-        &mut point_buffer[..point_values_len],
+    let mut points = MutMatrixView::try_from(
+        &mut point_values[..point_values_len],
         point_count,
         dimensions,
     )
-    .map_err(|error| {
-        ANNError::new(PartitionError::InvalidBufferLength {
-            buffer: "point stripe",
-            expected: point_values_len,
-            actual: error.into_inner().len(),
-        })
-    })?;
-    let dots = &mut dot_buffer[..dots_len];
-    gather_vectors(data, point_ids, point_matrix.as_mut_slice())?;
-    diskann_linalg::sgemm(
-        Transpose::None,
-        Transpose::Ordinary,
-        point_count,
-        leader_count,
-        dimensions,
-        1.0,
-        point_matrix.as_slice(),
-        leader_values,
-        None,
-        dots,
-    )
-    .map_err(ANNError::new)?;
-
-    M::prepare_point_norms(NormPreparation {
-        values: point_matrix.as_view(),
-        norms: point_norm_buffer,
-    })
-    .map_err(ANNError::new)?;
-    let point_norms = &*point_norm_buffer;
-    let norms = PartitionNorms {
-        point_norms,
-        leader_norms: leader_norm_values,
-    };
-    let dots = MatrixView::try_from(&*dots, point_count, leader_count).map_err(|_| {
-        ANNError::new(PartitionError::InvalidBufferLength {
-            buffer: "dot-product stripe",
-            expected: dots_len,
-            actual: dots.len(),
-        })
-    })?;
-    let output = MutMatrixView::try_from(assignments, point_count, fanout).map_err(|error| {
-        ANNError::new(PartitionError::InvalidBufferLength {
-            buffer: "partition assignments",
-            expected: output_len,
-            actual: error.into_inner().len(),
-        })
-    })?;
-    nearest_leaders::<A, M>(arch, PartitionInput { dots, norms }, output, ranked_leaders)
-        .map_err(ANNError::new)
+    .map_err(|error| ANNError::new(error.as_static()))?;
+    gather_vectors(data, point_ids, points.as_mut_slice())?;
+    let output = MutMatrixView::try_from(assignments, point_count, fanout)
+        .map_err(|error| ANNError::new(error.as_static()))?;
+    assign_leaders::<A, M>(arch, points.as_view(), leaders, output, kernel_workspace)
 }
 
 fn gather_vectors<T>(data: MatrixView<'_, T>, indices: &[u32], output: &mut [f32]) -> ANNResult<()>
 where
     T: VectorRepr,
 {
-    let expected = checked_area("gather output", indices.len(), data.ncols())?;
-    if output.len() != expected {
-        return Err(ANNError::new(PartitionError::InvalidBufferLength {
-            buffer: "gather output",
-            expected,
-            actual: output.len(),
-        }));
-    }
     for (&index, vector_output) in indices.iter().zip(output.chunks_exact_mut(data.ncols())) {
         T::as_f32_into(data.row(index as usize), vector_output).map_err(Into::<ANNError>::into)?;
     }
@@ -538,64 +399,41 @@ fn scatter_assignments(
     leaders: usize,
 ) -> ANNResult<Vec<Vec<u32>>> {
     if points.len() < PARALLEL_SCATTER_MIN_POINTS {
-        return scatter_serial(points, assignments, fanout, leaders);
+        return Ok(scatter_serial(points, assignments, fanout, leaders));
     }
 
     let stripe_points = points.len().div_ceil(rayon::current_num_threads().max(1));
     let stripe_assignment_count = checked_area("scatter assignment stripe", stripe_points, fanout)?;
-    let stripes = points.len().div_ceil(stripe_points);
-    let mut partials = Vec::new();
-    partials.try_reserve_exact(stripes).map_err(ANNError::new)?;
-    partials.resize_with(stripes, || None);
-    // `build_graph` runs this Rayon operation in the pool from the build context.
-    // Each worker writes only to its indexed partial result.
+    // Indexed parallel collection preserves stripe order.
     #[allow(clippy::disallowed_methods)]
-    partials
-        .par_iter_mut()
-        .zip(
-            points
-                .par_chunks(stripe_points)
-                .zip(assignments.par_chunks(stripe_assignment_count)),
-        )
-        .try_for_each(|(slot, (points, assignments))| {
-            *slot = Some(scatter_serial(points, assignments, fanout, leaders)?);
-            Ok::<(), ANNError>(())
-        })?;
+    let locals: Vec<_> = points
+        .par_chunks(stripe_points)
+        .zip(assignments.par_chunks(stripe_assignment_count))
+        .map(|(points, assignments)| scatter_serial(points, assignments, fanout, leaders))
+        .collect();
 
-    let mut locals = Vec::new();
-    locals.try_reserve_exact(stripes).map_err(ANNError::new)?;
-    for result in partials {
-        locals.push(result.ok_or_else(|| ANNError::new(PartitionError::MissingWorkerResult))?);
-    }
-
-    let mut sizes = filled_vec(leaders, 0usize)?;
+    let mut sizes = vec![0usize; leaders];
     for local in &locals {
         for (size, cluster) in sizes.iter_mut().zip(local) {
-            *size = size.checked_add(cluster.len()).ok_or_else(|| {
-                ANNError::new(PartitionError::ShapeOverflow {
-                    buffer: "cluster size",
-                    rows: *size,
-                    cols: cluster.len(),
-                })
-            })?;
+            *size += cluster.len();
         }
     }
 
     // `build_graph` runs this Rayon operation in the pool from the build context.
     // Each worker creates one independent leader cluster.
     #[allow(clippy::disallowed_methods)]
-    sizes
+    let clusters = sizes
         .into_par_iter()
         .enumerate()
         .map(|(leader, size)| {
-            let mut cluster = Vec::new();
-            cluster.try_reserve_exact(size).map_err(ANNError::new)?;
+            let mut cluster = Vec::with_capacity(size);
             for local in &locals {
                 cluster.extend_from_slice(&local[leader]);
             }
-            Ok(cluster)
+            cluster
         })
-        .collect()
+        .collect();
+    Ok(clusters)
 }
 
 fn scatter_serial(
@@ -603,53 +441,22 @@ fn scatter_serial(
     assignments: &[u32],
     fanout: usize,
     leaders: usize,
-) -> ANNResult<Vec<Vec<u32>>> {
-    let expected = checked_area("scatter assignments", points.len(), fanout)?;
-    if assignments.len() != expected {
-        return Err(ANNError::new(PartitionError::InvalidBufferLength {
-            buffer: "scatter assignments",
-            expected,
-            actual: assignments.len(),
-        }));
-    }
-
-    let mut sizes = filled_vec(leaders, 0usize)?;
+) -> Vec<Vec<u32>> {
+    let mut sizes = vec![0usize; leaders];
     for &leader in assignments {
-        let Some(size) = sizes.get_mut(leader as usize) else {
-            return Err(ANNError::new(PartitionError::InvalidBufferLength {
-                buffer: "leader assignment",
-                expected: leaders,
-                actual: leader as usize + 1,
-            }));
-        };
-        *size = size.checked_add(1).ok_or_else(|| {
-            ANNError::new(PartitionError::ShapeOverflow {
-                buffer: "cluster size",
-                rows: *size,
-                cols: 1,
-            })
-        })?;
+        sizes[leader as usize] += 1;
     }
-    let mut clusters = clusters_with_capacities(&sizes)?;
+    let mut clusters = clusters_with_capacities(&sizes);
     for (&point, point_assignments) in points.iter().zip(assignments.chunks_exact(fanout)) {
         for &leader in point_assignments {
             clusters[leader as usize].push(point);
         }
     }
-    Ok(clusters)
+    clusters
 }
 
-fn clusters_with_capacities(sizes: &[usize]) -> ANNResult<Vec<Vec<u32>>> {
-    let mut clusters = Vec::new();
-    clusters
-        .try_reserve_exact(sizes.len())
-        .map_err(ANNError::new)?;
-    for &size in sizes {
-        let mut cluster = Vec::new();
-        cluster.try_reserve_exact(size).map_err(ANNError::new)?;
-        clusters.push(cluster);
-    }
-    Ok(clusters)
+fn clusters_with_capacities(sizes: &[usize]) -> Vec<Vec<u32>> {
+    sizes.iter().map(|&size| Vec::with_capacity(size)).collect()
 }
 
 /// Merge leaves smaller than `c_min` without exceeding `c_max`.
@@ -661,12 +468,8 @@ fn merge_undersized_leaves(
     c_min: usize,
     c_max: usize,
 ) -> ANNResult<Vec<Vec<u32>>> {
-    let mut merged = Vec::new();
+    let mut merged = Vec::with_capacity(leaves.len());
     let mut small_leaves = Vec::new();
-    merged.try_reserve(leaves.len()).map_err(ANNError::new)?;
-    small_leaves
-        .try_reserve(leaves.len())
-        .map_err(ANNError::new)?;
     for leaf in leaves {
         if leaf.len() >= c_min {
             merged.push(leaf);
@@ -678,42 +481,27 @@ fn merge_undersized_leaves(
         return Ok(merged);
     }
 
-    let mut small = HashSet::new();
-    small.try_reserve(c_max).map_err(ANNError::new)?;
+    let mut small = HashSet::with_capacity(c_max);
 
     for leaf in small_leaves {
-        let combined = small.len().checked_add(leaf.len()).ok_or_else(|| {
-            ANNError::new(PartitionError::ShapeOverflow {
-                buffer: "small-leaf merge",
-                rows: small.len(),
-                cols: leaf.len(),
-            })
-        })?;
+        let combined = small.len() + leaf.len();
         if combined > c_max {
-            merged.push(drain_sorted(&mut small)?);
+            merged.push(drain_sorted(&mut small));
         }
-        small.try_reserve(leaf.len()).map_err(ANNError::new)?;
         small.extend(leaf);
         if small.len() >= c_min {
-            merged.push(drain_sorted(&mut small)?);
+            merged.push(drain_sorted(&mut small));
         }
     }
 
     if !small.is_empty() {
-        let mut remainder = drain_sorted(&mut small)?;
+        let mut remainder = drain_sorted(&mut small);
         if remainder.len() < c_min
             && let Some(last) = merged.last_mut()
         {
             remainder.retain(|id| !last.contains(id));
-            let combined = last.len().checked_add(remainder.len()).ok_or_else(|| {
-                ANNError::new(PartitionError::ShapeOverflow {
-                    buffer: "small-leaf tail merge",
-                    rows: last.len(),
-                    cols: remainder.len(),
-                })
-            })?;
+            let combined = last.len() + remainder.len();
             if combined <= c_max {
-                last.try_reserve(remainder.len()).map_err(ANNError::new)?;
                 last.append(&mut remainder);
                 last.sort_unstable();
             }
@@ -726,37 +514,20 @@ fn merge_undersized_leaves(
     Ok(merged)
 }
 
-fn drain_sorted(set: &mut HashSet<u32>) -> ANNResult<Vec<u32>> {
-    let mut values = Vec::new();
-    values.try_reserve_exact(set.len()).map_err(ANNError::new)?;
-    values.extend(set.drain());
+fn drain_sorted(set: &mut HashSet<u32>) -> Vec<u32> {
+    let mut values: Vec<_> = set.drain().collect();
     values.sort_unstable();
-    Ok(values)
-}
-
-fn point_ids(points: usize) -> ANNResult<Vec<u32>> {
-    let mut ids = Vec::new();
-    ids.try_reserve_exact(points).map_err(ANNError::new)?;
-    ids.extend(0..points as u32);
-    Ok(ids)
-}
-
-fn filled_vec<T: Clone>(len: usize, value: T) -> ANNResult<Vec<T>> {
-    let mut values = Vec::new();
-    values.try_reserve_exact(len).map_err(ANNError::new)?;
-    values.resize(len, value);
-    Ok(values)
-}
-
-fn grow_fallible<T: Clone>(values: &mut Vec<T>, len: usize, value: T) -> ANNResult<()> {
-    if values.len() >= len {
-        return Ok(());
-    }
     values
-        .try_reserve(len - values.len())
-        .map_err(ANNError::new)?;
-    values.resize(len, value);
-    Ok(())
+}
+
+fn point_ids(points: usize) -> Vec<u32> {
+    (0..points as u32).collect()
+}
+
+fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
+    if values.len() < len {
+        values.resize(len, value);
+    }
 }
 
 fn checked_area(buffer: &'static str, rows: usize, cols: usize) -> ANNResult<usize> {
@@ -1184,78 +955,9 @@ mod tests {
             .flat_map(|point| [point % 7, (point + 3) % 7])
             .collect();
 
-        let expected = scatter_serial(&points, &assignments, 2, 7).unwrap();
+        let expected = scatter_serial(&points, &assignments, 2, 7);
         let actual = scatter_assignments(&points, &assignments, 2, 7).unwrap();
 
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn rejects_empty_dataset() {
-        let data = Matrix::<f32>::new(0.0, 0, 4);
-        let error =
-            partition_with_runtime_metric(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2)
-                .unwrap_err();
-
-        assert_eq!(
-            error.downcast::<PartitionError>().unwrap(),
-            PartitionError::EmptyDataset
-        );
-    }
-
-    #[test]
-    fn rejects_zero_dimensions() {
-        let data = Matrix::<f32>::new(0.0, 4, 0);
-        let error =
-            partition_with_runtime_metric(data.as_view(), &config(1, 4, vec![1], 1), Metric::L2)
-                .unwrap_err();
-
-        assert_eq!(
-            error.downcast::<PartitionError>().unwrap(),
-            PartitionError::EmptyDimensions
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_gather_output_length() {
-        let data = Matrix::<f32>::new(0.0, 2, 2);
-        let error = gather_vectors(data.as_view(), &[0, 1], &mut [0.0; 3]).unwrap_err();
-
-        assert_eq!(
-            error.downcast::<PartitionError>().unwrap(),
-            PartitionError::InvalidBufferLength {
-                buffer: "gather output",
-                expected: 4,
-                actual: 3,
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_assignment_length() {
-        let error = scatter_serial(&[7, 8], &[0, 1, 0], 2, 2).unwrap_err();
-
-        assert_eq!(
-            error.downcast::<PartitionError>().unwrap(),
-            PartitionError::InvalidBufferLength {
-                buffer: "scatter assignments",
-                expected: 4,
-                actual: 3,
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_assignment_to_an_unknown_leader() {
-        let error = scatter_serial(&[7], &[2], 1, 2).unwrap_err();
-
-        assert_eq!(
-            error.downcast::<PartitionError>().unwrap(),
-            PartitionError::InvalidBufferLength {
-                buffer: "leader assignment",
-                expected: 2,
-                actual: 3,
-            }
-        );
     }
 }
