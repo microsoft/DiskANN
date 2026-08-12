@@ -438,6 +438,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "dashmap",
+ "diskann-linalg",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",

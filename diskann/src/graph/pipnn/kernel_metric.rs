@@ -11,20 +11,12 @@ mod partition;
 pub(super) use leaf::LeafMetric;
 pub(super) use partition::PartitionMetric;
 
-use std::collections::TryReserveError;
-
-use diskann_utils::views::MatrixView;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
 pub(super) struct L2;
 pub(super) struct Cosine;
 pub(super) struct CosineNormalized;
 pub(super) struct InnerProduct;
-
-pub(super) struct NormPreparation<'a, 'b> {
-    pub(super) values: MatrixView<'a, f32>,
-    pub(super) norms: &'b mut Vec<f32>,
-}
 
 /// Prepared norms for one point stripe and its sampled leaders.
 #[derive(Clone, Copy, Debug)]
@@ -33,28 +25,10 @@ pub(super) struct PartitionNorms<'a> {
     pub(super) leader_norms: &'a [f32],
 }
 
-pub(super) fn resize_norms(norms: &mut Vec<f32>, len: usize) -> Result<(), TryReserveError> {
-    norms.try_reserve(len.saturating_sub(norms.len()))?;
-    norms.resize(len, 0.0);
-    Ok(())
-}
-
-/// This function converts a squared norm to a norm.
-///
-/// It maps subnormal values to zero and preserves NaN.
-#[inline(always)]
-pub(super) fn norm_from_squared(squared_norm: f32) -> f32 {
-    if squared_norm < f32::MIN_POSITIVE {
-        0.0
-    } else {
-        squared_norm.sqrt()
-    }
-}
-
 /// Compute SIMD cosine distance with the DiskANN zero-norm and NaN rules.
 ///
-/// Each lane contains one point pair. A zero norm produces zero similarity. A
-/// NaN norm remains NaN unless the other norm is zero.
+/// Each lane contains one point pair. A zero norm produces zero similarity.
+/// Finite similarity is clamped to the cosine range before distance conversion.
 #[inline(always)]
 pub(super) fn cosine_distance_simd<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
 where
@@ -69,7 +43,8 @@ where
     let denominator = source_norm * target_norm;
     let safe_denominator = source_zero.select(one, target_zero.select(one, denominator));
     let cosine = source_zero.select(zero, target_zero.select(zero, dot / safe_denominator));
-    one - cosine
+    let negative_one = F::splat(arch, -1.0);
+    one - negative_one.max_simd(cosine.min_simd(one))
 }
 
 /// Compute one cosine distance with the DiskANN zero-norm and NaN rules.
@@ -78,22 +53,7 @@ pub(super) fn cosine_distance_single(dot: f32, source_norm: f32, target_norm: f3
     if source_norm < f32::MIN_POSITIVE.sqrt() || target_norm < f32::MIN_POSITIVE.sqrt() {
         1.0
     } else {
-        1.0 - dot / (source_norm * target_norm)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn norm_from_squared_applies_zero_threshold_without_erasing_nan() {
-        assert_eq!(norm_from_squared(-0.0).to_bits(), 0.0f32.to_bits());
-        assert_eq!(norm_from_squared(f32::MIN_POSITIVE / 2.0), 0.0);
-        assert_eq!(
-            norm_from_squared(f32::MIN_POSITIVE),
-            f32::MIN_POSITIVE.sqrt()
-        );
-        assert!(norm_from_squared(f32::NAN).is_nan());
+        let cosine = dot / (source_norm * target_norm);
+        1.0 - (-1.0_f32).max(1.0_f32.min(cosine))
     }
 }

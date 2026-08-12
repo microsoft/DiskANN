@@ -3,150 +3,192 @@
  * Licensed under the MIT license.
  */
 
-use std::collections::TryReserveError;
-
+use diskann_utils::views::MatrixView;
 use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
 
 use super::{
-    Cosine, CosineNormalized, InnerProduct, L2, NormPreparation, cosine_distance_simd,
-    cosine_distance_single, norm_from_squared, resize_norms,
+    Cosine, CosineNormalized, InnerProduct, L2, cosine_distance_simd, cosine_distance_single,
 };
 
-/// Leaf formulas return ascending distances.
-/// L2 uses squared norms. Cosine uses norms. Other metrics ignore norms.
+/// Compute leaf distances for one concrete metric.
 pub(in super::super) trait LeafMetric: Send + Sync + 'static {
     /// Prepare one contiguous metric-specific norm for each leaf-local point.
-    fn prepare_leaf_norms(preparation: NormPreparation<'_, '_>) -> Result<(), TryReserveError>;
+    fn prepare_leaf_norms(_dots: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
+        norms.clear();
+    }
+
+    /// Prepare one source norm for reuse across SIMD target groups.
+    #[inline(always)]
+    fn source_simd<F>(arch: F::Arch, _norms: &[f32], _source: usize) -> F
+    where
+        F: SIMDVector<Scalar = f32>,
+    {
+        F::default(arch)
+    }
+
+    /// Prepare one source norm for reuse across single target values.
+    #[inline(always)]
+    fn source_single(_norms: &[f32], _source: usize) -> f32 {
+        0.0
+    }
 
     /// Compute distances for one complete SIMD group.
-    fn leaf_distance_simd<F>(arch: F::Arch, dot_products: F, source_norms: F, target_norms: F) -> F
+    fn distances_simd<F>(
+        arch: F::Arch,
+        norms: &[f32],
+        source_norms: F,
+        dot_products: F,
+        first_target: usize,
+    ) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>;
 
     /// Compute one distance outside the complete SIMD prefix.
-    fn leaf_distance_single(dot_product: f32, source_norm: f32, target_norm: f32) -> f32;
+    fn distance_single(norms: &[f32], source_norm: f32, dot_product: f32, target: usize) -> f32;
 }
 
-/// Clamp negative SIMD roundoff to zero and preserve NaN lanes.
+/// Load one complete SIMD group of prepared norms.
 #[inline(always)]
-fn clamp_nonnegative_simd<F>(arch: F::Arch, distance: F) -> F
+fn load_norms_simd<F>(arch: F::Arch, norms: &[f32], first_norm: usize) -> F
 where
-    F: SIMDVector<Scalar = f32> + SIMDFloat,
-    F::Mask: SIMDSelect<F>,
+    F: SIMDVector<Scalar = f32>,
 {
-    let zero = F::default(arch);
-    distance
-        .eq_simd(distance)
-        .select(zero.max_simd(distance), distance)
-}
+    let last_norm = first_norm + F::LANES;
+    let norm_group = &norms[first_norm..last_norm];
 
-/// Clamp negative roundoff to zero and preserve NaN.
-#[inline(always)]
-fn clamp_nonnegative_single(distance: f32) -> f32 {
-    if distance < 0.0 { 0.0 } else { distance }
+    // SAFETY: `norm_group` contains one complete SIMD group.
+    unsafe { F::load_simd(arch, norm_group.as_ptr()) }
 }
 
 impl LeafMetric for L2 {
-    fn prepare_leaf_norms(preparation: NormPreparation<'_, '_>) -> Result<(), TryReserveError> {
-        resize_norms(preparation.norms, preparation.values.nrows())?;
-        for (point, norm) in preparation.norms.iter_mut().enumerate() {
-            *norm = preparation.values[(point, point)];
+    fn prepare_leaf_norms(dots: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
+        norms.resize(dots.nrows(), 0.0);
+        for (point, norm) in norms.iter_mut().enumerate() {
+            *norm = dots[(point, point)];
         }
-        Ok(())
     }
 
     #[inline(always)]
-    fn leaf_distance_simd<F>(arch: F::Arch, dot_products: F, source_norms: F, target_norms: F) -> F
+    fn source_simd<F>(arch: F::Arch, norms: &[f32], source: usize) -> F
+    where
+        F: SIMDVector<Scalar = f32>,
+    {
+        F::splat(arch, norms[source])
+    }
+
+    #[inline(always)]
+    fn source_single(norms: &[f32], source: usize) -> f32 {
+        norms[source]
+    }
+
+    #[inline(always)]
+    fn distances_simd<F>(
+        arch: F::Arch,
+        norms: &[f32],
+        source_norms: F,
+        dot_products: F,
+        first_target: usize,
+    ) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        clamp_nonnegative_simd(
-            arch,
-            source_norms + target_norms - F::splat(arch, 2.0) * dot_products,
-        )
+        let target_norms = load_norms_simd::<F>(arch, norms, first_target);
+        (F::splat(arch, -2.0).mul_add_simd(dot_products, source_norms) + target_norms)
+            .max_simd(F::default(arch))
     }
 
     #[inline(always)]
-    fn leaf_distance_single(dot_product: f32, source_norm: f32, target_norm: f32) -> f32 {
-        clamp_nonnegative_single(source_norm + target_norm - 2.0 * dot_product)
+    fn distance_single(norms: &[f32], source_norm: f32, dot_product: f32, target: usize) -> f32 {
+        ((-2.0_f32).mul_add(dot_product, source_norm) + norms[target]).max(0.0)
     }
 }
 
 impl LeafMetric for Cosine {
-    fn prepare_leaf_norms(preparation: NormPreparation<'_, '_>) -> Result<(), TryReserveError> {
-        resize_norms(preparation.norms, preparation.values.nrows())?;
-        for (point, norm) in preparation.norms.iter_mut().enumerate() {
-            *norm = norm_from_squared(preparation.values[(point, point)]);
+    fn prepare_leaf_norms(dots: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
+        norms.resize(dots.nrows(), 0.0);
+        for (point, norm) in norms.iter_mut().enumerate() {
+            *norm = dots[(point, point)].sqrt();
         }
-        Ok(())
     }
 
     #[inline(always)]
-    fn leaf_distance_simd<F>(arch: F::Arch, dot_products: F, source_norms: F, target_norms: F) -> F
+    fn source_simd<F>(arch: F::Arch, norms: &[f32], source: usize) -> F
+    where
+        F: SIMDVector<Scalar = f32>,
+    {
+        F::splat(arch, norms[source])
+    }
+
+    #[inline(always)]
+    fn source_single(norms: &[f32], source: usize) -> f32 {
+        norms[source]
+    }
+
+    #[inline(always)]
+    fn distances_simd<F>(
+        arch: F::Arch,
+        norms: &[f32],
+        source_norms: F,
+        dot_products: F,
+        first_target: usize,
+    ) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        clamp_nonnegative_simd(
-            arch,
-            cosine_distance_simd(arch, dot_products, source_norms, target_norms),
-        )
+        let target_norms = load_norms_simd::<F>(arch, norms, first_target);
+        cosine_distance_simd(arch, dot_products, source_norms, target_norms)
+            .max_simd(F::default(arch))
     }
 
     #[inline(always)]
-    fn leaf_distance_single(dot_product: f32, source_norm: f32, target_norm: f32) -> f32 {
-        clamp_nonnegative_single(cosine_distance_single(
-            dot_product,
-            source_norm,
-            target_norm,
-        ))
+    fn distance_single(norms: &[f32], source_norm: f32, dot_product: f32, target: usize) -> f32 {
+        cosine_distance_single(dot_product, source_norm, norms[target]).max(0.0)
     }
 }
 
 impl LeafMetric for CosineNormalized {
-    fn prepare_leaf_norms(preparation: NormPreparation<'_, '_>) -> Result<(), TryReserveError> {
-        preparation.norms.clear();
-        Ok(())
-    }
-
     #[inline(always)]
-    fn leaf_distance_simd<F>(arch: F::Arch, dot_products: F, source_norms: F, target_norms: F) -> F
+    fn distances_simd<F>(
+        arch: F::Arch,
+        _norms: &[f32],
+        _source_norms: F,
+        dot_products: F,
+        _first_target: usize,
+    ) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        let _ = (source_norms, target_norms);
-        clamp_nonnegative_simd(arch, F::splat(arch, 1.0) - dot_products)
+        F::splat(arch, 1.0) - dot_products
     }
 
     #[inline(always)]
-    fn leaf_distance_single(dot_product: f32, source_norm: f32, target_norm: f32) -> f32 {
-        let _ = (source_norm, target_norm);
-        clamp_nonnegative_single(1.0 - dot_product)
+    fn distance_single(_norms: &[f32], _source_norm: f32, dot_product: f32, _target: usize) -> f32 {
+        1.0 - dot_product
     }
 }
 
 impl LeafMetric for InnerProduct {
-    fn prepare_leaf_norms(preparation: NormPreparation<'_, '_>) -> Result<(), TryReserveError> {
-        preparation.norms.clear();
-        Ok(())
-    }
-
     #[inline(always)]
-    fn leaf_distance_simd<F>(arch: F::Arch, dot_products: F, source_norms: F, target_norms: F) -> F
+    fn distances_simd<F>(
+        arch: F::Arch,
+        _norms: &[f32],
+        _source_norms: F,
+        dot_products: F,
+        _first_target: usize,
+    ) -> F
     where
         F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
         F::Mask: SIMDSelect<F>,
     {
-        let _ = (source_norms, target_norms);
         F::default(arch) - dot_products
     }
 
     #[inline(always)]
-    fn leaf_distance_single(dot_product: f32, source_norm: f32, target_norm: f32) -> f32 {
-        let _ = (source_norm, target_norm);
+    fn distance_single(_norms: &[f32], _source_norm: f32, dot_product: f32, _target: usize) -> f32 {
         -dot_product
     }
 }
