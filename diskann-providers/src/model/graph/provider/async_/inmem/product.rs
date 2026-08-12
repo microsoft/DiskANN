@@ -50,7 +50,12 @@ impl CreateVectorStore for FixedChunkPQTable {
         metric: Metric,
         _prefetch_lookahead: Option<usize>,
     ) -> Self::Target {
-        DefaultQuant::new(metric, max_points, self)
+        let pq_metric = match metric {
+            Metric::CosineNormalized => Metric::L2,
+            metric => metric,
+        };
+
+        DefaultQuant::new(pq_metric, max_points, self)
     }
 }
 
