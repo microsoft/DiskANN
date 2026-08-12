@@ -44,15 +44,15 @@ where
     pub fn new(
         data_path: String,
         compressed_data_path: String,
-        quantizer_context: Q::CompressorContext,
-    ) -> Self {
-        let quantizer = Q::new(quantizer_context);
-        Self {
+        quantizer_context: &Q::CompressorContext,
+    ) -> ANNResult<Self> {
+        let quantizer = Q::new(quantizer_context)?;
+        Ok(Self {
             data_path,
             compressed_data_path,
             quantizer,
             phantom: PhantomData,
-        }
+        })
     }
 
     /// This method reads the source data file, processes vectors in batches, compresses them
@@ -93,7 +93,6 @@ where
             ));
         }
 
-        self.quantizer.generate()?;
         let compressed_path = self.compressed_data_path.as_str();
 
         if storage_provider.exists(compressed_path) {
@@ -220,12 +219,8 @@ mod generator_tests {
     impl QuantCompressor<f32> for DummyCompressor {
         type CompressorContext = u32;
 
-        fn new(context: Self::CompressorContext) -> Self {
-            Self::new(context)
-        }
-
-        fn generate(&self) -> ANNResult<()> {
-            Ok(())
+        fn new(context: &Self::CompressorContext) -> ANNResult<Self> {
+            Ok(Self::new(*context))
         }
 
         fn compress(
@@ -289,8 +284,12 @@ mod generator_tests {
         max_block_size: usize,
     ) -> (QuantDataGenerator<f32, DummyCompressor>, ANNResult<()>) {
         let pool: diskann_providers::utils::RayonThreadPool = create_thread_pool_for_test();
-        let generator =
-            QuantDataGenerator::<f32, DummyCompressor>::new(data_path, compressed_path, output_dim);
+        let generator = QuantDataGenerator::<f32, DummyCompressor>::new(
+            data_path,
+            compressed_path,
+            &output_dim,
+        )
+        .unwrap();
         let result = generator.generate_data(storage_provider, pool.as_ref(), max_block_size);
         (generator, result)
     }

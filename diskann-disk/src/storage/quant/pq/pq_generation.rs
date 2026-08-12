@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{marker::PhantomData, sync::OnceLock, time::Instant};
+use std::{marker::PhantomData, time::Instant};
 
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -46,10 +46,10 @@ where
     T: VectorRepr,
     Storage: StorageReadProvider + StorageWriteProvider + 'a,
 {
-    context: PQGenerationContext<'a, Storage>,
-    table: OnceLock<TransposedTable>,
+    table: TransposedTable,
     num_chunks: usize,
     phantom_data: PhantomData<T>,
+    phantom_storage: PhantomData<&'a Storage>,
 }
 
 impl<'a, T, Storage> PQGeneration<'a, T, Storage>
@@ -120,28 +120,13 @@ where
 {
     type CompressorContext = PQGenerationContext<'a, Storage>;
 
-    fn new(context: Self::CompressorContext) -> Self {
-        let num_chunks = context.num_chunks;
-        Self {
-            context,
-            table: OnceLock::new(),
-            num_chunks,
-            phantom_data: PhantomData,
-        }
-    }
-
-    fn generate(&self) -> diskann::ANNResult<()> {
-        if self.table.get().is_some() {
-            return Ok(());
-        }
-
-        let context = &self.context;
+    fn new(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
         Self::generate_pivots(context)?;
+
         let (_, full_dim) = context
             .pq_storage
             .read_existing_pivot_metadata(context.storage_provider)?;
 
-        //Load the pivots
         let num_chunks = context.num_chunks;
         let (mut full_pivot_data, centroid, chunk_offsets) =
             context.pq_storage.load_existing_pivot_data(
@@ -168,11 +153,11 @@ where
         )
         .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
-        self.table.set(table).map_err(|_| {
-            diskann_error!(
-                ErrorKind::PQError,
-                "PQ compressor was generated concurrently"
-            )
+        Ok(Self {
+            table,
+            num_chunks,
+            phantom_data: PhantomData,
+            phantom_storage: PhantomData,
         })
     }
 
@@ -182,13 +167,6 @@ where
         output: MatrixBase<&mut [u8]>,
     ) -> Result<(), diskann::ANNError> {
         self.table
-            .get()
-            .ok_or_else(|| {
-                diskann_error!(
-                    ErrorKind::PQError,
-                    "PQ compressor must be generated before compression"
-                )
-            })?
             .compress_into(vector, output)
             .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))
     }
@@ -294,24 +272,22 @@ mod pq_generation_tests {
 
         assert!(!storage_provider.exists(pivot_file_name));
 
-        let compressor = PQGeneration::<f32, _>::new(context);
-        assert!(!storage_provider.exists(pivot_file_name));
-
-        let result = compressor.generate();
+        let result = PQGeneration::<f32, _>::generate_pivots(&context);
         assert!(result.is_ok());
         assert!(storage_provider.exists(pivot_file_name));
+
+        let compressor = PQGeneration::<f32, _>::new(&context).unwrap();
 
         assert_eq!(compressor.num_chunks, num_chunks);
         assert_eq!(compressor.compressed_bytes(), num_chunks);
 
-        let table = compressor.table.get().unwrap();
-        assert_eq!(table.dim(), dim);
-        assert_eq!(table.ncenters(), num_centers);
-        assert_eq!(table.nchunks(), num_chunks);
+        assert_eq!(compressor.table.dim(), dim);
+        assert_eq!(compressor.table.ncenters(), num_centers);
+        assert_eq!(compressor.table.nchunks(), num_chunks);
     }
 
     #[rstest]
-    fn generate_creates_missing_pivots() {
+    fn new_preserves_missing_pivot_generation_fallback() {
         let storage_provider = VirtualStorageProvider::new_memory();
         storage_provider
             .filesystem()
@@ -342,10 +318,8 @@ mod pq_generation_tests {
             Some(data_path),
         );
 
-        let compressor = PQGeneration::<f32, _>::new(context);
-        let result = compressor.generate();
-
-        assert!(result.is_ok());
+        let compressor = PQGeneration::<f32, _>::new(&context);
+        assert!(compressor.is_ok());
         assert!(storage_provider.exists(pivot_file_name));
     }
 
@@ -370,14 +344,14 @@ mod pq_generation_tests {
             "".to_string(),
             None,
         );
-        let compressor = PQGeneration::<f32, _>::new(context);
-        let result = compressor.generate();
+        let compressor = PQGeneration::<f32, _>::new(&context);
 
-        if let Err(x) = result.as_ref() {
+        if let Err(x) = compressor.as_ref() {
             println!("Error creating compressor: {x}");
         };
 
-        assert!(result.is_ok());
+        assert!(compressor.is_ok());
+        let compressor = compressor.unwrap();
 
         let data_matrix =
             read_bin::<f32>(&mut storage_provider.open_reader(TEST_PQ_DATA_PATH).unwrap()).unwrap();
@@ -423,7 +397,7 @@ mod pq_generation_tests {
             "".to_string(),
             None,
         );
-        let result = PQGeneration::<f32, _>::new(context).generate();
+        let result = PQGeneration::<f32, _>::new(&context);
         assert!(result.is_err());
     }
 }
