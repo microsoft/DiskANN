@@ -5,6 +5,7 @@
 
 //! Range-based search within a distance radius.
 
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
@@ -298,11 +299,9 @@ where
             for neighbor in in_range.iter() {
                 scratch.visited.insert(*neighbor.id());
             }
-            scratch.in_range = in_range;
 
-            let stats = if scratch.in_range.len()
-                >= ((starting_l as f32) * self.initial_slack()) as usize
-                && scratch.in_range.len() < max_returned
+            let stats = if in_range.len() >= ((starting_l as f32) * self.initial_slack()) as usize
+                && in_range.len() < max_returned
             {
                 // Move to range search
                 let range_stats = range_search_internal(
@@ -310,6 +309,7 @@ where
                     &self,
                     &mut accessor,
                     &mut scratch,
+                    &mut in_range,
                 )
                 .await?;
 
@@ -338,7 +338,7 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    scratch.in_range.iter().copied(),
+                    in_range.iter().copied(),
                     &mut filtered,
                 )
                 .await
@@ -413,27 +413,30 @@ pub(crate) async fn range_search_internal<A>(
     search_params: &Range,
     accessor: &mut A,
     scratch: &mut SearchScratch<A::Id>,
+    in_range: &mut Vec<Neighbor<A::Id>>,
 ) -> ANNResult<InternalSearchStats>
 where
     A: SearchAccessor,
 {
     let beam_width = search_params.beam_width().get();
 
-    for neighbor in &scratch.in_range {
-        scratch.range_frontier.push_back(*neighbor.id());
+    let mut range_frontier: VecDeque<A::Id> = VecDeque::new();
+
+    for neighbor in in_range.iter() {
+        range_frontier.push_back(*neighbor.id());
     }
 
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
 
     let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
 
-    while !scratch.range_frontier.is_empty() && scratch.in_range.len() < max_returned {
+    while !range_frontier.is_empty() && in_range.len() < max_returned {
         scratch.beam_nodes.clear();
 
         // In this loop we are going to find the beam_width number of remaining nodes within the radius
         // Each of these nodes will be a frontier node.
-        while !scratch.range_frontier.is_empty() && scratch.beam_nodes.len() < beam_width {
-            let next = scratch.range_frontier.pop_front();
+        while !range_frontier.is_empty() && scratch.beam_nodes.len() < beam_width {
+            let next = range_frontier.pop_front();
             if let Some(next_node) = next {
                 scratch.beam_nodes.push(next_node);
             }
@@ -451,10 +454,10 @@ where
         // The predicate ensures that the contents of `neighbors` are unique.
         for neighbor in neighbors.iter() {
             if *neighbor.distance() <= search_params.radius() * search_params.range_slack()
-                && scratch.in_range.len() < max_returned
+                && in_range.len() < max_returned
             {
-                scratch.in_range.push(*neighbor);
-                scratch.range_frontier.push_back(*neighbor.id());
+                in_range.push(*neighbor);
+                range_frontier.push_back(*neighbor.id());
             }
         }
         scratch.cmps += neighbors.len() as u32;

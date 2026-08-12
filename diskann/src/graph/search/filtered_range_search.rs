@@ -183,15 +183,14 @@ where
                 && matched_within_radius.len() < max_returned
             {
                 // clear the visited set and repopulate it with all in-range points found so far, filtered and unfiltered
-                // also add these points to range_frontier for seeding the second-round search
                 scratch.visited.clear();
-                scratch.range_frontier.clear();
                 scratch
                     .visited
                     .extend(in_range.iter().map(|neighbor| *neighbor.id()));
-                scratch
-                    .range_frontier
-                    .extend(in_range.iter().map(|neighbor| *neighbor.id()));
+
+                // Create a range frontier for seeding the second-round search
+                let range_frontier: std::collections::VecDeque<_> =
+                    in_range.iter().map(|neighbor| *neighbor.id()).collect();
 
                 // Move to filtered range search
                 let range_stats = filtered_range_search_internal(
@@ -200,6 +199,7 @@ where
                     &mut accessor,
                     &mut scratch,
                     &mut matched_within_radius,
+                    range_frontier,
                 )
                 .await?;
 
@@ -262,6 +262,7 @@ pub(crate) async fn filtered_range_search_internal<A>(
     accessor: &mut A,
     scratch: &mut SearchScratch<A::Id>,
     matched_in_range: &mut Vec<Neighbor<A::Id>>,
+    mut range_frontier: std::collections::VecDeque<A::Id>,
 ) -> ANNResult<InternalSearchStats>
 where
     A: FilteredAccessor,
@@ -272,13 +273,13 @@ where
 
     let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
 
-    while !scratch.range_frontier.is_empty() && matched_in_range.len() < max_returned {
+    while !range_frontier.is_empty() && matched_in_range.len() < max_returned {
         scratch.beam_nodes.clear();
 
         // In this loop we are going to find the beam_width number of remaining nodes within the radius
         // Each of these nodes will be a frontier node.
-        while !scratch.range_frontier.is_empty() && scratch.beam_nodes.len() < beam_width {
-            let next = scratch.range_frontier.pop_front();
+        while !range_frontier.is_empty() && scratch.beam_nodes.len() < beam_width {
+            let next = range_frontier.pop_front();
             if let Some(next_node) = next {
                 scratch.beam_nodes.push(next_node);
             }
@@ -300,7 +301,7 @@ where
         for (decision, distance) in neighbors.iter().copied() {
             if distance <= navigation_radius {
                 let id = decision.into_inner();
-                scratch.range_frontier.push_back(id);
+                range_frontier.push_back(id);
 
                 if distance <= search_params.radius()
                     && decision.is_accept()
