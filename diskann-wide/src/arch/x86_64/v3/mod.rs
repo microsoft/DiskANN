@@ -84,6 +84,9 @@ pub use u64x2_::u64x2;
 pub mod u64x4_;
 pub use u64x4_::u64x4;
 
+pub mod u64x8_;
+pub use u64x8_::u64x8;
+
 // Masks
 pub mod masks;
 

@@ -555,6 +555,7 @@ pub trait Architecture: sealed::Sealed {
     type mask_u32x16: SIMDMask + SIMDSelect<Self::u32x16>;
     type mask_u64x2: SIMDMask;
     type mask_u64x4: SIMDMask;
+    type mask_u64x8: SIMDMask;
 
     /////////////////
     //-- vectors --//
@@ -696,6 +697,12 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u64x4: <Self, u64, 4, mask_u64x4>
         + SplitJoin<Halved = Self::u64x2>
+        + SIMDUnsigned
+        + SIMDSumTree
+    );
+    vector!(
+        u64x8: <Self, u64, 8, mask_u64x8>
+        + SplitJoin<Halved = Self::u64x4>
         + SIMDUnsigned
         + SIMDSumTree
     );
@@ -1209,6 +1216,7 @@ macro_rules! maskdef {
 
             mask_u64x2 = u64x2,
             mask_u64x4 = u64x4,
+            mask_u64x8 = u64x8,
         );
     };
 }
@@ -1245,6 +1253,7 @@ macro_rules! typedef {
 
             u64x2,
             u64x4,
+            u64x8,
         );
     };
     ($repr:ident) => {

@@ -42,6 +42,7 @@ pub type u32x16 = Emulated<u32, 16>;
 
 pub type u64x2 = Emulated<u64, 2>;
 pub type u64x4 = Emulated<u64, 4>;
+pub type u64x8 = Emulated<u64, 8>;
 
 /// A safe architecture that is guaranteed to be compatible with the machine that
 /// a Rust program was compiled for.
