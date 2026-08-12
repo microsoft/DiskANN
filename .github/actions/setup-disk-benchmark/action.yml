@@ -52,6 +52,7 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p "$EXTRACT_TO"
-        curl --fail --location --output "$ARCHIVE" "$BAB_RELEASE_URL/$ARCHIVE"
+        curl --proto '=https' --tlsv1.2 --fail --location \
+          --output "$ARCHIVE" "$BAB_RELEASE_URL/$ARCHIVE"
         echo "$SHA256  $ARCHIVE" | sha256sum --check
         tar xzf "$ARCHIVE" -C "$EXTRACT_TO"
