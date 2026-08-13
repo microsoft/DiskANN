@@ -123,6 +123,7 @@ impl Store {
 unsafe extern "C" fn test_read(
     ctx: u64,
     count: u32,
+    _length_hint: u32,
     id_bytes: *const u8,
     id_len: usize,
     cb: ReadDataCallback,
@@ -225,7 +226,7 @@ mod tests {
         let ctx = Context::new(0);
 
         // Reading a non-existant key should fail.
-        assert!(!callbacks.exists_iid(&ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0, 10));
 
         // Round tripping a write should work.
         assert!(callbacks.write_iid(&ctx, 0, b"test"));
@@ -240,9 +241,9 @@ mod tests {
         assert_eq!(val, b"again");
 
         // Exists and delete should work.
-        assert!(callbacks.exists_iid(&ctx, 0));
+        assert!(callbacks.exists_iid(&ctx, 0, 10));
         assert!(callbacks.delete_iid(&ctx, 0));
-        assert!(!callbacks.exists_iid(&ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0, 10));
 
         // Different contexts should stay separate.
         assert!(callbacks.write_iid(&ctx.term(Term::Vector), 0, b"0000"));
@@ -257,7 +258,7 @@ mod tests {
         assert!(callbacks.write_iid(&ctx.term(Term::Vector), 1, b"2222"));
         let ids = [4u32, 0, 4, 1, 4, 2];
         let mut results = HashMap::new();
-        callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, |i, v| {
+        callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, 10, |i, v| {
             results.insert(i, v.to_owned());
         });
         assert_eq!(results.get(&0), Some(b"0000".to_vec()).as_ref());

@@ -912,6 +912,27 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         Ok(())
     }
+
+    /// The size of a stored full vector.
+    fn full_vector_size(&self) -> usize {
+        self.dim * mem::size_of::<T>()
+    }
+
+    /// The size of a stored quant vector.
+    fn quant_vector_size(&self) -> usize {
+        if let Some(quantizer) = &self.quantizer {
+            quantizer.bytes()
+        } else {
+            0
+        }
+    }
+
+    /// Provides an estimate of quantizer state size.
+    /// This is allowed to be wrong, but should ideally be an overestimate.
+    #[cfg(test)]
+    fn quant_state_size(&self) -> usize {
+        self.dim * 6 + 128
+    }
 }
 
 impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
@@ -1248,19 +1269,28 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
                 }
             }
 
-            let ctx = if self.quantized {
-                self.context.term(Term::Quantized)
+            let (ctx, length_hint) = if self.quantized {
+                (
+                    self.context.term(Term::Quantized),
+                    self.provider.quant_vector_size(),
+                )
             } else {
-                self.context.term(Term::Vector)
+                (
+                    self.context.term(Term::Vector),
+                    self.provider.full_vector_size(),
+                )
             };
 
             if !self.filtered_ids.is_empty() {
-                self.provider
-                    .callbacks
-                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                self.provider.callbacks.read_multi_lpiid(
+                    &ctx,
+                    &self.filtered_ids,
+                    length_hint,
+                    |i, v| {
                         let dist = self.computer.evaluate_similarity(v);
                         on_neighbors(self.filtered_ids[i as usize * 2 + 1], dist);
-                    });
+                    },
+                );
             }
         }
 
@@ -1420,6 +1450,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
             provider.callbacks.read_multi_lpiid(
                 &accessor.context.term(Term::Vector),
                 &accessor.filtered_ids,
+                provider.full_vector_size(),
                 |i, v| {
                     let dist = f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(v));
                     reranked.push(Neighbor::new(
@@ -1498,16 +1529,24 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                 }
             }
 
-            let ctx = if self.quantized {
-                self.context.term(Term::Quantized)
+            let (ctx, length_hint) = if self.quantized {
+                (
+                    self.context.term(Term::Quantized),
+                    self.provider.quant_vector_size(),
+                )
             } else {
-                self.context.term(Term::Vector)
+                (
+                    self.context.term(Term::Vector),
+                    self.provider.full_vector_size(),
+                )
             };
 
             if !self.filtered_ids.is_empty() {
-                self.provider
-                    .callbacks
-                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                self.provider.callbacks.read_multi_lpiid(
+                    &ctx,
+                    &self.filtered_ids,
+                    length_hint,
+                    |i, v| {
                         let dist = self.computer.evaluate_similarity(v);
                         let decision = if self.filtered_decisions[i as usize] {
                             Decision::accept(self.filtered_ids[i as usize * 2 + 1])
@@ -1515,7 +1554,8 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                             Decision::reject(self.filtered_ids[i as usize * 2 + 1])
                         };
                         on_neighbors(decision, dist);
-                    });
+                    },
+                );
             }
         }
 
@@ -1554,19 +1594,28 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                 }
             }
 
-            let ctx = if self.quantized {
-                self.context.term(Term::Quantized)
+            let (ctx, length_hint) = if self.quantized {
+                (
+                    self.context.term(Term::Quantized),
+                    self.provider.quant_vector_size(),
+                )
             } else {
-                self.context.term(Term::Vector)
+                (
+                    self.context.term(Term::Vector),
+                    self.provider.full_vector_size(),
+                )
             };
 
             if !self.filtered_ids.is_empty() {
-                self.provider
-                    .callbacks
-                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                self.provider.callbacks.read_multi_lpiid(
+                    &ctx,
+                    &self.filtered_ids,
+                    length_hint,
+                    |i, v| {
                         let dist = self.computer.evaluate_similarity(v);
                         on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
-                    });
+                    },
+                );
             }
         }
 
@@ -1706,19 +1755,28 @@ where
             }
         }
 
-        let ctx = if self.quantized {
-            self.context.term(Term::Quantized)
+        let (ctx, length_hint) = if self.quantized {
+            (
+                self.context.term(Term::Quantized),
+                self.provider.quant_vector_size(),
+            )
         } else {
-            self.context.term(Term::Vector)
+            (
+                self.context.term(Term::Vector),
+                self.provider.full_vector_size(),
+            )
         };
 
         if !self.filtered_ids.is_empty() {
-            self.provider
-                .callbacks
-                .read_multi_lpiid(&ctx, &self.filtered_ids, |id, v| {
+            self.provider.callbacks.read_multi_lpiid(
+                &ctx,
+                &self.filtered_ids,
+                length_hint,
+                |id, v| {
                     self.set
                         .insert(self.filtered_ids[id as usize * 2 + 1], v.into());
-                });
+                },
+            );
         }
 
         Ok((self.set.view(), &self.distance))
@@ -1995,9 +2053,11 @@ mod tests {
 
         // There should be no saved quant state.
         assert!(
-            !provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            !provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state should not be stored yet"
         );
 
@@ -2069,9 +2129,11 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state missing"
         );
 
@@ -2167,9 +2229,11 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state missing"
         );
 
@@ -2183,11 +2247,11 @@ mod tests {
 
         // Every quant vector should be present in the store
         for id in 0..last_inserted_id {
-            assert!(
-                provider
-                    .callbacks
-                    .exists_iid(&ctx.term(Term::Quantized), id)
-            );
+            assert!(provider.callbacks.exists_iid(
+                &ctx.term(Term::Quantized),
+                id,
+                provider.quant_vector_size()
+            ));
         }
 
         // Searches should still work and use quantized vectors
@@ -2256,9 +2320,11 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state missing"
         );
 
