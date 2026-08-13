@@ -28,7 +28,7 @@ pub struct InputFile {
 }
 
 impl InputFile {
-    /// Create a new new input file from the path-like `path``
+    /// Create a new input file from the path-like `path`.
     pub fn new<P>(path: P) -> Self
     where
         PathBuf: From<P>,
