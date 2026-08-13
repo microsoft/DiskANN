@@ -445,6 +445,9 @@ impl DiskIndexBuild {
                     write_field!(f, "Quantization", format!("sq, nbits {nbits}"))?
                 }
             }
+            QuantizationType::Spherical(nbits) => {
+                write_field!(f, "Quantization", format!("spherical, nbits {nbits}"))?
+            }
         }
         write_field!(f, "Save Path", self.save_path)?;
         Ok(())
