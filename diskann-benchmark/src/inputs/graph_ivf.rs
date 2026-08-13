@@ -167,7 +167,7 @@ pub(crate) enum GraphIvfSource {
     Load(GraphIvfLoad),
     Static(GraphIvfStaticBuild),
     Online(GraphIvfOnlineBuild),
-    OnlineRunbook(GraphIvfOnlineRunbook),
+    OnlineRunbook(Box<GraphIvfOnlineRunbook>),
 }
 
 #[cfg(feature = "graph-ivf")]
@@ -382,9 +382,10 @@ pub(crate) struct GraphIvfRunbookConfig {
 
 /// How every search stage of the runbook is measured.
 ///
-/// Searches run single-threaded against the in-memory clusterer, so the reported
-/// latency is a clean per-query cost rather than a throughput figure; the point
-/// of a runbook run is recall as the index churns.
+/// Searches run against the in-memory clusterer, so `num_threads` buys wall-clock
+/// only: the reported latency is always the mean per-query cost, measured around
+/// each individual query rather than derived from the sweep's wall-clock. The
+/// point of a runbook run is recall as the index churns, not throughput.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GraphIvfRunbookSearch {
@@ -396,6 +397,15 @@ pub(crate) struct GraphIvfRunbookSearch {
     /// least the concrete `nlist` computed for each fraction.
     pub(crate) centroid_search_l: usize,
     pub(crate) recall_at: RecallAt,
+    /// Worker threads per sweep, each with its own searcher. Defaults to one so
+    /// that configs written before this knob existed keep their timings.
+    #[serde(default = "one_thread")]
+    pub(crate) num_threads: usize,
+}
+
+/// Backwards-compatible default for [`GraphIvfRunbookSearch::num_threads`].
+const fn one_thread() -> usize {
+    1
 }
 
 /// Serializable mirror of `diskann_graphivf::AssignMethod` (the benchmark's
@@ -703,7 +713,11 @@ impl GraphIvfRunbookSearch {
             &self.cluster_fractions,
             self.centroid_search_l,
             &mut self.recall_at,
-        )
+        )?;
+        if self.num_threads == 0 {
+            anyhow::bail!("num_threads must be positive");
+        }
+        Ok(())
     }
 }
 
@@ -909,6 +923,7 @@ impl fmt::Display for GraphIvfRunbookSearch {
         write_field!(f, "Cluster Fractions", CommaList(&self.cluster_fractions))?;
         write_field!(f, "Centroid L", self.centroid_search_l)?;
         write_field!(f, "Recall@", self.recall_at)?;
+        write_field!(f, "Threads", self.num_threads)?;
         Ok(())
     }
 }

@@ -138,7 +138,7 @@ struct PhaseAccum {
     bytes_read: AtomicU64,
 }
 
-fn record_first_error(first_error: &Mutex<Option<String>>, message: String) {
+pub(super) fn record_first_error(first_error: &Mutex<Option<String>>, message: String) {
     let mut error = first_error
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

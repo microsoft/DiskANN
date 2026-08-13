@@ -16,18 +16,30 @@
 //! coincide and no translation layer is needed. That also means a `Replace`
 //! stage — whose two ranges differ — has no meaning here and is rejected.
 //!
-//! Searches run single-threaded against the in-memory `f32` corpus. That skips
-//! the quantization error the flushed index would add, so recall read here is an
-//! upper bound for a quantized element type and exact for `f32`.
+//! Searches run against the in-memory `f32` corpus. That skips the quantization
+//! error the flushed index would add, so recall read here is an upper bound for a
+//! quantized element type and exact for `f32`.
 
-use std::{fmt, path::Path, time::Instant};
+use std::{
+    fmt,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
+    time::Instant,
+};
 
 use diskann_benchmark_core::streaming::{executors::bigann, Executor as _, Stream};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_graphivf::SearchParams;
-use diskann_providers::storage::FileStorageProvider;
+use diskann_providers::{
+    storage::FileStorageProvider,
+    utils::{create_thread_pool, ParallelIteratorInPool, RayonThreadPool},
+};
 use diskann_tools::utils::search_index_utils;
 use diskann_utils::views::Matrix;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -35,7 +47,7 @@ use crate::{
         build::decompress_to_f32,
         element::GraphIvfElement,
         online::{online_setup, OnlineSetup},
-        search::{recall_points, RecallPoint},
+        search::{recall_points, record_first_error, RecallPoint},
     },
     inputs::graph_ivf::GraphIvfOnlineRunbook,
     utils::{datafiles, SimilarityMeasure},
@@ -61,6 +73,8 @@ pub(super) struct GraphIvfRunbookSearchResult {
     pub(super) mean_points_scanned: u64,
     /// `mean_points_scanned` as a percentage of the live set at this stage.
     pub(super) pct_scanned: f32,
+    /// Mean cost of one query, measured around each query individually so that
+    /// it stays comparable no matter how many threads ran the sweep.
     pub(super) mean_latency: MicroSeconds,
 }
 
@@ -346,6 +360,7 @@ where
         queries,
         dim,
         params,
+        pool: create_thread_pool(params.search.num_threads)?,
         stage: 0,
     };
 
@@ -429,6 +444,8 @@ struct GraphIvfStream<'a> {
     queries: Matrix<f32>,
     dim: usize,
     params: &'a GraphIvfOnlineRunbook,
+    /// Built once and reused by every sweep of every search stage.
+    pool: RayonThreadPool,
     stage: usize,
 }
 
@@ -477,6 +494,10 @@ impl GraphIvfStream<'_> {
             num_clusters > 0,
             "cannot search an online graph-IVF index with no live clusters"
         );
+        // Confirm a searcher can be created before entering the parallel region;
+        // the per-thread initializer below reuses the same fallible call.
+        let _ = self.clusterer.searcher()?;
+
         let mut results = Vec::with_capacity(search.cluster_fractions.len());
         for &cluster_fraction in &search.cluster_fractions {
             // Resolve at every stage because inserts, deletes, splits, and
@@ -486,25 +507,62 @@ impl GraphIvfStream<'_> {
                 nlist,
                 centroid_search_l: search.centroid_search_l,
             };
-            let mut searcher = self.clusterer.searcher()?;
             let mut result_ids = vec![0u32; k_max * num_queries];
-            let mut hits = Vec::with_capacity(k_max);
+            let first_error = Mutex::new(None::<String>);
+            let scanned = AtomicU64::new(0);
+            let latency_ns = AtomicU64::new(0);
 
-            let start = Instant::now();
-            for (q, ids) in self
-                .queries
+            self.queries
                 .as_slice()
-                .chunks(self.dim)
-                .zip(result_ids.chunks_mut(k_max))
-            {
-                searcher.search_into(q, k_max, &params, &mut hits)?;
-                for (slot, (id, _)) in ids.iter_mut().zip(hits.iter()) {
-                    *slot = *id;
-                }
-            }
-            let elapsed = start.elapsed();
-            let mean_points_scanned = searcher.points_scanned() / num_queries.max(1) as u64;
+                .par_chunks(self.dim)
+                .zip(result_ids.par_chunks_mut(k_max))
+                .for_each_init_in_pool(
+                    self.pool.as_ref(),
+                    // Each worker owns its own searcher; the handle is not shareable.
+                    || {
+                        self.clusterer
+                            .searcher()
+                            .map(|searcher| (searcher, Vec::with_capacity(k_max)))
+                            .map_err(|error| format!("{error:#}"))
+                    },
+                    |state, (q, ids)| {
+                        let start = Instant::now();
+                        let (searcher, hits) = match state {
+                            Ok(state) => state,
+                            Err(error) => {
+                                ids.fill(0);
+                                record_first_error(
+                                    &first_error,
+                                    format!("failed to create a worker searcher: {error}"),
+                                );
+                                return;
+                            }
+                        };
+                        match searcher.search_into(q, k_max, &params, hits) {
+                            Ok(stats) => {
+                                scanned.fetch_add(stats.points_scanned as u64, Ordering::Relaxed);
+                                for (slot, (id, _)) in ids.iter_mut().zip(hits.iter()) {
+                                    *slot = *id;
+                                }
+                            }
+                            Err(error) => {
+                                ids.fill(0);
+                                record_first_error(&first_error, format!("{error:#}"));
+                            }
+                        }
+                        latency_ns.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    },
+                );
 
+            if let Some(error) = first_error
+                .into_inner()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            {
+                anyhow::bail!("one or more graph-ivf runbook searches failed: {error}");
+            }
+
+            let queries = num_queries.max(1) as u64;
+            let mean_points_scanned = scanned.load(Ordering::Relaxed) / queries;
             let recalls = recall_points(&search.recall_at, num_queries, &gt, &result_ids, k_max)?;
 
             results.push(GraphIvfRunbookSearchResult {
@@ -514,7 +572,7 @@ impl GraphIvfStream<'_> {
                 mean_points_scanned,
                 pct_scanned: 100.0 * mean_points_scanned as f32 / live_points.max(1) as f32,
                 mean_latency: MicroSeconds::new(
-                    elapsed.as_micros() as u64 / num_queries.max(1) as u64,
+                    latency_ns.load(Ordering::Relaxed) / queries / 1000,
                 ),
             });
         }
@@ -738,6 +796,7 @@ mod tests {
                     cluster_fractions: vec![ClusterFraction::new(1.0)],
                     centroid_search_l: NUM_POINTS,
                     recall_at: RecallAt::new(vec![5, RECALL_AT as u32]),
+                    num_threads: 2,
                 },
             }
         }
