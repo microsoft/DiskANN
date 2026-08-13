@@ -326,7 +326,7 @@ impl InlineFilterSearchPhase {
     }
 }
 
-/// A one-to-one correspondence with [`diskann::index::config::IntraBatchCandidates`].
+/// A one-to-one correspondence with [`diskann::graph::config::IntraBatchCandidates`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum IntraBatchCandidates {
