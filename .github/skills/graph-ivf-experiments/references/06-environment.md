@@ -62,11 +62,12 @@ Pop-Location
 
 ## Repository state
 
-- `_results/` is **untracked** — not gitignored, just never committed. It holds all logs,
-  scripts, plots and workbooks.
+- `_results/` is **untracked** — not gitignored, just never committed. It holds all configs,
+  logs, scripts, plots and workbooks for local experiments.
+- Keep experiment configs in `_results/configs/`, not in `diskann-benchmark/example/`. The
+  example directory is version-controlled and should only carry small portable samples.
 - `build_online_workbook.py` **at the repository root is a stale duplicate** and is marked
   as such in its docstring. The live copy is `_results/scripts/build_online_workbook.py`.
 - Experiment work happens on `u/adkrishnan/graph-ivf`; the default branch is `main`.
-- On the current Windows host, Git for Windows may fail with `BUG (fork bomb)`. Do not keep
-  retrying native Git when that happens. Use `dulwich` for read-only status/diff inspection
-  until Git is repaired. This is an environment workaround, not a repository dependency.
+- `.gitattributes` sets `text eol=crlf`, so CRLF in the working tree is expected and Git
+  normalizes to LF on check-in. Do not "fix" line endings.

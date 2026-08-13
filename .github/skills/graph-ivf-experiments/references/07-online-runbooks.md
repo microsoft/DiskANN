@@ -36,6 +36,9 @@ row-major blocks.
 
 ## Author the config
 
+Place runbook configs in `_results/configs/msturing/` (or a sibling directory named for the
+campaign), not in `diskann-benchmark/example/`.
+
 ```jsonc
 {
   "jobs": [{

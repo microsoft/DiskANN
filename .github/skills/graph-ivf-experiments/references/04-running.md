@@ -15,7 +15,7 @@ or `diskann-graphivf/`.
 ```powershell
 $b = "<absolute-repo-root>"
 & "$b\target\release\diskann-benchmark.exe" run `
-  --input-file  "$b\diskann-benchmark\example\graph-ivf-nq-load-t120.json" `
+  --input-file  "$b\_results\configs\sweeps\nq\graph-ivf\graph-ivf-nq-load-t120.json" `
   --output-file "$b\_results\logs\nq\graphivf_nq_t120_s32_b4096_iters6_nz_search.json" `
   2>&1 | Tee-Object -FilePath "$b\_results\logs\nq\graphivf_nq_t120_s32_b4096_iters6_nz_search.log" | Out-Null
 Write-Output "DONE exit=$LASTEXITCODE"

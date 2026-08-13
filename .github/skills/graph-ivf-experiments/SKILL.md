@@ -15,7 +15,8 @@ applicable stage reference before doing that stage.
 |---|---|---|
 | Corpora, queries, groundtruth, saved indexes | `<data-root>/<dataset>/` | No — outside the repo |
 | Dataset prep tool (`vecprep.py`, `compress_minmax`) | `diskann-graphivf/scripts/dataprep/` | Yes |
-| Benchmark configs | `diskann-benchmark/example/*.json` | Yes |
+| Portable example configs | `diskann-benchmark/example/graph-ivf-*.json` | Yes |
+| Local sweep / churn / runbook configs | `_results/configs/` | **No — untracked** |
 | Runner binary | `target/release/diskann-benchmark.exe` | No (build output) |
 | Run logs + results | `_results/logs/<dataset>/*.{json,log}` | **No — untracked** |
 | Analysis scripts + dataset registry | `_results/scripts/`, `_results/scripts/registry.py` | **No — untracked** |
@@ -103,7 +104,7 @@ cargo build --release -p diskann-benchmark --features graph-ivf
 # One run: config in, JSON out, console tee'd to a log
 $b = "<absolute-repo-root>"
 & "$b\target\release\diskann-benchmark.exe" run `
-    --input-file  "$b\diskann-benchmark\example\<config>.json" `
+    --input-file  "$b\_results\configs\<group>\<config>.json" `
     --output-file "$b\_results\logs\<dataset>\<run>.json" `
     2>&1 | Tee-Object -FilePath "$b\_results\logs\<dataset>\<run>.log" | Out-Null
 Write-Output "DONE exit=$LASTEXITCODE"

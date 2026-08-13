@@ -1,7 +1,17 @@
 # Stage 3 — Benchmark configs
 
-Configs live in `diskann-benchmark/example/` and are the one part of an experiment that is
-version-controlled. The full schema is documented in
+Experiment configs live in the untracked `_results/configs/` tree, grouped by campaign:
+
+| Directory | Contents |
+|---|---|
+| `_results/configs/sweeps/<dataset>/graph-ivf/` | build and search sweeps for one dataset |
+| `_results/configs/sweeps/<dataset>/disk-index/` | matching disk-index baselines |
+| `_results/configs/churn/` | insert/delete churn runs |
+| `_results/configs/msturing/` | streaming BigANN runbook replays |
+
+`diskann-benchmark/example/graph-ivf-*.json` holds only the three small, portable,
+version-controlled examples (static build, online build, search) — keep dataset-specific
+sweep configs out of it. The full schema is documented in
 [`diskann-benchmark/README.md`](../../../../diskann-benchmark/README.md); this covers the
 online graph-IVF conventions.
 
