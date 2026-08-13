@@ -334,9 +334,13 @@ impl OnlineParams {
 /// it buys nothing.
 pub const MIN_CENTROID_SEARCH_L: usize = 128;
 
-/// Default [`SearchParams::centroid_search_alpha`]: half again as many
-/// candidates as clusters requested.
-pub const DEFAULT_CENTROID_SEARCH_ALPHA: f32 = 1.5;
+/// Default [`SearchParams::centroid_search_alpha`].
+///
+/// Chosen by measuring centroid selection against an exact scan over a 30M
+/// streaming runbook: 4.0 holds ~98% of the exactly-nearest clusters from 6k to
+/// 60k clusters, while 1.5 holds only ~63% and costs nearly seven points of
+/// end-to-end recall@50 to save well under a factor of two in latency.
+pub const DEFAULT_CENTROID_SEARCH_ALPHA: f32 = 4.0;
 
 /// Parameters controlling a single search.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -352,6 +356,12 @@ pub struct SearchParams {
     /// cluster counts, sized for the start it silently degrades to a truncated
     /// walk later. Expressing the beam as a multiple of the request keeps the
     /// overshoot proportional at any index size.
+    ///
+    /// Graph-search accuracy tracks this ratio and is otherwise insensitive to
+    /// how many clusters exist, so one value holds across the whole life of an
+    /// index. It is also the parameter recall is most sensitive to: clusters
+    /// missed here are missed before a single point is scanned, and no amount of
+    /// scanning recovers them.
     ///
     /// Must be at least 1.0 — a search list shorter than `nlist` cannot return
     /// `nlist` clusters.

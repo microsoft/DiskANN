@@ -356,7 +356,7 @@ the index's clusters:
   "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
   "num_threads": 1,
   "cluster_fractions": [0.0625, 0.125, 0.25, 0.5, 1.0],
-  "centroid_search_alpha": 1.5,
+  "centroid_search_alpha": 4.0,
   "recall_at": [10, 100],
   "distance": "squared_l2"
 }
@@ -368,10 +368,14 @@ recomputes that value from the current live cluster count at every search stage;
 deletes, splits, and dissolves therefore do not change the requested share of clusters.
 Results retain both `cluster_fraction` and the effective concrete `nlist`.
 
-`centroid_search_alpha` (optional, default `1.5`, must be `>= 1.0`) sizes the centroid
+`centroid_search_alpha` (optional, default `4.0`, must be `>= 1.0`) sizes the centroid
 graph beam as `max(128, ceil(alpha * nlist))`. Because `nlist` is derived per fraction and
 per stage, the beam follows the sweep instead of being pinned to whatever the widest
-fraction or largest index will eventually need.
+fraction or largest index will eventually need. Set
+`"measure_centroid_recall": true` on a runbook search to score selection against an exact
+scan of every live centroid; it costs a full centroid pass per query and is measured
+outside the reported latency. Alpha is the parameter recall is most sensitive to — at 1.5
+only ~63% of the probed clusters are genuinely the nearest, against ~98% at 4.0.
 
 An online runbook source has this shape:
 
@@ -402,7 +406,7 @@ An online runbook source has this shape:
   "search": {
     "queries": "queries.fbin",
     "cluster_fractions": [0.01, 0.05, 0.10, 0.15],
-    "centroid_search_alpha": 1.5,
+    "centroid_search_alpha": 4.0,
     "recall_at": [50]
   }
 }

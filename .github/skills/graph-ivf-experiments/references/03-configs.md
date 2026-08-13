@@ -105,7 +105,7 @@ Loads the saved index and sweeps fractions of its clusters. Never rebuilds.
         "groundtruth": "groundtruth_nozero_recall_1000_query_1000.bin",
         "num_threads": 1,
         "cluster_fractions": [0.002, 0.003, 0.004, 0.005, 0.006, 0.008, 0.01, 0.0125, 0.0175, 0.0225, 0.03, 0.04, 0.05, 0.06],
-        "centroid_search_alpha": 1.5,
+        "centroid_search_alpha": 4.0,
         "recall_at": [50, 1000],
         "distance": "squared_l2"
       }
@@ -127,7 +127,8 @@ schema, input audit, query/truthset subsetting, and long-run validation procedur
 **Fractions are in `(0.0, 1.0]`.** For `C` clusters the runner probes
 `ceil(cluster_fraction * C)` lists and records that effective `nlist`. The centroid beam
 is derived from it as `max(128, ceil(centroid_search_alpha * nlist))`, so it tracks the
-sweep automatically. `centroid_search_alpha` defaults to 1.5 and rarely needs setting.
+sweep automatically. `centroid_search_alpha` defaults to 4.0, measured to retrieve ~98% of
+the exactly-nearest clusters; 1.5 retrieves only ~63% and costs ~7 points of recall@50.
 
 **List every depth in one config.** `"recall_at": [50, 1000]` searches once per cluster
 fraction, to the deepest value, and scores both from that result set — one run instead of

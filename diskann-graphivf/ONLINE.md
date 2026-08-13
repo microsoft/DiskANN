@@ -127,7 +127,7 @@ metric, dimensions, centroid-graph parameters, threads, seed, output prefix, and
       "groundtruth": "groundtruth.bin",
       "num_threads": 1,
       "cluster_fractions": [0.01, 0.025, 0.04, 0.055, 0.07, 0.1, 0.15],
-      "centroid_search_alpha": 1.5,
+      "centroid_search_alpha": 4.0,
       "recall_at": [50, 1000],
       "distance": "squared_l2"
     }
@@ -565,7 +565,7 @@ Search ([`SearchParams`](src/params.rs)):
 | Parameter | Role |
 | --- | --- |
 | `nlist` | Number of nearest centroids (lists) to probe (`≤ num_clusters`). |
-| `centroid_search_alpha` | Centroid-graph search list as a multiple of `nlist`; effective L is `max(128, ceil(alpha * nlist))`. Must be `≥ 1.0`; defaults to 1.5. |
+| `centroid_search_alpha` | Centroid-graph search list as a multiple of `nlist`; effective L is `max(128, ceil(alpha * nlist))`. Must be `≥ 1.0`; defaults to 4.0. |
 
 The beam is a multiple rather than a constant because it is charged to every
 query. On an index that grows, churns, or is swept across cluster fractions, the

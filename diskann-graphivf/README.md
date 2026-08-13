@@ -84,7 +84,7 @@ while scoring candidates with the configured metric.
 | Field | Meaning |
 | --- | --- |
 | `cluster_fractions` | fractions of the index's clusters to probe, in `(0.0, 1.0]` — one search per value |
-| `centroid_search_alpha` | centroid-graph search list as a multiple of `nlist`; defaults to 1.5 |
+| `centroid_search_alpha` | centroid-graph search list as a multiple of `nlist`; defaults to 4.0 |
 | `recall_at` | the `k` recall is measured at — one value, or a list scored from a single search |
 
 For `C` live clusters, the harness computes `nlist = ceil(cluster_fraction · C)`.

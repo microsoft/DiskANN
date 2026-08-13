@@ -22,7 +22,7 @@
                         0.5,
                         1.0
                     ],
-                    "centroid_search_alpha": 1.5,
+                    "centroid_search_alpha": 4.0,
                     "recall_at": 10,
                     "distance": "squared_l2"
                 }
