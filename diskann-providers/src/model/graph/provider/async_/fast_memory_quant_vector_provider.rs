@@ -58,18 +58,8 @@ pub struct FastMemoryQuantVectorProviderAsync {
 type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
 type QueryComputer<'a> = pq::distance::QueryComputer<'a>;
 
-fn effective_pq_metric(metric: Metric) -> Metric {
-    match metric {
-        // Product-PQ query distances use squared L2 as the normalized-cosine approximation.
-        // Store that effective metric so query, random-access, and hybrid pruning agree.
-        Metric::CosineNormalized => Metric::L2,
-        metric => metric,
-    }
-}
-
 impl FastMemoryQuantVectorProviderAsync {
     pub fn new(dist_metric: Metric, max_vectors: usize, pq_chunk_table: FixedChunkPQTable) -> Self {
-        let metric = effective_pq_metric(dist_metric);
         let dim = pq_chunk_table.get_num_chunks();
         let quant_vectors = AlignedMemoryVectorStore::with_capacity(max_vectors, dim);
         let write_locks = (0..max_vectors.div_ceil(WRITE_LOCK_GRANULARITY))
@@ -82,7 +72,7 @@ impl FastMemoryQuantVectorProviderAsync {
             quant_vectors,
             write_locks,
             pq_chunk_table: Arc::new(pq_chunk_table),
-            metric,
+            metric: dist_metric,
             num_get_calls: TestCallCount::default(),
             vec_pool,
         }
@@ -438,7 +428,7 @@ mod tests {
         );
     }
 
-    fn create_test_provider_with_metric(metric: Metric) -> FastMemoryQuantVectorProviderAsync {
+    fn create_test_provider() -> FastMemoryQuantVectorProviderAsync {
         let num_points = 5;
         let dim = 2;
 
@@ -451,7 +441,7 @@ mod tests {
         )
         .unwrap();
 
-        let provider = FastMemoryQuantVectorProviderAsync::new(metric, num_points, table);
+        let provider = FastMemoryQuantVectorProviderAsync::new(Metric::L2, num_points, table);
 
         assert_eq!(provider.total(), num_points);
         assert_eq!(provider.full_dim(), dim);
@@ -467,16 +457,6 @@ mod tests {
         }
 
         provider
-    }
-
-    fn create_test_provider() -> FastMemoryQuantVectorProviderAsync {
-        create_test_provider_with_metric(Metric::L2)
-    }
-
-    #[test]
-    fn normalized_cosine_uses_l2_consistently() {
-        let provider = create_test_provider_with_metric(Metric::CosineNormalized);
-        assert_eq!(provider.metric(), Metric::L2);
     }
 
     #[test]
@@ -521,7 +501,6 @@ mod tests {
         original: &FastMemoryQuantVectorProviderAsync,
         reloaded: &FastMemoryQuantVectorProviderAsync,
     ) {
-        assert_eq!(original.metric(), reloaded.metric());
         assert_eq!(original.total(), reloaded.total());
         assert_eq!(original.full_dim(), reloaded.full_dim());
         assert_eq!(original.pq_chunks(), reloaded.pq_chunks());
@@ -581,27 +560,6 @@ mod tests {
         let reloaded = Provider::load_direct(&storage, pivots, data, provider.metric).unwrap();
 
         check_providers_equal(&provider, &reloaded);
-    }
-
-    #[test]
-    fn test_normalized_cosine_direct_save_load() {
-        type Provider = FastMemoryQuantVectorProviderAsync;
-
-        let storage = VirtualStorageProvider::new_memory();
-        let provider = create_test_provider_with_metric(Metric::CosineNormalized);
-        assert_eq!(provider.metric(), Metric::L2);
-
-        let pivots = "/cosine-pivots.bin";
-        let data = "/cosine-data.bin";
-        provider.save_direct(&storage, pivots, data).unwrap();
-
-        // Index metadata retains the requested metric, so loading must apply the same
-        // Product-PQ effective-metric mapping as initial construction.
-        let reloaded =
-            Provider::load_direct(&storage, pivots, data, Metric::CosineNormalized).unwrap();
-
-        check_providers_equal(&provider, &reloaded);
-        assert_eq!(reloaded.metric(), Metric::L2);
     }
 
     // Test Saving and Loading.

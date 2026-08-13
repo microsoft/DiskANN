@@ -50,7 +50,12 @@ impl CreateVectorStore for FixedChunkPQTable {
         metric: Metric,
         _prefetch_lookahead: Option<usize>,
     ) -> Self::Target {
-        DefaultQuant::new(metric, max_points, self)
+        let pq_metric = match metric {
+            Metric::CosineNormalized => Metric::L2,
+            metric => metric,
+        };
+
+        DefaultQuant::new(pq_metric, max_points, self)
     }
 }
 
@@ -655,7 +660,7 @@ mod tests {
 
     use crate::model::{
         graph::provider::async_::{
-            FastMemoryQuantVectorProviderAsync,
+            common::CreateVectorStore,
             distances::pq::{Hybrid, HybridComputer},
         },
         pq::FixedChunkPQTable,
@@ -672,8 +677,7 @@ mod tests {
 
     #[test]
     fn normalized_cosine_query_and_hybrid_pruning_use_squared_l2() {
-        let quant =
-            FastMemoryQuantVectorProviderAsync::new(Metric::CosineNormalized, 2, test_table());
+        let quant = test_table().create(2, Metric::CosineNormalized, None);
         let full0 = [1u8, 0, 0, 2];
         let full1 = [2u8, 0, 0, 1];
         let code0 = [0u8, 1];
