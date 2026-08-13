@@ -597,7 +597,7 @@ where
 
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
-/// approximate search, so the post-processing step includes a [`Rerank`] stage.
+/// approximate search, so the post-processing step includes a `Rerank` stage.
 impl<'a, const NBITS: usize, D, Ctx, T>
     SearchStrategy<'a, FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
@@ -636,7 +636,7 @@ where
 
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
-/// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
+/// post-processing step just copies candidate IDs forward via `RemoveDeletedIdsAndCopy`.
 impl<'a, const NBITS: usize, D, Ctx, T>
     SearchStrategy<'a, DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
