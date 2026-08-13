@@ -10,13 +10,41 @@ use diskann_vector::PreprocessedDistanceFunction;
 use tokio::runtime::Runtime;
 
 use super::OnlineClusterer;
-use crate::{params::SearchParams, GraphIvfError, Result};
+use crate::{cluster::sq_l2, params::SearchParams, GraphIvfError, Result};
 
 /// Work performed by one in-memory online query.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OnlineSearchStats {
     /// Corpus vectors scored across the probed inverted lists.
     pub points_scanned: usize,
+}
+
+/// How closely the centroid graph reproduced an exact centroid ranking for one
+/// query.
+///
+/// Separates the two ways a probe can miss: the graph selected the wrong
+/// clusters, or it selected the right ones and they did not hold the neighbors.
+/// Only the first is a search-quality problem.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CentroidRecall {
+    /// Clusters asked for, i.e. [`SearchParams::nlist`].
+    pub requested: usize,
+    /// Clusters the centroid graph actually returned. Falls short of
+    /// `requested` only if the walk could not reach that many.
+    pub retrieved: usize,
+    /// Retrieved clusters that are genuinely among the nearest `requested`.
+    pub matched: usize,
+}
+
+impl CentroidRecall {
+    /// [`matched`](Self::matched) as a fraction of
+    /// [`requested`](Self::requested), in `0.0..=1.0`.
+    pub fn recall(&self) -> f32 {
+        if self.requested == 0 {
+            return 1.0;
+        }
+        self.matched as f32 / self.requested as f32
+    }
 }
 
 /// A single-threaded query handle into a live [`OnlineClusterer`].
@@ -109,25 +137,8 @@ impl<'a> OnlineSearcher<'a> {
         if k == 0 {
             return Err(GraphIvfError::invalid("k must be non-zero"));
         }
-        if query.len() != clusterer.dim {
-            return Err(GraphIvfError::invalid(format!(
-                "query has dim {} but index has dim {}",
-                query.len(),
-                clusterer.dim
-            )));
-        }
-
-        self.cids.clear();
-        self.cids.resize(params.nlist, 0);
-        self.cdist.clear();
-        self.cdist.resize(params.nlist, 0.0);
-        let found = clusterer.centroids.search(
-            &self.runtime,
-            query,
-            params.effective_l(),
-            &mut self.cids,
-            &mut self.cdist,
-        )?;
+        self.check_dim(query)?;
+        let found = self.select_centroids(query, params)?;
 
         let scorer = f32::query_distance(query, clusterer.params.metric.search_metric());
         results.clear();
@@ -148,5 +159,83 @@ impl<'a> OnlineSearcher<'a> {
         }
         results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         Ok(OnlineSearchStats { points_scanned })
+    }
+
+    /// Score the centroids `params` selects for `query` against an exact scan of
+    /// every live centroid.
+    ///
+    /// Costs one full pass over the centroid table per call, so this is a
+    /// diagnostic and not something to run on a query path. It answers whether
+    /// a given [`centroid_search_alpha`](SearchParams::centroid_search_alpha) is
+    /// wide enough for the graph as it stands — which is a property of the graph
+    /// too, not just of the beam, and drifts as splits and merges churn it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `query` has the wrong dimension, `params` is invalid
+    /// for the current cluster count, or centroid-graph navigation fails.
+    pub fn centroid_recall(
+        &mut self,
+        query: &[f32],
+        params: &SearchParams,
+    ) -> Result<CentroidRecall> {
+        let clusterer = self.clusterer;
+        params.validate(clusterer.num_clusters())?;
+        self.check_dim(query)?;
+        let found = self.select_centroids(query, params)?;
+
+        // `validate` already established that at least `nlist` clusters are
+        // live, so the exact cutoff exists.
+        let cutoff = clusterer
+            .centroids
+            .kth_nearest_distance(query, params.nlist)
+            .ok_or_else(|| {
+                GraphIvfError::invalid(format!(
+                    "fewer than {} live centroids for an exact ranking",
+                    params.nlist
+                ))
+            })?;
+        let matched = self.cids[..found]
+            .iter()
+            .filter(|&&cid| {
+                clusterer
+                    .centroids
+                    .get(cid)
+                    .is_some_and(|c| sq_l2(query, c) <= cutoff)
+            })
+            .count();
+
+        Ok(CentroidRecall {
+            requested: params.nlist,
+            retrieved: found,
+            matched,
+        })
+    }
+
+    fn check_dim(&self, query: &[f32]) -> Result<()> {
+        if query.len() != self.clusterer.dim {
+            return Err(GraphIvfError::invalid(format!(
+                "query has dim {} but index has dim {}",
+                query.len(),
+                self.clusterer.dim
+            )));
+        }
+        Ok(())
+    }
+
+    /// Fill `self.cids` / `self.cdist` with the centroids `params` selects and
+    /// return how many the walk actually reached.
+    fn select_centroids(&mut self, query: &[f32], params: &SearchParams) -> Result<usize> {
+        self.cids.clear();
+        self.cids.resize(params.nlist, 0);
+        self.cdist.clear();
+        self.cdist.resize(params.nlist, 0.0);
+        self.clusterer.centroids.search(
+            &self.runtime,
+            query,
+            params.effective_l(),
+            &mut self.cids,
+            &mut self.cdist,
+        )
     }
 }

@@ -131,6 +131,25 @@ impl CentroidTable {
             .filter_map(|(id, slot)| slot.as_ref().map(|_| id as u32))
     }
 
+    /// Squared-L2 distance from `query` to its `k`-th nearest live centroid, or
+    /// `None` if fewer than `k` centroids are live.
+    ///
+    /// This is the exact cutoff the centroid graph is trying to reproduce, so it
+    /// serves as the reference for centroid-selection recall. Comparing against
+    /// a distance rather than an id set counts a tie as correct instead of
+    /// penalizing whichever tie-break the graph happened to take.
+    fn kth_nearest_distance(&self, query: &[f32], k: usize) -> Option<f32> {
+        if k == 0 {
+            return None;
+        }
+        let mut distances: Vec<f32> = self.iter_live().map(|(_, v)| sq_l2(query, v)).collect();
+        if distances.len() < k {
+            return None;
+        }
+        let (_, kth, _) = distances.select_nth_unstable_by(k - 1, f32::total_cmp);
+        Some(*kth)
+    }
+
     /// Brute-force nearest live centroid to `point` by squared-L2, or `None` if
     /// no live centroid exists.
     fn nearest(&self, point: &[f32]) -> Option<u32> {
@@ -213,6 +232,10 @@ impl CentroidRegistry {
 
     pub(super) fn nearest(&self, point: &[f32]) -> Option<u32> {
         self.table.nearest(point)
+    }
+
+    pub(super) fn kth_nearest_distance(&self, query: &[f32], k: usize) -> Option<f32> {
+        self.table.kth_nearest_distance(query, k)
     }
 
     pub(super) fn densify(&self) -> Result<(Vec<u32>, Matrix<f32>)> {

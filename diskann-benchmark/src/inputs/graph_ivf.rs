@@ -401,6 +401,15 @@ pub(crate) struct GraphIvfRunbookSearch {
     #[serde(default = "default_centroid_search_alpha")]
     pub(crate) centroid_search_alpha: f32,
     pub(crate) recall_at: RecallAt,
+    /// Also score each sweep's centroid selection against an exact scan of
+    /// every live centroid.
+    ///
+    /// This separates a bad probe from a bad partition: end-to-end recall drops
+    /// both when the graph picks the wrong clusters and when the right clusters
+    /// do not hold the neighbors, and only the former is fixed by widening the
+    /// beam. Off by default because it costs a full centroid pass per query.
+    #[serde(default)]
+    pub(crate) measure_centroid_recall: bool,
     /// Worker threads per sweep, each with its own searcher. Defaults to one so
     /// that configs written before this knob existed keep their timings.
     #[serde(default = "one_thread")]
@@ -416,7 +425,7 @@ const fn one_thread() -> usize {
 /// `diskann_graphivf::DEFAULT_CENTROID_SEARCH_ALPHA` (the `inputs` layer is
 /// compiled without that optional dependency, so it cannot name the constant).
 const fn default_centroid_search_alpha() -> f32 {
-    1.5
+    4.0
 }
 
 /// Serializable mirror of `diskann_graphivf::AssignMethod` (the benchmark's
@@ -937,6 +946,7 @@ impl fmt::Display for GraphIvfRunbookSearch {
         write_field!(f, "Cluster Fractions", CommaList(&self.cluster_fractions))?;
         write_field!(f, "Centroid Alpha", self.centroid_search_alpha)?;
         write_field!(f, "Recall@", self.recall_at)?;
+        write_field!(f, "Centroid Recall", self.measure_centroid_recall)?;
         write_field!(f, "Threads", self.num_threads)?;
         Ok(())
     }

@@ -76,7 +76,7 @@ mod telemetry;
 
 use state::{CentroidRegistry, CentroidTable, DetachedPoint, IvfPartition};
 
-pub use search::{OnlineSearchStats, OnlineSearcher};
+pub use search::{CentroidRecall, OnlineSearchStats, OnlineSearcher};
 pub use seed::SeedStrategy;
 pub use telemetry::{BuildTelemetry, MergeEvent, SplitEvent};
 

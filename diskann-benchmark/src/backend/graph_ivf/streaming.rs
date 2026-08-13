@@ -76,6 +76,13 @@ pub(super) struct GraphIvfRunbookSearchResult {
     /// Mean cost of one query, measured around each query individually so that
     /// it stays comparable no matter how many threads ran the sweep.
     pub(super) mean_latency: MicroSeconds,
+    /// Mean fraction of the probed clusters that were genuinely the nearest
+    /// ones, as a percentage. `None` unless `measure_centroid_recall` is set.
+    ///
+    /// Anything below 100 is recall this sweep lost before scanning a single
+    /// point, and no amount of scanning gets it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) centroid_recall: Option<f32>,
 }
 
 /// Size distribution of the live inverted lists after a stage.
@@ -286,6 +293,9 @@ impl fmt::Display for GraphIvfRunbookStats {
                     r.pct_scanned,
                     r.mean_latency.as_seconds() * 1e6
                 )?;
+                if let Some(centroid) = r.centroid_recall {
+                    write!(f, "  centroid={centroid:.2}%")?;
+                }
             }
             writeln!(f)?;
         }
@@ -512,13 +522,17 @@ impl GraphIvfStream<'_> {
                 .collect::<Vec<_>>()
                 .join(" ");
             println!(
-                "    f={:<6.4} nlist={:<7} {}  scanned {:>9} ({:>5.2}%)  {:>8.2}ms/query",
+                "    f={:<6.4} nlist={:<7} {}  scanned {:>9} ({:>5.2}%)  {:>8.2}ms/query{}",
                 result.cluster_fraction,
                 result.nlist,
                 recalls,
                 result.mean_points_scanned,
                 result.pct_scanned,
                 result.mean_latency.as_seconds() * 1000.0,
+                result
+                    .centroid_recall
+                    .map(|r| format!("  centroid={r:.2}%"))
+                    .unwrap_or_default(),
             );
         }
     }
@@ -557,6 +571,9 @@ impl GraphIvfStream<'_> {
             let first_error = Mutex::new(None::<String>);
             let scanned = AtomicU64::new(0);
             let latency_ns = AtomicU64::new(0);
+            // Summed as a count rather than a mean so the accumulation stays
+            // integral and order-independent across workers.
+            let centroids_matched = AtomicU64::new(0);
 
             self.queries
                 .as_slice()
@@ -597,6 +614,21 @@ impl GraphIvfStream<'_> {
                             }
                         }
                         latency_ns.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
+                        // Measured after the timed region: an exact centroid
+                        // scan costs far more than the query it is scoring, and
+                        // must not land in the reported latency.
+                        if search.measure_centroid_recall {
+                            match searcher.centroid_recall(q, &params) {
+                                Ok(centroid) => {
+                                    centroids_matched
+                                        .fetch_add(centroid.matched as u64, Ordering::Relaxed);
+                                }
+                                Err(error) => {
+                                    record_first_error(&first_error, format!("{error:#}"));
+                                }
+                            }
+                        }
                     },
                 );
 
@@ -620,6 +652,11 @@ impl GraphIvfStream<'_> {
                 mean_latency: MicroSeconds::new(
                     latency_ns.load(Ordering::Relaxed) / queries / 1000,
                 ),
+                centroid_recall: search.measure_centroid_recall.then(|| {
+                    let requested = queries * nlist as u64;
+                    100.0 * centroids_matched.load(Ordering::Relaxed) as f32
+                        / requested.max(1) as f32
+                }),
             });
         }
         Ok(results)
@@ -843,6 +880,9 @@ mod tests {
                     cluster_fractions: vec![ClusterFraction::new(1.0)],
                     centroid_search_alpha: 1.5,
                     recall_at: RecallAt::new(vec![5, RECALL_AT as u32]),
+                    // Exhaustive probing makes centroid recall trivially 1.0,
+                    // which is exactly what the test wants to pin down.
+                    measure_centroid_recall: true,
                     num_threads: 2,
                 },
             }

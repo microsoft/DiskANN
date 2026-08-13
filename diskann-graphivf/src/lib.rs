@@ -61,8 +61,8 @@ pub use diskann_vector::Half;
 pub use error::{GraphIvfError, Result};
 pub use index::{CentroidInit, GraphIvfIndex, Searcher};
 pub use online::{
-    BuildTelemetry, MergeEvent, OnlineClusterer, OnlineSearchStats, OnlineSearcher, SeedStrategy,
-    SplitEvent,
+    BuildTelemetry, CentroidRecall, MergeEvent, OnlineClusterer, OnlineSearchStats, OnlineSearcher,
+    SeedStrategy, SplitEvent,
 };
 pub use params::{
     AssignMethod, BuildParams, EmptyClusterPolicy, GraphParams, Metric, OnlineParams, SearchParams,

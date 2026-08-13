@@ -251,6 +251,53 @@ fn many_splits_preserve_invariants_and_bound_residual() {
 }
 
 #[test]
+fn centroid_recall_scores_selection_against_an_exact_scan() {
+    // Enough splits that the centroid graph carries retired parents and its
+    // walk is genuinely approximate, which is the case worth measuring.
+    let mut rng = StdRng::seed_from_u64(11);
+    let (nn, dim) = (600usize, 8usize);
+    let mut v = vec![0.0f32; nn * dim];
+    for x in v.iter_mut() {
+        *x = rng.random_range(-1.0..1.0);
+    }
+    let points = mat(v, nn, dim);
+    let mut ib = vec![0.0f32; 4 * dim];
+    for i in 0..4 {
+        ib[i * dim..(i + 1) * dim].copy_from_slice(points.row(rng.random_range(0..nn)));
+    }
+
+    let mut c = OnlineClusterer::new(points.clone(), mat(ib, 4, dim), params(64, 40)).unwrap();
+    for pid in 0..nn as u32 {
+        c.insert_batch(&[pid]).unwrap();
+    }
+    let num_clusters = c.num_clusters();
+    assert!(num_clusters > 4, "expected some splits to occur");
+
+    let query = points.row(0).to_vec();
+    let mut searcher = c.searcher().unwrap();
+
+    // Probing every cluster puts the whole graph inside the beam, so selection
+    // is exact — which also pins that every live centroid stays reachable
+    // despite the retired parents left behind by splitting.
+    let all = searcher
+        .centroid_recall(&query, &SearchParams::new(num_clusters))
+        .unwrap();
+    assert_eq!(all.requested, num_clusters);
+    assert_eq!(all.retrieved, num_clusters);
+    assert_eq!(all.matched, num_clusters);
+
+    // A narrow probe is scored against the same exact reference, so it can only
+    // lose ground, never invent it.
+    let few = searcher
+        .centroid_recall(&query, &SearchParams::new(4))
+        .unwrap();
+    assert_eq!(few.requested, 4);
+    assert!(few.retrieved <= 4);
+    assert!(few.matched <= few.retrieved);
+    assert!((0.0..=1.0).contains(&few.recall()));
+}
+
+#[test]
 fn uncapped_splits_until_threshold_equilibrium() {
     // `max_clusters: None` removes the live-cluster ceiling: splitting is
     // driven purely by the threshold and continues for every point, so the
