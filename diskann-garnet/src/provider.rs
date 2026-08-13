@@ -647,6 +647,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     // NOTE: This return is unrecoverable in the current design, as there is no way
                     // to signal that backfill has failed. The index will operate on full precision
                     // vectors only from now on.
+                    self.callbacks.log(
+                        &context.term(Term::Quantized),
+                        "Error quantizing start point; failed to finish backfill. Index will operate full precision only mode.",
+                    );
                     return;
                 };
                 self.start_point_quant_cache.insert(0, point);
@@ -665,6 +669,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
             ) {
                 // NOTE: This return is unrecoverable in the current design, as there is no way to
                 // signal that backfill failed.
+                self.callbacks.log(
+                    &context.term(Term::Quantized),
+                    "Error saving quantizer state; failed to finish backfill. Index will operate full precision only mode.",
+                );
                 return;
             }
 

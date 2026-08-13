@@ -29,7 +29,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
-    garnet::FilterCallback,
+    garnet::{FilterCallback, LogCallback},
     provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
@@ -236,6 +236,7 @@ pub unsafe extern "C" fn create_index(
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
     filter_callback: FilterCallback,
+    log_callback: LogCallback,
     quantization_needed: *mut bool,
 ) -> *const c_void {
     unsafe { *quantization_needed = false };
@@ -267,6 +268,7 @@ pub unsafe extern "C" fn create_index(
         delete_callback,
         rmw_callback,
         filter_callback,
+        log_callback,
     );
 
     match quant_type {
@@ -995,6 +997,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -1027,6 +1030,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -1086,6 +1090,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -1156,6 +1161,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -1347,6 +1353,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };

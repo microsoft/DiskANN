@@ -8,11 +8,15 @@ use core::slice;
 use dashmap::DashMap;
 use std::{
     ffi::c_void,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 thread_local! {
     pub static STORE: DashMap<Vec<u8>, Vec<u8>> = DashMap::new();
+    pub static LOGS: Mutex<Vec<(u64, String)>> = const { Mutex::new(Vec::new()) };
     pub static FULL_READS: AtomicUsize = const { AtomicUsize::new(0) };
     pub static QUANT_READS: AtomicUsize = const { AtomicUsize::new(0) };
 }
@@ -36,11 +40,22 @@ impl Store {
     }
 
     pub fn callbacks(&self) -> Callbacks {
-        Callbacks::new(test_read, test_write, test_delete, test_rmw, test_filter)
+        Callbacks::new(
+            test_read,
+            test_write,
+            test_delete,
+            test_rmw,
+            test_filter,
+            test_log,
+        )
     }
 
     pub fn clear(&self) {
         STORE.with(|s| s.clear());
+        LOGS.with(|l| {
+            let mut guard = l.lock().unwrap();
+            guard.clear();
+        });
         FULL_READS.with(|fr| fr.store(0, Ordering::Release));
         QUANT_READS.with(|qr| qr.store(0, Ordering::Release));
     }
@@ -95,6 +110,13 @@ impl Store {
 
     pub fn quant_reads(&self) -> usize {
         QUANT_READS.with(|qr| qr.load(Ordering::Acquire))
+    }
+
+    pub fn log(&self, context: u64, msg: &str) {
+        LOGS.with(|l| {
+            let mut guard = l.lock().unwrap();
+            guard.push((context, msg.to_owned()));
+        });
     }
 }
 
@@ -178,6 +200,13 @@ unsafe extern "C" fn test_rmw(
 
 unsafe extern "C" fn test_filter(_context: u64, _internal_id: u32) -> bool {
     true
+}
+
+unsafe extern "C" fn test_log(context: u64, msg: *const u8, msg_len: usize) {
+    let store = Store::attach();
+    let msg_slice = unsafe { slice::from_raw_parts(msg, msg_len) };
+    let msg = str::from_utf8(msg_slice).unwrap();
+    store.log(context, msg)
 }
 
 mod tests {

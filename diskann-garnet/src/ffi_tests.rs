@@ -60,6 +60,7 @@ mod tests {
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
+                callbacks.log_callback(),
                 &mut quant_needed,
             )
         };

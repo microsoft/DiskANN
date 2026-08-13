@@ -86,6 +86,7 @@ pub(crate) type ReadModifyWriteCallback =
 pub(crate) type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
 pub(crate) type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
 pub(crate) type FilterCallback = unsafe extern "C" fn(u64, u32) -> bool;
+pub(crate) type LogCallback = unsafe extern "C" fn(u64, *const u8, usize);
 
 #[derive(Copy, Clone)]
 pub(crate) struct Callbacks {
@@ -94,6 +95,7 @@ pub(crate) struct Callbacks {
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
     filter_callback: FilterCallback,
+    log_callback: LogCallback,
 }
 
 impl Callbacks {
@@ -103,6 +105,7 @@ impl Callbacks {
         delete_callback: DeleteCallback,
         rmw_callback: ReadModifyWriteCallback,
         filter_callback: FilterCallback,
+        log_callback: LogCallback,
     ) -> Self {
         Self {
             read_callback,
@@ -110,6 +113,7 @@ impl Callbacks {
             delete_callback,
             rmw_callback,
             filter_callback,
+            log_callback,
         }
     }
 
@@ -136,6 +140,11 @@ impl Callbacks {
     #[cfg(test)]
     pub(crate) fn filter_callback(&self) -> FilterCallback {
         self.filter_callback
+    }
+
+    #[cfg(test)]
+    pub(crate) fn log_callback(&self) -> LogCallback {
+        self.log_callback
     }
 
     #[cfg(test)]
@@ -491,6 +500,15 @@ impl Callbacks {
     #[must_use]
     pub(crate) fn matches_filter(&self, ctx: &Context, id: u32) -> bool {
         unsafe { (self.filter_callback)(ctx.inner, id) }
+    }
+
+    /// Log a message to Garnet.
+    ///
+    /// The context bits can be set with appropriate `Term` to flag which area the log message concerns.
+    pub(crate) fn log(&self, ctx: &Context, msg: &str) {
+        unsafe {
+            (self.log_callback)(ctx.inner, msg.as_ptr(), msg.len());
+        }
     }
 }
 
