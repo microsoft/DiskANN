@@ -131,6 +131,27 @@ macro_rules! aarch64_define_register {
     };
 }
 
+macro_rules! aarch64_interleaved_loadstore {
+    ($type:ty, $stride:literal, $load:ident, $store:ident, $unpack:expr, $pack:expr) => {
+        impl crate::InterleavedLoadStore<$stride> for $type {
+            #[inline(always)]
+            unsafe fn load_deinterleaved(
+                arch: Self::Arch,
+                ptr: *const Self::Scalar,
+            ) -> [Self; $stride] {
+                // SAFETY: The caller guarantees the complete interleaved input is readable.
+                ($unpack)(arch, unsafe { $load(ptr) })
+            }
+
+            #[inline(always)]
+            unsafe fn store_interleaved(vectors: [Self; $stride], ptr: *mut Self::Scalar) {
+                // SAFETY: The caller guarantees the complete interleaved output is writable.
+                unsafe { $store(ptr, ($pack)(vectors)) };
+            }
+        }
+    };
+}
+
 pub(super) trait AArchSplat: SIMDVector {
     fn aarch_splat(arch: <Self as SIMDVector>::Arch, value: <Self as SIMDVector>::Scalar) -> Self;
 
@@ -568,6 +589,7 @@ pub(crate) use aarch64_define_fma;
 pub(crate) use aarch64_define_loadstore;
 pub(crate) use aarch64_define_register;
 pub(crate) use aarch64_define_splat;
+pub(crate) use aarch64_interleaved_loadstore;
 pub(crate) use aarch64_splitjoin;
 
 /// Implement [`ZipUnzip`] for a [`Doubled`] type using Neon zip/unzip intrinsics.

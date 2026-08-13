@@ -68,6 +68,28 @@ where
     fn as_simd(self, arch: T::Arch) -> T;
 }
 
+/// Load and store SIMD vectors whose lanes are interleaved in memory.
+pub trait InterleavedLoadStore<const N: usize>: SIMDVector {
+    /// Load `N` vectors by deinterleaving `N * Self::LANES` consecutive elements.
+    ///
+    /// There are no alignment requirements on `ptr`.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to read `N * Self::LANES` consecutive elements.
+    unsafe fn load_deinterleaved(arch: Self::Arch, ptr: *const Self::Scalar) -> [Self; N];
+
+    /// Store `N` vectors as `N * Self::LANES` interleaved consecutive elements.
+    ///
+    /// There are no alignment requirements on `ptr`.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid to write `N * Self::LANES` consecutive elements and the
+    /// pointed-to memory must satisfy Rust's aliasing rules.
+    unsafe fn store_interleaved(vectors: [Self; N], ptr: *mut Self::Scalar);
+}
+
 /// A logical mask for SIMD operations.
 ///
 /// The representation of this type varies between architectures and micro-architectures.
