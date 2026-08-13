@@ -393,9 +393,13 @@ pub(crate) struct GraphIvfRunbookSearch {
     /// Fractions of the current live clusters to probe — one sweep per value,
     /// recomputed at every search stage.
     pub(crate) cluster_fractions: Vec<ClusterFraction>,
-    /// Search-list size for centroid graph search. The effective value is at
-    /// least the concrete `nlist` computed for each fraction.
-    pub(crate) centroid_search_l: usize,
+    /// Centroid-graph search list as a multiple of each sweep's `nlist`.
+    ///
+    /// A runbook grows and shrinks the index by orders of magnitude, so the
+    /// `nlist` behind a fixed fraction moves with it and no constant beam fits
+    /// the whole replay. Defaults to the library's oversampling factor.
+    #[serde(default = "default_centroid_search_alpha")]
+    pub(crate) centroid_search_alpha: f32,
     pub(crate) recall_at: RecallAt,
     /// Worker threads per sweep, each with its own searcher. Defaults to one so
     /// that configs written before this knob existed keep their timings.
@@ -406,6 +410,13 @@ pub(crate) struct GraphIvfRunbookSearch {
 /// Backwards-compatible default for [`GraphIvfRunbookSearch::num_threads`].
 const fn one_thread() -> usize {
     1
+}
+
+/// Default centroid oversampling factor, mirroring
+/// `diskann_graphivf::DEFAULT_CENTROID_SEARCH_ALPHA` (the `inputs` layer is
+/// compiled without that optional dependency, so it cannot name the constant).
+const fn default_centroid_search_alpha() -> f32 {
+    1.5
 }
 
 /// Serializable mirror of `diskann_graphivf::AssignMethod` (the benchmark's
@@ -446,9 +457,9 @@ pub(crate) struct GraphIvfSearchPhase {
     pub(crate) num_threads: usize,
     /// Fractions of the index's clusters to probe — one search sweep per value.
     pub(crate) cluster_fractions: Vec<ClusterFraction>,
-    /// Search-list size for centroid graph search. The effective value is at
-    /// least the concrete `nlist` computed for each fraction.
-    pub(crate) centroid_search_l: usize,
+    /// Centroid-graph search list as a multiple of each sweep's `nlist`.
+    #[serde(default = "default_centroid_search_alpha")]
+    pub(crate) centroid_search_alpha: f32,
     pub(crate) recall_at: RecallAt,
     pub(crate) distance: SimilarityMeasure,
 }
@@ -643,11 +654,11 @@ impl GraphIvfOnlineBuild {
 }
 
 /// Shared validation for all search configs that have cluster fractions,
-/// `centroid_search_l`, and `recall_at`. Called by both
+/// `centroid_search_alpha`, and `recall_at`. Called by both
 /// [`GraphIvfRunbookSearch`] and [`GraphIvfSearchPhase`].
 fn validate_cluster_fractions_and_recall(
     cluster_fractions: &[ClusterFraction],
-    centroid_search_l: usize,
+    centroid_search_alpha: f32,
     recall_at: &mut RecallAt,
 ) -> Result<(), anyhow::Error> {
     if cluster_fractions.is_empty() {
@@ -656,8 +667,11 @@ fn validate_cluster_fractions_and_recall(
     for &fraction in cluster_fractions {
         fraction.validate()?;
     }
-    if centroid_search_l == 0 {
-        anyhow::bail!("centroid_search_l must be positive");
+    // Rejects NaN too; a beam shorter than nlist cannot return nlist clusters.
+    if !centroid_search_alpha.is_finite() || centroid_search_alpha < 1.0 {
+        anyhow::bail!(
+            "centroid_search_alpha ({centroid_search_alpha}) must be finite and at least 1.0"
+        );
     }
     recall_at.validate()
 }
@@ -711,7 +725,7 @@ impl GraphIvfRunbookSearch {
             .context("invalid queries file")?;
         validate_cluster_fractions_and_recall(
             &self.cluster_fractions,
-            self.centroid_search_l,
+            self.centroid_search_alpha,
             &mut self.recall_at,
         )?;
         if self.num_threads == 0 {
@@ -731,7 +745,7 @@ impl GraphIvfSearchPhase {
             .context("invalid groundtruth file")?;
         validate_cluster_fractions_and_recall(
             &self.cluster_fractions,
-            self.centroid_search_l,
+            self.centroid_search_alpha,
             &mut self.recall_at,
         )?;
         if self.num_threads == 0 {
@@ -776,7 +790,7 @@ impl Example for GraphIvfOperation {
                 ClusterFraction::new(0.05),
                 ClusterFraction::new(0.1),
             ],
-            centroid_search_l: 64,
+            centroid_search_alpha: default_centroid_search_alpha(),
             recall_at: RecallAt::new(vec![10]),
             distance: SimilarityMeasure::SquaredL2,
         };
@@ -921,7 +935,7 @@ impl fmt::Display for GraphIvfRunbookSearch {
         writeln!(f, "Graph-IVF Runbook Search")?;
         write_field!(f, "Queries", self.queries.display())?;
         write_field!(f, "Cluster Fractions", CommaList(&self.cluster_fractions))?;
-        write_field!(f, "Centroid L", self.centroid_search_l)?;
+        write_field!(f, "Centroid Alpha", self.centroid_search_alpha)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
         Ok(())
@@ -934,7 +948,7 @@ impl fmt::Display for GraphIvfSearchPhase {
         write_field!(f, "Queries", self.queries.display())?;
         write_field!(f, "Groundtruth", self.groundtruth.display())?;
         write_field!(f, "Cluster Fractions", CommaList(&self.cluster_fractions))?;
-        write_field!(f, "Centroid L", self.centroid_search_l)?;
+        write_field!(f, "Centroid Alpha", self.centroid_search_alpha)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
         write_field!(f, "Distance", self.distance)?;
@@ -1359,7 +1373,7 @@ mod tests {
             "groundtruth": "groundtruth.bin",
             "num_threads": 1,
             "cluster_fractions": [0.01, 0.25, 1.0],
-            "centroid_search_l": 64,
+            "centroid_search_alpha": 2.0,
             "recall_at": [50, 1000],
             "distance": "squared_l2"
         });
@@ -1372,11 +1386,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0.01, 0.25, 1.0]
         );
+        assert_eq!(parsed.centroid_search_alpha, 2.0);
+
+        // Omitting the multiplier falls back to the library default.
+        let object = value.as_object_mut().unwrap();
+        object.remove("centroid_search_alpha");
+        let parsed: GraphIvfSearchPhase = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            parsed.centroid_search_alpha,
+            default_centroid_search_alpha()
+        );
 
         let object = value.as_object_mut().unwrap();
         let fractions = object.remove("cluster_fractions").unwrap();
         object.insert("nlist".to_string(), fractions);
         let error = serde_json::from_value::<GraphIvfSearchPhase>(value).unwrap_err();
         assert!(error.to_string().contains("unknown field `nlist`"));
+    }
+
+    #[test]
+    fn centroid_search_alpha_must_leave_room_for_nlist() {
+        let mut recall = RecallAt::new(vec![10]);
+        let fractions = [ClusterFraction::new(0.1)];
+        assert!(
+            validate_cluster_fractions_and_recall(&fractions, 1.0, &mut recall).is_ok(),
+            "an alpha of exactly 1.0 requests nlist candidates, which is legal"
+        );
+        for bad in [0.5, f32::NAN, f32::INFINITY] {
+            assert!(
+                validate_cluster_fractions_and_recall(&fractions, bad, &mut recall).is_err(),
+                "alpha {bad} should be rejected"
+            );
+        }
     }
 }

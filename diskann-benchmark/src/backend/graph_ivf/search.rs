@@ -87,7 +87,7 @@ pub(super) struct GraphIvfSearchStats {
     pub(super) num_threads: usize,
     pub(super) recall_at: Vec<u32>,
     pub(super) distance: SimilarityMeasure,
-    pub(super) centroid_search_l: usize,
+    pub(super) centroid_search_alpha: f32,
     pub(super) search_results_per_nlist: Vec<GraphIvfSearchResult>,
 }
 
@@ -219,7 +219,7 @@ where
         let nlist = cluster_fraction.nlist(num_clusters);
         let params = SearchParams {
             nlist,
-            centroid_search_l: search_params.centroid_search_l,
+            centroid_search_alpha: search_params.centroid_search_alpha,
         };
 
         let mut result_ids: Vec<u32> = vec![0; k_max * num_queries];
@@ -361,7 +361,7 @@ where
         num_threads: search_params.num_threads,
         recall_at: recall_at.iter().collect(),
         distance: search_params.distance,
-        centroid_search_l: search_params.centroid_search_l,
+        centroid_search_alpha: search_params.centroid_search_alpha,
         search_results_per_nlist,
     })
 }

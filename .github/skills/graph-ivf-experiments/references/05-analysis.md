@@ -23,9 +23,9 @@ anything new** — a filename only the author can decode goes stale silently.
 | `ios_and_bytes_at(rows, key)` | interpolate to the 90% recall target, clamped if unattained |
 
 `Run.params` flattens the job source plus `recall_at` (always a list, even for a run that
-measured one depth), `search_num_threads` and
-`search_centroid_search_l`, so runs are selected by *what they were*, not what they were
-named.
+measured one depth), `search_num_threads`, and the centroid-beam setting
+(`search_centroid_search_alpha`, or `search_centroid_search_l` for runs predating it), so
+runs are selected by *what they were*, not what they were named.
 
 **Spec shapes** accepted by `variant_rows`:
 

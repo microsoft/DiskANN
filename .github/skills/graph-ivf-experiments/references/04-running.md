@@ -97,8 +97,10 @@ Expected shapes — a deviation is a bug, not a finding:
 - **I/O count ≈ `nlist`** (sometimes `nlist - 1`). Each probed list is one read.
 - **Bytes read grows linearly in `nlist`.** Multiple recall depths scored from one result
   buffer share the same I/O measurements.
-- **Centroid search time is flat** across `nlist` only while
-  `centroid_search_l >= nlist`; the effective beam is `max(centroid_search_l, nlist)`.
+- **Centroid search time grows with `nlist`**, since the beam is
+  `max(128, ceil(centroid_search_alpha * nlist))`. It is flat only across the low end where
+  the 128 floor binds. Growth much faster than linear in `nlist` means the beam is
+  exceeding the centroid graph and degenerating into a full walk of it.
 - **Disk read dominates** at high `nlist`.
 
 If recall does not climb with `nlist`, stop and re-read [stage 2](./02-groundtruth.md)

@@ -107,9 +107,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Per query: graph top-k and brute-force top-k centroids --------------
-    // effective_l = max(centroid_search_l, nlist); every nlist <= 1024 here, so
-    // l = 1024 throughout. A single graph search at k = l = max_nlist yields,
-    // by prefix, what each smaller nlist request would return.
+    // The ablation pins the beam rather than deriving it from `SearchParams`,
+    // so that every nlist below is served by one search: a single graph search
+    // at k = l = max_nlist yields, by prefix, what each smaller nlist would
+    // return.
     let max_nlist = *NLISTS.iter().max().unwrap();
     let l = CENTROID_SEARCH_L.max(max_nlist);
 

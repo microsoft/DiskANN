@@ -551,7 +551,7 @@ impl GraphIvfStream<'_> {
             let nlist = cluster_fraction.nlist(num_clusters);
             let params = SearchParams {
                 nlist,
-                centroid_search_l: search.centroid_search_l,
+                centroid_search_alpha: search.centroid_search_alpha,
             };
             let mut result_ids = vec![0u32; k_max * num_queries];
             let first_error = Mutex::new(None::<String>);
@@ -838,9 +838,10 @@ mod tests {
                 search: GraphIvfRunbookSearch {
                     queries: self.query_file.clone(),
                     // Probe every cluster, so every sweep is exhaustive and
-                    // recall is exact however the cluster count changes.
+                    // recall is exact however the cluster count changes. The
+                    // beam scales with nlist, so it stays exhaustive too.
                     cluster_fractions: vec![ClusterFraction::new(1.0)],
-                    centroid_search_l: NUM_POINTS,
+                    centroid_search_alpha: 1.5,
                     recall_at: RecallAt::new(vec![5, RECALL_AT as u32]),
                     num_threads: 2,
                 },
@@ -960,10 +961,7 @@ mod tests {
         let index = diskann_graphivf::GraphIvfIndex::<f32>::load(Path::new(&fixture.save_path), 1)
             .expect("the runbook build must leave a loadable index");
         let mut searcher = index.searcher().unwrap();
-        let params = SearchParams {
-            nlist: index.num_clusters(),
-            centroid_search_l: index.num_clusters(),
-        };
+        let params = SearchParams::new(index.num_clusters());
         let hits = searcher
             .search(&fixture.queries[..DIM], NUM_POINTS, &params)
             .unwrap();

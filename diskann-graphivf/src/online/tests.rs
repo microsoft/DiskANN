@@ -437,10 +437,7 @@ fn flush_roundtrips_through_load_and_search() {
     let mut searcher = index.searcher().unwrap();
 
     // A query in blob 0 should retrieve blob-0 points (small distances).
-    let sp = SearchParams {
-        nlist: 2,
-        centroid_search_l: 8,
-    };
+    let sp = SearchParams::new(2);
     let results = searcher.search(&[0.0f32, 0.0], 5, &sp).unwrap();
     assert!(!results.is_empty());
     // Nearest neighbor is within blob 0 (distance well under the blob gap).
@@ -773,10 +770,7 @@ fn flush_after_deletes_drops_them_and_keeps_original_ids() {
 
     let index = GraphIvfIndex::<f32>::load(&prefix, 2).unwrap();
     let mut searcher = index.searcher().unwrap();
-    let sp = SearchParams {
-        nlist: index.num_clusters(),
-        centroid_search_l: 16,
-    };
+    let sp = SearchParams::new(index.num_clusters());
     // Scanning every list returns the whole live corpus and nothing else.
     let results = searcher.search(&[0.0f32, 0.0], n, &sp).unwrap();
     assert_eq!(results.len(), n - removed.len());
@@ -809,10 +803,7 @@ fn online_search_probing_everything_is_exact() {
     let mut c = OnlineClusterer::new(points.clone(), initial, params(4, 25)).unwrap();
     c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
 
-    let sp = SearchParams {
-        nlist: c.num_clusters(),
-        centroid_search_l: 16,
-    };
+    let sp = SearchParams::new(c.num_clusters());
     let live: Vec<u32> = (0..n as u32).collect();
     let mut s = c.searcher().unwrap();
     for q in [[0.0f32, 0.0], [20.0, 20.0], [10.0, 10.0]] {
@@ -835,10 +826,7 @@ fn online_search_after_deletes_and_merges_sees_only_live_points() {
     c.delete_batch(&[0, 1, 2]).unwrap();
 
     let live: Vec<u32> = (3..20u32).collect();
-    let sp = SearchParams {
-        nlist: c.num_clusters(),
-        centroid_search_l: 16,
-    };
+    let sp = SearchParams::new(c.num_clusters());
     let mut s = c.searcher().unwrap();
     let got: Vec<u32> = s
         .search(&[0.0f32, 0.0], 20, &sp)
@@ -862,18 +850,12 @@ fn points_scanned_counts_every_probed_list_member() {
     let mut s = c.searcher().unwrap();
     assert_eq!(s.points_scanned(), 0);
 
-    let sp = SearchParams {
-        nlist: 1,
-        centroid_search_l: 8,
-    };
+    let sp = SearchParams::new(1);
     s.search(&[0.0f32, 0.0], 3, &sp).unwrap();
     assert_eq!(s.points_scanned(), 5, "one group's list, not the top-3");
 
     // Accumulates across queries, and grows with the probe width.
-    let sp = SearchParams {
-        nlist: 4,
-        centroid_search_l: 8,
-    };
+    let sp = SearchParams::new(4);
     s.search(&[0.0f32, 0.0], 3, &sp).unwrap();
     assert_eq!(
         s.points_scanned(),
@@ -891,10 +873,7 @@ fn search_into_reuses_output_and_reports_per_query_scan() {
         .insert_batch(&(0..20u32).collect::<Vec<_>>())
         .unwrap();
 
-    let search_params = SearchParams {
-        nlist: 2,
-        centroid_search_l: 8,
-    };
+    let search_params = SearchParams::new(2);
     let mut searcher = clusterer.searcher().unwrap();
     let mut output = Vec::with_capacity(20);
     let capacity = output.capacity();
@@ -921,10 +900,7 @@ fn online_search_returns_fewer_than_k_when_lists_are_short() {
     let mut c = OnlineClusterer::new(points, initial, params(8, 10_000)).unwrap();
     c.insert_batch(&(0..20u32).collect::<Vec<_>>()).unwrap();
 
-    let sp = SearchParams {
-        nlist: 1,
-        centroid_search_l: 8,
-    };
+    let sp = SearchParams::new(1);
     let mut s = c.searcher().unwrap();
     let got = s.search(&[0.0f32, 0.0], 50, &sp).unwrap();
     assert_eq!(got.len(), 5, "one list holds one group");
@@ -937,17 +913,11 @@ fn online_search_rejects_bad_queries() {
     let mut c = OnlineClusterer::new(points, initial, params(8, 10_000)).unwrap();
     c.insert_batch(&(0..20u32).collect::<Vec<_>>()).unwrap();
 
-    let sp = SearchParams {
-        nlist: 2,
-        centroid_search_l: 8,
-    };
+    let sp = SearchParams::new(2);
     let mut s = c.searcher().unwrap();
     assert!(s.search(&[0.0, 0.0], 0, &sp).is_err(), "k must be non-zero");
     assert!(s.search(&[0.0, 0.0, 0.0], 5, &sp).is_err(), "wrong dim");
-    let too_many = SearchParams {
-        nlist: 99,
-        centroid_search_l: 99,
-    };
+    let too_many = SearchParams::new(99);
     assert!(s.search(&[0.0, 0.0], 5, &too_many).is_err());
 }
 

@@ -80,8 +80,9 @@ campaign), not in `diskann-benchmark/example/`.
         "search": {
           "queries": "queries_first1000.fbin",
           "cluster_fractions": [0.01, 0.02, 0.03, 0.04, 0.05],
-          "centroid_search_l": 4096,
-          "recall_at": [50]
+          "centroid_search_alpha": 1.5,
+          "recall_at": [50],
+          "num_threads": 16
         }
       }
     }
@@ -91,10 +92,16 @@ campaign), not in `diskann-benchmark/example/`.
 
 Set `distance` to the dataset's actual metric. `normalize` controls warmup/split centroid
 normalization only; it does not normalize corpus or query rows. Maintain merge hysteresis:
-`2 * merge_threshold <= split_threshold`. Estimate the maximum live cluster count and make
-`centroid_search_l` intentionally large enough for the maximum effective
-`nlist = ceil(max_fraction * live_clusters)`; the search implementation otherwise widens
-its beam to `max(centroid_search_l, nlist)`.
+`2 * merge_threshold <= split_threshold`.
+
+`search.num_threads` gives each worker its own searcher; the reported latency stays a
+per-query mean, so raising it buys wall-clock without changing the measurement.
+
+The centroid beam is `max(128, ceil(centroid_search_alpha * nlist))` and `nlist` is
+recomputed from the live cluster count at every search stage, so the beam follows an index
+that grows by orders of magnitude on its own. This is the parameter to leave alone: a
+constant beam sized for the peak cluster count makes the centroid walk the dominant cost of
+every earlier stage, which is enough to turn a feasible replay into an infeasible one.
 
 ## Run and monitor
 

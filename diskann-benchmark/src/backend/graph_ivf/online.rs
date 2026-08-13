@@ -523,7 +523,7 @@ mod tests {
                 ClusterFraction::new(f64::MIN_POSITIVE),
                 ClusterFraction::new(1.0),
             ],
-            centroid_search_l: 128,
+            centroid_search_alpha: 1.5,
             // Two depths from one sweep: the shallower must be scored from the
             // prefix of the deeper search's results, not from a second search.
             recall_at: RecallAt::new(vec![5, RECALL_AT as u32]),

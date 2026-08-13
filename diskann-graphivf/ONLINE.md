@@ -127,7 +127,7 @@ metric, dimensions, centroid-graph parameters, threads, seed, output prefix, and
       "groundtruth": "groundtruth.bin",
       "num_threads": 1,
       "cluster_fractions": [0.01, 0.025, 0.04, 0.055, 0.07, 0.1, 0.15],
-      "centroid_search_l": 1024,
+      "centroid_search_alpha": 1.5,
       "recall_at": [50, 1000],
       "distance": "squared_l2"
     }
@@ -473,7 +473,7 @@ handle per worker when searching in parallel.
 For each `f32` query, the handle:
 
 1. searches the mutable centroid graph for the nearest `nlist` live centroids
-   using `max(centroid_search_l, nlist)`;
+   using `max(128, ceil(centroid_search_alpha * nlist))`;
 2. exhaustively scores every corpus point in those in-memory lists;
 3. selects and sorts the best `k` `(point_id, distance)` pairs.
 
@@ -517,9 +517,10 @@ flowchart TD
    `L2`/`Cosine`, negated inner product for `InnerProduct` — all "smaller is
    better".
 2. **Centroid KNN.** Search the centroid graph for the query's nearest `nlist`
-   centroids, using search-list size `effective_l = max(centroid_search_l,
-   nlist)`. A loaded `InnerProduct` index navigates this rebuilt graph by inner
-   product; `L2` and `Cosine` use squared-L2. These are the lists to probe.
+   centroids, using search-list size `effective_l = max(128,
+   ceil(centroid_search_alpha * nlist))`. A loaded `InnerProduct` index navigates
+   this rebuilt graph by inner product; `L2` and `Cosine` use squared-L2. These
+   are the lists to probe.
 3. **Plan I/O.** For each non-empty probed cluster, compute the smallest
    512-aligned byte window that fully contains its list, and carve each a
    disjoint slice of **one reusable 512-aligned buffer** (grown only when a query
@@ -533,7 +534,7 @@ flowchart TD
    `(id, score)` pairs.
 
 End-to-end recall is therefore capped by two things: whether the centroid graph
-returns the *truly* nearest `nlist` centroids (increase `centroid_search_l` /
+returns the *truly* nearest `nlist` centroids (increase `centroid_search_alpha` /
 `nlist`), and whether the target neighbors actually live in those lists (a
 function of clustering quality — the reason for the split-and-reassign build).
 
@@ -564,7 +565,13 @@ Search ([`SearchParams`](src/params.rs)):
 | Parameter | Role |
 | --- | --- |
 | `nlist` | Number of nearest centroids (lists) to probe (`≤ num_clusters`). |
-| `centroid_search_l` | Centroid-graph search-list size; effective L is `max(centroid_search_l, nlist)`. |
+| `centroid_search_alpha` | Centroid-graph search list as a multiple of `nlist`; effective L is `max(128, ceil(alpha * nlist))`. Must be `≥ 1.0`; defaults to 1.5. |
+
+The beam is a multiple rather than a constant because it is charged to every
+query. On an index that grows, churns, or is swept across cluster fractions, the
+`nlist` behind a given fraction moves by orders of magnitude, and a constant sized
+for the peak makes the centroid walk — not the list scan — the dominant cost
+everywhere below it.
 
 Practical tuning order:
 
@@ -573,7 +580,7 @@ Practical tuning order:
 2. Increase `reassign_neighbors` (and, if needed, `reassign_l`) when build
   quality matters more than split cost.
 3. Sweep `nlist` to choose the query-time recall, I/O, and latency trade-off.
-4. Raise `assign_l` or `centroid_search_l` only if routing quality is limiting
+4. Raise `assign_l` or `centroid_search_alpha` only if routing quality is limiting
   build or search recall.
 
 The complete field/default table is in the [graph-IVF section of

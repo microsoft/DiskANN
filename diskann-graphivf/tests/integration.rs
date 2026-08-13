@@ -122,10 +122,7 @@ fn run_metric<T: VectorRepr>(metric: Metric, min_mean_recall: f32) {
     assert_eq!(index.num_clusters(), 48);
 
     let mut searcher = index.searcher().expect("searcher");
-    let params = SearchParams {
-        nlist: 12,
-        centroid_search_l: 32,
-    };
+    let params = SearchParams::new(12);
 
     let k = 10;
     let mut total = 0.0f32;
@@ -199,10 +196,7 @@ fn load_round_trip() {
     // Build and search.
     let built = GraphIvfIndex::<f32>::build(matrix.as_view(), &build_params(Metric::L2), &prefix)
         .expect("build");
-    let params = SearchParams {
-        nlist: 12,
-        centroid_search_l: 32,
-    };
+    let params = SearchParams::new(12);
     let query: Vec<f32> = data[0..DIM].to_vec();
     let from_built = {
         let mut s = built.searcher().expect("searcher");
@@ -259,11 +253,15 @@ fn rejects_bad_params() {
     let index = GraphIvfIndex::<f32>::build(matrix.as_view(), &build_params(Metric::L2), &prefix)
         .expect("build");
     let mut searcher = index.searcher().expect("searcher");
-    let bad_search = SearchParams {
-        nlist: index.num_clusters() + 1,
-        centroid_search_l: 64,
-    };
+    let bad_search = SearchParams::new(index.num_clusters() + 1);
     assert!(searcher.search(&data_query(), 10, &bad_search).is_err());
+
+    // An oversampling factor below 1.0 cannot return nlist clusters.
+    let bad_alpha = SearchParams {
+        nlist: 4,
+        centroid_search_alpha: 0.5,
+    };
+    assert!(searcher.search(&data_query(), 10, &bad_alpha).is_err());
 }
 
 fn data_query() -> Vec<f32> {

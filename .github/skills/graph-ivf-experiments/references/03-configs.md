@@ -105,7 +105,7 @@ Loads the saved index and sweeps fractions of its clusters. Never rebuilds.
         "groundtruth": "groundtruth_nozero_recall_1000_query_1000.bin",
         "num_threads": 1,
         "cluster_fractions": [0.002, 0.003, 0.004, 0.005, 0.006, 0.008, 0.01, 0.0125, 0.0175, 0.0225, 0.03, 0.04, 0.05, 0.06],
-        "centroid_search_l": 2048,
+        "centroid_search_alpha": 1.5,
         "recall_at": [50, 1000],
         "distance": "squared_l2"
       }
@@ -125,9 +125,9 @@ schema, input audit, query/truthset subsetting, and long-run validation procedur
 ## Rules
 
 **Fractions are in `(0.0, 1.0]`.** For `C` clusters the runner probes
-`ceil(cluster_fraction * C)` lists and records that effective `nlist`. The effective
-centroid beam is at least this concrete value. Size `centroid_search_l` intentionally for
-the largest expected `nlist` in the band rather than relying on that automatic widening.
+`ceil(cluster_fraction * C)` lists and records that effective `nlist`. The centroid beam
+is derived from it as `max(128, ceil(centroid_search_alpha * nlist))`, so it tracks the
+sweep automatically. `centroid_search_alpha` defaults to 1.5 and rarely needs setting.
 
 **List every depth in one config.** `"recall_at": [50, 1000]` searches once per cluster
 fraction, to the deepest value, and scores both from that result set — one run instead of
@@ -150,24 +150,25 @@ A typo produces a "no run matching" gap in the analysis, not an error at run tim
 Pick a geometric-ish ladder that brackets 90% recall at both depths, ~14 points. Starting
 points that worked:
 
-| Clusters | Fraction range | Approximate `nlist` range | `centroid_search_l` |
-|---|---|---|---|
-| ~4.5K (T≈800) | 0.002 → 0.135 | 9 → 608 | 1024 |
-| ~36K (T≈120) | 0.002 → 0.06 | 72 → 2160 | 4096 |
-| ~115K (T≈50) | 0.002 → 0.08 | 230 → 9200 | 16384 |
+| Clusters | Fraction range | Approximate `nlist` range |
+|---|---|---|
+| ~4.5K (T≈800) | 0.002 → 0.135 | 9 → 608 |
+| ~36K (T≈120) | 0.002 → 0.06 | 72 → 2160 |
+| ~115K (T≈50) | 0.002 → 0.08 | 230 → 9200 |
 
 Recall@1000 needs roughly 1.7–2.3× the effective `nlist` of recall@50 for the same recall,
 so size the top fraction off the deeper measurement.
 
 ### Banding
 
-The effective beam is `max(centroid_search_l, nlist)`. The centroid beam is charged to every
-query in a sweep, so one oversized value inflates the cheap end of the curve, while an
-undersized value silently widens only at larger fractions and makes latency less comparable.
-Split wide ranges into bands, each with the narrowest intentional beam that fits its largest
-expected effective `nlist`, and let `benchlib.concat_bands` splice them (narrowest first;
-duplicate effective `nlist` keeps its first, cheaper appearance).
-GloVe-200 is the worked example.
+The centroid beam is charged to every query in a sweep. It used to be a constant, which
+forced a choice between inflating the cheap end of the curve and silently widening only at
+large fractions — the reason these sweeps were split into bands spliced by
+`benchlib.concat_bands`. `centroid_search_alpha` removes that reason: the beam is
+`max(128, ceil(alpha * nlist))`, so it is proportional at every point of the ladder and one
+config can span the whole range. Banding is still useful for splitting a long sweep into
+resumable pieces, and `concat_bands` still splices them (narrowest first; duplicate
+effective `nlist` keeps its first appearance).
 
 If the band tops out below the target recall, add an `-ext` config extending the fraction
 upward rather than re-running the whole sweep — and delete it once folded in, so it cannot

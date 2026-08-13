@@ -84,13 +84,18 @@ while scoring candidates with the configured metric.
 | Field | Meaning |
 | --- | --- |
 | `cluster_fractions` | fractions of the index's clusters to probe, in `(0.0, 1.0]` — one search per value |
-| `centroid_search_l` | centroid-graph search-list size; effective L is at least the fraction's computed `nlist` |
+| `centroid_search_alpha` | centroid-graph search list as a multiple of `nlist`; defaults to 1.5 |
 | `recall_at` | the `k` recall is measured at — one value, or a list scored from a single search |
 
 For `C` live clusters, the harness computes `nlist = ceil(cluster_fraction · C)`.
 It reports both values. A runbook recomputes `C` at every search stage, so the same
 fraction continues to mean the same share while the index grows and shrinks. The
 library's `SearchParams` remains concrete and continues to accept `nlist` directly.
+
+The centroid beam is `max(128, ceil(alpha · nlist))`. Expressing it as a multiple
+rather than a constant matters most on an index that changes size: a constant has
+to be picked for the largest `nlist` a run will reach, and until it does the beam
+is pure overhead charged to every query.
 
 A `Load` job needs only `data_type` and the index prefix — the same `data_type` the index
 was built with, since it selects the backend that decodes the lists.

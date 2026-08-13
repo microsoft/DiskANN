@@ -326,16 +326,47 @@ impl OnlineParams {
     }
 }
 
+/// Floor on the centroid-graph search list returned by
+/// [`SearchParams::effective_l`].
+///
+/// A greedy graph walk narrower than this has too little room to recover from a
+/// poor entry point, and a beam this small is cheap regardless, so scaling below
+/// it buys nothing.
+pub const MIN_CENTROID_SEARCH_L: usize = 128;
+
+/// Default [`SearchParams::centroid_search_alpha`]: half again as many
+/// candidates as clusters requested.
+pub const DEFAULT_CENTROID_SEARCH_ALPHA: f32 = 1.5;
+
 /// Parameters controlling a single search.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SearchParams {
     /// Number of nearest clusters to probe (inverted lists to fetch).
     pub nlist: usize,
-    /// Search-list size for the centroid graph search (`>= nlist`).
-    pub centroid_search_l: usize,
+    /// Centroid-graph search list as a multiple of `nlist`.
+    ///
+    /// The centroid beam is charged to every query, so a fixed size has to be
+    /// picked for the largest `nlist` a workload will ever ask for and then
+    /// overpays for every smaller one. On an index that grows or churns there is
+    /// no single good value: sized for the peak it dominates the query at small
+    /// cluster counts, sized for the start it silently degrades to a truncated
+    /// walk later. Expressing the beam as a multiple of the request keeps the
+    /// overshoot proportional at any index size.
+    ///
+    /// Must be at least 1.0 — a search list shorter than `nlist` cannot return
+    /// `nlist` clusters.
+    pub centroid_search_alpha: f32,
 }
 
 impl SearchParams {
+    /// Probe `nlist` clusters with the default oversampling.
+    pub const fn new(nlist: usize) -> Self {
+        Self {
+            nlist,
+            centroid_search_alpha: DEFAULT_CENTROID_SEARCH_ALPHA,
+        }
+    }
+
     pub(crate) fn validate(&self, num_clusters: usize) -> crate::Result<()> {
         use crate::GraphIvfError as E;
         if self.nlist == 0 {
@@ -347,12 +378,24 @@ impl SearchParams {
                 self.nlist
             )));
         }
+        // Rejects NaN as well, which would otherwise reach `effective_l` and
+        // cast to zero.
+        if !self.centroid_search_alpha.is_finite() || self.centroid_search_alpha < 1.0 {
+            return Err(E::invalid(format!(
+                "centroid_search_alpha ({}) must be finite and at least 1.0",
+                self.centroid_search_alpha
+            )));
+        }
         Ok(())
     }
 
-    /// Search-list size to use, never smaller than `nlist`.
+    /// Search-list size to use: `alpha * nlist`, floored at
+    /// [`MIN_CENTROID_SEARCH_L`].
     pub(crate) fn effective_l(&self) -> usize {
-        self.centroid_search_l.max(self.nlist)
+        // Float-to-int casts saturate in Rust, so an extreme alpha clamps to
+        // usize::MAX rather than wrapping to a tiny beam.
+        let scaled = (f64::from(self.centroid_search_alpha) * self.nlist as f64).ceil() as usize;
+        scaled.max(MIN_CENTROID_SEARCH_L)
     }
 }
 
@@ -435,30 +478,34 @@ mod tests {
 
     #[test]
     fn search_validate_and_effective_l() {
-        let p = SearchParams {
-            nlist: 4,
-            centroid_search_l: 2,
-        };
+        // Below the floor the beam is pinned to it.
+        let p = SearchParams::new(4);
         assert!(p.validate(8).is_ok());
-        // effective_l is never smaller than nlist.
-        assert_eq!(p.effective_l(), 4);
+        assert_eq!(p.effective_l(), MIN_CENTROID_SEARCH_L);
 
+        // Above the floor the beam scales with nlist and rounds up.
         let p2 = SearchParams {
-            nlist: 4,
-            centroid_search_l: 10,
+            nlist: 1_000,
+            centroid_search_alpha: 1.5,
         };
-        assert_eq!(p2.effective_l(), 10);
+        assert_eq!(p2.effective_l(), 1_500);
+        let p3 = SearchParams {
+            nlist: 999,
+            centroid_search_alpha: 1.5,
+        };
+        assert_eq!(p3.effective_l(), 1_499);
 
         // nlist must be non-zero and within the cluster count.
-        let zero = SearchParams {
-            nlist: 0,
-            centroid_search_l: 8,
-        };
-        assert!(zero.validate(8).is_err());
-        let too_many = SearchParams {
-            nlist: 9,
-            centroid_search_l: 9,
-        };
-        assert!(too_many.validate(8).is_err());
+        assert!(SearchParams::new(0).validate(8).is_err());
+        assert!(SearchParams::new(9).validate(8).is_err());
+
+        // Alpha must be finite and leave room for nlist results.
+        for bad in [0.5, f32::NAN, f32::INFINITY] {
+            let p = SearchParams {
+                nlist: 4,
+                centroid_search_alpha: bad,
+            };
+            assert!(p.validate(8).is_err(), "alpha {bad} should be rejected");
+        }
     }
 }
