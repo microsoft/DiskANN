@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! DiskANN integration and FFI bindings for Garnet vector sets.
+
 use std::{
     ffi::c_void,
     mem,
