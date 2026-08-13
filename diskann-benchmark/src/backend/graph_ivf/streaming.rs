@@ -362,6 +362,8 @@ where
         params,
         pool: create_thread_pool(params.search.num_threads)?,
         stage: 0,
+        total_stages: runbook.len(),
+        started: Instant::now(),
     };
 
     let stream_start = Instant::now();
@@ -447,10 +449,18 @@ struct GraphIvfStream<'a> {
     /// Built once and reused by every sweep of every search stage.
     pool: RayonThreadPool,
     stage: usize,
+    /// Stage count of the whole runbook, for the progress lines' denominator.
+    total_stages: usize,
+    /// Start of the replay, so each progress line carries cumulative elapsed.
+    started: Instant,
 }
 
 impl GraphIvfStream<'_> {
     /// Wrap a completed stage in its stats record, snapshotting the index state.
+    ///
+    /// Also prints the stage's one-line progress record. Stage stats are only
+    /// serialized after the whole runbook replays and the index flushes, so
+    /// without this a multi-hour run is opaque until the moment it succeeds.
     fn finish(
         &mut self,
         kind: StageKind,
@@ -473,8 +483,44 @@ impl GraphIvfStream<'_> {
             ),
             search,
         };
+        self.report(&stats);
         self.stage += 1;
         stats
+    }
+
+    /// Print one stage's progress, plus a line per sweep for a search stage.
+    ///
+    /// `std::io::Stdout` is line-buffered, so each line reaches a redirected log
+    /// as it is written rather than at process exit.
+    fn report(&self, stats: &GraphIvfStageStats) {
+        println!(
+            "[stage {}/{}] {:<6} {:>9} pts  stage {:>8.2}s  run {:>8.1}s  clusters {:>9}  live {:>11}",
+            stats.stage + 1,
+            self.total_stages,
+            stats.kind,
+            stats.num_points,
+            stats.elapsed.as_seconds(),
+            self.started.elapsed().as_secs_f64(),
+            stats.live_clusters,
+            stats.live_points,
+        );
+        for result in &stats.search {
+            let recalls = result
+                .recalls
+                .iter()
+                .map(|r| format!("r@{}={:.2}", r.at, r.recall))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "    f={:<6.4} nlist={:<7} {}  scanned {:>9} ({:>5.2}%)  {:>8.2}ms/query",
+                result.cluster_fraction,
+                result.nlist,
+                recalls,
+                result.mean_points_scanned,
+                result.pct_scanned,
+                result.mean_latency.as_seconds() * 1000.0,
+            );
+        }
     }
 
     /// Run every configured cluster-fraction sweep against the current index.
