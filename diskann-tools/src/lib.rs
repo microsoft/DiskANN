@@ -2,6 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
 //! Utilities for DiskANN command-line tools.
 
 #![cfg_attr(

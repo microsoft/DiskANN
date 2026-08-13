@@ -2,6 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
 //! A grab bag of miscellaneous indexing-related functionality, including in-memory indexing.
 //!
 //! This crate is slowly being deprecated, with its functionality redistributed to other crates
