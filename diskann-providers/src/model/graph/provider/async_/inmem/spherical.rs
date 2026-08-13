@@ -475,9 +475,8 @@ where
 // Strategies //
 ////////////////
 
-/// Unlike [`super::Quantized`], searches over a [`SphericalStore`] support different
-/// [`spherical::iface::QueryLayout`]s. This strategy type allows the user to specify the
-/// desired layout explicitly.
+/// Searches over a [`SphericalStore`] support different [`spherical::iface::QueryLayout`]s.
+/// This strategy type allows the user to specify the desired layout explicitly.
 #[derive(Debug, Clone, Copy)]
 pub struct Quantized {
     layout: spherical::iface::QueryLayout,
@@ -495,7 +494,7 @@ impl Quantized {
         }
     }
 
-    /// Construct a new [`QuantizedStrategy`] for index search using the specified layout.
+    /// Construct a new [`Quantized`] strategy for index search using the specified layout.
     pub fn search(layout: spherical::iface::QueryLayout) -> Self {
         Self {
             layout,

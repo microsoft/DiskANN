@@ -54,7 +54,7 @@ type CVRef<'a, const NBITS: usize> = CompensatedVectorRef<'a, NBITS>;
 /// A thin wrapper around [`ScalarQuantizer`] that encodes the number of bits desired for
 /// the [`SQStore`] derived from the quantizer.
 ///
-/// This is meant to be used in conjunction with [`CreateQuantProvider`] to serve as a
+/// This is meant to be used in conjunction with [`CreateVectorStore`] to serve as a
 /// precursor for [`DefaultProvider::new_empty`].
 #[derive(Clone)]
 pub struct WithBits<const NBITS: usize> {

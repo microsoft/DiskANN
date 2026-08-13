@@ -67,7 +67,8 @@ impl PQStorage {
     /// * `centroid` - Optional per-dimension centroid. Pass `None` for the standard
     ///   (non-legacy) code path; a zero vector of length `dim` is written to preserve
     ///   the on-disk file format. Pass `Some(centroid)` only when legacy centroid
-    ///   centering is enabled (see [`GeneratePivotArguments::with_legacy_centering`]).
+    ///   centering is enabled (see the `legacy_center_data` argument to
+    ///   [`crate::model::pq::generate_pq_pivots`]).
     /// * `chunk_offsets` - the chunk offsets of the pivot table
     /// * `num_centers` - the number of centers
     /// * `dim` - the dimension of the pivot table
