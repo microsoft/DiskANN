@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 //! Disk index quantizer implementation.
+use std::sync::Arc;
+
 use crate::data_model::GraphDataType;
 use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -15,7 +17,12 @@ use diskann_providers::{
     storage::{PQStorage, SQStorage},
     utils::{create_thread_pool, BridgeErr, PQPathNames},
 };
-use diskann_quantization::scalar::train::ScalarQuantizationParameters;
+use diskann_quantization::{
+    algorithms::transforms::{TargetDim, TransformKind},
+    alloc::GlobalAllocator,
+    scalar::train::ScalarQuantizationParameters,
+    spherical::{PreScale, SphericalQuantizer, SupportedMetric},
+};
 use diskann_utils::views::MatrixView;
 use tracing::info;
 
@@ -29,6 +36,7 @@ use crate::{
 pub enum BuildQuantizer {
     NoQuant(NoStore),
     Scalar1Bit(WithBits<1>),
+    Spherical1Bit(Arc<SphericalQuantizer>),
     PQ(FixedChunkPQTable),
 }
 
@@ -119,6 +127,48 @@ impl BuildQuantizer {
                 sq_storage.save_quantizer(&quantizer, storage_provider)?;
 
                 Ok(Self::Scalar1Bit(WithBits::<1>::new(quantizer)))
+            }
+            QuantizationType::Spherical(nbits) => {
+                if nbits != 1 {
+                    return Err(diskann_error!(
+                        ErrorKind::IndexConfigError("build_quantization_type"),
+                        "Spherical quantization is only supported for 1 bit",
+                    ));
+                }
+
+                let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
+                    index_configuration.random_seed,
+                );
+                let mut rnd = rng.create_rnd();
+                let (train_data, train_size, train_dim) = pq_storage
+                    .get_random_train_data_slice::<Data::VectorDataType, _>(
+                        p_val,
+                        storage_provider,
+                        &mut rnd,
+                    )?;
+                let train_data =
+                    MatrixView::try_from(&train_data, train_size, train_dim).bridge_err()?;
+                let metric: SupportedMetric =
+                    index_configuration.dist_metric.try_into().bridge_err()?;
+                let quantizer = SphericalQuantizer::train(
+                    train_data,
+                    TransformKind::PaddingHadamard {
+                        target_dim: TargetDim::Natural,
+                    },
+                    metric,
+                    PreScale::ReciprocalMeanNorm,
+                    &mut rnd,
+                    GlobalAllocator,
+                )
+                .map_err(|err| {
+                    diskann_error!(
+                        ErrorKind::IndexError,
+                        "Failed to train spherical quantizer: {}",
+                        err
+                    )
+                })?;
+
+                Ok(Self::Spherical1Bit(Arc::new(quantizer)))
             }
         }
     }

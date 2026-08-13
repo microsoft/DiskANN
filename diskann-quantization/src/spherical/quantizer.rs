@@ -156,6 +156,11 @@ where
         self.shift.allocator()
     }
 
+    /// Return an independently allocated copy of this quantizer.
+    pub fn try_clone(&self) -> Result<Self, AllocatorError> {
+        <Self as TryClone>::try_clone(self)
+    }
+
     /// A lower-level constructor that accepts a centroid, mean norm, and pre-scale directly.
     pub fn generate(
         mut centroid: Poly<[f32], A>,

@@ -17,6 +17,7 @@ use diskann_providers::{
         READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_quantization::spherical::DataRef;
 use diskann_utils::io::read_bin;
 use rand::seq::SliceRandom;
 use tracing::info;
@@ -55,6 +56,11 @@ fn estimate_build_index_ram_usage(
         // `+ std::mem::size_of::<f32>()` for f32 compensation metadata for the scalar quantizer.
         QuantizationType::SQ { nbits, .. } => {
             (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
+        }
+        // Spherical quantization currently only supports 1 bit, enforced during validation.
+        QuantizationType::Spherical(nbits) => {
+            debug_assert_eq!(nbits, 1);
+            DataRef::<1>::canonical_bytes(dim.next_power_of_two() as usize) as u64
         }
     };
 
@@ -919,6 +925,10 @@ pub(crate) mod disk_index_builder_tests {
 
     #[rstest]
     #[case(QuantizationType::SQ { nbits: 2, standard_deviation: None }, "SQ quantization is only supported for 1 bit")]
+    #[case(
+        QuantizationType::Spherical(2),
+        "Spherical quantization is only supported for 1 bit"
+    )]
     fn test_build_quantization_type_failure_cases(
         #[case] build_quantization_type: QuantizationType,
         #[case] error_message: &str,
@@ -1167,6 +1177,7 @@ mod ram_estimation_tests {
     #[case(QuantizationType::FP)]
     #[case(QuantizationType::PQ { num_chunks: 15 })]
     #[case(QuantizationType::SQ { nbits: 1, standard_deviation: None })]
+    #[case(QuantizationType::Spherical(1))]
     fn test_estimate_build_index_ram_usage(#[case] build_quantization_type: QuantizationType) {
         let num_points = 1000;
         let dim = 128;
@@ -1178,6 +1189,9 @@ mod ram_estimation_tests {
             QuantizationType::PQ { num_chunks } => num_chunks as u64,
             QuantizationType::SQ { nbits, .. } => {
                 (nbits as u64 * dim).div_ceil(8) + std::mem::size_of::<f32>() as u64
+            }
+            QuantizationType::Spherical(_) => {
+                DataRef::<1>::canonical_bytes(dim.next_power_of_two() as usize) as u64
             }
         };
         let mut expected_ram_usage = (num_points as f64)
