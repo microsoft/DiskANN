@@ -47,10 +47,12 @@ impl RecallAt {
     }
 
     /// The depth every search must run to for all configured `k` to be scorable.
+    #[cfg(any(feature = "graph-ivf", test))]
     pub(crate) fn max(&self) -> u32 {
         self.0.iter().copied().max().unwrap_or(0)
     }
 
+    #[cfg(any(feature = "graph-ivf", test))]
     pub(crate) fn iter(&self) -> impl Iterator<Item = u32> + '_ {
         self.0.iter().copied()
     }
@@ -92,6 +94,54 @@ impl Serialize for RecallAt {
 impl fmt::Display for RecallAt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         CommaList(&self.0).fmt(f)
+    }
+}
+
+//////////////////////
+// Cluster fraction //
+//////////////////////
+
+/// Fraction of the current index's live clusters to probe.
+///
+/// Benchmark configs use a fraction rather than a concrete `nlist` so the
+/// requested search effort scales with indexes of different sizes and with a
+/// runbook index whose cluster count changes between search stages.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct ClusterFraction(f64);
+
+impl ClusterFraction {
+    pub(crate) const fn new(value: f64) -> Self {
+        Self(value)
+    }
+
+    #[cfg(any(feature = "graph-ivf", test))]
+    pub(crate) const fn get(self) -> f64 {
+        self.0
+    }
+
+    /// Convert this fraction to a concrete library-level `nlist`.
+    ///
+    /// Rounding up ensures every positive fraction probes at least one cluster
+    /// and never probes less than the requested share. Validation guarantees
+    /// the result cannot exceed `num_clusters`.
+    #[cfg(any(feature = "graph-ivf", test))]
+    pub(crate) fn nlist(self, num_clusters: usize) -> usize {
+        debug_assert!(num_clusters > 0);
+        ((self.0 * num_clusters as f64).ceil() as usize).clamp(1, num_clusters)
+    }
+
+    fn validate(self) -> Result<(), anyhow::Error> {
+        if !(self.0.is_finite() && 0.0 < self.0 && self.0 <= 1.0) {
+            anyhow::bail!("cluster_fractions values must be finite and in the range (0.0, 1.0]");
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for ClusterFraction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -339,10 +389,11 @@ pub(crate) struct GraphIvfRunbookConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct GraphIvfRunbookSearch {
     pub(crate) queries: InputFile,
-    /// Numbers of nearest clusters to probe — one sweep per value, at every
-    /// search stage.
-    pub(crate) nlist: Vec<usize>,
-    /// Search-list size for the centroid graph search (`>= nlist`).
+    /// Fractions of the current live clusters to probe — one sweep per value,
+    /// recomputed at every search stage.
+    pub(crate) cluster_fractions: Vec<ClusterFraction>,
+    /// Search-list size for centroid graph search. The effective value is at
+    /// least the concrete `nlist` computed for each fraction.
     pub(crate) centroid_search_l: usize,
     pub(crate) recall_at: RecallAt,
 }
@@ -383,9 +434,10 @@ pub(crate) struct GraphIvfSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
     pub(crate) num_threads: usize,
-    /// Numbers of nearest clusters to probe — one search sweep per value.
-    pub(crate) nlist: Vec<usize>,
-    /// Search-list size for the centroid graph search (`>= nlist`).
+    /// Fractions of the index's clusters to probe — one search sweep per value.
+    pub(crate) cluster_fractions: Vec<ClusterFraction>,
+    /// Search-list size for centroid graph search. The effective value is at
+    /// least the concrete `nlist` computed for each fraction.
     pub(crate) centroid_search_l: usize,
     pub(crate) recall_at: RecallAt,
     pub(crate) distance: SimilarityMeasure,
@@ -580,18 +632,19 @@ impl GraphIvfOnlineBuild {
     }
 }
 
-/// Shared validation for all search configs that have `nlist`, `centroid_search_l`,
-/// and `recall_at`. Called by both [`GraphIvfRunbookSearch`] and [`GraphIvfSearchPhase`].
-fn validate_nlist_and_recall(
-    nlist: &[usize],
+/// Shared validation for all search configs that have cluster fractions,
+/// `centroid_search_l`, and `recall_at`. Called by both
+/// [`GraphIvfRunbookSearch`] and [`GraphIvfSearchPhase`].
+fn validate_cluster_fractions_and_recall(
+    cluster_fractions: &[ClusterFraction],
     centroid_search_l: usize,
     recall_at: &mut RecallAt,
 ) -> Result<(), anyhow::Error> {
-    if nlist.is_empty() {
-        anyhow::bail!("nlist must have at least one value");
+    if cluster_fractions.is_empty() {
+        anyhow::bail!("cluster_fractions must have at least one value");
     }
-    if nlist.contains(&0) {
-        anyhow::bail!("nlist values must be positive");
+    for &fraction in cluster_fractions {
+        fraction.validate()?;
     }
     if centroid_search_l == 0 {
         anyhow::bail!("centroid_search_l must be positive");
@@ -646,7 +699,11 @@ impl GraphIvfRunbookSearch {
         self.queries
             .resolve(checker)
             .context("invalid queries file")?;
-        validate_nlist_and_recall(&self.nlist, self.centroid_search_l, &mut self.recall_at)
+        validate_cluster_fractions_and_recall(
+            &self.cluster_fractions,
+            self.centroid_search_l,
+            &mut self.recall_at,
+        )
     }
 }
 
@@ -658,7 +715,11 @@ impl GraphIvfSearchPhase {
         self.groundtruth
             .resolve(checker)
             .context("invalid groundtruth file")?;
-        validate_nlist_and_recall(&self.nlist, self.centroid_search_l, &mut self.recall_at)?;
+        validate_cluster_fractions_and_recall(
+            &self.cluster_fractions,
+            self.centroid_search_l,
+            &mut self.recall_at,
+        )?;
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
         }
@@ -696,7 +757,11 @@ impl Example for GraphIvfOperation {
             queries: InputFile::new("path/to/queries.fbin"),
             groundtruth: InputFile::new("path/to/groundtruth.ibin"),
             num_threads: 8,
-            nlist: vec![8, 16, 32],
+            cluster_fractions: vec![
+                ClusterFraction::new(0.01),
+                ClusterFraction::new(0.05),
+                ClusterFraction::new(0.1),
+            ],
             centroid_search_l: 64,
             recall_at: RecallAt::new(vec![10]),
             distance: SimilarityMeasure::SquaredL2,
@@ -841,7 +906,7 @@ impl fmt::Display for GraphIvfRunbookSearch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Graph-IVF Runbook Search")?;
         write_field!(f, "Queries", self.queries.display())?;
-        write_field!(f, "NList", CommaList(&self.nlist))?;
+        write_field!(f, "Cluster Fractions", CommaList(&self.cluster_fractions))?;
         write_field!(f, "Centroid L", self.centroid_search_l)?;
         write_field!(f, "Recall@", self.recall_at)?;
         Ok(())
@@ -853,7 +918,7 @@ impl fmt::Display for GraphIvfSearchPhase {
         writeln!(f, "Graph-IVF Search Phase")?;
         write_field!(f, "Queries", self.queries.display())?;
         write_field!(f, "Groundtruth", self.groundtruth.display())?;
-        write_field!(f, "NList", CommaList(&self.nlist))?;
+        write_field!(f, "Cluster Fractions", CommaList(&self.cluster_fractions))?;
         write_field!(f, "Centroid L", self.centroid_search_l)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
@@ -1249,5 +1314,54 @@ mod tests {
 
         let many: RecallAt = serde_json::from_str("[50,1000]").unwrap();
         assert_eq!(serde_json::to_string(&many).unwrap(), "[50,1000]");
+    }
+
+    #[test]
+    fn cluster_fraction_validates_the_supported_range() {
+        for value in [f64::MIN_POSITIVE, 0.01, 0.5, 1.0] {
+            ClusterFraction::new(value).validate().unwrap();
+        }
+        for value in [0.0, -0.1, 1.000_001, f64::INFINITY, f64::NAN] {
+            assert!(
+                ClusterFraction::new(value).validate().is_err(),
+                "{value:?} is not a valid cluster fraction"
+            );
+        }
+    }
+
+    #[test]
+    fn cluster_fraction_rounds_up_and_stays_in_bounds() {
+        assert_eq!(ClusterFraction::new(f64::MIN_POSITIVE).nlist(100), 1);
+        assert_eq!(ClusterFraction::new(0.25).nlist(10), 3);
+        assert_eq!(ClusterFraction::new(0.5).nlist(10), 5);
+        assert_eq!(ClusterFraction::new(1.0).nlist(10), 10);
+    }
+
+    #[test]
+    fn search_schema_accepts_cluster_fractions_and_rejects_legacy_nlist() {
+        let mut value = serde_json::json!({
+            "queries": "queries.fbin",
+            "groundtruth": "groundtruth.bin",
+            "num_threads": 1,
+            "cluster_fractions": [0.01, 0.25, 1.0],
+            "centroid_search_l": 64,
+            "recall_at": [50, 1000],
+            "distance": "squared_l2"
+        });
+        let parsed: GraphIvfSearchPhase = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            parsed
+                .cluster_fractions
+                .iter()
+                .map(|fraction| fraction.get())
+                .collect::<Vec<_>>(),
+            [0.01, 0.25, 1.0]
+        );
+
+        let object = value.as_object_mut().unwrap();
+        let fractions = object.remove("cluster_fractions").unwrap();
+        object.insert("nlist".to_string(), fractions);
+        let error = serde_json::from_value::<GraphIvfSearchPhase>(value).unwrap_err();
+        assert!(error.to_string().contains("unknown field `nlist`"));
     }
 }

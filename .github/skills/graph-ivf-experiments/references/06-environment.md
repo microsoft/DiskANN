@@ -3,26 +3,26 @@
 Machine-specific behaviour that has cost real time on this workstation. Read this first
 when something misbehaves for no apparent reason.
 
-## Python interpreters
+## Python environment
 
-Two interpreters, and they are **not** interchangeable:
+Use the Python environment configured for this workspace. Package versions change, so
+verify script requirements rather than copying a frozen machine snapshot:
 
-| | `.venv\Scripts\python.exe` | conda base (`miniconda3\python.exe`, on PATH as `python`) |
-|---|---|---|
-| numpy | 2.5.1 | 2.2.6 |
-| openpyxl | 3.1.5 | 3.1.5 |
-| **matplotlib** | **absent** | 3.10.9 |
+| Package | Used for |
+|---|---|
+| numpy | binary matrices, groundtruth, result processing |
+| matplotlib | plots |
+| openpyxl | workbook generation |
+| pandas | optional tabular analysis |
+| dulwich | optional pure-Python Git fallback |
 
-- **Plot scripts must run under conda base.** The venv fails with
-  `ModuleNotFoundError: No module named 'matplotlib'`.
-- Dataset prep (numpy-only) runs fine under either.
-- The Pylance run-code-snippet tool uses the **venv**, so it can do numpy and openpyxl
-  inspection but not plotting.
+The current workspace venv supports helper scripts, plotting, and workbook generation.
+Configure it before running Python commands or installing missing packages.
 
 Scripts `import benchlib` by bare name, so run them from `_results/scripts/`:
 
 ```powershell
-Push-Location "$(git rev-parse --show-toplevel)\_results\scripts"
+Push-Location "<repo-root>\_results\scripts"
 python plot_online_bytes_recall.py
 Pop-Location
 ```
@@ -44,7 +44,8 @@ Pop-Location
 
 ## Long-running jobs
 
-- Use **async mode** for builds and sweeps; you are notified on completion. Do not poll and
+- Run one-shot builds and sweeps normally. The terminal integration may move a quiet,
+  long-running command into the background and will notify on completion. Do not poll and
   do not `Start-Sleep`.
 - **Terminal cleanup kills running children.** Do not tidy up terminals while a build or
   sweep is in flight.
@@ -66,3 +67,6 @@ Pop-Location
 - `build_online_workbook.py` **at the repository root is a stale duplicate** and is marked
   as such in its docstring. The live copy is `_results/scripts/build_online_workbook.py`.
 - Experiment work happens on `u/adkrishnan/graph-ivf`; the default branch is `main`.
+- On the current Windows host, Git for Windows may fail with `BUG (fork bomb)`. Do not keep
+  retrying native Git when that happens. Use `dulwich` for read-only status/diff inspection
+  until Git is repaired. This is an environment workaround, not a repository dependency.

@@ -311,14 +311,15 @@ Without the feature the `graph-ivf` input kind is still parsed and validated —
 backends (`graph-ivf-f32`, `-f16`, `-u8`, `-i8`, `-minmax8`) are absent, so a config that
 uses it fails at benchmark-matching rather than at deserialization.
 
-A job is one `source` (how the index comes to exist) plus one `search_phase`. The three
-sources are tagged by `graph-ivf-source`, and the tag matches the `build_kind` reported in
-the output, so a config and the results it produced name the same builder:
+A job is one `source` (how the index comes to exist) plus an optional final
+`search_phase`. The four sources are tagged by `graph-ivf-source`; the tag matches the
+`build_kind` reported in the output, so a config and its results name the same builder:
 
 | `graph-ivf-source` | What it does | Key fields |
 | --- | --- | --- |
 | `Static` | Batch build: fit `k` centroids by k-means over a corpus sample, then assign every point. | `num_clusters`, `sample_size`, `kmeans_iters`, `assign_method`, `empty_clusters`, `save_path` |
 | `Online` | Streaming build: insert points, splitting a cluster whenever it overflows. The cluster count emerges from the data. | `split_threshold`, `batch_size`, `max_clusters`, `reassign_neighbors`, `reassign_l`, `normalize`, `save_path`, `telemetry_csv` |
+| `OnlineRunbook` | Replay BigANN insert/delete/search stages against a live online index, then flush it once. | nested `build`, `runbook`, and `search` objects; see below |
 | `Load` | Search an index built by an earlier job. | `load_path` |
 
 `batch_size` (default `1`) controls how many points an `Online` build consumes at
@@ -331,13 +332,15 @@ bisection at a time. That last part changes the partition, so compare recall
 before switching. See
 [`diskann-graphivf/ONLINE.md`](../diskann-graphivf/ONLINE.md#3b-batched-inserts).
 
-All three sources take `data_type` (`float32` \| `float16` \| `uint8` \| `int8` \|
-`minmax8`), which is the on-disk element type of the inverted lists and selects the
-backend — a `Load` job must name the same type the index was built with. The two build
-sources additionally take the corpus (`data`, `dim`, `distance`) and the centroid-graph
+Static, online, and load sources take `data_type` (`float32` \| `float16` \| `uint8` \|
+`int8` \| `minmax8`), which is the on-disk element type of the inverted lists and selects
+the backend — a `Load` job must name the same type the index was built with. An
+`OnlineRunbook` puts the same online build fields inside its `build` object. Static and
+online builds additionally take the corpus (`data`, `dim`, `distance`) and centroid-graph
 parameters (`graph_degree`, `graph_slack`, `graph_l_build`, `graph_alpha`).
 
-The two build sources are deliberately disjoint and both use `deny_unknown_fields`: a
+The static and online build schemas are deliberately disjoint and use
+`deny_unknown_fields`: a
 config that mixes k-means knobs into an online build is a hard error rather than a set of
 silently ignored keys. `save_path` and `load_path` are index *prefixes* — the
 `.graphivf_meta`, `.graphivf_lists` and `.graphivf_centroids.fbin` suffixes are added by
@@ -345,19 +348,68 @@ the backend. A relative `save_path` is resolved against the working directory, n
 runner's `output_directory`; setting `output_directory` alongside a graph-IVF build is
 rejected rather than silently ignored.
 
-The search phase sweeps `nlist` (the number of nearest clusters to probe), running one
-search per value:
+The search phase sweeps `cluster_fractions`, running one search per requested share of
+the index's clusters:
 ```json
 "search_phase": {
   "queries": "disk_index_sample_query_10pts.fbin",
   "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
   "num_threads": 1,
-  "nlist": [1, 2, 4, 8, 16],
+  "cluster_fractions": [0.0625, 0.125, 0.25, 0.5, 1.0],
   "centroid_search_l": 64,
   "recall_at": [10, 100],
   "distance": "squared_l2"
 }
 ```
+Each fraction must be finite and in `(0.0, 1.0]`. For an index with `C` clusters the
+benchmark passes `ceil(fraction * C)` as the library-level `nlist`, so every positive
+fraction probes at least one cluster and `1.0` is exhaustive. An `OnlineRunbook`
+recomputes that value from the current live cluster count at every search stage; inserts,
+deletes, splits, and dissolves therefore do not change the requested share of clusters.
+Results retain both `cluster_fraction` and the effective concrete `nlist`.
+
+An online runbook source has this shape:
+
+```json
+"source": {
+  "graph-ivf-source": "OnlineRunbook",
+  "build": {
+    "data_type": "float32",
+    "data": "corpus.fbin",
+    "distance": "squared_l2",
+    "dim": 100,
+    "split_threshold": 120,
+    "merge_threshold": 40,
+    "reassign_neighbors": 10,
+    "graph_degree": 32,
+    "graph_slack": 1.2,
+    "graph_l_build": 64,
+    "graph_alpha": 1.2,
+    "num_threads": 16,
+    "seed": 0,
+    "save_path": "/absolute/path/to/output-prefix"
+  },
+  "runbook": {
+    "runbook_path": "runbooks/final_runbook.yaml",
+    "dataset_name": "dataset-key-in-runbook",
+    "gt_directory": "groundtruth/final_runbook.yaml"
+  },
+  "search": {
+    "queries": "queries.fbin",
+    "cluster_fractions": [0.01, 0.05, 0.10, 0.15],
+    "centroid_search_l": 4096,
+    "recall_at": [50]
+  }
+}
+```
+
+`batch_size` sub-batches each runbook insert/delete range; it does not alter stage
+boundaries. Search runs only at explicit runbook search stages. `gt_directory` must contain
+exactly one `step<stage>.gt<depth>` file for every search stage. Replace stages are rejected
+because graph-IVF external ids are corpus row ids and cannot be remapped in place. The
+runbook result records every mutation and search stage; split and merge CSVs are written
+after replay and the final index flush succeeds.
+
 Each sweep reports recall, QPS, mean/p95/p999 latency, bytes read and IOs per query, plus
 a per-stage latency breakdown (preprocess, centroid search, plan I/O, disk read, score,
 top-k). `recall_at` takes a single `k` or a list of them: a sweep searches once to the
@@ -367,9 +419,7 @@ one row per split, which is a complete timeline of cluster growth and split cost
 
 Four constraints are worth calling out because they are checked up front:
 
-- No `nlist` may exceed the index's cluster count. For an online build that count emerges
-  from the data rather than being declared, so size the sweep against what the build
-  actually produced (or cap it with `max_clusters`).
+- `cluster_fractions` must contain at least one value, all in `(0.0, 1.0]`.
 - The groundtruth must carry at least the largest `recall_at` neighbors per query, since
   scoring deeper than it reaches would silently read another query's row.
 - Online builds store corpus rows verbatim and cannot normalize them, so `cosine` is
@@ -377,8 +427,10 @@ Four constraints are worth calling out because they are checked up front:
 - For `minmax8` indexes the corpus and queries must both already be quantized; see
   [`compress_minmax`](../diskann-graphivf/scripts/README.md).
 
-Three runnable examples cover the shapes, all against the checked-in `test_data` corpus so
-they work from a fresh clone:
+Three runnable examples cover static, online, and load jobs, all against the checked-in
+`test_data` corpus so they work from a fresh clone. Online runbooks require a workload with
+insert/delete-only stages and matching per-stage groundtruth, so their portable schema is
+shown above rather than tied to a machine-local dataset:
 
 | Config | What it shows |
 | --- | --- |

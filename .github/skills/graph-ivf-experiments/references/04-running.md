@@ -3,20 +3,21 @@
 ## Build the runner
 
 ```powershell
-cargo build --release -p diskann-benchmark --features graph-ivf,disk-index
+cargo build --release -p diskann-benchmark --features graph-ivf
 ```
 
-Both features are needed for the graph-IVF vs disk-index comparison. Rebuild after any
-change under `diskann-benchmark/` or `diskann-graphivf/`.
+Add `disk-index` only when the same run needs that backend; unrelated feature sets can
+require additional generated tooling. Rebuild after any change under `diskann-benchmark/`
+or `diskann-graphivf/`.
 
 ## Run one job
 
 ```powershell
-$b = git rev-parse --show-toplevel   # repo root, from anywhere in the working tree
+$b = "<absolute-repo-root>"
 & "$b\target\release\diskann-benchmark.exe" run `
-    --input-file  "$b\diskann-benchmark\example\graph-ivf-nq-load-t120-r1000.json" `
-    --output-file "$b\_results\logs\nq\graphivf_nq_t120_s32_b4096_iters6_nz_r1000.json" `
-    2>&1 | Tee-Object -FilePath "$b\_results\logs\nq\graphivf_nq_t120_s32_b4096_iters6_nz_r1000.log" | Out-Null
+  --input-file  "$b\diskann-benchmark\example\graph-ivf-nq-load-t120.json" `
+  --output-file "$b\_results\logs\nq\graphivf_nq_t120_s32_b4096_iters6_nz_search.json" `
+  2>&1 | Tee-Object -FilePath "$b\_results\logs\nq\graphivf_nq_t120_s32_b4096_iters6_nz_search.log" | Out-Null
 Write-Output "DONE exit=$LASTEXITCODE"
 ```
 
@@ -26,9 +27,10 @@ Write-Output "DONE exit=$LASTEXITCODE"
 - The `.json` is what analysis reads; the `.log` is for diagnosing a failure. Keep both,
   same stem, in `_results/logs/<dataset>/`.
 
-**Run one at a time.** A `foreach` loop over several benchmark invocations silently
-executes nothing. Long sweeps should use async mode and be left alone until they report
-completion.
+**Run one benchmark at a time.** Invoke it directly rather than through a PowerShell loop.
+The terminal integration may move a quiet long-running command into the background; retain
+that execution and leave it alone until completion notification. Do not launch another
+benchmark beside it.
 
 **Never clean up a terminal while a run is in flight.** Doing so kills the child process —
 you get no log, no JSON, and no error. One t120 sweep was lost exactly this way and had to
@@ -37,11 +39,18 @@ be relaunched from scratch.
 ## Order of operations
 
 ```
-build t=<A>  →  build t=<B>  →  sweep A@50  →  sweep A@1000  →  sweep B@50  →  sweep B@1000
+build t=<A>  →  build t=<B>  →  sweep A@[50,1000]  →  sweep B@[50,1000]
 ```
 
-Builds are the expensive, serial part (mostly per-insert). Sweeps are cheap by comparison
-and reuse the saved index, so get both builds done first.
+Builds are the expensive, serial part (mostly per-insert). Sweeps reuse the saved index, so
+get the builds done first. Split a sweep into multiple centroid-beam bands only when one
+beam would distort the low-effort end; each band can still measure both recall depths.
+
+An `OnlineRunbook` does not follow this order: it intentionally interleaves mutations and
+live searches in one replay. Runbook JSON, split telemetry, and merge telemetry are written
+only after replay and final flush complete, so a quiet log and absent output files are not
+stage-level progress indicators. Check process liveness and cumulative CPU without killing
+or restarting the terminal.
 
 ## Naming
 
@@ -51,7 +60,7 @@ The run name is the experiment's identity — analysis selects on the embedded `
 ```
 graphivf_<dataset>_<t-tag>_<variant tags>_<correction marker>_<phase>.json
 graphivf_nq_online_t800_s32_b4096_iters6_nz_build.json
-graphivf_nq_t800_s32_b4096_iters6_nz_r50.json
+graphivf_nq_t800_s32_b4096_iters6_nz_search.json
 ```
 
 When results are superseded (corrected groundtruth, rebuilt corpus), **rename the new ones**
@@ -78,17 +87,18 @@ A large deviation means the run did not reach equilibrium.
 
 ## Reading sweep output
 
-`results.search.search_results_per_nlist[]` gives per-`nlist`: `qps`, `mean_latency`,
-`p95_latency`, `p999_latency`, `recall`, and a `breakdown` of `io_count`, `bytes_read`,
-`preprocess_ns`, `centroid_search_ns`, `plan_io_ns`, `disk_read_ns`, `score_ns`, `topk_ns`.
+`results.search.search_results_per_nlist[]` gives the requested `cluster_fraction`, its
+effective concrete `nlist`, `qps`, `mean_latency`, `p95_latency`, `p999_latency`, recall,
+and a `breakdown` of `io_count`, `bytes_read`, `preprocess_ns`, `centroid_search_ns`,
+`plan_io_ns`, `disk_read_ns`, `score_ns`, and `topk_ns`.
 
 Expected shapes — a deviation is a bug, not a finding:
 
 - **I/O count ≈ `nlist`** (sometimes `nlist - 1`). Each probed list is one read.
-- **Bytes read grows linearly in `nlist`**, and is identical between the recall@50 and
-  recall@1000 runs of the same index — only the scoring depth differs.
-- **Centroid search time is flat** across `nlist` (it depends on `centroid_search_l`, not
-  `nlist`): ~2.6 ms at L=1024, ~9 ms at L=2048 with 36K centroids.
+- **Bytes read grows linearly in `nlist`.** Multiple recall depths scored from one result
+  buffer share the same I/O measurements.
+- **Centroid search time is flat** across `nlist` only while
+  `centroid_search_l >= nlist`; the effective beam is `max(centroid_search_l, nlist)`.
 - **Disk read dominates** at high `nlist`.
 
 If recall does not climb with `nlist`, stop and re-read [stage 2](./02-groundtruth.md)

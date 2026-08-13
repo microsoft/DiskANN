@@ -22,6 +22,12 @@ pub enum GraphIvfError {
     #[error("invalid parameter: {0}")]
     InvalidParameter(String),
 
+    /// An online mutation failed after it began changing internal state.
+    /// Further operations are rejected because centroid-graph retirements
+    /// cannot be rolled back safely.
+    #[error("online clusterer is unusable after a failed mutation: {0}")]
+    Poisoned(String),
+
     /// An on-disk index file was malformed or had an unexpected layout.
     #[error("malformed index file: {0}")]
     Malformed(String),
@@ -33,6 +39,10 @@ pub type Result<T> = std::result::Result<T, GraphIvfError>;
 impl GraphIvfError {
     pub(crate) fn invalid(msg: impl Into<String>) -> Self {
         Self::InvalidParameter(msg.into())
+    }
+
+    pub(crate) fn poisoned(msg: impl Into<String>) -> Self {
+        Self::Poisoned(msg.into())
     }
 
     pub(crate) fn malformed(msg: impl Into<String>) -> Self {

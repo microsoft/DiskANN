@@ -271,7 +271,7 @@ mod tests {
     use super::*;
     use crate::{
         backend::graph_ivf::search::{search_graph_ivf, GraphIvfSearchResult},
-        inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
+        inputs::graph_ivf::{ClusterFraction, GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
         utils::SimilarityMeasure,
     };
 
@@ -519,7 +519,10 @@ mod tests {
             num_threads: 2,
             // Scanning every cluster must recover the exact answer; a narrow probe
             // should be worse, which is what makes the recall number meaningful.
-            nlist: vec![1, stats.final_clusters],
+            cluster_fractions: vec![
+                ClusterFraction::new(f64::MIN_POSITIVE),
+                ClusterFraction::new(1.0),
+            ],
             centroid_search_l: 128,
             // Two depths from one sweep: the shallower must be scored from the
             // prefix of the deeper search's results, not from a second search.
@@ -532,6 +535,9 @@ mod tests {
         assert_eq!(results.recall_at, vec![5, RECALL_AT as u32]);
         let narrow = &results.search_results_per_nlist[0];
         let exhaustive = &results.search_results_per_nlist[1];
+        assert_eq!(narrow.nlist, 1);
+        assert_eq!(exhaustive.nlist, stats.final_clusters);
+        assert_eq!(exhaustive.cluster_fraction, 1.0);
 
         let at = |r: &GraphIvfSearchResult, k: u32| {
             r.recalls

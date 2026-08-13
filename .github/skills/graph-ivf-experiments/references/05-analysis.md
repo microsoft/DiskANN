@@ -2,9 +2,9 @@
 
 All analysis lives in `_results/scripts/` and shares [`benchlib.py`](../../../../_results/scripts/benchlib.py).
 
-**Run from `_results/scripts/`** (the scripts `import benchlib` by bare name) **using conda
-python, not the venv** — the venv has numpy and openpyxl but no matplotlib. See
-[environment](./06-environment.md).
+**Run from `_results/scripts/`** because the scripts import `benchlib` by bare name. Use the
+workspace's configured Python environment and verify that NumPy, matplotlib, and openpyxl
+are installed. See [environment](./06-environment.md).
 
 ## benchlib
 
@@ -40,6 +40,12 @@ Row columns: `nlist, qps, mean_us, p95_us, p999_us, recall, recall50, recall1000
 ios_q, reqbytes, preproc_us, centroid_us, planio_us, diskread_us, score_us, topk_us`.
 A `recall<k>` column exists for each measured depth, and `recall` aliases the shallowest.
 Legacy rows carry `p99_us`; JSON rows carry `p999_us`. Neither has both.
+
+`OnlineRunbook` output has a different shape: `results.build.stages[]` contains mutation
+and live-search stages, and each search stage contains one entry per cluster fraction with
+the effective `nlist`, recall list, points scanned, scan percentage, and latency. Do not
+feed it through immutable-index `online_rows`; export stage/search/split/merge tables and
+plot recall against search-stage ordinal as described in [stage 7](./07-online-runbooks.md).
 
 ## The dataset registry
 

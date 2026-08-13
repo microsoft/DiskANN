@@ -17,13 +17,13 @@ below) — only data lives here.
 
 Both are little-endian with an 8-byte header.
 
-**fp16** — used for exact groundtruth computation.
+**f32/fp16** — full-precision inputs used for exact groundtruth computation.
 
 | Offset | Type | Meaning |
 |---|---|---|
 | 0 | `u32` | `npts` |
 | 4 | `u32` | `dim` |
-| 8 | `f16 × npts × dim` | row-major vectors |
+| 8 | `f32` or `f16 × npts × dim` | row-major vectors |
 
 **minmax8** — the quantized form the index is built and searched on.
 
@@ -97,10 +97,12 @@ Conventional names: `corpus_fp16.bin`, `corpus_minmax8.bin`, `queries_full_minma
 
 ## Normalization
 
-Configs set `normalize: true`, which L2-normalizes vectors and centroids. For a zero vector
-this is a division by zero — another reason degenerate rows must be removed rather than
-tolerated.
+For online graph-IVF, `normalize: true` normalizes **warmup and split centroids only**. It
+does not rewrite corpus or query rows; online rows are stored verbatim. If cosine semantics
+are needed, normalize corpus and queries during preparation, then use
+`distance: cosine_normalized`. Use `normalize: false` for ordinary squared-L2 datasets such
+as MSTuring.
 
-If a corpus is already unit-norm (most embedding models), squared L2 and inner product rank
-identically, so `distance: squared_l2` is used throughout and cosine results are directly
-comparable.
+Remove zero rows before normalization. For a genuinely unit-norm corpus, squared L2 and
+inner product produce the same ordering, but record the metric actually used rather than
+assuming every embedding dataset is normalized.

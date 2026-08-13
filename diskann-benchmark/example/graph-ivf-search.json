@@ -15,12 +15,12 @@
                     "queries": "disk_index_sample_query_10pts.fbin",
                     "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
                     "num_threads": 1,
-                    "nlist": [
-                        1,
-                        2,
-                        4,
-                        8,
-                        16
+                    "cluster_fractions": [
+                        0.0625,
+                        0.125,
+                        0.25,
+                        0.5,
+                        1.0
                     ],
                     "centroid_search_l": 64,
                     "recall_at": 10,

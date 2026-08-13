@@ -14,11 +14,12 @@ A hybrid **graph + clustered-IVF** approximate nearest neighbor index. Two parts
 **Search:** graph-find the `nlist` nearest centroids → one batched read of those lists
 → exhaustively score the query against the fetched vectors → top-k.
 
-Two build paths share this on-disk format and the same search path:
+Two build paths share this on-disk format and the same flushed-index search path:
 
-- **Online** (primary) — streaming build: insert points one at a time; split
-  overflowing clusters and locally reassign. The cluster count emerges from the
-  data. See [`ONLINE.md`](ONLINE.md) for the algorithm.
+- **Online** (primary) — mutable streaming partition: route inserts, split
+  overflowing clusters with local reassignment, remove deleted points, and
+  dissolve underfull clusters onto nearby survivors. The live cluster count
+  emerges from the stream. See [`ONLINE.md`](ONLINE.md) for the algorithm.
 - **Static** — batch build: sample/select centroids, k-means, assign, write lists.
   Useful as a fixed-`k` baseline.
 
@@ -74,13 +75,22 @@ only sets how the *loaded* index scores at search time:
 | `inner_product` | inner product (MIPS) |
 | `cosine` | cosine — **static builds only**; an online build writes rows verbatim and so cannot normalize them |
 
+The graph-navigation column describes a flushed index rebuilt by `load`. Live
+`OnlineSearcher` queries always navigate the mutable centroid graph with L2,
+while scoring candidates with the configured metric.
+
 **Search** (the harness's `search_phase`):
 
 | Field | Meaning |
 | --- | --- |
-| `nlist` | numbers of nearest clusters (lists) to probe — one search per value |
-| `centroid_search_l` | centroid-graph search-list size; effective L is `max(centroid_search_l, nlist)` |
+| `cluster_fractions` | fractions of the index's clusters to probe, in `(0.0, 1.0]` — one search per value |
+| `centroid_search_l` | centroid-graph search-list size; effective L is at least the fraction's computed `nlist` |
 | `recall_at` | the `k` recall is measured at — one value, or a list scored from a single search |
+
+For `C` live clusters, the harness computes `nlist = ceil(cluster_fraction · C)`.
+It reports both values. A runbook recomputes `C` at every search stage, so the same
+fraction continues to mean the same share while the index grows and shrinks. The
+library's `SearchParams` remains concrete and continues to accept `nlist` directly.
 
 A `Load` job needs only `data_type` and the index prefix — the same `data_type` the index
 was built with, since it selects the backend that decodes the lists.
@@ -89,37 +99,43 @@ was built with, since it selects the backend that decodes the lists.
 
 ## 3. Online index (primary)
 
-No target cluster count: points stream in and clusters **split** when they exceed
-`split_threshold`; the final count emerges from the data. Run it with a
-`"graph-ivf-source": "Online"` job.
+No target cluster count is required: points stream in, clusters **split** when
+they exceed `split_threshold`, and delete-driven **dissolves** can reduce the
+live count. A plain `"graph-ivf-source": "Online"` job inserts the corpus once;
+an `OnlineRunbook` job replays insert, delete, and live-search stages.
 
 ### Build parameters
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `split_threshold` | *(required)* | split a cluster once it holds **more** than this many points (dominant granularity knob) |
+| `merge_threshold` | 0 | dissolve a cluster once deletes leave it below this size; `0` disables dissolves and `2 · merge_threshold ≤ split_threshold` is required |
+| `min_clusters` | 1 | live-cluster floor enforced when admitting dissolves |
+| `batch_size` | 1 | points routed and planned together per insert batch; larger batches enable parallel routing and joint split k-means |
 | `warmup_centroids` | 100 | initial centroids from a light k-means over a corpus prefix |
 | `warmup_points` | 10000 | leading corpus points used for the warmup |
 | `warmup_iters` | 15 | Lloyd iterations for that warmup |
 | `num_threads` | *(required)* | worker threads |
 | `assign_l` | 64 | centroid-graph search-list size for routing inserts |
-| `two_means_iters` | 12 | Lloyd iterations per split 2-means |
-| `distance` | *(required)* | recorded scoring metric; `cosine` is rejected (rows are stored verbatim) |
-| `normalize` | `false` | L2-normalize child centroids after a split (unit-sphere corpora) |
+| `two_means_iters` | 12 | Lloyd iterations for split k-means (two children per admitted parent) |
+| `distance` | *(required)* | live/flushed candidate-scoring metric; `cosine` is rejected (rows are stored verbatim) |
+| `normalize` | `false` | L2-normalize warmup and split-child centroids (unit-sphere corpora) |
 | `capacity_mult` | 3 | centroid id-budget headroom (`≈ capacity_mult · 2N / split_threshold`) |
-| `reassign_neighbors` | 8 | `s` nearest neighbor clusters pooled for reassignment on a split |
-| `reassign_l` | `max(s, assign_l)` | search-list size selecting those `s` neighbors |
+| `reassign_neighbors` | 8 | split-neighbor candidates and maximum survivor landing sites per dissolve |
+| `reassign_l` | `max(s, assign_l)` | search-list size for split-neighbor and dissolve-survivor selection |
 | `max_clusters` | *(omit)* | omitted/`null` = uncapped growth; else a hard cap on live clusters |
 | `data_type` | *(required)* | on-disk element type: `minmax8` \| `float16` \| `float32` \| `uint8` \| `int8` |
-| `telemetry_csv` | *(omit)* | path for the per-split telemetry CSV; omit to skip writing it |
+| `telemetry_csv` | *(omit)* | split telemetry path; an `OnlineRunbook` also writes a derived `<stem>_merges.<ext>` sibling |
 
-Equilibrium live clusters ≈ `2 · num_points / split_threshold`.
+For an insert-only uncapped build, equilibrium live clusters are approximately
+`2 · num_points / split_threshold`. Under churn the count also depends on the
+delete stream, `merge_threshold`, and `min_clusters`.
 
-Writes `<save_path>.graphivf_{lists,meta,centroids.fbin}`, plus the telemetry CSV if
-asked for (per-split: cluster size, neighbors pooled, points reassigned, live count,
-and 2-means / reassign / total latency). Unlike the retired `build_online` script, the
-prefix is used verbatim — encode the knobs in `save_path` yourself if you want them in
-the filename.
+Writes `<save_path>.graphivf_{lists,meta,centroids.fbin}`. If requested, a plain
+online build writes the split telemetry CSV; an `OnlineRunbook` writes that file
+plus its derived merge sibling. Unlike the retired `build_online` script, the
+prefix is used verbatim — encode the knobs in `save_path` yourself if you want
+them in the filename.
 
 Example — ~16384 clusters (`th=106`), `s=5` reassignment neighbors:
 
@@ -143,13 +159,42 @@ Example — ~16384 clusters (`th=106`), `s=5` reassignment neighbors:
 }
 ```
 
-The job's `search_phase` then sweeps `nlist` over the index it just built, printing one
-row per value: one recall column per `recall_at`, mean/p95/p999 latency (µs), bytes
-read/query, IOs/query, request bytes, QPS, and a per-stage latency breakdown (preprocess,
-centroid search, plan I/O, disk read, score, top-k). Each search runs to the largest
-`recall_at` and every listed `k` is scored from that one result set, so `[50, 1000]`
-costs what `50` alone did. Point a later `Load` job at the same prefix to re-sweep
-without rebuilding.
+### Live mutation, search, and failure behavior
+
+The library's [`OnlineClusterer`](src/online.rs) exposes `insert_batch` and
+`delete_batch`. Both validate and compute projected cluster sizes before
+changing live state; each also completes its applicable fallible routing,
+neighborhood search, snapshots, and k-means. Structural commit goes through one
+private owner of the centroid table and graph, while point movement goes through
+one owner of the inverted lists and reverse assignments. If a commit fails after
+an irreversible graph operation, [`OnlineClusterer::is_poisoned`](src/online.rs)
+becomes true and later insert, delete, search, and flush operations return
+[`GraphIvfError::Poisoned`](src/error.rs); preparation errors leave the clusterer
+usable. See [the detailed failure contract](ONLINE.md#3d-state-ownership-and-failure-semantics).
+
+Before flush, [`OnlineClusterer::searcher`](src/online.rs) opens an
+[`OnlineSearcher`](src/online/search.rs) over the current full-precision
+partition. `search` is an allocating convenience method. `search_into` reuses a
+caller-owned vector as both the candidate buffer and sorted top-k output, so
+steady-state calls avoid allocating and copying a second result; it returns
+per-query [`OnlineSearchStats`](src/online/search.rs), while `points_scanned()`
+on the handle is cumulative. Keep one handle per worker. Its immutable borrow
+prevents concurrent mutation.
+
+The benchmark's `OnlineRunbook` source uses this live API at each search stage
+while replaying a BigANN runbook. It reports recall at every configured depth,
+latency, `mean_points_scanned`, and the scanned percentage of the current live
+set. Runbook insert/delete ranges are internally sub-batched by `batch_size`, while
+searches happen only at explicit runbook stages. It flushes once at the end, so an
+optional outer `search_phase` can still measure the resulting on-disk index.
+
+For a plain `Online` job, `search_phase` sweeps `cluster_fractions` over the index after
+it is flushed, printing one row per value with its effective `nlist`: one recall column per `recall_at`,
+mean/p95/p999 latency (µs), bytes read/query, IOs/query, request bytes, QPS, and
+a per-stage latency breakdown (preprocess, centroid search, plan I/O, disk read,
+score, top-k). Each search runs to the largest `recall_at` and every listed `k`
+is scored from that one result set, so `[50, 1000]` costs what `50` alone did.
+Point a later `Load` job at the same prefix to re-sweep without rebuilding.
 
 ---
 
@@ -210,7 +255,8 @@ either one.
 | `<prefix>.graphivf_centroids.fbin` | centroid matrix (`f32`), reloaded to rebuild the graph |
 | `<prefix>.graphivf_lists` | contiguous per-cluster inverted lists (`T` = the `data_type` element type) |
 | `<prefix>.graphivf_meta` | layout: counts, offsets, dim, metric, element size, graph params |
-| `<telemetry_csv>` | online only — per-split telemetry timeline |
+| `<telemetry_csv>` | plain online and online runbook — per-split telemetry timeline |
+| `<stem>_merges.<ext>` | online runbook only — per-dissolve telemetry timeline derived from `telemetry_csv` |
 
 ---
 
@@ -218,5 +264,5 @@ either one.
 
 - [graph-IVF in `diskann-benchmark/README.md`](../diskann-benchmark/README.md#graph-ivf) —
   how to configure and run a job, and worked configs for each source.
-- [`ONLINE.md`](ONLINE.md) — online split-and-reassign algorithm and search internals.
+- [`ONLINE.md`](ONLINE.md) — online insert/delete, split/dissolve, failure, and search internals.
 - [`scripts/README.md`](scripts/README.md) — corpus preparation and centroid-graph diagnostics.

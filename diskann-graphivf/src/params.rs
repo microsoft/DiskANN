@@ -9,20 +9,29 @@ use diskann_vector::distance::Metric as VectorMetric;
 
 /// Distance metric.
 ///
-/// `L2` and `Cosine` reduce everything to squared-L2 (`Cosine` additionally
-/// L2-normalizes vectors at build and query time). `InnerProduct` is a *hybrid*
-/// metric intended for maximum-inner-product (MIPS) datasets: the index is
-/// still **built** (clustering, centroid assignment) under squared-L2, but at
-/// **search** time both the centroids and the inverted-list points are scored
-/// by inner product (larger is better).
+/// `L2` and `Cosine` both score by squared-L2; cosine has the same ordering for
+/// unit vectors. A plain static build normalizes its corpus copy. Callers must
+/// supply normalized queries, and build paths that store pre-encoded or online
+/// corpus rows verbatim require those rows to be normalized before construction.
+/// `InnerProduct` is a *hybrid* metric intended for maximum-inner-product (MIPS)
+/// datasets: the index is still **built** (clustering, centroid assignment)
+/// under squared-L2. After an
+/// index is flushed and loaded, both centroids and inverted-list points are
+/// scored by inner product (larger is better). Live [`OnlineSearcher`] queries
+/// retain L2 navigation in the mutable centroid graph while scoring list
+/// candidates by inner product.
+///
+/// [`OnlineSearcher`]: crate::OnlineSearcher
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Metric {
     /// Squared Euclidean distance.
     L2,
-    /// Cosine similarity (vectors are L2-normalized).
+    /// Cosine similarity over L2-normalized vectors, ranked by squared-L2.
     Cosine,
-    /// Maximum inner product. Build (clustering + assignment) uses squared-L2;
-    /// search scores centroids and inverted-list points by inner product.
+    /// Maximum inner product. Build (clustering + assignment) uses squared-L2.
+    /// A loaded index scores centroids and list points by inner product; live
+    /// online search keeps L2 centroid navigation and scores list points by
+    /// inner product.
     InnerProduct,
 }
 
@@ -44,19 +53,20 @@ impl Metric {
         }
     }
 
-    /// Whether vectors must be L2-normalized for this metric.
+    /// Whether a static build should L2-normalize its clustering corpus.
     pub(crate) fn normalizes(self) -> bool {
         matches!(self, Metric::Cosine)
     }
 
-    /// The [`diskann_vector`] distance used at **search** time — both for
-    /// scoring candidates and for navigating the centroid graph.
+    /// The [`diskann_vector`] distance used to score list candidates and to
+    /// construct/navigate the immutable centroid graph when an index is loaded.
     ///
     /// `InnerProduct` scores by (negated) inner product so queries reach the
-    /// maximum-inner-product neighbors; `L2` and `Cosine` score by squared-L2
-    /// (`Cosine` vectors are normalized at build and query time, making L2 order
-    /// equivalent to cosine). Clustering and the build-time centroid graph
-    /// always use squared-L2 regardless of this value.
+    /// maximum-inner-product neighbors; `L2` and `Cosine` score by squared-L2.
+    /// Cosine corpus and query vectors must be normalized before scoring, making
+    /// L2 order equivalent to cosine. Clustering and the mutable online centroid
+    /// graph always use squared-L2 regardless of this value, so live online
+    /// search uses this distance only for candidate scoring.
     pub(crate) fn search_metric(self) -> VectorMetric {
         match self {
             Metric::InnerProduct => VectorMetric::InnerProduct,
@@ -230,19 +240,20 @@ pub struct OnlineParams {
     /// Centroid-graph search-list size used to route each inserted point.
     pub assign_l: usize,
     /// Number of nearest centroid clusters (besides the two children) drawn in
-    /// as reassignment candidates when a cluster is split. Must be `>= 1`.
+    /// as reassignment candidates when a cluster is split, and the maximum
+    /// survivor landing sites considered when a cluster is dissolved. Must be
+    /// `>= 1`.
     ///
     /// This replaces the earlier policy of using the split centroid's direct
     /// centroid-graph out-edges: the candidates are instead the `s` nearest live
     /// centroids to the split centroid, found by searching the centroid graph.
     pub reassign_neighbors: usize,
-    /// Centroid-graph search-list size for the nearest-centroid search that
-    /// selects the [`reassign_neighbors`](Self::reassign_neighbors) candidate
-    /// clusters. Larger values make the selection more accurate at higher cost;
-    /// it is clamped up to `reassign_neighbors + 1` internally. A good default
-    /// is `max(reassign_neighbors, assign_l)`.
+    /// Centroid-graph search-list size for split-neighbor and dissolve-survivor
+    /// selection. Larger values make selection more accurate at higher cost;
+    /// it is raised internally to fit the requested candidates and exclusions.
+    /// A good default is `max(reassign_neighbors, assign_l)`.
     pub reassign_l: usize,
-    /// Number of 2-means iterations used to split a cluster.
+    /// Lloyd iterations for split k-means (two children per admitted parent).
     pub two_means_iters: usize,
     /// A cluster is retired once deletes drop it below this many points. `0`
     /// disables merging entirely: deletes still remove points, but the
@@ -264,14 +275,14 @@ pub struct OnlineParams {
     pub min_clusters: usize,
     /// Centroid-graph construction parameters.
     pub graph: GraphParams,
-    /// Metric recorded in the flushed index metadata. Clustering and graph
-    /// navigation always use squared-L2 (as in a batch build); this only
-    /// controls how the *loaded* index scores at search time.
+    /// Candidate-scoring metric for live search and the metric recorded in the
+    /// flushed index metadata. Clustering and centroid-graph navigation always
+    /// use squared-L2 (as in a batch build).
     pub metric: Metric,
-    /// L2-normalize the two child centroids after a split (for unit-normalized
+    /// L2-normalize warmup and split-child centroids (for unit-normalized
     /// corpora).
     pub normalize_centroids: bool,
-    /// Worker threads for the internal 2-means and graph construction.
+    /// Worker threads for split k-means, routing, and graph construction.
     pub num_threads: usize,
     /// RNG seed for split seeding (reproducibility).
     pub seed: u64,

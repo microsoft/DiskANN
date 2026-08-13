@@ -48,13 +48,16 @@ use crate::{
 /// One measured sweep at one search stage.
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct GraphIvfRunbookSearchResult {
+    /// Requested share of the live clusters at this stage.
+    pub(super) cluster_fraction: f64,
+    /// Concrete number of clusters probed after rounding the fraction up.
     pub(super) nlist: usize,
     /// One entry per configured `recall_at`, all scored from the same sweep.
     /// Percentages, matching the search phase's convention.
     pub(super) recalls: Vec<RecallPoint>,
-    /// Mean corpus vectors scored per query. `nlist` alone does not determine
-    /// this — the probed cells shrink and grow as the partition churns — so it
-    /// is the cost axis recall is meaningfully read against.
+    /// Mean corpus vectors scored per query. A cluster fraction alone does not
+    /// determine this — list sizes remain imbalanced as the partition churns —
+    /// so it is the cost axis recall is meaningfully read against.
     pub(super) mean_points_scanned: u64,
     /// `mean_points_scanned` as a percentage of the live set at this stage.
     pub(super) pct_scanned: f32,
@@ -65,7 +68,7 @@ pub(super) struct GraphIvfRunbookSearchResult {
 ///
 /// The mean is fixed by the live point and cluster counts, so the spread is
 /// what carries information: it is the shape of the partition, and therefore
-/// what a fixed `nlist` actually costs to probe.
+/// what a fixed cluster fraction actually costs to probe.
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct ClusterSizeStats {
     pub(super) min: usize,
@@ -136,7 +139,7 @@ pub(super) struct GraphIvfStageStats {
     pub(super) live_points: usize,
     /// Size distribution of those clusters after the stage.
     pub(super) sizes: ClusterSizeStats,
-    /// One entry per `nlist` value; empty for insert and delete stages.
+    /// One entry per cluster fraction; empty for insert and delete stages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) search: Vec<GraphIvfRunbookSearchResult>,
 }
@@ -253,7 +256,12 @@ impl fmt::Display for GraphIvfRunbookStats {
                 d.min, d.p10, d.p50, d.p90, d.p99, d.max, d.mean, d.under, d.over
             )?;
             for r in &stage.search {
-                write!(f, "\n         nlist={:<6}", r.nlist)?;
+                write!(
+                    f,
+                    "\n         nlist={:<6} clusters={:>7.4}%",
+                    r.nlist,
+                    100.0 * r.cluster_fraction
+                )?;
                 for p in &r.recalls {
                     write!(f, " r@{}={:.2}", p.at, p.recall)?;
                 }
@@ -452,7 +460,7 @@ impl GraphIvfStream<'_> {
         stats
     }
 
-    /// Run every configured `nlist` sweep against the current index.
+    /// Run every configured cluster-fraction sweep against the current index.
     fn sweep(&self, groundtruth: &Path) -> anyhow::Result<Vec<GraphIvfRunbookSearchResult>> {
         let search = &self.params.search;
         let k_max = search.recall_at.max() as usize;
@@ -465,16 +473,22 @@ impl GraphIvfStream<'_> {
             &groundtruth.to_string_lossy(),
         )?;
 
-        let mut results = Vec::with_capacity(search.nlist.len());
-        for &nlist in &search.nlist {
-            // The cluster count moves with the stream, so a sweep value that is
-            // too large early on is clamped rather than failing the run.
+        anyhow::ensure!(
+            num_clusters > 0,
+            "cannot search an online graph-IVF index with no live clusters"
+        );
+        let mut results = Vec::with_capacity(search.cluster_fractions.len());
+        for &cluster_fraction in &search.cluster_fractions {
+            // Resolve at every stage because inserts, deletes, splits, and
+            // dissolves all change the live cluster count over the runbook.
+            let nlist = cluster_fraction.nlist(num_clusters);
             let params = SearchParams {
-                nlist: nlist.min(num_clusters),
+                nlist,
                 centroid_search_l: search.centroid_search_l,
             };
             let mut searcher = self.clusterer.searcher()?;
             let mut result_ids = vec![0u32; k_max * num_queries];
+            let mut hits = Vec::with_capacity(k_max);
 
             let start = Instant::now();
             for (q, ids) in self
@@ -483,7 +497,7 @@ impl GraphIvfStream<'_> {
                 .chunks(self.dim)
                 .zip(result_ids.chunks_mut(k_max))
             {
-                let hits = searcher.search(q, k_max, &params)?;
+                searcher.search_into(q, k_max, &params, &mut hits)?;
                 for (slot, (id, _)) in ids.iter_mut().zip(hits.iter()) {
                     *slot = *id;
                 }
@@ -494,6 +508,7 @@ impl GraphIvfStream<'_> {
             let recalls = recall_points(&search.recall_at, num_queries, &gt, &result_ids, k_max)?;
 
             results.push(GraphIvfRunbookSearchResult {
+                cluster_fraction: cluster_fraction.get(),
                 nlist,
                 recalls,
                 mean_points_scanned,
@@ -577,7 +592,8 @@ mod tests {
 
     use super::*;
     use crate::inputs::graph_ivf::{
-        GraphIvfOnlineBuild, GraphIvfRunbookConfig, GraphIvfRunbookSearch, RecallAt,
+        ClusterFraction, GraphIvfOnlineBuild, GraphIvfRunbookConfig, GraphIvfRunbookSearch,
+        RecallAt,
     };
 
     const DIM: usize = 8;
@@ -717,9 +733,9 @@ mod tests {
                 },
                 search: GraphIvfRunbookSearch {
                     queries: self.query_file.clone(),
-                    // Larger than any cluster count the run reaches, so every
-                    // sweep is exhaustive and recall is exact.
-                    nlist: vec![NUM_POINTS],
+                    // Probe every cluster, so every sweep is exhaustive and
+                    // recall is exact however the cluster count changes.
+                    cluster_fractions: vec![ClusterFraction::new(1.0)],
                     centroid_search_l: NUM_POINTS,
                     recall_at: RecallAt::new(vec![5, RECALL_AT as u32]),
                 },
@@ -772,8 +788,17 @@ mod tests {
         assert_eq!(stats.final_points, 400);
 
         for stage in stats.stages.iter().filter(|s| s.kind == StageKind::Search) {
-            assert_eq!(stage.search.len(), 1, "one sweep per configured nlist");
+            assert_eq!(
+                stage.search.len(),
+                1,
+                "one sweep per configured cluster fraction"
+            );
             let result = &stage.search[0];
+            assert_eq!(result.cluster_fraction, 1.0);
+            assert_eq!(
+                result.nlist, stage.live_clusters,
+                "the same fraction must be resolved from each stage's current cluster count"
+            );
             assert_eq!(
                 result.recalls.iter().map(|p| p.at).collect::<Vec<_>>(),
                 vec![5, RECALL_AT as u32],

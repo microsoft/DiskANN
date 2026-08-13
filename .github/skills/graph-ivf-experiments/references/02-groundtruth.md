@@ -13,12 +13,12 @@ sweeping.**
 | 8 | `u32 × nq × K` | neighbour ids |
 | … | `f32 × nq × K` | distances |
 
-The runner's `load_groundtruth` reads the ids and ignores the trailing distances. Keep the
-distances anyway — the audit below needs them.
+The runner's truthset loader accepts ids-only files or ids followed by distances. Keep the
+distances: recall uses them to include exact ties at the cutoff, and the audit needs them.
 
 ## Computing it
 
-Exact brute force over the **fp16** corpus (not the quantized one):
+Exact brute force over the **f32/fp16 source corpus** (not the quantized one):
 
 ```text
 python diskann-graphivf/scripts/dataprep/vecprep.py groundtruth \
@@ -27,14 +27,21 @@ python diskann-graphivf/scripts/dataprep/vecprep.py groundtruth \
 ```
 
 It chunks the corpus (`--chunk`, default 32768 rows) and merges a running top-K via
-`argpartition`, so an 8 GB corpus never lands in memory whole. `--metric mips` is available
-for non-normalized corpora; the study uses the default `squared_l2` throughout.
+`argpartition`, so an 8 GB corpus never lands in memory whole. Select the same metric used
+by the benchmark: default `squared_l2`, or `--metric mips` for maximum inner product.
 
 Ids are global row indices into the corpus file. If the corpus was filtered, they index the
 **filtered** corpus — regenerate the groundtruth after any filtering, never remap.
 
 Write both the full-query-set groundtruth and the sampled-query one, using the same evenly
 spaced indices the query subset used.
+
+For a pre-created streaming runbook, query row `i` must continue to correspond to truthset
+row `i` in **every** `step<stage>.gt<K>` file. If only the first `N` queries are required,
+write a new query matrix with header `(N, dim)` and a new truthset per search stage with
+header `(N, K)`. Truthset ids and distances are separate full row-major blocks, so byte-
+truncating the original file is wrong: copy the first `N*K` ids, seek to the original
+distance block, then copy the first `N*K` distances. See [stage 7](./07-online-runbooks.md).
 
 A note on reproducibility: recomputing an existing groundtruth will not always reproduce it
 id-for-id. Chunk size changes BLAS summation order, which perturbs distances at the ~1e-6

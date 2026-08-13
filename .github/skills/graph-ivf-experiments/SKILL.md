@@ -1,13 +1,13 @@
 ---
 name: graph-ivf-experiments
-description: 'Run a graph-IVF or disk-index benchmark experiment end to end: prepare a dataset, compute and audit groundtruth, author benchmark configs, build indexes, sweep recall@50 / recall@1000, then turn the results into plots and the Excel workbook. Use when asked to run a sweep, add a new dataset, build an online graph-IVF index, measure or improve recall, compare split thresholds, regenerate the online plots, or update the results workbook.'
+description: 'Run graph-IVF and disk-index experiments end to end: prepare data, audit groundtruth, author configs, build/sweep indexes, replay streaming BigANN runbooks, analyze churn, and generate plots/workbooks. Use when asked to add a dataset, run recall sweeps, build an online graph-IVF index, test insert/delete churn, compare split thresholds, or refresh results.'
 argument-hint: 'dataset name and what you want measured, e.g. "sweep recall@50 and @1000 on NQ at T=800 and T=120"'
 ---
 
 # Graph-IVF Benchmark Experiments
 
-End-to-end procedure for the comparative online graph-IVF study (Enron, MERB, Caselaw,
-MSMARCO, LoTTE, GloVe-200, MTEB-NQ). Read the stage reference before doing that stage.
+End-to-end procedure for graph-IVF comparisons and streaming runbook experiments. Read the
+applicable stage reference before doing that stage.
 
 ## Where things live
 
@@ -43,18 +43,23 @@ flowchart LR
   B --> C[3. Configs]
   C --> D[4. Build + sweep]
   D --> E[5. Plots + workbook]
+  B --> R[7. Streaming runbook]
+  R --> X[Stage CSVs + churn plots]
 ```
 
 1. **[Dataset preparation](./references/01-dataset-prep.md)** — acquire vectors, convert to
-   the `fp16` / `minmax8` binary formats, subsample queries.
+  the full-precision / benchmark storage formats, subsample queries.
 2. **[Groundtruth](./references/02-groundtruth.md)** — compute exact top-1000 **and audit it**.
    Skipping the audit is the single most expensive mistake available here.
-3. **[Benchmark configs](./references/03-configs.md)** — one build-only config per index,
-   one sweep config per (index, recall depth).
+3. **[Benchmark configs](./references/03-configs.md)** — choose among `Static`, `Online`,
+   `Load`, and `OnlineRunbook`; combine recall depths where practical.
 4. **[Running](./references/04-running.md)** — build the runner, execute builds and sweeps,
    capture logs.
 5. **[Analysis](./references/05-analysis.md)** — add the dataset to `registry.py`, render the
    four standard figures, refresh the workbook.
+7. **[Streaming runbooks](./references/07-online-runbooks.md)** — audit a BigANN plan,
+  subset queries and every truthset consistently, run live insert/delete/search stages,
+  and export stage/split/merge trajectories.
 
 [Environment and tooling gotchas](./references/06-environment.md) apply throughout; read it
 first if anything behaves strangely.
@@ -68,15 +73,19 @@ Violating any of these produces results that look plausible and are wrong, or co
 - **Audit the groundtruth before trusting any recall number.** Degenerate rows (all-zero
   vectors from empty documents) land *inside* the retrieval band under squared L2 and
   silently cap recall. See [stage 2](./references/02-groundtruth.md).
-- **`nlist` must be `<= centroid_search_l`.** The runner rejects configs that violate it.
-- **`recall_at` takes a list.** `[50, 1000]` scores both depths from one search per
-  `nlist`, so measure them together rather than as two runs. Older results measured one
-  depth apiece and are still joined on `nlist` during analysis.
+- **Search configs sweep `cluster_fractions`, not concrete `nlist`.** Values must be in
+  `(0.0, 1.0]`; the runner computes `ceil(fraction * num_clusters)` for each index or
+  runbook stage and reports that effective `nlist` alongside the fraction.
+- **Prefer a list for `recall_at`.** A scalar remains supported for legacy configs, but
+  `[50, 1000]` scores both depths from one search per cluster fraction. Values are sorted
+  and deduplicated during validation.
 - **Sweep single-threaded** (`num_threads: 1`) so latency and per-query I/O are comparable.
 
 **Process**
 
-- **Build once, save, then sweep from `Load` configs.** Never rebuild an index to re-sweep it.
+- **Build once, save, then sweep from `Load` configs.** Never rebuild an immutable index to
+  re-sweep it. `OnlineRunbook` is the exception: searches intentionally observe the live
+  partition between mutations, so build and search stages are one replay.
 - **Encode every experimental variable in the index and log name.** `_nozero_`, `_s32_`,
   `_b4096_`, `_iters6_`, `_t800_`. Analysis selects runs by these paths, and a superseded
   run left on disk with an ambiguous name will be silently picked up.
@@ -89,17 +98,17 @@ Violating any of these produces results that look plausible and are wrong, or co
 
 ```powershell
 # Build the runner (from repo root)
-cargo build --release -p diskann-benchmark --features graph-ivf,disk-index
+cargo build --release -p diskann-benchmark --features graph-ivf
 
 # One run: config in, JSON out, console tee'd to a log
-$b = git rev-parse --show-toplevel   # repo root, from anywhere in the working tree
+$b = "<absolute-repo-root>"
 & "$b\target\release\diskann-benchmark.exe" run `
     --input-file  "$b\diskann-benchmark\example\<config>.json" `
     --output-file "$b\_results\logs\<dataset>\<run>.json" `
     2>&1 | Tee-Object -FilePath "$b\_results\logs\<dataset>\<run>.log" | Out-Null
 Write-Output "DONE exit=$LASTEXITCODE"
 
-# Regenerate all figures and the workbook (conda python — the venv has no matplotlib)
+# Regenerate all figures and the workbook (use the configured Python environment)
 Push-Location "$b\_results\scripts"
 python plot_online_bytes_recall.py
 python plot_online_diskread_recall.py
