@@ -566,12 +566,12 @@ pub unsafe extern "C" fn backfill_quant_vectors(
     index_ptr: *const c_void,
     task_index: usize,
     task_count: usize,
-) {
+) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(context);
     index
         .inner
-        .backfill_quant_vectors(&ctx, task_index, task_count);
+        .backfill_quant_vectors(&ctx, task_index, task_count)
 }
 
 /// # Safety

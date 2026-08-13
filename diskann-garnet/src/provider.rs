@@ -575,22 +575,36 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         task_idx: usize,
         task_count: usize,
-    ) {
+    ) -> bool {
         let quantizer = match &self.quantizer {
             Some(q) => q,
-            None => return,
+            None => {
+                self.callbacks.log(
+                    &context.term(Term::Quantized),
+                    "Error: backfill_quant_vectors: Quantizer not found. Index will operate full precision only mode.",
+                );
+                return false;
+            }
         };
 
         let max_id = self.fsm.max_id_for_backfill() as usize;
         if max_id >= u32::MAX as usize {
             // The max_id was somehow not sampled, so bail.
-            return;
+            self.callbacks.log(
+                &context.term(Term::Quantized),
+                "Error: backfill_quant_vectors: Couldn't calculate max id to backfill. Index will operate full precision only mode.",
+            );
+            return false;
         }
 
         // If we have more tasks than vectors to backfill, we exit the extra tasks early.
         let task_count = task_count.min(max_id + 1);
         if task_idx >= task_count {
-            return;
+            self.callbacks.log(
+                &context.term(Term::Quantized),
+                "Error: backfill_quant_vectors: Bad task index. Index will operate full precision only mode.",
+            );
+            return false;
         }
 
         // Evenly divide the ID range from 0..max_id and determine this thread's backfill
@@ -644,14 +658,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let point = if let Ok(p) = Poly::from_iter(q.iter().copied(), AlignToEight) {
                     p
                 } else {
-                    // NOTE: This return is unrecoverable in the current design, as there is no way
-                    // to signal that backfill has failed. The index will operate on full precision
-                    // vectors only from now on.
                     self.callbacks.log(
                         &context.term(Term::Quantized),
                         "Error quantizing start point; failed to finish backfill. Index will operate full precision only mode.",
                     );
-                    return;
+                    return false;
                 };
                 self.start_point_quant_cache.insert(0, point);
             }
@@ -667,18 +678,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     data[0] = 1;
                 },
             ) {
-                // NOTE: This return is unrecoverable in the current design, as there is no way to
-                // signal that backfill failed.
                 self.callbacks.log(
                     &context.term(Term::Quantized),
                     "Error saving quantizer state; failed to finish backfill. Index will operate full precision only mode.",
                 );
-                return;
+                return false;
             }
 
             // Signal to the index that it is now safe to operate in quantized mode.
             self.all_quantized.store(true, Ordering::Release);
         }
+
+        true
     }
 
     pub(crate) fn random_members(
@@ -2214,7 +2225,7 @@ mod tests {
 
         // Run backfill
         for job_id in 0..4 {
-            provider.backfill_quant_vectors(&ctx, job_id, 4);
+            assert!(provider.backfill_quant_vectors(&ctx, job_id, 4));
         }
 
         // Drop and re-create the index, keeping the same backing store

@@ -70,7 +70,8 @@ pub(crate) trait DynIndex: Send + Sync {
 
     fn train_quantizer(&self, context: &Context) -> bool;
 
-    fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize);
+    fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize)
+    -> bool;
 
     fn random_members(&self, context: &Context, count: u32, output: &mut SearchResults<'_>)
     -> bool;
@@ -188,10 +189,15 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         self.inner.provider().train_quantizer(context)
     }
 
-    fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize) {
+    fn backfill_quant_vectors(
+        &self,
+        context: &Context,
+        task_idx: usize,
+        task_count: usize,
+    ) -> bool {
         self.inner
             .provider()
-            .backfill_quant_vectors(context, task_idx, task_count);
+            .backfill_quant_vectors(context, task_idx, task_count)
     }
 
     fn random_members(
