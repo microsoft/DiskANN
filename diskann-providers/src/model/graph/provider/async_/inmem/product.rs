@@ -50,6 +50,8 @@ impl CreateVectorStore for FixedChunkPQTable {
         metric: Metric,
         _prefetch_lookahead: Option<usize>,
     ) -> Self::Target {
+        // `pq::distance::QueryComputer::new` evaluates `CosineNormalized` queries with
+        // squared L2. Use L2 here too so both distances compared during pruning share a scale.
         let pq_metric = match metric {
             Metric::CosineNormalized => Metric::L2,
             metric => metric,
