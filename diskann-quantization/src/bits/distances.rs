@@ -2124,7 +2124,7 @@ retarget!(
 /// groups of 64-dimensions.
 ///
 /// For each group, we load the 64-bits of `y` into a word `bits`. And the four 64-bit words
-/// of the group in `x` in `b0`, `b1`, b2`, and `b3`.
+/// of the group in `x` in `b0`, `b1`, `b2`, and `b3`.
 ///
 /// Note that bit `i` in `b0` is bit-0 of the `i`-th value in ths group. Likewise, bit `i`
 /// in `b1` is bit-1 of the same word.
