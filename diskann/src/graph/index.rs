@@ -759,11 +759,11 @@ where
     ///
     /// Multi-insert specific configuration includes:
     ///
-    /// 1. [`diskann::index::Config::max_minibatch_par()`]: Control the maximum number
+    /// 1. [`crate::graph::Config::max_minibatch_par`]: Control the maximum number
     ///    of concurrent task spawns used by the implementation. This puts an upper bound
     ///    on the extracted parallelism of this function.
     ///
-    /// 2. [`diskann::index::Config::intra_batch_candidates()`]: Controls the maximum
+    /// 2. [`crate::graph::Config::intra_batch_candidates`]: Controls the maximum
     ///    number of candidates from within the batch that are considered as neighbors.
     ///
     ///    When the batch size is very high or the inserted data has high self similarity,
@@ -797,7 +797,7 @@ where
     /// ## Candidate Generation
     ///
     /// This is made up of a graph search followed by a prune on the resulting candidate
-    /// list. If [`diskann::index::Config::intra_batch_candidates()`] is non-zero, then
+    /// list. If [`crate::graph::Config::intra_batch_candidates`] is non-zero, then
     /// candidates from within the batch are added at this step prior to prune.
     ///
     /// ### Bootstrap
@@ -1521,7 +1521,7 @@ where
 
     /// This method deletes a vertex without needing to loop over the entire graph to find
     /// its out-neighbors. It is meant to be called in conjunction with
-    /// [`drop_deleted_neighbors`] run occasionally as a background process.
+    /// [`Self::drop_deleted_neighbors`] run occasionally as a background process.
     ///
     /// See `https://arxiv.org/abs/2502.13826` for full description and experiments
     pub fn inplace_delete<S>(
@@ -2002,16 +2002,16 @@ where
     /// Execute a search using the unified search interface.
     ///
     /// This method provides a single entry point for all search types. The `search_params` argument
-    /// implements [`search::Search`], which defines the complete search behavior including
+    /// implements [`crate::graph::search::Search`], which defines the complete search behavior including
     /// algorithm selection and post-processing.
     ///
     /// # Supported Search Types
     ///
-    /// - [`search::Knn`]: Standard k-NN graph-based search
-    /// - [`search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
-    /// - [`search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
-    /// - [`search::Range`]: Range-based search within a distance radius
-    /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
+    /// - [`crate::graph::search::Knn`]: Standard k-NN graph-based search
+    /// - [`crate::graph::search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`crate::graph::search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
+    /// - [`crate::graph::search::Range`]: Range-based search within a distance radius
+    /// - [`crate::graph::search::Diverse`]: Diversity-aware search (feature-gated)
     ///
     /// # Example
     ///
