@@ -82,13 +82,7 @@ where
     A: Allocator,
 {
     fn try_clone(&self) -> Result<Self, AllocatorError> {
-        Ok(Self {
-            shift: self.shift.try_clone()?,
-            transform: self.transform.try_clone()?,
-            metric: self.metric,
-            mean_norm: self.mean_norm,
-            pre_scale: self.pre_scale,
-        })
+        SphericalQuantizer::try_clone(self)
     }
 }
 
@@ -158,7 +152,13 @@ where
 
     /// Return an independently allocated copy of this quantizer.
     pub fn try_clone(&self) -> Result<Self, AllocatorError> {
-        <Self as TryClone>::try_clone(self)
+        Ok(Self {
+            shift: self.shift.try_clone()?,
+            transform: self.transform.try_clone()?,
+            metric: self.metric,
+            mean_norm: self.mean_norm,
+            pre_scale: self.pre_scale,
+        })
     }
 
     /// A lower-level constructor that accepts a centroid, mean norm, and pre-scale directly.
