@@ -545,9 +545,7 @@ where
                     // both these results guarantee within outer radius
                     range_frontier.push_back(*neighbor.id());
                 }
-                InRangePushResult::RejectedbyOuter
-                    if *neighbor.distance() <= navigation_radius =>
-                {
+                InRangePushResult::RejectedbyOuter if *neighbor.distance() <= navigation_radius => {
                     // add to the range frontier if it's within the tolerance
                     range_frontier.push_back(*neighbor.id());
                 }
