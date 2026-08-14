@@ -21,7 +21,7 @@ use crate::{
             Knn, Search, filtered_range_search::FilteredRange, record::NoopSearchRecord,
             scratch::SearchScratch,
         },
-        search_output_buffer::{self, SearchOutputBuffer},
+        search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::DataProvider,
@@ -140,6 +140,19 @@ impl Range {
         self.max_returned
     }
 
+    /// Returns either usize::MAX or the user-specified maximum number
+    /// results to return incremented by a user-inputted value.
+    /// Useful to enforce max results exactly when start points
+    /// are filtered out during post-processing.
+    #[inline]
+    pub fn effective_max_returned(&self, inc: usize) -> usize {
+        if let Some(max) = self.max_returned {
+            max.saturating_add(inc)
+        } else {
+            usize::MAX
+        }
+    }
+
     /// Returns the initial search list size.
     #[inline]
     pub fn starting_l(&self) -> NonZeroUsize {
@@ -183,6 +196,25 @@ impl Range {
 }
 
 /// Builder for [`Range`] search parameters.
+///
+/// `max_returned`: If specified, the search will stop and return results once this number of points has been found within both the inner and outer radii.
+/// Note that due to adding some extra slack for start points, occasionally slightly more than this number of points may be returned. Since the initial
+/// search phase does not respect `max_returned`, this parameter may not be set lower than `starting_l`.
+///
+/// `starting_l`: the L_search parameter for the initial search phase. Must be greater than zero.
+///
+/// `beam_width`: the beam width for parallel graph exploration. If not specified, defaults to 1. Must be greater than zero if specified.
+///
+/// `radius`: the outer radius for the range search. Points within this distance from the query are candidates for inclusion in the results.
+///
+/// `inner_radius`: the inner radius for the range search. Points closer than this distance from the query are excluded from the results. Must be less than or equal to `radius` if specified.
+///
+/// `initial_slack`: after the initial knn search phase, a decision is made on whether to continue to the second round of search. This decision is based on whether
+/// the number of points found within the outer radius is greater than `starting_l * initial_slack`, so lower values of `initial_slack` will make it more likely to continue to
+/// the second round of search. Must be between 0.0 and 1.0.
+///
+/// `range_slack`: during the second round of search, points that are within `radius * range_slack` are expanded to search for candidates within the range, so greater
+/// values of `range_slack` will mean more expansions. Must be greater than or equal to 1.0.
 #[derive(Debug, Clone, Copy)]
 pub struct RangeBuilder {
     max_returned: Option<usize>,
@@ -272,7 +304,9 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
             let num_start_ids = accessor.num_starting_points().await?;
-            let mut scratch = index.search_scratch(self.starting_l().get(), num_start_ids);
+
+            let starting_l = self.starting_l().get();
+            let mut scratch = index.search_scratch(starting_l, num_start_ids);
 
             let initial_stats = index
                 .search_internal(
@@ -283,63 +317,68 @@ where
                 )
                 .await?;
 
-            let mut in_range = Vec::with_capacity(self.starting_l().get());
+            let in_outer_range = InRange::new_checked(
+                self.radius(),
+                None,
+                starting_l,
+                scratch.best.iter().collect(),
+            );
 
-            let starting_l = self.starting_l().get();
-            let max_returned = self.max_returned().unwrap_or(usize::MAX);
+            // Increment the max results by the number of starting points, in case
+            // they are filtered out later and leave us with fewer than the requested
+            // number of results.
+            let max_returned = self.effective_max_returned(num_start_ids);
 
-            for neighbor in scratch.best.iter().take(starting_l) {
-                if *neighbor.distance() <= self.radius() {
-                    in_range.push(neighbor);
-                }
-            }
+            let outer_range_len = in_outer_range.len();
+            let outer_range_ids: Vec<_> = in_outer_range
+                .neighbors
+                .iter()
+                .map(|neighbor| *neighbor.id())
+                .collect();
 
-            // clear the visited set and repopulate it with just the in-range points
-            scratch.visited.clear();
-            for neighbor in in_range.iter() {
-                scratch.visited.insert(*neighbor.id());
-            }
+            let mut in_range = InRange::new_checked(
+                self.radius(),
+                self.inner_radius(),
+                max_returned,
+                in_outer_range.neighbors,
+            );
 
-            let stats = if in_range.len() >= ((starting_l as f32) * self.initial_slack()) as usize
-                && in_range.len() < max_returned
+            let stats = if outer_range_len >= ((starting_l as f32) * self.initial_slack()) as usize
+                && outer_range_len <= max_returned
             {
+                // clear the visited set and repopulate it with just the in-range points
+                scratch.visited.clear();
+                scratch.visited.extend(outer_range_ids.iter().copied());
+
+                // Create a range frontier for seeding the second-round search
+                let mut range_frontier: VecDeque<_> = outer_range_ids.into_iter().collect();
+
                 // Move to range search
                 let range_stats = range_search_internal(
                     index.max_degree_with_slack(),
                     &self,
                     &mut accessor,
                     &mut scratch,
+                    &mut range_frontier,
                     &mut in_range,
                 )
                 .await?;
 
                 InternalSearchStats {
-                    cmps: initial_stats.cmps,
-                    hops: initial_stats.hops + range_stats.hops,
+                    cmps: range_stats.cmps,
+                    hops: range_stats.hops,
                     range_search_second_round: true,
                 }
             } else {
                 initial_stats
             };
 
-            // Post-process results directly into the output buffer, filtering by radius.
-            let radius = self.radius();
-            let inner_radius = self.inner_radius();
-            let mut filtered = DistanceFiltered::new(output, |dist| {
-                if let Some(ir) = inner_radius
-                    && dist <= ir
-                {
-                    return false;
-                }
-                dist <= radius
-            });
-
             let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
-                    in_range.iter().copied(),
-                    &mut filtered,
+                    in_range.neighbors.iter().copied(),
+                    output,
                 )
                 .await
                 .into_ann_result()?;
@@ -354,49 +393,101 @@ where
     }
 }
 
-/// A [`SearchOutputBuffer`] wrapper that filters results by distance before
-/// forwarding them to an inner buffer.
-pub(super) struct DistanceFiltered<'a, F, B: ?Sized> {
-    predicate: F,
-    inner: &'a mut B,
+pub(super) enum InRangePushResult {
+    Accepted,
+    RejectedbyOuter,
+    RejectedbyInner, // this state is only returned when the outer radius is respected
+    RejectedbyFilter, // this state is only returned when outer AND inner radius are respected
+    Full,            // this state is returned *before* checking inner/outer radius
 }
 
-impl<'a, F, B: ?Sized> DistanceFiltered<'a, F, B> {
-    pub(super) fn new(inner: &'a mut B, predicate: F) -> Self {
-        Self { predicate, inner }
-    }
+pub(super) struct InRange<I> {
+    pub neighbors: Vec<Neighbor<I>>,
+    radius: f32,
+    inner_radius: Option<f32>,
+    max_returned: usize,
 }
 
-impl<I, F, B> SearchOutputBuffer<I> for DistanceFiltered<'_, F, B>
-where
-    F: FnMut(f32) -> bool,
-    B: SearchOutputBuffer<I> + ?Sized,
-{
-    fn size_hint(&self) -> Option<usize> {
-        self.inner.size_hint()
-    }
-
-    fn push(&mut self, neighbor: Neighbor<I>) -> search_output_buffer::BufferState {
-        if (self.predicate)(*neighbor.distance()) {
-            self.inner.push(neighbor)
-        } else {
-            match self.inner.size_hint() {
-                Some(0) => search_output_buffer::BufferState::Full,
-                _ => search_output_buffer::BufferState::Available,
-            }
+impl<I> InRange<I> {
+    pub(super) fn push(&mut self, neighbor: Neighbor<I>) -> InRangePushResult {
+        if self.neighbors.len() >= self.max_returned {
+            return InRangePushResult::Full;
         }
+        let dist = *neighbor.distance();
+        if dist > self.radius {
+            return InRangePushResult::RejectedbyOuter;
+        }
+        if let Some(inner) = self.inner_radius
+            && dist <= inner
+        {
+            return InRangePushResult::RejectedbyInner;
+        }
+        self.neighbors.push(neighbor);
+        InRangePushResult::Accepted
     }
 
-    fn current_len(&self) -> usize {
-        self.inner.current_len()
+    pub(super) fn push_with_filter(
+        &mut self,
+        distance: f32,
+        decision: glue::Decision<I>,
+    ) -> InRangePushResult {
+        if self.neighbors.len() >= self.max_returned {
+            return InRangePushResult::Full;
+        }
+        if distance > self.radius {
+            return InRangePushResult::RejectedbyOuter;
+        }
+        if let Some(inner) = self.inner_radius
+            && distance <= inner
+        {
+            return InRangePushResult::RejectedbyInner;
+        }
+        if decision.is_reject() {
+            return InRangePushResult::RejectedbyFilter;
+        }
+        self.neighbors
+            .push(Neighbor::new(decision.into_inner(), distance));
+        InRangePushResult::Accepted
     }
 
-    fn extend<Itr>(&mut self, itr: Itr) -> usize
-    where
-        Itr: IntoIterator<Item = Neighbor<I>>,
-    {
-        self.inner
-            .extend(itr.into_iter().filter(|n| (self.predicate)(*n.distance())))
+    pub(super) fn push_unchecked(&mut self, neighbor: Neighbor<I>) {
+        self.neighbors.push(neighbor);
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.neighbors.len()
+    }
+
+    /// Create a new InRange with the given parameters,
+    /// filtering the candidate neighbors and truncating
+    /// as needed to respect the maximum number of results.
+    pub(super) fn new_checked(
+        radius: f32,
+        inner_radius: Option<f32>,
+        max_returned: usize,
+        candidate_neighbors: Vec<Neighbor<I>>,
+    ) -> Self {
+        Self {
+            neighbors: candidate_neighbors
+                .into_iter()
+                .filter(|n| {
+                    let dist = *n.distance();
+                    if dist > radius {
+                        return false;
+                    }
+                    if let Some(inner) = inner_radius
+                        && dist <= inner
+                    {
+                        return false;
+                    }
+                    true
+                })
+                .take(max_returned)
+                .collect(),
+            radius,
+            inner_radius,
+            max_returned,
+        }
     }
 }
 
@@ -413,24 +504,17 @@ pub(crate) async fn range_search_internal<A>(
     search_params: &Range,
     accessor: &mut A,
     scratch: &mut SearchScratch<A::Id>,
-    in_range: &mut Vec<Neighbor<A::Id>>,
+    range_frontier: &mut VecDeque<A::Id>,
+    in_range: &mut InRange<A::Id>,
 ) -> ANNResult<InternalSearchStats>
 where
     A: SearchAccessor,
 {
     let beam_width = search_params.beam_width().get();
 
-    let mut range_frontier: VecDeque<A::Id> = VecDeque::new();
-
-    for neighbor in in_range.iter() {
-        range_frontier.push_back(*neighbor.id());
-    }
-
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
 
-    let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
-
-    while !range_frontier.is_empty() && in_range.len() < max_returned {
+    'outer: while !range_frontier.is_empty() {
         scratch.beam_nodes.clear();
 
         // In this loop we are going to find the beam_width number of remaining nodes within the radius
@@ -451,15 +535,26 @@ where
             )
             .await?;
 
-        // The predicate ensures that the contents of `neighbors` are unique.
+        let navigation_radius = search_params.radius() * search_params.range_slack();
         for neighbor in neighbors.iter() {
-            if *neighbor.distance() <= search_params.radius() * search_params.range_slack()
-                && in_range.len() < max_returned
-            {
-                in_range.push(*neighbor);
-                range_frontier.push_back(*neighbor.id());
+            match in_range.push(*neighbor) {
+                InRangePushResult::Full => {
+                    break 'outer; // we've reached the maximum number of results, stop processing
+                }
+                InRangePushResult::Accepted | InRangePushResult::RejectedbyInner => {
+                    // both these results guarantee within outer radius
+                    range_frontier.push_back(*neighbor.id());
+                }
+                InRangePushResult::RejectedbyOuter
+                    if *neighbor.distance() <= navigation_radius =>
+                {
+                    // add to the range frontier if it's within the tolerance
+                    range_frontier.push_back(*neighbor.id());
+                }
+                _ => {}
             }
         }
+
         scratch.cmps += neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
     }
@@ -478,8 +573,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::search_output_buffer::BufferState;
-    use crate::neighbor::Neighbor;
 
     #[test]
     fn range_builder_defaults_match_new() {
@@ -550,79 +643,5 @@ mod tests {
                 .build()
                 .is_err()
         );
-    }
-
-    #[test]
-    fn distance_filtered_push_accepts_passing_items() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-
-        assert_eq!(filtered.push(Neighbor::new(1, 0.5)), BufferState::Available);
-        assert_eq!(filtered.current_len(), 1);
-        assert_eq!(*inner[0].id(), 1);
-        assert_eq!(*inner[0].distance(), 0.5);
-    }
-
-    #[test]
-    fn distance_filtered_push_rejects_failing_items() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-
-        assert_eq!(filtered.push(Neighbor::new(1, 1.5)), BufferState::Available);
-        assert_eq!(filtered.current_len(), 0);
-    }
-
-    #[test]
-    fn distance_filtered_extend_filters_correctly() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-        assert!(filtered.size_hint().is_none());
-
-        let items = [(1u32, 0.3), (2, 1.5), (3, 0.7), (4, 2.0), (5, 0.9)].map(Neighbor::from_tuple);
-        let count = filtered.extend(items);
-
-        assert_eq!(count, 3);
-        assert_eq!(inner.len(), 3);
-        assert_eq!(*inner[0].id(), 1);
-        assert_eq!(*inner[1].id(), 3);
-        assert_eq!(*inner[2].id(), 5);
-    }
-
-    #[test]
-    fn distance_filtered_respects_inner_capacity() {
-        let mut ids = [0u32; 2];
-        let mut dists = [0.0f32; 2];
-        let mut inner = search_output_buffer::IdDistance::new(&mut ids, &mut dists);
-        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
-        assert_eq!(filtered.size_hint(), Some(2));
-
-        let items = [(1u32, 0.1), (2, 0.2), (3, 0.3)].map(Neighbor::from_tuple);
-        let count = filtered.extend(items);
-
-        assert_eq!(count, 2);
-        assert_eq!(ids, [1, 2]);
-    }
-
-    #[test]
-    fn distance_filtered_inner_radius_pattern() {
-        let mut inner: Vec<Neighbor<u32>> = Vec::new();
-        let radius = 1.0f32;
-        let inner_radius = Some(0.3f32);
-        let mut filtered = DistanceFiltered::new(&mut inner, |dist| {
-            if let Some(ir) = inner_radius
-                && dist <= ir
-            {
-                return false;
-            }
-            dist < radius
-        });
-
-        let items = [(1u32, 0.1), (2, 0.5), (3, 0.3), (4, 1.0), (5, 0.8)].map(Neighbor::from_tuple);
-        let count = filtered.extend(items);
-
-        // 0.1 and 0.3 are <= inner_radius, 1.0 is not < radius
-        assert_eq!(count, 2);
-        assert_eq!(*inner[0].id(), 2);
-        assert_eq!(*inner[1].id(), 5);
     }
 }

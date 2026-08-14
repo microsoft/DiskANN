@@ -17,12 +17,13 @@ use crate::{
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::inline_filter_search::{Ret, inline_filter_search_internal},
         search::{
-            Range, RangeSearchError, Search, range_search::DistanceFiltered,
-            range_search::RangeBuilder, record::NoopSearchRecord, scratch::SearchScratch,
+            Range, RangeSearchError, Search,
+            range_search::{InRange, InRangePushResult, RangeBuilder},
+            record::NoopSearchRecord,
+            scratch::SearchScratch,
         },
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::Neighbor,
     provider::DataProvider,
 };
 
@@ -53,6 +54,12 @@ impl FilteredRange {
     #[inline]
     pub fn max_returned(&self) -> Option<usize> {
         self.range_params.max_returned()
+    }
+
+    /// Returns the maximum number of results to return.
+    #[inline]
+    pub fn effective_max_returned(&self, inc: usize) -> usize {
+        self.range_params.effective_max_returned(inc)
     }
 
     /// Returns the initial search list size.
@@ -135,12 +142,12 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
             let num_start_ids = accessor.num_starting_points().await?;
-            let mut scratch = index.search_scratch(self.starting_l().get(), num_start_ids);
-
-            // Perform an initial inline filtered search, store both filtered and unfiltered results
+            let starting_l = self.starting_l().get();
+            let mut scratch = index.search_scratch(starting_l, num_start_ids);
 
             let search_knn = self.range_params.to_knn();
 
+            // Perform an initial inline filtered search, store both filtered and unfiltered results
             let Ret {
                 cmps,
                 hops,
@@ -155,42 +162,53 @@ where
             )
             .await?;
 
-            let max_returned = self.max_returned().unwrap_or(usize::MAX);
+            let max_returned = self.effective_max_returned(num_start_ids);
 
-            // merge matched_results with the best results from the first round, filtering by radius
-
-            let mut in_range: Vec<_> = scratch
-                .best
-                .iter()
-                .take(self.starting_l().get())
-                .chain(matched_results.iter().copied())
-                .filter(|neighbor| *neighbor.distance() <= self.radius())
-                .collect();
-
-            in_range.sort_unstable_by(crate::neighbor::ord::fast_distance_total);
-            in_range.dedup_by(|left, right| left.id() == right.id());
+            let mut in_outer_range = InRange::new_checked(
+                self.radius(),
+                None,
+                usize::MAX,
+                scratch.best.iter().take(starting_l).collect(),
+            );
 
             // filter matched results by radius; this will be used to decide if `max_results` has been reached
-            let mut matched_within_radius = Vec::with_capacity(matched_results.len());
-            for neighbor in matched_results.iter().copied() {
-                if *neighbor.distance() <= self.radius() {
-                    matched_within_radius.push(neighbor);
-                }
-            }
+            let mut matched_in_outer_range = InRange::new_checked(
+                self.radius(),
+                self.inner_radius(),
+                max_returned,
+                matched_results.to_vec(),
+            );
 
-            let stats = if in_range.len()
-                >= ((self.starting_l().get() as f32) * self.initial_slack()) as usize
-                && matched_within_radius.len() < max_returned
+            // merge matched_results with the best results from the first round, filtering by radius
+            for neighbor in matched_in_outer_range.neighbors.iter() {
+                in_outer_range.push_unchecked(*neighbor);
+            }
+            in_outer_range
+                .neighbors
+                .sort_unstable_by(crate::neighbor::ord::fast_distance_total);
+            in_outer_range
+                .neighbors
+                .dedup_by(|left, right| left.id() == right.id());
+
+            let stats = if in_outer_range.len()
+                >= ((starting_l as f32) * self.initial_slack()) as usize
+                && matched_in_outer_range.len() < max_returned
             {
                 // clear the visited set and repopulate it with all in-range points found so far, filtered and unfiltered
                 scratch.visited.clear();
-                scratch
-                    .visited
-                    .extend(in_range.iter().map(|neighbor| *neighbor.id()));
+                scratch.visited.extend(
+                    in_outer_range
+                        .neighbors
+                        .iter()
+                        .map(|neighbor| *neighbor.id()),
+                );
 
                 // Create a range frontier for seeding the second-round search
-                let range_frontier: std::collections::VecDeque<_> =
-                    in_range.iter().map(|neighbor| *neighbor.id()).collect();
+                let mut range_frontier: std::collections::VecDeque<_> = in_outer_range
+                    .neighbors
+                    .iter()
+                    .map(|neighbor| *neighbor.id())
+                    .collect();
 
                 // Move to filtered range search
                 let range_stats = filtered_range_search_internal(
@@ -198,8 +216,8 @@ where
                     &self,
                     &mut accessor,
                     &mut scratch,
-                    &mut matched_within_radius,
-                    range_frontier,
+                    &mut matched_in_outer_range,
+                    &mut range_frontier,
                 )
                 .await?;
 
@@ -216,24 +234,14 @@ where
                 }
             };
 
-            // Post-process results directly into the output buffer, filtering by radius.
-            let inner_radius = self.inner_radius();
-
-            // Note matched_in_range is assumed to satisfy the radius filter, so we only apply the inner radius filter here
-            let mut filtered = DistanceFiltered::new(output, |dist| {
-                if let Some(ir) = inner_radius
-                    && dist <= ir
-                {
-                    false
-                } else {
-                    true
-                }
-            });
-
-            let truncated_matched = matched_within_radius.iter().copied().take(max_returned);
+            let truncated_matched = matched_in_outer_range
+                .neighbors
+                .iter()
+                .copied()
+                .take(max_returned);
 
             let result_count = processor
-                .post_process(&mut accessor, query, truncated_matched, &mut filtered)
+                .post_process(&mut accessor, query, truncated_matched, output)
                 .await
                 .into_ann_result()?;
 
@@ -261,8 +269,8 @@ pub(crate) async fn filtered_range_search_internal<A>(
     search_params: &FilteredRange,
     accessor: &mut A,
     scratch: &mut SearchScratch<A::Id>,
-    matched_in_range: &mut Vec<Neighbor<A::Id>>,
-    mut range_frontier: std::collections::VecDeque<A::Id>,
+    matched_in_range: &mut InRange<A::Id>,
+    range_frontier: &mut std::collections::VecDeque<A::Id>,
 ) -> ANNResult<InternalSearchStats>
 where
     A: FilteredAccessor,
@@ -273,7 +281,7 @@ where
 
     let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
 
-    while !range_frontier.is_empty() && matched_in_range.len() < max_returned {
+    'outer: while !range_frontier.is_empty() && matched_in_range.len() < max_returned {
         scratch.beam_nodes.clear();
 
         // In this loop we are going to find the beam_width number of remaining nodes within the radius
@@ -299,18 +307,26 @@ where
         // but only accepted IDs are added to in-range results.
         let navigation_radius = search_params.radius() * search_params.range_slack();
         for (decision, distance) in neighbors.iter().copied() {
-            if distance <= navigation_radius {
-                let id = decision.into_inner();
-                range_frontier.push_back(id);
-
-                if distance <= search_params.radius()
-                    && decision.is_accept()
-                    && matched_in_range.len() < max_returned
-                {
-                    matched_in_range.push(Neighbor::new(id, distance));
+            match matched_in_range.push_with_filter(distance, decision) {
+                InRangePushResult::Full => {
+                    break 'outer;
+                }
+                InRangePushResult::Accepted
+                | InRangePushResult::RejectedbyInner
+                | InRangePushResult::RejectedbyFilter => {
+                    let id = decision.into_inner();
+                    range_frontier.push_back(id);
+                }
+                InRangePushResult::RejectedbyOuter => {
+                    // add to the range frontier if it's within the tolerance
+                    if distance <= navigation_radius {
+                        let id = decision.into_inner();
+                        range_frontier.push_back(id);
+                    }
                 }
             }
         }
+
         scratch.cmps += neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
     }
