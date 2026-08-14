@@ -178,10 +178,10 @@ impl Drain<Scalar, Strip<'_, f32, SC_A, SC_B>> for RawMax<'_> {
 ///
 /// # Panics
 ///
-/// Panics unless `state` is exactly `nq` long.
+/// Panics if `state` is shorter than the query's padded row count: the drain indexes it
+/// one A-panel at a time.
 pub(super) fn run<Arch, AW, BW, const AR: usize, const BR: usize>(
     arch: Arch,
-    nq: usize,
     nd: usize,
     k: usize,
     budget: TileBudget,
@@ -204,8 +204,6 @@ pub(super) fn run<Arch, AW, BW, const AR: usize, const BR: usize>(
         >,
     for<'o, 'x> RawMax<'o>: Drain<Arch, Strip<'x, f32, AR, BR>>,
 {
-    assert_eq!(state.len(), nq, "state is one entry per padded query row");
-
     // The identity for max.
     state.fill(f32::MIN);
 
@@ -220,7 +218,7 @@ pub(super) fn run<Arch, AW, BW, const AR: usize, const BR: usize>(
     // Both sides are f32 rows of `k`: whatever the source element type, the leaves
     // consume f32.
     let row_bytes = k * size_of::<f32>();
-    let plan = Plan::<AR, BR>::new(row_bytes, row_bytes, size_of::<f32>(), budget);
+    let plan = Plan::<AR, BR>::new(row_bytes, row_bytes, nd, size_of::<f32>(), budget);
     let (a_walk, b_walk) = walks(plan);
     let mut buf = vec![0.0f32; plan.strip_len()];
 
@@ -260,7 +258,6 @@ impl
     ) {
         run(
             arch,
-            query.padded_nrows(),
             docs.num_vectors(),
             query.padded_ncols(),
             TileBudget::default(),
@@ -294,7 +291,6 @@ impl
     ) {
         run(
             arch,
-            query.padded_nrows(),
             docs.num_vectors(),
             query.padded_ncols(),
             TileBudget::default(),
@@ -364,20 +360,12 @@ mod tests {
         // Poisoned, not seeded: `run` owes the caller a full initialization, and every case
         // below would fail loudly if it skipped one.
         let mut state = vec![f32::MAX; bt.padded_nrows()];
-        run(
-            arch,
-            bt.padded_nrows(),
-            nd,
-            k,
-            budget,
-            &mut state,
-            |plan: Plan<AR, BR>| {
-                (
-                    QueryWalk::new(bt.as_view(), plan.a_panels),
-                    DocWalk::new(docs, plan.b_panels),
-                )
-            },
-        );
+        run(arch, nd, k, budget, &mut state, |plan: Plan<AR, BR>| {
+            (
+                QueryWalk::new(bt.as_view(), plan.a_panels),
+                DocWalk::new(docs, plan.b_panels),
+            )
+        });
 
         for (i, &expected) in naive(&a, nq, &b, nd, k).iter().enumerate() {
             let actual = state[i] as f64;
@@ -456,7 +444,6 @@ mod tests {
         let mut state = vec![f32::MAX; SC_A];
         run(
             Scalar::new(),
-            SC_A,
             3,
             0,
             TileBudget::default(),
@@ -472,7 +459,6 @@ mod tests {
         let mut state = vec![f32::MAX; SC_A];
         run(
             Scalar::new(),
-            SC_A,
             0,
             0,
             TileBudget::default(),
@@ -482,35 +468,5 @@ mod tests {
             },
         );
         assert_eq!(state, vec![f32::MIN; SC_A]);
-    }
-
-    /// `state` sized from `nrows()` instead of `padded_nrows()` is the mistake the entry
-    /// check exists for: the two are derived independently, so they can disagree, and it
-    /// used to surface as a slice index panic deep inside the drain.
-    #[test]
-    #[should_panic(expected = "one entry per padded query row")]
-    fn state_sized_for_logical_rows_is_rejected() {
-        let a = sample(9 * 4, 0);
-        let b = sample(2 * 4, 5);
-        let query = MatRef::new(Standard::new(9, 4).unwrap(), &a).unwrap();
-        let docs = MatRef::new(Standard::new(2, 4).unwrap(), &b).unwrap();
-        let bt = BlockTransposed::<f32, SC_A>::from_matrix_view(query.as_matrix_view());
-        assert_eq!((bt.nrows(), bt.padded_nrows()), (9, 16));
-
-        let mut state = vec![0.0; bt.nrows()];
-        run(
-            Scalar::new(),
-            bt.padded_nrows(),
-            2,
-            4,
-            TileBudget::default(),
-            &mut state,
-            |plan: Plan<SC_A, SC_B>| {
-                (
-                    QueryWalk::new(bt.as_view(), plan.a_panels),
-                    DocWalk::new(docs, plan.b_panels),
-                )
-            },
-        );
     }
 }

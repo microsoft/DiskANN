@@ -147,7 +147,6 @@ impl
     ) {
         float::run(
             arch,
-            query.padded_nrows(),
             docs.num_vectors(),
             query.padded_ncols(),
             TileBudget::default(),
@@ -181,7 +180,6 @@ impl
     ) {
         float::run(
             arch,
-            query.padded_nrows(),
             docs.num_vectors(),
             query.padded_ncols(),
             TileBudget::default(),

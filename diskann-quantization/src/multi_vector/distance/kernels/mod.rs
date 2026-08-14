@@ -53,7 +53,8 @@ impl Default for TileBudget {
 }
 
 /// Panel counts per tile: `a_panels` A-panels resident in L2, and as many B-panels as
-/// co-fit L1 alongside one A-panel *and* the accumulator columns they feed.
+/// co-fit L1 alongside one A-panel *and* the accumulator columns they feed, never more
+/// than the B-rows on hand.
 #[derive(Debug, Clone, Copy)]
 struct Plan<const AR: usize, const BR: usize> {
     a_panels: usize,
@@ -61,9 +62,21 @@ struct Plan<const AR: usize, const BR: usize> {
 }
 
 impl<const AR: usize, const BR: usize> Plan<AR, BR> {
+    /// `b_panels` is reconciled against `b_rows`, so a plan belongs to the B side it was
+    /// built for; reused against a longer one it still computes the right answer, but tiles
+    /// far more narrowly than the cache allows. `a_panels` needs no such reconciliation: it only
+    /// feeds a walk stride, which the cursor already bounds by the data it holds, whereas
+    /// `b_panels` also sizes the accumulator strip.
+    ///
     /// Row sizes are clamped to one byte so a degenerate row cannot divide by zero; the
     /// entries reject an empty contraction before planning, so such a plan is never used.
-    fn new(a_row_bytes: usize, b_row_bytes: usize, acc_bytes: usize, budget: TileBudget) -> Self {
+    fn new(
+        a_row_bytes: usize,
+        b_row_bytes: usize,
+        b_rows: usize,
+        acc_bytes: usize,
+        budget: TileBudget,
+    ) -> Self {
         let a_row_bytes = a_row_bytes.max(1);
         let b_row_bytes = b_row_bytes.max(1);
 
@@ -73,7 +86,12 @@ impl<const AR: usize, const BR: usize> Plan<AR, BR> {
         // A-panel stays resident alongside.
         let per_b_row = b_row_bytes + AR * acc_bytes;
         let b_budget = budget.l1_b.saturating_sub(AR * a_row_bytes);
-        let b_panels = ((b_budget / per_b_row) / BR).max(1);
+        let cache_fit = (b_budget / per_b_row) / BR;
+
+        // Never plan wider than the B-rows on hand: a cache-sized tile over a short B side
+        // would size accumulator columns no fill can reach. One panel at minimum, so a
+        // budget too small for even that still makes progress.
+        let b_panels = cache_fit.min(b_rows.div_ceil(BR)).max(1);
 
         Self { a_panels, b_panels }
     }
@@ -292,6 +310,7 @@ mod tests {
         let plan = Plan::<16, 4>::new(
             64,
             64,
+            usize::MAX,
             4,
             TileBudget {
                 l2_a: 40960,
@@ -303,8 +322,20 @@ mod tests {
     }
 
     #[test]
+    fn plan_never_tiles_past_the_b_rows_on_hand() {
+        // The cache would take 68 B-panels, but 10 B-rows fill three.
+        let budget = TileBudget {
+            l2_a: 40960,
+            l1_b: 36000,
+        };
+        let plan = Plan::<16, 4>::new(64, 64, 10, 4, budget);
+        assert_eq!(plan.b_panels, 3);
+        assert_eq!(plan.strip_len(), 16 * 3 * 4);
+    }
+
+    #[test]
     fn plan_clamps_to_one_panel_per_tile() {
-        let plan = Plan::<16, 4>::new(1024, 1024, 4, TileBudget { l2_a: 1, l1_b: 1 });
+        let plan = Plan::<16, 4>::new(1024, 1024, usize::MAX, 4, TileBudget { l2_a: 1, l1_b: 1 });
         assert_eq!((plan.a_panels, plan.b_panels), (1, 1));
         assert_eq!(plan.strip_len(), 16 * 4);
     }
