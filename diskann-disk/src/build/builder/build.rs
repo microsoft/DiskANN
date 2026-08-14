@@ -87,7 +87,7 @@ where
             disk_build_param.build_quantization(),
             &index_writer.get_index_path_prefix(),
             &index_configuration,
-            &pq_storage,
+            &index_writer.get_dataset_file(),
             storage_provider,
         )?;
 
