@@ -292,10 +292,7 @@ where
             Ok(Arc::new(QuantInMemBuilder::new(index, DefaultQuantized)))
         }
         BuildQuantizer::Spherical1Bit(q) => {
-            let quantizer = q
-                .as_ref()
-                .try_clone()
-                .map_err(spherical::AllocatorError::from)?;
+            let quantizer = q.try_clone().map_err(spherical::AllocatorError::from)?;
             let plan = iface::Impl::<1>::new(quantizer).map_err(spherical::AllocatorError::from)?;
             let index = diskann_async::new_quant_only_index(config, params, plan, NoDeletes)?;
             Ok(Arc::new(QuantInMemBuilder::new(

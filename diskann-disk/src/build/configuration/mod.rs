@@ -8,4 +8,4 @@ pub use disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, Num
 pub mod filter_parameter;
 
 pub mod quantization_types;
-pub use quantization_types::QuantizationType;
+pub use quantization_types::{QuantizationType, SphericalBits};

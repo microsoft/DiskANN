@@ -3,8 +3,6 @@
  * Licensed under the MIT license.
  */
 //! Disk index quantizer implementation.
-use std::sync::Arc;
-
 use crate::data_model::GraphDataType;
 use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -20,6 +18,7 @@ use diskann_providers::{
 use diskann_quantization::{
     algorithms::transforms::{TargetDim, TransformKind},
     alloc::GlobalAllocator,
+    error::Format,
     scalar::train::ScalarQuantizationParameters,
     spherical::{PreScale, SphericalQuantizer, SupportedMetric},
 };
@@ -28,15 +27,14 @@ use tracing::info;
 
 use crate::{
     error::{diskann_error, ErrorKind},
-    QuantizationType,
+    QuantizationType, SphericalBits,
 };
 
 /// Quantizer types used specifically for async disk index building.
-#[derive(Clone)]
 pub enum BuildQuantizer {
     NoQuant(NoStore),
     Scalar1Bit(WithBits<1>),
-    Spherical1Bit(Arc<SphericalQuantizer>),
+    Spherical1Bit(SphericalQuantizer),
     PQ(FixedChunkPQTable),
 }
 
@@ -128,14 +126,7 @@ impl BuildQuantizer {
 
                 Ok(Self::Scalar1Bit(WithBits::<1>::new(quantizer)))
             }
-            QuantizationType::Spherical(nbits) => {
-                if nbits != 1 {
-                    return Err(diskann_error!(
-                        ErrorKind::IndexConfigError("build_quantization_type"),
-                        "Spherical quantization is only supported for 1 bit",
-                    ));
-                }
-
+            QuantizationType::Spherical(SphericalBits::One) => {
                 let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
                     index_configuration.random_seed,
                 );
@@ -152,7 +143,7 @@ impl BuildQuantizer {
                     index_configuration.dist_metric.try_into().bridge_err()?;
                 let quantizer = SphericalQuantizer::train(
                     train_data,
-                    TransformKind::PaddingHadamard {
+                    TransformKind::DoubleHadamard {
                         target_dim: TargetDim::Natural,
                     },
                     metric,
@@ -164,11 +155,11 @@ impl BuildQuantizer {
                     diskann_error!(
                         ErrorKind::IndexError,
                         "Failed to train spherical quantizer: {}",
-                        err
+                        Format(err)
                     )
                 })?;
 
-                Ok(Self::Spherical1Bit(Arc::new(quantizer)))
+                Ok(Self::Spherical1Bit(quantizer))
             }
         }
     }

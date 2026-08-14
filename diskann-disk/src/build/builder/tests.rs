@@ -14,7 +14,7 @@ mod disk_index_build_tests {
         build::builder::core::disk_index_builder_tests::{
             new_vfs, verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
         },
-        QuantizationType,
+        QuantizationType, SphericalBits,
     };
 
     #[derive(PartialEq)]
@@ -52,7 +52,7 @@ mod disk_index_build_tests {
 
         run_test_with_metric(
             index_path_prefix,
-            QuantizationType::Spherical(1),
+            QuantizationType::Spherical(SphericalBits::One),
             false,
             8,
             130,
@@ -91,7 +91,7 @@ mod disk_index_build_tests {
             BuildType::AsyncSpherical1Bit => {
                 run_test(
                     index_path_prefix,
-                    QuantizationType::Spherical(1),
+                    QuantizationType::Spherical(SphericalBits::One),
                     use_sharded_build,
                     8,   // top_k
                     130, // search_l

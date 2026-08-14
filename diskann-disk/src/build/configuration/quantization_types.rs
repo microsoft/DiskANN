@@ -17,7 +17,9 @@ const EXPECTED_QUANTIZATION_TEMPLATE: &str =
 
 /// - `PQ`: Product Quantization with a specified number of chunks.
 /// - `SQ`: Scalar Quantization with a specified number of bits per dimension and a standard deviation.
-///   The `Default` implementation returns `FP` (Full Precision).
+/// - `Spherical`: Spherical Quantization with a supported bit width.
+///
+/// The `Default` implementation returns `FP` (Full Precision).
 #[derive(Debug, Copy, Default, PartialEq, Clone)]
 pub enum QuantizationType {
     /// No quantization - uses full precision
@@ -39,13 +41,47 @@ pub enum QuantizationType {
         standard_deviation: Option<Positive<f64>>,
     },
 
-    /// Spherical quantization bit width. Disk-index builds currently support only 1 bit.
-    Spherical(usize),
+    /// Spherical quantization.
+    Spherical(SphericalBits),
 }
 
 #[derive(Debug, Error)]
 #[error("Invalid quantization type: {0:?}")]
 pub struct QuantizationTypeParseError(String);
+
+/// Supported spherical quantization bit widths.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SphericalBits {
+    One,
+}
+
+impl SphericalBits {
+    pub const fn as_usize(self) -> usize {
+        match self {
+            Self::One => 1,
+        }
+    }
+}
+
+impl FromStr for SphericalBits {
+    type Err = QuantizationTypeParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "1" => Ok(Self::One),
+            _ => Err(QuantizationTypeParseError(format!(
+                "Unsupported spherical quantization bit width: {}",
+                s
+            ))),
+        }
+    }
+}
+
+impl Display for SphericalBits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_usize().fmt(f)
+    }
+}
 
 impl serde::Serialize for QuantizationType {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -156,15 +192,7 @@ impl FromStr for QuantizationType {
                         EXPECTED_QUANTIZATION_TEMPLATE, s
                     )));
                 }
-                let nbits = parts[1].parse::<usize>().map_err(|_| {
-                    QuantizationTypeParseError(format!("{} {}", EXPECTED_QUANTIZATION_TEMPLATE, s))
-                })?;
-                if nbits == 0 {
-                    return Err(QuantizationTypeParseError(
-                        "The nbits should be more than 0 for Spherical quantization".to_string(),
-                    ));
-                }
-                Ok(QuantizationType::Spherical(nbits))
+                Ok(QuantizationType::Spherical(parts[1].parse()?))
             }
             _ => Err(QuantizationTypeParseError(format!(
                 "{} {}",
@@ -212,8 +240,7 @@ mod tests {
         nbits: 1,
         standard_deviation: None
     }))]
-    #[case("SPHERICAL_1", Ok(QuantizationType::Spherical(1)))]
-    #[case("spherical_4", Ok(QuantizationType::Spherical(4)))]
+    #[case("SPHERICAL_1", Ok(QuantizationType::Spherical(SphericalBits::One)))]
     #[case("", Err(()))]
     #[case("FP_1", Err(()))]
     #[case("invalid", Err(()))]
@@ -227,6 +254,7 @@ mod tests {
     #[case("SQ_1_abc", Err(()))]
     #[case("SPHERICAL", Err(()))]
     #[case("SPHERICAL_0", Err(()))]
+    #[case("SPHERICAL_2", Err(()))]
     #[case("SPHERICAL_abc", Err(()))]
     fn test_parse_quantization_type(
         #[case] input: &str,
@@ -250,7 +278,7 @@ mod tests {
     #[rstest]
     #[case(QuantizationType::PQ { num_chunks: 16 }, "PQ_16")]
     #[case(QuantizationType::FP, "FP")]
-    #[case(QuantizationType::Spherical(1), "SPHERICAL_1")]
+    #[case(QuantizationType::Spherical(SphericalBits::One), "SPHERICAL_1")]
     #[case(
         QuantizationType::SQ { nbits: 8, standard_deviation: None },
         "SQ_8_None"
@@ -295,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_quantization_type_spherical() {
-        let quant = QuantizationType::Spherical(1);
+        let quant = QuantizationType::Spherical(SphericalBits::One);
         let serialized = bincode::serialize(&quant).unwrap();
         let deserialized: QuantizationType = bincode::deserialize(&serialized).unwrap();
         assert_eq!(quant, deserialized);
@@ -312,7 +340,7 @@ mod tests {
                 nbits: 8,
                 standard_deviation: Some(Positive::new(1.5).unwrap()),
             },
-            QuantizationType::Spherical(1),
+            QuantizationType::Spherical(SphericalBits::One),
         ];
 
         for quant_type in types {
