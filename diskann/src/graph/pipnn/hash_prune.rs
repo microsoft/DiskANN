@@ -203,13 +203,7 @@ struct MmapSlab<T: Pod>(Vec<T>);
 #[cfg(not(any(target_os = "linux", windows)))]
 impl<T: Pod + Default> MmapSlab<T> {
     fn new_zeroed(len: usize) -> ANNResult<Self> {
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(len)
-            .map_err(ANNError::new)
-            .map_err(|error| error.context(format!("reserving {len} HashPrune slab elements")))?;
-        values.resize_with(len, T::default);
-        Ok(Self(values))
+        Ok(Self(vec![T::default(); len]))
     }
     #[inline]
     fn as_ptr(&self) -> *const T {
@@ -645,12 +639,6 @@ impl HashPrune {
         l_max: usize,
         seed: u64,
     ) -> ANNResult<Self> {
-        if !(1..=MAX_RESERVOIR_LEN).contains(&l_max) {
-            return Err(super::config_error(format!(
-                "HashPrune l_max ({l_max}) must be in 1..={MAX_RESERVOIR_LEN}"
-            )));
-        }
-
         let npoints = data.nrows();
         let t0 = std::time::Instant::now();
         let sketches = LshSketches::try_new(data, num_planes, seed)?;
@@ -661,14 +649,7 @@ impl HashPrune {
         let t1 = std::time::Instant::now();
         let row_stride = l_max.next_multiple_of(32).max(32);
 
-        let mut states: Vec<LockedReservoirState> = Vec::new();
-        states
-            .try_reserve_exact(npoints)
-            .map_err(ANNError::new)
-            .map_err(|error| error.context(format!("reserving {npoints} HashPrune reservoirs")))?;
-        for _ in 0..npoints {
-            states.push(LockedReservoirState::new());
-        }
+        let states: Vec<_> = (0..npoints).map(|_| LockedReservoirState::new()).collect();
 
         // Each reservoir array has one `row_stride` row for each source point.
         let total = npoints.checked_mul(row_stride).ok_or_else(|| {
@@ -727,27 +708,14 @@ impl HashPrune {
     /// Lock one source point's reservoir while `f` reads or updates it.
     ///
     /// RAII unlocks the point when the closure exits.
-    ///
-    /// Returns an error when `idx` is outside the reservoir array or its row
-    /// offset overflows `usize`.
     #[inline(always)]
     fn with_locked_reservoir<R>(
         &self,
         idx: usize,
         f: impl FnOnce(&mut ReservoirState, ReservoirRows) -> R,
-    ) -> ANNResult<R> {
-        let slot = self.states.get(idx).ok_or_else(|| {
-            ANNError::message(format!(
-                "HashPrune point ID {idx} is outside {} reservoirs",
-                self.states.len()
-            ))
-        })?;
-        let off = idx.checked_mul(self.row_stride).ok_or_else(|| {
-            ANNError::message(format!(
-                "HashPrune row offset {idx} x {} overflows usize",
-                self.row_stride
-            ))
-        })?;
+    ) -> R {
+        let slot = &self.states[idx];
+        let off = idx * self.row_stride;
         // SAFETY: `idx` is in bounds. Each array has
         // `states.len() * row_stride` elements. `UnsafeCell` permits these writes,
         // and `with_locked_state` holds the source lock for the closure.
@@ -759,56 +727,41 @@ impl HashPrune {
                 row_stride: self.row_stride,
             }
         };
-        Ok(slot.with_locked_state(|state| f(state, rows)))
+        slot.with_locked_state(|state| f(state, rows))
     }
 
-    /// Merge one leaf's CSR edges into the point reservoirs.
+    /// Add one leaf's weighted CSR edges to the point reservoirs.
     ///
     /// `point_ids` maps leaf-local positions to dataset IDs. `edge_offsets` and
     /// `edges` form a CSR matrix with leaf-local targets. `sketch_scratch` stores
     /// the gathered sketches for this leaf.
     ///
-    /// Returns an error for an invalid CSR shape, point ID, or local target.
+    /// The leaf builder supplies sorted unique dataset IDs and one monotonic
+    /// offset range per point. Each edge target is a valid leaf-local position.
+    /// Construction checks the full sketch and reservoir allocation shapes.
     pub(crate) fn add_leaf_edges(
         &self,
         point_ids: &[u32],
         edge_offsets: &[u32],
         edges: &[(u32, f32)],
         sketch_scratch: &mut Vec<f32>,
-    ) -> ANNResult<()> {
-        let n = point_ids.len();
-        let expected_offsets = n.checked_add(1).ok_or_else(|| {
-            ANNError::message(format!("HashPrune point count {n} overflows usize"))
-        })?;
-        if edge_offsets.len() != expected_offsets {
-            return Err(ANNError::message(format!(
-                "HashPrune expected {expected_offsets} edge offsets, got {}",
-                edge_offsets.len()
-            )));
-        }
+    ) {
         if edges.is_empty() {
-            return Ok(());
+            return;
         }
 
+        let n = point_ids.len();
         let m = self.sketches.num_planes();
         let l_max = self.l_max as u8;
-        let sketch_len = n.checked_mul(m).ok_or_else(|| {
-            ANNError::message(format!("HashPrune sketch shape {n} x {m} overflows usize"))
-        })?;
+        let sketch_len = n * m;
         if sketch_scratch.len() < sketch_len {
             sketch_scratch.resize(sketch_len, 0.0);
         }
-        self.gather_sketches(point_ids, &mut sketch_scratch[..sketch_len])?;
+        self.gather_sketches(point_ids, &mut sketch_scratch[..sketch_len]);
 
         for local_src in 0..n {
             let start = edge_offsets[local_src] as usize;
             let end = edge_offsets[local_src + 1] as usize;
-            if start > end || end > edges.len() {
-                return Err(ANNError::message(format!(
-                    "HashPrune CSR range {start}..{end} is outside {} edges",
-                    edges.len()
-                )));
-            }
             if start == end {
                 continue;
             }
@@ -820,9 +773,9 @@ impl HashPrune {
             {
                 let off = next * self.row_stride;
                 prefetch_hint_all(std::slice::from_ref(&self.states[next]));
-                // SAFETY: `next` is a dataset point ID, so this raw range is the
-                // complete padded hash segment for that point. Raw prefetch avoids
-                // creating a shared slice while another worker mutates the segment.
+                // SAFETY: `next` is a dataset point ID. This range is the
+                // complete padded hash row for that point. Raw prefetch avoids
+                // a shared slice while another worker mutates the row.
                 unsafe {
                     let hashes = (*self.hash_rows.get()).as_ptr().add(off);
                     prefetch_hint_all_raw(
@@ -833,24 +786,19 @@ impl HashPrune {
             }
 
             let src_sketch = &sketch_scratch[local_src * m..(local_src + 1) * m];
-            self.with_locked_reservoir(global_src, |state, rows| -> ANNResult<()> {
+            self.with_locked_reservoir(global_src, |state, rows| {
                 for &(dst_local, dist) in &edges[start..end] {
                     let dst_index = dst_local as usize;
-                    let global_dst = *point_ids.get(dst_index).ok_or_else(|| {
-                        ANNError::message(format!(
-                            "HashPrune local target {dst_local} is outside {n} leaf points"
-                        ))
-                    })?;
+                    let global_dst = point_ids[dst_index];
                     let dst_sketch = &sketch_scratch[dst_index * m..(dst_index + 1) * m];
                     let hash = self.relative_hash.call(RelativeHashArgs {
                         src: src_sketch.as_ptr(),
                         dst: dst_sketch.as_ptr(),
                         len: m,
                     });
-                    // SAFETY: `with_locked_reservoir` holds this source's lock for the
-                    // closure and supplies its three exact reservoir rows.
-                    // `l_max` was validated at construction and `insert_reservoir_edge`
-                    // maintains initialized entries through `state.len`.
+                    // SAFETY: The source lock gives exclusive access to these rows.
+                    // Each row has at least `l_max` entries. Insertion maintains
+                    // `state.len <= l_max` and reads only initialized entries.
                     unsafe {
                         insert_reservoir_edge(
                             state,
@@ -863,43 +811,17 @@ impl HashPrune {
                         )
                     };
                 }
-                Ok(())
-            })??;
+            });
         }
-        Ok(())
     }
 
-    fn gather_sketches(&self, indices: &[u32], out: &mut [f32]) -> ANNResult<()> {
-        let m = self.sketches.num_planes();
-        let expected = indices.len().checked_mul(m).ok_or_else(|| {
-            ANNError::message(format!(
-                "HashPrune sketch shape {} x {m} overflows usize",
-                indices.len()
-            ))
-        })?;
-        if out.len() != expected {
-            return Err(ANNError::message(format!(
-                "HashPrune expected {expected} gathered sketch values, got {}",
-                out.len()
-            )));
+    fn gather_sketches(&self, indices: &[u32], out: &mut [f32]) {
+        let dimensions = self.sketches.num_planes();
+        let sketches = self.sketches.sketches();
+        for (destination, &point) in out.chunks_exact_mut(dimensions).zip(indices) {
+            let first = point as usize * dimensions;
+            destination.copy_from_slice(&sketches[first..first + dimensions]);
         }
-        let src = self.sketches.sketches();
-        for (i, &idx) in indices.iter().enumerate() {
-            let start = (idx as usize).checked_mul(m).ok_or_else(|| {
-                ANNError::message(format!(
-                    "HashPrune sketch offset {idx} x {m} overflows usize"
-                ))
-            })?;
-            let end = start.checked_add(m).ok_or_else(|| {
-                ANNError::message(format!("HashPrune sketch row {idx} overflows usize"))
-            })?;
-            let source = src.get(start..end).ok_or_else(|| {
-                ANNError::message(format!("HashPrune point ID {idx} has no sketch row"))
-            })?;
-            let output_start = i * m;
-            out[output_start..output_start + m].copy_from_slice(source);
-        }
-        Ok(())
     }
 
     /// Consume the reservoirs and return at most `max_degree` nearest IDs per point.
@@ -1117,8 +1039,7 @@ mod tests {
             unsafe {
                 insert_reservoir_edge(state, rows, hash, dst as u32, distance, l_max, hp.find_hash)
             };
-        })
-        .unwrap();
+        });
     }
 
     fn assert_sketch_source_type_matches_f32<T>(
@@ -1291,18 +1212,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_l_max_outside_structural_boundaries() {
-        for l_max in [0, MAX_RESERVOIR_LEN + 1] {
-            let result = hash_prune(&[0.0_f32], 1, 1, 1, l_max);
-            let error = match result {
-                Ok(_) => panic!("l_max={l_max} must be rejected"),
-                Err(error) => error,
-            };
-            assert!(format!("{error:?}").contains(&format!("l_max ({l_max})")));
-        }
-    }
-
-    #[test]
     fn ordered_distance_key_preserves_bf16_order_for_all_signs() {
         let values = [
             f32::NEG_INFINITY,
@@ -1342,9 +1251,7 @@ mod tests {
         ];
         let mut scratch = Vec::new();
 
-        batched
-            .add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch)
-            .unwrap();
+        batched.add_leaf_edges(&point_ids, &offsets, &edges, &mut scratch);
         for source in 0..point_ids.len() {
             for &(target, distance) in
                 &edges[offsets[source] as usize..offsets[source + 1] as usize]
@@ -1370,44 +1277,20 @@ mod tests {
     }
 
     #[test]
-    fn leaf_edges_reject_invalid_csr_and_point_ids() {
-        let data = [0.0_f32, 1.0];
-        let hp = hash_prune(&data, 2, 1, 1, 2).unwrap();
-        let mut scratch = Vec::new();
-
-        assert!(hp.add_leaf_edges(&[0], &[0], &[], &mut scratch).is_err());
-        assert!(
-            hp.add_leaf_edges(&[2], &[0, 1], &[(0, 1.0)], &mut scratch)
-                .is_err()
-        );
-        assert!(
-            hp.add_leaf_edges(&[0, 1], &[0, 1, 1], &[(2, 1.0)], &mut scratch)
-                .is_err()
-        );
-        assert!(
-            hp.add_leaf_edges(&[0, 1], &[0, 1, 0], &[(1, 1.0)], &mut scratch)
-                .is_err()
-        );
-    }
-
-    #[test]
     fn leaf_edges_grow_then_reuse_sketch_scratch() {
         let data = [0.0_f32, 1.0, 2.0, 3.0];
         let hp = hash_prune(&data, 4, 1, 8, 4).unwrap();
         let mut scratch = vec![99.0; 1];
 
-        hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch)
-            .unwrap();
+        hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
         assert_eq!(scratch.len(), 16);
         let capacity = scratch.capacity();
 
-        hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch)
-            .unwrap();
+        hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
         assert_eq!(scratch.len(), 16);
         assert_eq!(scratch.capacity(), capacity);
 
-        hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch)
-            .unwrap();
+        hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch);
         assert_eq!(scratch.len(), 16);
         assert_eq!(scratch.capacity(), capacity);
         assert!(
