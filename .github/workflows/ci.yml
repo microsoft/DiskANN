@@ -26,6 +26,7 @@ env:
 
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
   SDE_VERSION: "sde-external-10.8.0-2026-03-15-lin"
+  SDE_SHA256: "50b320cd226acef7a491f5b321fc1be3c3c7984f9e27a456e64894b5b0979dd3"
 
 defaults:
   run:
@@ -333,14 +334,16 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: intel-sde
-          key: intel-${{ env.SDE_VERSION }}
+          key: intel-${{ env.SDE_VERSION }}-${{ env.SDE_SHA256 }}
 
       - name: Download Intel SDE
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
-          wget -qO intel-sde.tar.xz "$SDE_URL"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --silent --show-error --output intel-sde.tar.xz "$SDE_URL"
+          echo "${SDE_SHA256}  intel-sde.tar.xz" | sha256sum --check
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
           rm intel-sde.tar.xz
@@ -393,14 +396,16 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: intel-sde
-          key: intel-${{ env.SDE_VERSION }}
+          key: intel-${{ env.SDE_VERSION }}-${{ env.SDE_SHA256 }}
 
       - name: Download Intel SDE
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
-          wget -qO intel-sde.tar.xz "$SDE_URL"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --silent --show-error --output intel-sde.tar.xz "$SDE_URL"
+          echo "${SDE_SHA256}  intel-sde.tar.xz" | sha256sum --check
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
           rm intel-sde.tar.xz
