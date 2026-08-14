@@ -751,8 +751,9 @@ impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 ///   `unzip_flat([a0, b0, a1, b1, …]) = [a0, a1, …, b0, b1, …]`
 ///
 /// `zip` and `unzip` are required. `zip_flat` and `unzip_flat` have default
-/// implementations that delegate through [`SplitJoin::split`] / [`SplitJoin::join`].
-/// Backends should override whichever pair is cheapest on their ISA.
+/// implementations that delegate through [`crate::SplitJoin::split`] /
+/// [`crate::SplitJoin::join`]. Backends should override whichever pair is cheapest on their
+/// ISA.
 pub trait ZipUnzip: crate::SplitJoin + Sized {
     /// Interleave elements from `halves.lo` and `halves.hi` into `Self`.
     fn zip(halves: crate::LoHi<Self::Halved>) -> Self;

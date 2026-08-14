@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde_json::Value;
 
-/// AST for query filters https://en.wikipedia.org/wiki/Abstract_syntax_tree
+/// AST for query filters <https://en.wikipedia.org/wiki/Abstract_syntax_tree>
 #[derive(Debug, Clone, PartialEq)]
 pub enum ASTExpr {
     /// Logical AND: all sub-expressions must be true

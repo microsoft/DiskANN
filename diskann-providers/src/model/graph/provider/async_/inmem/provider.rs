@@ -47,7 +47,7 @@ use crate::{
 ///
 /// * `U`: The primary vector store that holds the main representation of vectors.
 ///   Typical use cases:
-///   - Full precision vectors (e.g., [`FullPrecisionStore`])
+///   - Full precision vectors (e.g., [`FullPrecisionStore`](super::FullPrecisionStore))
 ///   - Quantized vectors when no higher fidelity representation is required
 ///   - May be `NoStore` if no base representation is required
 ///
@@ -71,13 +71,14 @@ use crate::{
 ///
 /// # Indexing Strategies
 ///
-/// * [`FullPrecision`]: The strategies implemented by [`FullPrecision`] only retrieve data
+/// * [`FullPrecision`](super::super::common::FullPrecision): The strategies implemented by
+///   `FullPrecision` only retrieve data
 ///   from the full-precision portion of the index. No quantized vectors are used.
 ///
 ///   During search, start points are filtered from the final results.
 ///
-/// * [`Quantized`]: The strategies implemented by [`Quantized`] can use a mix of quantized
-///   and full-precision vectors.
+/// * [`Quantized`](super::super::common::Quantized): The strategies implemented by
+///   `Quantized` can use a mix of quantized and full-precision vectors.
 ///
 ///   - Search: During search, quantized vectors are used with reranking applied to the
 ///     results before returning.
@@ -131,8 +132,8 @@ use crate::{
 /// ## Full-Precision and PQ - No Deletes
 ///
 /// To create a two-level provider with a PQ-based quant vector store, a
-/// [`FixedChunkPQTable`] can be supplied for the `quant_precursor` argument, as this
-/// implements the [`CreateQuantProvider`] trait.
+/// [`FixedChunkPQTable`](crate::model::pq::FixedChunkPQTable) can be supplied for the
+/// `quant_precursor` argument, as this implements the [`CreateVectorStore`] trait.
 /// ```
 /// use std::num::NonZeroUsize;
 ///
@@ -179,8 +180,9 @@ use crate::{
 ///
 /// ## Full-Precision and PQ - With Deletes.
 ///
-/// If deletes are desired, than the type [`TableBasedDeletes`] can be passed to the
-/// constructor.
+/// If deletes are desired, then
+/// [`TableBasedDeletes`](crate::model::graph::provider::async_::common::TableBasedDeletes)
+/// can be passed to the constructor.
 /// ```
 /// use std::num::NonZeroUsize;
 ///

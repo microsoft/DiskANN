@@ -66,6 +66,7 @@ jobs:
       - clippy-features
       - clippy-no-default-features
       - basics
+      - docs
       - codeql
       - baseline
       - sde
@@ -91,8 +92,7 @@ jobs:
       - clippy-default-features
       - clippy-features
       - clippy-no-default-features
-      # TODO: Re-enable docs check later
-      # - docs
+      - docs
     steps:
       - run: exit 0
 
@@ -225,19 +225,18 @@ jobs:
         with:
           category: "/language:rust"
 
-  # TODO: Re-enable docs check later
-  # docs:
-  #   name: docs
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Install Rust
-  #       run: rustup show
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: "doc --workspace --no-deps"
-  #       run: cargo doc --workspace --no-deps --document-private-items
-  #       env:
-  #         RUSTDOCFLAGS: -Dwarnings
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: "doc --workspace --no-deps"
+        run: cargo doc --locked --workspace --no-deps --features linalg,flatbuffers,experimental_diversity_search
+        env:
+          RUSTDOCFLAGS: -D rustdoc::all
 
   vectorset-fmt:
     name: vectorset format check

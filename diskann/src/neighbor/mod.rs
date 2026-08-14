@@ -38,7 +38,7 @@ pub use diverse_priority_queue::{
 ///
 /// To that end, the functions in the [`ord`] submodule should be used in combination with
 /// the standard library's sorting methods that accept explicit comparison functions like
-/// [`std::slice::sort_by`].
+/// [`slice::sort_by`].
 ///
 /// ```rust
 /// use diskann::neighbor::{self, Neighbor};

@@ -69,7 +69,6 @@ use crate::{
 /// The data format for disk is different from that of the in-memory providers.
 /// The disk format stores both the vectors and the adjacency list next to each other for
 /// better locality for quicker access.
-/// Please refer to the RFC documentation at [`docs\rfcs\cy2025\disk_provider_for_async_index.md`] for design details.
 pub struct DiskProvider<Data>
 where
     Data: GraphDataType<VectorIdType = u32>,

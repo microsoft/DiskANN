@@ -65,7 +65,7 @@ impl PruneKind {
     /// Construct a new [`PruneKind`] tailored for `metric`.
     ///
     /// For L2 and cosine variants, this returns [`Self::TriangleInequality`].
-    /// For inner product variants, this returns [`Self:Occluding`].
+    /// For inner product variants, this returns [`Self::Occluding`].
     pub fn from_metric(metric: diskann_vector::distance::Metric) -> Self {
         use diskann_vector::distance::Metric;
         match metric {
@@ -565,10 +565,7 @@ enum BackedgeSpec {
     Amount(usize),
 }
 
-/// A builder for for [`Config`]. Necessary invariants among the fields will be checked
-/// upon invoking [`Config::build`].
-///
-/// See [`Config::build`] for details.
+/// A builder for [`Config`].
 pub struct Builder {
     pruned_degree: usize,
     max_degree: MaxDegree,
