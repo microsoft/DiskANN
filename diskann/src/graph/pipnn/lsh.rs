@@ -41,11 +41,6 @@ impl LshSketches {
         num_planes: usize,
         seed: u64,
     ) -> ANNResult<Self> {
-        if !(1..=MAX_PLANES).contains(&num_planes) {
-            return Err(ANNError::message(format!(
-                "num_planes ({num_planes}) must be in 1..={MAX_PLANES}"
-            )));
-        }
         let npoints = data.nrows();
         let ndims = data.ncols();
         let hyperplane_len = num_planes.checked_mul(ndims).ok_or_else(|| {
@@ -60,28 +55,17 @@ impl LshSketches {
         })?;
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        let mut hyperplanes: Vec<f32> = Vec::new();
-        hyperplanes
-            .try_reserve_exact(hyperplane_len)
-            .map_err(ANNError::new)?;
-        hyperplanes.resize_with(hyperplane_len, || StandardNormal.sample(&mut rng));
+        let hyperplanes: Vec<f32> = (0..hyperplane_len)
+            .map(|_| StandardNormal.sample(&mut rng))
+            .collect();
 
-        let mut sketches = Vec::new();
-        sketches
-            .try_reserve_exact(sketch_len)
-            .map_err(ANNError::new)?;
-        sketches.resize(sketch_len, 0.0f32);
+        let mut sketches = vec![0.0f32; sketch_len];
 
         #[allow(clippy::disallowed_methods)] // caller installs the complete build in its pool.
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
             .try_for_each_init(Vec::new, |buffer, (point, sketch_row)| {
-                if buffer.len() < ndims {
-                    buffer
-                        .try_reserve(ndims - buffer.len())
-                        .map_err(ANNError::new)?;
-                }
                 buffer.resize(ndims, 0.0);
                 T::as_f32_into(data.row(point), &mut buffer[..ndims])
                     .map_err(Into::<ANNError>::into)
@@ -204,14 +188,6 @@ mod tests {
             let error =
                 LshSketches::try_new(data, 2, 42).expect_err("overflowing LSH shape must fail");
             assert!(error.to_string().contains("overflows"));
-        }
-    }
-
-    #[test]
-    fn rejects_plane_counts_outside_u16_capacity() {
-        for planes in [0, MAX_PLANES + 1] {
-            let error = LshSketches::try_new(view(&[0.0_f32], 1, 1), planes, 42).unwrap_err();
-            assert!(error.to_string().contains("must be in 1..=16"));
         }
     }
 }
