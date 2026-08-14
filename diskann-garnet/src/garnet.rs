@@ -85,7 +85,7 @@ pub(crate) type ReadModifyWriteCallback =
     unsafe extern "C" fn(u64, *const u8, usize, usize, RmwDataCallback, *mut c_void) -> bool;
 pub(crate) type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
 pub(crate) type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
-pub(crate) type FilterCallback = unsafe extern "C" fn(u64, u32) -> bool;
+pub(crate) type FilterCallback = unsafe extern "C" fn(u64, *const u8, usize) -> bool;
 pub(crate) type LogCallback = unsafe extern "C" fn(u64, *const u8, usize);
 
 #[derive(Copy, Clone)]
@@ -507,8 +507,18 @@ impl Callbacks {
 
     /// Evaluate the filter callback on an ID.
     #[must_use]
-    pub(crate) fn matches_filter(&self, ctx: &Context, id: u32) -> bool {
-        unsafe { (self.filter_callback)(ctx.inner, id) }
+    pub(crate) fn matches_filter(&self, ctx: &Context, data: &[u8]) -> bool {
+        unsafe {
+            (self.filter_callback)(
+                ctx.inner,
+                if data.is_empty() {
+                    std::ptr::null()
+                } else {
+                    data.as_ptr()
+                },
+                data.len(),
+            )
+        }
     }
 
     /// Log a message to Garnet.

@@ -471,20 +471,21 @@ pub unsafe extern "C" fn insert(
         return InsertResult::Fail.into();
     };
 
-    // Write attributes to garnet
-    let attr_data = if attribute_len > 0 && !attribute_data.is_null() {
-        unsafe { slice::from_raw_parts(attribute_data, attribute_len) }
-    } else {
-        &[]
-    };
-    if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-        return InsertResult::Fail.into();
-    }
-
     let old_ready = ctx.quantizer_ready();
 
     // Insert the vector
     if index.inner.insert(&ctx, &id, &v).is_ok() {
+        // Write attributes to garnet. These are written after insert since
+        // they are keyed on internal id.
+        let attr_data = if attribute_len > 0 && !attribute_data.is_null() {
+            unsafe { slice::from_raw_parts(attribute_data, attribute_len) }
+        } else {
+            &[]
+        };
+        if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
+            return InsertResult::Fail.into();
+        }
+
         let ready = ctx.quantizer_ready();
         if !old_ready && ready {
             InsertResult::SuccessStartTraining.into()
@@ -1103,8 +1104,6 @@ mod tests {
         let ctx = Context::new(0);
         let v = [0.0f32, 0.0f32];
 
-        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
-
         assert_eq!(
             unsafe {
                 super::insert(
@@ -1120,8 +1119,9 @@ mod tests {
             },
             1
         );
+        let iid = store.get(ctx.term(Term::IntMap).get(), &eid).unwrap();
         assert_eq!(
-            store.get(ctx.term(Term::Attributes).get(), &eid),
+            store.get(ctx.term(Term::Attributes).get(), &iid),
             Some(metadata.as_slice().to_owned())
         );
 
@@ -1135,7 +1135,7 @@ mod tests {
                 0,
             )
         });
-        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+        assert!(store.get(ctx.term(Term::Attributes).get(), &iid).is_none());
 
         unsafe {
             drop_index(0, index_ptr);

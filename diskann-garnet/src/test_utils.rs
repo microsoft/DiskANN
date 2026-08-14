@@ -199,7 +199,7 @@ unsafe extern "C" fn test_rmw(
     true
 }
 
-unsafe extern "C" fn test_filter(_context: u64, _internal_id: u32) -> bool {
+unsafe extern "C" fn test_filter(_context: u64, _data: *const u8, _len: usize) -> bool {
     true
 }
 

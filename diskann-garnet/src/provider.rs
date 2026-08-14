@@ -66,6 +66,10 @@ const QUANT_STATE_KEY: u32 = u32::from_be_bytes(*b"_qnt");
 /// Starting capacity of the pre-allocated rerank buffers.
 const RERANK_BUFFER_LENGTH: usize = 1024;
 
+/// Size hint passed to Garnet when batch reading attributes. Attributes are variable
+/// length, so this is only an estimate used to size Garnet's read buffer.
+const ATTRIBUTE_LENGTH_HINT: usize = 1024;
+
 #[derive(Clone)]
 struct AdjList(AdjacencyList<u32>);
 
@@ -424,9 +428,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
         id: &GarnetId,
         data: &[u8],
     ) -> Result<(), GarnetProviderError> {
+        let mut iid = u32::MAX;
+        if !self.callbacks.read_single_eid(
+            &context.term(Term::IntMap),
+            id,
+            bytemuck::bytes_of_mut(&mut iid),
+        ) {
+            return Err(GarnetError::Read.into());
+        }
+
         if self
             .callbacks
-            .write_eid(&context.term(Term::Attributes), id, data)
+            .write_iid(&context.term(Term::Attributes), iid, data)
         {
             Ok(())
         } else {
@@ -439,9 +452,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         id: &GarnetId,
     ) -> Result<(), GarnetProviderError> {
+        let mut iid = u32::MAX;
+        if !self.callbacks.read_single_eid(
+            &context.term(Term::IntMap),
+            id,
+            bytemuck::bytes_of_mut(&mut iid),
+        ) {
+            return Err(GarnetError::Read.into());
+        }
+
         if self
             .callbacks
-            .delete_eid(&context.term(Term::Attributes), id)
+            .delete_iid(&context.term(Term::Attributes), iid)
         {
             Ok(())
         } else {
@@ -1066,7 +1088,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         // It is not an error to fail deleting attributes; they may not exist.
         let _: bool = self
             .callbacks
-            .delete_eid(&context.term(Term::Attributes), gid);
+            .delete_iid(&context.term(Term::Attributes), id);
 
         // TODO: inplace_delete needs access to neighbors. Delete these once that bug is fixed.
         // See https://github.com/microsoft/DiskANN/issues/1153.
@@ -1202,6 +1224,32 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
                 None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
             }
         }
+    }
+
+    /// Batch read the attributes for `filtered_ids` and record the filter result for each
+    /// into `filtered_decisions`.
+    ///
+    /// Garnet skips ids with no stored attributes, so those keep `default_decision`.
+    fn compute_filter_decisions(&mut self, default_decision: bool) {
+        let Self {
+            provider,
+            context,
+            filtered_ids,
+            filtered_decisions,
+            ..
+        } = self;
+
+        filtered_decisions.clear();
+        filtered_decisions.resize(filtered_ids.len() / 2, default_decision);
+
+        provider.callbacks.read_multi_lpiid::<_, u8>(
+            &context.term(Term::Attributes),
+            filtered_ids,
+            ATTRIBUTE_LENGTH_HINT,
+            |i, attrs| {
+                filtered_decisions[i as usize] = provider.callbacks.matches_filter(context, attrs);
+            },
+        );
     }
 }
 
@@ -1516,12 +1564,13 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
         // borrow. We put it back at the end to save the allocation.
         let mut id_buffer = mem::take(&mut **self.id_buffer);
 
+        let default_decision = self.provider.callbacks.matches_filter(self.context, &[]);
+
         for nl_id in ids {
             self.provider
                 .get_neighbors(self.context, nl_id, &mut id_buffer);
 
             self.filtered_ids.clear();
-            self.filtered_decisions.clear();
 
             for id in id_buffer.iter().copied().filter(|id| pred.eval_mut(id)) {
                 if id == Self::START_ID {
@@ -1531,13 +1580,13 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                     };
                     on_neighbors(Decision::reject(id), dist);
                 } else {
-                    let matches = self.provider.callbacks.matches_filter(self.context, id);
-
                     self.filtered_ids.push(4);
                     self.filtered_ids.push(id);
-
-                    self.filtered_decisions.push(matches);
                 }
+            }
+
+            if self.filtered_ids.is_empty() {
+                continue;
             }
 
             let (ctx, length_hint) = if self.quantized {
@@ -1552,22 +1601,23 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                 )
             };
 
-            if !self.filtered_ids.is_empty() {
-                self.provider.callbacks.read_multi_lpiid(
-                    &ctx,
-                    &self.filtered_ids,
-                    length_hint,
-                    |i, v| {
-                        let dist = self.computer.evaluate_similarity(v);
-                        let decision = if self.filtered_decisions[i as usize] {
-                            Decision::accept(self.filtered_ids[i as usize * 2 + 1])
-                        } else {
-                            Decision::reject(self.filtered_ids[i as usize * 2 + 1])
-                        };
-                        on_neighbors(decision, dist);
-                    },
-                );
-            }
+            self.compute_filter_decisions(default_decision);
+
+            // Read vectors and calculate distances
+            self.provider.callbacks.read_multi_lpiid(
+                &ctx,
+                &self.filtered_ids,
+                length_hint,
+                |i, v| {
+                    let dist = self.computer.evaluate_similarity(v);
+                    let decision = if self.filtered_decisions[i as usize] {
+                        Decision::accept(self.filtered_ids[i as usize * 2 + 1])
+                    } else {
+                        Decision::reject(self.filtered_ids[i as usize * 2 + 1])
+                    };
+                    on_neighbors(decision, dist);
+                },
+            );
         }
 
         **self.id_buffer = id_buffer;
@@ -1589,6 +1639,8 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
         // borrow. We put it back at the end to save the allocation.
         let mut id_buffer = mem::take(&mut **self.id_buffer);
 
+        let default_decision = self.provider.callbacks.matches_filter(self.context, &[]);
+
         for nl_id in ids {
             self.provider
                 .get_neighbors(self.context, nl_id, &mut id_buffer);
@@ -1596,13 +1648,36 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
 
             for id in id_buffer.iter().copied() {
                 if id != Self::START_ID && pred.eval(&id) {
-                    let matches = self.provider.callbacks.matches_filter(self.context, id);
-
-                    if matches && pred.eval_mut(&Accept::new(id)) {
-                        self.filtered_ids.push(4);
-                        self.filtered_ids.push(id);
-                    }
+                    self.filtered_ids.push(4);
+                    self.filtered_ids.push(id);
                 }
+            }
+
+            if self.filtered_ids.is_empty() {
+                continue;
+            }
+
+            self.compute_filter_decisions(default_decision);
+
+            // Remove non-matching ids
+            let mut index = 0;
+            for (i, &matches) in self.filtered_decisions.iter().enumerate() {
+                if !matches {
+                    continue;
+                }
+
+                let id = self.filtered_ids[i * 2 + 1];
+
+                if pred.eval_mut(&Accept::new(id)) {
+                    self.filtered_ids[index * 2] = 4;
+                    self.filtered_ids[index * 2 + 1] = id;
+                    index += 1;
+                }
+            }
+            self.filtered_ids.truncate(index * 2);
+
+            if self.filtered_ids.is_empty() {
+                continue;
             }
 
             let (ctx, length_hint) = if self.quantized {
@@ -1617,17 +1692,15 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                 )
             };
 
-            if !self.filtered_ids.is_empty() {
-                self.provider.callbacks.read_multi_lpiid(
-                    &ctx,
-                    &self.filtered_ids,
-                    length_hint,
-                    |i, v| {
-                        let dist = self.computer.evaluate_similarity(v);
-                        on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
-                    },
-                );
-            }
+            self.provider.callbacks.read_multi_lpiid(
+                &ctx,
+                &self.filtered_ids,
+                length_hint,
+                |i, v| {
+                    let dist = self.computer.evaluate_similarity(v);
+                    on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
+                },
+            );
         }
 
         **self.id_buffer = id_buffer;
