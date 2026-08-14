@@ -46,18 +46,29 @@ mod disk_index_build_tests {
         #[values(Metric::InnerProduct, Metric::Cosine)] metric: Metric,
     ) {
         let index_path_prefix = format!(
-            "/disk_index_build/test_spherical_disk_index_build_{:?}",
+            "/disk_index_build/test_spherical_disk_index_build_{:?}_async_SPHERICAL_1",
             metric
         );
-
-        run_test_with_metric(
+        let params = TestParams {
+            l_build: 64,
+            max_degree: 16,
             index_path_prefix,
-            QuantizationType::Spherical(SphericalBits::One),
-            false,
+            data_compression_chunk_vector_count: Some(10),
+            build_quantization_type: QuantizationType::Spherical(SphericalBits::One),
+            metric,
+            ..TestParams::default()
+        };
+        let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
+
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+
+        verify_search_result_with_ground_truth::<GraphDataF32VectorUnitData>(
+            &fixture.params,
             8,
             130,
-            metric,
-        );
+            &fixture.storage_provider,
+        )
+        .unwrap();
     }
 
     // Helper function to run the tests with consistent behavior
@@ -116,24 +127,6 @@ mod disk_index_build_tests {
         top_k: usize,
         search_l: u32,
     ) {
-        run_test_with_metric(
-            index_path_prefix,
-            build_quantization_type,
-            use_sharded_build,
-            top_k,
-            search_l,
-            Metric::L2,
-        );
-    }
-
-    fn run_test_with_metric(
-        index_path_prefix: String,
-        build_quantization_type: QuantizationType,
-        use_sharded_build: bool,
-        top_k: usize,
-        search_l: u32,
-        metric: Metric,
-    ) {
         // Use the same parameters from [test_sift_build_and_search] in diskann_index
         let l_build = 64;
         let max_degree = 16;
@@ -149,7 +142,6 @@ mod disk_index_build_tests {
             index_build_ram_gb: get_index_build_ram_gb(use_sharded_build),
             data_compression_chunk_vector_count: Some(10),
             build_quantization_type,
-            metric,
             ..TestParams::default()
         };
 
@@ -157,9 +149,7 @@ mod disk_index_build_tests {
 
         fixture.build::<GraphDataF32VectorUnitData>().unwrap();
 
-        if metric == Metric::L2 {
-            fixture.compare_pq_compressed_files();
-        }
+        fixture.compare_pq_compressed_files();
         verify_search_result_with_ground_truth::<GraphDataF32VectorUnitData>(
             &fixture.params,
             top_k,
