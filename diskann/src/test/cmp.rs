@@ -108,6 +108,15 @@ pub(crate) use assert_eq_verbose;
 // Implementation //
 ////////////////////
 
+impl<T> VerboseEq for &T
+where
+    T: VerboseEq + ?Sized,
+{
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        (*self).verbose_eq(*other)
+    }
+}
+
 /// Display implementation for recording a field mismatch.
 #[derive(Debug)]
 pub(crate) struct Field(pub(crate) &'static str);
@@ -130,7 +139,7 @@ macro_rules! impl_via_partial_eq {
         impl $crate::test::cmp::VerboseEq for $T {
             fn verbose_eq(&self, other: &Self) -> $crate::ANNResult<()> {
                 if self != other {
-                    Err($crate::ANNError::new(NotEq(self.clone(), other.clone())))
+                    Err($crate::ANNError::new(NotEq(self.to_owned(), other.to_owned())))
                 } else {
                     Ok(())
                 }
@@ -143,7 +152,7 @@ macro_rules! impl_via_partial_eq {
 }
 
 impl_via_partial_eq!(
-    u8, u16, u32, u64, i8, i16, i32, i64, usize, f32, f64, String, bool,
+    u8, u16, u32, u64, i8, i16, i32, i64, usize, f32, f64, String, str, bool,
 );
 
 macro_rules! impl_tuple {

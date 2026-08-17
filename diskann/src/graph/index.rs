@@ -2601,26 +2601,21 @@ where
         //
         // Iteration preserves the pool's nearest-first order. Pruning stores results
         // by cache position and resolves each position to `local_id` afterward.
-        let sorted_cache: Vec<(f32, Option<_>)> = pool
-            .iter()
-            .map(|neighbor| {
-                // Filter out self loops.
-                let id = neighbor.id();
-                if exclude(*id) {
-                    (*neighbor.distance(), None)
-                } else {
-                    (*neighbor.distance(), map.get(*id))
-                }
-            })
-            .collect();
+        let mut storage = Vec::with_capacity(pool.len());
+        let cache = pool.map_in(
+            &mut storage,
+            |id| {
+                if exclude(*id) { None } else { map.get(*id) }
+            },
+        );
 
         let found = prune::robust_prune(
-            &sorted_cache,
+            cache,
             states,
             degree,
             alpha,
             self.config.prune_kind(),
-            |neighbor, result| {
+            |neighbor: &M::Element<'_>, result: &M::Element<'_>| {
                 computer.evaluate_similarity((*neighbor).reborrow(), result.reborrow())
             },
         );

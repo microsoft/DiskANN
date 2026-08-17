@@ -5,11 +5,9 @@
 
 use thiserror::Error;
 
-use super::SortedNeighbors;
-
 use crate::{
     ANNError, error,
-    graph::{AdjacencyList, config::PruneKind},
+    graph::{AdjacencyList, config::PruneKind, internal::SortedNeighbors},
     neighbor::Neighbor,
     utils::{IntoUsize, VectorId},
 };
@@ -97,14 +95,14 @@ pub(crate) struct State {
 
 /// Select a degree-bounded neighbor set with Vamana RobustPrune.
 ///
-/// `sorted_cache` stores each source distance and candidate vector in ascending
+/// `cache` stores each source distance and candidate vector in ascending
 /// source-distance order. `None` excludes that candidate without changing
 /// positional alignment. `states` has one entry for each candidate position.
 ///
 /// The function writes selected candidate indexes to `states[..result]` and
 /// returns `result`. The caller converts those indexes to graph IDs.
 pub(in crate::graph) fn robust_prune<V, D>(
-    sorted_cache: &[(f32, Option<V>)],
+    cache: SortedNeighbors<'_, Option<V>>,
     states: &mut [State],
     degree: usize,
     alpha: f32,
@@ -114,11 +112,6 @@ pub(in crate::graph) fn robust_prune<V, D>(
 where
     D: FnMut(&V, &V) -> f32,
 {
-    debug_assert!(
-        sorted_cache.is_sorted_by_key(|(distance, _)| distance),
-        "candidate cache must be sorted by source distance"
-    );
-
     let mut current_alpha = 1.0f32;
     let increment_factor = alpha.min(1.2);
 
@@ -138,11 +131,11 @@ where
     //
     // On the implementation side, we use `states` in the following way:
     //
-    // * `states[n].neighbor` is the **index** in `sorted_cache` of the `n`th **neighbor**.
+    // * `states[n].neighbor` is the **index** in `cache` of the `n`th **neighbor**.
     //   Note that a "neighbor" is a candidate that passes pruning.
     //
     //   Very important: to get the index `j` in the above description, we need to
-    //   check `sorted_cache[states[n].neighbor]`.
+    //   check `cache[states[n].neighbor]`.
     //
     //   This indexing naturally skips candidates `j` that have not been promoted to
     //   neighbors.
@@ -152,14 +145,14 @@ where
     //   excludes it from future consideration.
     //
     // * `states[i].last_checked` is the highest value of `n` against which the
-    //   occlude factor for `j = sorted_cache[states[n].neighbor]` has been checked.
+    //   occlude factor for `j = cache[states[n].neighbor]` has been checked.
     //
     //   The maximum value this should reach is `i`.
     //
     // Note that we use `states` for both "candidate" and "neighbor" tracking.
     let mut found = 0;
     while found < degree {
-        for (i, (neighbor_distance, neighbor)) in sorted_cache.iter().enumerate() {
+        for (i, neighbor) in cache.iter().enumerate() {
             if found >= degree {
                 break;
             }
@@ -179,7 +172,8 @@ where
             // Retrieval from the cache might not be perfect.
             //
             // This neighbor did not end up in the cache, then just skip it.
-            let neighbor = match neighbor {
+            let neighbor_distance = neighbor.distance();
+            let neighbor = match neighbor.id() {
                 Some(n) => n,
                 None => {
                     debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
@@ -198,7 +192,7 @@ where
                 let result_position = states[last_checked as usize].neighbor.into_usize();
                 last_checked += 1;
 
-                // If the position of this result in `sorted_cache` is greater than or equal
+                // If the position of this result in `cache` is greater than or equal
                 // to the current working position, then skip this candidate.
                 if result_position >= i {
                     debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
@@ -209,9 +203,9 @@ where
 
                 // Otherwise, compute the distance between the result and this neighbor
                 // and update the occlude factor.
-                let distance = match &sorted_cache[result_position] {
-                    (_, Some(v)) => compute_distance(neighbor, v),
-                    (_, None) => f32::MAX,
+                let distance = match cache[result_position].id() {
+                    Some(v) => compute_distance(neighbor, v),
+                    None => f32::MAX,
                 };
 
                 // Update occlude factor
