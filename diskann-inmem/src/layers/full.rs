@@ -185,7 +185,18 @@ where
     }
 }
 
-impl<T> layers::Insert for Full<T> where T: FullPrecision {}
+impl<T> layers::Insert for Full<T>
+where
+    T: FullPrecision,
+{
+    fn __prune<'a>(
+        &'a self,
+        store: &'a Store,
+        _: Hidden,
+    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+        T::__prune(Hidden::new(), self, store)
+    }
+}
 
 ///////////
 // Prune //
@@ -197,44 +208,68 @@ struct Prune<'a, T, D> {
     buffer: Vec<Option<UnalignedSlice<'a, T>>>,
     // A reader into a layer's store.
     reader: store::invasive::Reader<'a>,
-    // The expected dim.
-    dim: usize,
-    // Tye type of the data in the original dataset.
-    _data: PhantomData<T>,
     // Type type of the `PureDistanceFunction` used for the implementation.
     _distance: PhantomData<D>,
 }
 
+impl<'a, T, D> Prune<'a, T, D> {
+    fn new(reader: store::invasive::Reader<'a>) -> Self {
+        assert!(
+            reader
+                .bytes()
+                .value()
+                .is_multiple_of(std::mem::size_of::<T>()),
+            "internal inveriant violated",
+        );
+
+        Self {
+            buffer: Vec::new(),
+            reader,
+            _distance: PhantomData,
+        }
+    }
+}
+
 impl<T, D> layers::__Prune for Prune<'_, T, D>
 where
-    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, T>>,
+    T: Send + Sync + 'static + Debug,
+    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, T>>
+        + Send
+        + Sync
+        + Debug,
 {
     fn __prepare(&mut self, iter: &mut dyn crate::iter::Chunked<u32>) -> ANNResult<()> {
         let mut stack = crate::iter::StackBuffer::<u32, CHUNK_SIZE>::new();
         self.buffer.clear();
         loop {
-            let next = iter.next();
+            let next = iter.next(stack.as_mut_slice());
             if next.is_empty() {
                 break;
             }
 
-            self.buffer
-                .extend(next.iter().map(|id| match self.reader.read(i) {
-                    Some(v) => unsafe {
-                        Some(UnalignedSlice::new(
-                            v.as_ptr().cast::<T>(),
-                            reader.bytes().value() / std::mem::size_of::<T>(),
-                        ))
-                    },
-                    None => None,
-                }));
+            self.buffer.extend(
+                next.iter()
+                    .map(|id| match self.reader.read(id.into_usize()) {
+                        Some(v) => unsafe {
+                            Some(UnalignedSlice::new(
+                                v.as_ptr().cast::<T>(),
+                                self.reader.bytes().value() / std::mem::size_of::<T>(),
+                            ))
+                        },
+                        None => None,
+                    }),
+            );
         }
 
         Ok(())
     }
 
     fn __evaluate(&self, a: u32, b: u32) -> f32 {
-        D::run(ARCH, self.buffer[a], self.buffer[b])
+        D::run(
+            ARCH,
+            self.buffer[a.into_usize()].unwrap(),
+            self.buffer[b.into_usize()].unwrap(),
+        )
     }
 }
 
@@ -551,6 +586,23 @@ impl FullPrecision for f32 {
 
         Ok(output)
     }
+
+    fn __prune<'a>(
+        _: Hidden,
+        full: &'a Full<Self>,
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+        let reader = store.temp_inner_reader()?;
+
+        let output: Box<dyn layers::__Prune> = match full.metric {
+            Metric::L2 => Box::new(Prune::<f32, SquaredL2>::new(reader)),
+            Metric::InnerProduct => Box::new(Prune::<f32, InnerProduct>::new(reader)),
+            Metric::Cosine => Box::new(Prune::<f32, Cosine>::new(reader)),
+            Metric::CosineNormalized => Box::new(Prune::<f32, CosineNormalized>::new(reader)),
+        };
+
+        Ok(output)
+    }
 }
 
 impl FullPrecision for f16 {
@@ -582,6 +634,23 @@ impl FullPrecision for f16 {
             Metric::InnerProduct => mint!(query, reader, { f32, f16 } => InnerProduct),
             Metric::Cosine => mint!(query, reader, { f32, f16 } => Cosine),
             Metric::CosineNormalized => mint!(query, reader, { f32, f16 } => CosineNormalized),
+        };
+
+        Ok(output)
+    }
+
+    fn __prune<'a>(
+        _: Hidden,
+        full: &'a Full<Self>,
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+        let reader = store.temp_inner_reader()?;
+
+        let output: Box<dyn layers::__Prune> = match full.metric {
+            Metric::L2 => Box::new(Prune::<f16, SquaredL2>::new(reader)),
+            Metric::InnerProduct => Box::new(Prune::<f16, InnerProduct>::new(reader)),
+            Metric::Cosine => Box::new(Prune::<f16, Cosine>::new(reader)),
+            Metric::CosineNormalized => Box::new(Prune::<f16, CosineNormalized>::new(reader)),
         };
 
         Ok(output)
@@ -619,6 +688,23 @@ impl FullPrecision for u8 {
 
         Ok(output)
     }
+
+    fn __prune<'a>(
+        _: Hidden,
+        full: &'a Full<Self>,
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+        let reader = store.temp_inner_reader()?;
+
+        let output: Box<dyn layers::__Prune> = match full.metric {
+            Metric::L2 => Box::new(Prune::<u8, SquaredL2>::new(reader)),
+            Metric::InnerProduct => Box::new(Prune::<u8, InnerProduct>::new(reader)),
+            Metric::Cosine => Box::new(Prune::<u8, Cosine>::new(reader)),
+            Metric::CosineNormalized => Box::new(Prune::<u8, CosineNormalized>::new(reader)),
+        };
+
+        Ok(output)
+    }
 }
 
 impl FullPrecision for i8 {
@@ -642,6 +728,23 @@ impl FullPrecision for i8 {
             Metric::InnerProduct => mint!(query, reader, i8 => InnerProduct),
             Metric::Cosine => mint!(query, reader, i8 => Cosine),
             Metric::CosineNormalized => mint!(query, reader, i8 => Cosine),
+        };
+
+        Ok(output)
+    }
+
+    fn __prune<'a>(
+        _: Hidden,
+        full: &'a Full<Self>,
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+        let reader = store.temp_inner_reader()?;
+
+        let output: Box<dyn layers::__Prune> = match full.metric {
+            Metric::L2 => Box::new(Prune::<i8, SquaredL2>::new(reader)),
+            Metric::InnerProduct => Box::new(Prune::<i8, InnerProduct>::new(reader)),
+            Metric::Cosine => Box::new(Prune::<i8, Cosine>::new(reader)),
+            Metric::CosineNormalized => Box::new(Prune::<i8, CosineNormalized>::new(reader)),
         };
 
         Ok(output)

@@ -81,6 +81,9 @@ impl<'a, T, const N: usize> From<&'a [T; N]> for UnalignedSlice<'a, T> {
     }
 }
 
+unsafe impl<T> Send for UnalignedSlice<'_, T> where T: Sync {}
+unsafe impl<T> Sync for UnalignedSlice<'_, T> where T: Sync {}
+
 /// View `self` as an [`UnalignedSlice`].
 pub trait AsUnaligned {
     /// The element type of the slice.
