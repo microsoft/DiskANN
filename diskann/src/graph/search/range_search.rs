@@ -317,41 +317,33 @@ where
                 )
                 .await?;
 
-            let in_outer_range = InRange::new_checked(
-                self.radius(),
-                None,
-                starting_l,
-                scratch.best.iter().collect(),
-            );
+            let in_outer_range = InRange::new(self.radius(), None, starting_l, scratch.best.iter());
 
             // Increment the max results by the number of starting points, in case
             // they are filtered out later and leave us with fewer than the requested
             // number of results.
             let max_returned = self.effective_max_returned(num_start_ids);
 
-            let outer_range_len = in_outer_range.len();
-            let outer_range_ids: Vec<_> = in_outer_range
-                .neighbors
-                .iter()
-                .map(|neighbor| *neighbor.id())
-                .collect();
-
-            let mut in_range = InRange::new_checked(
+            let mut in_range = InRange::new(
                 self.radius(),
                 self.inner_radius(),
                 max_returned,
-                in_outer_range.neighbors,
+                in_outer_range.iter(),
             );
 
-            let stats = if outer_range_len >= ((starting_l as f32) * self.initial_slack()) as usize
-                && outer_range_len <= max_returned
+            let stats = if in_outer_range.len()
+                >= ((starting_l as f32) * self.initial_slack()) as usize
+                && in_outer_range.len() <= max_returned
             {
                 // clear the visited set and repopulate it with just the in-range points
                 scratch.visited.clear();
-                scratch.visited.extend(outer_range_ids.iter().copied());
+                scratch
+                    .visited
+                    .extend(in_outer_range.iter().map(|n| *n.id()));
 
                 // Create a range frontier for seeding the second-round search
-                let mut range_frontier: VecDeque<_> = outer_range_ids.into_iter().collect();
+                let mut range_frontier: VecDeque<_> =
+                    in_outer_range.take().into_iter().map(|n| *n.id()).collect();
 
                 // Move to range search
                 let range_stats = range_search_internal(
@@ -374,12 +366,7 @@ where
             };
 
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    in_range.neighbors.iter().copied(),
-                    output,
-                )
+                .post_process(&mut accessor, query, in_range.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -393,82 +380,73 @@ where
     }
 }
 
-pub(super) enum InRangePushResult {
-    Accepted,
-    RejectedbyOuter,
-    RejectedbyInner, // this state is only returned when the outer radius is respected
-    RejectedbyFilter, // this state is only returned when outer AND inner radius are respected
-    Full,            // this state is returned *before* checking inner/outer radius
-}
-
 pub(super) struct InRange<I> {
-    pub neighbors: Vec<Neighbor<I>>,
+    neighbors: Vec<Neighbor<I>>,
     radius: f32,
     inner_radius: Option<f32>,
     max_returned: usize,
 }
 
 impl<I> InRange<I> {
-    pub(super) fn push(&mut self, neighbor: Neighbor<I>) -> InRangePushResult {
-        if self.neighbors.len() >= self.max_returned {
-            return InRangePushResult::Full;
+    #[must_use]
+    pub(super) fn push(&mut self, neighbor: Neighbor<I>) -> bool {
+        let d = *neighbor.distance();
+        if self.neighbors.len() < self.max_returned && self.check(d) {
+            self.neighbors.push(neighbor);
+            true
+        } else {
+            false
         }
-        let dist = *neighbor.distance();
-        if dist > self.radius {
-            return InRangePushResult::RejectedbyOuter;
-        }
-        if let Some(inner) = self.inner_radius
-            && dist <= inner
-        {
-            return InRangePushResult::RejectedbyInner;
-        }
-        self.neighbors.push(neighbor);
-        InRangePushResult::Accepted
     }
 
-    pub(super) fn push_with_filter(
-        &mut self,
-        distance: f32,
-        decision: glue::Decision<I>,
-    ) -> InRangePushResult {
-        if self.neighbors.len() >= self.max_returned {
-            return InRangePushResult::Full;
-        }
-        if distance > self.radius {
-            return InRangePushResult::RejectedbyOuter;
-        }
-        if let Some(inner) = self.inner_radius
-            && distance <= inner
-        {
-            return InRangePushResult::RejectedbyInner;
-        }
-        if decision.is_reject() {
-            return InRangePushResult::RejectedbyFilter;
-        }
+    pub(super) fn dedup(&mut self)
+    where
+        I: Ord,
+    {
         self.neighbors
-            .push(Neighbor::new(decision.into_inner(), distance));
-        InRangePushResult::Accepted
-    }
-
-    pub(super) fn push_unchecked(&mut self, neighbor: Neighbor<I>) {
-        self.neighbors.push(neighbor);
+            .sort_unstable_by(crate::neighbor::ord::fast_distance_total);
+        self.neighbors
+            .dedup_by(|left, right| left.id() == right.id());
     }
 
     pub(super) fn len(&self) -> usize {
         self.neighbors.len()
     }
 
+    pub(super) fn is_full(&self) -> bool {
+        self.len() == self.max_returned
+    }
+
+    pub(super) fn take(self) -> Vec<Neighbor<I>> {
+        self.neighbors
+    }
+
+    pub(super) fn iter(&self) -> impl ExactSizeIterator<Item = Neighbor<I>>
+    where
+        I: Copy,
+    {
+        self.neighbors.iter().copied()
+    }
+
+    #[must_use]
+    pub(super) fn check(&self, distance: f32) -> bool {
+        distance <= self.radius && self.inner_radius.map_or(true, |inner| distance > inner)
+    }
+
     /// Create a new InRange with the given parameters,
     /// filtering the candidate neighbors and truncating
     /// as needed to respect the maximum number of results.
-    pub(super) fn new_checked(
+    pub(super) fn new<Itr>(
         radius: f32,
         inner_radius: Option<f32>,
         max_returned: usize,
-        candidate_neighbors: Vec<Neighbor<I>>,
-    ) -> Self {
+        candidates: Itr,
+    ) -> Self
+    where
+        Itr: IntoIterator<Item = Neighbor<I>>,
+    {
         Self {
-            neighbors: candidate_neighbors
+            neighbors: candidates
                 .into_iter()
                 .filter(|n| {
                     let dist = *n.distance();
@@ -514,7 +492,7 @@ where
 
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
 
-    'outer: while !range_frontier.is_empty() {
+    while !range_frontier.is_empty() && !in_range.is_full() {
         scratch.beam_nodes.clear();
 
         // In this loop we are going to find the beam_width number of remaining nodes within the radius
@@ -537,19 +515,12 @@ where
 
         let navigation_radius = search_params.radius() * search_params.range_slack();
         for neighbor in neighbors.iter() {
-            match in_range.push(*neighbor) {
-                InRangePushResult::Full => {
-                    break 'outer; // we've reached the maximum number of results, stop processing
-                }
-                InRangePushResult::Accepted | InRangePushResult::RejectedbyInner => {
-                    // both these results guarantee within outer radius
-                    range_frontier.push_back(*neighbor.id());
-                }
-                InRangePushResult::RejectedbyOuter if *neighbor.distance() <= navigation_radius => {
-                    // add to the range frontier if it's within the tolerance
-                    range_frontier.push_back(*neighbor.id());
-                }
-                _ => {}
+            if in_range.is_full() {
+                break;
+            }
+
+            if in_range.push(*neighbor) || *neighbor.distance() <= navigation_radius {
+                range_frontier.push_back(*neighbor.id());
             }
         }
 
