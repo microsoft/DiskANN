@@ -706,21 +706,22 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 /// This type implements zero-copy access to the data within its parent provider during prunes.
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
-    reader: store::Reader<'a>,
-    distance: &'a dyn layers::Distance,
+    prune: Box<dyn layers::__Prune + 'a>,
+    keys: hashbrown::HashMap<u32, Option<layers::PruneKey>>,
+    neighbors: &'a Neighbors,
     counters: LocalCounters<'a>,
 }
 
 /// The distance computer for [`PruneAccessor`].
 #[derive(Debug)]
 pub struct Distance<'a> {
-    distance: &'a dyn layers::Distance,
+    prune: &'a dyn layers::__Prune,
     counters: LocalCounters<'a>,
 }
 
 impl<'a> Distance<'a> {
-    fn new(distance: &'a dyn layers::Distance, counters: LocalCounters<'a>) -> Self {
-        Self { distance, counters }
+    fn new(prune: &'a dyn layers::__Prune, counters: LocalCounters<'a>) -> Self {
+        Self { prune, counters }
     }
 }
 
@@ -728,11 +729,11 @@ impl<'a> Distance<'a> {
     clippy::unwrap_used,
     reason = "prune does not allow fallible distance functions yet"
 )]
-impl diskann_vector::DistanceFunction<&[u8], &[u8], f32> for Distance<'_> {
+impl diskann_vector::DistanceFunction<layers::PruneKey, layers::PruneKey, f32> for Distance<'_> {
     #[inline]
-    fn evaluate_similarity(&self, x: &[u8], y: &[u8]) -> f32 {
+    fn evaluate_similarity(&self, x: layers::PruneKey, y: layers::PruneKey) -> f32 {
         self.counters.distance_ref(1);
-        self.distance.evaluate(x, y).unwrap()
+        self.prune.__evaluate(x, y)
     }
 }
 
@@ -746,7 +747,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     where
         Self: 'a;
 
-    type ElementRef<'a> = &'a [u8];
+    type ElementRef<'a> = layers::PruneKey;
 
     type View<'a>
         = &'a Self
@@ -764,12 +765,17 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        _itr: Itr,
+        itr: Itr,
     ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
-        Ok((self, Distance::new(self.distance, self.counters.fork())))
+        self.keys.clear();
+        self.keys.extend(itr.map(|i| (i, None)));
+        let count = self.prune.__prepare(self.keys.iter_mut())?;
+        self.counters.get_vector(count.as_u64());
+
+        Ok((self, Distance::new(&*self.prune, self.counters.fork())))
     }
 }
 
@@ -781,7 +787,7 @@ impl provider::NeighborAccessor for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || {
             self.counters.get_neighbors(1);
-            Ok(self.reader.neighbors().get(id, neighbors)?)
+            Ok(self.neighbors.get(id, neighbors)?)
         };
         ready(work)
     }
@@ -795,7 +801,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || {
             self.counters.set_neighbors(1);
-            Ok(self.reader.neighbors().set(id, neighbors)?)
+            Ok(self.neighbors.set(id, neighbors)?)
         };
         ready(work)
     }
@@ -807,7 +813,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || -> ANNResult<()> {
             self.counters.append_vector(1);
-            let lock = self.reader.neighbors().lock(id)?;
+            let lock = self.neighbors.lock(id)?;
 
             // Due to race conditions between calls to `get_neighbors` and `append_vector`
             // in `diskann` - it's possible that the state of the adjacency list has changed
@@ -831,19 +837,14 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
 }
 
 impl workingset::View<u32> for &PruneAccessor<'_> {
-    type ElementRef<'a> = &'a [u8];
+    type ElementRef<'a> = layers::PruneKey;
     type Element<'a>
-        = &'a [u8]
+        = layers::PruneKey
     where
         Self: 'a;
-    fn get(&self, id: u32) -> Option<&[u8]> {
-        match self.reader.inner().read(id.into_usize()) {
-            Some(data) => {
-                self.counters.get_vector_ref(1);
-                Some(data)
-            }
-            None => None,
-        }
+
+    fn get(&self, id: u32) -> Option<layers::PruneKey> {
+        *self.keys.get(&id)?
     }
 }
 
@@ -965,7 +966,7 @@ where
 
 impl<L, M> glue::PruneStrategy<Provider<L, M>> for Strategy
 where
-    L: layers::Layer + layers::AsDistance,
+    L: layers::Insert,
     M: Id,
 {
     type PruneAccessor<'a> = PruneAccessor<'a>;
@@ -978,8 +979,9 @@ where
         _capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
         Ok(PruneAccessor {
-            reader: provider.store.reader()?,
-            distance: <L as layers::AsDistance>::as_distance(&provider.layer),
+            prune: <L as layers::Insert>::__prune(&provider.layer, &provider.store, Hidden::new())?,
+            keys: hashbrown::HashMap::new(),
+            neighbors: provider.store.temp_neighbors(),
             counters: provider.local_counters(),
         })
     }

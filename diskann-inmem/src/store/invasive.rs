@@ -235,7 +235,7 @@ impl<'a> Reader<'a> {
 
     /// Return the number of bytes for each entry.
     pub(crate) fn bytes(&self) -> Bytes {
-        self.unpadded
+        self.unpadded.unchecked_sub(AtomicTag::SIZE)
     }
 }
 

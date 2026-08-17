@@ -26,7 +26,10 @@
 //!
 //! 2. Keep the number of specializations bounded for compile time reasons.
 
+use std::num::NonZeroU16;
+
 use diskann::ANNResult;
+use thiserror::Error;
 
 use crate::{Hidden, num::Bytes, store::Store};
 
@@ -59,33 +62,6 @@ pub trait Set<T>: Layer {
     fn set(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
 }
 
-/// A distance computation on raw byte slices.
-///
-/// When paired with [`Layer`] via helpers like [`AsDistance`], implementations may assume
-/// that `x` and `y` have length [`Layer::bytes`].
-///
-/// No alignment guarantees are made for `x` and `y`, though in practice they are likely
-/// to be aligned to 32 or 64 bytes.
-pub trait Distance: Send + Sync + std::fmt::Debug {
-    fn evaluate(&self, x: &[u8], y: &[u8]) -> ANNResult<f32>;
-}
-
-/// Return a [`Distance`] function for a [`Layer`].
-pub trait AsDistance: Send + Sync + std::fmt::Debug {
-    fn as_distance(&self) -> &dyn Distance;
-}
-
-// /// A unary query distance on raw byte slices.
-// ///
-// /// When paired with [`Layer`] via helpers like [`Search`], implementations may assume
-// /// that `x` has length [`Layer::bytes`].
-// ///
-// /// No alignment guarantees are made for `x`, though in practice it is likely to be
-// /// aligned to 32 or 64 bytes.
-// pub trait QueryDistance: Send + Sync + std::fmt::Debug {
-//     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
-// }
-
 // TODO: Try to hide?
 #[doc(hidden)]
 pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
@@ -106,12 +82,54 @@ pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
     ) -> ANNResult<usize>;
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PruneKey(NonZeroU16);
+
+impl PruneKey {
+    const ONE: Self = Self(NonZeroU16::new(1).unwrap());
+
+    pub(crate) fn counter() -> Self {
+        Self::ONE
+    }
+
+    pub(crate) fn inc(self) -> Result<Self, Overflow> {
+        match self.0.checked_add(1) {
+            Some(v) => Ok(Self(v)),
+            None => Err(Overflow),
+        }
+    }
+
+    pub(crate) fn as_u64(self) -> u64 {
+        u64::from(self.0.get()) - 1
+    }
+
+    pub(crate) fn index(self) -> usize {
+        usize::from(self.0.get()) - 1
+    }
+}
+
+impl<'a> diskann_utils::Reborrow<'a> for PruneKey {
+    type Target = PruneKey;
+    fn reborrow(&'a self) -> Self::Target {
+        *self
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("prune list exceeded u16::MAX")]
+struct Overflow;
+
+diskann::convert_error!(Overflow);
+
 // TODO: Try to hide?
 #[doc(hidden)]
 pub(crate) trait __Prune: Send + Sync + std::fmt::Debug {
-    fn __prepare(&mut self, items: &mut dyn crate::iter::Chunked<u32>) -> ANNResult<()>;
+    fn __prepare(
+        &mut self,
+        items: hashbrown::hash_map::IterMut<'_, u32, Option<PruneKey>>,
+    ) -> ANNResult<PruneKey>;
 
-    fn __evaluate(&self, a: u32, b: u32) -> f32;
+    fn __evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
 }
 
 /// Enable search over vectors defined by a [`Layer`].
@@ -128,41 +146,13 @@ pub trait Search: Send + Sync + 'static {
         store: &'a Store,
         _: Hidden,
     ) -> ANNResult<Box<dyn __ExpandBeam + 'a>>;
-
-    // /// Create a distance computer specialized for `query` and provide it to `visitor`.
-    // fn query_distance<'a, V>(&'a self, query: Self::Query<'a>, visitor: V) -> ANNResult<V::Output>
-    // where
-    //     V: QueryVisitor<'a>;
 }
-
-// /// Specialize a kernel around a [`QueryDistance`] implementation.
-// pub trait QueryVisitor<'a>: Sized {
-//     /// The type of the type-erased output.
-//     type Output;
-//
-//     /// Specialize [`Self::Output`] for `distance`.
-//     fn visit<T>(self, distance: T) -> Self::Output
-//     where
-//         T: QueryDistance + 'a;
-//
-//     /// Specialize [`Self::Output`] for `distance` accepting a hint that `distance` has been
-//     /// specialized to work on data elements of exactly `BYTES` bytes long.
-//     ///
-//     /// This can be used to tailor surrounding code (e.g. software prefetches) for exactly
-//     /// the length of the data being processed.
-//     fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
-//     where
-//         T: QueryDistance + 'a,
-//     {
-//         self.visit(distance)
-//     }
-// }
 
 /// A insert-specific specialization of [`Search`].
 ///
 /// Note that the bounds for this trait are unnecessarily complicated, but rely on changes
 /// to `diskann` to full resolve.
-pub trait Insert: Search + for<'a> Set<Self::Query<'a>> + AsDistance {
+pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
     /// A specialization of [`Search::query_distance`] targeting vector insert specifically.
     #[doc(hidden)]
     fn __insert_expand_beam<'a, V>(

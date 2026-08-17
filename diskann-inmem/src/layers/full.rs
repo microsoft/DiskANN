@@ -37,9 +37,6 @@ const CHUNK_SIZE: usize = 16;
 /// a single bound.
 pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     #[doc(hidden)]
-    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<Self>;
-
-    #[doc(hidden)]
     fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<Self>,
@@ -61,8 +58,9 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    distance: Distance<T>,
+    dim: usize,
     metric: Metric,
+    _type: PhantomData<T>,
 }
 
 impl<T> Full<T>
@@ -74,24 +72,16 @@ where
     where
         T: FullPrecision,
     {
-        T::__new(Hidden::new(), dim, metric)
-    }
-
-    fn from_distance_provider(dim: usize, metric: Metric) -> Self
-    where
-        T: DistanceProvider<T>,
-    {
-        let distance = Distance {
-            f: T::distance_comparer(metric, Some(dim)),
+        Self {
             dim,
-        };
-
-        Self { distance, metric }
+            metric,
+            _type: PhantomData,
+        }
     }
 
     /// Return the logical dimension of the data handled by this [`layers::Layer`].
     pub fn dim(&self) -> usize {
-        self.distance.dim
+        self.dim
     }
 
     /// Return the number of bytes of the data handles by this [`layers::Layer`].
@@ -160,15 +150,6 @@ enum SetError {
 
 diskann::convert_error!(SetError);
 
-impl<T> layers::AsDistance for Full<T>
-where
-    T: FullPrecision,
-{
-    fn as_distance(&self) -> &dyn layers::Distance {
-        &self.distance
-    }
-}
-
 impl<T> layers::Search for Full<T>
 where
     T: FullPrecision,
@@ -205,7 +186,7 @@ where
 #[derive(Debug)]
 struct Prune<'a, T, D> {
     // Buffered data to prune over.
-    buffer: Vec<Option<UnalignedSlice<'a, T>>>,
+    buffer: Vec<UnalignedSlice<'a, T>>,
     // A reader into a layer's store.
     reader: store::invasive::Reader<'a>,
     // Type type of the `PureDistanceFunction` used for the implementation.
@@ -238,121 +219,37 @@ where
         + Sync
         + Debug,
 {
-    fn __prepare(&mut self, iter: &mut dyn crate::iter::Chunked<u32>) -> ANNResult<()> {
-        let mut stack = crate::iter::StackBuffer::<u32, CHUNK_SIZE>::new();
+    fn __prepare(
+        &mut self,
+        items: hashbrown::hash_map::IterMut<'_, u32, Option<layers::PruneKey>>,
+    ) -> ANNResult<layers::PruneKey> {
+        let mut counter = layers::PruneKey::counter();
         self.buffer.clear();
-        loop {
-            let next = iter.next(stack.as_mut_slice());
-            if next.is_empty() {
-                break;
+        self.buffer.reserve(items.len());
+
+        for (id, key) in items {
+            if let Some(v) = self.reader.read(id.into_usize()) {
+                self.buffer.push(unsafe { UnalignedSlice::new(
+                    v.as_ptr().cast::<T>(),
+                    self.reader.bytes().value() / std::mem::size_of::<T>(),
+                )});
+
+                *key = Some(counter);
+
+                // Potential overflow issue - but it's exceedingly unlikely that
+                // someone will provide a prune list exceeding `u16::MAX`.
+                //
+                // In addition, `diskann` limits this bound as well.
+                counter = counter.inc()?;
             }
-
-            self.buffer.extend(
-                next.iter()
-                    .map(|id| match self.reader.read(id.into_usize()) {
-                        Some(v) => unsafe {
-                            Some(UnalignedSlice::new(
-                                v.as_ptr().cast::<T>(),
-                                self.reader.bytes().value() / std::mem::size_of::<T>(),
-                            ))
-                        },
-                        None => None,
-                    }),
-            );
         }
 
-        Ok(())
+        Ok(counter)
     }
 
-    fn __evaluate(&self, a: u32, b: u32) -> f32 {
-        D::run(
-            ARCH,
-            self.buffer[a.into_usize()].unwrap(),
-            self.buffer[b.into_usize()].unwrap(),
-        )
+    fn __evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
+        D::run(ARCH, self.buffer[a.index()], self.buffer[b.index()])
     }
-}
-
-//////////////
-// Distance //
-//////////////
-
-#[derive(Debug)]
-#[doc(hidden)]
-pub struct Distance<T, U = T>
-where
-    T: 'static,
-    U: 'static,
-{
-    f: distance::Distance<T, U>,
-    dim: usize,
-}
-
-impl<T, U> Clone for Distance<T, U> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T, U> Copy for Distance<T, U> {}
-
-impl<T, U> Distance<T, U>
-where
-    T: 'static,
-    U: 'static,
-{
-    #[cold]
-    #[inline(never)]
-    fn error(&self, x: &[u8], y: &[u8]) -> ANNResult<f32> {
-        let error = DistanceError {
-            expected: self.bytes(),
-            xlen: x.len(),
-            ylen: y.len(),
-        };
-
-        Err(ANNError::new(error))
-    }
-
-    fn dim(&self) -> usize {
-        self.dim
-    }
-
-    fn bytes(&self) -> usize {
-        self.dim() * std::mem::size_of::<U>()
-    }
-}
-
-impl<T> layers::Distance for Distance<T>
-where
-    T: Debug + 'static,
-{
-    fn evaluate(&self, x: &[u8], y: &[u8]) -> ANNResult<f32> {
-        let bytes = self.bytes();
-        if x.len() != bytes || y.len() != bytes {
-            self.error(x, y)
-        } else {
-            // SAFETY: We've checked that both `x` and `y` are valid for
-            // `size_of::<T>() * self.dim` bytes.
-            let ux = unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.dim) };
-
-            // SAFETY: Same as above
-            let uy = unsafe { UnalignedSlice::new(y.as_ptr().cast::<T>(), self.dim) };
-            Ok(self.f.call_unaligned(ux, uy))
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-#[error(
-    "expected slices of length {} - instead got {} and {}",
-    self.expected,
-    self.xlen,
-    self.ylen
-)]
-struct DistanceError {
-    expected: usize,
-    xlen: usize,
-    ylen: usize,
 }
 
 ///////////////////
@@ -554,10 +451,6 @@ macro_rules! mint {
 }
 
 impl FullPrecision for f32 {
-    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<f32> {
-        Full::from_distance_provider(dim, metric)
-    }
-
     fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<f32>,
@@ -606,10 +499,6 @@ impl FullPrecision for f32 {
 }
 
 impl FullPrecision for f16 {
-    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<f16> {
-        Full::from_distance_provider(dim, metric)
-    }
-
     fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<f16>,
@@ -658,10 +547,6 @@ impl FullPrecision for f16 {
 }
 
 impl FullPrecision for u8 {
-    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<u8> {
-        Full::from_distance_provider(dim, metric)
-    }
-
     fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<u8>,
@@ -708,10 +593,6 @@ impl FullPrecision for u8 {
 }
 
 impl FullPrecision for i8 {
-    fn __new(_: Hidden, dim: usize, metric: Metric) -> Full<i8> {
-        Full::from_distance_provider(dim, metric)
-    }
-
     fn __expand_beam<'a>(
         _: Hidden,
         full: &'a Full<i8>,
