@@ -75,17 +75,18 @@ pub trait AsDistance: Send + Sync + std::fmt::Debug {
     fn as_distance(&self) -> &dyn Distance;
 }
 
-/// A unary query distance on raw byte slices.
-///
-/// When paired with [`Layer`] via helpers like [`Search`], implementations may assume
-/// that `x` has length [`Layer::bytes`].
-///
-/// No alignment guarantees are made for `x`, though in practice it is likely to be
-/// aligned to 32 or 64 bytes.
-pub trait QueryDistance: Send + Sync + std::fmt::Debug {
-    fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
-}
+// /// A unary query distance on raw byte slices.
+// ///
+// /// When paired with [`Layer`] via helpers like [`Search`], implementations may assume
+// /// that `x` has length [`Layer::bytes`].
+// ///
+// /// No alignment guarantees are made for `x`, though in practice it is likely to be
+// /// aligned to 32 or 64 bytes.
+// pub trait QueryDistance: Send + Sync + std::fmt::Debug {
+//     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
+// }
 
+// TODO: Try to hide?
 #[doc(hidden)]
 pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
     /// Evaluate a raw distance against index `i`.
@@ -103,6 +104,14 @@ pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
         buffer: &mut [(u32, f32)],
         _: Hidden,
     ) -> ANNResult<usize>;
+}
+
+// TODO: Try to hide?
+#[doc(hidden)]
+pub trait __Prune: Send + Sync + std::fmt::Debug {
+    // fn prepare(
+    //     &mut self,
+    //     hashbrown::hash_map::IterMut<'_, Option
 }
 
 /// Enable search over vectors defined by a [`Layer`].

@@ -13,6 +13,7 @@ mod arch;
 mod buffer;
 mod counters;
 mod epoch;
+mod iter;
 mod freelist;
 mod ids;
 mod neighbors;

@@ -53,7 +53,7 @@ use crate::{
     Hidden,
     counters::{Counters, LocalCounters},
     ids::IdMap,
-    layers::{self, QueryDistance},
+    layers,
     neighbors::Neighbors,
     num::Bytes,
     store::{self, Store},
