@@ -56,6 +56,7 @@ mod params;
 mod profile;
 mod storage;
 
+pub use centroids::AdjacencyCensus;
 pub use diskann::utils::VectorRepr;
 pub use diskann_vector::Half;
 pub use error::{GraphIvfError, Result};
@@ -65,7 +66,8 @@ pub use online::{
     SeedStrategy, SplitEvent,
 };
 pub use params::{
-    AssignMethod, BuildParams, EmptyClusterPolicy, GraphParams, Metric, OnlineParams, SearchParams,
-    DEFAULT_CENTROID_SEARCH_ALPHA, MIN_CENTROID_SEARCH_L,
+    AssignMethod, BuildParams, CentroidRouting, CentroidSearch, EmptyClusterPolicy, GraphParams,
+    Metric, OnlineCentroidRouting, OnlineParams, SearchParams, DEFAULT_CENTROID_SEARCH_ALPHA,
+    MIN_CENTROID_SEARCH_L,
 };
 pub use profile::{BuildProfile, SearchProfile};

@@ -15,6 +15,7 @@ autoexamples = false
 [dependencies]
 diskann.workspace = true
 diskann-disk.workspace = true
+diskann-linalg.workspace = true
 diskann-providers.workspace = true
 diskann-quantization.workspace = true
 diskann-utils.workspace = true

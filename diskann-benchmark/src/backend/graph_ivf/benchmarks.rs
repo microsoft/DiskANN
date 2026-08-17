@@ -122,6 +122,7 @@ where
                     GraphIvfLoad {
                         data_type: build.data_type,
                         load_path: build.save_path.clone(),
+                        centroid_search: build.routing.mode(),
                     },
                 )
             }
@@ -132,6 +133,7 @@ where
                     GraphIvfLoad {
                         data_type: online.data_type,
                         load_path: online.save_path.clone(),
+                        centroid_search: online.routing.mode(),
                     },
                 )
             }
@@ -142,6 +144,7 @@ where
                     GraphIvfLoad {
                         data_type: runbook.build.data_type,
                         load_path: runbook.build.save_path.clone(),
+                        centroid_search: runbook.build.routing.mode(),
                     },
                 )
             }

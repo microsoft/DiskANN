@@ -182,19 +182,24 @@ impl<'a> OnlineSearcher<'a> {
         let clusterer = self.clusterer;
         params.validate(clusterer.num_clusters())?;
         self.check_dim(query)?;
-        let found = self.select_centroids(query, params)?;
 
-        // `validate` already established that at least `nlist` clusters are
-        // live, so the exact cutoff exists.
-        let cutoff = clusterer
+        // Take the exact cutoff first. It reduces to a single scalar, so the
+        // centroid buffers are free for the graph walk that follows.
+        self.resize_centroid_buffers(params.nlist);
+        let ranked = clusterer
             .centroids
-            .kth_nearest_distance(query, params.nlist)
-            .ok_or_else(|| {
-                GraphIvfError::invalid(format!(
-                    "fewer than {} live centroids for an exact ranking",
-                    params.nlist
-                ))
-            })?;
+            .exact_search(query, &mut self.cids, &mut self.cdist)?;
+        if ranked < params.nlist {
+            return Err(GraphIvfError::invalid(format!(
+                "fewer than {} live centroids for an exact ranking",
+                params.nlist
+            )));
+        }
+        // Comparing against a distance rather than an id set counts a tie as
+        // correct instead of penalizing whichever tie-break the graph took.
+        let cutoff = self.cdist[params.nlist - 1];
+
+        let found = self.select_centroids(query, params)?;
         let matched = self.cids[..found]
             .iter()
             .filter(|&&cid| {
@@ -223,13 +228,18 @@ impl<'a> OnlineSearcher<'a> {
         Ok(())
     }
 
+    /// Size `self.cids` / `self.cdist` to hold `n` centroid results.
+    fn resize_centroid_buffers(&mut self, n: usize) {
+        self.cids.clear();
+        self.cids.resize(n, 0);
+        self.cdist.clear();
+        self.cdist.resize(n, 0.0);
+    }
+
     /// Fill `self.cids` / `self.cdist` with the centroids `params` selects and
     /// return how many the walk actually reached.
     fn select_centroids(&mut self, query: &[f32], params: &SearchParams) -> Result<usize> {
-        self.cids.clear();
-        self.cids.resize(params.nlist, 0);
-        self.cdist.clear();
-        self.cdist.resize(params.nlist, 0.0);
+        self.resize_centroid_buffers(params.nlist);
         self.clusterer.centroids.search(
             &self.runtime,
             query,

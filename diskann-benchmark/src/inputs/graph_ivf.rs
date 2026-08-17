@@ -189,6 +189,11 @@ pub(crate) struct GraphIvfLoad {
     pub(crate) data_type: DataType,
     /// Path prefix the index was saved under (without the `.graphivf_*` suffix).
     pub(crate) load_path: String,
+    /// How the loaded index locates clusters. Not a property of the files, so
+    /// the same index can be searched both ways — which is how an exact scan
+    /// serves as a reference for the graph's cluster selection.
+    #[serde(default)]
+    pub(crate) centroid_search: CentroidSearchConfig,
 }
 
 /// A static (batch) build: `k` centroids are fit by k-means over a sample of the
@@ -206,16 +211,10 @@ pub(crate) struct GraphIvfStaticBuild {
     pub(crate) sample_size: usize,
     /// Number of Lloyd's iterations for k-means.
     pub(crate) kmeans_iters: usize,
-    /// Search-list size used when assigning corpus points to centroids.
-    pub(crate) assign_l: usize,
-    /// Pruned out-degree of the centroid graph (`R`).
-    pub(crate) graph_degree: usize,
-    /// Maximum out-degree as a multiple of `graph_degree` (slack, `>= 1.0`).
-    pub(crate) graph_slack: f32,
-    /// Search-list size used during centroid-graph construction (`L`).
-    pub(crate) graph_l_build: usize,
-    /// Pruning alpha (`>= 1.0`).
-    pub(crate) graph_alpha: f32,
+    /// How the index locates clusters, when assigning the corpus and when
+    /// serving queries, plus the knobs that mode needs.
+    #[serde(default)]
+    pub(crate) routing: StaticRoutingConfig,
     pub(crate) num_threads: usize,
     /// RNG seed for sampling and k-means (for reproducibility).
     pub(crate) seed: u64,
@@ -266,13 +265,12 @@ pub(crate) struct GraphIvfOnlineBuild {
     /// Lloyd iterations for the warmup clustering.
     #[serde(default = "default_warmup_iters")]
     pub(crate) warmup_iters: usize,
-    /// Centroid-graph search-list size used to route each inserted point.
-    #[serde(default = "default_assign_l")]
-    pub(crate) assign_l: usize,
     /// Lloyd iterations for the 2-means run at each split.
     #[serde(default = "default_two_means_iters")]
     pub(crate) two_means_iters: usize,
-    /// Nearest clusters pooled as reassignment candidates when a cluster splits (`s`).
+    /// Nearest clusters pooled as reassignment candidates when a cluster splits
+    /// (`s`). A candidate count rather than a beam width, so it applies under
+    /// either routing mode.
     #[serde(default = "default_reassign_neighbors")]
     pub(crate) reassign_neighbors: usize,
     /// A cluster is retired once deletes drop it below this many points: it
@@ -286,11 +284,6 @@ pub(crate) struct GraphIvfOnlineBuild {
     /// Floor on live clusters that merging will not go below.
     #[serde(default = "default_min_clusters")]
     pub(crate) min_clusters: usize,
-    /// Search-list size selecting those neighbors. Resolved during validation to
-    /// `max(reassign_neighbors, assign_l)` when omitted, so the effective value is
-    /// always recorded in the job's serialized input.
-    #[serde(default)]
-    pub(crate) reassign_l: Option<usize>,
     /// Headroom multiplier for the centroid id budget, which is derived from the
     /// corpus size at build time (every split permanently retires one id).
     #[serde(default = "default_capacity_mult")]
@@ -298,14 +291,10 @@ pub(crate) struct GraphIvfOnlineBuild {
     /// L2-normalize the two child centroids after a split (for unit-norm corpora).
     #[serde(default)]
     pub(crate) normalize: bool,
-    /// Pruned out-degree of the centroid graph (`R`).
-    pub(crate) graph_degree: usize,
-    /// Maximum out-degree as a multiple of `graph_degree` (slack, `>= 1.0`).
-    pub(crate) graph_slack: f32,
-    /// Search-list size used during centroid-graph construction (`L`).
-    pub(crate) graph_l_build: usize,
-    /// Pruning alpha (`>= 1.0`).
-    pub(crate) graph_alpha: f32,
+    /// How the clusterer locates clusters, for routing, splitting, merging, and
+    /// query-time selection alike, plus the knobs that mode needs.
+    #[serde(default)]
+    pub(crate) routing: OnlineRoutingConfig,
     pub(crate) num_threads: usize,
     /// RNG seed for warmup sampling and split seeding (for reproducibility).
     pub(crate) seed: u64,
@@ -431,18 +420,196 @@ const fn default_centroid_search_alpha() -> f32 {
 /// Serializable mirror of `diskann_graphivf::AssignMethod` (the benchmark's
 /// `inputs` layer is compiled without the optional `graph-ivf` dependency, so
 /// it cannot name that type directly).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub(crate) enum AssignMethodConfig {
     /// Exact brute-force nearest-centroid assignment.
     #[default]
     Exact,
-    /// Graph-accelerated approximate assignment.
+    /// Graph-accelerated approximate assignment. The graph built here is scratch
+    /// for the k-means refinement and is unrelated to the one `routing` may
+    /// build, so it carries its own recipe and beam.
     Graph {
         /// Rebuild the centroid graph every this many iterations.
         rebuild_every: usize,
         /// Number of graph candidates to re-rank exactly per point.
         rerank: usize,
+        /// Search-list size for the per-point walk during refinement.
+        #[serde(default = "default_assign_l")]
+        assign_l: usize,
+        /// Pruned out-degree of the refinement graph (`R`).
+        #[serde(default = "default_graph_degree")]
+        graph_degree: usize,
+        /// Maximum out-degree as a multiple of `graph_degree`.
+        #[serde(default = "default_graph_slack")]
+        graph_slack: f32,
+        /// Search-list size used during refinement-graph construction (`L`).
+        #[serde(default = "default_graph_l_build")]
+        graph_l_build: usize,
+        /// Pruning alpha (`>= 1.0`).
+        #[serde(default = "default_graph_alpha")]
+        graph_alpha: f32,
     },
+}
+
+const fn default_graph_degree() -> usize {
+    32
+}
+
+const fn default_graph_slack() -> f32 {
+    1.2
+}
+
+const fn default_graph_l_build() -> usize {
+    64
+}
+
+const fn default_graph_alpha() -> f32 {
+    1.2
+}
+
+/// Serializable mirror of `diskann_graphivf::CentroidSearch`.
+///
+/// One index-wide choice of how nearest centroids are found: every centroid
+/// lookup the index makes — routing on insert, split and merge, and query-time
+/// cluster selection — uses the same one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CentroidSearchConfig {
+    /// Navigate a DiskANN graph over the centroids. Sub-linear in the cluster
+    /// count, approximate, and tuned by `centroid_search_alpha`.
+    #[default]
+    Graph,
+    /// Score every live centroid with a batched matrix multiply. Exact, so the
+    /// nearest clusters are never missed and `centroid_search_alpha` has no
+    /// effect; linear in the cluster count.
+    Exact,
+}
+
+/// Centroid routing for a static build: the mode plus the knobs it consumes.
+///
+/// Modelled as a tagged union so a config cannot carry a beam width or a graph
+/// degree that the chosen mode would ignore: `"routing": {"graph": {...}}` or
+/// `"routing": "exact"`. `deny_unknown_fields` turns a graph-only knob under
+/// `exact` into a parse error naming the offending key, rather than a silently
+/// dead setting.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub(crate) enum StaticRoutingConfig {
+    /// Navigate a DiskANN graph over the centroids.
+    Graph {
+        /// Search-list size used when assigning corpus points to centroids.
+        #[serde(default = "default_assign_l")]
+        assign_l: usize,
+        /// Pruned out-degree of the centroid graph (`R`).
+        #[serde(default = "default_graph_degree")]
+        graph_degree: usize,
+        /// Maximum out-degree as a multiple of `graph_degree` (slack, `>= 1.0`).
+        #[serde(default = "default_graph_slack")]
+        graph_slack: f32,
+        /// Search-list size used during centroid-graph construction (`L`).
+        #[serde(default = "default_graph_l_build")]
+        graph_l_build: usize,
+        /// Pruning alpha (`>= 1.0`).
+        #[serde(default = "default_graph_alpha")]
+        graph_alpha: f32,
+    },
+    /// Score every live centroid. Takes no further parameters.
+    Exact,
+}
+
+impl Default for StaticRoutingConfig {
+    fn default() -> Self {
+        Self::Graph {
+            assign_l: default_assign_l(),
+            graph_degree: default_graph_degree(),
+            graph_slack: default_graph_slack(),
+            graph_l_build: default_graph_l_build(),
+            graph_alpha: default_graph_alpha(),
+        }
+    }
+}
+
+/// Centroid routing for an online build.
+///
+/// Carries one beam width more than [`StaticRoutingConfig`]: a streaming build
+/// also searches the centroids when a cluster splits or dissolves.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub(crate) enum OnlineRoutingConfig {
+    /// Navigate a mutable DiskANN graph over the live centroids.
+    Graph {
+        /// Search-list size used to route each inserted point.
+        #[serde(default = "default_assign_l")]
+        assign_l: usize,
+        /// Search-list size selecting split neighbors and dissolve survivors.
+        /// Resolved during validation to `max(reassign_neighbors, assign_l)`
+        /// when omitted, so the effective value is always recorded in the job's
+        /// serialized input.
+        #[serde(default)]
+        reassign_l: Option<usize>,
+        /// Pruned out-degree of the centroid graph (`R`).
+        #[serde(default = "default_graph_degree")]
+        graph_degree: usize,
+        /// Maximum out-degree as a multiple of `graph_degree` (slack, `>= 1.0`).
+        #[serde(default = "default_graph_slack")]
+        graph_slack: f32,
+        /// Search-list size used during centroid-graph construction (`L`).
+        #[serde(default = "default_graph_l_build")]
+        graph_l_build: usize,
+        /// Pruning alpha (`>= 1.0`).
+        #[serde(default = "default_graph_alpha")]
+        graph_alpha: f32,
+    },
+    /// Score every live centroid. Takes no further parameters.
+    Exact,
+}
+
+impl Default for OnlineRoutingConfig {
+    fn default() -> Self {
+        Self::Graph {
+            assign_l: default_assign_l(),
+            reassign_l: None,
+            graph_degree: default_graph_degree(),
+            graph_slack: default_graph_slack(),
+            graph_l_build: default_graph_l_build(),
+            graph_alpha: default_graph_alpha(),
+        }
+    }
+}
+
+impl OnlineRoutingConfig {
+    /// Mode alone, for reporting and for opening the flushed index.
+    #[cfg(feature = "graph-ivf")]
+    pub(crate) fn mode(self) -> CentroidSearchConfig {
+        match self {
+            Self::Graph { .. } => CentroidSearchConfig::Graph,
+            Self::Exact => CentroidSearchConfig::Exact,
+        }
+    }
+
+    /// Beam width for split-neighbor and dissolve-survivor selection, once
+    /// resolved. `None` under exact routing.
+    pub(crate) fn effective_reassign_l(self, reassign_neighbors: usize) -> Option<usize> {
+        match self {
+            Self::Graph {
+                assign_l,
+                reassign_l,
+                ..
+            } => Some(reassign_l.unwrap_or_else(|| reassign_neighbors.max(assign_l))),
+            Self::Exact => None,
+        }
+    }
+}
+
+impl StaticRoutingConfig {
+    /// Mode alone, for reporting.
+    #[cfg(feature = "graph-ivf")]
+    pub(crate) fn mode(self) -> CentroidSearchConfig {
+        match self {
+            Self::Graph { .. } => CentroidSearchConfig::Graph,
+            Self::Exact => CentroidSearchConfig::Exact,
+        }
+    }
 }
 
 /// Serializable mirror of `diskann_graphivf::EmptyClusterPolicy`.
@@ -544,14 +711,22 @@ impl GraphIvfStaticBuild {
         if self.sample_size < self.num_clusters {
             anyhow::bail!("sample_size must be >= num_clusters");
         }
-        if self.assign_l == 0 {
-            anyhow::bail!("assign_l must be positive");
-        }
-        if self.graph_degree == 0 {
-            anyhow::bail!("graph_degree must be positive");
-        }
-        if self.graph_l_build == 0 {
-            anyhow::bail!("graph_l_build must be positive");
+        if let StaticRoutingConfig::Graph {
+            assign_l,
+            graph_degree,
+            graph_l_build,
+            ..
+        } = self.routing
+        {
+            if assign_l == 0 {
+                anyhow::bail!("assign_l must be positive");
+            }
+            if graph_degree == 0 {
+                anyhow::bail!("graph_degree must be positive");
+            }
+            if graph_l_build == 0 {
+                anyhow::bail!("graph_l_build must be positive");
+            }
         }
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
@@ -583,9 +758,6 @@ impl GraphIvfOnlineBuild {
         if self.warmup_points < self.warmup_centroids {
             anyhow::bail!("warmup_points must be >= warmup_centroids");
         }
-        if self.assign_l == 0 {
-            anyhow::bail!("assign_l must be positive");
-        }
         if self.two_means_iters == 0 {
             anyhow::bail!("two_means_iters must be positive");
         }
@@ -608,11 +780,22 @@ impl GraphIvfOnlineBuild {
                 self.split_threshold
             );
         }
-        if self.graph_degree == 0 {
-            anyhow::bail!("graph_degree must be positive");
-        }
-        if self.graph_l_build == 0 {
-            anyhow::bail!("graph_l_build must be positive");
+        if let OnlineRoutingConfig::Graph {
+            assign_l,
+            graph_degree,
+            graph_l_build,
+            ..
+        } = self.routing
+        {
+            if assign_l == 0 {
+                anyhow::bail!("assign_l must be positive");
+            }
+            if graph_degree == 0 {
+                anyhow::bail!("graph_degree must be positive");
+            }
+            if graph_l_build == 0 {
+                anyhow::bail!("graph_l_build must be positive");
+            }
         }
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
@@ -641,13 +824,18 @@ impl GraphIvfOnlineBuild {
 
         // Resolve the documented default now so the effective value is recorded in the
         // job's serialized input rather than being implied by the backend.
-        let reassign_l = self
-            .reassign_l
-            .unwrap_or_else(|| self.reassign_neighbors.max(self.assign_l));
-        if reassign_l == 0 {
-            anyhow::bail!("reassign_l must be positive");
+        if let OnlineRoutingConfig::Graph {
+            assign_l,
+            reassign_l,
+            ..
+        } = &mut self.routing
+        {
+            let resolved = reassign_l.unwrap_or_else(|| self.reassign_neighbors.max(*assign_l));
+            if resolved == 0 {
+                anyhow::bail!("reassign_l must be positive");
+            }
+            *reassign_l = Some(resolved);
         }
-        self.reassign_l = Some(reassign_l);
 
         validate_save_path(&self.save_path, checker)?;
 
@@ -655,10 +843,10 @@ impl GraphIvfOnlineBuild {
     }
 
     /// The reassignment search-list size, falling back to the documented default so an
-    /// unvalidated struct still reports the value the backend would use.
-    pub(crate) fn effective_reassign_l(&self) -> usize {
-        self.reassign_l
-            .unwrap_or_else(|| self.reassign_neighbors.max(self.assign_l))
+    /// unvalidated struct still reports the value the backend would use. `None` under
+    /// exact routing, which has no beam.
+    pub(crate) fn effective_reassign_l(&self) -> Option<usize> {
+        self.routing.effective_reassign_l(self.reassign_neighbors)
     }
 }
 
@@ -778,11 +966,7 @@ impl Example for GraphIvfOperation {
             num_clusters: 1024,
             sample_size: 65536,
             kmeans_iters: 10,
-            assign_l: 32,
-            graph_degree: 32,
-            graph_slack: 1.2,
-            graph_l_build: 64,
-            graph_alpha: 1.2,
+            routing: StaticRoutingConfig::default(),
             num_threads: 8,
             seed: 0,
             assign_method: AssignMethodConfig::Exact,
@@ -853,11 +1037,23 @@ impl fmt::Display for GraphIvfStaticBuild {
         write_field!(f, "Num Clusters", self.num_clusters)?;
         write_field!(f, "Sample Size", self.sample_size)?;
         write_field!(f, "KMeans Iters", self.kmeans_iters)?;
-        write_field!(f, "Assign L", self.assign_l)?;
-        write_field!(f, "Graph Degree", self.graph_degree)?;
-        write_field!(f, "Graph Slack", self.graph_slack)?;
-        write_field!(f, "Graph L Build", self.graph_l_build)?;
-        write_field!(f, "Graph Alpha", self.graph_alpha)?;
+        match self.routing {
+            StaticRoutingConfig::Graph {
+                assign_l,
+                graph_degree,
+                graph_slack,
+                graph_l_build,
+                graph_alpha,
+            } => {
+                write_field!(f, "Routing", "graph")?;
+                write_field!(f, "Assign L", assign_l)?;
+                write_field!(f, "Graph Degree", graph_degree)?;
+                write_field!(f, "Graph Slack", graph_slack)?;
+                write_field!(f, "Graph L Build", graph_l_build)?;
+                write_field!(f, "Graph Alpha", graph_alpha)?;
+            }
+            StaticRoutingConfig::Exact => write_field!(f, "Routing", "exact")?,
+        }
         write_field!(f, "Build Threads", self.num_threads)?;
         write_field!(f, "Seed", self.seed)?;
         write_field!(f, "Save Path", self.save_path)?;
@@ -880,10 +1076,8 @@ impl fmt::Display for GraphIvfOnlineBuild {
         write_field!(f, "Warmup Centroids", self.warmup_centroids)?;
         write_field!(f, "Warmup Points", self.warmup_points)?;
         write_field!(f, "Warmup Iters", self.warmup_iters)?;
-        write_field!(f, "Assign L", self.assign_l)?;
         write_field!(f, "Two Means Iters", self.two_means_iters)?;
         write_field!(f, "Reassign S", self.reassign_neighbors)?;
-        write_field!(f, "Reassign L", self.effective_reassign_l())?;
         if self.merge_threshold > 0 {
             write_field!(f, "Merge Threshold", self.merge_threshold)?;
             write_field!(f, "Min Clusters", self.min_clusters)?;
@@ -892,10 +1086,25 @@ impl fmt::Display for GraphIvfOnlineBuild {
         }
         write_field!(f, "Capacity Mult", self.capacity_mult)?;
         write_field!(f, "Normalize", self.normalize)?;
-        write_field!(f, "Graph Degree", self.graph_degree)?;
-        write_field!(f, "Graph Slack", self.graph_slack)?;
-        write_field!(f, "Graph L Build", self.graph_l_build)?;
-        write_field!(f, "Graph Alpha", self.graph_alpha)?;
+        match self.routing {
+            OnlineRoutingConfig::Graph {
+                assign_l,
+                graph_degree,
+                graph_slack,
+                graph_l_build,
+                graph_alpha,
+                ..
+            } => {
+                write_field!(f, "Routing", "graph")?;
+                write_field!(f, "Assign L", assign_l)?;
+                write_field!(f, "Reassign L", self.effective_reassign_l().unwrap_or(0))?;
+                write_field!(f, "Graph Degree", graph_degree)?;
+                write_field!(f, "Graph Slack", graph_slack)?;
+                write_field!(f, "Graph L Build", graph_l_build)?;
+                write_field!(f, "Graph Alpha", graph_alpha)?;
+            }
+            OnlineRoutingConfig::Exact => write_field!(f, "Routing", "exact")?,
+        }
         write_field!(f, "Build Threads", self.num_threads)?;
         write_field!(f, "Seed", self.seed)?;
         write_field!(f, "Save Path", self.save_path)?;
@@ -997,10 +1206,6 @@ mod tests {
                 "distance": "squared_l2",
                 "dim": 384,
                 "split_threshold": 759,
-                "graph_degree": 32,
-                "graph_slack": 1.2,
-                "graph_l_build": 64,
-                "graph_alpha": 1.2,
                 "num_threads": 16,
                 "seed": 0,
                 "save_path": "{save_path}"
@@ -1045,7 +1250,6 @@ mod tests {
         assert_eq!(online.warmup_centroids, 100);
         assert_eq!(online.warmup_points, 10_000);
         assert_eq!(online.warmup_iters, 15);
-        assert_eq!(online.assign_l, 64);
         assert_eq!(online.two_means_iters, 12);
         assert_eq!(online.reassign_neighbors, 8);
         assert_eq!(online.capacity_mult, 3);
@@ -1060,26 +1264,48 @@ mod tests {
 
         // Default is max(reassign_neighbors, assign_l); here assign_l wins.
         let online = validated(dir.path(), r#", "reassign_neighbors": 32"#).unwrap();
-        assert_eq!(online.effective_reassign_l(), 64);
         assert_eq!(
-            online.reassign_l,
+            online.effective_reassign_l(),
             Some(64),
             "validation must write the effective value back so it is recorded in the \
              serialized input"
         );
 
         // ...and here reassign_neighbors wins.
-        let online =
-            validated(dir.path(), r#", "reassign_neighbors": 128, "assign_l": 16"#).unwrap();
-        assert_eq!(online.reassign_l, Some(128));
+        let online = validated(
+            dir.path(),
+            r#", "reassign_neighbors": 128, "routing": {"graph": {"assign_l": 16}}"#,
+        )
+        .unwrap();
+        assert_eq!(online.effective_reassign_l(), Some(128));
 
         // An explicit value is never overwritten.
         let online = validated(
             dir.path(),
-            r#", "reassign_neighbors": 32, "reassign_l": 256"#,
+            r#", "reassign_neighbors": 32, "routing": {"graph": {"reassign_l": 256}}"#,
         )
         .unwrap();
-        assert_eq!(online.reassign_l, Some(256));
+        assert_eq!(online.effective_reassign_l(), Some(256));
+
+        // Exact routing has no beam at all.
+        let online = validated(dir.path(), r#", "routing": "exact""#).unwrap();
+        assert_eq!(online.effective_reassign_l(), None);
+    }
+
+    #[test]
+    fn exact_routing_rejects_graph_only_knobs() {
+        let dir = tempfile::tempdir().unwrap();
+        for knob in [
+            r#""assign_l": 32"#,
+            r#""reassign_l": 32"#,
+            r#""graph_degree": 32"#,
+            r#""graph_alpha": 1.2"#,
+        ] {
+            let extra = format!(r#", "routing": {{"exact": {{{knob}}}}}"#);
+            // `exact` is a unit variant, so any payload at all is a parse error.
+            parse_online(online_json(dir.path(), &extra))
+                .expect_err(&format!("exact routing must reject {knob}"));
+        }
     }
 
     #[test]
@@ -1119,11 +1345,6 @@ mod tests {
                 "num_clusters": 1024,
                 "sample_size": 100000,
                 "kmeans_iters": 5,
-                "assign_l": 32,
-                "graph_degree": 32,
-                "graph_slack": 1.2,
-                "graph_l_build": 64,
-                "graph_alpha": 1.2,
                 "num_threads": 8,
                 "seed": 0,
                 "save_path": "{save_path}",
@@ -1235,12 +1456,9 @@ mod tests {
         for (key, needle) in [
             ("dim", "dim must be positive"),
             ("warmup_centroids", "warmup_centroids must be positive"),
-            ("assign_l", "assign_l must be positive"),
             ("two_means_iters", "two_means_iters must be positive"),
             ("reassign_neighbors", "reassign_neighbors must be positive"),
             ("capacity_mult", "capacity_mult must be positive"),
-            ("graph_degree", "graph_degree must be positive"),
-            ("graph_l_build", "graph_l_build must be positive"),
             ("num_threads", "num_threads must be positive"),
         ] {
             let mut value = online_json(dir.path(), "");
@@ -1254,6 +1472,23 @@ mod tests {
             assert!(
                 err.to_string().contains(needle),
                 "setting {key} to 0 should report {needle:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_valued_routing_knobs_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        for (knob, needle) in [
+            (r#""assign_l": 0"#, "assign_l must be positive"),
+            (r#""graph_degree": 0"#, "graph_degree must be positive"),
+            (r#""graph_l_build": 0"#, "graph_l_build must be positive"),
+        ] {
+            let extra = format!(r#", "routing": {{"graph": {{{knob}}}}}"#);
+            let err = validated(dir.path(), &extra).unwrap_err();
+            assert!(
+                err.to_string().contains(needle),
+                "setting {knob} should report {needle:?}, got: {err}"
             );
         }
     }
@@ -1306,7 +1541,7 @@ mod tests {
             panic!("round trip changed the source variant");
         };
         assert_eq!(decoded.reassign_neighbors, 32);
-        assert_eq!(decoded.reassign_l, online.reassign_l);
+        assert_eq!(decoded.routing, online.routing);
         assert!(decoded.normalize);
         assert_eq!(decoded.split_threshold, online.split_threshold);
         assert_eq!(decoded.seed, online.seed);

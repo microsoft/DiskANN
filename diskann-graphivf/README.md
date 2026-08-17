@@ -62,8 +62,19 @@ Cosine: normalize vectors **before** compression (stored rows are written verbat
 
 ## 2. Shared parameters
 
-**Centroid graph** (`GraphParams`, same fields for both build paths): `graph_degree=32`,
-`graph_slack=1.2`, `graph_l_build=64`, `graph_alpha=1.2`.
+**Routing** (`routing`, both build paths) selects how the index finds nearest
+centroids and carries only the knobs that mode uses:
+
+- `{"graph": { ... }}` (default) — navigate a DiskANN graph over the centroids.
+  Optional knobs: `assign_l` (routing beam), `reassign_l` (online only;
+  split/dissolve neighbor beam), and the centroid-graph recipe `graph_degree=32`,
+  `graph_slack=1.2`, `graph_l_build=64`, `graph_alpha=1.2`. Any omitted knob uses
+  its default; `reassign_l` defaults to `max(reassign_neighbors, assign_l)`.
+- `"exact"` — score every live centroid with a batched matrix multiply. Exact and
+  linear in the cluster count; it takes no knobs, so supplying one is a parse error.
+
+Exact routing is a correctness reference: its build cost scales as points ×
+clusters × dim, so prefer graph routing for anything large.
 
 **Metric** — clustering and assignment are **always squared-L2**. The `distance` field
 only sets how the *loaded* index scores at search time:
@@ -121,13 +132,12 @@ an `OnlineRunbook` job replays insert, delete, and live-search stages.
 | `warmup_points` | 10000 | leading corpus points used for the warmup |
 | `warmup_iters` | 15 | Lloyd iterations for that warmup |
 | `num_threads` | *(required)* | worker threads |
-| `assign_l` | 64 | centroid-graph search-list size for routing inserts |
 | `two_means_iters` | 12 | Lloyd iterations for split k-means (two children per admitted parent) |
 | `distance` | *(required)* | live/flushed candidate-scoring metric; `cosine` is rejected (rows are stored verbatim) |
 | `normalize` | `false` | L2-normalize warmup and split-child centroids (unit-sphere corpora) |
 | `capacity_mult` | 3 | centroid id-budget headroom (`≈ capacity_mult · 2N / split_threshold`) |
-| `reassign_neighbors` | 8 | split-neighbor candidates and maximum survivor landing sites per dissolve |
-| `reassign_l` | `max(s, assign_l)` | search-list size for split-neighbor and dissolve-survivor selection |
+| `reassign_neighbors` | 8 | split-neighbor candidates and maximum survivor landing sites per dissolve (applies to either routing mode) |
+| `routing` | `{"graph": {...}}` | centroid routing mode and its knobs — graph mode carries `assign_l` (64), `reassign_l` (`max(s, assign_l)`), and the graph recipe; `"exact"` scans every centroid (see [§2](#2-shared-parameters)) |
 | `max_clusters` | *(omit)* | omitted/`null` = uncapped growth; else a hard cap on live clusters |
 | `data_type` | *(required)* | on-disk element type: `minmax8` \| `float16` \| `float32` \| `uint8` \| `int8` |
 | `telemetry_csv` | *(omit)* | split telemetry path; an `OnlineRunbook` also writes a derived `<stem>_merges.<ext>` sibling |
@@ -154,10 +164,7 @@ Example — ~16384 clusters (`th=106`), `s=5` reassignment neighbors:
   "split_threshold": 106,
   "reassign_neighbors": 5,
   "max_clusters": 16384,
-  "graph_degree": 32,
-  "graph_slack": 1.2,
-  "graph_l_build": 64,
-  "graph_alpha": 1.2,
+  "routing": { "graph": { "graph_degree": 32, "graph_slack": 1.2, "graph_l_build": 64, "graph_alpha": 1.2 } },
   "num_threads": 16,
   "seed": 0,
   "save_path": "/abs/path/out_prefix_th106_minmax8"
@@ -217,7 +224,7 @@ Use it as a fixed-`k` baseline against the online build, via a
 | `sample_size` | corpus rows sampled for the Forgy k-means seeding (`>= num_clusters`) |
 | `kmeans_iters` | Lloyd iterations (`0` = use initial centers unrefined) |
 | `num_threads` | build worker threads |
-| `assign_l` | centroid-graph search-list size for point→centroid assignment |
+| `routing` | `{"graph": {...}}` (default) or `"exact"`; graph mode carries `assign_l` (point→centroid assignment beam) and the centroid-graph recipe (`graph_degree` etc.), exact scans every centroid (see [§2](#2-shared-parameters)) |
 | `assign_method` | `"Exact"` (default) or `{ "Graph": { "rebuild_every": n, "rerank": n } }` |
 | `empty_clusters` | policy for clusters emptied during refinement: `"PreserveOld"` (default), `"Zero"`, `"ReseedFarthest"` |
 | `distance` | search-time metric (clustering/assignment are always squared-L2) |
@@ -237,11 +244,7 @@ Example — sampled build, 16384 clusters:
   "num_clusters": 16384,
   "sample_size": 200000,
   "kmeans_iters": 10,
-  "assign_l": 32,
-  "graph_degree": 32,
-  "graph_slack": 1.2,
-  "graph_l_build": 64,
-  "graph_alpha": 1.2,
+  "routing": { "graph": { "assign_l": 32, "graph_degree": 32, "graph_slack": 1.2, "graph_l_build": 64, "graph_alpha": 1.2 } },
   "num_threads": 16,
   "seed": 0,
   "save_path": "/abs/path/out_prefix_16384_minmax8"

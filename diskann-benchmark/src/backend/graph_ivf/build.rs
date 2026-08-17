@@ -8,15 +8,18 @@ use std::{fmt, path::Path, time::Instant};
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_graphivf::{
-    AssignMethod, BuildParams, BuildProfile, CentroidInit, EmptyClusterPolicy, GraphIvfIndex,
-    GraphParams, Metric as GraphIvfMetric,
+    AssignMethod, BuildParams, BuildProfile, CentroidInit, CentroidRouting, CentroidSearch,
+    EmptyClusterPolicy, GraphIvfIndex, GraphParams, Metric as GraphIvfMetric,
 };
 use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     backend::graph_ivf::element::GraphIvfElement,
-    inputs::graph_ivf::{AssignMethodConfig, EmptyClusterConfig, GraphIvfStaticBuild},
+    inputs::graph_ivf::{
+        AssignMethodConfig, CentroidSearchConfig, EmptyClusterConfig, GraphIvfStaticBuild,
+        StaticRoutingConfig,
+    },
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -60,6 +63,36 @@ pub(super) fn to_graphivf_metric(distance: SimilarityMeasure) -> anyhow::Result<
         }
         SimilarityMeasure::Cosine => Ok(GraphIvfMetric::Cosine),
         SimilarityMeasure::InnerProduct => Ok(GraphIvfMetric::InnerProduct),
+    }
+}
+
+/// Map the config mirror onto the library's centroid-search mode.
+pub(super) fn to_centroid_search(mode: CentroidSearchConfig) -> CentroidSearch {
+    match mode {
+        CentroidSearchConfig::Graph => CentroidSearch::Graph,
+        CentroidSearchConfig::Exact => CentroidSearch::Exact,
+    }
+}
+
+/// Map the static routing config onto the library's routing parameters.
+pub(super) fn to_routing(routing: StaticRoutingConfig) -> CentroidRouting {
+    match routing {
+        StaticRoutingConfig::Graph {
+            assign_l,
+            graph_degree,
+            graph_slack,
+            graph_l_build,
+            graph_alpha,
+        } => CentroidRouting::Graph {
+            graph: GraphParams {
+                degree: graph_degree,
+                slack: graph_slack,
+                l_build: graph_l_build,
+                alpha: graph_alpha,
+            },
+            assign_l,
+        },
+        StaticRoutingConfig::Exact => CentroidRouting::Exact,
     }
 }
 
@@ -165,13 +198,7 @@ where
         metric: to_graphivf_metric(params.distance)?,
         sample_size: params.sample_size,
         kmeans_iters: params.kmeans_iters,
-        assign_l: params.assign_l,
-        graph: GraphParams {
-            degree: params.graph_degree,
-            slack: params.graph_slack,
-            l_build: params.graph_l_build,
-            alpha: params.graph_alpha,
-        },
+        routing: to_routing(params.routing),
         num_threads: params.num_threads,
         seed: params.seed,
         assign_method: match params.assign_method {
@@ -179,9 +206,21 @@ where
             AssignMethodConfig::Graph {
                 rebuild_every,
                 rerank,
+                assign_l,
+                graph_degree,
+                graph_slack,
+                graph_l_build,
+                graph_alpha,
             } => AssignMethod::Graph {
                 rebuild_every,
                 rerank,
+                assign_l,
+                graph: GraphParams {
+                    degree: graph_degree,
+                    slack: graph_slack,
+                    l_build: graph_l_build,
+                    alpha: graph_alpha,
+                },
             },
         },
         empty_clusters: match params.empty_clusters {

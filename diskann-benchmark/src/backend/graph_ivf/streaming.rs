@@ -49,7 +49,7 @@ use crate::{
         online::{online_setup, OnlineSetup},
         search::{recall_points, record_first_error, RecallPoint},
     },
-    inputs::graph_ivf::GraphIvfOnlineRunbook,
+    inputs::graph_ivf::{CentroidSearchConfig, GraphIvfOnlineRunbook},
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -160,9 +160,28 @@ pub(super) struct GraphIvfStageStats {
     pub(super) live_points: usize,
     /// Size distribution of those clusters after the stage.
     pub(super) sizes: ClusterSizeStats,
+    /// Out-edge health of the centroid graph after the stage. Measured on
+    /// search stages only, where it lines up with centroid recall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) centroid_adjacency: Option<CentroidAdjacencyStats>,
     /// One entry per cluster fraction; empty for insert and delete stages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) search: Vec<GraphIvfRunbookSearchResult>,
+}
+
+/// How much of the centroid graph's out-degree still points at live centroids.
+///
+/// Search traverses tombstones like any other node, so a low live fraction
+/// means the candidate list is diluted with dead ends.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub(super) struct CentroidAdjacencyStats {
+    pub(super) out_edges: u64,
+    pub(super) live_out_edges: u64,
+    /// `live_out_edges / out_edges`, as a percentage.
+    pub(super) live_pct: f64,
+    pub(super) mean_live_degree: f64,
+    /// Live centroids with no live out-edge at all.
+    pub(super) starved: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +204,8 @@ impl fmt::Display for StageKind {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct GraphIvfRunbookStats {
+    /// How clusters were located throughout the replay.
+    centroid_search: CentroidSearchConfig,
     corpus_load: MicroSeconds,
     decompress: MicroSeconds,
     seed: MicroSeconds,
@@ -226,6 +247,7 @@ impl fmt::Display for GraphIvfRunbookStats {
             self.num_points,
             self.dim
         )?;
+        writeln!(f, "  centroid search: {:?}", self.centroid_search)?;
         writeln!(f, "  corpus_load:    {:.3}s", self.corpus_load.as_seconds())?;
         writeln!(f, "  decompress:     {:.3}s", self.decompress.as_seconds())?;
         writeln!(f, "  seed:           {:.3}s", self.seed.as_seconds())?;
@@ -405,6 +427,7 @@ where
     }
 
     Ok(GraphIvfRunbookStats {
+        centroid_search: params.build.routing.mode(),
         corpus_load,
         decompress,
         seed,
@@ -477,8 +500,19 @@ impl GraphIvfStream<'_> {
         num_points: usize,
         elapsed: std::time::Duration,
         search: Vec<GraphIvfRunbookSearchResult>,
-    ) -> GraphIvfStageStats {
+    ) -> anyhow::Result<GraphIvfStageStats> {
         let mut sizes = self.clusterer.cluster_sizes();
+        let centroid_adjacency = (kind == StageKind::Search)
+            .then(|| self.clusterer.centroid_adjacency_census())
+            .transpose()?
+            .flatten()
+            .map(|c| CentroidAdjacencyStats {
+                out_edges: c.out_edges,
+                live_out_edges: c.live_out_edges,
+                live_pct: c.live_fraction() * 100.0,
+                mean_live_degree: c.mean_live_degree(),
+                starved: c.starved,
+            });
         let stats = GraphIvfStageStats {
             stage: self.stage,
             kind,
@@ -491,11 +525,12 @@ impl GraphIvfStream<'_> {
                 self.params.build.merge_threshold,
                 self.params.build.split_threshold,
             ),
+            centroid_adjacency,
             search,
         };
         self.report(&stats);
         self.stage += 1;
-        stats
+        Ok(stats)
     }
 
     /// Print one stage's progress, plus a line per sweep for a search stage.
@@ -514,6 +549,12 @@ impl GraphIvfStream<'_> {
             stats.live_clusters,
             stats.live_points,
         );
+        if let Some(a) = &stats.centroid_adjacency {
+            println!(
+                "    centroid graph: live edges {}/{} ({:.2}%)  mean live degree {:.2}  starved {}",
+                a.live_out_edges, a.out_edges, a.live_pct, a.mean_live_degree, a.starved,
+            );
+        }
         for result in &stats.search {
             let recalls = result
                 .recalls
@@ -669,7 +710,7 @@ impl Stream<bigann::Args> for GraphIvfStream<'_> {
     fn search(&mut self, args: bigann::Search<'_>) -> anyhow::Result<Self::Output> {
         let start = Instant::now();
         let results = self.sweep(args.groundtruth)?;
-        Ok(self.finish(StageKind::Search, 0, start.elapsed(), results))
+        self.finish(StageKind::Search, 0, start.elapsed(), results)
     }
 
     fn insert(&mut self, args: bigann::Insert) -> anyhow::Result<Self::Output> {
@@ -688,7 +729,7 @@ impl Stream<bigann::Args> for GraphIvfStream<'_> {
         for batch in ids.chunks(self.params.build.batch_size) {
             self.clusterer.insert_batch(batch)?;
         }
-        Ok(self.finish(StageKind::Insert, ids.len(), start.elapsed(), Vec::new()))
+        self.finish(StageKind::Insert, ids.len(), start.elapsed(), Vec::new())
     }
 
     fn replace(&mut self, _args: bigann::Replace) -> anyhow::Result<Self::Output> {
@@ -705,7 +746,7 @@ impl Stream<bigann::Args> for GraphIvfStream<'_> {
         for batch in ids.chunks(self.params.build.batch_size) {
             self.clusterer.delete_batch(batch)?;
         }
-        Ok(self.finish(StageKind::Delete, ids.len(), start.elapsed(), Vec::new()))
+        self.finish(StageKind::Delete, ids.len(), start.elapsed(), Vec::new())
     }
 
     fn maintain(&mut self, _args: ()) -> anyhow::Result<Self::Output> {
@@ -734,7 +775,7 @@ mod tests {
     use super::*;
     use crate::inputs::graph_ivf::{
         ClusterFraction, GraphIvfOnlineBuild, GraphIvfRunbookConfig, GraphIvfRunbookSearch,
-        RecallAt,
+        OnlineRoutingConfig, RecallAt,
     };
 
     const DIM: usize = 8;
@@ -849,18 +890,20 @@ mod tests {
                     warmup_centroids: 4,
                     warmup_points: 100,
                     warmup_iters: 5,
-                    assign_l: 32,
                     two_means_iters: 8,
                     reassign_neighbors: 4,
-                    reassign_l: Some(32),
                     merge_threshold,
                     min_clusters: 1,
                     capacity_mult: 3,
                     normalize: false,
-                    graph_degree: 16,
-                    graph_slack: 1.2,
-                    graph_l_build: 32,
-                    graph_alpha: 1.2,
+                    routing: OnlineRoutingConfig::Graph {
+                        assign_l: 32,
+                        reassign_l: Some(32),
+                        graph_degree: 16,
+                        graph_slack: 1.2,
+                        graph_l_build: 32,
+                        graph_alpha: 1.2,
+                    },
                     num_threads: 2,
                     seed: 0,
                     save_path: self.save_path.clone(),
@@ -998,8 +1041,12 @@ mod tests {
         // The flush writes only live rows and keeps their original corpus ids,
         // so an exhaustive search of the on-disk index can never surface one of
         // the deleted rows.
-        let index = diskann_graphivf::GraphIvfIndex::<f32>::load(Path::new(&fixture.save_path), 1)
-            .expect("the runbook build must leave a loadable index");
+        let index = diskann_graphivf::GraphIvfIndex::<f32>::load(
+            Path::new(&fixture.save_path),
+            1,
+            diskann_graphivf::CentroidSearch::Graph,
+        )
+        .expect("the runbook build must leave a loadable index");
         let mut searcher = index.searcher().unwrap();
         let params = SearchParams::new(index.num_clusters());
         let hits = searcher

@@ -318,7 +318,7 @@ A job is one `source` (how the index comes to exist) plus an optional final
 | `graph-ivf-source` | What it does | Key fields |
 | --- | --- | --- |
 | `Static` | Batch build: fit `k` centroids by k-means over a corpus sample, then assign every point. | `num_clusters`, `sample_size`, `kmeans_iters`, `assign_method`, `empty_clusters`, `save_path` |
-| `Online` | Streaming build: insert points, splitting a cluster whenever it overflows. The cluster count emerges from the data. | `split_threshold`, `batch_size`, `max_clusters`, `reassign_neighbors`, `reassign_l`, `normalize`, `save_path`, `telemetry_csv` |
+| `Online` | Streaming build: insert points, splitting a cluster whenever it overflows. The cluster count emerges from the data. | `split_threshold`, `batch_size`, `max_clusters`, `reassign_neighbors`, `routing`, `normalize`, `save_path`, `telemetry_csv` |
 | `OnlineRunbook` | Replay BigANN insert/delete/search stages against a live online index, then flush it once. | nested `build`, `runbook`, and `search` objects; see below |
 | `Load` | Search an index built by an earlier job. | `load_path` |
 
@@ -336,8 +336,34 @@ Static, online, and load sources take `data_type` (`float32` \| `float16` \| `ui
 `int8` \| `minmax8`), which is the on-disk element type of the inverted lists and selects
 the backend — a `Load` job must name the same type the index was built with. An
 `OnlineRunbook` puts the same online build fields inside its `build` object. Static and
-online builds additionally take the corpus (`data`, `dim`, `distance`) and centroid-graph
-parameters (`graph_degree`, `graph_slack`, `graph_l_build`, `graph_alpha`).
+online builds additionally take the corpus (`data`, `dim`, `distance`) and a `routing`
+block.
+
+`routing` selects how the index finds nearest centroids, and carries only the knobs that
+mode uses:
+
+```jsonc
+// Navigate a graph over the centroids. Every key is optional.
+"routing": {
+  "graph": {
+    "assign_l": 64,      // beam for routing a point to its cluster
+    "reassign_l": 64,    // online only; beam for split/merge neighbor selection
+    "graph_degree": 32,
+    "graph_slack": 1.2,
+    "graph_l_build": 64,
+    "graph_alpha": 1.2
+  }
+}
+
+// Score every live centroid with a batched matrix multiply. Exact, linear in the
+// cluster count, and takes no parameters — supplying one is a parse error.
+"routing": "exact"
+```
+
+Omitting `reassign_l` resolves it to `max(reassign_neighbors, assign_l)`, and validation
+writes the effective value back so the job's serialized input records it.
+`reassign_neighbors` is a candidate *count* rather than a beam width, so it stays outside
+`routing` and applies under either mode.
 
 The static and online build schemas are deliberately disjoint and use
 `deny_unknown_fields`: a
@@ -390,10 +416,7 @@ An online runbook source has this shape:
     "split_threshold": 120,
     "merge_threshold": 40,
     "reassign_neighbors": 10,
-    "graph_degree": 32,
-    "graph_slack": 1.2,
-    "graph_l_build": 64,
-    "graph_alpha": 1.2,
+    "routing": { "graph": { "graph_degree": 32, "graph_l_build": 64 } },
     "num_threads": 16,
     "seed": 0,
     "save_path": "/absolute/path/to/output-prefix"

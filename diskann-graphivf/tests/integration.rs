@@ -7,8 +7,8 @@
 //! recall against brute-force ground truth for both supported metrics.
 
 use diskann_graphivf::{
-    AssignMethod, BuildParams, EmptyClusterPolicy, GraphIvfIndex, GraphParams, Half, Metric,
-    SearchParams, VectorRepr,
+    AssignMethod, BuildParams, CentroidRouting, CentroidSearch, EmptyClusterPolicy, GraphIvfIndex,
+    GraphParams, Half, Metric, SearchParams, VectorRepr,
 };
 use diskann_utils::views::Matrix;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -81,12 +81,14 @@ fn build_params(metric: Metric) -> BuildParams {
         metric,
         sample_size: NUM_POINTS,
         kmeans_iters: 15,
-        assign_l: 48,
-        graph: GraphParams {
-            degree: 24,
-            slack: 1.3,
-            l_build: 64,
-            alpha: 1.2,
+        routing: CentroidRouting::Graph {
+            graph: GraphParams {
+                degree: 24,
+                slack: 1.3,
+                l_build: 64,
+                alpha: 1.2,
+            },
+            assign_l: 48,
         },
         num_threads: 2,
         seed: 42,
@@ -205,7 +207,7 @@ fn load_round_trip() {
     drop(built);
 
     // Reload from disk and search again.
-    let loaded = GraphIvfIndex::<f32>::load(&prefix, 2).expect("load");
+    let loaded = GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).expect("load");
     assert_eq!(loaded.dim(), DIM);
     assert_eq!(loaded.num_clusters(), 48);
     let from_loaded = {
@@ -230,9 +232,46 @@ fn load_rejects_format_mismatch() {
     GraphIvfIndex::<f32>::build(matrix.as_view(), &build_params(Metric::L2), &prefix)
         .expect("build");
     // ... cannot be loaded as f16.
-    assert!(GraphIvfIndex::<Half>::load(&prefix, 2).is_err());
+    assert!(GraphIvfIndex::<Half>::load(&prefix, 2, CentroidSearch::Graph).is_err());
     // ... but loads fine as f32.
-    assert!(GraphIvfIndex::<f32>::load(&prefix, 2).is_ok());
+    assert!(GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).is_ok());
+}
+
+#[test]
+fn exact_centroid_search_agrees_with_a_full_graph_probe() {
+    let mut rng = StdRng::seed_from_u64(11);
+    let data = make_corpus(&mut rng);
+    let matrix =
+        Matrix::try_from(data.clone().into_boxed_slice(), NUM_POINTS, DIM).expect("matrix shape");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prefix = dir.path().join("idx");
+
+    // Assignment during build routes through the exact scan too.
+    let params = BuildParams {
+        routing: CentroidRouting::Exact,
+        ..build_params(Metric::L2)
+    };
+    let built =
+        GraphIvfIndex::<f32>::build(matrix.as_view(), &params, &prefix).expect("build exact");
+    assert_eq!(built.num_clusters(), 48);
+    drop(built);
+
+    // Probing every cluster makes graph selection exact by definition, so the
+    // two modes must agree result-for-result on the same files.
+    let search = SearchParams::new(48);
+    let query: Vec<f32> = data[0..DIM].to_vec();
+    let with_exact = {
+        let index = GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Exact).expect("load");
+        let mut s = index.searcher().expect("searcher");
+        s.search(&query, 10, &search).expect("search")
+    };
+    let with_graph = {
+        let index = GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).expect("load");
+        let mut s = index.searcher().expect("searcher");
+        s.search(&query, 10, &search).expect("search")
+    };
+    assert_eq!(with_exact, with_graph);
 }
 
 #[test]

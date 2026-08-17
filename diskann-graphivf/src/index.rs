@@ -22,10 +22,7 @@ use diskann_disk::utils::{
     },
     AlignedFileReaderFactory,
 };
-use diskann_providers::{
-    index::diskann_async::MemoryIndex,
-    utils::{create_thread_pool, ParallelIteratorInPool, RayonThreadPool},
-};
+use diskann_providers::utils::{create_thread_pool, RayonThreadPool};
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 use diskann_utils::{
     io::read_bin,
@@ -33,12 +30,12 @@ use diskann_utils::{
 };
 use diskann_vector::{distance::Metric as VMetric, PreprocessedDistanceFunction};
 use rand::{rngs::StdRng, SeedableRng};
-use rayon::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::{
-    centroids, cluster,
-    params::{AssignMethod, BuildParams, Metric, SearchParams},
+    centroids::CentroidSource,
+    cluster,
+    params::{AssignMethod, BuildParams, CentroidRouting, CentroidSearch, Metric, SearchParams},
     profile::{BuildProfile, SearchProfile},
     storage::{self, Layout},
     GraphIvfError, Result,
@@ -57,16 +54,16 @@ type ListAlign = <ListReader as AlignedFileReader>::Alignment;
 
 /// A hybrid graph + clustered-IVF index.
 ///
-/// Holds the in-memory centroid graph and the path to the on-disk inverted
-/// lists. Use [`GraphIvfIndex::searcher`] to obtain a [`Searcher`] for querying;
-/// create one searcher per thread for parallel search.
+/// Holds the in-memory centroid lookup structure and the path to the on-disk
+/// inverted lists. Use [`GraphIvfIndex::searcher`] to obtain a [`Searcher`] for
+/// querying; create one searcher per thread for parallel search.
 ///
 /// The type parameter `T` is the element type of the stored inverted-list
 /// vectors (e.g. `f32` or [`diskann_vector::Half`]); any [`VectorRepr`] type is
-/// supported. The centroid graph is always full-precision `f32`; only the
-/// on-disk corpus vectors use `T`.
+/// supported. Centroids are always full-precision `f32`; only the on-disk corpus
+/// vectors use `T`.
 pub struct GraphIvfIndex<T: VectorRepr = f32> {
-    centroids: MemoryIndex<f32>,
+    centroids: CentroidSource,
     layout: Arc<Layout>,
     lists_path: PathBuf,
     metric: Metric,
@@ -328,23 +325,23 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         storage::write_centroids(&centroids_path, centroids_mat.as_view())?;
         profile.write_centroids = write_centroids_start.elapsed();
 
-        // 2. Build the in-memory graph over the centroids. This graph is used
-        //    for the L2 centroid assignment that follows, so it is always built
-        //    with squared-L2 (clustering/assignment is L2 for every metric,
-        //    including the hybrid `InnerProduct`). The search-time graph is
-        //    rebuilt with the search metric on load.
+        // 2. Prepare the centroid lookup. It is used for the L2 centroid
+        //    assignment that follows, so it always ranks by squared-L2
+        //    (clustering/assignment is L2 for every metric, including the hybrid
+        //    `InnerProduct`). The search-time structure is rebuilt with the
+        //    search metric on load.
         let build_graph_start = Instant::now();
-        let centroids = centroids::build(
+        let centroids = CentroidSource::new(
+            params.routing,
             centroids_mat,
-            &params.graph,
             params.num_threads,
             VMetric::L2,
         )?;
         profile.build_graph = build_graph_start.elapsed();
 
-        // 3. Assign every corpus point to its nearest centroid via graph search.
+        // 3. Assign every corpus point to its nearest centroid.
         let assign_start = Instant::now();
-        let assignments = assign(&centroids, work, params.assign_l, pool)?;
+        let assignments = centroids.assign(work, pool)?;
         profile.assign = assign_start.elapsed();
 
         // 4. Write the inverted lists and the metadata.
@@ -368,7 +365,7 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             metric: params.metric,
             element_size: std::mem::size_of::<T>(),
             num_points: num_points as u64,
-            graph: params.graph,
+            graph: params.routing.stored_graph_params(),
             counts,
             offsets,
         };
@@ -386,15 +383,24 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         })
     }
 
-    /// Load a previously built index. The centroid graph is rebuilt in memory
-    /// from the persisted centroids using `num_threads` workers.
+    /// Load a previously built index. The centroid lookup structure is rebuilt
+    /// in memory from the persisted centroids using `num_threads` workers.
+    ///
+    /// `centroid_search` selects how clusters are located at query time and is a
+    /// property of this handle, not of the persisted index — the same files can
+    /// be loaded either way, which is what makes an exact scan usable as a
+    /// ground-truth reference for a graph-navigated index.
     ///
     /// # Errors
     ///
     /// Returns an error if the persisted element size does not match `T`. This
     /// is a size check (e.g. it distinguishes `f32` from [`diskann_vector::Half`]),
     /// not a full type check.
-    pub fn load(prefix: &Path, num_threads: usize) -> Result<Self> {
+    pub fn load(
+        prefix: &Path,
+        num_threads: usize,
+        centroid_search: CentroidSearch,
+    ) -> Result<Self> {
         let layout = storage::read_metadata(&with_suffix(prefix, META_SUFFIX))?;
         let want = std::mem::size_of::<T>();
         if layout.element_size != want {
@@ -411,12 +417,16 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         let mut centroids_file = File::open(with_suffix(prefix, CENTROIDS_SUFFIX))?;
         let centroids_mat: Matrix<f32> =
             read_bin(&mut centroids_file).map_err(|e| GraphIvfError::malformed(e.to_string()))?;
-        // Rebuild the search-time centroid graph with the *search* metric: a
-        // hybrid `InnerProduct` index navigates the centroids by inner product
-        // (the f32 IP distance is negated, so the graph still finds the
-        // maximum-IP centroids); `L2`/`Cosine` navigate by squared-L2.
-        let graph_metric = metric.search_metric();
-        let centroids = centroids::build(centroids_mat, &layout.graph, num_threads, graph_metric)?;
+        // Rank centroids by the *search* metric: a hybrid `InnerProduct` index
+        // navigates the centroids by inner product (the f32 IP distance is
+        // negated, so the maximum-IP centroids still come first); `L2`/`Cosine`
+        // navigate by squared-L2.
+        let centroids = CentroidSource::new(
+            CentroidRouting::for_load(centroid_search, layout.graph),
+            centroids_mat,
+            num_threads,
+            metric.search_metric(),
+        )?;
 
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
 
@@ -451,7 +461,7 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         Ok(Searcher {
             reader,
             runtime,
-            centroids: Arc::clone(&self.centroids),
+            centroids: self.centroids.clone(),
             layout: Arc::clone(&self.layout),
             metric: self.metric,
             dim: self.dim,
@@ -597,9 +607,11 @@ fn refine_centroids(
         AssignMethod::Graph {
             rebuild_every,
             rerank,
+            graph,
+            assign_l,
         } => Box::new(cluster::GraphAssigner::new(
-            params.graph,
-            params.assign_l,
+            graph,
+            assign_l,
             rebuild_every,
             rerank,
             params.num_threads,
@@ -631,7 +643,7 @@ fn refine_centroids(
 pub struct Searcher<T: VectorRepr = f32> {
     reader: ListReader,
     runtime: Runtime,
-    centroids: MemoryIndex<f32>,
+    centroids: CentroidSource,
     layout: Arc<Layout>,
     metric: Metric,
     dim: usize,
@@ -716,7 +728,7 @@ impl<T: VectorRepr> Searcher<T> {
         let q_f32 = T::as_f32(query).map_err(|e| GraphIvfError::Ann(e.into()))?;
         profile.preprocess = preprocess_start.elapsed();
 
-        // 1. Find the nearest `nlist` centroids via graph search.
+        // 1. Find the nearest `nlist` centroids.
         let centroid_search_start = Instant::now();
         let nlist = params.nlist;
         let l = params.effective_l();
@@ -724,14 +736,9 @@ impl<T: VectorRepr> Searcher<T> {
         self.cids.resize(nlist, 0);
         self.cdist.clear();
         self.cdist.resize(nlist, 0.0);
-        let n = centroids::search(
-            &self.centroids,
-            &self.runtime,
-            &q_f32,
-            l,
-            &mut self.cids,
-            &mut self.cdist,
-        )?;
+        let n = self
+            .centroids
+            .search(&self.runtime, &q_f32, l, &mut self.cids, &mut self.cdist)?;
         profile.centroid_search = centroid_search_start.elapsed();
 
         // 2. Build a sector-aligned read window per non-empty probed cluster
@@ -820,47 +827,6 @@ impl<T: VectorRepr> Searcher<T> {
         profile.total = total_start.elapsed();
         Ok((candidates, profile))
     }
-}
-
-/// Assign each corpus point to its nearest centroid via graph search.
-///
-/// Parallelized across chunks of points; each worker drives the (in-memory)
-/// graph search with its own current-thread runtime.
-fn assign(
-    centroids: &MemoryIndex<f32>,
-    work: MatrixView<'_, f32>,
-    assign_l: usize,
-    pool: &RayonThreadPool,
-) -> Result<Vec<u32>> {
-    let num_points = work.nrows();
-    let mut assignments = vec![0u32; num_points];
-    const CHUNK: usize = 256;
-
-    assignments
-        .par_chunks_mut(CHUNK)
-        .enumerate()
-        .try_for_each_in_pool(pool.as_ref(), |(ci, out)| -> Result<()> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .map_err(ANNError::from)?;
-            let mut ids = [0u32; 1];
-            let mut dist = [0.0f32; 1];
-            for (j, slot) in out.iter_mut().enumerate() {
-                let pid = ci * CHUNK + j;
-                centroids::search(
-                    centroids,
-                    &runtime,
-                    work.row(pid),
-                    assign_l,
-                    &mut ids,
-                    &mut dist,
-                )?;
-                *slot = ids[0];
-            }
-            Ok(())
-        })?;
-
-    Ok(assignments)
 }
 
 /// Append `suffix` to a path prefix, e.g. `/a/idx` + `.graphivf_meta`.

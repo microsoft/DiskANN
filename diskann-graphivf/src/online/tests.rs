@@ -1,5 +1,5 @@
 use super::*;
-use crate::{GraphIvfIndex, GraphParams, SearchParams};
+use crate::{CentroidSearch, GraphIvfIndex, GraphParams, OnlineCentroidRouting, SearchParams};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn mat(data: Vec<f32>, nrows: usize, ncols: usize) -> Matrix<f32> {
@@ -11,9 +11,12 @@ fn params(target: usize, threshold: usize) -> OnlineParams {
         max_clusters: Some(target),
         centroid_capacity: target.saturating_mul(2).max(1),
         split_threshold: threshold,
-        assign_l: 32,
         reassign_neighbors: 8,
-        reassign_l: 32,
+        routing: OnlineCentroidRouting::Graph {
+            graph: GraphParams::default(),
+            assign_l: 32,
+            reassign_l: 32,
+        },
         two_means_iters: 10,
         num_threads: 2,
         ..Default::default()
@@ -298,6 +301,51 @@ fn centroid_recall_scores_selection_against_an_exact_scan() {
 }
 
 #[test]
+fn exact_centroid_search_selects_perfectly_at_every_width() {
+    // Same corpus as the graph-mode test above, but routed by exact scan. The
+    // interesting part is that splits, merges and deletes all keep mutating the
+    // centroid set underneath, so this pins that the dense mirror stays in step.
+    let mut rng = StdRng::seed_from_u64(11);
+    let (nn, dim) = (600usize, 8usize);
+    let mut v = vec![0.0f32; nn * dim];
+    for x in v.iter_mut() {
+        *x = rng.random_range(-1.0..1.0);
+    }
+    let points = mat(v, nn, dim);
+    let mut ib = vec![0.0f32; 4 * dim];
+    for i in 0..4 {
+        ib[i * dim..(i + 1) * dim].copy_from_slice(points.row(rng.random_range(0..nn)));
+    }
+
+    let p = OnlineParams {
+        routing: OnlineCentroidRouting::Exact,
+        ..merge_params(64, 40, 8)
+    };
+    let mut c = OnlineClusterer::new(points.clone(), mat(ib, 4, dim), p).unwrap();
+    for pid in 0..nn as u32 {
+        c.insert_batch(&[pid]).unwrap();
+    }
+    // Thin the corpus out so merges retire centroids as well.
+    c.delete_batch(&(0..nn as u32).filter(|p| p % 3 != 0).collect::<Vec<_>>())
+        .unwrap();
+    let num_clusters = c.num_clusters();
+    assert!(num_clusters > 4, "expected some splits to occur");
+
+    // No centroid graph exists in this mode, so there is nothing to census.
+    assert!(c.centroid_adjacency_census().unwrap().is_none());
+
+    let mut searcher = c.searcher().unwrap();
+    for width in [1, 4, num_clusters / 2, num_clusters] {
+        let r = searcher
+            .centroid_recall(points.row(0), &SearchParams::new(width))
+            .unwrap();
+        assert_eq!(r.requested, width);
+        assert_eq!(r.retrieved, width, "width={width}");
+        assert_eq!(r.matched, width, "width={width}");
+    }
+}
+
+#[test]
 fn uncapped_splits_until_threshold_equilibrium() {
     // `max_clusters: None` removes the live-cluster ceiling: splitting is
     // driven purely by the threshold and continues for every point, so the
@@ -479,7 +527,7 @@ fn flush_roundtrips_through_load_and_search() {
     let prefix = dir.join("idx");
     c.flush(&prefix, c.points.as_view()).unwrap();
 
-    let index = GraphIvfIndex::<f32>::load(&prefix, 2).unwrap();
+    let index = GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).unwrap();
     assert_eq!(index.num_clusters(), 2);
     let mut searcher = index.searcher().unwrap();
 
@@ -815,7 +863,7 @@ fn flush_after_deletes_drops_them_and_keeps_original_ids() {
     let prefix = dir.join("idx");
     c.flush(&prefix, c.points.as_view()).unwrap();
 
-    let index = GraphIvfIndex::<f32>::load(&prefix, 2).unwrap();
+    let index = GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).unwrap();
     let mut searcher = index.searcher().unwrap();
     let sp = SearchParams::new(index.num_clusters());
     // Scanning every list returns the whole live corpus and nothing else.

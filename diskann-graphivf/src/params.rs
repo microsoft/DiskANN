@@ -76,7 +76,7 @@ impl Metric {
 }
 
 /// Construction parameters for the in-memory centroid graph.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GraphParams {
     /// Pruned out-degree (`R`).
     pub degree: usize,
@@ -101,7 +101,7 @@ impl Default for GraphParams {
 
 /// Strategy for assigning corpus points to their nearest centroid during the
 /// k-means (Lloyd's) iterations that refine the centroids.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum AssignMethod {
     /// Exact brute-force nearest-centroid assignment (GEMM-based). Cost is
     /// `O(num_points * num_clusters * dim)` per iteration; the historical
@@ -112,6 +112,10 @@ pub enum AssignMethod {
     /// in-memory graph over the centroids and searches it for each point,
     /// optionally re-ranking the top `rerank` candidates exactly. Scales to
     /// large `num_clusters` where the exact scan is intractable.
+    ///
+    /// The graph built here is scratch for the k-means refinement and is
+    /// unrelated to the one [`CentroidRouting::Graph`] may build, so it carries
+    /// its own recipe and beam.
     Graph {
         /// Rebuild the centroid graph every this many iterations (`1` rebuilds
         /// every iteration). Clamped to `>= 1`.
@@ -119,7 +123,209 @@ pub enum AssignMethod {
         /// Number of graph candidates to re-rank exactly per point (`1` trusts
         /// the graph's nearest result directly). Clamped to `>= 1`.
         rerank: usize,
+        /// Construction parameters for the refinement graph.
+        #[serde(default)]
+        graph: GraphParams,
+        /// Search-list size for the per-point walk during refinement.
+        #[serde(default = "default_assign_l")]
+        assign_l: usize,
     },
+}
+
+/// How the index finds the centroids nearest to a vector.
+///
+/// This is a single index-wide choice: it governs every centroid lookup the
+/// index performs — routing points on insert, locating neighbors when a cluster
+/// splits or is dissolved, and selecting the clusters a query probes. Keeping it
+/// to one setting means the clusters a query probes are found the same way the
+/// points in them were routed, so the two can never disagree about what
+/// "nearest" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CentroidSearch {
+    /// Navigate a DiskANN graph built over the centroids.
+    ///
+    /// Sub-linear in the cluster count and the only option that stays practical
+    /// as clusters grow into the millions, at the cost of occasionally missing a
+    /// nearest cluster. On an index that churns, the graph also accumulates
+    /// tombstones, and the beam has to be widened
+    /// ([`SearchParams::centroid_search_alpha`]) to compensate.
+    #[default]
+    Graph,
+    /// Score every live centroid.
+    ///
+    /// Exact by construction: the nearest clusters are never missed, retired
+    /// clusters can never be returned, and no beam parameter applies. Scoring is
+    /// done with a batched matrix multiply, so the cost is
+    /// `O(num_clusters * dim)` per vector at memory-bandwidth speed rather than
+    /// per-candidate speed — practical well beyond the point where a naive scan
+    /// is not, but still linear in the cluster count.
+    ///
+    /// No centroid graph is built or maintained in this mode, since nothing
+    /// would search it.
+    Exact,
+}
+
+/// Centroid routing for a batch build: the [`CentroidSearch`] mode together
+/// with the knobs that mode actually consumes.
+///
+/// [`CentroidSearch`] alone is enough to *open* an existing index, because a
+/// loaded graph is rebuilt from the recipe in the index metadata. Building one
+/// additionally needs a beam width and a graph recipe, and both are meaningless
+/// under [`Exact`](Self::Exact). Keeping them inside the
+/// [`Graph`](Self::Graph) variant makes supplying an ignored knob impossible
+/// rather than merely useless.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
+pub enum CentroidRouting {
+    /// Navigate a DiskANN graph built over the centroids.
+    Graph {
+        /// Centroid graph construction parameters.
+        #[serde(default)]
+        graph: GraphParams,
+        /// Search-list size used when assigning corpus points to centroids.
+        #[serde(default = "default_assign_l")]
+        assign_l: usize,
+    },
+    /// Score every live centroid with a batched matrix multiply.
+    Exact,
+}
+
+impl Default for CentroidRouting {
+    fn default() -> Self {
+        Self::Graph {
+            graph: GraphParams::default(),
+            assign_l: default_assign_l(),
+        }
+    }
+}
+
+fn default_assign_l() -> usize {
+    32
+}
+
+impl CentroidRouting {
+    /// Routing for an index being opened.
+    ///
+    /// The graph recipe comes from the index metadata rather than the caller,
+    /// and the assignment beam is left at its default because opening an index
+    /// assigns nothing — [`assign`](crate::GraphIvfIndex) already ran at build
+    /// time and the result is on disk.
+    pub(crate) fn for_load(mode: CentroidSearch, graph: GraphParams) -> Self {
+        match mode {
+            CentroidSearch::Graph => Self::Graph {
+                graph,
+                assign_l: default_assign_l(),
+            },
+            CentroidSearch::Exact => Self::Exact,
+        }
+    }
+
+    /// Graph recipe recorded in the index metadata so a later
+    /// [`load`](crate::GraphIvfIndex::load) with [`CentroidSearch::Graph`] can
+    /// rebuild one over the flushed centroids.
+    ///
+    /// An exact build never constructs a graph, so it has no recipe of its own
+    /// to record and the defaults stand in.
+    pub(crate) fn stored_graph_params(self) -> GraphParams {
+        match self {
+            Self::Graph { graph, .. } => graph,
+            Self::Exact => GraphParams::default(),
+        }
+    }
+
+    fn validate(&self) -> crate::Result<()> {
+        use crate::GraphIvfError as E;
+        if let Self::Graph { graph, assign_l } = self {
+            if *assign_l == 0 {
+                return Err(E::invalid("assign_l must be non-zero"));
+            }
+            if graph.degree == 0 || graph.l_build == 0 {
+                return Err(E::invalid("graph degree and l_build must be non-zero"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Centroid routing for an online build.
+///
+/// Distinct from [`CentroidRouting`] because a streaming build also searches
+/// the centroids when a cluster splits or dissolves, which a batch build never
+/// does, so the `Graph` variant carries one more beam width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OnlineCentroidRouting {
+    /// Navigate a mutable DiskANN graph maintained over the live centroids.
+    Graph {
+        /// Centroid graph construction parameters.
+        graph: GraphParams,
+        /// Search-list size used to route each inserted point.
+        assign_l: usize,
+        /// Search-list size for split-neighbor and dissolve-survivor selection.
+        /// Raised internally to fit the requested candidates and exclusions.
+        reassign_l: usize,
+    },
+    /// Score every live centroid with a batched matrix multiply.
+    Exact,
+}
+
+impl Default for OnlineCentroidRouting {
+    fn default() -> Self {
+        Self::Graph {
+            graph: GraphParams::default(),
+            assign_l: default_assign_l(),
+            reassign_l: default_assign_l(),
+        }
+    }
+}
+
+impl OnlineCentroidRouting {
+    /// See [`CentroidRouting::stored_graph_params`].
+    pub(crate) fn stored_graph_params(self) -> GraphParams {
+        match self {
+            Self::Graph { graph, .. } => graph,
+            Self::Exact => GraphParams::default(),
+        }
+    }
+
+    /// Beam width for routing one point, and the widened retry that follows it.
+    /// `None` in exact mode, where no beam applies.
+    pub(crate) fn route_beams(self) -> Option<(usize, usize)> {
+        match self {
+            Self::Graph { assign_l, .. } => {
+                let base = assign_l.max(1);
+                Some((base, base.saturating_mul(8).max(512)))
+            }
+            Self::Exact => None,
+        }
+    }
+
+    /// Beam width for split-neighbor and dissolve-survivor selection, floored to
+    /// return at least `want` candidates. `None` in exact mode.
+    pub(crate) fn neighbor_beam(self, want: usize) -> Option<usize> {
+        match self {
+            Self::Graph { reassign_l, .. } => Some(reassign_l.max(want)),
+            Self::Exact => None,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> crate::Result<()> {
+        use crate::GraphIvfError as E;
+        if let Self::Graph {
+            graph,
+            assign_l,
+            reassign_l,
+        } = self
+        {
+            if *assign_l == 0 || *reassign_l == 0 {
+                return Err(E::invalid("assign_l and reassign_l must be non-zero"));
+            }
+            if graph.degree == 0 || graph.l_build == 0 {
+                return Err(E::invalid("graph degree and l_build must be non-zero"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Policy for centroids whose cluster received no points in a Lloyd's iteration.
@@ -146,10 +352,10 @@ pub struct BuildParams {
     pub sample_size: usize,
     /// Number of Lloyd's iterations for k-means.
     pub kmeans_iters: usize,
-    /// Search-list size used when assigning corpus points to centroids.
-    pub assign_l: usize,
-    /// Centroid graph construction parameters.
-    pub graph: GraphParams,
+    /// How the built index finds nearest centroids when assigning the corpus,
+    /// and the knobs that mode needs.
+    #[serde(default)]
+    pub routing: CentroidRouting,
     /// Number of worker threads to use during the build.
     pub num_threads: usize,
     /// RNG seed for sampling and k-means (for reproducibility).
@@ -189,15 +395,10 @@ impl BuildParams {
                 self.sample_size, self.num_clusters
             )));
         }
-        if self.assign_l == 0 {
-            return Err(E::invalid("assign_l must be non-zero"));
-        }
         if self.num_threads == 0 {
             return Err(E::invalid("num_threads must be non-zero"));
         }
-        if self.graph.degree == 0 || self.graph.l_build == 0 {
-            return Err(E::invalid("graph degree and l_build must be non-zero"));
-        }
+        self.routing.validate()?;
         Ok(())
     }
 
@@ -237,22 +438,13 @@ pub struct OnlineParams {
     /// A cluster is split once it holds strictly more than this many points.
     /// Must be `>= 2`.
     pub split_threshold: usize,
-    /// Centroid-graph search-list size used to route each inserted point.
-    pub assign_l: usize,
     /// Number of nearest centroid clusters (besides the two children) drawn in
     /// as reassignment candidates when a cluster is split, and the maximum
     /// survivor landing sites considered when a cluster is dissolved. Must be
     /// `>= 1`.
     ///
-    /// This replaces the earlier policy of using the split centroid's direct
-    /// centroid-graph out-edges: the candidates are instead the `s` nearest live
-    /// centroids to the split centroid, found by searching the centroid graph.
+    /// A candidate *count*, so it applies whichever routing mode is in use.
     pub reassign_neighbors: usize,
-    /// Centroid-graph search-list size for split-neighbor and dissolve-survivor
-    /// selection. Larger values make selection more accurate at higher cost;
-    /// it is raised internally to fit the requested candidates and exclusions.
-    /// A good default is `max(reassign_neighbors, assign_l)`.
-    pub reassign_l: usize,
     /// Lloyd iterations for split k-means (two children per admitted parent).
     pub two_means_iters: usize,
     /// A cluster is retired once deletes drop it below this many points. `0`
@@ -273,8 +465,10 @@ pub struct OnlineParams {
     /// partition below this. Clamped to `>= 1` internally — orphans need at
     /// least one surviving cluster to land on.
     pub min_clusters: usize,
-    /// Centroid-graph construction parameters.
-    pub graph: GraphParams,
+    /// How the clusterer finds nearest centroids — for routing, splitting,
+    /// merging, and query-time cluster selection alike — and the knobs that
+    /// mode needs.
+    pub routing: OnlineCentroidRouting,
     /// Candidate-scoring metric for live search and the metric recorded in the
     /// flushed index metadata. Clustering and centroid-graph navigation always
     /// use squared-L2 (as in a batch build).
@@ -299,13 +493,11 @@ impl Default for OnlineParams {
             max_clusters: None,
             centroid_capacity: 1024,
             split_threshold: 256,
-            assign_l: 32,
             reassign_neighbors: 8,
-            reassign_l: 32,
             two_means_iters: 10,
             merge_threshold: 0,
             min_clusters: 1,
-            graph: GraphParams::default(),
+            routing: OnlineCentroidRouting::default(),
             metric: Metric::L2,
             normalize_centroids: false,
             num_threads: 1,
@@ -429,8 +621,7 @@ mod tests {
             metric: Metric::L2,
             sample_size: 100,
             kmeans_iters: 10,
-            assign_l: 16,
-            graph: GraphParams::default(),
+            routing: CentroidRouting::default(),
             num_threads: 2,
             seed: 0,
             assign_method: AssignMethod::Exact,
@@ -461,7 +652,10 @@ mod tests {
         assert!(p.validate(100, 4).is_err());
 
         let mut p = valid_build();
-        p.assign_l = 0;
+        p.routing = CentroidRouting::Graph {
+            graph: GraphParams::default(),
+            assign_l: 0,
+        };
         assert!(p.validate(100, 4).is_err());
 
         let mut p = valid_build();
@@ -469,7 +663,13 @@ mod tests {
         assert!(p.validate(100, 4).is_err());
 
         let mut p = valid_build();
-        p.graph.degree = 0;
+        p.routing = CentroidRouting::Graph {
+            graph: GraphParams {
+                degree: 0,
+                ..GraphParams::default()
+            },
+            assign_l: 16,
+        };
         assert!(p.validate(100, 4).is_err());
     }
 

@@ -113,10 +113,7 @@ metric, dimensions, centroid-graph parameters, threads, seed, output prefix, and
       "batch_size": 4096,
       "reassign_neighbors": 5,
       "max_clusters": 16384,
-      "graph_degree": 32,
-      "graph_slack": 1.2,
-      "graph_l_build": 64,
-      "graph_alpha": 1.2,
+      "routing": { "graph": { "graph_degree": 32, "graph_slack": 1.2, "graph_l_build": 64, "graph_alpha": 1.2 } },
       "num_threads": 16,
       "seed": 0,
       "save_path": "/abs/path/out_prefix_th106_f16",
@@ -551,11 +548,9 @@ Online build ([`OnlineParams`](src/params.rs)):
 | `min_clusters` | Live-cluster floor: merges stop before taking the count below this (clamped to `≥ 1` internally). |
 | `max_clusters` | Optional hard cap on live clusters (`None` = data-driven growth). |
 | `centroid_capacity` | Total id budget (live + retired); size to `≈ 2×` expected final clusters. |
-| `assign_l` | Centroid-graph search-list size for routing inserts. |
-| `reassign_neighbors` | Neighbor clusters pooled with split children, and maximum survivor landing sites per dissolve (`≥ 1`). |
-| `reassign_l` | Centroid-graph search-list size for split-neighbor and dissolve-survivor selection; raised internally to fit the requested candidates and exclusions. |
+| `reassign_neighbors` | Neighbor clusters pooled with split children, and maximum survivor landing sites per dissolve (`≥ 1`); a candidate count, so it applies under either routing mode. |
 | `two_means_iters` | Lloyd iterations for split k-means (two children per admitted parent; internally at least one). |
-| `graph` | Centroid-graph build params: `degree` (R), `slack`, `l_build`, `alpha`. |
+| `routing` | How the clusterer finds nearest centroids. `Graph { graph, assign_l, reassign_l }` navigates the centroid graph: `assign_l` routes inserts; `reassign_l` sizes split-neighbor and dissolve-survivor search, raised internally to fit candidates and exclusions; `graph` is the build recipe (`degree` R, `slack`, `l_build`, `alpha`). `Exact` scans every live centroid and carries none of these. |
 | `metric` | Candidate-scoring metric for live and flushed search. Clustering and live mutable-graph navigation remain L2; a loaded index rebuilds its immutable centroid graph with this search metric. |
 | `normalize_centroids` | L2-normalize warmup and child centroids (unit-sphere corpora). |
 | `num_threads`, `seed` | Worker pool for warmup/split k-means, routing, and graph build; RNG seed. |
@@ -577,11 +572,11 @@ Practical tuning order:
 
 1. Pick `split_threshold` for the desired list size / cluster count; use
   `max_clusters` only when a hard cap is required.
-2. Increase `reassign_neighbors` (and, if needed, `reassign_l`) when build
+2. Increase `reassign_neighbors` (and, if needed, `routing.reassign_l`) when build
   quality matters more than split cost.
 3. Sweep `nlist` to choose the query-time recall, I/O, and latency trade-off.
-4. Raise `assign_l` or `centroid_search_alpha` only if routing quality is limiting
-  build or search recall.
+4. Raise `routing.assign_l` or `centroid_search_alpha` only if routing quality is
+  limiting build or search recall.
 
 The complete field/default table is in the [graph-IVF section of
 `diskann-benchmark/README.md`](../diskann-benchmark/README.md#graph-ivf).

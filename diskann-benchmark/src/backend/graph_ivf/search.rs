@@ -23,8 +23,11 @@ use diskann_tools::utils::{search_index_utils, KRecallAtN, TruthSet};
 use diskann_utils::views::Matrix;
 
 use crate::{
-    backend::graph_ivf::{build::to_graphivf_metric, element::GraphIvfElement},
-    inputs::graph_ivf::{GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
+    backend::graph_ivf::{
+        build::{to_centroid_search, to_graphivf_metric},
+        element::GraphIvfElement,
+    },
+    inputs::graph_ivf::{CentroidSearchConfig, GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -87,6 +90,9 @@ pub(super) struct GraphIvfSearchStats {
     pub(super) num_threads: usize,
     pub(super) recall_at: Vec<u32>,
     pub(super) distance: SimilarityMeasure,
+    /// How clusters were selected. `centroid_search_alpha` has no effect under
+    /// [`CentroidSearchConfig::Exact`].
+    pub(super) centroid_search: CentroidSearchConfig,
     pub(super) centroid_search_alpha: f32,
     pub(super) search_results_per_nlist: Vec<GraphIvfSearchResult>,
 }
@@ -176,6 +182,7 @@ where
     let index = GraphIvfIndex::<T>::load(
         std::path::Path::new(&index_load.load_path),
         search_params.num_threads,
+        to_centroid_search(index_load.centroid_search),
     )?;
     let dim = index.dim();
     let num_clusters = index.num_clusters();
@@ -361,6 +368,7 @@ where
         num_threads: search_params.num_threads,
         recall_at: recall_at.iter().collect(),
         distance: search_params.distance,
+        centroid_search: index_load.centroid_search,
         centroid_search_alpha: search_params.centroid_search_alpha,
         search_results_per_nlist,
     })

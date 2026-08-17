@@ -7,75 +7,112 @@ use diskann_utils::views::Matrix;
 use tokio::runtime::Runtime;
 
 use crate::{
-    centroids::{self, MutableCentroidGraph},
-    cluster::sq_l2,
+    centroids::{self, AdjacencyCensus, DenseCentroids, ExactMetric, MutableCentroidGraph},
     GraphIvfError, Result,
 };
 
 use super::UNASSIGNED;
 
-/// Id-indexed store of centroid vectors with soft deletion.
+/// Substitute edges offered to each node that loses a link when a centroid is
+/// deleted in place.
 ///
-/// A centroid id is permanent and is never reused after retirement, so the
-/// table is sized to the whole id budget up front. A `None` slot is retired or
-/// not yet allocated; a `Some` slot is live.
-pub(super) struct CentroidTable {
-    dim: usize,
-    /// Centroid vectors indexed by id; `None` marks a retired centroid.
-    vecs: Vec<Option<Box<[f32]>>>,
-    /// Number of live (non-retired) centroids.
-    live_count: usize,
+/// This is a per-repaired-node fan-out, not a count of deletions: every
+/// in-neighbor lost exactly one edge, and the proposed replacements still have
+/// to survive pruning. Two matches the arity of a split, where the parent is
+/// succeeded by exactly two children.
+const REPLACE_EDGES: usize = 2;
+
+/// The single owner of the live centroids and of the structure used to find
+/// them.
+///
+/// Vectors live in a [`DenseCentroids`] mirror, which keeps them packed and
+/// contiguous while still addressing them by id. That costs nothing over a
+/// sparse id-indexed array — one `u32` per id slot instead of a pointer plus a
+/// separate allocation per centroid — and it is what makes an exact scan of the
+/// centroids a matrix multiply rather than a pointer chase.
+///
+/// A centroid id is permanent and is never reused after retirement, so the id
+/// map is sized to the whole budget up front.
+///
+/// Structural updates go through this type so callers cannot update the vectors
+/// without also updating whatever navigates them. Which of the two navigation
+/// modes is in effect is fixed for the life of the clusterer and is not visible
+/// to callers: routing, splitting, merging, and query-time cluster selection all
+/// go through the same [`search`](Self::search).
+pub(super) struct CentroidRegistry {
+    /// Packed, live-only vectors, addressable by centroid id.
+    dense: DenseCentroids,
+    /// Total number of id slots (live + retired + free).
+    capacity: usize,
     /// Next unused centroid id.
     next_id: u32,
+    /// Maintained graph over the live centroids, or `None` when they are
+    /// scanned exactly instead. Exact mode keeps no state of its own — there is
+    /// no second copy of the centroids and no graph to hold in sync.
+    graph: Option<MutableCentroidGraph>,
 }
 
-impl CentroidTable {
-    /// Create a table with `capacity` id slots, seeding ids `0..initial.nrows()`
-    /// from `initial` and leaving the remaining slots free.
-    pub(super) fn new(initial: &Matrix<f32>, capacity: usize) -> Self {
-        let initial_k = initial.nrows();
-        let mut vecs: Vec<Option<Box<[f32]>>> = Vec::with_capacity(capacity);
-        for i in 0..initial_k {
-            vecs.push(Some(initial.row(i).to_vec().into_boxed_slice()));
-        }
-        for _ in initial_k..capacity {
-            vecs.push(None);
+impl CentroidRegistry {
+    /// Create a registry with `capacity` id slots, seeding ids
+    /// `0..initial.nrows()` from `initial` and leaving the remaining slots free.
+    ///
+    /// `graph` must already contain those same initial centroids under the same
+    /// ids; pass `None` to navigate by exact scan instead.
+    pub(super) fn new(
+        initial: &Matrix<f32>,
+        capacity: usize,
+        graph: Option<MutableCentroidGraph>,
+    ) -> Self {
+        let mut dense = DenseCentroids::with_capacity(initial.ncols(), capacity);
+        for i in 0..initial.nrows() {
+            dense.push(i as u32, initial.row(i));
         }
         Self {
-            dim: initial.ncols(),
-            vecs,
-            live_count: initial_k,
-            next_id: initial_k as u32,
+            dense,
+            capacity,
+            next_id: initial.nrows() as u32,
+            graph,
         }
     }
 
     /// Total number of id slots (live + retired + free).
     #[cfg(test)]
-    fn capacity(&self) -> usize {
-        self.vecs.len()
+    pub(super) fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Number of live (non-retired) centroids.
-    fn live_count(&self) -> usize {
-        self.live_count
+    pub(super) fn live_count(&self) -> usize {
+        self.dense.len()
     }
 
     /// Whether `id` is a live centroid.
-    fn is_live(&self, id: u32) -> bool {
-        self.vecs.get(id as usize).is_some_and(Option::is_some)
+    pub(super) fn is_live(&self, id: u32) -> bool {
+        self.dense.contains(id)
     }
 
     /// The vector of centroid `id`, or `None` if retired or out of range.
-    fn get(&self, id: u32) -> Option<&[f32]> {
-        self.vecs.get(id as usize).and_then(|s| s.as_deref())
+    pub(super) fn get(&self, id: u32) -> Option<&[f32]> {
+        self.dense.get(id)
     }
 
     /// Number of ids still available for new centroids.
-    fn alloc_budget(&self) -> usize {
-        self.vecs.len().saturating_sub(self.next_id as usize)
+    pub(super) fn alloc_budget(&self) -> usize {
+        self.capacity.saturating_sub(self.next_id as usize)
     }
 
-    /// Return the next `count` ids without changing the table.
+    /// Iterate over live centroids as `(id, vector)` pairs, in ascending id
+    /// order.
+    pub(super) fn iter_live(&self) -> impl Iterator<Item = (u32, &[f32])> {
+        self.dense.iter_by_id()
+    }
+
+    /// Ids of the live centroids, in ascending order.
+    pub(super) fn live_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.dense.ids_by_id()
+    }
+
+    /// Return the next `count` ids without changing the registry.
     ///
     /// # Errors
     ///
@@ -90,7 +127,7 @@ impl CentroidTable {
     }
 
     /// Publish centroids under ids previously returned by [`reserve_ids`].
-    /// This is infallible so the table can be updated only after all fallible
+    /// This is infallible so the vectors can be updated only after all fallible
     /// centroid-graph mutations have succeeded.
     ///
     /// [`reserve_ids`]: Self::reserve_ids
@@ -98,150 +135,36 @@ impl CentroidTable {
         debug_assert_eq!(ids.len(), vectors.len());
         debug_assert_eq!(ids.first().copied(), Some(self.next_id));
         for (&id, vector) in ids.iter().zip(vectors) {
-            debug_assert_eq!(vector.len(), self.dim);
-            debug_assert!(self.vecs[id as usize].is_none());
-            self.vecs[id as usize] = Some(vector);
+            self.dense.push(id, &vector);
         }
         self.next_id += ids.len() as u32;
-        self.live_count += ids.len();
-    }
-
-    /// Retire centroid `id` (soft delete). Its slot stays occupied but empty; a
-    /// no-op if `id` is already retired.
-    fn retire(&mut self, id: u32) {
-        if self.vecs[id as usize].take().is_some() {
-            self.live_count -= 1;
-        }
-    }
-
-    /// Iterate over live centroids as `(id, vector)` pairs, in ascending id
-    /// order.
-    fn iter_live(&self) -> impl Iterator<Item = (u32, &[f32])> {
-        self.vecs
-            .iter()
-            .enumerate()
-            .filter_map(|(id, slot)| slot.as_deref().map(|v| (id as u32, v)))
-    }
-
-    /// Ids of the live centroids, in ascending order.
-    fn live_ids(&self) -> impl Iterator<Item = u32> + '_ {
-        self.vecs
-            .iter()
-            .enumerate()
-            .filter_map(|(id, slot)| slot.as_ref().map(|_| id as u32))
-    }
-
-    /// Squared-L2 distance from `query` to its `k`-th nearest live centroid, or
-    /// `None` if fewer than `k` centroids are live.
-    ///
-    /// This is the exact cutoff the centroid graph is trying to reproduce, so it
-    /// serves as the reference for centroid-selection recall. Comparing against
-    /// a distance rather than an id set counts a tie as correct instead of
-    /// penalizing whichever tie-break the graph happened to take.
-    fn kth_nearest_distance(&self, query: &[f32], k: usize) -> Option<f32> {
-        if k == 0 {
-            return None;
-        }
-        let mut distances: Vec<f32> = self.iter_live().map(|(_, v)| sq_l2(query, v)).collect();
-        if distances.len() < k {
-            return None;
-        }
-        let (_, kth, _) = distances.select_nth_unstable_by(k - 1, f32::total_cmp);
-        Some(*kth)
-    }
-
-    /// Brute-force nearest live centroid to `point` by squared-L2, or `None` if
-    /// no live centroid exists.
-    fn nearest(&self, point: &[f32]) -> Option<u32> {
-        let mut best = None;
-        let mut best_d = f32::INFINITY;
-        for (id, v) in self.iter_live() {
-            let d = sq_l2(point, v);
-            if d < best_d {
-                best_d = d;
-                best = Some(id);
-            }
-        }
-        best
     }
 
     /// Densely pack the live centroids into a contiguous `k x dim` matrix and
     /// return `(remap, matrix)`, where `remap[old_id]` is the new dense index of
     /// a live centroid and [`UNASSIGNED`] for a retired id.
-    fn densify(&self) -> Result<(Vec<u32>, Matrix<f32>)> {
-        let live: Vec<usize> = (0..self.vecs.len())
-            .filter(|&c| self.vecs[c].is_some())
-            .collect();
-        let k = live.len();
-        let mut remap = vec![UNASSIGNED; self.vecs.len()];
-        let mut cbuf = vec![0.0f32; k * self.dim];
-        for (new, &old) in live.iter().enumerate() {
-            remap[old] = new as u32;
-            cbuf[new * self.dim..(new + 1) * self.dim]
-                .copy_from_slice(self.vecs[old].as_ref().expect("live"));
+    ///
+    /// The dense order is ascending id, not the mirror's internal row order:
+    /// this numbering is written to disk, so it has to be a function of the live
+    /// set alone and not of the order retirements happened to occur in.
+    pub(super) fn densify(&self) -> Result<(Vec<u32>, Matrix<f32>)> {
+        let dim = self.dense.dim();
+        let mut remap = vec![UNASSIGNED; self.capacity];
+        let mut cbuf = Vec::with_capacity(self.live_count() * dim);
+        for (new, (old, vector)) in self.iter_live().enumerate() {
+            remap[old as usize] = new as u32;
+            cbuf.extend_from_slice(vector);
         }
-        let mat = Matrix::try_from(cbuf.into_boxed_slice(), k, self.dim)
+        let mat = Matrix::try_from(cbuf.into_boxed_slice(), self.live_count(), dim)
             .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))?;
         Ok((remap, mat))
     }
-}
 
-/// The single owner of the two representations of live centroids.
-///
-/// The vector table is used by clustering and brute-force fallback, while the
-/// mutable graph is used for navigation. Structural updates go through this
-/// type so callers cannot update one representation without the other.
-pub(super) struct CentroidRegistry {
-    table: CentroidTable,
-    graph: MutableCentroidGraph,
-}
-
-impl CentroidRegistry {
-    pub(super) fn new(table: CentroidTable, graph: MutableCentroidGraph) -> Self {
-        Self { table, graph }
-    }
-
-    #[cfg(test)]
-    pub(super) fn capacity(&self) -> usize {
-        self.table.capacity()
-    }
-
-    pub(super) fn live_count(&self) -> usize {
-        self.table.live_count()
-    }
-
-    pub(super) fn is_live(&self, id: u32) -> bool {
-        self.table.is_live(id)
-    }
-
-    pub(super) fn get(&self, id: u32) -> Option<&[f32]> {
-        self.table.get(id)
-    }
-
-    pub(super) fn alloc_budget(&self) -> usize {
-        self.table.alloc_budget()
-    }
-
-    pub(super) fn iter_live(&self) -> impl Iterator<Item = (u32, &[f32])> {
-        self.table.iter_live()
-    }
-
-    pub(super) fn live_ids(&self) -> impl Iterator<Item = u32> + '_ {
-        self.table.live_ids()
-    }
-
-    pub(super) fn nearest(&self, point: &[f32]) -> Option<u32> {
-        self.table.nearest(point)
-    }
-
-    pub(super) fn kth_nearest_distance(&self, query: &[f32], k: usize) -> Option<f32> {
-        self.table.kth_nearest_distance(query, k)
-    }
-
-    pub(super) fn densify(&self) -> Result<(Vec<u32>, Matrix<f32>)> {
-        self.table.densify()
-    }
-
+    /// The `ids.len()` nearest live centroids to `query`, ascending by
+    /// distance, returning how many were written.
+    ///
+    /// `l` is the graph search-list size and is ignored in exact mode, which has
+    /// no beam to widen.
     pub(super) fn search(
         &self,
         runtime: &Runtime,
@@ -250,14 +173,45 @@ impl CentroidRegistry {
         ids: &mut [u32],
         distances: &mut [f32],
     ) -> Result<usize> {
-        centroids::search_mut(&self.graph, runtime, query, l, ids, distances)
+        match &self.graph {
+            Some(graph) => centroids::search_mut(graph, runtime, query, l, ids, distances),
+            None => self.exact_search(query, ids, distances),
+        }
+    }
+
+    /// Like [`search`](Self::search), but always ranks against every live
+    /// centroid, whichever navigation mode is configured.
+    ///
+    /// This is the ranking the centroid graph is trying to reproduce, which is
+    /// what makes it both the reference for centroid-selection recall and the
+    /// recovery path when a graph walk exhausts its frontier on tombstones and
+    /// reaches no live centroid at all. It costs a full pass over the centroid
+    /// set, so it does not belong on a hot query path.
+    pub(super) fn exact_search(
+        &self,
+        query: &[f32],
+        ids: &mut [u32],
+        distances: &mut [f32],
+    ) -> Result<usize> {
+        // Online clustering is squared-L2 throughout, matching a batch build,
+        // whatever metric candidate scoring later uses.
+        self.dense.search(ExactMetric::SqL2, query, ids, distances)
+    }
+
+    /// Tombstone pressure on the centroid graph, or `None` when no graph is
+    /// maintained.
+    pub(super) fn adjacency_census(&self, runtime: &Runtime) -> Result<Option<AdjacencyCensus>> {
+        match &self.graph {
+            Some(graph) => centroids::adjacency_census(graph, runtime, self.live_ids()).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Publish `children` and retire `parents` as one structural update.
     ///
-    /// The table is changed only after every graph operation succeeds. A graph
-    /// failure can still leave the graph partially updated, so the caller must
-    /// poison the enclosing clusterer before calling this method.
+    /// The vectors are changed only after every graph operation succeeds. A
+    /// graph failure can still leave the graph partially updated, so the caller
+    /// must poison the enclosing clusterer before calling this method.
     pub(super) fn apply_split(
         &mut self,
         runtime: &Runtime,
@@ -265,32 +219,47 @@ impl CentroidRegistry {
         children: Vec<Box<[f32]>>,
     ) -> Result<Vec<u32>> {
         debug_assert!(parents.iter().all(|&id| self.is_live(id)));
-        let ids = self.table.reserve_ids(children.len())?;
-        for (&id, vector) in ids.iter().zip(&children) {
-            centroids::insert_centroid(&self.graph, runtime, id, vector)?;
-        }
-        for &parent in parents {
-            centroids::delete_centroid(&self.graph, runtime, parent)?;
+        let ids = self.reserve_ids(children.len())?;
+        if let Some(graph) = &self.graph {
+            for (&id, vector) in ids.iter().zip(&children) {
+                centroids::insert_centroid(graph, runtime, id, vector)?;
+            }
+            // The children must already be in the graph: they sit where the
+            // parent sat, so they are the replacements the in-place delete below
+            // rewires the parent's in-neighbors onto.
+            for &parent in parents {
+                centroids::inplace_delete_centroid(graph, runtime, parent, REPLACE_EDGES)?;
+            }
         }
 
-        self.table.commit_reserved(&ids, children);
+        self.commit_reserved(&ids, children);
         for &parent in parents {
-            self.table.retire(parent);
+            self.dense.remove(parent);
         }
         Ok(ids)
     }
 
-    /// Retire all `victims` from the graph and table.
+    /// Retire all `victims` from the graph and the vector store.
     ///
     /// As with [`apply_split`](Self::apply_split), the caller must already have
     /// poisoned the clusterer because a partial graph failure is irreversible.
     pub(super) fn retire_all(&mut self, runtime: &Runtime, victims: &[u32]) -> Result<()> {
         debug_assert!(victims.iter().all(|&id| self.is_live(id)));
-        for &victim in victims {
-            centroids::delete_centroid(&self.graph, runtime, victim)?;
+        if let Some(graph) = &self.graph {
+            // Mark the whole victim set before repairing any of it. Dissolved
+            // clusters are spatially correlated — a sparse region empties
+            // together — so a victim's neighborhood is largely other victims.
+            // Repairing one at a time would rewire in-neighbors onto slots about
+            // to be tombstoned themselves.
+            for &victim in victims {
+                centroids::delete_centroid(graph, runtime, victim)?;
+            }
+            for &victim in victims {
+                centroids::inplace_delete_centroid(graph, runtime, victim, REPLACE_EDGES)?;
+            }
         }
         for &victim in victims {
-            self.table.retire(victim);
+            self.dense.remove(victim);
         }
         Ok(())
     }

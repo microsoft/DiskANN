@@ -59,10 +59,10 @@ use rayon::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::{
-    centroids,
+    centroids::{self, AdjacencyCensus},
     cluster::{self, sq_l2},
     index::{with_suffix, CENTROIDS_SUFFIX, LISTS_SUFFIX, META_SUFFIX},
-    params::{EmptyClusterPolicy, OnlineParams},
+    params::{EmptyClusterPolicy, OnlineCentroidRouting, OnlineParams},
     storage::{self, Layout},
     GraphIvfError, Result,
 };
@@ -74,7 +74,7 @@ mod seed;
 mod state;
 mod telemetry;
 
-use state::{CentroidRegistry, CentroidTable, DetachedPoint, IvfPartition};
+use state::{CentroidRegistry, DetachedPoint, IvfPartition};
 
 pub use search::{CentroidRecall, OnlineSearchStats, OnlineSearcher};
 pub use seed::SeedStrategy;
@@ -101,25 +101,33 @@ const REASSIGN_TILE: usize = 4096;
 /// clusters split — near the target cluster count roughly half the graph can be
 /// tombstones. A narrow beam can then occasionally exhaust its frontier on
 /// tombstoned nodes and return no live centroid, so the search is retried with
-/// `wide_l` before giving up and, as a last resort, falls back to a brute-force
-/// scan over the live centroids. Successful narrow-beam routes are unchanged.
+/// the wider beam before giving up and, as a last resort, falls back to a
+/// brute-force scan over the live centroids. Successful narrow-beam routes are
+/// unchanged.
+///
+/// `beams` is `None` under exact routing, where there is no graph to walk and
+/// the scan below is the primary path rather than a fallback.
 fn route_one(
     centroids: &CentroidRegistry,
     runtime: &Runtime,
     point: &[f32],
-    base_l: usize,
-    wide_l: usize,
+    beams: Option<(usize, usize)>,
 ) -> Result<u32> {
     let mut ids = [0u32; 1];
     let mut dist = [0.0f32; 1];
-    for l in [base_l, wide_l] {
-        if centroids.search(runtime, point, l, &mut ids, &mut dist)? > 0 {
-            return Ok(ids[0]);
+    if let Some((base_l, wide_l)) = beams {
+        for l in [base_l, wide_l] {
+            if centroids.search(runtime, point, l, &mut ids, &mut dist)? > 0 {
+                return Ok(ids[0]);
+            }
         }
     }
-    centroids
-        .nearest(point)
-        .ok_or_else(|| GraphIvfError::invalid("no live centroid available for assignment"))
+    if centroids.exact_search(point, &mut ids, &mut dist)? > 0 {
+        return Ok(ids[0]);
+    }
+    Err(GraphIvfError::invalid(
+        "no live centroid available for assignment",
+    ))
 }
 
 #[derive(Default)]
@@ -266,6 +274,7 @@ impl OnlineClusterer {
         if params.reassign_neighbors < 1 {
             return Err(GraphIvfError::invalid("reassign_neighbors must be >= 1"));
         }
+        params.routing.validate()?;
         // Merging needs a hysteresis gap below the split threshold. Without
         // one, a dissolve spills onto a neighbor, overflowing it; the split
         // that follows produces two half-size children, either of which may
@@ -285,22 +294,26 @@ impl OnlineClusterer {
         // graph and the id-indexed vectors to exactly that.
         let capacity = params.centroid_capacity.max(initial_k);
 
-        let init_mat = Matrix::try_from(
-            initial.as_slice().to_vec().into_boxed_slice(),
-            initial_k,
-            dim,
-        )
-        .map_err(|_| GraphIvfError::invalid("initial centroid matrix shape mismatch"))?;
-        let graph = centroids::build_mutable(
-            init_mat,
-            &params.graph,
-            params.num_threads,
-            capacity,
-            VectorMetric::L2,
-        )?;
-
-        let table = CentroidTable::new(&initial, capacity);
-        let centroids = CentroidRegistry::new(table, graph);
+        // Clustering and centroid navigation always run in squared-L2, matching
+        // a batch build, whatever metric candidate scoring uses.
+        let graph = if let OnlineCentroidRouting::Graph { graph, .. } = params.routing {
+            let init_mat = Matrix::try_from(
+                initial.as_slice().to_vec().into_boxed_slice(),
+                initial_k,
+                dim,
+            )
+            .map_err(|_| GraphIvfError::invalid("initial centroid matrix shape mismatch"))?;
+            Some(centroids::build_mutable(
+                init_mat,
+                &graph,
+                params.num_threads,
+                capacity,
+                VectorMetric::L2,
+            )?)
+        } else {
+            None
+        };
+        let centroids = CentroidRegistry::new(&initial, capacity, graph);
         let partition = IvfPartition::new(capacity, num_points);
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -368,6 +381,23 @@ impl OnlineClusterer {
             .live_ids()
             .map(|cid| self.partition.list_len(cid))
             .collect()
+    }
+
+    /// Census the out-edges of the live centroid graph, or `None` under
+    /// [`CentroidSearch::Exact`](crate::CentroidSearch::Exact), which maintains
+    /// no graph.
+    ///
+    /// Diagnostic for tombstone pressure: reports how much of the graph's
+    /// out-degree still points at live centroids. Reads adjacency lists and
+    /// delete bits only, so it costs `O(num_clusters * degree)` status checks
+    /// and no distance computations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clusterer is poisoned or the graph read fails.
+    pub fn centroid_adjacency_census(&self) -> Result<Option<AdjacencyCensus>> {
+        self.ensure_healthy()?;
+        self.centroids.adjacency_census(&self.runtime)
     }
 
     /// Clustering residual: the sum of squared distances from every assigned
@@ -692,7 +722,12 @@ impl OnlineClusterer {
     /// mutable scratch access.
     fn nearest_live_centroids(&mut self, query: &[f32], want: usize) -> Result<Vec<u32>> {
         let search_k = want.max(1);
-        let search_l = self.params.reassign_l.max(search_k);
+        // Ignored under exact routing, which scans every live centroid.
+        let search_l = self
+            .params
+            .routing
+            .neighbor_beam(search_k)
+            .unwrap_or(search_k);
 
         let scratch = &mut self.scratch.neighbors;
         scratch.ids.clear();
@@ -726,18 +761,11 @@ impl OnlineClusterer {
         debug_assert_eq!(pids.len(), out.len());
         let centroids = &self.centroids;
         let points = &self.points;
-        let base_l = self.params.assign_l.max(1);
-        let wide_l = base_l.saturating_mul(8).max(512);
+        let beams = self.params.routing.route_beams();
 
         if pids.len() <= ROUTE_CHUNK {
             for (pid, slot) in pids.iter().zip(out.iter_mut()) {
-                *slot = route_one(
-                    centroids,
-                    &self.runtime,
-                    points.row(*pid as usize),
-                    base_l,
-                    wide_l,
-                )?;
+                *slot = route_one(centroids, &self.runtime, points.row(*pid as usize), beams)?;
             }
             return Ok(());
         }
@@ -750,7 +778,7 @@ impl OnlineClusterer {
                     .map_err(ANNError::from)?;
                 for (j, slot) in chunk.iter_mut().enumerate() {
                     let point = points.row(pids[ci * ROUTE_CHUNK + j] as usize);
-                    *slot = route_one(centroids, &runtime, point, base_l, wide_l)?;
+                    *slot = route_one(centroids, &runtime, point, beams)?;
                 }
                 Ok(())
             })
@@ -987,10 +1015,9 @@ impl OnlineClusterer {
         let victim_set: std::collections::HashSet<u32> = victims.iter().copied().collect();
         let survivor_count = self.centroids.live_count().saturating_sub(victims.len());
         let want = self.params.reassign_neighbors.min(survivor_count);
-        let search_l = self
-            .params
-            .reassign_l
-            .max(want.saturating_add(victims.len()).max(1));
+        // Ignored under exact routing, which scans every live centroid.
+        let floor = want.saturating_add(victims.len()).max(1);
+        let search_l = self.params.routing.neighbor_beam(floor).unwrap_or(floor);
         let victims = victims
             .iter()
             .map(|&id| {
@@ -1257,7 +1284,7 @@ impl OnlineClusterer {
             metric: self.params.metric,
             element_size: std::mem::size_of::<T>(),
             num_points: live_points,
-            graph: self.params.graph,
+            graph: self.params.routing.stored_graph_params(),
             counts,
             offsets,
         };

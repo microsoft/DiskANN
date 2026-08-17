@@ -815,6 +815,7 @@ dependencies = [
  "byteorder",
  "diskann",
  "diskann-disk",
+ "diskann-linalg",
  "diskann-providers",
  "diskann-quantization",
  "diskann-utils",

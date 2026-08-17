@@ -14,7 +14,9 @@
 use std::{fmt, path::Path, time::Instant};
 
 use diskann_benchmark_runner::utils::MicroSeconds;
-use diskann_graphivf::{GraphParams, OnlineClusterer, OnlineParams, SeedStrategy};
+use diskann_graphivf::{
+    GraphParams, OnlineCentroidRouting, OnlineClusterer, OnlineParams, SeedStrategy,
+};
 use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +25,7 @@ use crate::{
         build::{decompress_to_f32, load_stored_corpus, to_graphivf_metric},
         element::GraphIvfElement,
     },
-    inputs::graph_ivf::GraphIvfOnlineBuild,
+    inputs::graph_ivf::{GraphIvfOnlineBuild, OnlineRoutingConfig},
 };
 
 /// Statistics for an online build.
@@ -116,6 +118,36 @@ fn centroid_capacity(params: &GraphIvfOnlineBuild, num_points: usize) -> usize {
         )
 }
 
+/// Map the online routing config onto the library's routing parameters.
+///
+/// `reassign_neighbors` resolves the documented `reassign_l` default for a
+/// config that was not run through validation.
+fn to_online_routing(
+    routing: OnlineRoutingConfig,
+    reassign_neighbors: usize,
+) -> OnlineCentroidRouting {
+    match routing {
+        OnlineRoutingConfig::Graph {
+            assign_l,
+            reassign_l,
+            graph_degree,
+            graph_slack,
+            graph_l_build,
+            graph_alpha,
+        } => OnlineCentroidRouting::Graph {
+            graph: GraphParams {
+                degree: graph_degree,
+                slack: graph_slack,
+                l_build: graph_l_build,
+                alpha: graph_alpha,
+            },
+            assign_l,
+            reassign_l: reassign_l.unwrap_or_else(|| reassign_neighbors.max(assign_l)),
+        },
+        OnlineRoutingConfig::Exact => OnlineCentroidRouting::Exact,
+    }
+}
+
 /// Everything an online run needs before its first insert: the stored corpus to
 /// flush from, and a seeded clusterer over the `f32` clustering copy.
 ///
@@ -152,18 +184,11 @@ where
         max_clusters: params.max_clusters,
         centroid_capacity,
         split_threshold: params.split_threshold,
-        assign_l: params.assign_l,
         reassign_neighbors: params.reassign_neighbors,
-        reassign_l: params.effective_reassign_l(),
         two_means_iters: params.two_means_iters,
         merge_threshold: params.merge_threshold,
         min_clusters: params.min_clusters,
-        graph: GraphParams {
-            degree: params.graph_degree,
-            slack: params.graph_slack,
-            l_build: params.graph_l_build,
-            alpha: params.graph_alpha,
-        },
+        routing: to_online_routing(params.routing, params.reassign_neighbors),
         metric: to_graphivf_metric(params.distance)?,
         normalize_centroids: params.normalize,
         num_threads: params.num_threads,
@@ -271,7 +296,9 @@ mod tests {
     use super::*;
     use crate::{
         backend::graph_ivf::search::{search_graph_ivf, GraphIvfSearchResult},
-        inputs::graph_ivf::{ClusterFraction, GraphIvfLoad, GraphIvfSearchPhase, RecallAt},
+        inputs::graph_ivf::{
+            CentroidSearchConfig, ClusterFraction, GraphIvfLoad, GraphIvfSearchPhase, RecallAt,
+        },
         utils::SimilarityMeasure,
     };
 
@@ -362,18 +389,20 @@ mod tests {
             warmup_centroids: 8,
             warmup_points: 200,
             warmup_iters: 5,
-            assign_l: 32,
             two_means_iters: 8,
             reassign_neighbors: 4,
-            reassign_l: Some(32),
             merge_threshold: 0,
             min_clusters: 1,
             capacity_mult: 3,
             normalize: false,
-            graph_degree: 16,
-            graph_slack: 1.2,
-            graph_l_build: 32,
-            graph_alpha: 1.2,
+            routing: OnlineRoutingConfig::Graph {
+                assign_l: 32,
+                reassign_l: Some(32),
+                graph_degree: 16,
+                graph_slack: 1.2,
+                graph_l_build: 32,
+                graph_alpha: 1.2,
+            },
             num_threads: 2,
             seed: 0,
             save_path: fixture.save_path.clone(),
@@ -512,6 +541,7 @@ mod tests {
         let load = GraphIvfLoad {
             data_type: <f32 as GraphIvfElement>::DATA_TYPE,
             load_path: fixture.save_path.clone(),
+            centroid_search: CentroidSearchConfig::Graph,
         };
         let search = GraphIvfSearchPhase {
             queries: fixture.queries.clone(),
