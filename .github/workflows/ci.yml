@@ -20,9 +20,6 @@ env:
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  # The features we want to explicitly test. For example, the `flatbuffers-build` feature
-  # of `diskann-quantization` requires additional setup and so must not be included by default.
-  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,multi-vector,bftree,inmem2,integration-test"
 
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
   SDE_VERSION: "sde-external-10.8.0-2026-03-15-lin"
@@ -151,8 +148,8 @@ jobs:
           set -euxo pipefail
           cargo clippy --locked --workspace \
             --all-targets \
+            --all-features \
             --no-deps \
-            --features ${{ env.DISKANN_FEATURES }} \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
 
@@ -482,10 +479,10 @@ jobs:
         run: |
           set -euxo pipefail
           cargo nextest run --locked --workspace \
-            --config "$RUST_CONFIG" \
-            --features ${{ env.DISKANN_FEATURES }}
+            --all-features \
+            --config "$RUST_CONFIG"
 
-          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --all-features --config "$RUST_CONFIG"
 
   coverage:
     needs: basics

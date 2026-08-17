@@ -17,7 +17,6 @@ env:
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,multi-vector,bftree,inmem2,integration-test"
 
 defaults:
   run:
@@ -51,8 +50,8 @@ jobs:
           set -euxo pipefail
           cargo clippy --locked --workspace \
             --all-targets \
+            --all-features \
             --no-deps \
-            --features ${{ env.DISKANN_FEATURES }} \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
 
@@ -108,10 +107,10 @@ jobs:
         run: |
           set -euxo pipefail
           cargo nextest run --locked --workspace \
-            --config "$RUST_CONFIG" \
-            --features ${{ env.DISKANN_FEATURES }}
+            --all-features \
+            --config "$RUST_CONFIG"
 
-          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --all-features --config "$RUST_CONFIG"
 
   miri:
     name: miri-test
