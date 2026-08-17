@@ -178,11 +178,8 @@ where
 
 /// An accessor for retrieving full-precision vectors from the `DefaultProvider`.
 ///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the [`DefaultProvider`].
-/// * [`ComputerAccessor`] for comparing full-precision distances.
-/// * [`BuildQueryComputer`].
+/// This type implements [`glue::SearchAccessor`] for the [`DefaultProvider`], retrieving
+/// vectors and computing full-precision distances.
 pub struct FullAccessor<'a, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -402,7 +399,7 @@ where
     }
 }
 
-/// A [`SearchPostProcess`]or that reranks a full-precision candidate stream using the
+/// A [`glue::SearchPostProcess`] implementation that reranks a full-precision candidate stream using the
 /// Determinant-Diversity algorithm, reordering results to promote geometric diversity
 /// while preserving relevance to the query.
 #[derive(Debug, Clone, Copy)]

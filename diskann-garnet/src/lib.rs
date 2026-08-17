@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! DiskANN integration and FFI bindings for Garnet vector sets.
+
 use std::{
     ffi::c_void,
     mem,
@@ -590,10 +592,17 @@ pub unsafe extern "C" fn set_attribute(
         return false;
     }
 
-    if attribute_len > 0 && !attribute_data.is_null() {
+    if !attribute_data.is_null() {
         let attr_data: &[u8] = unsafe { slice::from_raw_parts(attribute_data, attribute_len) };
-        if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-            return false;
+        if !attr_data.is_empty() {
+            if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
+                return false;
+            }
+        } else {
+            // Empty attribute string is interpreted as deletion
+            if index.inner.delete_attributes(&ctx, &id).is_err() {
+                return false;
+            }
         }
     }
 
@@ -839,7 +848,8 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     use crate::{
-        Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index, garnet::GarnetId,
+        Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
+        garnet::{Context, GarnetId, Term},
         test_utils::Store,
     };
 
@@ -990,5 +1000,75 @@ mod tests {
 
         let res = super::interpret_vector(VectorQuantType::Invalid, &ptr::null() as &*const u8, 0);
         assert!(res.is_none());
+    }
+
+    #[test]
+    fn set_and_delete_attributes() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let id = 0u32;
+        let eid = GarnetId::from(bytemuck::bytes_of(&id));
+        let metadata = b"{'foo': 0}";
+        let ctx = Context::new(0);
+        let v = [0.0f32, 0.0f32];
+
+        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+
+        assert_eq!(
+            unsafe {
+                super::insert(
+                    ctx.get(),
+                    index_ptr,
+                    eid.as_ptr(),
+                    eid.len(),
+                    bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                    v.len(),
+                    metadata.as_ptr(),
+                    metadata.len(),
+                )
+            },
+            1
+        );
+        assert_eq!(
+            store.get(ctx.term(Term::Attributes).get(), &eid),
+            Some(metadata.as_slice().to_owned())
+        );
+
+        assert!(unsafe {
+            super::set_attribute(
+                ctx.get(),
+                index_ptr,
+                eid.as_ptr(),
+                eid.len(),
+                b"".as_ptr(),
+                0,
+            )
+        });
+        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+
+        unsafe {
+            drop_index(0, index_ptr);
+        }
     }
 }

@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Generates associated data values from an integer range.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{gen_associated_data_from_range, CMDResult};

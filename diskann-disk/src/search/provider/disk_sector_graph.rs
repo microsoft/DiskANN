@@ -184,8 +184,8 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     #[inline]
     /// Gets the index for the sector that contains the node with the given vertex_id
     pub fn node_sector_index(&self, vertex_id: u32) -> u64 {
-        1 + if self.num_nodes_per_sector > 0 {
-            vertex_id as u64 / self.num_nodes_per_sector
+        1 + if let Some(r) = (vertex_id as u64).checked_div(self.num_nodes_per_sector) {
+            r
         } else {
             vertex_id as u64 * self.num_sectors_per_node as u64
         }

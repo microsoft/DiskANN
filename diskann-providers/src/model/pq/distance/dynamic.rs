@@ -25,7 +25,7 @@ impl<'a> QueryComputer<'a> {
     /// Create a new query computer implementing the `PreprocessedDistanceFunction` API.
     ///
     /// The returned object will implement the requested distance according to the provided
-    /// `Metric.
+    /// `Metric`.
     ///
     /// Currently supported values for `metric` are:
     ///
@@ -155,7 +155,7 @@ impl<'a> DistanceComputer<'a> {
     /// full-precision/quant and quant/quant combinations.
     ///
     /// The returned object will implement the requested distance according to the provided
-    /// `Metric.
+    /// `Metric`.
     ///
     /// Currently supported values for `metric` are:
     ///

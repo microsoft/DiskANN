@@ -286,7 +286,7 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
 // benchmark_core::search::Search impl  //
 //////////////////////////////////////////
 
-/// Wraps a [`FlatIndex`] and queries to implement the [`Search`] trait from benchmark_core.
+/// Wraps a [`FlatIndex`] and queries to implement [`search::Search`].
 struct Searcher<T: VectorRepr> {
     index: FlatIndex<InMemProvider<T>>,
     queries: Matrix<T>,

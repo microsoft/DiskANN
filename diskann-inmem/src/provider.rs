@@ -102,7 +102,7 @@ where
         let bytes = layers::Layer::bytes(&layer);
         let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
 
-        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points.into_iter()) {
+        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points) {
             layers::Set::set(&layer, point, row)?;
         }
 

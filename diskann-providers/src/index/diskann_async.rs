@@ -158,6 +158,7 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
+    use approx::assert_abs_diff_eq;
     use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
@@ -1377,6 +1378,7 @@ pub(crate) mod tests {
     }
 
     const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
+    const SIFTSMALL_NORMALIZED: &str = "/sift/siftsmall_learn_256pts_normalized.fbin";
 
     #[rstest]
     #[tokio::test]
@@ -1548,16 +1550,10 @@ pub(crate) mod tests {
                 // Test with an inner radius
 
                 assert!(inner_radius <= radius);
-                let range_search = Range::with_options(
-                    None,
-                    starting_l_value,
-                    None,
-                    radius,
-                    Some(inner_radius),
-                    1.0,
-                    1.0,
-                )
-                .unwrap();
+                let range_search = Range::builder(starting_l_value, radius)
+                    .inner_radius(Some(inner_radius))
+                    .build()
+                    .unwrap();
                 let mut results: Vec<Neighbor<u32>> = Vec::new();
                 let _ = index
                     .search(range_search, &FullPrecision, ctx, query, &mut results)
@@ -2058,8 +2054,11 @@ pub(crate) mod tests {
     /// PQ only Build & Search ///
     //////////////////////////////
 
+    #[rstest]
+    #[case(Metric::L2, SIFTSMALL)]
+    #[case(Metric::CosineNormalized, SIFTSMALL_NORMALIZED)]
     #[tokio::test]
-    async fn test_sift_pq_only_build_and_search() {
+    async fn test_sift_pq_only_build_and_search(#[case] metric: Metric, #[case] file: &str) {
         let ctx = &DefaultContext;
         let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
             let pq_table = train_pq(
@@ -2071,8 +2070,7 @@ pub(crate) mod tests {
             .unwrap();
 
             let (config, parameters) =
-                simplified_builder(64, 16, Metric::L2, data.ncols(), data.nrows(), no_modify)
-                    .unwrap();
+                simplified_builder(64, 16, metric, data.ncols(), data.nrows(), no_modify).unwrap();
 
             let index =
                 Arc::new(new_quant_only_index(config, parameters, pq_table, NoDeletes).unwrap());
@@ -2083,7 +2081,7 @@ pub(crate) mod tests {
             index
         };
         let (index, data) =
-            init_and_build_index_from_file(SIFTSMALL, create_fn, build_using_single_insert).await;
+            init_and_build_index_from_file(file, create_fn, build_using_single_insert).await;
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // There should be one more reachable node than points in the dataset to account for
@@ -2128,7 +2126,11 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-            assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
+            for i in 0..top_k {
+                let expected = gt[gt.len() - 1 - i];
+                assert_eq!(*expected.id(), ids[i], "failed on query {q} for result {i}");
+                assert_abs_diff_eq!(*expected.distance(), distances[i], epsilon = 1.0e-5);
+            }
         }
     }
 

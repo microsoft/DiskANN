@@ -285,6 +285,13 @@ impl<T: SIMDAbs> SIMDAbs for Doubled<T> {
     }
 }
 
+impl<T: crate::SIMDPopcount> crate::SIMDPopcount for Doubled<T> {
+    #[inline(always)]
+    fn popcount_simd(self) -> Self {
+        Self(self.0.popcount_simd(), self.1.popcount_simd())
+    }
+}
+
 impl<T: SIMDMulAdd> SIMDMulAdd for Doubled<T> {
     #[inline(always)]
     fn mul_add_simd(self, rhs: Self, accumulator: Self) -> Self {

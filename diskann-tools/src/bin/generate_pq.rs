@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Generates product-quantized data for DiskANN indexes.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{
