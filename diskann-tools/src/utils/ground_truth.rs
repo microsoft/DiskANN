@@ -520,7 +520,7 @@ fn write_range_search_ground_truth<StorageProvider: StorageReadProvider + Storag
 /// Writes out a ground truth file.  ground_truth is a vector of NeighborPriorityQueue objects
 /// where the order of queue objects corresponds to the order of queries used to compute this
 /// ground truth.
-fn write_ground_truth<A: Serialize + Copy>(
+pub fn write_ground_truth<A: Serialize + Copy>(
     storage_provider: &impl StorageWriteProvider,
     ground_truth_file: &str,
     number_of_queries: usize,
@@ -539,7 +539,7 @@ fn write_ground_truth<A: Serialize + Copy>(
     for mut query_neighbors in ground_truth {
         while let Some(closest_node) = query_neighbors.closest_notvisited() {
             gt_ids.push(*closest_node.id());
-            gt_distances.push(closest_node.distance());
+            gt_distances.push(*closest_node.distance());
         }
     }
 

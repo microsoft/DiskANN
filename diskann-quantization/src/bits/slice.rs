@@ -580,7 +580,7 @@ where
     }
 
     /// Construct a new `BitSlice` from the `precursor` capable of holding `count` encoded
-    /// elements of size `NBITS.
+    /// elements of size `NBITS`.
     ///
     /// # Requirements
     ///

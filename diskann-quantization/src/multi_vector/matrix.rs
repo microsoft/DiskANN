@@ -70,8 +70,7 @@ pub unsafe trait Repr: Copy {
     /// `self`, `self.nrows()` must return the same value.
     fn nrows(&self) -> usize;
 
-    /// Returns the memory layout for a memory allocation containing [`Repr::nrows`] vectors
-    /// each with vector dimension [`Repr::ncols`].
+    /// Returns the memory layout for an allocation containing [`Repr::nrows`] vectors.
     ///
     /// # Safety Contract
     ///

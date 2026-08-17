@@ -104,7 +104,7 @@ where
         let bytes = layers::Layer::bytes(&layer);
         let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
 
-        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points.into_iter()) {
+        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points) {
             layers::Set::set(&layer, point, row)?;
         }
 
@@ -938,7 +938,10 @@ where
             let mut count = 0;
             for c in candidates {
                 if let Some(ext) = provider.mapping.to_external(*c.id()) {
-                    if output.push(ext, c.distance()).is_available() {
+                    if output
+                        .push(Neighbor::new(ext, *c.distance()))
+                        .is_available()
+                    {
                         count += 1;
                     } else {
                         break;

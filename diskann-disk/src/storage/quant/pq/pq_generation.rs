@@ -8,12 +8,9 @@ use std::{marker::PhantomData, time::Instant};
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{
-        pq::{accum_row_inplace, generate_pq_pivots},
-        GeneratePivotArguments,
-    },
+    model::{pq::generate_pq_pivots, GeneratePivotArguments},
     storage::PQStorage,
-    utils::{BridgeErr, RayonThreadPoolRef},
+    utils::RayonThreadPoolRef,
 };
 use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
@@ -113,32 +110,28 @@ where
             .pq_storage
             .read_existing_pivot_metadata(context.storage_provider)?;
 
-        //Load the pivots
         let num_chunks = context.num_chunks;
-        let (mut full_pivot_data, centroid, chunk_offsets) =
-            context.pq_storage.load_existing_pivot_data(
-                &num_chunks,
-                &context.num_centers,
-                &full_dim,
-                context.storage_provider,
-            )?;
+        let table = context.pq_storage.load_pivots(context.storage_provider)?;
 
-        let mut full_pivot_data_mat = diskann_utils::views::MutMatrixView::try_from(
-            full_pivot_data.as_mut_slice(),
-            context.num_centers,
-            full_dim,
-        )
-        .bridge_err()?;
+        if table.nchunks() != num_chunks
+            || table.ncenters() != context.num_centers
+            || table.dim() != full_dim
+        {
+            return Err(diskann_error!(
+                ErrorKind::PQError,
+                "PQ pivot table mismatch: file has {} chunks, {} centers in {} dimensions but expected {} chunks, {} centers in {} dimensions.",
+                table.nchunks(),
+                table.ncenters(),
+                table.dim(),
+                num_chunks,
+                context.num_centers,
+                full_dim
+            ));
+        }
 
-        accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
-
-        let table = TransposedTable::from_parts(
-            full_pivot_data_mat.as_view(),
-            diskann_quantization::views::ChunkOffsetsView::new(&chunk_offsets)
-                .bridge_err()?
-                .to_owned(),
-        )
-        .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
+        let table =
+            TransposedTable::from_parts(table.view_pivots(), table.view_offsets().to_owned())
+                .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             table,

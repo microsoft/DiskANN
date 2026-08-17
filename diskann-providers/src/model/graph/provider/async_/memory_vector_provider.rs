@@ -39,7 +39,7 @@ impl<T: VectorRepr> MemoryVectorProviderAsync<T> {
         }
     }
 
-    /// Return the total number of points (including frozen points) included in `self.
+    /// Return the total number of points (including frozen points) included in `self`.
     #[inline(always)]
     pub fn total(&self) -> usize {
         self.max_vectors
@@ -93,8 +93,6 @@ impl<T: VectorRepr> MemoryVectorProviderAsync<T> {
     ///
     /// Because the number of start points are not saved as part of the `.bin` file format,
     /// this must be provided externally.
-    ///
-    /// See also: [`storage::bin::load_from_bin`].
     pub fn load_from_bin<P>(provider: &P, path: &str) -> ANNResult<Self>
     where
         P: StorageReadProvider,
@@ -105,8 +103,6 @@ impl<T: VectorRepr> MemoryVectorProviderAsync<T> {
     }
 
     /// Save `self` directly to a `.bin` file at `path`.
-    ///
-    /// See also: [`storage::bin::save_to_bin`].
     pub fn save_to_bin<P>(&self, provider: &P, path: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,

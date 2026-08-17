@@ -108,10 +108,10 @@ pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
 
 // TODO: Try to hide?
 #[doc(hidden)]
-pub trait __Prune: Send + Sync + std::fmt::Debug {
-    // fn prepare(
-    //     &mut self,
-    //     hashbrown::hash_map::IterMut<'_, Option
+pub(crate) trait __Prune: Send + Sync + std::fmt::Debug {
+    fn __prepare(&mut self, items: &mut dyn crate::iter::Chunked<u32>) -> ANNResult<()>;
+
+    fn __evaluate(&self, a: u32, b: u32) -> f32;
 }
 
 /// Enable search over vectors defined by a [`Layer`].
@@ -173,4 +173,7 @@ pub trait Insert: Search + for<'a> Set<Self::Query<'a>> + AsDistance {
     ) -> ANNResult<Box<dyn __ExpandBeam + 'a>> {
         self.__search_expand_beam(query, store, Hidden::new())
     }
+
+    #[doc(hidden)]
+    fn __prune<'a>(&'a self, store: &'a Store, _: Hidden) -> ANNResult<Box<dyn __Prune + 'a>>;
 }

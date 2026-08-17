@@ -144,7 +144,7 @@ pub trait TransientError<T>: Sized + std::fmt::Debug + Send + Sync {
 /// failures. The [`RankedError`] allows DiskANN algorithmic logic to determine whether
 /// an error can be suppressed safely or needs to be escalated.
 ///
-/// * See also: [`always_escalate!`], [`ErrorExt`].
+/// * See also: [`crate::always_escalate!`], [`ErrorExt`].
 pub trait ToRanked {
     type Transient: TransientError<Self::Error>;
     type Error: Into<ANNError> + std::fmt::Debug + Send + Sync;
@@ -200,7 +200,7 @@ where
 /// A zero-sized type that is unconstructable.
 ///
 /// This is used as the [`TransientError`] type for error types using the
-/// [`always_escalate!`] macro to opt-out of transient error handling.
+/// [`crate::always_escalate!`] macro to opt-out of transient error handling.
 #[derive(Debug)]
 pub enum NeverTransient {}
 

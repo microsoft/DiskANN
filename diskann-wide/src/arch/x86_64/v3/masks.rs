@@ -671,6 +671,7 @@ impl From<mask64x4> for BitMask<4, V3> {
 // Native Masks
 doubled::double_mask!(64, mask8x32);
 doubled::double_mask!(16, mask32x8);
+doubled::double_mask!(8, mask64x4);
 
 // Bit Mask
 doubled::double_mask!(32, BitMask<16, V3>);
@@ -986,6 +987,7 @@ mod test_masks {
     // Double
     test_simdmask!(Doubled<mask8x32>, 64, nop);
     test_simdmask!(Doubled<mask32x8>, 16, nop);
+    test_simdmask!(Doubled<mask64x4>, 8, nop);
 
     // Type alias to work around limitations in `test_simdmask`.
     type BitMask16V3 = BitMask<16, V3>;

@@ -25,7 +25,7 @@ use crate::utils;
 ///
 /// Stores the intrinsic dimension (output dimension after transform) which is
 /// needed to interpret each row of the quantized data. The row stride in bytes
-/// is computed as [`Data::<NBITS>::canonical_bytes(intrinsic_dim)`].
+/// is computed using [`minmax::Data::canonical_bytes`].
 #[derive(Debug, Clone, Copy)]
 pub struct MinMaxMeta<const NBITS: usize> {
     nrows: usize,

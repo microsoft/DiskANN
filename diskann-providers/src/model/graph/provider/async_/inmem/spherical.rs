@@ -475,9 +475,8 @@ where
 // Strategies //
 ////////////////
 
-/// Unlike [`super::Quantized`], searches over a [`SphericalStore`] support different
-/// [`spherical::iface::QueryLayout`]s. This strategy type allows the user to specify the
-/// desired layout explicitly.
+/// Searches over a [`SphericalStore`] support different [`spherical::iface::QueryLayout`]s.
+/// This strategy type allows the user to specify the desired layout explicitly.
 #[derive(Debug, Clone, Copy)]
 pub struct Quantized {
     layout: spherical::iface::QueryLayout,
@@ -495,7 +494,7 @@ impl Quantized {
         }
     }
 
-    /// Construct a new [`QuantizedStrategy`] for index search using the specified layout.
+    /// Construct a new [`Quantized`] strategy for index search using the specified layout.
     pub fn search(layout: spherical::iface::QueryLayout) -> Self {
         Self {
             layout,
@@ -506,7 +505,7 @@ impl Quantized {
 
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
-/// approximate search, so the post-processing step includes a [`Rerank`] stage.
+/// approximate search, so the post-processing step includes a `Rerank` stage.
 impl<'a, D, Ctx, T> SearchStrategy<'a, FullPrecisionProvider<T, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
@@ -541,7 +540,7 @@ where
 
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
-/// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
+/// post-processing step just copies candidate IDs forward via `RemoveDeletedIdsAndCopy`.
 impl<'a, D, Ctx, T> SearchStrategy<'a, DefaultProvider<NoStore, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where

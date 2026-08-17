@@ -64,8 +64,9 @@ where
     }
 }
 
-/// [`DefaultPostProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
-/// the inner strategy's default processor with [`FilterResults`].
+/// Delegates [`diskann::graph::glue::DefaultPostProcessor`] for [`InlineBetaStrategy`].
+///
+/// The processor wraps the inner strategy's default processor with [`FilterResults`].
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         'q,

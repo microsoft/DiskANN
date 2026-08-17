@@ -17,7 +17,7 @@ where
     }
 
     pub(crate) fn as_mut_slice(&mut self) -> StackSlice<'_, T> {
-        StackSlice(&self.0)
+        StackSlice(&mut self.0)
     }
 }
 
@@ -42,14 +42,12 @@ where
     fn next<'a>(&'a mut self, buffer: StackSlice<'a, I::Item>) -> &'a [I::Item] {
         let raw = buffer.0;
 
-        let count = std::iter::zip(
-            raw.iter_mut(),
-            self.0.by_ref(),
-        ).map(|(dst, src)| {
-            dst.write(src);
-        }).count();
+        let count = std::iter::zip(raw.iter_mut(), self.0.by_ref())
+            .map(|(dst, src)| {
+                dst.write(src);
+            })
+            .count();
 
         unsafe { raw[..count].assume_init_ref() }
     }
 }
-

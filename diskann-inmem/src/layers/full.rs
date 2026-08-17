@@ -28,6 +28,9 @@ use crate::{
     tag::AtomicTag,
 };
 
+/// The granularity for processing iterator chunks.
+const CHUNK_SIZE: usize = 16;
+
 /// A useful trait bound for types compatible with [`Full`].
 ///
 /// This encompasses *everything* required for `Full: layers::Insert` and can be used as
@@ -43,6 +46,13 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
         query: &'a [Self],
         store: &'a Store,
     ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>>;
+
+    #[doc(hidden)]
+    fn __prune<'a>(
+        _: Hidden,
+        full: &'a Full<Self>,
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::__Prune + 'a>>;
 }
 
 /// Full-precision data layer.
@@ -176,6 +186,57 @@ where
 }
 
 impl<T> layers::Insert for Full<T> where T: FullPrecision {}
+
+///////////
+// Prune //
+///////////
+
+#[derive(Debug)]
+struct Prune<'a, T, D> {
+    // Buffered data to prune over.
+    buffer: Vec<Option<UnalignedSlice<'a, T>>>,
+    // A reader into a layer's store.
+    reader: store::invasive::Reader<'a>,
+    // The expected dim.
+    dim: usize,
+    // Tye type of the data in the original dataset.
+    _data: PhantomData<T>,
+    // Type type of the `PureDistanceFunction` used for the implementation.
+    _distance: PhantomData<D>,
+}
+
+impl<T, D> layers::__Prune for Prune<'_, T, D>
+where
+    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, T>>,
+{
+    fn __prepare(&mut self, iter: &mut dyn crate::iter::Chunked<u32>) -> ANNResult<()> {
+        let mut stack = crate::iter::StackBuffer::<u32, CHUNK_SIZE>::new();
+        self.buffer.clear();
+        loop {
+            let next = iter.next();
+            if next.is_empty() {
+                break;
+            }
+
+            self.buffer
+                .extend(next.iter().map(|id| match self.reader.read(i) {
+                    Some(v) => unsafe {
+                        Some(UnalignedSlice::new(
+                            v.as_ptr().cast::<T>(),
+                            reader.bytes().value() / std::mem::size_of::<T>(),
+                        ))
+                    },
+                    None => None,
+                }));
+        }
+
+        Ok(())
+    }
+
+    fn __evaluate(&self, a: u32, b: u32) -> f32 {
+        D::run(ARCH, self.buffer[a], self.buffer[b])
+    }
+}
 
 //////////////
 // Distance //
