@@ -405,6 +405,28 @@ mod build_graph_tests {
     }
 
     #[test]
+    fn omits_non_rankable_candidates_without_invalid_ids() {
+        let values = [0.0_f32, 1.0, f32::NAN];
+        let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
+        let graph = graph_config(Metric::InnerProduct, 2);
+        let pool = pool(1);
+        let config = PiPNNConfig {
+            c_max: 2,
+            c_min: 1,
+            p_samp: 1.0,
+            fanout: vec![2],
+            leaf_k: 1,
+            replicas: 1,
+        };
+        let context = PiPNNBuildContext::new(config, &graph, Metric::InnerProduct, &pool).unwrap();
+
+        let actual = build_graph(data, &context).unwrap();
+
+        assert_graph_invariants(&actual, 3, 2);
+        assert_eq!(rows(actual), [vec![1], vec![0], vec![]]);
+    }
+
+    #[test]
     fn prunes_overfull_single_leaf_candidates_to_the_graph_degree() {
         let data = [0.0_f32, 1.0, 2.0, 3.0, 4.0];
         let data = MatrixView::try_from(&data[..], 5, 1).unwrap();
