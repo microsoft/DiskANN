@@ -68,7 +68,7 @@ impl TryAsPooled<PQQueryComputerArgs> for PQQueryComputerStorage {
     }
 }
 
-/// Preprocessed query-to-centroid distances for PQ codes.
+/// Opaque preprocessed query state created internally by disk search strategies.
 #[derive(Debug)]
 pub struct PQQueryComputer {
     storage: PoolOption<PQQueryComputerStorage>,
@@ -265,15 +265,23 @@ mod tests {
     fn query_computer_reuses_pooled_storage() {
         let args = PQQueryComputerArgs::new(2, 2, 3);
         let pool = Arc::new(ObjectPool::<PQQueryComputerStorage>::try_new(args, 0, None).unwrap());
+        assert!(pool.is_empty());
 
-        let first_ptr = {
+        let first_ptr;
+        {
             let computer = PQQueryComputer::pooled(&pool, args).unwrap();
-            computer.lookup_table().as_ptr()
-        };
-        let second_ptr = {
+            assert!(pool.is_empty());
+            first_ptr = computer.lookup_table().as_ptr();
+        }
+        assert_eq!(pool.len(), 1);
+
+        let second_ptr;
+        {
             let computer = PQQueryComputer::pooled(&pool, args).unwrap();
-            computer.lookup_table().as_ptr()
-        };
+            assert!(pool.is_empty());
+            second_ptr = computer.lookup_table().as_ptr();
+        }
+        assert_eq!(pool.len(), 1);
 
         assert_eq!(first_ptr, second_ptr);
     }

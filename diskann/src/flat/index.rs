@@ -40,6 +40,12 @@ pub struct FlatIndex<P: DataProvider> {
 /// Streams every element produced by the strategy's visitor through the query
 /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], then runs
 /// `processor` over the survivors to populate `output`.
+///
+/// # Errors
+///
+/// Returns an error if visitor creation, query preprocessing, distance scanning,
+/// or result post-processing fails. Distance-scan errors are escalated because a
+/// partial flat scan cannot produce correct k-nearest-neighbor results.
 pub fn knn_search<'a, P, S, T, O, PP, OB>(
     provider: &'a P,
     k: NonZeroUsize,

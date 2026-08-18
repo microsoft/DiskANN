@@ -2606,25 +2606,39 @@ mod disk_provider_tests {
         let result = search_engine
             .search(&[0.1; 128], 10, 10, None, SearchMode::flat())
             .unwrap();
-        let ids = result
-            .results
-            .iter()
-            .map(|item| item.vertex_id)
-            .collect::<Vec<_>>();
-        let distances = result
-            .results
-            .iter()
-            .map(|item| item.distance)
-            .collect::<Vec<_>>();
-        let expected_distances = [
-            256101.7, 256400.48, 256451.28, 256572.89, 256623.28, 256636.9, 256661.28, 256673.7,
-            256675.3, 256709.69,
-        ];
 
-        assert_eq!(ids, [152, 115, 98, 73, 20, 173, 95, 137, 118, 72]);
-        for (actual, expected) in std::iter::zip(distances, expected_distances) {
-            assert!((actual - expected).abs() <= 0.02);
+        let expected = [
+            (152, 256101.7),
+            (115, 256400.48),
+            (98, 256451.28),
+            (73, 256572.89),
+            (20, 256623.28),
+            (173, 256636.9),
+            (95, 256661.28),
+            (137, 256673.7),
+            (118, 256675.3),
+            (72, 256709.69),
+        ];
+        assert_eq!(result.results.len(), expected.len());
+        for (index, (actual, (expected_id, expected_distance))) in
+            std::iter::zip(&result.results, expected).enumerate()
+        {
+            assert_eq!(
+                actual.vertex_id, expected_id,
+                "flat baseline ID mismatch at result {index}",
+            );
+            assert!(
+                (actual.distance - expected_distance).abs() <= 0.02,
+                "flat baseline distance mismatch at result {index}: expected \
+                 {expected_distance}, got {}",
+                actual.distance,
+            );
         }
+
+        assert!(result
+            .results
+            .windows(2)
+            .all(|pair| pair[0].distance <= pair[1].distance));
         assert_eq!(result.stats.cmps, 256);
         assert_eq!(result.stats.result_count, 10);
     }
