@@ -14,7 +14,8 @@
 //! widths use the runtime insertion loop.
 //!
 //! Strict comparisons keep scan order for equal distances. They do not rank NaN.
-//! All supported metrics use the same SIMD-group and single-value traversal.
+//! An unfilled output slot contains [`LeafNeighbor::default`]. All supported
+//! metrics use the same SIMD-group and single-value traversal.
 //!
 //! The caller supplies concrete architecture `A` and metric `M`. The private
 //! dot ranker receives the square matrix created by this module.
@@ -42,6 +43,11 @@ impl LeafNeighbor {
     /// the source of the output row.
     pub(super) const fn new(target: u32, distance: f32) -> Self {
         Self { target, distance }
+    }
+
+    /// Return true when this slot contains a rankable leaf-local target.
+    pub(super) const fn is_assigned(self) -> bool {
+        self.target != u32::MAX
     }
 }
 

@@ -10,7 +10,8 @@
 //! products, and returns nearest leader-column IDs for partition scatter.
 //!
 //! L2 omits the assigned point's norm because it is constant across all sampled
-//! leaders. Equal scores keep sampled-leader order. NaN is not rankable.
+//! leaders. Equal scores keep sampled-leader order. NaN is not rankable. An
+//! unfilled output slot contains [`UNASSIGNED_LEADER`].
 
 use std::marker::PhantomData;
 
@@ -24,6 +25,9 @@ use diskann_wide::{
 };
 
 use super::kernel_metric::{PartitionMetric, PartitionNorms};
+
+/// No sampled partition center was rankable for this output slot.
+pub(super) const UNASSIGNED_LEADER: u32 = u32::MAX;
 
 /// Sampled leader vectors with metric-specific reusable norms.
 pub(super) struct PreparedLeaders<'a, M> {
@@ -71,6 +75,9 @@ struct PartitionInput<'a> {
 }
 
 /// Assign one packed point stripe to prepared partition leaders.
+///
+/// A point can have fewer assignments than the output width. Each remaining
+/// slot contains [`UNASSIGNED_LEADER`].
 ///
 /// # Errors
 ///
@@ -149,7 +156,7 @@ fn rank_leader_dots<A, M>(
         return;
     }
 
-    ranked_leaders.resize(fanout, (u32::MAX, f32::INFINITY));
+    ranked_leaders.resize(fanout, (UNASSIGNED_LEADER, f32::INFINITY));
     select_point_leaders::<A::f32x16, M>(arch, input.dots, input.norms, output, ranked_leaders);
 }
 
@@ -177,7 +184,7 @@ fn select_point_leaders<F, M>(
         .zip(output.as_mut_slice().chunks_exact_mut(fanout))
         .enumerate()
     {
-        ranked_leaders.fill((u32::MAX, f32::INFINITY));
+        ranked_leaders.fill((UNASSIGNED_LEADER, f32::INFINITY));
         let point_simd = M::point_simd::<F>(arch, norms, point);
         let point_single = M::point_single(norms, point);
         let simd_prefix = leader_count - leader_count % F::LANES;
@@ -502,7 +509,7 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod integration_tests {
-    use super::{PartitionInput, PartitionNorms, dispatch_nearest_leaders};
+    use super::{PartitionInput, PartitionNorms, UNASSIGNED_LEADER, dispatch_nearest_leaders};
     use diskann_utils::views::{Matrix, MatrixView};
     use diskann_vector::distance::Metric;
 
@@ -642,6 +649,16 @@ mod integration_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn non_rankable_leaders_leave_unassigned_slots() {
+        let dots = [-0.25, f32::NAN];
+
+        assert_eq!(
+            run_partition_kernel(Metric::InnerProduct, test_input(&dots, 1, 2, &[], &[]), 2),
+            [0, UNASSIGNED_LEADER]
+        );
     }
 
     #[test]
