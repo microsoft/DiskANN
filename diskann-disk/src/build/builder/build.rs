@@ -157,8 +157,6 @@ where
             metric: self.index_configuration.dist_metric,
         };
 
-        PQGeneration::<Data::VectorDataType, StorageProvider>::generate_pivots(&quantizer_context)?;
-
         let generator = QuantDataGenerator::<
             Data::VectorDataType,
             PQGeneration<Data::VectorDataType, StorageProvider>,
@@ -166,7 +164,7 @@ where
             self.index_writer.get_dataset_file(),
             self.pq_storage.get_compressed_data_path().into(),
             &quantizer_context,
-        )?;
+        );
         generator.generate_data(
             storage_provider,
             pool,
