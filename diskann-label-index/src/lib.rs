@@ -36,6 +36,41 @@ pub enum LabelIndexFormat {
     Bitslice = 0,
     /// One serialized Roaring posting list per encoded label.
     Bitmap = 1,
+    /// Dense bit slices for frequent labels and contiguous postings for sparse labels.
+    Hybrid = 2,
+}
+
+/// Build-time options for [`LabelIndexFormat::Hybrid`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HybridBuildOptions {
+    /// Minimum posting cardinality stored as a dense bit slice.
+    ///
+    /// When omitted, the encoder uses the memory break-even point against raw `u32` postings.
+    pub dense_threshold: Option<u32>,
+}
+
+/// Storage summary returned by the hybrid encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HybridBuildStats {
+    /// Cardinality at or above which labels were stored densely.
+    pub dense_threshold: u32,
+    /// Number of dense label rows.
+    pub dense_labels: u32,
+    /// Number of sparse posting lists.
+    pub sparse_labels: u32,
+    /// Dense payload bytes, excluding descriptors and dictionary data.
+    pub dense_bytes: u64,
+    /// Sparse posting and offset bytes, excluding descriptors and dictionary data.
+    pub sparse_bytes: u64,
+}
+
+/// Persisted representation selected for a hybrid label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridLabelRepresentation {
+    /// Full vector-ID bit slice.
+    Dense,
+    /// Sorted vector-ID posting range.
+    Sparse,
 }
 
 /// The outer Boolean structure of a clause list passed to [`EncodedLabelIndex::query`].
@@ -290,6 +325,56 @@ enum LabelStorage {
     Bitmap {
         postings: Arc<[RoaringBitmap]>,
     },
+    Hybrid {
+        storage: Arc<HybridStorage>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HybridLabelKind {
+    Dense,
+    Sparse,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HybridLabelDescriptor {
+    kind: HybridLabelKind,
+    ordinal: u32,
+    cardinality: u32,
+}
+
+#[derive(Debug)]
+struct HybridStorage {
+    words_per_label: usize,
+    descriptors: Box<[HybridLabelDescriptor]>,
+    dense_bits: Box<[u64]>,
+    sparse_offsets: Box<[u64]>,
+    sparse_doc_ids: Box<[u32]>,
+}
+
+impl HybridStorage {
+    fn contains(&self, label_id: u32, vec_id: u32) -> bool {
+        let descriptor = self.descriptors[label_id as usize];
+        match descriptor.kind {
+            HybridLabelKind::Dense => {
+                let word =
+                    descriptor.ordinal as usize * self.words_per_label + vec_id as usize / 64;
+                self.dense_bits[word] & (1u64 << (vec_id % 64)) != 0
+            }
+            HybridLabelKind::Sparse => {
+                let ordinal = descriptor.ordinal as usize;
+                let start = self.sparse_offsets[ordinal] as usize;
+                let end = self.sparse_offsets[ordinal + 1] as usize;
+                self.sparse_doc_ids[start..end]
+                    .binary_search(&vec_id)
+                    .is_ok()
+            }
+        }
+    }
+
+    fn descriptor(&self, label_id: Option<u32>) -> Option<HybridLabelDescriptor> {
+        label_id.map(|id| self.descriptors[id as usize])
+    }
 }
 
 /// An immutable encoded label index loaded from a versioned label-index file.
@@ -341,6 +426,10 @@ enum QueryStorage {
     DenseBitmap {
         bits: Box<[u64]>,
     },
+    Hybrid {
+        storage: Arc<HybridStorage>,
+        expression: CompiledExpression,
+    },
 }
 
 /// Query-scoped evaluator compiled from an [`EncodedLabelIndex`].
@@ -375,6 +464,10 @@ impl EncodedLabelQuery<'_> {
                 expression,
             } => expression.matches_bitslice(*words_per_label, bits, vec_id),
             QueryStorage::DenseBitmap { bits } => dense_contains(bits, vec_id),
+            QueryStorage::Hybrid {
+                storage,
+                expression,
+            } => expression.matches_hybrid(storage, vec_id),
         }
     }
 }
@@ -426,12 +519,173 @@ impl CompiledExpression {
             Self::Not(child) => !child.matches_bitslice(words_per_label, bits, vec_id),
         }
     }
+
+    fn matches_hybrid(&self, storage: &HybridStorage, vec_id: u32) -> bool {
+        match self {
+            Self::Flat(plan) => plan.matches_hybrid(storage, vec_id),
+            Self::Label(label_id) => {
+                label_id.is_some_and(|label_id| storage.contains(label_id, vec_id))
+            }
+            Self::And(children) => children
+                .iter()
+                .all(|child| child.matches_hybrid(storage, vec_id)),
+            Self::Or(children) => children
+                .iter()
+                .any(|child| child.matches_hybrid(storage, vec_id)),
+            Self::Not(child) => !child.matches_hybrid(storage, vec_id),
+        }
+    }
+
+    fn optimize_hybrid(&mut self, storage: &HybridStorage) {
+        match self {
+            Self::Flat(plan) => plan.optimize_hybrid(storage),
+            Self::And(children) => {
+                children
+                    .iter_mut()
+                    .for_each(|child| child.optimize_hybrid(storage));
+                if children.iter().all(|child| matches!(child, Self::Label(_))) {
+                    children.sort_unstable_by(|left, right| {
+                        hybrid_and_cmp(
+                            storage.descriptor(expression_label_id(left)),
+                            storage.descriptor(expression_label_id(right)),
+                        )
+                    });
+                }
+            }
+            Self::Or(children) => {
+                children
+                    .iter_mut()
+                    .for_each(|child| child.optimize_hybrid(storage));
+                if children.iter().all(|child| matches!(child, Self::Label(_))) {
+                    children.sort_unstable_by(|left, right| {
+                        hybrid_or_cmp(
+                            storage.descriptor(expression_label_id(left)),
+                            storage.descriptor(expression_label_id(right)),
+                        )
+                    });
+                }
+            }
+            Self::Not(child) => child.optimize_hybrid(storage),
+            Self::Label(_) => {}
+        }
+    }
+}
+
+impl CompiledPlan {
+    fn matches_hybrid(&self, storage: &HybridStorage, vec_id: u32) -> bool {
+        let terminal_matches =
+            |label_id: Option<u32>| label_id.is_some_and(|id| storage.contains(id, vec_id));
+
+        match self.kind {
+            PlanKind::Dnf => self.clause_offsets.windows(2).any(|clause| {
+                self.label_ids[clause[0]..clause[1]]
+                    .iter()
+                    .copied()
+                    .all(terminal_matches)
+            }),
+            PlanKind::Cnf => self.clause_offsets.windows(2).all(|clause| {
+                self.label_ids[clause[0]..clause[1]]
+                    .iter()
+                    .copied()
+                    .any(terminal_matches)
+            }),
+        }
+    }
+
+    fn optimize_hybrid(&mut self, storage: &HybridStorage) {
+        for clause in self.clause_offsets.windows(2) {
+            let labels = &mut self.label_ids[clause[0]..clause[1]];
+            match self.kind {
+                PlanKind::Dnf => labels.sort_unstable_by(|left, right| {
+                    hybrid_and_cmp(storage.descriptor(*left), storage.descriptor(*right))
+                }),
+                PlanKind::Cnf => labels.sort_unstable_by(|left, right| {
+                    hybrid_or_cmp(storage.descriptor(*left), storage.descriptor(*right))
+                }),
+            }
+        }
+    }
+}
+
+fn expression_label_id(expression: &CompiledExpression) -> Option<u32> {
+    match expression {
+        CompiledExpression::Label(label_id) => *label_id,
+        _ => unreachable!("caller checks that every expression is a label"),
+    }
+}
+
+fn hybrid_and_cmp(
+    left: Option<HybridLabelDescriptor>,
+    right: Option<HybridLabelDescriptor>,
+) -> std::cmp::Ordering {
+    hybrid_and_key(left).cmp(&hybrid_and_key(right))
+}
+
+fn hybrid_or_cmp(
+    left: Option<HybridLabelDescriptor>,
+    right: Option<HybridLabelDescriptor>,
+) -> std::cmp::Ordering {
+    hybrid_or_key(left).cmp(&hybrid_or_key(right))
+}
+
+fn hybrid_and_key(descriptor: Option<HybridLabelDescriptor>) -> (u8, u8, u32) {
+    match descriptor {
+        None => (0, 0, 0),
+        Some(descriptor) => (
+            1,
+            match descriptor.kind {
+                HybridLabelKind::Dense => 0,
+                HybridLabelKind::Sparse => 1,
+            },
+            descriptor.cardinality,
+        ),
+    }
+}
+
+fn hybrid_or_key(descriptor: Option<HybridLabelDescriptor>) -> (u8, u8, std::cmp::Reverse<u32>) {
+    match descriptor {
+        Some(descriptor) => (
+            0,
+            match descriptor.kind {
+                HybridLabelKind::Dense => 0,
+                HybridLabelKind::Sparse => 1,
+            },
+            std::cmp::Reverse(descriptor.cardinality),
+        ),
+        None => (1, 0, std::cmp::Reverse(0)),
+    }
 }
 
 impl EncodedLabelIndex {
+    /// Return the number of vectors covered by this index.
+    pub fn num_vectors(&self) -> u32 {
+        self.num_vectors
+    }
+
+    /// Return the number of encoded labels.
+    pub fn num_labels(&self) -> usize {
+        self.labels.len()
+    }
+
     /// Return whether this index contains an encoded label.
     pub fn contains_label(&self, label: &str) -> bool {
         self.label_ids.contains_key(label)
+    }
+
+    /// Return hybrid representation and cardinality metadata for `label`.
+    pub fn hybrid_label_metadata(&self, label: &str) -> Option<(HybridLabelRepresentation, u32)> {
+        let label_id = *self.label_ids.get(label)? as usize;
+        let LabelStorage::Hybrid { storage } = &self.storage else {
+            return None;
+        };
+        let descriptor = storage.descriptors[label_id];
+        Some((
+            match descriptor.kind {
+                HybridLabelKind::Dense => HybridLabelRepresentation::Dense,
+                HybridLabelKind::Sparse => HybridLabelRepresentation::Sparse,
+            },
+            descriptor.cardinality,
+        ))
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodedLabelIndexError> {
@@ -457,6 +711,7 @@ impl EncodedLabelIndex {
         let format = match read_u32(&mut reader)? {
             0 => LabelIndexFormat::Bitslice,
             1 => LabelIndexFormat::Bitmap,
+            2 => LabelIndexFormat::Hybrid,
             value => {
                 return Err(EncodedLabelIndexError::Invalid(format!(
                     "unsupported label-index format {value}"
@@ -608,6 +863,226 @@ impl EncodedLabelIndex {
                     postings: Arc::from(postings),
                 }
             }
+            LabelIndexFormat::Hybrid => {
+                let words_per_label = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid bitslice row length exceeds usize".to_string(),
+                    )
+                })?;
+                let expected_words = (num_vectors as usize).div_ceil(64);
+                if words_per_label != expected_words {
+                    return Err(EncodedLabelIndexError::Invalid(format!(
+                        "hybrid bitslice row has {words_per_label} words; expected {expected_words}"
+                    )));
+                }
+
+                let num_dense = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid dense label count exceeds usize".to_string(),
+                    )
+                })?;
+                let num_sparse = usize::try_from(read_u64(&mut reader)?).map_err(|_| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid sparse label count exceeds usize".to_string(),
+                    )
+                })?;
+                if num_dense.checked_add(num_sparse) != Some(num_labels) {
+                    return Err(EncodedLabelIndexError::Invalid(
+                        "hybrid dense and sparse label counts do not match dictionary".to_string(),
+                    ));
+                }
+
+                let descriptor_bytes = num_labels.checked_mul(12).ok_or_else(|| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid descriptor byte size overflow".to_string(),
+                    )
+                })?;
+                ensure_remaining(
+                    &mut reader,
+                    file_len,
+                    descriptor_bytes,
+                    "hybrid descriptors",
+                )?;
+
+                let mut descriptors = Vec::new();
+                descriptors.try_reserve_exact(num_labels).map_err(|_| {
+                    EncodedLabelIndexError::Invalid("cannot reserve hybrid descriptors".to_string())
+                })?;
+                let mut seen_dense = vec![false; num_dense];
+                let mut seen_sparse = vec![false; num_sparse];
+                for _ in 0..num_labels {
+                    let kind = match read_u32(&mut reader)? {
+                        0 => HybridLabelKind::Dense,
+                        1 => HybridLabelKind::Sparse,
+                        value => {
+                            return Err(EncodedLabelIndexError::Invalid(format!(
+                                "unsupported hybrid label kind {value}"
+                            )));
+                        }
+                    };
+                    let ordinal = read_u32(&mut reader)?;
+                    let cardinality = read_u32(&mut reader)?;
+                    if cardinality > num_vectors {
+                        return Err(EncodedLabelIndexError::Invalid(format!(
+                            "hybrid label cardinality {cardinality} exceeds vector count {num_vectors}"
+                        )));
+                    }
+
+                    let seen = match kind {
+                        HybridLabelKind::Dense => seen_dense.get_mut(ordinal as usize),
+                        HybridLabelKind::Sparse => seen_sparse.get_mut(ordinal as usize),
+                    }
+                    .ok_or_else(|| {
+                        EncodedLabelIndexError::Invalid(
+                            "hybrid label ordinal is out of range".to_string(),
+                        )
+                    })?;
+                    if std::mem::replace(seen, true) {
+                        return Err(EncodedLabelIndexError::Invalid(
+                            "duplicate hybrid label ordinal".to_string(),
+                        ));
+                    }
+
+                    descriptors.push(HybridLabelDescriptor {
+                        kind,
+                        ordinal,
+                        cardinality,
+                    });
+                }
+                if seen_dense.iter().any(|seen| !seen) || seen_sparse.iter().any(|seen| !seen) {
+                    return Err(EncodedLabelIndexError::Invalid(
+                        "hybrid label ordinals are incomplete".to_string(),
+                    ));
+                }
+
+                let total_dense_words =
+                    num_dense.checked_mul(words_per_label).ok_or_else(|| {
+                        EncodedLabelIndexError::Invalid(
+                            "hybrid dense allocation size overflow".to_string(),
+                        )
+                    })?;
+                let dense_bytes = total_dense_words.checked_mul(8).ok_or_else(|| {
+                    EncodedLabelIndexError::Invalid("hybrid dense byte size overflow".to_string())
+                })?;
+                ensure_remaining(&mut reader, file_len, dense_bytes, "hybrid dense payload")?;
+                let mut dense_bits = Vec::new();
+                dense_bits
+                    .try_reserve_exact(total_dense_words)
+                    .map_err(|_| {
+                        EncodedLabelIndexError::Invalid(
+                            "cannot reserve hybrid dense payload".to_string(),
+                        )
+                    })?;
+                for _ in 0..total_dense_words {
+                    dense_bits.push(read_u64(&mut reader)?);
+                }
+                validate_bitslice_padding(&dense_bits, num_dense, words_per_label, num_vectors)?;
+
+                let offset_count = num_sparse.checked_add(1).ok_or_else(|| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid sparse offset count overflow".to_string(),
+                    )
+                })?;
+                let offset_bytes = offset_count.checked_mul(8).ok_or_else(|| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid sparse offset byte size overflow".to_string(),
+                    )
+                })?;
+                ensure_remaining(&mut reader, file_len, offset_bytes, "hybrid sparse offsets")?;
+                let mut sparse_offsets = Vec::new();
+                sparse_offsets
+                    .try_reserve_exact(offset_count)
+                    .map_err(|_| {
+                        EncodedLabelIndexError::Invalid(
+                            "cannot reserve hybrid sparse offsets".to_string(),
+                        )
+                    })?;
+                for _ in 0..offset_count {
+                    sparse_offsets.push(read_u64(&mut reader)?);
+                }
+                if sparse_offsets.first().copied() != Some(0)
+                    || sparse_offsets.windows(2).any(|pair| pair[0] > pair[1])
+                {
+                    return Err(EncodedLabelIndexError::Invalid(
+                        "hybrid sparse offsets are not monotonic from zero".to_string(),
+                    ));
+                }
+
+                let posting_count = usize::try_from(sparse_offsets.last().copied().unwrap_or(0))
+                    .map_err(|_| {
+                        EncodedLabelIndexError::Invalid(
+                            "hybrid sparse posting count exceeds usize".to_string(),
+                        )
+                    })?;
+                let posting_bytes = posting_count.checked_mul(4).ok_or_else(|| {
+                    EncodedLabelIndexError::Invalid(
+                        "hybrid sparse posting byte size overflow".to_string(),
+                    )
+                })?;
+                ensure_remaining(
+                    &mut reader,
+                    file_len,
+                    posting_bytes,
+                    "hybrid sparse postings",
+                )?;
+                let mut sparse_doc_ids = Vec::new();
+                sparse_doc_ids
+                    .try_reserve_exact(posting_count)
+                    .map_err(|_| {
+                        EncodedLabelIndexError::Invalid(
+                            "cannot reserve hybrid sparse postings".to_string(),
+                        )
+                    })?;
+                for _ in 0..posting_count {
+                    sparse_doc_ids.push(read_u32(&mut reader)?);
+                }
+
+                for descriptor in &descriptors {
+                    match descriptor.kind {
+                        HybridLabelKind::Dense => {
+                            let start = descriptor.ordinal as usize * words_per_label;
+                            let end = start + words_per_label;
+                            let cardinality = dense_bits[start..end]
+                                .iter()
+                                .map(|word| word.count_ones())
+                                .sum::<u32>();
+                            if cardinality != descriptor.cardinality {
+                                return Err(EncodedLabelIndexError::Invalid(
+                                    "hybrid dense cardinality does not match payload".to_string(),
+                                ));
+                            }
+                        }
+                        HybridLabelKind::Sparse => {
+                            let ordinal = descriptor.ordinal as usize;
+                            let start = sparse_offsets[ordinal] as usize;
+                            let end = sparse_offsets[ordinal + 1] as usize;
+                            let posting = &sparse_doc_ids[start..end];
+                            if posting.len() != descriptor.cardinality as usize {
+                                return Err(EncodedLabelIndexError::Invalid(
+                                    "hybrid sparse cardinality does not match payload".to_string(),
+                                ));
+                            }
+                            if posting.last().is_some_and(|id| *id >= num_vectors)
+                                || posting.windows(2).any(|pair| pair[0] >= pair[1])
+                            {
+                                return Err(EncodedLabelIndexError::Invalid(
+                                    "hybrid sparse posting is unsorted or out of range".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                LabelStorage::Hybrid {
+                    storage: Arc::new(HybridStorage {
+                        words_per_label,
+                        descriptors: descriptors.into_boxed_slice(),
+                        dense_bits: dense_bits.into_boxed_slice(),
+                        sparse_offsets: sparse_offsets.into_boxed_slice(),
+                        sparse_doc_ids: sparse_doc_ids.into_boxed_slice(),
+                    }),
+                }
+            }
         };
 
         if reader.read(&mut [0u8; 1])? != 0 {
@@ -684,6 +1159,14 @@ impl EncodedLabelIndex {
                 bits: materialize_bitmap(&expression, postings, self.num_vectors)?
                     .into_boxed_slice(),
             },
+            LabelStorage::Hybrid { storage } => {
+                let mut expression = expression;
+                expression.optimize_hybrid(storage);
+                QueryStorage::Hybrid {
+                    storage: Arc::clone(storage),
+                    expression,
+                }
+            }
         };
 
         Ok(EncodedLabelQuery {
@@ -698,11 +1181,12 @@ impl EncodedLabelIndex {
         match &self.storage {
             LabelStorage::Bitslice { .. } => LabelIndexFormat::Bitslice,
             LabelStorage::Bitmap { .. } => LabelIndexFormat::Bitmap,
+            LabelStorage::Hybrid { .. } => LabelIndexFormat::Hybrid,
         }
     }
 }
 
-/// Encode a JSONL label file into a versioned Bitslice or Roaring-bitmap label index.
+/// Encode a JSONL label file into a versioned Bitslice, Roaring-bitmap, or hybrid label index.
 ///
 /// Supported JSONL rows are:
 ///
@@ -716,6 +1200,27 @@ pub fn encode_label_index_jsonl(
     format: LabelIndexFormat,
 ) -> Result<(), EncodedLabelIndexError> {
     encode_jsonl(input_path, output_path, format)
+}
+
+/// Encode a hybrid label index from a prebuilt dictionary and posting lists.
+pub fn encode_hybrid_label_index_postings(
+    output_path: impl AsRef<Path>,
+    num_vectors: u32,
+    labels: &[String],
+    postings: &[RoaringBitmap],
+    options: HybridBuildOptions,
+) -> Result<HybridBuildStats, EncodedLabelIndexError> {
+    write_label_index_with_options(
+        output_path,
+        LabelIndexFormat::Hybrid,
+        num_vectors,
+        labels,
+        postings,
+        options,
+    )?
+    .ok_or_else(|| {
+        EncodedLabelIndexError::Invalid("hybrid encoder did not produce storage stats".to_string())
+    })
 }
 
 /// Parse a JSON-encoded recursive label expression.
@@ -1190,6 +1695,25 @@ fn write_label_index(
     labels: &[String],
     postings: &[RoaringBitmap],
 ) -> Result<(), EncodedLabelIndexError> {
+    write_label_index_with_options(
+        path,
+        format,
+        num_vectors,
+        labels,
+        postings,
+        HybridBuildOptions::default(),
+    )
+    .map(|_| ())
+}
+
+fn write_label_index_with_options(
+    path: impl AsRef<Path>,
+    format: LabelIndexFormat,
+    num_vectors: u32,
+    labels: &[String],
+    postings: &[RoaringBitmap],
+    hybrid_options: HybridBuildOptions,
+) -> Result<Option<HybridBuildStats>, EncodedLabelIndexError> {
     if labels.len() > MAX_LABEL_COUNT {
         return Err(EncodedLabelIndexError::Invalid(format!(
             "label count {} exceeds limit {MAX_LABEL_COUNT}",
@@ -1211,6 +1735,15 @@ fn write_label_index(
             "bitmap vector count {num_vectors} exceeds limit {MAX_BITMAP_VECTORS}"
         )));
     }
+    if format == LabelIndexFormat::Hybrid
+        && postings
+            .iter()
+            .any(|posting| posting.max().is_some_and(|id| id >= num_vectors))
+    {
+        return Err(EncodedLabelIndexError::Invalid(
+            "posting contains an out-of-range vector ID".to_string(),
+        ));
+    }
 
     let mut writer = BufWriter::new(File::create(path)?);
     writer.write_all(&LABEL_INDEX_MAGIC)?;
@@ -1229,7 +1762,7 @@ fn write_label_index(
         writer.write_all(bytes)?;
     }
 
-    match format {
+    let hybrid_stats = match format {
         LabelIndexFormat::Bitslice => {
             let words_per_label = (num_vectors as usize).div_ceil(64);
             write_u64(&mut writer, words_per_label as u64)?;
@@ -1254,6 +1787,7 @@ fn write_label_index(
             for word in bits {
                 write_u64(&mut writer, word)?;
             }
+            None
         }
         LabelIndexFormat::Bitmap => {
             for posting in postings {
@@ -1272,11 +1806,161 @@ fn write_label_index(
                 write_u64(&mut writer, bytes.len() as u64)?;
                 writer.write_all(&bytes)?;
             }
+            None
+        }
+        LabelIndexFormat::Hybrid => Some(write_hybrid_payload(
+            &mut writer,
+            num_vectors,
+            postings,
+            hybrid_options,
+        )?),
+    };
+
+    writer.flush()?;
+    Ok(hybrid_stats)
+}
+
+fn write_hybrid_payload(
+    writer: &mut impl Write,
+    num_vectors: u32,
+    postings: &[RoaringBitmap],
+    options: HybridBuildOptions,
+) -> Result<HybridBuildStats, EncodedLabelIndexError> {
+    let words_per_label = (num_vectors as usize).div_ceil(64);
+    let break_even = u32::try_from(words_per_label.saturating_mul(2))
+        .unwrap_or(u32::MAX)
+        .max(1);
+    let dense_threshold = options.dense_threshold.unwrap_or(break_even).max(1);
+
+    let dense_labels = postings
+        .iter()
+        .filter(|posting| posting.len() >= u64::from(dense_threshold))
+        .count();
+    let sparse_labels = postings.len() - dense_labels;
+    let total_dense_words = dense_labels.checked_mul(words_per_label).ok_or_else(|| {
+        EncodedLabelIndexError::Invalid("hybrid dense allocation size overflow".to_string())
+    })?;
+
+    let mut descriptors = Vec::new();
+    descriptors
+        .try_reserve_exact(postings.len())
+        .map_err(|_| EncodedLabelIndexError::Invalid("cannot reserve hybrid descriptors".into()))?;
+    let mut dense_bits = Vec::new();
+    dense_bits
+        .try_reserve_exact(total_dense_words)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve hybrid dense payload".to_string())
+        })?;
+    dense_bits.resize(total_dense_words, 0);
+
+    let sparse_posting_count = postings
+        .iter()
+        .filter(|posting| posting.len() < u64::from(dense_threshold))
+        .try_fold(0usize, |total, posting| {
+            let len = usize::try_from(posting.len()).map_err(|_| {
+                EncodedLabelIndexError::Invalid(
+                    "hybrid sparse posting length exceeds usize".to_string(),
+                )
+            })?;
+            total.checked_add(len).ok_or_else(|| {
+                EncodedLabelIndexError::Invalid("hybrid sparse posting count overflow".to_string())
+            })
+        })?;
+    let mut sparse_offsets = Vec::new();
+    sparse_offsets
+        .try_reserve_exact(sparse_labels + 1)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve hybrid sparse offsets".to_string())
+        })?;
+    sparse_offsets.push(0);
+    let mut sparse_doc_ids = Vec::new();
+    sparse_doc_ids
+        .try_reserve_exact(sparse_posting_count)
+        .map_err(|_| {
+            EncodedLabelIndexError::Invalid("cannot reserve hybrid sparse postings".to_string())
+        })?;
+
+    let mut dense_ordinal = 0u32;
+    let mut sparse_ordinal = 0u32;
+    for posting in postings {
+        let cardinality = u32::try_from(posting.len()).map_err(|_| {
+            EncodedLabelIndexError::Invalid("hybrid label cardinality exceeds u32".to_string())
+        })?;
+        if cardinality >= dense_threshold {
+            let row_start = dense_ordinal as usize * words_per_label;
+            let row = &mut dense_bits[row_start..row_start + words_per_label];
+            for vec_id in posting {
+                let vec_id = vec_id as usize;
+                row[vec_id / 64] |= 1u64 << (vec_id % 64);
+            }
+            descriptors.push(HybridLabelDescriptor {
+                kind: HybridLabelKind::Dense,
+                ordinal: dense_ordinal,
+                cardinality,
+            });
+            dense_ordinal += 1;
+        } else {
+            sparse_doc_ids.extend(posting.iter());
+            sparse_offsets.push(sparse_doc_ids.len() as u64);
+            descriptors.push(HybridLabelDescriptor {
+                kind: HybridLabelKind::Sparse,
+                ordinal: sparse_ordinal,
+                cardinality,
+            });
+            sparse_ordinal += 1;
         }
     }
 
-    writer.flush()?;
-    Ok(())
+    write_u64(writer, words_per_label as u64)?;
+    write_u64(writer, dense_labels as u64)?;
+    write_u64(writer, sparse_labels as u64)?;
+    for descriptor in &descriptors {
+        write_u32(
+            writer,
+            match descriptor.kind {
+                HybridLabelKind::Dense => 0,
+                HybridLabelKind::Sparse => 1,
+            },
+        )?;
+        write_u32(writer, descriptor.ordinal)?;
+        write_u32(writer, descriptor.cardinality)?;
+    }
+    for word in dense_bits {
+        write_u64(writer, word)?;
+    }
+    for offset in &sparse_offsets {
+        write_u64(writer, *offset)?;
+    }
+    for doc_id in sparse_doc_ids {
+        write_u32(writer, doc_id)?;
+    }
+
+    let dense_bytes = u64::try_from(total_dense_words)
+        .ok()
+        .and_then(|words| words.checked_mul(8))
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("hybrid dense byte size overflow".to_string())
+        })?;
+    let sparse_bytes = u64::try_from(sparse_posting_count)
+        .ok()
+        .and_then(|count| count.checked_mul(4))
+        .and_then(|postings| {
+            u64::try_from(sparse_offsets.len())
+                .ok()
+                .and_then(|offsets| offsets.checked_mul(8))
+                .and_then(|offsets| postings.checked_add(offsets))
+        })
+        .ok_or_else(|| {
+            EncodedLabelIndexError::Invalid("hybrid sparse byte size overflow".to_string())
+        })?;
+
+    Ok(HybridBuildStats {
+        dense_threshold,
+        dense_labels: dense_ordinal,
+        sparse_labels: sparse_ordinal,
+        dense_bytes,
+        sparse_bytes,
+    })
 }
 
 fn write_u32(writer: &mut impl Write, value: u32) -> io::Result<()> {
@@ -1373,8 +2057,75 @@ mod tests {
     }
 
     #[test]
-    fn bitslice_and_bitmap_match_for_dnf() {
-        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+    fn hybrid_round_trip_mixes_dense_and_sparse_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("labels.hybrid");
+        let labels = vec!["dense".to_string(), "sparse".to_string()];
+        let postings = vec![
+            RoaringBitmap::from_iter([0, 1, 2]),
+            RoaringBitmap::from_iter([2]),
+        ];
+
+        let stats = encode_hybrid_label_index_postings(
+            &output,
+            4,
+            &labels,
+            &postings,
+            HybridBuildOptions {
+                dense_threshold: Some(2),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            stats,
+            HybridBuildStats {
+                dense_threshold: 2,
+                dense_labels: 1,
+                sparse_labels: 1,
+                dense_bytes: 8,
+                sparse_bytes: 20,
+            }
+        );
+
+        let index = EncodedLabelIndex::load(output).unwrap();
+        assert_eq!(index.format(), LabelIndexFormat::Hybrid);
+        assert_eq!(
+            matching_ids(&compile(&index, &["dense"], FilterExpressionType::DNF), 4),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            matching_ids(&compile(&index, &["sparse"], FilterExpressionType::DNF), 4),
+            vec![2]
+        );
+        assert_eq!(
+            matching_ids(
+                &compile(&index, &["dense&sparse"], FilterExpressionType::DNF),
+                4
+            ),
+            vec![2]
+        );
+        let reversed = compile(&index, &["sparse&dense"], FilterExpressionType::DNF);
+        assert_eq!(matching_ids(&reversed, 4), vec![2]);
+        let QueryStorage::Hybrid {
+            storage,
+            expression: CompiledExpression::Flat(plan),
+        } = &reversed.storage
+        else {
+            panic!("expected a flat hybrid query");
+        };
+        assert_eq!(
+            storage.descriptor(plan.label_ids[0]).unwrap().kind,
+            HybridLabelKind::Dense
+        );
+    }
+
+    #[test]
+    fn persisted_formats_match_for_dnf() {
+        for format in [
+            LabelIndexFormat::Bitslice,
+            LabelIndexFormat::Bitmap,
+            LabelIndexFormat::Hybrid,
+        ] {
             let index = round_trip(format);
             let query = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
             assert!(!query.is_match(0));
@@ -1385,8 +2136,12 @@ mod tests {
     }
 
     #[test]
-    fn bitslice_and_bitmap_match_for_cnf() {
-        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+    fn persisted_formats_match_for_cnf() {
+        for format in [
+            LabelIndexFormat::Bitslice,
+            LabelIndexFormat::Bitmap,
+            LabelIndexFormat::Hybrid,
+        ] {
             let index = round_trip(format);
             let query = compile(
                 &index,
@@ -1420,10 +2175,14 @@ mod tests {
     }
 
     #[test]
-    fn ast_matches_nested_expression_for_bitslice_and_bitmap() {
+    fn ast_matches_nested_expression_for_persisted_formats() {
         let expression = r#"{"or":[{"and":["A","B"]},{"and":["C","D"]}]}"#;
 
-        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+        for format in [
+            LabelIndexFormat::Bitslice,
+            LabelIndexFormat::Bitmap,
+            LabelIndexFormat::Hybrid,
+        ] {
             let index = round_trip(format);
             let query = index.query_ast_json(expression).unwrap();
             assert_eq!(matching_ids(&query, index.num_vectors), vec![2, 3]);
@@ -1432,7 +2191,11 @@ mod tests {
 
     #[test]
     fn ast_matches_equivalent_dnf_and_cnf_queries() {
-        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+        for format in [
+            LabelIndexFormat::Bitslice,
+            LabelIndexFormat::Bitmap,
+            LabelIndexFormat::Hybrid,
+        ] {
             let index = round_trip(format);
 
             let dnf = compile(&index, &["A&B", "C&D"], FilterExpressionType::DNF);
@@ -1470,7 +2233,11 @@ mod tests {
 
     #[test]
     fn ast_not_supports_known_and_unknown_labels() {
-        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+        for format in [
+            LabelIndexFormat::Bitslice,
+            LabelIndexFormat::Bitmap,
+            LabelIndexFormat::Hybrid,
+        ] {
             let index = round_trip(format);
             let not_a = index.query_ast_json(r#"{"not":"A"}"#).unwrap();
             assert_eq!(matching_ids(&not_a, index.num_vectors), vec![1, 3]);
@@ -1485,7 +2252,11 @@ mod tests {
 
     #[test]
     fn compiled_queries_remain_usable_after_index_drop() {
-        for format in [LabelIndexFormat::Bitslice, LabelIndexFormat::Bitmap] {
+        for format in [
+            LabelIndexFormat::Bitslice,
+            LabelIndexFormat::Bitmap,
+            LabelIndexFormat::Hybrid,
+        ] {
             let query = {
                 let index = round_trip(format);
                 Arc::new(
@@ -1703,6 +2474,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("labels.bin");
         std::fs::write(&path, b"not-an-index").unwrap();
+        assert!(EncodedLabelIndex::load(path).is_err());
+    }
+
+    #[test]
+    fn load_rejects_invalid_hybrid_label_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("labels.bin");
+        let mut writer = BufWriter::new(File::create(&path).unwrap());
+        writer.write_all(&LABEL_INDEX_MAGIC).unwrap();
+        write_u32(&mut writer, LABEL_INDEX_VERSION).unwrap();
+        write_u32(&mut writer, LabelIndexFormat::Hybrid as u32).unwrap();
+        write_u64(&mut writer, 1).unwrap();
+        write_u64(&mut writer, 1).unwrap();
+        write_u32(&mut writer, 1).unwrap();
+        writer.write_all(b"A").unwrap();
+        write_u64(&mut writer, 1).unwrap();
+        write_u64(&mut writer, 1).unwrap();
+        write_u64(&mut writer, 0).unwrap();
+        write_u32(&mut writer, 2).unwrap();
+        write_u32(&mut writer, 0).unwrap();
+        write_u32(&mut writer, 1).unwrap();
+        writer.flush().unwrap();
         assert!(EncodedLabelIndex::load(path).is_err());
     }
 

@@ -666,7 +666,51 @@ The expected opportunity is complex predicates with weak live short-circuiting a
 nodes to amortize a sequential SIMD pass. Live Bitslice-DNF should remain favored for small
 one-off searches and well-ordered selective predicates.
 
-## 9. Artifacts (`Q:\test6\filtered_test2\bench\full\`)
+## 8.9 100M provider/language hybrid-index trial
+
+A persisted hybrid format was tested on
+`Q:\test6\filtered_test4\EmbOffer.Global.100M.tsv`, using only provider ID (TSV column 3)
+and language (column 6). The input contains 100,000,000 rows, 64,524 non-empty provider IDs,
+887 non-empty languages, and 67,001 rows with both fields empty.
+
+The hybrid encoder uses the raw-`u32` posting memory break-even point:
+`dense_threshold = ceil(N / 64) * 2`, which is 3,125,000 matches for 100M vectors.
+Labels at or above the threshold use dense Bitslice rows; the tail uses one contiguous offset and
+sorted-`u32` postings area.
+
+| Metric | Result |
+|---|---:|
+| Build time | 152.1 seconds |
+| Persisted file size | 566,948,950 bytes (540.7 MiB) |
+| Dense labels | 8 |
+| Sparse labels | 65,403 |
+| Dense payload | 100,000,000 bytes |
+| Sparse postings + offsets | 464,881,536 bytes |
+
+The eight dense labels are two providers and six languages whose cardinalities exceed the
+memory threshold. Query compilation orders dense terminals before sparse terminals inside
+conjunctions, then orders by increasing cardinality, so equivalent input orders use the same
+short-circuit plan.
+
+Full 100M-ID membership scans, three repetitions:
+
+| Query | Representations | Matches | Mean | Million probes/s |
+|---|---|---:|---:|---:|
+| `provider:112453` | dense | 3,223,639 | 1.07 s | 93.77 |
+| `provider:3665615` | sparse | 2,006,362 | 4.07 s | 24.58 |
+| `language:en-US` | dense | 36,202,665 | 1.44 s | 69.63 |
+| `language:ja-JP` | sparse | 1,757,655 | 4.05 s | 24.67 |
+| `language:en-US&provider:3475408` | dense AND sparse | 331,486 | 2.70 s | 37.08 |
+| `provider:112453&language:zh-CN` | dense AND sparse | 0 | 1.18 s | 84.60 |
+
+The mixed-query counts were independently scanned from the raw TSV and matched exactly:
+2,006,362, 0, and 331,486 for the tested provider/language pairs. No 100M-vector graph index is
+present in `filtered_test4`, so these results validate persisted storage and query-provider
+performance rather than end-to-end ANN latency.
+
+## 10. Artifacts
+
+### 10.1 Original PMax benchmark (`Q:\test6\filtered_test2\bench\full\`)
 
 - Labels: `data_labels_set.jsonl` (596 labels, general), `data_labels_min.jsonl` (11, fast)
 - Predicates: `predmin_S1..S9.jsonl` (also `predset_S1..S9.jsonl`)
@@ -683,5 +727,13 @@ one-off searches and well-ordered selective predicates.
 - Inline Bitslice-DNF comparison (section 8.4.7): benchmark search-type `topk-inline-live-filter-bitslice-dnf`, using the same `InlineAttributeIndexBitslice` and DNF providers with `InlineFilterSearch`
 - Encoded-label library comparison (section 8.4.8): `diskann-label-index`; benchmark search-types `topk-multihop-encoded-bitslice-dnf`, `topk-multihop-encoded-bitslice-ast`, and `topk-multihop-encoded-bitmap-ast`; local encoded files `data_labels_set.bitslice.bin` and `data_labels_set.bitmap.bin`
 - Index (reused): `idxsave_full`(+`.data`)
+
+### 10.2 100M provider/language hybrid trial (`Q:\test6\filtered_test4\`)
+
+- Raw base data: `EmbOffer.Global.100M.tsv`
+- Raw query sample: `EmbQuery.1k.tsv`
+- Persisted hybrid labels: `provider_language.hybrid.bin`
+- Encoder: `diskann-tools/src/bin/build_hybrid_label_index.rs`
+- Probe tool: `diskann-tools/src/bin/probe_hybrid_label_index.rs`
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
