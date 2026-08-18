@@ -31,25 +31,10 @@ use std::num::NonZeroU16;
 use diskann::ANNResult;
 use thiserror::Error;
 
-use crate::{counters::LocalCounters, num::Bytes, store::Store};
+use crate::{counters::LocalCounters, num::Bytes};
 
-mod full;
+pub mod full;
 pub use full::{Full, FullPrecision};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    Available,
-    Published,
-    Retiring,
-    Frozen,
-}
-
-impl Status {
-    #[must_use = "this function has no side-effects"]
-    pub fn is_readable(self) -> bool {
-        matches!(self, Self::Published | Self::Frozen)
-    }
-}
 
 pub trait LayerConfig {
     type Layer: Layer;
@@ -59,12 +44,25 @@ pub trait LayerConfig {
 
 /// Base layer for data representations.
 pub trait Layer: Send + Sync + 'static {
-    // // Return the status of the item behind internal ID `i`.
-    fn bytes(&self) -> Bytes;
+    fn max_degree(&self) -> usize;
+
+    fn retire(&self, i: u32) -> ANNResult<()>;
+
+    fn is_readable(&self, i: u32) -> Option<bool>;
+
+    fn maximum(&self) -> u32;
+
+    fn capacity(&self) -> usize;
 }
 
 pub trait Set<T>: Layer {
-    fn set(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
+    type Guard<'a>: Guard;
+    fn set(&self, element: T) -> ANNResult<Self::Guard<'_>>;
+}
+
+pub trait Guard {
+    fn id(&self) -> u32;
+    fn publish(self);
 }
 
 pub(crate) trait ExpandBeam: Send + Sync + std::fmt::Debug {
@@ -130,7 +128,6 @@ pub trait Search: Send + Sync + 'static {
     fn search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
-        store: &'a Store,
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>>;
@@ -156,17 +153,15 @@ pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
     fn insert_search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
-        store: &'a Store,
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.search_accessor(query, store, provider, counters)
+        self.search_accessor(query, provider, counters)
     }
 
     #[doc(hidden)]
     fn prune_accessor<'a>(
         &'a self,
-        store: &'a Store,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
 }

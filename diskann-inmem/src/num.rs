@@ -161,6 +161,31 @@ impl std::fmt::Display for Align {
     }
 }
 
+//-------------------------//
+// General Number Wrappers //
+//-------------------------//
+
+macro_rules! typed_int {
+    ($name:ident, $T:ty) => {
+        #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+        pub struct $name($T);
+
+        impl $name {
+            pub fn new(value: $T) -> Self {
+                Self(value)
+            }
+
+            pub fn value(self) -> $T {
+                self.0
+            }
+        }
+    };
+}
+
+typed_int!(Capacity, usize);
+typed_int!(MaxDegree, usize);
+typed_int!(MaximumId, u32);
+
 ///////////
 // Tests //
 ///////////

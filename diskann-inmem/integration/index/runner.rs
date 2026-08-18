@@ -369,28 +369,49 @@ impl Test {
 
                 let dim = start_points.ncols();
                 let metric = self.data.metric;
-                let config = diskann_inmem::provider::Config::new(
-                    capacity,
-                    self.build.config.max_degree().get(),
-                );
+                let max_degree = self.build.config.max_degree().get();
+                // let config = diskann_inmem::provider::Config::new(
+                //     capacity,
+                //     self.build.config.max_degree().get(),
+                // );
 
                 let index_config = self.build.config.clone();
 
                 let index = match start_points {
                     DatasetView::F32(v) => finish(
-                        Provider::new(layers::Full::<f32>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(diskann_inmem::layers::full::Config::<f32>::new(
+                            capacity,
+                            max_degree,
+                            metric,
+                            v.to_owned(),
+                        ))?,
                         index_config,
                     ),
                     DatasetView::F16(v) => finish(
-                        Provider::new(layers::Full::<f16>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(diskann_inmem::layers::full::Config::<f16>::new(
+                            capacity,
+                            max_degree,
+                            metric,
+                            v.to_owned(),
+                        ))?,
                         index_config,
                     ),
                     DatasetView::U8(v) => finish(
-                        Provider::new(layers::Full::<u8>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(diskann_inmem::layers::full::Config::<u8>::new(
+                            capacity,
+                            max_degree,
+                            metric,
+                            v.to_owned(),
+                        ))?,
                         index_config,
                     ),
                     DatasetView::I8(v) => finish(
-                        Provider::new(layers::Full::<i8>::new(dim, metric), config, v.row_iter())?,
+                        Provider::new(diskann_inmem::layers::full::Config::<i8>::new(
+                            capacity,
+                            max_degree,
+                            metric,
+                            v.to_owned(),
+                        ))?,
                         index_config,
                     ),
                 };

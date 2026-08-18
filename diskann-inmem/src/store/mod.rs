@@ -255,6 +255,14 @@ impl Store {
         self.neighbors.max_length()
     }
 
+    pub(crate) fn maximum(&self) -> u32 {
+        self.neighbors.entries()
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.unfrozen
+    }
+
     pub(crate) fn temp_neighbors(&self) -> &Neighbors {
         &self.neighbors
     }
@@ -530,6 +538,8 @@ impl From<NeighborsError> for StoreError {
     }
 }
 
+diskann::convert_error!(StoreError);
+
 #[derive(Debug, Error)]
 enum StoreErrorInner {
     #[error("at least one frozen point must be provided")]
@@ -564,6 +574,8 @@ pub(crate) enum RetireError {
     #[error("could not claim slot")]
     CouldNotClaimSlot,
 }
+
+diskann::convert_error!(RetireError);
 
 /// An epoch protected reader into a [`Store`].
 ///
