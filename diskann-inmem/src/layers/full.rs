@@ -357,7 +357,6 @@ impl<'a, const PREFETCH: usize, T, U, D> QueryDistance<'a, PREFETCH, T, U, D> {
         std::mem::size_of::<U>() * self.query.len()
     }
 
-    #[inline(never)]
     fn error(&self, len: usize) -> ANNResult<f32> {
         let error = QueryDistanceError {
             expected: self.bytes(),
