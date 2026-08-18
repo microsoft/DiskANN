@@ -121,7 +121,7 @@ pub(crate) enum ValidatedEncodedQuerySource {
 /// timed ANN search performs the actual `EncodedLabelIndex::{query, query_ast_json}` compilation
 /// (plus bitmap AST materialization for bitmap-backed indexes); later probes reuse the cached
 /// [`EncodedLabelQuery`] for that one query row only.
-struct LazyEncodedQueryProvider {
+pub(crate) struct LazyEncodedQueryProvider {
     index: Arc<EncodedLabelIndex>,
     source: ValidatedEncodedQuerySource,
     compiled: OnceLock<EncodedLabelQuery<'static>>,
@@ -254,14 +254,11 @@ pub(crate) fn prepare_encoded_query_sources(
 pub(crate) fn make_encoded_query_providers(
     index: Arc<EncodedLabelIndex>,
     query_sources: &[ValidatedEncodedQuerySource],
-) -> Vec<Arc<dyn QueryLabelProvider<u32>>> {
+) -> Vec<Arc<LazyEncodedQueryProvider>> {
     query_sources
         .iter()
         .cloned()
-        .map(|source| {
-            Arc::new(LazyEncodedQueryProvider::new(index.clone(), source))
-                as Arc<dyn QueryLabelProvider<u32>>
-        })
+        .map(|source| Arc::new(LazyEncodedQueryProvider::new(index.clone(), source)))
         .collect()
 }
 
@@ -730,10 +727,10 @@ mod tests {
         }
     }
 
-    fn test_query_matches(
-        provider: &Arc<dyn QueryLabelProvider<u32>>,
-        num_vectors: u32,
-    ) -> Vec<u32> {
+    fn test_query_matches<P>(provider: &Arc<P>, num_vectors: u32) -> Vec<u32>
+    where
+        P: QueryLabelProvider<u32> + ?Sized,
+    {
         (0..num_vectors)
             .filter(|&vec_id| provider.is_match(vec_id))
             .collect()

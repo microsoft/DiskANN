@@ -586,7 +586,38 @@ with P99 also improving in seven of nine cases. This is a useful low-risk improv
 but the larger remaining ceiling is avoiding duplicated predicate checks and unnecessary
 distance work rather than removing additional small allocations.
 
-## 8.6 Backlog: ACORN-style filter-first traversal
+## 8.6 Static dispatch for encoded query providers
+
+The encoded benchmark path previously stored every per-query provider as
+`Arc<dyn QueryLabelProvider<u32>>`. That erased the concrete `LazyEncodedQueryProvider` type before
+search, forcing an indirect `is_match` call for every visited node and preventing the compiler
+from inlining through the lazy query provider into `EncodedLabelQuery`.
+
+`Filtered`, `FilteredAccessor`, and the benchmark `MultiHop` helper are now generic over the label
+provider type, with `dyn QueryLabelProvider` retained as the default for heterogeneous callers.
+The encoded Bitslice-DNF benchmark keeps `LazyEncodedQueryProvider` concrete end to end.
+
+A fresh controlled comparison used the full 596-label encoded Bitslice file, query-inclusive lazy
+DNF compilation, k=L=150, one thread, 1,000 queries, and three repetitions per S1-S9 case.
+Recall, distance comparisons, and graph hops were exactly identical.
+
+| Case | Dynamic AVG | Static AVG | AVG speedup | Dynamic P99 | Static P99 | P99 speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| S1 | 2.545 ms | **2.436 ms** | 1.045x | 8.923 ms | **8.664 ms** | 1.030x |
+| S2 | 4.290 ms | **4.035 ms** | 1.063x | 9.236 ms | **8.690 ms** | 1.063x |
+| S3 | 4.290 ms | **4.083 ms** | 1.051x | 10.540 ms | **10.098 ms** | 1.044x |
+| S4 | 5.098 ms | **4.795 ms** | 1.063x | 12.468 ms | **11.958 ms** | 1.043x |
+| S5 | 3.045 ms | **2.924 ms** | 1.042x | 9.679 ms | **9.119 ms** | 1.061x |
+| S6 | 5.609 ms | **5.277 ms** | 1.063x | 9.865 ms | **9.279 ms** | 1.063x |
+| S7 | 6.590 ms | **6.247 ms** | 1.055x | 10.125 ms | **9.608 ms** | 1.054x |
+| S8 | 6.905 ms | **6.425 ms** | 1.075x | 9.993 ms | **9.302 ms** | 1.074x |
+| S9 | 4.366 ms | **4.089 ms** | 1.068x | 8.047 ms | **7.624 ms** | 1.055x |
+
+The S1-S9 geometric-mean speedups are **1.0581x** for AVG (5.81%), **1.0541x** for
+P99 (5.41%), and **1.0411x** for P99.9 (4.11%). This removes dispatch overhead without changing
+filter semantics, traversal order, or result quality.
+
+## 8.7 Backlog: ACORN-style filter-first traversal
 
 ACORN-1 is deferred for later investigation. It changes traversal semantics rather than only
 optimizing predicate evaluation, so it is not expected to return the exact same neighbor IDs as
@@ -608,7 +639,7 @@ This work is intentionally postponed. The immediate priority is exact-semantics 
 the current multihop implementation, including allocation reuse and removal of duplicated work,
 before changing its traversal policy.
 
-## 8.7 Backlog: SIMD whole-query bitmap materialization
+## 8.8 Backlog: SIMD whole-query bitmap materialization
 
 A no-cache SIMD materialization path is worth testing as the strongest whole-query-bitmap
 alternative to live DNF Bitslice evaluation. It would reuse the existing attribute-major dense

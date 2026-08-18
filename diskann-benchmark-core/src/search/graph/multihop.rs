@@ -25,19 +25,25 @@ use crate::search::{self, Search, graph::KnnParams, graph::Strategy};
 /// The provided implementation of [`Search`] accepts [`KnnParams`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
-pub struct MultiHop<DP, T, S>
-where
+pub struct MultiHop<
+    DP,
+    T,
+    S,
+    L: ?Sized = dyn labeled::QueryLabelProvider<<DP as provider::DataProvider>::InternalId>,
+> where
     DP: provider::DataProvider,
+    L: labeled::QueryLabelProvider<DP::InternalId>,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
-    labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
+    labels: Arc<[Arc<L>]>,
 }
 
-impl<DP, T, S> MultiHop<DP, T, S>
+impl<DP, T, S, L> MultiHop<DP, T, S, L>
 where
     DP: provider::DataProvider,
+    L: labeled::QueryLabelProvider<DP::InternalId> + ?Sized + 'static,
 {
     /// Construct a new [`MultiHop`] searcher.
     ///
@@ -62,7 +68,7 @@ where
         index: Arc<graph::DiskANNIndex<DP>>,
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
-        labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
+        labels: Arc<[Arc<L>]>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -83,7 +89,7 @@ where
     }
 }
 
-impl<DP, T, S> Search for MultiHop<DP, T, S>
+impl<DP, T, S, L> Search for MultiHop<DP, T, S, L>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<
@@ -95,6 +101,7 @@ where
         > + Clone
         + AsyncFriendly,
     T: AsyncFriendly + Clone,
+    L: labeled::QueryLabelProvider<DP::InternalId> + ?Sized + 'static,
 {
     type Id = DP::ExternalId;
     type Parameters = KnnParams;

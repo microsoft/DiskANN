@@ -14,7 +14,10 @@ The final implementation keeps the same multihop traversal and replaces query-re
 materialization with:
 
 1. a persisted, attribute-major **Bitslice** label index; and
-2. a flat **Disjunctive Normal Form (DNF)** query plan evaluated directly against the Bitslice data.
+2. a flat **Disjunctive Normal Form (DNF)** query plan evaluated directly against the Bitslice data;
+   and
+3. a concrete query-provider type retained through the filtered-search hot path for static
+   dispatch.
 
 In the query-inclusive comparison, Bitmap+AST required **6.15-46.48 ms**, while Bitslice+DNF
 required **2.70-6.82 ms**. Bitslice+DNF was **3.13x faster by geometric-mean average latency**.
@@ -338,6 +341,18 @@ then reduces the remaining per-node evaluation overhead.
 The final search also reuses adjacency buffers across one-hop and two-hop expansions and iterates
 the selected routing neighbors without allocating another ID vector. This preserved exact search
 semantics and added a further **3.72% average-latency** and **3.07% P99** improvement.
+
+### 4. Retain static query-provider dispatch
+
+The original helper erased every query provider to `dyn QueryLabelProvider`, so each visited node
+paid an indirect `is_match` call and the compiler could not inline the encoded Bitslice-DNF
+evaluation. `Filtered`, `FilteredAccessor`, and the multihop benchmark helper now retain a concrete
+provider type when one is available, while keeping trait objects as the default for heterogeneous
+callers.
+
+A fresh query-inclusive S1-S9 run preserved identical recall, distance comparisons, and graph
+hops. Static dispatch improved geometric-mean average latency by **5.81%**, P99 by **5.41%**, and
+P99.9 by **4.11%**.
 
 ## End-to-end performance comparison
 
