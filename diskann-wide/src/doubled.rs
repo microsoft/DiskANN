@@ -205,6 +205,15 @@ impl<T: std::ops::Mul<Output = T>> std::ops::Mul for Doubled<T> {
     }
 }
 
+impl<T: std::ops::Div<Output = T>> std::ops::Div for Doubled<T> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn div(self, rhs: Self) -> Self {
+        Self(self.0 / rhs.0, self.1 / rhs.1)
+    }
+}
+
 impl<T: std::ops::BitAnd<Output = T>> std::ops::BitAnd for Doubled<T> {
     type Output = Self;
     #[inline(always)]

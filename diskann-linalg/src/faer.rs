@@ -53,6 +53,33 @@ pub(super) fn sgemm_impl(
     faer::linalg::matmul::matmul(c, beta, a, b, alpha, Par::Seq)
 }
 
+/// Compute the lower triangle of `A * Aᵀ` with Faer.
+///
+/// Leaf selection reads each symmetric pair once. It does not read the upper
+/// triangle. `BlockStructure::TriangularLower` prevents writes to that triangle.
+///
+/// `sgemm_aat_lower` checks both slice lengths and both size products. Therefore,
+/// the Faer matrix views stay inside their backing slices.
+pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, a: &[f32], c: &mut [f32]) {
+    use faer::linalg::matmul::triangular::{matmul, BlockStructure};
+
+    let a = faer::mat::MatRef::from_row_major_slice(a, m, k);
+    let at = a.transpose();
+    let c = faer::mat::MatMut::from_row_major_slice_mut(c, m, m);
+
+    matmul(
+        c,
+        BlockStructure::TriangularLower,
+        faer::Accum::Replace,
+        a,
+        BlockStructure::Rectangular,
+        at,
+        BlockStructure::Rectangular,
+        1.0,
+        Par::Seq,
+    );
+}
+
 /// See the documentation for `svd_into`.
 ///
 /// The implementation may assume the the specified invariants hold for the sizes of the
