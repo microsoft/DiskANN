@@ -396,6 +396,26 @@ pub struct SearchAccessor<'a> {
     counters: LocalCounters<'a>,
 }
 
+impl<'a> SearchAccessor<'a> {
+    pub(crate) fn new(
+        neighbors: &'a Neighbors,
+        expand_beam: Box<dyn layers::__ExpandBeam + 'a>,
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        start_points: std::ops::Range<u32>,
+        counters: LocalCounters<'a>,
+    ) -> Self {
+        Self {
+            neighbors,
+            ids: AdjacencyList::with_capacity(neighbors.max_length()),
+            expand_beam,
+            buffer: vec![Default::default(); neighbors.max_length()],
+            provider,
+            start_points,
+            counters,
+        }
+    }
+}
+
 impl diskann::provider::HasId for SearchAccessor<'_> {
     type Id = u32;
 }
@@ -463,11 +483,6 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                     self.expand_beam
                         .__expand_beam(&self.ids, &mut self.buffer, Hidden::new())
                 }?;
-
-                // let processed = unsafe {
-                //     self.expand_beam
-                //         .expand_beam(&self.ids, &self.reader, &mut self.buffer)
-                // }?;
 
                 self.counters.get_vector(processed as u64);
                 self.counters.query_distance(processed as u64);
@@ -712,6 +727,21 @@ pub struct PruneAccessor<'a> {
     counters: LocalCounters<'a>,
 }
 
+impl<'a> PruneAccessor<'a> {
+    pub(crate) fn new(
+        prune: Box<dyn layers::__Prune + 'a>,
+        neighbors: &'a Neighbors,
+        counters: LocalCounters<'a>,
+    ) -> Self {
+        Self {
+            prune,
+            keys: hashbrown::HashMap::new(),
+            neighbors,
+            counters,
+        }
+    }
+}
+
 /// The distance computer for [`PruneAccessor`].
 #[derive(Debug)]
 pub struct Distance<'a> {
@@ -869,24 +899,13 @@ where
         _context: &'a Context,
         query: L::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
-        let reader = provider.store.reader()?;
-        let expand_beam = <L as layers::Search>::__search_expand_beam(
+        <L as layers::Search>::search_accessor(
             &provider.layer,
             query,
             &provider.store,
-            Hidden::new(),
-        )?;
-
-        let accessor = SearchAccessor {
-            neighbors: provider.store.temp_neighbors(),
-            ids: AdjacencyList::new(),
-            expand_beam,
-            buffer: vec![(0, 0.0); provider.max_degree()],
             provider,
-            start_points: provider.store.frozen(),
-            counters: provider.local_counters(),
-        };
-        Ok(accessor)
+            provider.local_counters(),
+        )
     }
 }
 
@@ -978,12 +997,11 @@ where
         _context: &'a Context,
         _capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
-        Ok(PruneAccessor {
-            prune: <L as layers::Insert>::__prune(&provider.layer, &provider.store, Hidden::new())?,
-            keys: hashbrown::HashMap::new(),
-            neighbors: provider.store.temp_neighbors(),
-            counters: provider.local_counters(),
-        })
+        <L as layers::Insert>::prune_accessor(
+            &provider.layer,
+            &provider.store,
+            provider.local_counters(),
+        )
     }
 }
 

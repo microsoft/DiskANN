@@ -22,7 +22,9 @@ use half::f16;
 use thiserror::Error;
 
 use crate::{
-    Hidden, layers,
+    Hidden,
+    counters::LocalCounters,
+    layers,
     num::Bytes,
     store::{self, Store},
     tag::AtomicTag,
@@ -35,9 +37,8 @@ const CHUNK_SIZE: usize = 16;
 ///
 /// This encompasses *everything* required for `Full: layers::Insert` and can be used as
 /// a single bound.
-pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
-    #[doc(hidden)]
-    fn __expand_beam<'a>(
+pub(crate) trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
+    fn make_expand_beam<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         query: &'a [Self],
@@ -45,11 +46,64 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>>;
 
     #[doc(hidden)]
-    fn __prune<'a>(
+    fn make_prune<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
     ) -> ANNResult<Box<dyn layers::__Prune + 'a>>;
+}
+
+pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
+    #[doc(hidden)]
+    fn __search_accessor<'a>(
+        layer: &'a Full<Self>,
+        query: &'a [Self],
+        store: &'a Store,
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::SearchAccessor<'a>>;
+
+    #[doc(hidden)]
+    fn __prune_accessor<'a>(
+        layer: &'a Full<Self>,
+        store: &'a Store,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
+}
+
+impl<T> FullPrecision for T
+where
+    T: FullPrecisionImpl,
+{
+    fn __search_accessor<'a>(
+        layer: &'a Full<Self>,
+        query: &'a [Self],
+        store: &'a Store,
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+        let expand_beam = T::make_expand_beam(Hidden::new(), layer, query, store)?;
+        Ok(crate::provider::SearchAccessor::new(
+            store.temp_neighbors(),
+            expand_beam,
+            provider,
+            store.frozen(),
+            counters,
+        ))
+    }
+
+    fn __prune_accessor<'a>(
+        layer: &'a Full<Self>,
+        store: &'a Store,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
+        let prune = T::make_prune(Hidden::new(), layer, store)?;
+        Ok(crate::provider::PruneAccessor::new(
+            prune,
+            store.temp_neighbors(),
+            counters,
+        ))
+    }
 }
 
 /// Full-precision data layer.
@@ -156,13 +210,14 @@ where
 {
     type Query<'a> = &'a [T];
 
-    fn __search_expand_beam<'a>(
+    fn search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
         store: &'a Store,
-        _: Hidden,
-    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
-        T::__expand_beam(Hidden::new(), self, query, store)
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+        T::__search_accessor(self, query, store, provider, counters)
     }
 }
 
@@ -170,12 +225,12 @@ impl<T> layers::Insert for Full<T>
 where
     T: FullPrecision,
 {
-    fn __prune<'a>(
+    fn prune_accessor<'a>(
         &'a self,
         store: &'a Store,
-        _: Hidden,
-    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
-        T::__prune(Hidden::new(), self, store)
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
+        T::__prune_accessor(self, store, counters)
     }
 }
 
@@ -229,10 +284,12 @@ where
 
         for (id, key) in items {
             if let Some(v) = self.reader.read(id.into_usize()) {
-                self.buffer.push(unsafe { UnalignedSlice::new(
-                    v.as_ptr().cast::<T>(),
-                    self.reader.bytes().value() / std::mem::size_of::<T>(),
-                )});
+                self.buffer.push(unsafe {
+                    UnalignedSlice::new(
+                        v.as_ptr().cast::<T>(),
+                        self.reader.bytes().value() / std::mem::size_of::<T>(),
+                    )
+                });
 
                 *key = Some(counter);
 
@@ -450,8 +507,8 @@ macro_rules! mint {
     }};
 }
 
-impl FullPrecision for f32 {
-    fn __expand_beam<'a>(
+impl FullPrecisionImpl for f32 {
+    fn make_expand_beam<'a>(
         _: Hidden,
         full: &'a Full<f32>,
         query: &'a [f32],
@@ -480,7 +537,7 @@ impl FullPrecision for f32 {
         Ok(output)
     }
 
-    fn __prune<'a>(
+    fn make_prune<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
@@ -498,8 +555,8 @@ impl FullPrecision for f32 {
     }
 }
 
-impl FullPrecision for f16 {
-    fn __expand_beam<'a>(
+impl FullPrecisionImpl for f16 {
+    fn make_expand_beam<'a>(
         _: Hidden,
         full: &'a Full<f16>,
         query: &'a [f16],
@@ -528,7 +585,7 @@ impl FullPrecision for f16 {
         Ok(output)
     }
 
-    fn __prune<'a>(
+    fn make_prune<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
@@ -546,8 +603,8 @@ impl FullPrecision for f16 {
     }
 }
 
-impl FullPrecision for u8 {
-    fn __expand_beam<'a>(
+impl FullPrecisionImpl for u8 {
+    fn make_expand_beam<'a>(
         _: Hidden,
         full: &'a Full<u8>,
         query: &'a [u8],
@@ -574,7 +631,7 @@ impl FullPrecision for u8 {
         Ok(output)
     }
 
-    fn __prune<'a>(
+    fn make_prune<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
@@ -592,8 +649,8 @@ impl FullPrecision for u8 {
     }
 }
 
-impl FullPrecision for i8 {
-    fn __expand_beam<'a>(
+impl FullPrecisionImpl for i8 {
+    fn make_expand_beam<'a>(
         _: Hidden,
         full: &'a Full<i8>,
         query: &'a [i8],
@@ -614,7 +671,7 @@ impl FullPrecision for i8 {
         Ok(output)
     }
 
-    fn __prune<'a>(
+    fn make_prune<'a>(
         _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,

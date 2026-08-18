@@ -31,7 +31,7 @@ use std::num::NonZeroU16;
 use diskann::ANNResult;
 use thiserror::Error;
 
-use crate::{Hidden, num::Bytes, store::Store};
+use crate::{Hidden, counters::LocalCounters, num::Bytes, store::Store};
 
 mod full;
 pub use full::{Full, FullPrecision};
@@ -46,15 +46,6 @@ pub enum Status {
 
 /// Base layer for data representations.
 pub trait Layer: Send + Sync + 'static {
-    // /// Return the number of entries present in this layer.
-    // fn entries(&self) -> usize;
-
-    // /// Attempt to freeze entry `i`.
-    // unsafe fn freeze(&self, i: u32) -> ANNResult<()>;
-
-    // /// Attempt to delete entry `i`.
-    // unsafe fn delete(&self, i: u32) -> ANNResult<bool>;
-
     fn bytes(&self) -> Bytes;
 }
 
@@ -63,8 +54,7 @@ pub trait Set<T>: Layer {
 }
 
 // TODO: Try to hide?
-#[doc(hidden)]
-pub trait __ExpandBeam: Send + Sync + std::fmt::Debug {
+pub(crate) trait __ExpandBeam: Send + Sync + std::fmt::Debug {
     /// Evaluate a raw distance against index `i`.
     fn __evaluate(&self, i: u32, _: Hidden) -> ANNResult<Option<f32>>;
 
@@ -121,6 +111,23 @@ struct Overflow;
 
 diskann::convert_error!(Overflow);
 
+/// Enable search over vectors defined by a [`Layer`].
+pub trait Search: Send + Sync + 'static {
+    /// The type of the query. This should be equivalent to the generic parameter in
+    /// [`Set`], but needs to be replicated here due to limitations in the current trait
+    /// design.
+    type Query<'a>;
+
+    #[doc(hidden)]
+    fn search_accessor<'a>(
+        &'a self,
+        query: Self::Query<'a>,
+        store: &'a Store,
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::SearchAccessor<'a>>;
+}
+
 // TODO: Try to hide?
 #[doc(hidden)]
 pub(crate) trait __Prune: Send + Sync + std::fmt::Debug {
@@ -132,38 +139,26 @@ pub(crate) trait __Prune: Send + Sync + std::fmt::Debug {
     fn __evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
 }
 
-/// Enable search over vectors defined by a [`Layer`].
-pub trait Search: Send + Sync + 'static {
-    /// The type of the query. This should be equivalent to the generic parameter in
-    /// [`Set`], but needs to be replicated here due to limitations in the current trait
-    /// design.
-    type Query<'a>;
-
-    #[doc(hidden)]
-    fn __search_expand_beam<'a>(
-        &'a self,
-        query: Self::Query<'a>,
-        store: &'a Store,
-        _: Hidden,
-    ) -> ANNResult<Box<dyn __ExpandBeam + 'a>>;
-}
-
 /// A insert-specific specialization of [`Search`].
 ///
 /// Note that the bounds for this trait are unnecessarily complicated, but rely on changes
 /// to `diskann` to full resolve.
 pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
-    /// A specialization of [`Search::query_distance`] targeting vector insert specifically.
     #[doc(hidden)]
-    fn __insert_expand_beam<'a, V>(
+    fn insert_search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
         store: &'a Store,
-        _: Hidden,
-    ) -> ANNResult<Box<dyn __ExpandBeam + 'a>> {
-        self.__search_expand_beam(query, store, Hidden::new())
+        provider: &'a (dyn std::any::Any + Send + Sync),
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+        self.search_accessor(query, store, provider, counters)
     }
 
     #[doc(hidden)]
-    fn __prune<'a>(&'a self, store: &'a Store, _: Hidden) -> ANNResult<Box<dyn __Prune + 'a>>;
+    fn prune_accessor<'a>(
+        &'a self,
+        store: &'a Store,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
 }
