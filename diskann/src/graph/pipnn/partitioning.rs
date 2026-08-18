@@ -30,7 +30,9 @@ use rayon::prelude::*;
 use super::{
     PiPNNConfig,
     kernel_metric::PartitionMetric,
-    partition_kernel::{PartitionKernelWorkspace, PreparedLeaders, assign_leaders},
+    partition_kernel::{
+        PartitionKernelWorkspace, PreparedLeaders, UNASSIGNED_LEADER, assign_leaders,
+    },
 };
 
 // These constants control internal batching and deterministic seed generation.
@@ -444,12 +446,16 @@ fn scatter_serial(
 ) -> Vec<Vec<u32>> {
     let mut sizes = vec![0usize; leaders];
     for &leader in assignments {
-        sizes[leader as usize] += 1;
+        if leader != UNASSIGNED_LEADER {
+            sizes[leader as usize] += 1;
+        }
     }
     let mut clusters = clusters_with_capacities(&sizes);
     for (&point, point_assignments) in points.iter().zip(assignments.chunks_exact(fanout)) {
         for &leader in point_assignments {
-            clusters[leader as usize].push(point);
+            if leader != UNASSIGNED_LEADER {
+                clusters[leader as usize].push(point);
+            }
         }
     }
     clusters
@@ -945,6 +951,19 @@ mod tests {
 
         assert_eq!(clusters[0], (0..1_024).collect::<Vec<_>>());
         assert_eq!(clusters[1], (1_024..2_048).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn scatter_omits_unassigned_slots() {
+        assert_eq!(
+            scatter_serial(
+                &[10, 11],
+                &[0, UNASSIGNED_LEADER, UNASSIGNED_LEADER, 1],
+                2,
+                2
+            ),
+            [vec![10], vec![11]]
+        );
     }
 
     #[test]
