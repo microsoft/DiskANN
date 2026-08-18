@@ -31,7 +31,7 @@ use std::num::NonZeroU16;
 use diskann::ANNResult;
 use thiserror::Error;
 
-use crate::{Hidden, counters::LocalCounters, num::Bytes, store::Store};
+use crate::{counters::LocalCounters, num::Bytes, store::Store};
 
 mod full;
 pub use full::{Full, FullPrecision};
@@ -53,10 +53,9 @@ pub trait Set<T>: Layer {
     fn set(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
 }
 
-// TODO: Try to hide?
-pub(crate) trait __ExpandBeam: Send + Sync + std::fmt::Debug {
+pub(crate) trait ExpandBeam: Send + Sync + std::fmt::Debug {
     /// Evaluate a raw distance against index `i`.
-    fn __evaluate(&self, i: u32, _: Hidden) -> ANNResult<Option<f32>>;
+    fn evaluate(&self, i: u32) -> ANNResult<Option<f32>>;
 
     /// Compute the distance between the query and each neighbor in `list`.
     ///
@@ -64,11 +63,10 @@ pub(crate) trait __ExpandBeam: Send + Sync + std::fmt::Debug {
     ///
     /// * All items in `list` must in-bounds with respect to `reader`.
     /// * `buffer.len() >= list.len()`.
-    unsafe fn __expand_beam(
+    unsafe fn expand_beam(
         &self,
         list: &[u32],
         buffer: &mut [(u32, f32)],
-        _: Hidden,
     ) -> ANNResult<usize>;
 }
 
@@ -130,13 +128,13 @@ pub trait Search: Send + Sync + 'static {
 
 // TODO: Try to hide?
 #[doc(hidden)]
-pub(crate) trait __Prune: Send + Sync + std::fmt::Debug {
-    fn __prepare(
+pub(crate) trait Prune: Send + Sync + std::fmt::Debug {
+    fn prepare(
         &mut self,
         items: hashbrown::hash_map::IterMut<'_, u32, Option<PruneKey>>,
     ) -> ANNResult<PruneKey>;
 
-    fn __evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
+    fn evaluate(&self, a: PruneKey, b: PruneKey) -> f32;
 }
 
 /// A insert-specific specialization of [`Search`].

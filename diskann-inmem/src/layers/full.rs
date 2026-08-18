@@ -22,7 +22,6 @@ use half::f16;
 use thiserror::Error;
 
 use crate::{
-    Hidden,
     counters::LocalCounters,
     layers,
     num::Bytes,
@@ -30,29 +29,24 @@ use crate::{
     tag::AtomicTag,
 };
 
-/// The granularity for processing iterator chunks.
-const CHUNK_SIZE: usize = 16;
+trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
+    fn make_expand_beam<'a>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>>;
+
+    #[doc(hidden)]
+    fn make_prune<'a>(
+        full: &'a Full<Self>,
+        store: &'a Store,
+    ) -> ANNResult<Box<dyn layers::Prune + 'a>>;
+}
 
 /// A useful trait bound for types compatible with [`Full`].
 ///
 /// This encompasses *everything* required for `Full: layers::Insert` and can be used as
 /// a single bound.
-pub(crate) trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
-    fn make_expand_beam<'a>(
-        _: Hidden,
-        full: &'a Full<Self>,
-        query: &'a [Self],
-        store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>>;
-
-    #[doc(hidden)]
-    fn make_prune<'a>(
-        _: Hidden,
-        full: &'a Full<Self>,
-        store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__Prune + 'a>>;
-}
-
 pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     #[doc(hidden)]
     fn __search_accessor<'a>(
@@ -82,7 +76,7 @@ where
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        let expand_beam = T::make_expand_beam(Hidden::new(), layer, query, store)?;
+        let expand_beam = T::make_expand_beam(layer, query, store)?;
         Ok(crate::provider::SearchAccessor::new(
             store.temp_neighbors(),
             expand_beam,
@@ -97,7 +91,7 @@ where
         store: &'a Store,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
-        let prune = T::make_prune(Hidden::new(), layer, store)?;
+        let prune = T::make_prune(layer, store)?;
         Ok(crate::provider::PruneAccessor::new(
             prune,
             store.temp_neighbors(),
@@ -266,7 +260,7 @@ impl<'a, T, D> Prune<'a, T, D> {
     }
 }
 
-impl<T, D> layers::__Prune for Prune<'_, T, D>
+impl<T, D> layers::Prune for Prune<'_, T, D>
 where
     T: Send + Sync + 'static + Debug,
     D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, T>>
@@ -274,7 +268,7 @@ where
         + Sync
         + Debug,
 {
-    fn __prepare(
+    fn prepare(
         &mut self,
         items: hashbrown::hash_map::IterMut<'_, u32, Option<layers::PruneKey>>,
     ) -> ANNResult<layers::PruneKey> {
@@ -304,7 +298,7 @@ where
         Ok(counter)
     }
 
-    fn __evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
+    fn evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
         D::run(ARCH, self.buffer[a.index()], self.buffer[b.index()])
     }
 }
@@ -393,7 +387,7 @@ impl<'a, const PREFETCH: usize, T, U, D> QueryDistance<'a, PREFETCH, T, U, D> {
 const LOOKAHEAD: usize = 8;
 const BYTES: usize = 0;
 
-impl<const PREFETCH: usize, T, U, D> layers::__ExpandBeam for QueryDistance<'_, PREFETCH, T, U, D>
+impl<const PREFETCH: usize, T, U, D> layers::ExpandBeam for QueryDistance<'_, PREFETCH, T, U, D>
 where
     T: Send + Sync + 'static + Debug,
     U: Send + Sync + 'static + Debug,
@@ -402,7 +396,7 @@ where
         + Sync
         + Debug,
 {
-    fn __evaluate(&self, i: u32, _: Hidden) -> ANNResult<Option<f32>> {
+    fn evaluate(&self, i: u32) -> ANNResult<Option<f32>> {
         if !self.reader.is_in_bounds(i.into_usize()) {
             return Err(ANNError::new(OutOfBounds(i)));
         } else {
@@ -413,11 +407,10 @@ where
         }
     }
 
-    unsafe fn __expand_beam(
+    unsafe fn expand_beam(
         &self,
         list: &[u32],
         buffer: &mut [(u32, f32)],
-        _: Hidden,
     ) -> ANNResult<usize> {
         let len = list.len();
         let lookahead = LOOKAHEAD.min(len);
@@ -509,17 +502,16 @@ macro_rules! mint {
 
 impl FullPrecisionImpl for f32 {
     fn make_expand_beam<'a>(
-        _: Hidden,
         full: &'a Full<f32>,
         query: &'a [f32],
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
         let reader = store.temp_inner_reader()?;
 
         let query = Calf::Borrowed(query);
 
-        let output: Box<dyn layers::__ExpandBeam> = match full.metric {
+        let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 100 {
                     mint!(query, reader, f32 => { 100, SquaredL2 })
@@ -538,13 +530,12 @@ impl FullPrecisionImpl for f32 {
     }
 
     fn make_prune<'a>(
-        _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+    ) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = store.temp_inner_reader()?;
 
-        let output: Box<dyn layers::__Prune> = match full.metric {
+        let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<f32, SquaredL2>::new(reader)),
             Metric::InnerProduct => Box::new(Prune::<f32, InnerProduct>::new(reader)),
             Metric::Cosine => Box::new(Prune::<f32, Cosine>::new(reader)),
@@ -557,11 +548,10 @@ impl FullPrecisionImpl for f32 {
 
 impl FullPrecisionImpl for f16 {
     fn make_expand_beam<'a>(
-        _: Hidden,
         full: &'a Full<f16>,
         query: &'a [f16],
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
         let reader = store.temp_inner_reader()?;
 
@@ -569,7 +559,7 @@ impl FullPrecisionImpl for f16 {
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
-        let output: Box<dyn layers::__ExpandBeam> = match full.metric {
+        let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 100 {
                     mint!(query, reader, { f32, f16 } => { 100, SquaredL2 })
@@ -586,13 +576,12 @@ impl FullPrecisionImpl for f16 {
     }
 
     fn make_prune<'a>(
-        _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+    ) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = store.temp_inner_reader()?;
 
-        let output: Box<dyn layers::__Prune> = match full.metric {
+        let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<f16, SquaredL2>::new(reader)),
             Metric::InnerProduct => Box::new(Prune::<f16, InnerProduct>::new(reader)),
             Metric::Cosine => Box::new(Prune::<f16, Cosine>::new(reader)),
@@ -605,17 +594,16 @@ impl FullPrecisionImpl for f16 {
 
 impl FullPrecisionImpl for u8 {
     fn make_expand_beam<'a>(
-        _: Hidden,
         full: &'a Full<u8>,
         query: &'a [u8],
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
         let reader = store.temp_inner_reader()?;
 
         let query = Calf::Borrowed(query);
 
-        let output: Box<dyn layers::__ExpandBeam> = match full.metric {
+        let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 128 {
                     mint!(query, reader, u8 => { 128, SquaredL2 })
@@ -632,13 +620,12 @@ impl FullPrecisionImpl for u8 {
     }
 
     fn make_prune<'a>(
-        _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+    ) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = store.temp_inner_reader()?;
 
-        let output: Box<dyn layers::__Prune> = match full.metric {
+        let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<u8, SquaredL2>::new(reader)),
             Metric::InnerProduct => Box::new(Prune::<u8, InnerProduct>::new(reader)),
             Metric::Cosine => Box::new(Prune::<u8, Cosine>::new(reader)),
@@ -651,17 +638,16 @@ impl FullPrecisionImpl for u8 {
 
 impl FullPrecisionImpl for i8 {
     fn make_expand_beam<'a>(
-        _: Hidden,
         full: &'a Full<i8>,
         query: &'a [i8],
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
         let reader = store.temp_inner_reader()?;
 
         let query = Calf::Borrowed(query);
 
-        let output: Box<dyn layers::__ExpandBeam + 'a> = match full.metric {
+        let output: Box<dyn layers::ExpandBeam + 'a> = match full.metric {
             Metric::L2 => mint!(query, reader, i8 => SquaredL2),
             Metric::InnerProduct => mint!(query, reader, i8 => InnerProduct),
             Metric::Cosine => mint!(query, reader, i8 => Cosine),
@@ -672,13 +658,12 @@ impl FullPrecisionImpl for i8 {
     }
 
     fn make_prune<'a>(
-        _: Hidden,
         full: &'a Full<Self>,
         store: &'a Store,
-    ) -> ANNResult<Box<dyn layers::__Prune + 'a>> {
+    ) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = store.temp_inner_reader()?;
 
-        let output: Box<dyn layers::__Prune> = match full.metric {
+        let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<i8, SquaredL2>::new(reader)),
             Metric::InnerProduct => Box::new(Prune::<i8, InnerProduct>::new(reader)),
             Metric::Cosine => Box::new(Prune::<i8, Cosine>::new(reader)),

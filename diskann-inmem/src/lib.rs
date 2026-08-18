@@ -15,7 +15,6 @@ mod counters;
 mod epoch;
 mod freelist;
 mod ids;
-mod iter;
 mod neighbors;
 mod tag;
 
@@ -33,19 +32,3 @@ mod test;
 #[doc(hidden)]
 pub mod integration;
 
-//----------------//
-// Internal Tools //
-//----------------//
-
-/// A "public" type that can only be constructed by this crate.
-///
-/// This helps with public traits with internal methods that we don't want users to call.
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct Hidden(());
-
-impl Hidden {
-    const fn new() -> Self {
-        Self(())
-    }
-}

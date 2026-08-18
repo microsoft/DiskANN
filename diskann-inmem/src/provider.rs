@@ -50,7 +50,6 @@ use diskann_utils::views::Matrix;
 use thiserror::Error;
 
 use crate::{
-    Hidden,
     counters::{Counters, LocalCounters},
     ids::IdMap,
     layers,
@@ -387,7 +386,7 @@ where
 pub struct SearchAccessor<'a> {
     neighbors: &'a Neighbors,
     ids: AdjacencyList<u32>,
-    expand_beam: Box<dyn layers::__ExpandBeam + 'a>,
+    expand_beam: Box<dyn layers::ExpandBeam + 'a>,
     buffer: Vec<(u32, f32)>,
 
     // The parent provider for the accessor.
@@ -399,7 +398,7 @@ pub struct SearchAccessor<'a> {
 impl<'a> SearchAccessor<'a> {
     pub(crate) fn new(
         neighbors: &'a Neighbors,
-        expand_beam: Box<dyn layers::__ExpandBeam + 'a>,
+        expand_beam: Box<dyn layers::ExpandBeam + 'a>,
         provider: &'a (dyn std::any::Any + Send + Sync),
         start_points: std::ops::Range<u32>,
         counters: LocalCounters<'a>,
@@ -436,7 +435,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || {
             for p in self.start_points.clone() {
-                match self.expand_beam.__evaluate(p, Hidden::new())? {
+                match self.expand_beam.evaluate(p)? {
                     Some(distance) => {
                         // Counters are no-ops without `integration-test`.
                         self.counters.get_vector(1);
@@ -481,7 +480,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 // `self.buffer` is long enough to hold all the IDs.
                 let processed = unsafe {
                     self.expand_beam
-                        .__expand_beam(&self.ids, &mut self.buffer, Hidden::new())
+                        .expand_beam(&self.ids, &mut self.buffer)
                 }?;
 
                 self.counters.get_vector(processed as u64);
@@ -721,7 +720,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 /// This type implements zero-copy access to the data within its parent provider during prunes.
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
-    prune: Box<dyn layers::__Prune + 'a>,
+    prune: Box<dyn layers::Prune + 'a>,
     keys: hashbrown::HashMap<u32, Option<layers::PruneKey>>,
     neighbors: &'a Neighbors,
     counters: LocalCounters<'a>,
@@ -729,7 +728,7 @@ pub struct PruneAccessor<'a> {
 
 impl<'a> PruneAccessor<'a> {
     pub(crate) fn new(
-        prune: Box<dyn layers::__Prune + 'a>,
+        prune: Box<dyn layers::Prune + 'a>,
         neighbors: &'a Neighbors,
         counters: LocalCounters<'a>,
     ) -> Self {
@@ -745,12 +744,12 @@ impl<'a> PruneAccessor<'a> {
 /// The distance computer for [`PruneAccessor`].
 #[derive(Debug)]
 pub struct Distance<'a> {
-    prune: &'a dyn layers::__Prune,
+    prune: &'a dyn layers::Prune,
     counters: LocalCounters<'a>,
 }
 
 impl<'a> Distance<'a> {
-    fn new(prune: &'a dyn layers::__Prune, counters: LocalCounters<'a>) -> Self {
+    fn new(prune: &'a dyn layers::Prune, counters: LocalCounters<'a>) -> Self {
         Self { prune, counters }
     }
 }
@@ -763,7 +762,7 @@ impl diskann_vector::DistanceFunction<layers::PruneKey, layers::PruneKey, f32> f
     #[inline]
     fn evaluate_similarity(&self, x: layers::PruneKey, y: layers::PruneKey) -> f32 {
         self.counters.distance_ref(1);
-        self.prune.__evaluate(x, y)
+        self.prune.evaluate(x, y)
     }
 }
 
@@ -802,7 +801,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     {
         self.keys.clear();
         self.keys.extend(itr.map(|i| (i, None)));
-        let count = self.prune.__prepare(self.keys.iter_mut())?;
+        let count = self.prune.prepare(self.keys.iter_mut())?;
         self.counters.get_vector(count.as_u64());
 
         Ok((self, Distance::new(&*self.prune, self.counters.fork())))
