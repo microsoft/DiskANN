@@ -6,6 +6,7 @@
 //! Product quantization types and functions used during disk-based search.
 
 mod pq_scratch;
+pub(crate) use pq_scratch::{PQBatchScratch, PQQueryComputerArgs, PQQueryComputerStorage};
 pub use pq_scratch::{PQQueryComputer, PQScratch};
 
 pub(crate) use crate::storage::quant::pq::PQData;

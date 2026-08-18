@@ -7,36 +7,98 @@
 use diskann::ANNResult;
 
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
+use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
 use diskann_vector::PreprocessedDistanceFunction;
+use std::sync::Arc;
 
 use crate::error::{diskann_error, ErrorKind};
 
-/// Preprocessed query-to-centroid distances for PQ codes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PQQueryComputerArgs {
+    dim: usize,
+    num_pq_chunks: usize,
+    num_centers: usize,
+}
+
+impl PQQueryComputerArgs {
+    pub(crate) fn new(dim: usize, num_pq_chunks: usize, num_centers: usize) -> Self {
+        Self {
+            dim,
+            num_pq_chunks,
+            num_centers,
+        }
+    }
+}
+
 #[derive(Debug)]
-pub struct PQQueryComputer {
+pub(crate) struct PQQueryComputerStorage {
     aligned_pqtable_dist_scratch: Poly<[f32], AlignedAllocator>,
     query_scratch: Vec<f32>,
     num_pq_chunks: usize,
     num_centers: usize,
 }
 
-impl PQQueryComputer {
-    /// Create an empty query computer for the given PQ schema.
-    pub(crate) fn new(dim: usize, num_pq_chunks: usize, num_centers: usize) -> ANNResult<Self> {
-        let aligned_pqtable_dist_scratch =
-            Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128)
-                .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+impl TryAsPooled<PQQueryComputerArgs> for PQQueryComputerStorage {
+    type Error = diskann::ANNError;
+
+    fn try_create(args: PQQueryComputerArgs) -> Result<Self, Self::Error> {
+        let aligned_pqtable_dist_scratch = Poly::broadcast(
+            0f32,
+            args.num_centers * args.num_pq_chunks,
+            AlignedAllocator::A128,
+        )
+        .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+
         Ok(Self {
             aligned_pqtable_dist_scratch,
-            query_scratch: vec![0.0; dim],
-            num_pq_chunks,
-            num_centers,
+            query_scratch: vec![0.0; args.dim],
+            num_pq_chunks: args.num_pq_chunks,
+            num_centers: args.num_centers,
+        })
+    }
+
+    fn try_modify(&mut self, args: PQQueryComputerArgs) -> Result<(), Self::Error> {
+        if self.query_scratch.len() != args.dim
+            || self.num_pq_chunks != args.num_pq_chunks
+            || self.num_centers != args.num_centers
+        {
+            *self = Self::try_create(args)?;
+        }
+        Ok(())
+    }
+}
+
+/// Preprocessed query-to-centroid distances for PQ codes.
+#[derive(Debug)]
+pub struct PQQueryComputer {
+    storage: PoolOption<PQQueryComputerStorage>,
+}
+
+impl PQQueryComputer {
+    /// Create an empty query computer for the given PQ schema.
+    #[cfg(test)]
+    pub(crate) fn new(dim: usize, num_pq_chunks: usize, num_centers: usize) -> ANNResult<Self> {
+        Ok(Self {
+            storage: PoolOption::try_non_pooled_create(PQQueryComputerArgs::new(
+                dim,
+                num_pq_chunks,
+                num_centers,
+            ))?,
+        })
+    }
+
+    pub(crate) fn pooled(
+        pool: &Arc<ObjectPool<PQQueryComputerStorage>>,
+        args: PQQueryComputerArgs,
+    ) -> ANNResult<Self> {
+        Ok(Self {
+            storage: PoolOption::try_pooled(pool, args)?,
         })
     }
 
     /// Copy a full-precision query into the preprocessing buffer.
     pub(crate) fn set(&mut self, query: &[f32]) -> ANNResult<()> {
-        let dim = self.query_scratch.len();
+        let dim = self.storage.query_scratch.len();
         if query.len() != dim {
             return Err(diskann_error!(
                 ErrorKind::DimensionMismatchError,
@@ -44,16 +106,20 @@ impl PQQueryComputer {
                 query.len()
             ));
         }
-        self.query_scratch.copy_from_slice(query);
+        self.storage.query_scratch.copy_from_slice(query);
         Ok(())
     }
 
     pub(crate) fn lookup_table(&self) -> &[f32] {
-        &self.aligned_pqtable_dist_scratch
+        &self.storage.aligned_pqtable_dist_scratch
     }
 
     pub(super) fn preprocessing_buffers(&mut self) -> (&[f32], &mut [f32]) {
-        (&self.query_scratch, &mut self.aligned_pqtable_dist_scratch)
+        let storage = &mut *self.storage;
+        (
+            &storage.query_scratch,
+            &mut storage.aligned_pqtable_dist_scratch,
+        )
     }
 }
 
@@ -61,13 +127,14 @@ impl PreprocessedDistanceFunction<&[u8], f32> for PQQueryComputer {
     fn evaluate_similarity(&self, code: &[u8]) -> f32 {
         assert_eq!(
             code.len(),
-            self.num_pq_chunks,
+            self.storage.num_pq_chunks,
             "PQ code has the wrong number of chunks",
         );
         code.iter()
             .enumerate()
             .map(|(chunk, &center)| {
-                self.aligned_pqtable_dist_scratch[chunk * self.num_centers + center as usize]
+                self.storage.aligned_pqtable_dist_scratch
+                    [chunk * self.storage.num_centers + center as usize]
             })
             .sum()
     }
@@ -76,8 +143,8 @@ impl PreprocessedDistanceFunction<&[u8], f32> for PQQueryComputer {
 #[derive(Debug)]
 /// PQ scratch
 pub struct PQScratch {
-    /// Preprocessed query state shared by graph and flat PQ search.
-    pub query_computer: PQQueryComputer,
+    /// Aligned PQ table distance scratch.
+    pub aligned_pqtable_dist_scratch: Poly<[f32], AlignedAllocator>,
 
     /// Aligned dist scratch, must be at least diskann MAX_DEGREE
     /// This is used to temporarily save the pq distance between query vector to the candidate vectors.
@@ -86,6 +153,9 @@ pub struct PQScratch {
     /// Aligned pq coord scratch, must be at least [N_CHUNKS * MAX_DEGREE]
     /// This is used to store the pq coordinates of the candidate vectors.
     pub aligned_pq_coord_scratch: Poly<[u8], AlignedAllocator>,
+
+    /// Query scratch buffer stored as `f32`.
+    pub query_scratch: Vec<f32>,
 }
 
 impl PQScratch {
@@ -104,11 +174,15 @@ impl PQScratch {
                 .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
         let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
             .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+        let aligned_pqtable_dist_scratch =
+            Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128)
+                .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
 
         Ok(Self {
-            query_computer: PQQueryComputer::new(dim, num_pq_chunks, num_centers)?,
+            aligned_pqtable_dist_scratch,
             aligned_dist_scratch,
             aligned_pq_coord_scratch,
+            query_scratch: vec![0.0; dim],
         })
     }
 
@@ -120,10 +194,44 @@ impl PQScratch {
     ///
     /// Returns `DimensionMismatchError` if `query.len() != query_scratch.len()`.
     pub fn set(&mut self, query: &[f32]) -> ANNResult<()> {
-        self.query_computer.set(query)
+        let dim = self.query_scratch.len();
+        if query.len() != dim {
+            return Err(diskann_error!(
+                ErrorKind::DimensionMismatchError,
+                "PQScratch::set: expected query of length {dim}, got {}",
+                query.len()
+            ));
+        }
+        self.query_scratch.copy_from_slice(query);
+        Ok(())
     }
 
     /// Return the largest number of PQ vectors that fit in the batch scratch.
+    #[cfg(test)]
+    pub(crate) fn max_vectors(&self) -> usize {
+        self.aligned_dist_scratch.len()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PQBatchScratch {
+    pub(crate) aligned_dist_scratch: Poly<[f32], AlignedAllocator>,
+    pub(crate) aligned_pq_coord_scratch: Poly<[u8], AlignedAllocator>,
+}
+
+impl PQBatchScratch {
+    pub(crate) fn new(graph_degree: usize, num_pq_chunks: usize) -> ANNResult<Self> {
+        let aligned_pq_coord_scratch =
+            Poly::broadcast(0u8, graph_degree * num_pq_chunks, AlignedAllocator::A128)
+                .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+        let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
+            .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+        Ok(Self {
+            aligned_dist_scratch,
+            aligned_pq_coord_scratch,
+        })
+    }
+
     pub(crate) fn max_vectors(&self) -> usize {
         self.aligned_dist_scratch.len()
     }
@@ -131,11 +239,14 @@ impl PQScratch {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use diskann_quantization::num::PowerOfTwo;
+    use diskann_utils::object_pool::ObjectPool;
     use diskann_vector::PreprocessedDistanceFunction;
     use rstest::rstest;
 
-    use super::{PQQueryComputer, PQScratch};
+    use super::{PQQueryComputer, PQQueryComputerArgs, PQQueryComputerStorage, PQScratch};
 
     use crate::error::{error_kind, ErrorKind};
 
@@ -143,10 +254,28 @@ mod tests {
     fn query_computer_scores_pq_code() {
         let mut computer = PQQueryComputer::new(2, 2, 3).unwrap();
         computer
-            .aligned_pqtable_dist_scratch
+            .preprocessing_buffers()
+            .1
             .copy_from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
 
         assert_eq!(computer.evaluate_similarity(&[1, 2]), 6.0);
+    }
+
+    #[test]
+    fn query_computer_reuses_pooled_storage() {
+        let args = PQQueryComputerArgs::new(2, 2, 3);
+        let pool = Arc::new(ObjectPool::<PQQueryComputerStorage>::try_new(args, 0, None).unwrap());
+
+        let first_ptr = {
+            let computer = PQQueryComputer::pooled(&pool, args).unwrap();
+            computer.lookup_table().as_ptr()
+        };
+        let second_ptr = {
+            let computer = PQQueryComputer::pooled(&pool, args).unwrap();
+            computer.lookup_table().as_ptr()
+        };
+
+        assert_eq!(first_ptr, second_ptr);
     }
 
     #[rstest]
@@ -162,7 +291,7 @@ mod tests {
             PQScratch::new(graph_degree, dim, num_pq_chunks, num_centers).unwrap();
 
         assert_eq!(
-            (pq_scratch.query_computer.lookup_table().as_ptr() as usize) % PowerOfTwo::V128.raw(),
+            (pq_scratch.aligned_pqtable_dist_scratch.as_ptr() as usize) % PowerOfTwo::V128.raw(),
             0
         );
         assert_eq!(
@@ -180,7 +309,7 @@ mod tests {
         pq_scratch.set(&query).unwrap();
 
         (0..query.len()).for_each(|i| {
-            assert_eq!(pq_scratch.query_computer.query_scratch[i], query[i]);
+            assert_eq!(pq_scratch.query_scratch[i], query[i]);
         });
     }
 

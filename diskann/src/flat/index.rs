@@ -62,9 +62,7 @@ where
             .create_visitor(provider, context)
             .into_ann_result()?;
 
-        let computer = strategy
-            .build_query_computer(provider, query)
-            .into_ann_result()?;
+        let computer = strategy.build_query_computer(query).into_ann_result()?;
 
         let k = k.get();
         let mut queue = NeighborPriorityQueue::new(k);

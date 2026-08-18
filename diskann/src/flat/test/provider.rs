@@ -418,7 +418,6 @@ impl SearchStrategy<Provider, &[f32]> for Strategy {
 
     fn build_query_computer(
         &self,
-        _provider: &Provider,
         from: &[f32],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         if from.len() != self.dim {
