@@ -504,9 +504,9 @@ mod minmax_quantizer_tests {
         assert!(
             (reconstruction_error / norm) <= relative_err,
             "Expected vector : {:?} to be reconstructed within error {} but instead got : {:?}, with error {} for dim : {}",
-            &vector,
+            vector,
             relative_err,
-            &reconstructed,
+            reconstructed,
             reconstruction_error / norm,
             dim,
         );
@@ -522,7 +522,7 @@ mod minmax_quantizer_tests {
             "Encoded vector with dim : {dim} is {:?}, got error : {} for vector : {:?}",
             encoded.reborrow(),
             (code_sum - expected_code_sum).abs(),
-            &vector,
+            vector,
         );
         let recon_norm_sq = reconstructed.iter().map(|x| x * x).sum::<f32>();
         assert!((encoded.reborrow().meta().norm_squared - recon_norm_sq).abs() <= 1e-3);
