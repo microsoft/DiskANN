@@ -413,6 +413,9 @@ fn build_symmetric_edge_csr(
 
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in neighbors {
+            if !neighbor.is_assigned() {
+                continue;
+            }
             let target = neighbor.target as usize;
             count_directed_edge(leaf, point_count, source, target, seen, offsets)?;
             count_directed_edge(leaf, point_count, target, source, seen, offsets)?;
@@ -432,6 +435,9 @@ fn build_symmetric_edge_csr(
 
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in neighbors {
+            if !neighbor.is_assigned() {
+                continue;
+            }
             let target = neighbor.target as usize;
             write_directed_edge(
                 point_count,
@@ -880,6 +886,34 @@ mod tests {
         assert_eq!(offsets, [0, 1, 3, 4]);
         assert_eq!(edges, [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)]);
     }
+    #[test]
+    fn symmetric_edge_csr_omits_unassigned_neighbors() {
+        let point_ids = [10, 20];
+        let neighbors = [LeafNeighbor::new(1, 1.0), LeafNeighbor::default()];
+        let mut seen = vec![false; 4];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+
+        let count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            1,
+            &neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(offsets, [0, 1, 2]);
+        assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
+    }
+
     #[test]
     fn symmetric_edge_csr_deduplicates_edges_seen_from_both_endpoints() {
         let point_ids = [10, 20];
