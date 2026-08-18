@@ -7,20 +7,95 @@
 
 use diskann_utils::future::SendFuture;
 use hashbrown::HashSet;
+use std::num::NonZeroUsize;
+use thiserror::Error;
 
 use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNResult,
+    ANNError, ANNResult,
     error::IntoANNResult,
     graph::{
-        DiverseSearchParams,
-        glue::{SearchPostProcess, SearchStrategy},
+        glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::{AttributeValueProvider, DiverseNeighborQueue, NeighborQueue},
     provider::DataProvider,
 };
+
+/// Error type for [`DiverseSearchParams`] parameter validation.
+#[derive(Debug, Error)]
+pub enum DiverseSearchError {
+    #[error("total k_value cannot be zero")]
+    TotalKZero,
+    #[error("diverse k_value cannot be zero")]
+    DiverseKZero,
+    #[error("diverse k_value ({diverse_results_k}) cannot exceed total k_value ({total_k_value})")]
+    DiverseKGreaterThanTotalK {
+        diverse_results_k: usize,
+        total_k_value: usize,
+    },
+}
+
+impl From<DiverseSearchError> for ANNError {
+    #[track_caller]
+    fn from(err: DiverseSearchError) -> Self {
+        Self::new(err)
+    }
+}
+
+/// Error type for [`Diverse`] parameter validation.
+#[derive(Debug, Error)]
+pub enum DiverseError {
+    #[error("l_value ({l_value}) must be greater than or equal to total_k_value ({total_k_value})")]
+    LValueTooSmall {
+        l_value: usize,
+        total_k_value: usize,
+    },
+}
+
+impl From<DiverseError> for ANNError {
+    #[track_caller]
+    fn from(err: DiverseError) -> Self {
+        Self::new(err)
+    }
+}
+
+// Parameters for diverse search
+#[derive(Clone, Debug)]
+pub struct DiverseSearchParams<P>
+where
+    P: crate::neighbor::AttributeValueProvider,
+{
+    pub diverse_attribute_id: usize,
+    pub diverse_results_k: NonZeroUsize,
+    pub total_k_value: NonZeroUsize,
+    pub attribute_provider: std::sync::Arc<P>,
+}
+
+impl<P> DiverseSearchParams<P>
+where
+    P: crate::neighbor::AttributeValueProvider,
+{
+    pub fn new(
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
+        total_k_value: usize,
+        attribute_provider: std::sync::Arc<P>,
+    ) -> Result<Self, DiverseSearchError> {
+        let diverse_results_k =
+            NonZeroUsize::new(diverse_results_k).ok_or(DiverseSearchError::DiverseKZero)?;
+        let total_k_value =
+            NonZeroUsize::new(total_k_value).ok_or(DiverseSearchError::TotalKZero)?;
+
+        Ok(Self {
+            diverse_attribute_id,
+            diverse_results_k,
+            total_k_value,
+            attribute_provider,
+        })
+    }
+}
 
 /// Parameters for diversity-aware search.
 ///
@@ -41,11 +116,21 @@ where
     P: AttributeValueProvider,
 {
     /// Create new diverse search parameters.
-    pub fn new(inner: Knn, diverse_params: DiverseSearchParams<P>) -> Self {
-        Self {
+    pub fn new(inner: Knn, diverse_params: DiverseSearchParams<P>) -> Result<Self, DiverseError> {
+        let l_value = inner.l_value().get();
+        let total_k_value = diverse_params.total_k_value.get();
+
+        if l_value < total_k_value {
+            return Err(DiverseError::LValueTooSmall {
+                l_value,
+                total_k_value,
+            });
+        }
+
+        Ok(Self {
             inner,
             diverse_params,
-        }
+        })
     }
 
     /// Returns a reference to the inner k-NN search parameters.
@@ -72,8 +157,8 @@ where
         let attribute_provider = self.diverse_params.attribute_provider.clone();
         let diverse_queue = DiverseNeighborQueue::new(
             self.inner.l_value().get(),
-            self.inner.k_value(),
-            self.diverse_params.diverse_results_k,
+            self.diverse_params.total_k_value,
+            self.diverse_params.diverse_results_k.get(),
             attribute_provider,
         );
 
@@ -96,7 +181,7 @@ impl<'a, DP, S, T, P> Search<'a, DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
     T: Copy + Send + Sync,
-    S: SearchStrategy<'a, DP, T>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;

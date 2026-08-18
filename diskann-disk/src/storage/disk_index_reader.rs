@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{storage::PQStorage, utils::load_metadata_from_file};
+use diskann_providers::{
+    model::FixedChunkPQTable, storage::PQStorage, utils::load_metadata_from_file,
+};
 
 use crate::search::pq::PQData;
 use tracing::info;
@@ -29,11 +31,8 @@ impl DiskIndexReader {
         storage_provider: &Storage,
     ) -> ANNResult<Self> {
         let pq_storage = PQStorage::new(&pq_pivot_path, &pq_compressed_data_path, None);
-        let pq_pivot_table = pq_storage.load_pq_pivots_bin::<Storage>(
-            &pq_pivot_path,
-            0, // Use 0 to infer num_pq_chunks from the file
-            storage_provider,
-        )?;
+        let pq_pivot_table =
+            FixedChunkPQTable::try_from(pq_storage.load_pivots(storage_provider)?)?;
 
         // Auto-detect number of points from compressed PQ file metadata
         let metadata = load_metadata_from_file(storage_provider, &pq_compressed_data_path)?;
@@ -67,7 +66,6 @@ impl DiskIndexReader {
 
 #[cfg(test)]
 mod disk_index_storage_test {
-    use diskann::ANNErrorKind;
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
@@ -103,7 +101,6 @@ mod disk_index_storage_test {
             Ok(_) => panic!("this function should not have succeeded"),
             Err(err) => err,
         };
-        assert_eq!(err.kind(), ANNErrorKind::PQError);
         assert!(err.to_string().contains("PQ k-means pivot file not found"));
     }
 

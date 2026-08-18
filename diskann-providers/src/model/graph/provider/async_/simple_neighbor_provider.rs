@@ -7,6 +7,7 @@ use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
+use diskann_utils::lazy_format;
 use diskann_vector::contains::ContainsSimd;
 use tracing::trace;
 
@@ -141,8 +142,6 @@ impl HasId for SimpleNeighborProviderAsync {
 
 impl SimpleNeighborProviderAsync {
     /// Load the graph directly from a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::load_graph`].
     pub fn load_direct<P>(provider: &P, path: &str) -> ANNResult<Self>
     where
         P: StorageReadProvider,
@@ -156,9 +155,11 @@ impl SimpleNeighborProviderAsync {
                 //
                 // Work backwards from this value to determine the internal `max_points`.
                 let max_points = num_points.checked_sub(num_start_points).ok_or_else(|| {
-                    ANNError::log_index_error(format_args!(
+                    ANNError::message(lazy_format!(
+                        move,
                         "expected {} start points but the on-disk dataset only has {} total points",
-                        num_start_points, num_points,
+                        num_start_points,
+                        num_points,
                     ))
                 })?;
 
@@ -175,8 +176,6 @@ impl SimpleNeighborProviderAsync {
     }
 
     /// Save `self` directly to a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::save_graph`].
     pub fn save_direct<P>(&self, provider: &P, start_point: u32, path: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,

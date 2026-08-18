@@ -20,12 +20,10 @@ env:
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  # The features we want to explicitly test. For example, the `flatbuffers-build` feature
-  # of `diskann-quantization` requires additional setup and so must not be included by default.
-  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
 
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
-  SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
+  SDE_VERSION: "sde-external-10.8.0-2026-03-15-lin"
+  SDE_SHA256: "50b320cd226acef7a491f5b321fc1be3c3c7984f9e27a456e64894b5b0979dd3"
 
 defaults:
   run:
@@ -65,12 +63,16 @@ jobs:
       - clippy-features
       - clippy-no-default-features
       - basics
+      - docs
       - codeql
       - baseline
       - sde
       - test-workspace
       - test-workspace-features
       - coverage
+      - vectorset-clippy
+      - vectorset-fmt
+      - vectorset-build
     if: ${{ always() && (cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
     steps:
       - name: Gate failure
@@ -87,8 +89,7 @@ jobs:
       - clippy-default-features
       - clippy-features
       - clippy-no-default-features
-      # TODO: Re-enable docs check later
-      # - docs
+      - docs
     steps:
       - run: exit 0
 
@@ -96,10 +97,10 @@ jobs:
     name: format check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust
         run: rustup show && rustup component add rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Check fmt
       - name: "cargo fmt --check"
         run: |
@@ -120,10 +121,10 @@ jobs:
     name: clippy-default-features (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust
         run: rustup show && rustup component add clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
 
@@ -138,34 +139,33 @@ jobs:
     name: clippy-features (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust
         run: rustup show && rustup component add clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: "clippy --workspace --all-targets"
         run: |
           set -euxo pipefail
           cargo clippy --locked --workspace \
             --all-targets \
+            --all-features \
             --no-deps \
-            --features ${{ env.DISKANN_FEATURES }} \
             --config "$RUST_CONFIG" \
             -- -Dwarnings
-
 
   clippy-no-default-features:
     name: clippy (no default features)
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
 
       - name: Install Rust
         run: rustup show && rustup component add clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Clippy - select crates (no default features)
         run: |
@@ -187,7 +187,7 @@ jobs:
             cargo clippy --locked --package "$crate" \
               --no-default-features \
               --all-targets \
-              --profile ci \
+              --profile test \
               --no-deps \
               --config "$RUST_CONFIG" \
               -- -Dwarnings
@@ -202,40 +202,94 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           languages: rust
 
       - name: Install Rust
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Build workspace
-        run: cargo build --workspace --locked --profile ci
+        run: cargo build --workspace --locked --profile test
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           category: "/language:rust"
 
-  # TODO: Re-enable docs check later
-  # docs:
-  #   name: docs
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Install Rust
-  #       run: rustup show
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: "doc --workspace --no-deps"
-  #       run: cargo doc --workspace --no-deps --document-private-items
-  #       env:
-  #         RUSTDOCFLAGS: -Dwarnings
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: "doc --workspace --no-deps"
+        run: cargo doc --locked --workspace --no-deps --features linalg,flatbuffers,experimental_diversity_search
+        env:
+          RUSTDOCFLAGS: -D rustdoc::all
 
+  vectorset-fmt:
+    name: vectorset format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: rustup show && rustup component add rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Check fmt
+      - name: "vectorset: cargo fmt --check"
+        run: |
+          cd vectorset
+          if ! cargo fmt --all --check; then
+            printf "Please run \`cargo fmt --all\` to fix rustfmt errors.\n" >&2
+            exit 1
+          fi
+
+  vectorset-clippy:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - windows-latest
+      fail-fast: false
+    name: vectorset-clippy (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: "vectorset: clippy --all-targets"
+        run: |
+          cd vectorset
+          cargo clippy --locked --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  vectorset-build:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - windows-latest
+      fail-fast: false
+    name: vectorset-build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: "vectorset: build debug & release"
+        run: |
+          cd vectorset
+          cargo build --locked
+          cargo build --locked --release
 
   # Test micro-architecture detection and dispatching.
   #
@@ -264,26 +318,28 @@ jobs:
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -nhm --"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Cache Intel SDE
         id: cache-sde
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: intel-sde
-          key: intel-${{ env.SDE_VERSION }}
+          key: intel-${{ env.SDE_VERSION }}-${{ env.SDE_SHA256 }}
 
       - name: Download Intel SDE
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
-          wget -qO intel-sde.tar.xz "$SDE_URL"
+          SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --silent --show-error --output intel-sde.tar.xz "$SDE_URL"
+          echo "${SDE_SHA256}  intel-sde.tar.xz" | sha256sum --check
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
           rm intel-sde.tar.xz
@@ -294,13 +350,12 @@ jobs:
       - name: "SDE Baseline Tests (Nehalem)"
         run: |
           set -euxo pipefail
-          cargo test --locked --profile ci \
+          cargo test --locked \
               --package diskann-wide \
               --package diskann-vector \
               --package diskann-quantization \
               -- --skip compile_tests \
                  --skip pivots::tests::run_test_happy_path
-
 
   # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
   #
@@ -325,26 +380,28 @@ jobs:
       WIDE_TEST_MIN_ARCH: "x86-64-v4"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Cache Intel SDE
         id: cache-sde
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: intel-sde
-          key: intel-${{ env.SDE_VERSION }}
+          key: intel-${{ env.SDE_VERSION }}-${{ env.SDE_SHA256 }}
 
       - name: Download Intel SDE
         if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
-          wget -qO intel-sde.tar.xz "$SDE_URL"
+          SDE_URL="https://downloadmirror.intel.com/915934/${SDE_VERSION}.tar.xz"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --silent --show-error --output intel-sde.tar.xz "$SDE_URL"
+          echo "${SDE_SHA256}  intel-sde.tar.xz" | sha256sum --check
           mkdir -p intel-sde
           tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
           rm intel-sde.tar.xz
@@ -355,7 +412,7 @@ jobs:
       - name: "SDE Tests (AVX-512)"
         run: |
           set -euxo pipefail
-          cargo test --locked --profile ci \
+          cargo test --locked \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
@@ -373,7 +430,7 @@ jobs:
           - ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
 
@@ -381,17 +438,17 @@ jobs:
         run: rustup show
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-nextest
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo nextest run --locked --workspace --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
@@ -404,7 +461,7 @@ jobs:
           - ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
 
@@ -412,21 +469,20 @@ jobs:
         run: rustup show
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-nextest
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
           cargo nextest run --locked --workspace \
-            --cargo-profile ci \
-            --config "$RUST_CONFIG" \
-            --features ${{ env.DISKANN_FEATURES }}
+            --all-features \
+            --config "$RUST_CONFIG"
 
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --all-features --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -434,7 +490,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.actor != 'dependabot[bot]'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
           fetch-depth: 0
@@ -443,20 +499,20 @@ jobs:
         run: rustup show && rustup component add llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-llvm-cov
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
         with:
           tool: cargo-nextest
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest --locked --cargo-profile ci \
+          cargo llvm-cov nextest --locked \
             --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
@@ -465,12 +521,12 @@ jobs:
         env:
           RUSTFLAGS: "--cfg=miri"
         run: |
-          cargo +nightly llvm-cov nextest --locked --cargo-profile ci \
+          cargo +nightly llvm-cov nextest --locked \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: lcov.info
           fail_ci_if_error: true
@@ -479,7 +535,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload miri coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: lcov_miri.info
           fail_ci_if_error: true
@@ -498,12 +554,12 @@ jobs:
       LLVM_LINES_GROWTH_THRESHOLD: 5
     steps:
       - name: Checkout current branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: pr
 
       - name: Checkout base ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
@@ -516,7 +572,7 @@ jobs:
       - name: Install cargo-llvm-lines
         run: cargo install cargo-llvm-lines --locked
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             pr -> target

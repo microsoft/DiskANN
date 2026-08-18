@@ -2,6 +2,9 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+//! Generates synthetic labels for vector datasets.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::generate_synthetic_labels_utils::generate_labels;
@@ -11,7 +14,7 @@ use tracing::{error, info};
 #[derive(Debug, Parser)]
 struct GenerateSyntheticLabelsArgs {
     /// Filename for saving the label file
-    #[arg(long = "output_file", required = true)]
+    #[arg(long = "output-file", required = true)]
     pub output_file: String,
 
     /// Number of vectors

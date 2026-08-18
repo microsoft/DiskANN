@@ -8,7 +8,7 @@
 use std::{future::Future, sync::Mutex};
 
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult, default_post_processor,
+    ANNError, ANNResult, convert_error, default_post_processor,
     error::IntoANNResult,
     graph::{
         AdjacencyList,
@@ -50,45 +50,17 @@ use crate::{
 // Error Promotion //
 /////////////////////
 
-impl From<Bridge<QueryComputerError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<QueryComputerError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<diskann_quantization::spherical::CompressionError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::CompressionError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<diskann_quantization::spherical::iface::QueryDistanceError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::iface::QueryDistanceError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
-
-impl From<Bridge<spherical::UnsupportedMetric>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<spherical::UnsupportedMetric>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+convert_error!(Bridge<QueryComputerError>);
+convert_error!(Bridge<spherical::CompressionError>);
+convert_error!(Bridge<spherical::iface::QueryDistanceError>);
+convert_error!(Bridge<spherical::UnsupportedMetric>);
 
 /// An allocator error scoped to the spherical store.
 #[derive(Debug, Clone, Copy, Error)]
 #[error(transparent)]
 pub struct AllocatorError(#[from] diskann_quantization::alloc::AllocatorError);
 
-impl From<AllocatorError> for ANNError {
-    #[track_caller]
-    fn from(err: AllocatorError) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+convert_error!(AllocatorError);
 
 ///////////
 // Error //
@@ -503,9 +475,8 @@ where
 // Strategies //
 ////////////////
 
-/// Unlike [`super::Quantized`], searches over a [`SphericalStore`] support different
-/// [`spherical::iface::QueryLayout`]s. This strategy type allows the user to specify the
-/// desired layout explicitly.
+/// Searches over a [`SphericalStore`] support different [`spherical::iface::QueryLayout`]s.
+/// This strategy type allows the user to specify the desired layout explicitly.
 #[derive(Debug, Clone, Copy)]
 pub struct Quantized {
     layout: spherical::iface::QueryLayout,
@@ -523,7 +494,7 @@ impl Quantized {
         }
     }
 
-    /// Construct a new [`QuantizedStrategy`] for index search using the specified layout.
+    /// Construct a new [`Quantized`] strategy for index search using the specified layout.
     pub fn search(layout: spherical::iface::QueryLayout) -> Self {
         Self {
             layout,
@@ -534,7 +505,7 @@ impl Quantized {
 
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
-/// approximate search, so the post-processing step includes a [`Rerank`] stage.
+/// approximate search, so the post-processing step includes a `Rerank` stage.
 impl<'a, D, Ctx, T> SearchStrategy<'a, FullPrecisionProvider<T, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
@@ -569,7 +540,7 @@ where
 
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
-/// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
+/// post-processing step just copies candidate IDs forward via `RemoveDeletedIdsAndCopy`.
 impl<'a, D, Ctx, T> SearchStrategy<'a, DefaultProvider<NoStore, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
@@ -635,7 +606,12 @@ where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
-    Quantized: SearchStrategy<'a, DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<
+            'a,
+            DefaultProvider<V, SphericalStore, D, Ctx>,
+            &'a [T],
+            SearchAccessor = QuantAccessor<'a, V, D, Ctx>,
+        >,
 {
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -702,13 +678,7 @@ pub enum RQError {
     FullPrecisionConversionErr(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl From<RQError> for ANNError {
-    #[cold]
-    #[track_caller]
-    fn from(err: RQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
+diskann::convert_error!(RQError);
 
 ///////////
 // Tests //

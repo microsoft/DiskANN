@@ -18,8 +18,7 @@ use crate::{
     search::{self, Search, graph::Strategy},
 };
 
-/// A built-in helper for benchmarking the range search method
-/// [`graph::DiskANNIndex::range_search`].
+/// A built-in helper for benchmarking [`graph::search::Range`] searches.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
 /// [`search::search_all`] and provides some basic additional metrics for
@@ -80,6 +79,7 @@ impl<DP, T, S> Search for Range<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    graph::search::Range: for<'a> graph::Search<'a, DP, S, &'a [T]>,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -91,7 +91,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l()))
+        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l().into()))
     }
 
     async fn search<O>(
@@ -262,7 +262,11 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             range.clone(),
-            graph::search::Range::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+            graph::search::Range::builder(10, 2.0)
+                .initial_slack(0.8)
+                .range_slack(1.2)
+                .build()
+                .unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -281,11 +285,19 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Range::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::search::Range::builder(10, 2.0)
+                    .initial_slack(0.8)
+                    .range_slack(1.2)
+                    .build()
+                    .unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Range::with_options(None, 15, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::search::Range::builder(15, 2.0)
+                    .initial_slack(0.8)
+                    .range_slack(1.2)
+                    .build()
+                    .unwrap(),
                 setup.clone(),
             ),
         ];

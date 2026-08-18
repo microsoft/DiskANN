@@ -15,12 +15,9 @@ use std::{
 };
 
 use diskann::{utils::VectorRepr, ANNError};
-use diskann_disk::utils::{
-    aligned_file_reader::{
-        traits::{AlignedFileReader, AlignedReaderFactory},
-        AlignedRead,
-    },
-    AlignedFileReaderFactory,
+use diskann_disk::search::provider::aligned_file_reader::{
+    traits::{AlignedFileReader, AlignedReaderFactory},
+    AlignedFileReaderFactory, AlignedRead,
 };
 use diskann_providers::utils::{create_thread_pool, RayonThreadPool};
 use diskann_quantization::alloc::{AlignedAllocator, Poly};

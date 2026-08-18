@@ -153,8 +153,7 @@ pub(crate) fn search(
     dist_out: &mut [f32],
 ) -> Result<usize> {
     debug_assert_eq!(ids_out.len(), dist_out.len());
-    let k = ids_out.len();
-    let knn = Knn::new(k, l, None).map_err(ANNError::from)?;
+    let knn = Knn::new(l, None).map_err(ANNError::from)?;
 
     let mut buffer = IdDistance::new(ids_out, dist_out);
     runtime.block_on(index.search(knn, &FullPrecision, &DefaultContext, query, &mut buffer))?;
@@ -475,8 +474,7 @@ pub(crate) fn search_mut(
     dist_out: &mut [f32],
 ) -> Result<usize> {
     debug_assert_eq!(ids_out.len(), dist_out.len());
-    let k = ids_out.len();
-    let knn = Knn::new(k, l, None).map_err(ANNError::from)?;
+    let knn = Knn::new(l, None).map_err(ANNError::from)?;
 
     let mut buffer = IdDistance::new(ids_out, dist_out);
     runtime.block_on(index.search(knn, &FullPrecision, &DefaultContext, query, &mut buffer))?;

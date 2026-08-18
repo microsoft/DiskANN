@@ -4,7 +4,7 @@
  */
 
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::Score,
     utils::datatype::{AsDataType, DataType},
 };
 use serde::{Deserialize, Serialize};
@@ -15,16 +15,14 @@ pub(crate) mod recall;
 pub(crate) mod streaming;
 pub(crate) mod tokio;
 
-pub(crate) const DATA_TYPE_MISMATCH: FailureScore = FailureScore(1000);
+pub(crate) const DATA_TYPE_MISMATCH: u32 = 1000;
 
-pub(crate) fn match_data_type<T>(data_type: DataType) -> Result<MatchScore, FailureScore>
+pub(crate) fn match_data_type<T>(score: &mut Score, data_type: DataType)
 where
     T: AsDataType,
 {
-    if T::is_match(data_type) {
-        Ok(MatchScore(0))
-    } else {
-        Err(DATA_TYPE_MISMATCH)
+    if !T::is_match(data_type) {
+        score.fail(DATA_TYPE_MISMATCH, &T::describe(data_type))
     }
 }
 
@@ -103,65 +101,6 @@ where
         }
     }
 }
-
-/// Backend implementations are gated behind additive features to reduce compilation time
-/// when only a subset of benchmarks are needed.
-///
-/// However, when benchmarks are feature gated, we want to provide a useful diagnostic when
-/// users try to run a benchmark targeting the blocked out method.
-///
-/// To do this, we use stub implementations that use "dispatch matching" to match the same
-/// `CentralDispatch` enum as the base benchmark, but return an error that describes
-/// feature required to enable the backend benchmark.
-macro_rules! stub_impl {
-    ($feature:literal, $input:path $(,)?) => {
-        #[cfg(not(feature = $feature))]
-        mod imp {
-            use diskann_benchmark_runner::{
-                benchmark::{FailureScore, MatchScore},
-                output::Output,
-                Benchmark, Checkpoint, Registry,
-            };
-
-            use crate::inputs;
-
-            pub(super) fn register(name: &str, registry: &mut Registry) -> anyhow::Result<()> {
-                Ok(registry.register(name, Stub)?)
-            }
-
-            /// An empty placeholder to provide a hint for the necessary feature.
-            pub(super) struct Stub;
-
-            impl Benchmark for Stub {
-                type Input = $input;
-                type Output = serde_json::Value;
-
-                fn try_match(&self, _input: &$input) -> Result<MatchScore, FailureScore> {
-                    Err(FailureScore(0))
-                }
-
-                fn description(
-                    &self,
-                    f: &mut std::fmt::Formatter<'_>,
-                    _input: Option<&$input>,
-                ) -> std::fmt::Result {
-                    writeln!(f, "{}", concat!("Requires the \"", $feature, "\" feature"))
-                }
-
-                fn run(
-                    &self,
-                    _input: &$input,
-                    _checkpoint: Checkpoint<'_>,
-                    _output: &mut dyn Output,
-                ) -> anyhow::Result<serde_json::Value> {
-                    panic!("this function should not be called!");
-                }
-            }
-        }
-    };
-}
-
-pub(crate) use stub_impl;
 
 /////////////////
 // SmallBanner //

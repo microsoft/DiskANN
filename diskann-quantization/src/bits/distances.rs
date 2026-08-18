@@ -1662,7 +1662,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     ///
     /// # Strategy
     ///
-    /// Unpack each 16-byte chunk of `y` into 32 nibble values via [`unpack_half_bytes`],
+    /// Unpack each 16-byte chunk of `y` into 32 nibble values via `unpack_half`,
     /// then multiply with the corresponding 32 bytes of `x` using `_mm256_maddubs_epi16`
     /// (u8 × u8 → i16, pairwise horizontal add).
     ///
@@ -1797,7 +1797,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     /// # Strategy
     ///
     /// Unpack each 16-byte chunk of `y` into 64 crumb values via a two-level cascade:
-    /// first [`unpack_half_bytes`] splits bytes into nibbles, then a second pass splits
+    /// first `unpack_sub` splits bytes into nibbles, then a second pass splits
     /// nibbles into crumbs (masked with `0x03`). Each unpacked half is paired with 32
     /// bytes of `x` and multiplied via `_mm256_maddubs_epi16`.
     ///
@@ -2124,7 +2124,7 @@ retarget!(
 /// groups of 64-dimensions.
 ///
 /// For each group, we load the 64-bits of `y` into a word `bits`. And the four 64-bit words
-/// of the group in `x` in `b0`, `b1`, b2`, and `b3`.
+/// of the group in `x` in `b0`, `b1`, `b2`, and `b3`.
 ///
 /// Note that bit `i` in `b0` is bit-0 of the `i`-th value in ths group. Likewise, bit `i`
 /// in `b1` is bit-1 of the same word.

@@ -1,0 +1,116 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use std::io::Read;
+
+use diskann::ANNResult;
+use diskann_providers::storage::StorageReadProvider;
+use tracing::info;
+
+use crate::search::provider::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, A1};
+
+pub struct StorageProviderAlignedFileReader {
+    data: Vec<u8>,
+}
+
+impl StorageProviderAlignedFileReader {
+    pub fn new(
+        storage_provider: &impl StorageReadProvider,
+        file_name: &str,
+    ) -> ANNResult<StorageProviderAlignedFileReader> {
+        info!("Loading data from {}", file_name);
+        let file_length = storage_provider.get_length(file_name)?;
+
+        let mut data = vec![0u8; file_length as usize];
+        storage_provider
+            .open_reader(file_name)?
+            .read_exact(&mut data)?;
+
+        Ok(StorageProviderAlignedFileReader { data })
+    }
+}
+
+impl AlignedFileReader for StorageProviderAlignedFileReader {
+    type Alignment = A1;
+
+    fn read(&mut self, read_requests: &mut [AlignedRead<u8, A1>]) -> ANNResult<()> {
+        for read in read_requests {
+            let offset = read.offset();
+            let len = read.aligned_buf().len();
+            let aligned_buf = read.aligned_buf_mut();
+            aligned_buf.copy_from_slice(&self.data[offset as usize..offset as usize + len]);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Seek, SeekFrom};
+
+    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_utils::test_data_root;
+
+    use super::*;
+    use diskann_quantization::alloc::{AlignedAllocator, Poly};
+
+    fn test_index_path() -> String {
+        "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index"
+            .to_string()
+    }
+
+    fn setup_reader() -> StorageProviderAlignedFileReader {
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
+        StorageProviderAlignedFileReader::new(&storage_provider, &test_index_path()).unwrap()
+    }
+
+    #[test]
+    fn test_new_aligned_file_reader() {
+        let reader = setup_reader();
+        assert!(!(reader.data.is_empty()));
+    }
+
+    #[test]
+    fn test_read() {
+        let mut reader = setup_reader();
+
+        let read_length = 512;
+        let num_read = 10;
+        let mut aligned_mem =
+            Poly::broadcast(0u8, read_length * num_read, AlignedAllocator::A512).unwrap();
+
+        // create and add AlignedReads to the vector
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
+
+        let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
+            .iter_mut()
+            .enumerate()
+            .map(|(i, slice)| {
+                let offset = (i * read_length) as u64;
+                AlignedRead::new(offset, slice).unwrap()
+            })
+            .collect();
+
+        let result = reader.read(&mut aligned_reads);
+        assert!(result.is_ok());
+
+        // Assert that the actual data is correct.
+        let file_system = VirtualStorageProvider::new_overlay(test_data_root());
+        let mut file = file_system.open_reader(&test_index_path()).unwrap();
+        for current_read in aligned_reads {
+            let offset = current_read.offset();
+            let mut expected = vec![0; current_read.aligned_buf().len()];
+            file.seek(SeekFrom::Start(offset)).unwrap();
+            file.read_exact(&mut expected).unwrap();
+
+            assert_eq!(
+                expected,
+                current_read.aligned_buf(),
+                "aligned_buf did not contain the expected data"
+            );
+        }
+    }
+}

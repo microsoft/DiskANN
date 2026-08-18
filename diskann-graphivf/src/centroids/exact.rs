@@ -378,7 +378,7 @@ impl DenseCentroids {
             let ids = &self.ids[start..start + tile];
             for (best, row) in scratch.best.iter_mut().zip(scores.chunks_exact(tile)) {
                 for (&id, &distance) in ids.iter().zip(row) {
-                    best.insert(Neighbor { id, distance });
+                    best.insert(Neighbor::new(id, distance));
                 }
             }
         }
@@ -390,8 +390,8 @@ impl DenseCentroids {
             let offset = metric.query_offset(queries.row(q));
             for r in 0..best.size().min(k) {
                 let neighbor = best.get(r);
-                ids_out[q * k + r] = neighbor.id;
-                dist_out[q * k + r] = (neighbor.distance + offset).max(0.0);
+                ids_out[q * k + r] = *neighbor.id();
+                dist_out[q * k + r] = (neighbor.distance() + offset).max(0.0);
             }
         }
         Ok(())

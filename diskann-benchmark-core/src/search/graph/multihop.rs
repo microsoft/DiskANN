@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, ext::labeled, glue},
     provider,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
 
-use crate::search::{self, Search, graph::Strategy};
+use crate::search::{self, Search, graph::KnnParams, graph::Strategy};
 
 /// A built-in helper for benchmarking filtered K-nearest neighbors search
 /// using the multi-hop search method.
@@ -22,7 +22,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// [`search::search_all`] is provided by the [`search::graph::knn::Aggregator`] type (same
 /// aggregator as [`search::graph::knn::KNN`]).
 ///
-/// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
+/// The provided implementation of [`Search`] accepts [`KnnParams`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
 pub struct MultiHop<DP, T, S>
@@ -32,7 +32,7 @@ where
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
-    labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+    labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
 }
 
 impl<DP, T, S> MultiHop<DP, T, S>
@@ -62,7 +62,7 @@ where
         index: Arc<graph::DiskANNIndex<DP>>,
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
-        labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+        labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -86,11 +86,18 @@ where
 impl<DP, T, S> Search for MultiHop<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [T],
+            DP::ExternalId,
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::search::Knn;
+    type Parameters = KnnParams;
     type Output = super::knn::Metrics;
 
     fn num_queries(&self) -> usize {
@@ -111,13 +118,15 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let multihop_search =
-            graph::search::MultihopFilterSearch::new(*parameters, &*self.labels[index]);
+        let knn = parameters.knn;
+        let multihop_search = graph::search::MultihopFilterSearch::new(knn);
+        let strategy =
+            labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
         let stats = self
             .index
             .search(
                 multihop_search,
-                self.strategy.get(index)?,
+                &strategy,
                 &context,
                 self.queries.row(index),
                 buffer,
@@ -142,13 +151,13 @@ mod tests {
     use super::*;
 
     use crate::recall::GroundTruthMode;
-    use diskann::graph::{index::QueryLabelProvider, test::provider};
+    use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
 
     // A simple [`QueryLabelProvider`] that rejects odd indices.
     #[derive(Debug)]
     struct NoOdds;
 
-    impl graph::index::QueryLabelProvider<u32> for NoOdds {
+    impl labeled::QueryLabelProvider<u32> for NoOdds {
         fn is_match(&self, id: u32) -> bool {
             id.is_multiple_of(2)
         }
@@ -183,7 +192,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
+            KnnParams::new(nearest_neighbors, 10).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -211,11 +220,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
+                KnnParams::new(nearest_neighbors, 10).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors, 15, None).unwrap(),
+                KnnParams::new(nearest_neighbors, 15).unwrap(),
                 setup.clone(),
             ),
         ];

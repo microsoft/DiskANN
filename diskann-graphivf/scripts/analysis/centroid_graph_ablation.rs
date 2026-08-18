@@ -193,7 +193,7 @@ fn graph_search(
 ) -> Vec<u32> {
     let mut ids = vec![0u32; k];
     let mut dist = vec![0.0f32; k];
-    let knn = Knn::new(k, l, None).expect("invalid knn params");
+    let knn = Knn::new(l, None).expect("invalid knn params");
     let mut buffer = IdDistance::new(&mut ids, &mut dist);
     runtime
         .block_on(index.search(knn, &FullPrecision, &DefaultContext, query, &mut buffer))

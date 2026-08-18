@@ -229,7 +229,7 @@ impl<'a> Checks<'a> {
         // We can now package everything together!
         debug_assert_eq!(input_to_parsed.len(), inputs.jobs().len());
 
-        let checks = std::iter::zip(inputs.into_inner(), input_to_parsed.into_iter())
+        let checks = std::iter::zip(inputs.into_inner(), input_to_parsed)
             .map(|(input, index)| {
                 // This index should always be inbounds.
                 let inner = &parsed.inner[index];
@@ -239,13 +239,7 @@ impl<'a> Checks<'a> {
                 // regression benchmark for this concrete input. This benchmark should exist,
                 // but it's possible that code changes between when the results were generated
                 // and now has led to the input no longer being matchable with anything.
-                let regression = inner
-                    .entry
-                    .regressions
-                    .iter()
-                    .filter_map(|r| r.try_match(&input).ok().map(|score| (*r, score)))
-                    .min_by_key(|(_, score)| *score)
-                    .map(|(r, _)| r)
+                let regression = registry::find_best_match(&input, &inner.entry.regressions)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Could not match input tag \"{}\" and tolerance tag \"{}\" to \
@@ -258,7 +252,7 @@ impl<'a> Checks<'a> {
                     })?;
 
                 Ok(Check {
-                    regression,
+                    regression: *regression,
                     tolerance: inner.tolerance.clone(),
                     input,
                 })

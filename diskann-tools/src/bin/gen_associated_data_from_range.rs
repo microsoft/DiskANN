@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Generates associated data values from an integer range.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_tools::utils::{gen_associated_data_from_range, CMDResult};
@@ -20,7 +22,7 @@ fn main() -> CMDResult<()> {
 
 #[derive(Debug, Parser)]
 struct GenAssociatedDataFromRangeArgs {
-    #[arg(long = "associated_data_path")]
+    #[arg(long = "associated-data-file")]
     pub associated_data_path: String,
 
     #[arg(long = "start")]

@@ -64,8 +64,9 @@ where
     }
 }
 
-/// [`DefaultPostProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
-/// the inner strategy's default processor with [`FilterResults`].
+/// Delegates [`diskann::graph::glue::DefaultPostProcessor`] for [`InlineBetaStrategy`].
+///
+/// The processor wraps the inner strategy's default processor with [`FilterResults`].
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         'q,
@@ -156,14 +157,17 @@ where
         // TODO: Fix for performance.
         let mut filtered_candidates = Vec::<Neighbor<IA::Id>>::new();
         for candidate in candidates {
-            accessor.attributes_for(candidate.id, |computer, attributes| -> ANNResult<()> {
-                let pe = PredicateEvaluator::new(&*attributes);
+            accessor.attributes_for(
+                *candidate.id(),
+                |computer, attributes| -> ANNResult<()> {
+                    let pe = PredicateEvaluator::new(&*attributes);
 
-                if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
-                    filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
-                }
-                Ok(())
-            })??;
+                    if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
+                        filtered_candidates.push(candidate);
+                    }
+                    Ok(())
+                },
+            )??;
         }
 
         // Assuming that the job of the post processor is to only forward the right set of
