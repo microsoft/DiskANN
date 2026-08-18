@@ -35,6 +35,58 @@ pub struct FlatIndex<P: DataProvider> {
     provider: P,
 }
 
+/// Brute-force k-nearest-neighbor search over a borrowed provider.
+///
+/// Streams every element produced by the strategy's visitor through the query
+/// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], then runs
+/// `processor` over the survivors to populate `output`.
+pub fn knn_search<'a, P, S, T, O, PP, OB>(
+    provider: &'a P,
+    k: NonZeroUsize,
+    strategy: &'a S,
+    processor: PP,
+    context: &'a P::Context,
+    query: T,
+    output: &'a mut OB,
+) -> impl SendFuture<ANNResult<SearchStats>> + 'a
+where
+    P: DataProvider,
+    S: SearchStrategy<P, T> + 'a,
+    T: Copy + Send + Sync + 'a,
+    O: Send + 'a,
+    PP: SearchPostProcess<S::Visitor<'a>, T, O> + Send + Sync + 'a,
+    OB: SearchOutputBuffer<O> + Send + ?Sized + 'a,
+{
+    async move {
+        let mut visitor = strategy
+            .create_visitor(provider, context)
+            .into_ann_result()?;
+
+        let computer = strategy
+            .build_query_computer(provider, query)
+            .into_ann_result()?;
+
+        let k = k.get();
+        let mut queue = NeighborPriorityQueue::new(k);
+        let mut cmps: u32 = 0;
+
+        visitor
+            .distances_unordered(&computer, |id, dist| {
+                cmps += 1;
+                queue.insert(Neighbor::new(id, dist));
+            })
+            .await
+            .escalate("flat scan must complete to produce correct k-NN results")?;
+
+        let result_count = processor
+            .post_process(&mut visitor, query, queue.iter().take(k), output)
+            .await
+            .into_ann_result()? as u32;
+
+        Ok(SearchStats { cmps, result_count })
+    }
+}
+
 impl<P: DataProvider> FlatIndex<P> {
     /// Construct a new [`FlatIndex`] around `provider`.
     pub fn new(provider: P) -> Self {
@@ -71,30 +123,16 @@ impl<P: DataProvider> FlatIndex<P> {
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
-            let mut visitor = strategy
-                .create_visitor(&self.provider, context)
-                .into_ann_result()?;
-
-            let computer = strategy.build_query_computer(query).into_ann_result()?;
-
-            let k = k.get();
-            let mut queue = NeighborPriorityQueue::new(k);
-            let mut cmps: u32 = 0;
-
-            visitor
-                .distances_unordered(&computer, |id, dist| {
-                    cmps += 1;
-                    queue.insert(Neighbor::new(id, dist));
-                })
-                .await
-                .escalate("flat scan must complete to produce correct k-NN results")?;
-
-            let result_count = processor
-                .post_process(&mut visitor, query, queue.iter().take(k), output)
-                .await
-                .into_ann_result()? as u32;
-
-            Ok(SearchStats { cmps, result_count })
+            knn_search(
+                &self.provider,
+                k,
+                strategy,
+                processor,
+                context,
+                query,
+                output,
+            )
+            .await
         }
     }
 }

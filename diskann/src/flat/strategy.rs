@@ -83,9 +83,10 @@ where
         context: &'a P::Context,
     ) -> Result<Self::Visitor<'a>, Self::Error>;
 
-    /// Construct the per-query computer.
+    /// Construct the per-query computer for `provider`.
     fn build_query_computer(
         &self,
+        provider: &P,
         query: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
 }

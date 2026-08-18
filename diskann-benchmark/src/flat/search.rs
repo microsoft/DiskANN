@@ -276,6 +276,7 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
 
     fn build_query_computer(
         &self,
+        _provider: &InMemProvider<T>,
         query: &[T],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         Ok(T::query_distance(query, self.metric))
