@@ -24,6 +24,7 @@ hashbrown = { version = "0.16.0", default-features = false, features = ["default
 num-traits.workspace = true
 parking_lot = { version = "0.12.5", optional = true }
 rand.workspace = true
+rand_distr = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
@@ -33,6 +34,9 @@ diskann-wide = { workspace = true }
 
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 futures-util = { workspace = true, default-features = false  }
@@ -60,7 +64,14 @@ panic = "warn"
 default = ["tracing"]
 
 # Enable PiPNN batch graph construction.
-pipnn = ["dep:diskann-linalg", "dep:parking_lot", "dep:rayon", "tracing"]
+pipnn = [
+    "dep:diskann-linalg",
+    "dep:libc",
+    "dep:parking_lot",
+    "dep:rand_distr",
+    "dep:rayon",
+    "tracing",
+]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]
