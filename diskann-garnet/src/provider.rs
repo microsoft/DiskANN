@@ -62,6 +62,9 @@ use crate::{
 /// bytes are the serialized quant table.
 const QUANT_STATE_KEY: u32 = u32::from_be_bytes(*b"_qnt");
 
+/// Starting capacity of the pre-allocated rerank buffers.
+const RERANK_BUFFER_LENGTH: usize = 1024;
+
 #[derive(Clone)]
 struct AdjList(AdjacencyList<u32>);
 
@@ -138,6 +141,8 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Pool of pre-allocated buffers to use for filter decisions during
     /// filtered search beam expansion
     filtered_decisions_pool: ObjectPool<Vec<bool>>,
+    /// Pool of pre-allocated buffers to use for reranking
+    rerank_pool: ObjectPool<Vec<Neighbor<u32>>>,
     /// Pool of pre-allocated buffers to use for quantizing vectors
     quant_buffer_pool: ObjectPool<Vec<u8>>,
     /// Small cache for the start points' neighbors
@@ -170,6 +175,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
         );
         let filtered_decisions_pool = ObjectPool::new(
             Undef::new(MAX_OCCLUSION_SIZE.get() as usize),
+            parallelism,
+            Some(parallelism),
+        );
+        let rerank_pool = ObjectPool::new(
+            Undef::new(RERANK_BUFFER_LENGTH),
             parallelism,
             Some(parallelism),
         );
@@ -293,6 +303,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             id_buffer_pool,
             filtered_ids_pool,
             filtered_decisions_pool,
+            rerank_pool,
             quant_buffer_pool,
             start_point_cache,
             start_point_quant_cache,
@@ -421,6 +432,22 @@ impl<T: VectorRepr> GarnetProvider<T> {
             Err(GarnetError::Write.into())
         }
     }
+
+    pub(crate) fn delete_attributes(
+        &self,
+        context: &Context,
+        id: &GarnetId,
+    ) -> Result<(), GarnetProviderError> {
+        if self
+            .callbacks
+            .delete_eid(&context.term(Term::Attributes), id)
+        {
+            Ok(())
+        } else {
+            Err(GarnetError::Delete.into())
+        }
+    }
+
     pub(crate) fn vector_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
         let iid = match self.to_internal_id(context, id) {
             Ok(iid) => iid,
@@ -452,15 +479,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
         };
 
         let quantizer = match &self.quantizer {
-            Some(q) => {
-                if !q.is_trained() {
-                    q
-                } else {
-                    // Quantizer already trained, bail.
-                    return false;
-                }
-            }
+            Some(q) if !q.is_trained() => q,
             None => return false,
+            Some(_) => return false,
         };
 
         let rows = quantizer.required_vectors();
@@ -1247,7 +1268,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
                 Err(_) => continue, // Can't read the mapping; skip.
             };
 
-            if output.push(id, n.distance()).is_full() {
+            if output.push(Neighbor::new(id, *n.distance())).is_full() {
                 break;
             }
         }
@@ -1292,42 +1313,42 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
                 .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)));
         }
 
-        let provider = &accessor.provider;
+        let provider = accessor.provider;
         let f = T::distance(provider.metric_type, Some(provider.dim));
-        let mut v = Poly::broadcast(0u8, provider.dim * mem::size_of::<T>(), AlignToEight)?;
 
-        // Filter before computing the full precision distances.
-        let mut reranked: Vec<(u32, f32)> = candidates
-            .filter_map(|n| {
-                if !provider.vector_iid_exists(accessor.context, *n.id()) {
-                    None
-                } else if provider.callbacks.read_single_iid(
-                    &accessor.context.term(Term::Vector),
-                    *n.id(),
-                    &mut v,
-                ) {
-                    Some((
-                        *n.id(),
-                        f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(&v)),
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut reranked = provider
+            .rerank_pool
+            .get_ref(Undef::new(RERANK_BUFFER_LENGTH));
+        reranked.clear();
+
+        // Use the accessor.filtered_ids pre-allocated buffer to do a multi read from Garnet, placing the results in
+        // the rerank buffer.
+        accessor.filtered_ids.clear();
+        for nbor in candidates {
+            accessor.filtered_ids.push(4);
+            accessor.filtered_ids.push(*nbor.id());
+        }
+
+        if !accessor.filtered_ids.is_empty() {
+            provider.callbacks.read_multi_lpiid(
+                &accessor.context.term(Term::Vector),
+                &accessor.filtered_ids,
+                |i, v| {
+                    let dist = f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(v));
+                    reranked.push(Neighbor::new(
+                        accessor.filtered_ids[i as usize * 2 + 1],
+                        dist,
+                    ));
+                },
+            );
+        }
 
         // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(diskann::neighbor::ord::fast_distance);
 
-        next.post_process(
-            accessor,
-            query,
-            reranked.into_iter().map(|(id, d)| Neighbor::new(id, d)),
-            output,
-        )
-        .await
-        .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)))
+        next.post_process(accessor, query, reranked.iter().copied(), output)
+            .await
+            .map_err(|e| GarnetProviderError::PostProcessing(Box::new(e)))
     }
 }
 
@@ -1896,7 +1917,7 @@ mod tests {
         // Quantization is not needed yet
         assert!(!provider.quantization_needed());
 
-        let params = search::Knn::new(10, 10, None).unwrap();
+        let params = search::Knn::new(10, None).unwrap();
         let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
         let mut output_dists = vec![0f32; 10];
         let mut output = SearchResults::new(
@@ -2083,7 +2104,7 @@ mod tests {
         }
 
         // Searches should still work and use quantized vectors
-        let params = search::Knn::new(10, 10, None).unwrap();
+        let params = search::Knn::new(10, None).unwrap();
         let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
         let mut output_dists = vec![0f32; 10];
         let mut output = SearchResults::new(

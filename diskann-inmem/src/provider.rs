@@ -102,7 +102,7 @@ where
         let bytes = layers::Layer::bytes(&layer);
         let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
 
-        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points.into_iter()) {
+        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points) {
             layers::Set::set(&layer, point, row)?;
         }
 
@@ -608,7 +608,7 @@ unsafe fn prefetch(ptr: *const u8, len: usize) {
 /// # Safety
 ///
 /// The memory range `[ptr, ptr.add(len))` must be valid.
-#[cfg(not(any(target_arch = "x86_64", target_feature = "avx2")))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
 
 /// # Safety
@@ -932,7 +932,10 @@ where
             let mut count = 0;
             for c in candidates {
                 if let Some(ext) = provider.mapping.to_external(*c.id()) {
-                    if output.push(ext, c.distance()).is_available() {
+                    if output
+                        .push(Neighbor::new(ext, *c.distance()))
+                        .is_available()
+                    {
                         count += 1;
                     } else {
                         break;
@@ -1141,7 +1144,7 @@ mod tests {
         assert!(index.provider().to_external_id(&Context, 26).is_err());
 
         // Searches should return something reasonable.
-        let knn = Knn::new(10, 10, None).unwrap();
+        let knn = Knn::new(10, None).unwrap();
         let mut neighbors = Vec::<Neighbor<u64>>::new();
         index
             .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)

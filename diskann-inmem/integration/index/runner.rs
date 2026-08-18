@@ -287,13 +287,13 @@ impl Build {
 
 #[derive(Debug)]
 struct Search {
-    knn: Vec<Knn>,
+    knn: Vec<(usize, Knn)>,
 }
 
 impl Search {
     fn from_raw(raw: dto::Search) -> anyhow::Result<Self> {
-        fn make_knn(raw: &dto::KnnSearch) -> anyhow::Result<Knn> {
-            Ok(Knn::new(raw.knn, raw.search_l, raw.beam_width)?)
+        fn make_knn(raw: &dto::KnnSearch) -> anyhow::Result<(usize, Knn)> {
+            Ok((raw.knn, Knn::new(raw.search_l, raw.beam_width)?))
         }
 
         Ok(Self {
@@ -306,9 +306,9 @@ impl Search {
     }
 
     fn as_raw(&self) -> dto::Search {
-        fn make_knn(knn: &Knn) -> dto::KnnSearch {
+        fn make_knn((k, knn): &(usize, Knn)) -> dto::KnnSearch {
             dto::KnnSearch {
-                knn: knn.k_value().get(),
+                knn: *k,
                 search_l: knn.l_value().get(),
                 beam_width: Some(knn.beam_width().get()),
             }
@@ -513,9 +513,10 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
 
         let mut knn = Vec::new();
-        for param in input.search.knn.iter() {
+        for (k, param) in input.search.knn.iter() {
             let stats = super::tests::knn(
                 &*index,
+                *k,
                 *param,
                 queries.as_view(),
                 &groundtruth.as_view(),

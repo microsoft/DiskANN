@@ -158,6 +158,7 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
+    use approx::assert_abs_diff_eq;
     use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
@@ -343,8 +344,7 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-        let graph_search =
-            graph::search::Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
+        let graph_search = graph::search::Knn::new_default(parameters.search_l).unwrap();
         index
             .search(
                 graph_search,
@@ -918,7 +918,7 @@ pub(crate) mod tests {
                 let expected: Neighbor<u32> = gt[gt.len() - 1 - position];
                 if id != *expected.id() {
                     // We can allow it if the distance is the same.
-                    if distance == expected.distance() {
+                    if distance == *expected.distance() {
                         Ok(())
                     } else {
                         Err(Box::new(format!(
@@ -926,7 +926,7 @@ pub(crate) mod tests {
                             expected, id
                         )))
                     }
-                } else if distance != expected.distance() {
+                } else if distance != *expected.distance() {
                     Err(Box::new(format!(
                         "expected neighbor {:?}, but found {}",
                         expected, distance
@@ -1086,7 +1086,7 @@ pub(crate) mod tests {
             let mut gt = groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
             for n in gt.iter_mut() {
                 if filter.is_match(*n.id()) {
-                    *n = Neighbor::new(*n.id(), n.distance() * beta);
+                    *n = Neighbor::new(*n.id(), *n.distance() * beta);
                 }
             }
             gt.sort_unstable_by(neighbor::ord::reverse(neighbor::ord::fast_distance));
@@ -1378,6 +1378,7 @@ pub(crate) mod tests {
     }
 
     const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
+    const SIFTSMALL_NORMALIZED: &str = "/sift/siftsmall_learn_256pts_normalized.fbin";
 
     #[rstest]
     #[tokio::test]
@@ -1437,7 +1438,7 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+                let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                 // Full Precision Search.
                 index
                     .search(
@@ -1455,7 +1456,7 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+                let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                 // Quantized Search
                 index
                     .search(
@@ -1549,16 +1550,10 @@ pub(crate) mod tests {
                 // Test with an inner radius
 
                 assert!(inner_radius <= radius);
-                let range_search = Range::with_options(
-                    None,
-                    starting_l_value,
-                    None,
-                    radius,
-                    Some(inner_radius),
-                    1.0,
-                    1.0,
-                )
-                .unwrap();
+                let range_search = Range::builder(starting_l_value, radius)
+                    .inner_radius(Some(inner_radius))
+                    .build()
+                    .unwrap();
                 let mut results: Vec<Neighbor<u32>> = Vec::new();
                 let _ = index
                     .search(range_search, &FullPrecision, ctx, query, &mut results)
@@ -1695,8 +1690,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search =
-                            graph::search::Knn::new_default(top_k, search_l).unwrap();
+                        let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                         // Full Precision Search.
                         index
                             .search(
@@ -1714,8 +1708,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search =
-                            graph::search::Knn::new_default(top_k, search_l).unwrap();
+                        let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -1802,7 +1795,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search = graph::search::Knn::new_default(top_k, top_k).unwrap();
+                        let graph_search = graph::search::Knn::new_default(top_k).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -1916,7 +1909,7 @@ pub(crate) mod tests {
 
             // Full Precision Search.
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
             index
                 .search(graph_search, &FullPrecision, ctx, query, &mut output)
                 .await
@@ -1928,7 +1921,7 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
 
             index
                 .search(graph_search, &strategy, ctx, query, &mut output)
@@ -2032,7 +2025,7 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
 
             index
                 .search(graph_search, &strategy, ctx, query, &mut output)
@@ -2061,8 +2054,11 @@ pub(crate) mod tests {
     /// PQ only Build & Search ///
     //////////////////////////////
 
+    #[rstest]
+    #[case(Metric::L2, SIFTSMALL)]
+    #[case(Metric::CosineNormalized, SIFTSMALL_NORMALIZED)]
     #[tokio::test]
-    async fn test_sift_pq_only_build_and_search() {
+    async fn test_sift_pq_only_build_and_search(#[case] metric: Metric, #[case] file: &str) {
         let ctx = &DefaultContext;
         let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
             let pq_table = train_pq(
@@ -2074,8 +2070,7 @@ pub(crate) mod tests {
             .unwrap();
 
             let (config, parameters) =
-                simplified_builder(64, 16, Metric::L2, data.ncols(), data.nrows(), no_modify)
-                    .unwrap();
+                simplified_builder(64, 16, metric, data.ncols(), data.nrows(), no_modify).unwrap();
 
             let index =
                 Arc::new(new_quant_only_index(config, parameters, pq_table, NoDeletes).unwrap());
@@ -2086,7 +2081,7 @@ pub(crate) mod tests {
             index
         };
         let (index, data) =
-            init_and_build_index_from_file(SIFTSMALL, create_fn, build_using_single_insert).await;
+            init_and_build_index_from_file(file, create_fn, build_using_single_insert).await;
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // There should be one more reachable node than points in the dataset to account for
@@ -2118,7 +2113,7 @@ pub(crate) mod tests {
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
@@ -2131,7 +2126,11 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-            assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
+            for i in 0..top_k {
+                let expected = gt[gt.len() - 1 - i];
+                assert_eq!(*expected.id(), ids[i], "failed on query {q} for result {i}");
+                assert_abs_diff_eq!(*expected.distance(), distances[i], epsilon = 1.0e-5);
+            }
         }
     }
 
@@ -2697,7 +2696,7 @@ pub(crate) mod tests {
             let gt = groundtruth(queries.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
+            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
@@ -2961,20 +2960,22 @@ pub(crate) mod tests {
         let mut result_output_buffer =
             diskann::graph::IdDistance::new(&mut indices, &mut distances);
 
-        let diverse_params = diskann::graph::DiverseSearchParams::new(
+        let diverse_params = diskann::graph::search::DiverseSearchParams::new(
             0, // diverse_attribute_id
             diverse_results_k,
+            return_list_size,
             attribute_provider.clone(),
-        );
+        )
+        .unwrap();
 
         let search_params = diskann::graph::search::Knn::new(
-            return_list_size,
             search_list_size,
             None, // beam_width
         )
         .unwrap();
 
-        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let diverse_search =
+            diskann::graph::search::Diverse::new(search_params, diverse_params).unwrap();
 
         let result = index
             .search(
@@ -3125,7 +3126,7 @@ pub(crate) mod tests {
         let mut ids = vec![0; top_k];
         let mut distances = vec![0.0; top_k];
         let ctx = DefaultContext;
-        let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let search_params = graph::search::Knn::new_default(search_l).unwrap();
         for i in 0..query_count {
             let query_vector = &queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
 

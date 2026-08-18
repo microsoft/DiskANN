@@ -28,6 +28,7 @@ doubled::double_mask!(4, mask64x2);
 doubled::double_mask!(64, Doubled<mask8x16>);
 doubled::double_mask!(32, Doubled<mask16x8>);
 doubled::double_mask!(16, Doubled<mask32x4>);
+doubled::double_mask!(8, Doubled<mask64x2>);
 
 macro_rules! double_alias {
     ($type:ident, $scalar:ty, $lanes:literal, $subtype:ty) => {
@@ -64,6 +65,7 @@ double_alias!(f16x16, f16, 16, f16x8);
 
 double_alias!(u8x64, u8, 64, u8x32);
 double_alias!(u32x16, u32, 16, u32x8);
+double_alias!(u64x8, u64, 8, u64x4);
 
 double_alias!(i8x64, i8, 64, i8x32);
 double_alias!(i16x32, i16, 32, i16x16);
@@ -243,6 +245,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(u8x32, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(u8x32, 0xf24be4e5bc1d95b6, test_neon());
         test_utils::ops::test_splitjoin!(u8x32 => u8x16, 0x2e301b7e12090d5c, test_neon());
         test_utils::ops::test_zipunzip!(u8x32 => u8x16, 0xa1b2c3d4e5f67890, test_neon());
     }
@@ -253,6 +256,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(u8x64, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(u8x64, 0x7207f32ecac3fbf3, test_neon());
         test_utils::ops::test_splitjoin!(u8x64 => u8x32, 0x2e301b7e12090d5c, test_neon());
     }
 
@@ -289,7 +293,18 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(u64x4, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_sumtree!(u64x4, 0x529c27f62ea171ec, test_neon());
         test_utils::ops::test_splitjoin!(u64x4 => u64x2, 0x2e301b7e12090d5c, test_neon());
+    }
+
+    mod test_u64x8 {
+        use super::*;
+        standard_tests!(u64x8, u64, 8);
+
+        // Bit ops
+        test_utils::ops::test_bitops!(u64x8, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_sumtree!(u64x8, 0x529c27f62ea171ec, test_neon());
+        test_utils::ops::test_splitjoin!(u64x8 => u64x4, 0x2e301b7e12090d5c, test_neon());
     }
 
     // i8s
@@ -299,6 +314,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i8x32, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(i8x32, 0x45f60286da125e84, test_neon());
         test_utils::ops::test_abs!(i8x32, 0xd62d8de09f82ed4e, test_neon());
         test_utils::ops::test_splitjoin!(i8x32 => i8x16, 0x2e301b7e12090d5c, test_neon());
         test_utils::ops::test_zipunzip!(i8x32 => i8x16, 0xc7e3a92f1d8b5604, test_neon());
@@ -310,6 +326,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i8x64, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_popcount!(i8x64, 0x73e6c7da94a679ac, test_neon());
         test_utils::ops::test_abs!(i8x64, 0xd62d8de09f82ed4e, test_neon());
         test_utils::ops::test_splitjoin!(i8x64 => i8x32, 0x2e301b7e12090d5c, test_neon());
     }

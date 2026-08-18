@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Command-line benchmarks for DiskANN.
+
 mod disk_index;
 mod exhaustive;
 mod filters;
@@ -697,6 +699,22 @@ mod tests {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-range.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_filter_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-filter-range.json"));
         run_integration_test(raw);
     }
 

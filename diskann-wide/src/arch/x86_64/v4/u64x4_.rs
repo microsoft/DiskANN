@@ -17,7 +17,7 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDSumTree, SIMDVector},
 };
 
 /////
@@ -38,6 +38,13 @@ macros::x86_splitjoin!(
 
 helpers::unsafe_map_binary_op!(u64x4, std::ops::Add, add, _mm256_add_epi64, "avx2");
 helpers::unsafe_map_binary_op!(u64x4, std::ops::Sub, sub, _mm256_sub_epi64, "avx2");
+helpers::unsafe_map_unary_op!(
+    u64x4,
+    SIMDPopcount,
+    popcount_simd,
+    _mm256_popcnt_epi64,
+    "avx512vpopcntdq,avx512vl"
+);
 helpers::unsafe_map_binary_op!(
     u64x4,
     std::ops::Mul,
@@ -81,6 +88,13 @@ macros::x86_avx512_load_store!(
 
 macros::x86_avx512_int_comparisons!(u64x4, _mm256_cmp_epu64_mask, "avx512f,avx512vl");
 
+impl SIMDSumTree for u64x4 {
+    #[inline(always)]
+    fn sum_tree(self) -> u64 {
+        self.retarget().sum_tree()
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -121,6 +135,9 @@ mod test_x86_u64 {
     test_utils::ops::test_cmp!(u64x4, 0x0beda0dd5141ec40, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(u64x4 => u64x2, 0xb151fcd6141b10c9, V4::new_checked_uncached());
 
+    test_utils::ops::test_sumtree!(u64x4, 0x529c27f62ea171ec, V4::new_checked_uncached());
+
     // Bit ops
     test_utils::ops::test_bitops!(u64x4, 0xb1ac2e16327a8d5e, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(u64x4, 0xf23de3226c0141be, V4::new_checked_uncached());
 }

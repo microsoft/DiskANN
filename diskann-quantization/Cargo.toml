@@ -31,7 +31,7 @@ uninlined_format_args = "allow"
 cfg-if = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-trybuild = "1.0.101"
+trybuild = "1.0.120"
 rand_distr = { workspace = true }
 
 [features]
@@ -45,12 +45,6 @@ flatbuffers = ["dep:flatbuffers"]
 
 # Enable Rayon-based Parallelism for tagged kernels.
 rayon = ["dep:rayon", "diskann-utils/rayon"]
-
-# Compile the `.fbs` files in `schemas` using the `flatc` executable and copy the generated
-# files into the source tree.
-#
-# This avoids a general dependency on the `flatc` executable to build `quantization`.
-flatbuffers-build = []
 
 # Instantiate well named functions for distance functions whose aseembly we care about.
 #

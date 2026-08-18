@@ -55,13 +55,7 @@ where
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
         let checker = accessor.as_deletion_check();
-        let count = output.extend(candidates.filter_map(|n| {
-            if checker.deletion_check(*n.id()) {
-                None
-            } else {
-                Some(n.as_tuple())
-            }
-        }));
+        let count = output.extend(candidates.filter(|n| !checker.deletion_check(*n.id())));
         std::future::ready(Ok(count))
     }
 }

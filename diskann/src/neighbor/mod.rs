@@ -38,7 +38,7 @@ pub use diverse_priority_queue::{
 ///
 /// To that end, the functions in the [`ord`] submodule should be used in combination with
 /// the standard library's sorting methods that accept explicit comparison functions like
-/// [`std::slice::sort_by`].
+/// [`slice::sort_by`].
 ///
 /// ```rust
 /// use diskann::neighbor::{self, Neighbor};
@@ -65,28 +65,28 @@ pub use diverse_priority_queue::{
 /// );
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Neighbor<I> {
+pub struct Neighbor<I, D = f32> {
     id: I,
-    distance: f32,
+    distance: D,
 }
 
-impl<I> Neighbor<I> {
+impl<I, D> Neighbor<I, D> {
     /// Create a [`Neighbor`] with `id` and `distance`.
     #[inline]
-    pub fn new(id: I, distance: f32) -> Self {
+    pub fn new(id: I, distance: D) -> Self {
         Self { id, distance }
     }
 
     /// Return the ID and distance in `self` as a tuple.
     #[inline]
-    pub fn as_tuple(self) -> (I, f32) {
+    pub fn as_tuple(self) -> (I, D) {
         (self.id, self.distance)
     }
 
     /// Return the distance.
     #[inline]
-    pub fn distance(&self) -> f32 {
-        self.distance
+    pub fn distance(&self) -> &D {
+        &self.distance
     }
 
     /// Return the ID.
@@ -94,12 +94,18 @@ impl<I> Neighbor<I> {
     pub fn id(&self) -> &I {
         &self.id
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_tuple((id, distance): (I, D)) -> Self {
+        Self::new(id, distance)
+    }
 }
 
 #[cfg(test)]
-impl<I> crate::test::cmp::VerboseEq for Neighbor<I>
+impl<I, D> crate::test::cmp::VerboseEq for Neighbor<I, D>
 where
     I: crate::test::cmp::VerboseEq,
+    D: crate::test::cmp::VerboseEq,
 {
     #[inline(never)]
     #[track_caller]
@@ -143,7 +149,7 @@ pub mod ord {
     /// ```
     pub fn fast_distance<I>(x: &Neighbor<I>, y: &Neighbor<I>) -> std::cmp::Ordering {
         x.distance()
-            .partial_cmp(&y.distance())
+            .partial_cmp(y.distance())
             .unwrap_or(std::cmp::Ordering::Equal)
     }
 
@@ -203,19 +209,19 @@ pub mod ord {
     }
 }
 
-/// A [`SearchOutputBuffer`] wrapper around `&mut [Neighbor<I>]`. This can be used to
+/// A [`SearchOutputBuffer`] wrapper around `&mut [Neighbor<I, D>]`. This can be used to
 /// populate such a mutable slice as the result of [`crate::graph::DiskANNIndex::search`].
 #[derive(Debug)]
-pub struct BackInserter<'a, I> {
-    buffer: &'a mut [Neighbor<I>],
+pub struct BackInserter<'a, I, D = f32> {
+    buffer: &'a mut [Neighbor<I, D>],
     position: usize,
 }
 
-impl<'a, I> BackInserter<'a, I> {
+impl<'a, I, D> BackInserter<'a, I, D> {
     /// Construct a new [`BackInserter`] around the provided slice.
     ///
     /// The buffer will have a capacity equal to the length of `buffer`.
-    pub fn new(buffer: &'a mut [Neighbor<I>]) -> Self {
+    pub fn new(buffer: &'a mut [Neighbor<I, D>]) -> Self {
         Self {
             buffer,
             position: 0,
@@ -228,19 +234,19 @@ impl<'a, I> BackInserter<'a, I> {
     }
 }
 
-impl<I> SearchOutputBuffer<I> for BackInserter<'_, I> {
+impl<I, D> SearchOutputBuffer<I, D> for BackInserter<'_, I, D> {
     fn size_hint(&self) -> Option<usize> {
         // We maintain the invariant that `self.position <= self.buffer.len()`, so this
         // subtraction should not underflow.
         Some(self.buffer.len() - self.position)
     }
 
-    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
+    fn push(&mut self, neighbor: Neighbor<I, D>) -> search_output_buffer::BufferState {
         if self.position == self.buffer.len() {
             return search_output_buffer::BufferState::Full;
         }
 
-        self.buffer[self.position] = Neighbor::new(id, distance);
+        self.buffer[self.position] = neighbor;
         self.position += 1;
 
         // Return `Full` if we added the last item.
@@ -257,15 +263,13 @@ impl<I> SearchOutputBuffer<I> for BackInserter<'_, I> {
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (I, f32)>,
+        Itr: IntoIterator<Item = Neighbor<I, D>>,
     {
         let mut i = 0;
-        std::iter::zip(self.buffer.iter_mut().skip(self.position), itr).for_each(
-            |(neighbor, (id, distance))| {
-                i += 1;
-                *neighbor = Neighbor::new(id, distance);
-            },
-        );
+        std::iter::zip(self.buffer.iter_mut().skip(self.position), itr).for_each(|(dst, src)| {
+            i += 1;
+            *dst = src;
+        });
 
         self.position += i;
 
@@ -273,13 +277,13 @@ impl<I> SearchOutputBuffer<I> for BackInserter<'_, I> {
     }
 }
 
-impl<I> SearchOutputBuffer<I> for Vec<Neighbor<I>> {
+impl<I, D> SearchOutputBuffer<I, D> for Vec<Neighbor<I, D>> {
     fn size_hint(&self) -> Option<usize> {
         None
     }
 
-    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
-        self.push(Neighbor::new(id, distance));
+    fn push(&mut self, neighbor: Neighbor<I, D>) -> search_output_buffer::BufferState {
+        self.push(neighbor);
         search_output_buffer::BufferState::Available
     }
 
@@ -289,13 +293,10 @@ impl<I> SearchOutputBuffer<I> for Vec<Neighbor<I>> {
 
     fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: IntoIterator<Item = (I, f32)>,
+        Itr: IntoIterator<Item = Neighbor<I, D>>,
     {
         let before = self.len();
-        Extend::extend(
-            self,
-            itr.into_iter().map(|(id, dist)| Neighbor::new(id, dist)),
-        );
+        Extend::extend(self, itr);
         self.len() - before
     }
 }
@@ -381,28 +382,28 @@ mod neighbor_test {
             assert_eq!(inserter.size_hint(), Some(MAX_LENGTH));
             assert_eq!(inserter.current_len(), 0);
 
-            assert!(inserter.push(1, 1.0).is_available());
+            assert!(inserter.push(Neighbor::new(1, 1.0)).is_available());
             assert_eq!(inserter.current_len(), 1);
             assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 1));
 
-            assert!(inserter.push(2, 2.0).is_available());
+            assert!(inserter.push(Neighbor::new(2, 2.0)).is_available());
             assert_eq!(inserter.current_len(), 2);
             assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 2));
 
-            assert!(inserter.push(3, 3.0).is_available());
+            assert!(inserter.push(Neighbor::new(3, 3.0)).is_available());
             assert_eq!(inserter.current_len(), 3);
             assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 3));
 
-            assert!(inserter.push(4, 4.0).is_available());
+            assert!(inserter.push(Neighbor::new(4, 4.0)).is_available());
             assert_eq!(inserter.current_len(), 4);
             assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 4));
 
             // This should error since further attempts will not work.
-            assert!(inserter.push(5, 5.0).is_full());
+            assert!(inserter.push(Neighbor::new(5, 5.0)).is_full());
             assert_eq!(inserter.current_len(), 5);
             assert_eq!(inserter.size_hint(), Some(0));
 
-            assert!(inserter.push(6, 6.0).is_full());
+            assert!(inserter.push(Neighbor::new(6, 6.0)).is_full());
             assert_eq!(inserter.current_len(), 5);
             assert_eq!(inserter.size_hint(), Some(0));
 
@@ -417,15 +418,18 @@ mod neighbor_test {
             assert_eq!(inserter.size_hint(), Some(MAX_LENGTH));
             assert_eq!(inserter.current_len(), 0);
 
-            let set = inserter.extend([(1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0), (5, 5.0), (6, 6.0)]);
+            let set = inserter.extend(
+                [(1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0), (5, 5.0), (6, 6.0)]
+                    .map(Neighbor::from_tuple),
+            );
             assert_eq!(set, MAX_LENGTH);
             assert_eq!(inserter.current_len(), MAX_LENGTH);
             assert_eq!(inserter.size_hint(), Some(0));
 
             // Ensure that `pushing` respects the limit.
-            assert!(inserter.push(7, 7.0).is_full());
+            assert!(inserter.push(Neighbor::new(7, 7.0)).is_full());
 
-            let set = inserter.extend([(10, 10.0), (20, 20.0)]);
+            let set = inserter.extend([(10, 10.0), (20, 20.0)].map(Neighbor::from_tuple));
             assert_eq!(set, 0, "no more items can be added");
 
             assert_eq_verbose!(buffer, [f(1), f(2), f(3), f(4), f(5)]);
@@ -436,19 +440,19 @@ mod neighbor_test {
             let mut buffer = [Neighbor::<u32>::default(); MAX_LENGTH];
             let mut inserter = BackInserter::new(&mut buffer);
 
-            assert!(inserter.push(1, 1.0).is_available());
+            assert!(inserter.push(Neighbor::new(1, 1.0)).is_available());
 
-            let set = inserter.extend([(2, 2.0), (3, 3.0)]);
+            let set = inserter.extend([(2, 2.0), (3, 3.0)].map(Neighbor::from_tuple));
             assert_eq!(set, 2, "only two items were pushed");
 
             assert_eq!(inserter.current_len(), 3);
             assert_eq!(inserter.size_hint(), Some(2));
 
-            assert!(inserter.push(4, 4.0).is_available());
+            assert!(inserter.push(Neighbor::new(4, 4.0)).is_available());
             assert_eq!(inserter.current_len(), 4);
             assert_eq!(inserter.size_hint(), Some(1));
 
-            let set = inserter.extend([(5, 5.0), (6, 6.0)]);
+            let set = inserter.extend([(5, 5.0), (6, 6.0)].map(Neighbor::from_tuple));
             assert_eq!(
                 set, 1,
                 "there should only be room for one more item in the buffer"
@@ -469,14 +473,17 @@ mod neighbor_test {
         assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 0);
 
         // push grows unboundedly
-        assert!(SearchOutputBuffer::push(&mut buf, 1, 0.5).is_available());
-        assert!(SearchOutputBuffer::push(&mut buf, 2, 1.0).is_available());
+        assert!(SearchOutputBuffer::push(&mut buf, Neighbor::new(1, 0.5)).is_available());
+        assert!(SearchOutputBuffer::push(&mut buf, Neighbor::new(2, 1.0)).is_available());
         assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 2);
         assert_eq_verbose!(buf[0], Neighbor::new(1, 0.5));
         assert_eq_verbose!(buf[1], Neighbor::new(2, 1.0));
 
         // extend appends and returns count
-        let count = SearchOutputBuffer::extend(&mut buf, vec![(3u32, 1.5), (4, 2.0), (5, 2.5)]);
+        let count = SearchOutputBuffer::extend(
+            &mut buf,
+            [(3u32, 1.5), (4, 2.0), (5, 2.5)].map(Neighbor::from_tuple),
+        );
         assert_eq!(count, 3);
         assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 5);
         assert_eq_verbose!(buf[4], Neighbor::new(5, 2.5));

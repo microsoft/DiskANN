@@ -25,7 +25,7 @@ pub use map::Map;
 pub trait View<I> {
     /// The reborrowed element with an arbitrarily short lifetime.
     ///
-    /// Corresponds to [`crate::provider::Accessor::ElementRef`].
+    /// Corresponds to [`crate::graph::glue::PruneAccessor::ElementRef`].
     type ElementRef<'a>;
 
     /// The element returned from [`Self::get`].
@@ -38,7 +38,8 @@ pub trait View<I> {
 
     /// Retrieve element associated with `id` if available.
     ///
-    /// Users can expect that if `Self` was constructed from [`PruneAccessor::fill`], then
+    /// Users can expect that if `Self` was constructed from
+    /// [`crate::graph::glue::PruneAccessor::fill`], then
     /// `id` will belong to the iterator argument of that function.
     ///
     /// Retrieval should be reasonably efficient, but is not called in the hot-loop of prune.

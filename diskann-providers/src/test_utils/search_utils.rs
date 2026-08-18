@@ -70,7 +70,7 @@ pub fn assert_top_k_exactly_match(
     for i in 0..top_k {
         let neighbor = gt[gt.len() - 1 - i];
         assert_eq!(
-            neighbor.distance(),
+            *neighbor.distance(),
             distances[i],
             "failed on query {} for result {}",
             query_id,
@@ -100,12 +100,12 @@ pub fn assert_range_results_exactly_match(
 ) {
     let gt_ids = if let Some(inner_radius) = inner_radius {
         gt.iter()
-            .filter(|nbh| nbh.distance() >= inner_radius && nbh.distance() <= radius)
+            .filter(|nbh| *nbh.distance() >= inner_radius && *nbh.distance() <= radius)
             .map(|nbh| *nbh.id())
             .collect::<Vec<_>>()
     } else {
         gt.iter()
-            .filter(|nbh| nbh.distance() <= radius)
+            .filter(|nbh| *nbh.distance() <= radius)
             .map(|nbh| *nbh.id())
             .collect::<Vec<_>>()
     };
