@@ -179,9 +179,15 @@ where
                         let mut r = table.row(row);
                         r.insert(stage, 0);
                         r.insert(stats.kind, 1);
-                        r.insert(format!("{:.1}us", stats.insert_latencies.mean), 2);
-                        r.insert(stats.insert_latencies.p90, 3);
-                        r.insert(stats.insert_latencies.p99, 4);
+                        if let Some(latencies) = &stats.insert_latencies {
+                            r.insert(format!("{:.1}us", latencies.mean), 2);
+                            r.insert(latencies.p90, 3);
+                            r.insert(latencies.p99, 4);
+                        } else {
+                            r.insert("not measured", 2);
+                            r.insert("-", 3);
+                            r.insert("-", 4);
+                        }
 
                         row += 1;
                         stage += 1;
