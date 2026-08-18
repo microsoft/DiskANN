@@ -6,6 +6,7 @@
 use std::{fmt::Debug, marker::PhantomData};
 
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
+use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
@@ -28,6 +29,50 @@ use crate::{
     store::{self, Store},
     tag::AtomicTag,
 };
+
+#[derive(Debug)]
+pub struct Config<T> {
+    layout: store::Layout,
+    metric: Metric,
+    start_points: Matrix<T>,
+    store: store::Config,
+}
+
+impl<T> Config<T> {
+    pub fn new(
+        capacity: usize,
+        max_degree: usize,
+        metric: Metric,
+        start_points: Matrix<T>,
+    ) -> Self {
+        Self {
+            layout: store::Layout::new(capacity, max_degree),
+            metric,
+            start_points,
+            store: store::Config::default(),
+        }
+    }
+
+    pub fn store(mut self, config: store::Config) -> Self {
+        self.store = config;
+        self
+    }
+
+    fn dim(&self) -> usize {
+        self.start_points.ncols()
+    }
+}
+
+impl<T> layers::LayerConfig for Config<T>
+where
+    T: FullPrecision,
+{
+    type Layer = Full<T>;
+
+    fn build(self) -> ANNResult<Full<T>> {
+        Ok(Full::new(self.dim(), self.metric))
+    }
+}
 
 trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     fn make_expand_beam<'a>(
@@ -406,11 +451,7 @@ where
         }
     }
 
-    unsafe fn expand_beam(
-        &self,
-        list: &[u32],
-        buffer: &mut [(u32, f32)],
-    ) -> ANNResult<usize> {
+    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
         let len = list.len();
         let lookahead = LOOKAHEAD.min(len);
 

@@ -44,8 +44,22 @@ pub enum Status {
     Frozen,
 }
 
+impl Status {
+    #[must_use = "this function has no side-effects"]
+    pub fn is_readable(self) -> bool {
+        matches!(self, Self::Published | Self::Frozen)
+    }
+}
+
+pub trait LayerConfig {
+    type Layer: Layer;
+
+    fn build(self) -> ANNResult<Self::Layer>;
+}
+
 /// Base layer for data representations.
 pub trait Layer: Send + Sync + 'static {
+    // // Return the status of the item behind internal ID `i`.
     fn bytes(&self) -> Bytes;
 }
 
@@ -63,11 +77,7 @@ pub(crate) trait ExpandBeam: Send + Sync + std::fmt::Debug {
     ///
     /// * All items in `list` must in-bounds with respect to `reader`.
     /// * `buffer.len() >= list.len()`.
-    unsafe fn expand_beam(
-        &self,
-        list: &[u32],
-        buffer: &mut [(u32, f32)],
-    ) -> ANNResult<usize>;
+    unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize>;
 }
 
 #[derive(Debug, Clone, Copy)]

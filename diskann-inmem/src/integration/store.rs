@@ -41,8 +41,9 @@ impl Store {
     /// the frozen point exceeds `u32::MAX`) or if other configuration parameters such as
     /// the number of epoch guard slots are invalid (e.g. zero).
     pub fn new(config: Config) -> Self {
-        let mut store_config =
-            store::Config::new(config.capacity, Bytes::new(config.entry_bytes), 0);
+        let mut store_layout = store::Layout::new(config.capacity, 0);
+
+        let mut store_config = store::Config::default();
 
         store_config
             .epoch_guard_slots(
@@ -60,8 +61,8 @@ impl Store {
             );
 
         let data = Matrix::new(0u8, 1, config.entry_bytes);
-        let store =
-            store::Store::new(store_config, data.as_view()).expect("failed to construct store");
+        let store = store::Store::new(store_layout, store_config, data.as_view())
+            .expect("failed to construct store");
         Self { store }
     }
 

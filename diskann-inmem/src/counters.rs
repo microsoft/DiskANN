@@ -22,8 +22,10 @@ mod inner {
         }
     }
 
+    // Must be public because it shows up in public APIs - but is unconstructable by
+    // downstream code.
     #[derive(Debug)]
-    pub(crate) struct LocalCounters<'a> {
+    pub struct LocalCounters<'a> {
         _marker: PhantomData<&'a ()>,
     }
 
@@ -86,8 +88,10 @@ mod inner {
         }
     }
 
+    // Must be public because it shows up in public APIs - but is unconstructable by
+    // downstream code.
     #[derive(Debug)]
-    pub(crate) struct LocalCounters<'a> {
+    pub struct LocalCounters<'a> {
         query_distance: u64,
         // This fields needs to be `AtomicU64` because we increment in some loops where we
         // have to increment it behind a shared reference.

@@ -79,16 +79,7 @@ pub(crate) const TAG_SIZE: Bytes = AtomicTag::SIZE;
 
 /// Configuration for the concurrenct store.
 #[derive(Debug)]
-pub(crate) struct Config {
-    /// The number of non-frozen slots to create space for.
-    entries: usize,
-
-    /// The size of each slot.
-    bytes: Bytes,
-
-    /// The maximum number of neighbors in each adjacency list.
-    max_neighbors: usize,
-
+pub struct Config {
     /// The number of epoch guard slots.
     ///
     /// Increasing this number will increase the number of threads that can work concurrently
@@ -100,14 +91,10 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    /// Create a new `Config` capable of holding `entries` non-frozen points each of size
-    /// `bytes`. All adjacency lists will have a maximum capacity of `max_neighbors`.
-    pub(crate) fn new(entries: usize, bytes: Bytes, max_neighbors: usize) -> Self {
+    /// Create a new [`Config`] with default concurrency parameters.
+    pub fn new() -> Self {
         const DEFAULT_FREELIST_RECYCLE_CAPACITY: NonZeroU32 = NonZeroU32::new(1024).unwrap();
         Self {
-            entries,
-            bytes,
-            max_neighbors,
             epoch_guard_slots: Registry::default_guard_slots(),
             freelist_recycle_capacity: DEFAULT_FREELIST_RECYCLE_CAPACITY,
         }
@@ -132,6 +119,33 @@ impl Config {
     ) -> &mut Self {
         self.freelist_recycle_capacity = freelist_recycle_capacity;
         self
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Layout {
+    /// The number of non-frozen slots to create space for.
+    entries: usize,
+
+    /// The maximum number of neighbors in each adjacency list.
+    max_neighbors: usize,
+}
+
+impl Layout {
+    /// Create a new [`Layout`] capable of holding `entries` non-frozen points.
+    ///
+    /// All adjacency lists will have a maximum capacity of `max_neighbors`.
+    pub(crate) fn new(entries: usize, max_neighbors: usize) -> Self {
+        Self {
+            entries,
+            max_neighbors,
+        }
     }
 }
 
@@ -161,18 +175,22 @@ const RETRY_LIMIT: usize = 20;
 impl Store {
     /// Create a new [`Store`]. The entries within `init` will be used as frozen points
     /// within the store and must be compatible the the number of bytes in `config`.
-    pub(crate) fn new(config: Config, init: MatrixView<'_, u8>) -> Result<Self, StoreError> {
-        let Config {
+    pub(crate) fn new(
+        layout: Layout,
+        config: Config,
+        init: MatrixView<'_, u8>,
+    ) -> Result<Self, StoreError> {
+        let Layout {
             entries,
-            bytes,
             max_neighbors,
+        } = layout;
+
+        let Config {
             epoch_guard_slots,
             freelist_recycle_capacity,
         } = config;
 
-        if init.ncols() != bytes.value() {
-            return Err(StoreError::mismatched_frozen_point_dim(init.ncols(), bytes));
-        }
+        let bytes = Bytes::new(init.ncols());
 
         if init.nrows() == 0 {
             return Err(StoreError::need_frozen_point());
@@ -487,10 +505,6 @@ impl Store {
 pub(crate) struct StoreError(StoreErrorInner);
 
 impl StoreError {
-    fn mismatched_frozen_point_dim(dim: usize, bytes: Bytes) -> Self {
-        Self(StoreErrorInner::MismatchedFrozenPointDim { dim, bytes })
-    }
-
     fn need_frozen_point() -> Self {
         Self(StoreErrorInner::NeedFrozenPoint)
     }
@@ -518,12 +532,6 @@ impl From<NeighborsError> for StoreError {
 
 #[derive(Debug, Error)]
 enum StoreErrorInner {
-    #[error(
-        "frozen point dim ({}) must have the same dimensionality as requested bytes ({})",
-        dim,
-        bytes
-    )]
-    MismatchedFrozenPointDim { dim: usize, bytes: Bytes },
     #[error("at least one frozen point must be provided")]
     NeedFrozenPoint,
     #[error(
@@ -664,27 +672,17 @@ mod tests {
             base = base.wrapping_add(1);
         }
 
-        let mut config = Config::new(entries, Bytes::new(entry_bytes), 0);
+        let mut config = Config::new();
         config.epoch_guard_slots(NonZeroUsize::new(10).unwrap());
         config.freelist_recycle_capacity(NonZeroU32::new(16).unwrap());
 
-        Store::new(config, data.as_view())
+        let layout = Layout::new(entries, 0);
+        Store::new(layout, config, data.as_view())
     }
 
     //------------------------//
     // Constructor validation //
     //------------------------//
-
-    #[test]
-    fn new_rejects_mismatched_frozen_dim() {
-        // Frozen point has 8 columns but the store is asked for 16-byte entries.
-        let data = Matrix::new(0u8, 1, 8);
-        let err = Store::new(Config::new(4, Bytes::new(16), 0), data.as_view()).unwrap_err();
-        assert!(matches!(
-            err.0,
-            StoreErrorInner::MismatchedFrozenPointDim { dim: 8, .. }
-        ));
-    }
 
     #[test]
     fn new_requires_a_frozen_point() {
@@ -697,7 +695,8 @@ mod tests {
         // `entries` alone fits in u32, but `entries + frozen` overflows it.
         let data = Matrix::new(0u8, 1, 8);
         let err = Store::new(
-            Config::new(u32::MAX as usize, Bytes::new(8), 0),
+            Layout::new(u32::MAX as usize, 0),
+            Config::default(),
             data.as_view(),
         )
         .unwrap_err();
@@ -708,7 +707,8 @@ mod tests {
     fn new_rejects_too_many_neighbors() {
         let data = Matrix::new(0u8, 1, 8);
         let err = Store::new(
-            Config::new(4, Bytes::new(8), u32::MAX.into_usize() + 1),
+            Layout::new(4, u32::MAX.into_usize() + 1),
+            Config::default(),
             data.as_view(),
         )
         .unwrap_err();

@@ -107,7 +107,7 @@ where
             layers::Set::set(&layer, point, row)?;
         }
 
-        let mut store_config = store::Config::new(config.capacity(), bytes, config.max_degree());
+        let mut store_config = store::Config::default();
 
         if let Some(slots) = config.epoch_guard_slots {
             store_config.epoch_guard_slots(slots);
@@ -117,7 +117,9 @@ where
             store_config.freelist_recycle_capacity(capacity);
         }
 
-        let store = Store::new(store_config, data.as_view())
+        let mut store_layout = store::Layout::new(config.capacity(), config.max_degree());
+
+        let store = Store::new(store_layout, store_config, data.as_view())
             .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
 
         let mapping = IdMap::new(config.capacity());
@@ -470,6 +472,8 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 self.counters.get_neighbors(1);
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
+                //
+                // TODO: We need safe provenance on the upper bound.
                 self.ids
                     .retain(|i| pred.eval_mut(i) && *i < self.neighbors.entries());
 
@@ -478,10 +482,8 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 
                 // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
                 // `self.buffer` is long enough to hold all the IDs.
-                let processed = unsafe {
-                    self.expand_beam
-                        .expand_beam(&self.ids, &mut self.buffer)
-                }?;
+                let processed =
+                    unsafe { self.expand_beam.expand_beam(&self.ids, &mut self.buffer) }?;
 
                 self.counters.get_vector(processed as u64);
                 self.counters.query_distance(processed as u64);
