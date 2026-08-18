@@ -265,6 +265,9 @@ fn add_symmetric_neighbors(
 ) {
     for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in source_neighbors {
+            if !neighbor.is_assigned() {
+                continue;
+            }
             let target = neighbor.target as usize;
             let source_id = point_ids[source];
             let target_id = point_ids[target];
@@ -440,6 +443,15 @@ mod tests {
         );
 
         assert_eq!(actual, brute_force_symmetric_l2(&points, 2));
+    }
+
+    #[test]
+    fn non_rankable_neighbors_are_omitted() {
+        let data = [0.0_f32, 1.0, f32::NAN];
+
+        let graph = build(view(&data, 3, 1), &[vec![0, 1, 2]], 2, Metric::InnerProduct).unwrap();
+
+        assert_eq!(adjacency_lists(graph), [vec![1], vec![0], vec![]]);
     }
 
     #[test]
