@@ -628,6 +628,7 @@ dependencies = [
  "byteorder",
  "diskann",
  "diskann-disk",
+ "diskann-inmem",
  "diskann-linalg",
  "diskann-providers",
  "diskann-quantization",

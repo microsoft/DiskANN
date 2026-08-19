@@ -171,8 +171,8 @@ pub(super) struct GraphIvfStageStats {
 
 /// How much of the centroid graph's out-degree still points at live centroids.
 ///
-/// Search traverses tombstones like any other node, so a low live fraction
-/// means the candidate list is diluted with dead ends.
+/// Search traverses an edge into a retired slot like any other node, so a low
+/// live fraction means the candidate list is diluted with dead ends.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub(super) struct CentroidAdjacencyStats {
     pub(super) out_edges: u64,

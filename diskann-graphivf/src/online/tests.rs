@@ -92,17 +92,17 @@ fn mutable_graph_insert_delete_search() {
     let mut dist = [0.0f32; 1];
 
     // Query near centroid 3 (10,10) -> returns 3.
-    centroids::search_mut(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
+    centroids::search(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
     assert_eq!(ids[0], 3);
 
     // Delete centroid 3; the same query now returns a different live one.
-    centroids::delete_centroid(&graph, &rt, 3).unwrap();
-    centroids::search_mut(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
+    centroids::inplace_delete_centroid(&graph, &rt, 3, 2).unwrap();
+    centroids::search(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
     assert_ne!(ids[0], 3);
 
     // Insert a new centroid (id 4) right at the query; it wins.
     centroids::insert_centroid(&graph, &rt, 4, &[9.5, 9.5]).unwrap();
-    centroids::search_mut(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
+    centroids::search(&graph, &rt, &[9.5, 9.5], 8, &mut ids, &mut dist).unwrap();
     assert_eq!(ids[0], 4);
 }
 
@@ -784,6 +784,85 @@ fn merges_run_with_an_exhausted_id_budget() {
     assert_live_invariants(&c, &(3..20u32).collect::<Vec<_>>());
     assert_eq!(c.telemetry().total_merges, 1);
     assert_eq!(c.num_clusters(), 3);
+}
+
+/// The centroid graph agrees with the registry about which ids exist and what
+/// they hold.
+///
+/// Retiring a centroid frees its internal slot for reuse, so a stale in-edge
+/// left behind by an incomplete repair would eventually address a slot that a
+/// later split had recycled under a different id. Both halves of that show up
+/// here: a walk must never surface an id the registry has retired, and a
+/// centroid queried at its own location must come back as itself rather than
+/// as whichever centroid inherited its slot.
+fn assert_graph_matches_registry(c: &OnlineClusterer) {
+    let live: Vec<(u32, Box<[f32]>)> = c
+        .centroids
+        .iter_live()
+        .map(|(id, v)| (id, v.to_vec().into_boxed_slice()))
+        .collect();
+    let mut ids = [0u32; 4];
+    let mut distances = [0.0f32; 4];
+    let mut self_hits = 0usize;
+    for (id, vector) in &live {
+        let n = c
+            .centroids
+            .search(&c.runtime, vector, 64, &mut ids, &mut distances)
+            .unwrap();
+        assert!(n > 0, "centroid {id} found nothing at its own location");
+        for &got in &ids[..n] {
+            assert!(c.centroids.is_live(got), "walk surfaced retired id {got}");
+        }
+        if ids[0] == *id {
+            self_hits += 1;
+            assert_eq!(distances[0], 0.0, "centroid {id} is not at its own vector");
+        }
+    }
+    // The search list is at least as wide as the cluster cap, so every live
+    // centroid is reachable and self-retrieval is exact. A recycled slot
+    // serving the wrong vector breaks that immediately.
+    assert!(
+        self_hits == live.len(),
+        "only {self_hits}/{} centroids found themselves",
+        live.len()
+    );
+}
+
+#[test]
+fn churn_keeps_the_centroid_graph_and_registry_in_sync() {
+    let mut rng = StdRng::seed_from_u64(99);
+    let n = 600;
+    let mut v = Vec::with_capacity(n * 2);
+    for _ in 0..n {
+        v.push(rng.random_range(-50.0f32..50.0));
+        v.push(rng.random_range(-50.0f32..50.0));
+    }
+    let points = mat(v, n, 2);
+    let initial = mat(vec![-25.0, -25.0, 25.0, 25.0], 2, 2);
+    let p = OnlineParams {
+        centroid_capacity: 4096,
+        ..merge_params(64, 24, 6)
+    };
+
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
+    assert_graph_matches_registry(&c);
+
+    // Recycle a sixth of the corpus at a time. Deleting a contiguous id range
+    // starves whole regions at once, which is the case that retires spatially
+    // adjacent centroids together; reinserting the same ids then splits those
+    // regions back apart and reuses the slots just freed.
+    for round in 0..6u32 {
+        let victims: Vec<u32> = (round * 100..round * 100 + 100).collect();
+        c.delete_batch(&victims).unwrap();
+        assert_graph_matches_registry(&c);
+        c.insert_batch(&victims).unwrap();
+        assert_graph_matches_registry(&c);
+    }
+
+    assert_invariants(&c, n);
+    assert!(c.telemetry().total_merges > 0, "no cluster ever retired");
+    assert!(c.telemetry().total_splits > 0, "no cluster ever split");
 }
 
 #[test]

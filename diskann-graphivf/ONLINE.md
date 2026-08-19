@@ -210,7 +210,8 @@ partition. For a single streamed point `pid`:
 1. **Validate.** Reject an out-of-range id, an id already present in the index,
    or a duplicate within the same batch. A rejected batch is a no-op.
 2. **Route.** Find the nearest live centroid `c` with centroid-graph search-list
-   size `assign_l`. Because previous splits leave **tombstoned** graph slots, a
+   size `assign_l`. Splits and merges retire centroids in place, and the in-edge
+   repair around a departing centroid can leave a region thinly connected, so a
    narrow beam can rarely return no live centroid; `route_one` retries with
    `max(8·assign_l, 512)` and finally scans the live centroid table exactly.
 3. **Project and admit.** Test `len(list[c]) + incoming(c)` against

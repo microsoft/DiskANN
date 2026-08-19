@@ -28,31 +28,27 @@
 //! cargo run --release --example centroid_graph_ablation -- [centroids.fbin] [queries_fp16.bin]
 //! ```
 
-use std::{fs::File, sync::Arc};
+use std::{fs::File, num::NonZeroUsize};
 
 use diskann::{
     graph::{
         config::{Builder, MaxDegree},
         search::Knn,
         search_output_buffer::{IdDistance, SearchOutputBuffer},
-        strategy::FullPrecision,
+        DiskANNIndex,
     },
-    provider::DefaultContext,
-    utils::ONE,
     ANNError,
 };
-use diskann_providers::{
-    index::diskann_async::{new_index, MemoryIndex},
-    model::graph::provider::async_::{
-        common::NoDeletes,
-        inmem::{DefaultProviderParameters, SetStartPoints},
-    },
-    utils::{create_thread_pool, ParallelIteratorInPool},
-};
+use diskann_inmem::{layers, provider as inmem, Context, Provider, Strategy};
+use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool};
 use diskann_utils::{io::read_bin, views::Matrix};
 use diskann_vector::{distance::Metric as VectorMetric, Half};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 use tokio::runtime::Runtime;
+
+/// Mirrors `centroids::CentroidGraph`.
+type CentroidGraph = DiskANNIndex<Provider<layers::Full<f32>, u32>>;
 
 // --- Configuration (matches the 16384-centroid build/search json) ------------
 
@@ -69,6 +65,8 @@ const GRAPH_SLACK: f32 = 1.2;
 const GRAPH_L_BUILD: usize = 64;
 const GRAPH_ALPHA: f32 = 1.2;
 const NUM_THREADS: usize = 8;
+/// Guard slots to provision when `NUM_THREADS` does not demand more.
+const MIN_GUARD_SLOTS: usize = 1024;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -185,7 +183,7 @@ fn brute_force_topk(centroids: &[f32], nc: usize, dim: usize, query: &[f32], k: 
 
 /// Run a k-NN over the centroid graph; returns the returned centroid ids.
 fn graph_search(
-    index: &MemoryIndex<f32>,
+    index: &CentroidGraph,
     runtime: &Runtime,
     query: &[f32],
     k: usize,
@@ -196,7 +194,7 @@ fn graph_search(
     let knn = Knn::new(l, None).expect("invalid knn params");
     let mut buffer = IdDistance::new(&mut ids, &mut dist);
     runtime
-        .block_on(index.search(knn, &FullPrecision, &DefaultContext, query, &mut buffer))
+        .block_on(index.search(knn, &Strategy, &Context, query, &mut buffer))
         .expect("centroid graph search failed");
     let n = buffer.current_len();
     ids.truncate(n);
@@ -205,7 +203,7 @@ fn graph_search(
 
 /// Build the in-memory full-precision Vamana graph over the centroids, mirroring
 /// the index's `centroids::build`.
-fn build_centroid_graph(centroids: Matrix<f32>) -> Result<MemoryIndex<f32>, ANNError> {
+fn build_centroid_graph(centroids: Matrix<f32>) -> Result<CentroidGraph, ANNError> {
     let nc = centroids.nrows();
     let dim = centroids.ncols();
 
@@ -221,45 +219,45 @@ fn build_centroid_graph(centroids: Matrix<f32>) -> Result<MemoryIndex<f32>, ANNE
     .build()
     .map_err(ANNError::from)?;
 
-    let params = DefaultProviderParameters {
-        max_points: nc,
-        frozen_points: ONE,
-        dim,
-        metric: VectorMetric::L2,
-        prefetch_lookahead: None,
-        prefetch_cache_line_level: None,
-        max_degree: config.max_degree_u32().get(),
-    };
+    let mut provider_config = inmem::Config::new(nc, config.max_degree_u32().get() as usize);
+    provider_config.set_epoch_guard_slots(NonZeroUsize::new(
+        NUM_THREADS.saturating_mul(4).max(MIN_GUARD_SLOTS),
+    ));
 
-    let index = new_index::<f32, _>(config, params, NoDeletes)?;
+    // Start point = a real centroid, picked deterministically (same as the
+    // index). The mean is a poor start point under inner product: it has the
+    // smallest norm, so nothing selects it as a neighbor and it dead-ends.
+    let start = StdRng::seed_from_u64(nc as u64).random_range(0..nc);
 
-    // Start point = mean of all centroids (same as the index).
-    let mut mean = vec![0.0f32; dim];
-    for row in centroids.row_iter() {
-        for (m, v) in mean.iter_mut().zip(row.iter()) {
-            *m += *v;
-        }
-    }
-    for m in mean.iter_mut() {
-        *m /= nc as f32;
-    }
-    index
-        .provider()
-        .set_start_points(std::iter::once(mean.as_slice()))?;
+    let provider = Provider::new(
+        layers::Full::<f32>::new(dim, VectorMetric::L2),
+        provider_config,
+        std::iter::once(centroids.row(start)),
+    )
+    .map_err(ANNError::new)?;
 
-    let ids: Arc<[u32]> = (0..nc as u32).collect();
-    let batch = Arc::new(centroids);
+    let index = DiskANNIndex::new(config, provider, None);
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(NUM_THREADS)
-        .build()
-        .map_err(ANNError::from)?;
-    runtime.block_on(index.multi_insert::<_, Matrix<f32>>(
-        FullPrecision,
-        &DefaultContext,
-        batch,
-        ids,
-    ))?;
+    // Single inserts in parallel, matching `centroids::insert_centroids`: row
+    // `i` is centroid `i` whichever slot it lands in.
+    const CHUNK: usize = 64;
+    let pool = create_thread_pool(NUM_THREADS)?;
+    (0..nc).into_par_iter().chunks(CHUNK).try_for_each_in_pool(
+        pool.as_ref(),
+        |rows| -> Result<(), ANNError> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .map_err(ANNError::from)?;
+            runtime.block_on(async {
+                for i in rows {
+                    index
+                        .insert(&Strategy, &Context, &(i as u32), centroids.row(i))
+                        .await?;
+                }
+                Ok::<_, ANNError>(())
+            })
+        },
+    )?;
 
     Ok(index)
 }

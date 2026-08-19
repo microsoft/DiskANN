@@ -7,7 +7,7 @@ use diskann_utils::views::Matrix;
 use tokio::runtime::Runtime;
 
 use crate::{
-    centroids::{self, AdjacencyCensus, DenseCentroids, ExactMetric, MutableCentroidGraph},
+    centroids::{self, AdjacencyCensus, CentroidGraph, DenseCentroids, ExactMetric},
     GraphIvfError, Result,
 };
 
@@ -49,7 +49,7 @@ pub(super) struct CentroidRegistry {
     /// Maintained graph over the live centroids, or `None` when they are
     /// scanned exactly instead. Exact mode keeps no state of its own — there is
     /// no second copy of the centroids and no graph to hold in sync.
-    graph: Option<MutableCentroidGraph>,
+    graph: Option<CentroidGraph>,
 }
 
 impl CentroidRegistry {
@@ -61,7 +61,7 @@ impl CentroidRegistry {
     pub(super) fn new(
         initial: &Matrix<f32>,
         capacity: usize,
-        graph: Option<MutableCentroidGraph>,
+        graph: Option<CentroidGraph>,
     ) -> Self {
         let mut dense = DenseCentroids::with_capacity(initial.ncols(), capacity);
         for i in 0..initial.nrows() {
@@ -174,7 +174,7 @@ impl CentroidRegistry {
         distances: &mut [f32],
     ) -> Result<usize> {
         match &self.graph {
-            Some(graph) => centroids::search_mut(graph, runtime, query, l, ids, distances),
+            Some(graph) => centroids::search(graph, runtime, query, l, ids, distances),
             None => self.exact_search(query, ids, distances),
         }
     }
@@ -184,9 +184,9 @@ impl CentroidRegistry {
     ///
     /// This is the ranking the centroid graph is trying to reproduce, which is
     /// what makes it both the reference for centroid-selection recall and the
-    /// recovery path when a graph walk exhausts its frontier on tombstones and
-    /// reaches no live centroid at all. It costs a full pass over the centroid
-    /// set, so it does not belong on a hot query path.
+    /// recovery path when a graph walk exhausts its frontier without reaching
+    /// any live centroid. It costs a full pass over the centroid set, so it
+    /// does not belong on a hot query path.
     pub(super) fn exact_search(
         &self,
         query: &[f32],
@@ -198,7 +198,7 @@ impl CentroidRegistry {
         self.dense.search(ExactMetric::SqL2, query, ids, distances)
     }
 
-    /// Tombstone pressure on the centroid graph, or `None` when no graph is
+    /// Out-edge health of the centroid graph, or `None` when no graph is
     /// maintained.
     pub(super) fn adjacency_census(&self, runtime: &Runtime) -> Result<Option<AdjacencyCensus>> {
         match &self.graph {
@@ -246,14 +246,14 @@ impl CentroidRegistry {
     pub(super) fn retire_all(&mut self, runtime: &Runtime, victims: &[u32]) -> Result<()> {
         debug_assert!(victims.iter().all(|&id| self.is_live(id)));
         if let Some(graph) = &self.graph {
-            // Mark the whole victim set before repairing any of it. Dissolved
-            // clusters are spatially correlated — a sparse region empties
-            // together — so a victim's neighborhood is largely other victims.
-            // Repairing one at a time would rewire in-neighbors onto slots about
-            // to be tombstoned themselves.
-            for &victim in victims {
-                centroids::delete_centroid(graph, runtime, victim)?;
-            }
+            // Repair-and-remove one victim at a time. Dissolved clusters are
+            // spatially correlated — a sparse region empties together — so a
+            // victim's neighborhood is largely other victims, and an early
+            // repair can rewire in-neighbors onto a victim that is itself about
+            // to go. That self-corrects: those in-neighbors are rewired again
+            // when the victim they were pointed at is retired, and by the last
+            // victim every other one is already gone, so nothing is left
+            // pointing into the retired set.
             for &victim in victims {
                 centroids::inplace_delete_centroid(graph, runtime, victim, REPLACE_EDGES)?;
             }

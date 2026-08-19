@@ -147,8 +147,8 @@ pub enum CentroidSearch {
     ///
     /// Sub-linear in the cluster count and the only option that stays practical
     /// as clusters grow into the millions, at the cost of occasionally missing a
-    /// nearest cluster. On an index that churns, the graph also accumulates
-    /// tombstones, and the beam has to be widened
+    /// nearest cluster. On an index that churns, repeated in-place repair also
+    /// thins the graph's connectivity, and the beam has to be widened
     /// ([`SearchParams::centroid_search_alpha`]) to compensate.
     #[default]
     Graph,

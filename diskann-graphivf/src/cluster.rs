@@ -16,10 +16,7 @@
 
 use diskann::ANNError;
 use diskann_disk::utils::{compute_closest_centers, compute_vecs_l2sq};
-use diskann_providers::{
-    index::diskann_async::MemoryIndex,
-    utils::{ParallelIteratorInPool, RayonThreadPool},
-};
+use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPool};
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric as VectorMetric;
 use rayon::prelude::*;
@@ -110,7 +107,7 @@ impl Assigner for ExactAssigner {
 /// exactly against the current centroids, recovering most of the accuracy lost
 /// to the approximate search.
 pub(crate) struct GraphAssigner {
-    graph: Option<MemoryIndex<f32>>,
+    graph: Option<centroids::CentroidGraph>,
     graph_params: GraphParams,
     assign_l: usize,
     rebuild_every: usize,

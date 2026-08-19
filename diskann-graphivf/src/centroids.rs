@@ -5,38 +5,30 @@
 
 //! In-memory structures for locating the nearest cluster centroids.
 //!
-//! Two of them: a DiskANN graph over the centroids (thin wrappers around the
-//! `diskann` / `diskann-providers` in-memory index) and an exact scan over a
-//! packed copy of them ([`exact`]). [`CentroidSource`] and its online
-//! counterpart pick between the two so that no caller has to.
+//! Two of them: a DiskANN graph over the centroids (a thin wrapper around the
+//! `diskann` graph and the `diskann-inmem` concurrent provider) and an exact
+//! scan over a packed copy of them ([`exact`]). [`CentroidSource`] and its
+//! online counterpart pick between the two so that no caller has to.
 
 mod exact;
 
 pub(crate) use exact::{DenseCentroids, ExactMetric};
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{
     graph::{
         config::{Builder, MaxDegree},
+        glue::PruneStrategy,
         search::Knn,
         search_output_buffer::{IdDistance, SearchOutputBuffer},
-        strategy::FullPrecision,
-        Config, InplaceDeleteMethod,
+        Config, DiskANNIndex, InplaceDeleteMethod,
     },
-    provider::{DataProvider, DefaultAccessor, DefaultContext, Delete},
-    utils::ONE,
+    provider::DataProvider,
     ANNError,
 };
-use diskann_providers::{
-    index::diskann_async::{new_index, MemoryIndex},
-    model::graph::provider::async_::{
-        common::{NoDeletes, TableBasedDeletes},
-        inmem::{DefaultProviderParameters, SetStartPoints},
-        TableDeleteProviderAsync,
-    },
-    utils::{ParallelIteratorInPool, RayonThreadPool},
-};
+use diskann_inmem::{layers, provider as inmem, Context, Provider, Strategy};
+use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool, RayonThreadPool};
 use diskann_utils::views::{Matrix, MatrixView};
 use diskann_vector::distance::Metric as VectorMetric;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -48,19 +40,22 @@ use crate::{
     GraphIvfError, Result,
 };
 
-/// Construct the graph [`Config`] and provider parameters shared by the
-/// immutable ([`build`]) and mutable ([`build_mutable`]) centroid graphs.
+/// A DiskANN graph over the centroids, backed by the concurrent in-memory
+/// provider.
 ///
-/// `dim` is the centroid dimension and `capacity` the number of id slots to
-/// reserve — equal to the centroid count for an immutable graph, larger for a
-/// mutable one that must accommodate later insertions.
-fn centroid_graph_config(
-    graph: &GraphParams,
-    dim: usize,
-    capacity: usize,
-    metric: VectorMetric,
-) -> Result<(Config, DefaultProviderParameters)> {
-    let config = Builder::new_with(
+/// Centroid ids are the provider's *external* ids, so row `i` of the matrix the
+/// graph was built from is always returned as id `i` regardless of which
+/// internal slot it landed in.
+///
+/// The provider supports insertion and deletion natively, so the graph the
+/// batch clusterer builds and the one the online clusterer mutates differ only
+/// in how much spare capacity they were given ([`build`] versus
+/// [`build_mutable`]).
+pub(crate) type CentroidGraph = Arc<DiskANNIndex<Provider<layers::Full<f32>, u32>>>;
+
+/// Build the graph [`Config`] shared by every centroid graph.
+fn graph_config(graph: &GraphParams, metric: VectorMetric) -> Result<Config> {
+    Builder::new_with(
         graph.degree,
         MaxDegree::slack(graph.slack),
         graph.l_build,
@@ -70,18 +65,8 @@ fn centroid_graph_config(
         },
     )
     .build()
-    .map_err(ANNError::from)?;
-
-    let params = DefaultProviderParameters {
-        max_points: capacity,
-        frozen_points: ONE,
-        dim,
-        metric,
-        prefetch_lookahead: None,
-        prefetch_cache_line_level: None,
-        max_degree: config.max_degree_u32().get(),
-    };
-    Ok((config, params))
+    .map_err(ANNError::from)
+    .map_err(Into::into)
 }
 
 /// Deterministically pick a centroid to use as the graph's frozen start point.
@@ -96,8 +81,75 @@ fn start_point_index(num_clusters: usize) -> usize {
     rng.random_range(0..num_clusters)
 }
 
+/// Create an empty centroid graph with room for `capacity` centroids, frozen at
+/// `start` (a copy of one centroid, used only as the navigation entry point).
+///
+/// The frozen point holds no external id, so it is never reported by a search:
+/// result translation drops any candidate without an id mapping.
+fn empty_graph(
+    graph: &GraphParams,
+    dim: usize,
+    capacity: usize,
+    metric: VectorMetric,
+    start: &[f32],
+    num_threads: usize,
+) -> Result<CentroidGraph> {
+    let config = graph_config(graph, metric)?;
+
+    let mut provider_config = inmem::Config::new(capacity, config.max_degree_u32().get() as usize);
+    // One epoch guard is held for the whole of every concurrent search or
+    // insert. Build-time `num_threads` only bounds the build, so keep a floor
+    // that also covers search-time concurrency; a slot is 8 bytes.
+    provider_config.set_epoch_guard_slots(NonZeroUsize::new(
+        num_threads.saturating_mul(4).max(MIN_GUARD_SLOTS),
+    ));
+
+    let provider = Provider::new(
+        layers::Full::<f32>::new(dim, metric),
+        provider_config,
+        std::iter::once(start),
+    )
+    .map_err(ANNError::new)?;
+
+    Ok(Arc::new(DiskANNIndex::new(config, provider, None)))
+}
+
+/// Guard slots to provision when the caller's thread count does not demand more.
+const MIN_GUARD_SLOTS: usize = 1024;
+
+/// Insert row `i` of `centroids` under external id `i`, in parallel.
+///
+/// Ids come from the row index rather than the insert order, so the graph's
+/// contents are independent of how the work is scheduled: row `i` is always
+/// centroid `i`, whichever internal slot the provider hands it.
+fn insert_centroids(
+    index: &CentroidGraph,
+    centroids: &Matrix<f32>,
+    pool: &RayonThreadPool,
+) -> Result<()> {
+    const CHUNK: usize = 64;
+
+    (0..centroids.nrows())
+        .into_par_iter()
+        .chunks(CHUNK)
+        .try_for_each_in_pool(pool.as_ref(), |rows| -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .map_err(ANNError::from)?;
+            runtime.block_on(async {
+                for i in rows {
+                    index
+                        .insert(&Strategy, &Context, &(i as u32), centroids.row(i))
+                        .await?;
+                }
+                Ok::<_, ANNError>(())
+            })?;
+            Ok(())
+        })
+}
+
 /// Build an immutable in-memory full-precision graph over `centroids` (row `i`
-/// is centroid `i`, returned as internal/external id `i`), sized exactly to its
+/// is centroid `i`, returned as external id `i`), sized exactly to its
 /// centroids.
 ///
 /// `metric` is the distance used for graph construction and navigation. Build-
@@ -112,28 +164,44 @@ pub(crate) fn build(
     graph: &GraphParams,
     num_threads: usize,
     metric: VectorMetric,
-) -> Result<MemoryIndex<f32>> {
+) -> Result<CentroidGraph> {
+    let capacity = centroids.nrows();
+    build_with_capacity(centroids, graph, num_threads, capacity, metric)
+}
+
+/// Shared body of [`build`] and [`build_mutable`]: fill a graph sized to
+/// `capacity` with every row of `centroids` under its own row index as id.
+fn build_with_capacity(
+    centroids: Matrix<f32>,
+    graph: &GraphParams,
+    num_threads: usize,
+    capacity: usize,
+    metric: VectorMetric,
+) -> Result<CentroidGraph> {
     let num_clusters = centroids.nrows();
-    let (config, params) = centroid_graph_config(graph, centroids.ncols(), num_clusters, metric)?;
-    let index = new_index::<f32, _>(config, params, NoDeletes)?;
+    if num_clusters == 0 {
+        return Err(GraphIvfError::invalid(
+            "cannot build a centroid graph over an empty centroid set",
+        ));
+    }
+    if capacity < num_clusters {
+        return Err(GraphIvfError::invalid(format!(
+            "graph capacity ({capacity}) is smaller than the initial centroid count ({num_clusters})"
+        )));
+    }
 
     let start = start_point_index(num_clusters);
-    index
-        .provider()
-        .set_start_points(std::iter::once(centroids.row(start)))?;
+    let index = empty_graph(
+        graph,
+        centroids.ncols(),
+        capacity,
+        metric,
+        centroids.row(start),
+        num_threads,
+    )?;
 
-    let ids: Arc<[u32]> = (0..num_clusters as u32).collect();
-    let batch = Arc::new(centroids);
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_threads)
-        .build()
-        .map_err(ANNError::from)?;
-    runtime.block_on(index.multi_insert::<_, Matrix<f32>>(
-        FullPrecision,
-        &DefaultContext,
-        batch,
-        ids,
-    ))?;
+    let pool = create_thread_pool(num_threads)?;
+    insert_centroids(&index, &centroids, &pool)?;
 
     Ok(index)
 }
@@ -145,7 +213,7 @@ pub(crate) fn build(
 /// `ids_out` and `dist_out` must have the same length, which is the requested
 /// `k`. `l` is the centroid-graph search-list size and must be `>= k`.
 pub(crate) fn search(
-    index: &MemoryIndex<f32>,
+    index: &CentroidGraph,
     runtime: &Runtime,
     query: &[f32],
     l: usize,
@@ -156,7 +224,7 @@ pub(crate) fn search(
     let knn = Knn::new(l, None).map_err(ANNError::from)?;
 
     let mut buffer = IdDistance::new(ids_out, dist_out);
-    runtime.block_on(index.search(knn, &FullPrecision, &DefaultContext, query, &mut buffer))?;
+    runtime.block_on(index.search(knn, &Strategy, &Context, query, &mut buffer))?;
 
     Ok(buffer.current_len())
 }
@@ -173,7 +241,7 @@ pub(crate) fn search(
 pub(crate) enum CentroidSource {
     /// Navigate a DiskANN graph over the centroids.
     Graph {
-        index: MemoryIndex<f32>,
+        index: CentroidGraph,
         /// Search-list size for the per-point walk in [`assign`](Self::assign).
         assign_l: usize,
     },
@@ -276,115 +344,70 @@ impl CentroidSource {
     }
 }
 
-/// A centroid graph that supports incremental insertion and soft deletion of
-/// centroids (used by the online split/reassign clusterer).
+/// Build a [`CentroidGraph`] over `centroids` with room for `capacity` live
+/// centroids.
 ///
-/// Unlike [`build`], which produces an immutable graph sized exactly to its
-/// centroids, this graph is built with spare capacity and a delete table so new
-/// centroids can be inserted and split centroids soft-deleted in place. Soft
-/// deletes leave the slot occupied (no reuse), so the capacity must cover every
-/// id ever allocated over the clusterer's lifetime.
-pub(crate) type MutableCentroidGraph = MemoryIndex<f32, TableDeleteProviderAsync>;
-
-/// Build a [`MutableCentroidGraph`] over `centroids` with room for `capacity`
-/// total centroid ids.
+/// The initial centroids receive ids `0..centroids.nrows()`. Unlike [`build`],
+/// which sizes the graph exactly to its centroids, this leaves spare slots for
+/// later [`insert_centroid`] calls. Because [`inplace_delete_centroid`] frees a
+/// slot for reuse, the graph itself only needs `capacity` to cover the centroids
+/// live at any one instant. The online clusterer nonetheless sizes it as a
+/// budget on ids *consumed*, since it never reissues a retired id.
 ///
-/// The initial centroids receive ids `0..centroids.nrows()`; ids
-/// `centroids.nrows()..capacity` are free for later [`insert_centroid`] calls.
 /// `metric` is the navigation/assignment metric (callers pass
 /// [`VectorMetric::L2`], matching batch clustering).
 ///
-/// # Panics / Errors
+/// # Errors
 ///
-/// Returns an error if `capacity < centroids.nrows()` or graph construction
-/// fails.
+/// Returns an error if `capacity < centroids.nrows()`, `centroids` is empty, or
+/// graph construction fails.
 pub(crate) fn build_mutable(
     centroids: Matrix<f32>,
     graph: &GraphParams,
     num_threads: usize,
     capacity: usize,
     metric: VectorMetric,
-) -> Result<MutableCentroidGraph> {
-    let num_clusters = centroids.nrows();
-    if capacity < num_clusters {
-        return Err(GraphIvfError::invalid(format!(
-            "graph capacity ({capacity}) is smaller than the initial centroid count ({num_clusters})"
-        )));
-    }
-    let (config, params) = centroid_graph_config(graph, centroids.ncols(), capacity, metric)?;
-    let index = new_index::<f32, _>(config, params, TableBasedDeletes)?;
-
-    let start = start_point_index(num_clusters);
-    index
-        .provider()
-        .set_start_points(std::iter::once(centroids.row(start)))?;
-
-    let ids: Arc<[u32]> = (0..num_clusters as u32).collect();
-    let batch = Arc::new(centroids);
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_threads)
-        .build()
-        .map_err(ANNError::from)?;
-    runtime.block_on(index.multi_insert::<_, Matrix<f32>>(
-        FullPrecision,
-        &DefaultContext,
-        batch,
-        ids,
-    ))?;
-
-    Ok(index)
+) -> Result<CentroidGraph> {
+    build_with_capacity(centroids, graph, num_threads, capacity, metric)
 }
 
 /// Insert a new centroid `vec` under external id `id` into a
-/// [`MutableCentroidGraph`]. `id` must be unused and within the graph's
-/// capacity.
+/// [`CentroidGraph`]. `id` must not currently be live, and the graph must have
+/// a free slot.
 pub(crate) fn insert_centroid(
-    index: &MutableCentroidGraph,
+    index: &CentroidGraph,
     runtime: &Runtime,
     id: u32,
     vec: &[f32],
 ) -> Result<()> {
-    runtime.block_on(index.insert(&FullPrecision, &DefaultContext, &id, vec))?;
+    runtime.block_on(index.insert(&Strategy, &Context, &id, vec))?;
     Ok(())
 }
 
-/// Soft-delete the centroid with external id `id` from a
-/// [`MutableCentroidGraph`]. The centroid is no longer returned by
-/// [`search_mut`], though its slot remains occupied.
-pub(crate) fn delete_centroid(
-    index: &MutableCentroidGraph,
-    runtime: &Runtime,
-    id: u32,
-) -> Result<()> {
-    runtime.block_on(index.provider().delete(&DefaultContext, &id))?;
-    Ok(())
-}
-
-/// Soft-delete the centroid with external id `id` and repair the graph around
-/// it, so the tombstoned slot is no longer reachable from live centroids.
+/// Delete the centroid with external id `id` and repair the graph around it, so
+/// the dying centroid's in-neighbors are rewired before its slot is retired.
 ///
-/// [`delete_centroid`] only flips the delete bit: the slot keeps its in-edges,
-/// and a walk still spends frontier entries on it. Because ids are never
-/// reused, a long-running clusterer accumulates roughly one tombstone per
-/// split and searches degrade as the beam fills with dead nodes. This variant
-/// additionally rewires each in-neighbor onto the `num_to_replace` nearest
-/// members of the dying centroid's own neighborhood and drops its out-edges.
+/// Repairing is not optional. A bare provider delete would release the id
+/// mapping and leave the departing centroid's in-edges dangling: a walk still
+/// spends frontier entries reaching a slot that no longer resolves to a
+/// centroid, and once that slot is recycled those edges point at an unrelated
+/// centroid instead. This rewires each in-neighbor onto the `num_to_replace`
+/// nearest members of the dying centroid's own neighborhood and drops its
+/// out-edges.
 ///
-/// Deletion is performed by the call itself, so this *replaces*
-/// [`delete_centroid`] rather than following it (calling both is harmless —
-/// the delete is idempotent — and is what the dissolve path relies on to mark
-/// a whole victim set before repairing it).
+/// Deletion is performed by the call itself. Calling it twice on the same
+/// centroid fails: the id mapping is gone, so the id can no longer be resolved.
 ///
 /// Uses [`InplaceDeleteMethod::TwoHopAndOneHop`].
 pub(crate) fn inplace_delete_centroid(
-    index: &MutableCentroidGraph,
+    index: &CentroidGraph,
     runtime: &Runtime,
     id: u32,
     num_to_replace: usize,
 ) -> Result<()> {
     runtime.block_on(index.inplace_delete(
-        FullPrecision,
-        &DefaultContext,
+        Strategy,
+        &Context,
         &id,
         num_to_replace,
         InplaceDeleteMethod::TwoHopAndOneHop,
@@ -394,21 +417,22 @@ pub(crate) fn inplace_delete_centroid(
 
 /// Out-edge census of the live centroid graph.
 ///
-/// Search traverses tombstoned centroids like any other node and only discards
-/// them when results are copied out, so dead adjacency entries dilute the
-/// candidate list rather than disconnecting the graph. This measures how much
-/// of the graph's out-degree is still live, which decides whether the dead
-/// entries can simply be dropped or have to be replaced.
+/// A retired slot stays unreadable until the provider recycles it, and search
+/// traverses an edge into one like any other before discarding it at result
+/// translation. Such edges dilute the candidate list rather than disconnecting
+/// the graph. This measures how much of the graph's out-degree still reaches a
+/// readable slot, which decides whether those entries can simply be dropped or
+/// have to be replaced.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AdjacencyCensus {
     /// Live centroids inspected.
     pub nodes: usize,
-    /// Out-edges across those centroids, live and tombstoned.
+    /// Out-edges across those centroids, live and dead.
     pub out_edges: u64,
-    /// Out-edges pointing at a live centroid.
+    /// Out-edges pointing at a readable slot.
     pub live_out_edges: u64,
     /// Live centroids with no live out-edge at all — dead ends for navigation
-    /// if the tombstoned entries were dropped.
+    /// if the dead entries were dropped.
     pub starved: usize,
 }
 
@@ -432,22 +456,26 @@ impl AdjacencyCensus {
 
 /// Census the out-edges of the centroids in `live`.
 ///
-/// Reads adjacency lists and delete bits only — no distance computations — so
+/// Reads adjacency lists and slot status only — no distance computations — so
 /// the cost is `O(|live| * degree)` status checks.
+///
+/// An edge counts as live if its slot is readable. Once a retired slot has been
+/// recycled it is readable again, so this measures reachable-slot health, not
+/// that each edge still points at the centroid it was created for.
 pub(crate) fn adjacency_census(
-    index: &MutableCentroidGraph,
+    index: &CentroidGraph,
     runtime: &Runtime,
     live: impl Iterator<Item = u32>,
 ) -> Result<AdjacencyCensus> {
     let provider = index.provider();
-    let mut accessor = provider.default_accessor();
+    let mut accessor = Strategy.prune_accessor(provider, &Context, 0)?;
     let mut census = AdjacencyCensus::default();
 
     runtime.block_on(async {
         for id in live {
-            let internal = provider.to_internal_id(&DefaultContext, &id)?;
+            let internal = provider.to_internal_id(&Context, &id)?;
             let partitioned = index
-                .get_undeleted_neighbors(&DefaultContext, &mut accessor, internal)
+                .get_undeleted_neighbors(&Context, &mut accessor, internal)
                 .await?;
 
             census.nodes += 1;
@@ -463,25 +491,6 @@ pub(crate) fn adjacency_census(
     Ok(census)
 }
 
-/// Like [`search`], but over a [`MutableCentroidGraph`]. Soft-deleted centroids
-/// are skipped automatically.
-pub(crate) fn search_mut(
-    index: &MutableCentroidGraph,
-    runtime: &Runtime,
-    query: &[f32],
-    l: usize,
-    ids_out: &mut [u32],
-    dist_out: &mut [f32],
-) -> Result<usize> {
-    debug_assert_eq!(ids_out.len(), dist_out.len());
-    let knn = Knn::new(l, None).map_err(ANNError::from)?;
-
-    let mut buffer = IdDistance::new(ids_out, dist_out);
-    runtime.block_on(index.search(knn, &FullPrecision, &DefaultContext, query, &mut buffer))?;
-
-    Ok(buffer.current_len())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,8 +499,162 @@ mod tests {
         Matrix::try_from(data.into_boxed_slice(), nrows, ncols).unwrap()
     }
 
+    /// Deterministic pseudo-random centroids.
+    fn random_centroids(nrows: usize, ncols: usize, seed: u64) -> Matrix<f32> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let data = (0..nrows * ncols)
+            .map(|_| rng.random_range(-1.0f32..1.0f32))
+            .collect();
+        mat(data, nrows, ncols)
+    }
+
+    fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
+        std::iter::zip(a, b).map(|(x, y)| (x - y) * (x - y)).sum()
+    }
+
+    /// Brute-force nearest centroid under squared L2.
+    fn exact_top1(cents: &Matrix<f32>, q: &[f32]) -> u32 {
+        (0..cents.nrows())
+            .min_by(|&i, &j| {
+                sq_l2(cents.row(i), q)
+                    .total_cmp(&sq_l2(cents.row(j), q))
+                    .then(i.cmp(&j))
+            })
+            .unwrap() as u32
+    }
+
+    fn current_thread_rt() -> Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+    }
+
+    fn probe(graph: &CentroidGraph, rt: &Runtime, q: &[f32], k: usize, l: usize) -> Vec<u32> {
+        let mut ids = vec![u32::MAX; k];
+        let mut dist = vec![0.0f32; k];
+        let n = search(graph, rt, q, l, &mut ids, &mut dist).unwrap();
+        ids.truncate(n);
+        ids
+    }
+
+    /// Row `i` of the matrix must come back as centroid id `i`.
+    ///
+    /// This is the invariant every caller depends on — assignments, inverted
+    /// lists and `DenseCentroids` are all keyed by it — and it is the one the
+    /// provider swap could silently break, because internal slots are now
+    /// handed out by a freelist instead of matching the row index.
+    #[test]
+    fn static_graph_returns_the_row_index_as_the_centroid_id() {
+        let cents = random_centroids(512, 8, 7);
+        let graph = build(cents.clone(), &GraphParams::default(), 4, VectorMetric::L2).unwrap();
+        let rt = current_thread_rt();
+
+        for i in 0..cents.nrows() {
+            let got = probe(&graph, &rt, cents.row(i), 1, 64);
+            assert_eq!(got, vec![i as u32], "centroid {i} did not retrieve itself");
+        }
+    }
+
+    /// The frozen start point duplicates a centroid's vector but holds no
+    /// external id, so it must never surface as a result or as a duplicate.
+    #[test]
+    fn static_graph_never_reports_the_frozen_start_point() {
+        let cents = random_centroids(256, 8, 11);
+        let n = cents.nrows() as u32;
+        let graph = build(cents.clone(), &GraphParams::default(), 4, VectorMetric::L2).unwrap();
+        let rt = current_thread_rt();
+
+        for q in 0..64 {
+            let query = random_centroids(1, 8, 1000 + q);
+            let ids = probe(&graph, &rt, query.row(0), 32, 64);
+
+            assert!(ids.iter().all(|&id| id < n), "out-of-range id in {ids:?}");
+            let mut sorted = ids.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), ids.len(), "duplicate ids in {ids:?}");
+        }
+    }
+
+    /// Graph routing must agree with a brute-force scan on the overwhelming
+    /// majority of queries. A broken id mapping would score near zero here even
+    /// though the graph itself navigates fine.
+    #[test]
+    fn static_graph_agrees_with_exact_search() {
+        let cents = random_centroids(512, 8, 13);
+        let graph = build(cents.clone(), &GraphParams::default(), 4, VectorMetric::L2).unwrap();
+        let rt = current_thread_rt();
+
+        let queries = random_centroids(256, 8, 99);
+        let hits = (0..queries.nrows())
+            .filter(|&q| {
+                probe(&graph, &rt, queries.row(q), 1, 64)
+                    .first()
+                    .is_some_and(|&id| id == exact_top1(&cents, queries.row(q)))
+            })
+            .count();
+
+        assert!(
+            hits * 100 >= queries.nrows() * 95,
+            "graph top-1 agreed with exact on only {hits}/{}",
+            queries.nrows()
+        );
+    }
+
+    /// Ids are taken from the row index, not the insert order, so the mapping
+    /// must not depend on how many workers the build ran on.
+    #[test]
+    fn static_graph_ids_do_not_depend_on_the_thread_count() {
+        let cents = random_centroids(384, 8, 17);
+        let rt = current_thread_rt();
+
+        let serial = build(cents.clone(), &GraphParams::default(), 1, VectorMetric::L2).unwrap();
+        let parallel = build(cents.clone(), &GraphParams::default(), 8, VectorMetric::L2).unwrap();
+
+        for i in 0..cents.nrows() {
+            assert_eq!(
+                probe(&serial, &rt, cents.row(i), 1, 64),
+                probe(&parallel, &rt, cents.row(i), 1, 64),
+                "centroid {i} resolved differently across thread counts"
+            );
+        }
+    }
+
+    /// Every concurrent search holds an epoch guard for its whole duration, so
+    /// a graph built by few threads must still serve many searchers.
+    #[test]
+    fn static_graph_serves_more_searchers_than_builders() {
+        let cents = random_centroids(256, 8, 23);
+        let graph = build(cents.clone(), &GraphParams::default(), 2, VectorMetric::L2).unwrap();
+
+        std::thread::scope(|s| {
+            for t in 0..32 {
+                let graph = &graph;
+                let cents = &cents;
+                s.spawn(move || {
+                    let rt = current_thread_rt();
+                    for i in (t..cents.nrows()).step_by(32) {
+                        assert_eq!(probe(graph, &rt, cents.row(i), 1, 64), vec![i as u32]);
+                    }
+                });
+            }
+        });
+    }
+
+    /// A capacity sized exactly to the centroid count must absorb every
+    /// insertion: the frozen start point lives outside that budget.
+    #[test]
+    fn static_graph_capacity_is_exactly_the_centroid_count() {
+        let cents = random_centroids(1024, 4, 29);
+        let graph = build(cents.clone(), &GraphParams::default(), 4, VectorMetric::L2).unwrap();
+        let rt = current_thread_rt();
+
+        let ids = probe(&graph, &rt, cents.row(0), cents.nrows(), 2048);
+        assert_eq!(ids.len(), cents.nrows(), "not every centroid is reachable");
+    }
+
     /// Four centroids at the corners of a 10x10 square, with spare capacity.
-    fn square(capacity: usize) -> (MutableCentroidGraph, Runtime) {
+    fn square(capacity: usize) -> (CentroidGraph, Runtime) {
         let cents = mat(vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 10.0], 4, 2);
         let graph = build_mutable(
             cents,
@@ -507,53 +670,52 @@ mod tests {
         (graph, rt)
     }
 
-    fn nearest(graph: &MutableCentroidGraph, rt: &Runtime, q: &[f32], k: usize) -> Vec<u32> {
+    fn nearest(graph: &CentroidGraph, rt: &Runtime, q: &[f32], k: usize) -> Vec<u32> {
         let mut ids = vec![0u32; k];
         let mut dist = vec![0.0f32; k];
-        let n = search_mut(graph, rt, q, k.max(16), &mut ids, &mut dist).unwrap();
+        let n = search(graph, rt, q, k.max(16), &mut ids, &mut dist).unwrap();
         ids.truncate(n);
         ids
     }
 
-    /// A soft-deleted centroid is no longer returned by search, and a fresh id
+    /// A deleted centroid is no longer returned by search, and a fresh id
     /// can be inserted afterwards.
     #[test]
     fn delete_then_insert_fresh_id() {
         let (graph, rt) = square(8);
-        delete_centroid(&graph, &rt, 1).unwrap();
+        inplace_delete_centroid(&graph, &rt, 1, 2).unwrap();
         assert!(!nearest(&graph, &rt, &[10.0, 0.0], 4).contains(&1));
 
         insert_centroid(&graph, &rt, 4, &[9.0, 1.0]).unwrap();
         assert!(nearest(&graph, &rt, &[10.0, 0.0], 4).contains(&4));
     }
 
-    /// Centroid ids are **not** reusable: re-inserting the id of a soft-deleted
-    /// centroid silently appears to succeed, but the centroid is never returned
-    /// by a search — the tombstone wins.
+    /// Centroid ids **are** reusable: deleting a centroid releases its id
+    /// mapping and frees its slot, so the same id can be re-inserted with a new
+    /// vector and is found at the new location.
     ///
-    /// This is why the online [`CentroidRegistry`] hands out ids monotonically
-    /// and `centroid_capacity` must cover every id ever allocated, not just the
-    /// peak live count. Recycling ids would silently lose clusters.
+    /// The online [`CentroidRegistry`] still hands out ids monotonically and
+    /// sizes itself by `centroid_capacity`, so it does not yet exploit this;
+    /// the point here is that the graph no longer forbids it.
     ///
     /// [`CentroidRegistry`]: crate::online::OnlineClusterer
     #[test]
-    fn deleted_centroid_ids_are_not_reusable() {
+    fn deleted_centroid_ids_are_reusable() {
         let (graph, rt) = square(8);
-        delete_centroid(&graph, &rt, 1).unwrap();
+        inplace_delete_centroid(&graph, &rt, 1, 2).unwrap();
 
-        // Re-inserting a retired id reports success ...
         insert_centroid(&graph, &rt, 1, &[-5.0, -5.0]).unwrap();
 
-        // ... but the centroid is unreachable: a query sitting exactly on it
-        // returns every *other* centroid instead.
         let found = nearest(&graph, &rt, &[-5.0, -5.0], 4);
         assert!(
-            !found.contains(&1),
-            "id reuse unexpectedly worked; revisit the monotonic id allocation \
-             in OnlineClusterer (found {found:?})"
+            found.contains(&1),
+            "a re-inserted id must be reachable at its new location (found {found:?})"
         );
+
+        // The old location must no longer resolve to it.
+        let corner = nearest(&graph, &rt, &[10.0, 0.0], 4);
         assert!(
-            !found.is_empty(),
+            !corner.is_empty(),
             "the surviving centroids remain reachable"
         );
     }

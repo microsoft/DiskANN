@@ -97,13 +97,13 @@ const REASSIGN_TILE: usize = 4096;
 
 /// Route one point to its nearest live centroid via the centroid graph.
 ///
-/// The mutable centroid graph accumulates soft-deleted (tombstoned) slots as
-/// clusters split — near the target cluster count roughly half the graph can be
-/// tombstones. A narrow beam can then occasionally exhaust its frontier on
-/// tombstoned nodes and return no live centroid, so the search is retried with
-/// the wider beam before giving up and, as a last resort, falls back to a
-/// brute-force scan over the live centroids. Successful narrow-beam routes are
-/// unchanged.
+/// The centroid graph is mutated in place as clusters split and dissolve:
+/// retired slots are recycled, and the in-edges repaired around a departing
+/// centroid can leave a region thinly connected. A narrow beam can then
+/// occasionally exhaust its frontier without reaching a live centroid, so the
+/// search is retried with the wider beam before giving up and, as a last
+/// resort, falls back to a brute-force scan over the live centroids.
+/// Successful narrow-beam routes are unchanged.
 ///
 /// `beams` is `None` under exact routing, where there is no graph to walk and
 /// the scan below is the primary path rather than a fallback.
@@ -387,10 +387,10 @@ impl OnlineClusterer {
     /// [`CentroidSearch::Exact`](crate::CentroidSearch::Exact), which maintains
     /// no graph.
     ///
-    /// Diagnostic for tombstone pressure: reports how much of the graph's
-    /// out-degree still points at live centroids. Reads adjacency lists and
-    /// delete bits only, so it costs `O(num_clusters * degree)` status checks
-    /// and no distance computations.
+    /// Diagnostic for graph health under churn: reports how much of the
+    /// graph's out-degree still points at a readable slot. Reads adjacency
+    /// lists and slot status only, so it costs `O(num_clusters * degree)`
+    /// status checks and no distance computations.
     ///
     /// # Errors
     ///
