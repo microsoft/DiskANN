@@ -391,8 +391,6 @@ struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
     io_count: AtomicUsize,
-    #[cfg(test)]
-    traversal_io_count: AtomicUsize,
 }
 
 impl Default for IOTracker {
@@ -401,8 +399,6 @@ impl Default for IOTracker {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
             io_count: AtomicUsize::new(0),
-            #[cfg(test)]
-            traversal_io_count: AtomicUsize::new(0),
         }
     }
 }
@@ -423,18 +419,6 @@ impl IOTracker {
 
     fn io_count(&self) -> usize {
         self.io_count.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    fn add_traversal_io_count(&self, count: usize) {
-        self.traversal_io_count
-            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[cfg(test)]
-    fn traversal_io_count(&self) -> usize {
-        self.traversal_io_count
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -522,7 +506,7 @@ where
             }
         };
         if !uncached_ids.is_empty() {
-            accessor.load_vertices(&uncached_ids)?;
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
             for n in &uncached_ids {
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
                 let d = provider.distance_comparer.evaluate_similarity(query, v);
@@ -565,7 +549,7 @@ where
                     final_fetch_vertices = final_fetch_ids.len(),
                     "Fetching missing indexed vectors after rerank"
                 );
-                accessor.load_vertices(&final_fetch_ids)?;
+                ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &final_fetch_ids)?;
                 for id in final_fetch_ids {
                     let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
                     collector.capture_required(id, vector)?;
@@ -620,7 +604,7 @@ where
             return Ok(0);
         }
 
-        accessor.load_vertices(&candidate_ids)?;
+        ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
 
         let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
@@ -982,29 +966,19 @@ where
         })
     }
 
-    /// Load a batch and account for it independently of the traversal I/O budget.
-    /// Traversal applies its budget before calling this helper; required post-processing
-    /// loads deliberately do not, so they cannot make a complete result incomplete.
-    fn load_vertices(&mut self, ids: &[u32]) -> ANNResult<()> {
+    fn ensure_loaded(&mut self, ids: &[u32]) -> ANNResult<()> {
         if ids.is_empty() {
             return Ok(());
         }
 
+        let scratch = &mut self.scratch;
         let timer = Instant::now();
-        ensure_vertex_loaded(&mut self.scratch.vertex_provider, ids)?;
+        ensure_vertex_loaded(&mut scratch.vertex_provider, ids)?;
         IOTracker::add_time(
             &self.io_tracker.io_time_us,
             timer.elapsed().as_micros() as u64,
         );
         self.io_tracker.add_io_count(ids.len());
-        Ok(())
-    }
-
-    fn ensure_loaded(&mut self, ids: &[u32]) -> ANNResult<()> {
-        self.load_vertices(ids)?;
-        #[cfg(test)]
-        self.io_tracker.add_traversal_io_count(ids.len());
-        let scratch = &mut self.scratch;
         for id in ids {
             let vector = scratch.vertex_provider.get_vector(id)?;
             if let Some(collector) = self.indexed_vector_capture.traversal_collector() {
@@ -3291,15 +3265,13 @@ mod disk_provider_tests {
             .collect::<Vec<_>>();
 
         let query_stats = strategy.io_tracker;
-        // Traversal respects the budget, while required post-processing loads are still tracked
-        // and may take the final total beyond it.
+        //Verify the IO limit was respected
         assert!(
-            query_stats.traversal_io_count() <= io_limit,
-            "Expected traversal IO operations to be <= {}, but got {}",
+            query_stats.io_count() <= io_limit,
+            "Expected IO operations to be <= {}, but got {}",
             io_limit,
-            query_stats.traversal_io_count()
+            query_stats.io_count()
         );
-        assert!(query_stats.io_count() > query_stats.traversal_io_count());
 
         const EXPECTED_NODES: [u32; 17] = [
             72, 118, 108, 86, 84, 152, 170, 82, 114, 87, 207, 176, 79, 153, 67, 165, 141,
