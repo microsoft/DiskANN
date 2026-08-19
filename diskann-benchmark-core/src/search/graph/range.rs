@@ -18,8 +18,7 @@ use crate::{
     search::{self, Search, graph::Strategy},
 };
 
-/// A built-in helper for benchmarking the range search method
-/// [`graph::DiskANNIndex::range_search`].
+/// A built-in helper for benchmarking [`graph::search::Range`] searches.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
 /// [`search::search_all`] and provides some basic additional metrics for

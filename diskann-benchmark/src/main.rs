@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Command-line benchmarks for DiskANN.
+
 mod disk_index;
 mod exhaustive;
 mod filters;

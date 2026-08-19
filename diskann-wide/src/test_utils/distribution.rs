@@ -103,7 +103,11 @@ macro_rules! finite {
                     // infinity/NaN).
                     //
                     // The mantissa is allowed to be all zeros.
-                    (<$T>::EXPONENT_MASK | <$T>::MANTISSA_MASK, false, true)
+                    (
+                        <$T as Layout>::EXPONENT_MASK | <$T as Layout>::MANTISSA_MASK,
+                        false,
+                        true,
+                    )
                 } else if kind < NORMAL_WEIGHT + SUBNORMAL_WEIGHT {
                     // Generate a subnormal floating point number.
                     //

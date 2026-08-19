@@ -35,7 +35,8 @@ impl<StorageProvider: StorageReadProvider, T: VectorRepr, A>
     VectorDataIterator<StorageProvider, T, A>
 {
     /// Create the iterator from a vector dataset stream and an associated data stream.
-    /// vector_stream format: | num_points (4 bytes) | dimension (4 bytes) | vector data 1 (dimension * size_of::<T>())) | .. | vector data N |
+    /// vector_stream format: | num_points (4 bytes) | dimension (4 bytes) | vector data 1
+    /// (dimension * `size_of::<T>()`) | .. | vector data N |
     /// associated_data_stream format: | num_points (4 bytes) | associated_data_length | associated data 1 (associated_data_length) | .. | associated data N |
     pub fn new(
         vector_stream: &str,

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! [`FlatIndex`] — the index wrapper for a [`DataProvider`](crate::provider::DataProvider)
+//! [`FlatIndex`] — the index wrapper for a [`DataProvider`]
 //! over which we do flat search.
 use std::num::NonZeroUsize;
 

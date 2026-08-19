@@ -31,6 +31,7 @@ on:
       - 'diskann-label-filter/**'
       - 'diskann-benchmark/**'
       - 'diskann-benchmark-runner/**'
+      - '.github/actions/setup-disk-benchmark/**'
       - '.github/workflows/disk-benchmarks.yml'
 
 # Cancel in-progress runs when a new run is triggered
@@ -66,10 +67,12 @@ jobs:
           - dataset: wikipedia-100K
             config: wikipedia-100K-disk-index.json
             archive: wikipedia-100K.tar.gz
+            sha256: 5b312d186773c549e6132483b148a22b2421140f1a8d9fcd6230c4e019405027
             data_dir: wikipedia_cohere
           - dataset: openai-100K
             config: openai-100K-disk-index.json
             archive: openai-100K.tar.gz
+            sha256: b6887d9a31e9ce035665e3df385db37866116a7b7effc1cbaded239956fec113
             data_dir: OpenAIArXiv
 
     steps:
@@ -88,13 +91,13 @@ jobs:
           ln -s /mnt/nvme/baseline baseline
 
       - name: Checkout current branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: diskann_rust
           lfs: true
 
       - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.baseline_ref || 'main' }}
           path: baseline
@@ -105,6 +108,7 @@ jobs:
         with:
           dataset: ${{ matrix.dataset }}
           archive: ${{ matrix.archive }}
+          sha256: ${{ matrix.sha256 }}
           extract-to: diskann_rust/target/tmp
 
       - name: Copy dataset to baseline
@@ -137,7 +141,7 @@ jobs:
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()  # Upload even if validation fails
         with:
           name: benchmark-results-${{ matrix.dataset }}

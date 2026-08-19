@@ -30,68 +30,57 @@ The read-modify-write (rmw) method accesses a single key with a callback but all
 
 ### Keys & Contexts
 
-Garnet keys are arbitrary byte strings (e.g. `&[u8]`). The methods described above can use whatever keys they like to read and write data, however those methods also take a semi-opaque context which gives the operation a scope. For the most part this context is used for internal Garnet bookkeeping and is opaque, but the least significant 3 bits are available for diskann-garnet to use for its own scoping.
+Garnet keys are arbitrary byte strings (e.g. `&[u8]`). The methods described above can use whatever keys they like, with some caveats, to read and write data, however those methods also take a semi-opaque context which gives the operation a scope. For the most part this context is used for internal Garnet bookkeeping and is opaque, but the least significant 3 bits are available for diskann-garnet to use for its own scoping. Keys must be a multiple of 4 bytes in length, except for keys stored under context 3 and context 5 (`Term::Attributes` and `Term::IntMap`) which are special cased in Garnet as they key is the user-provided external ID. There are no alignment requirements on keys.
 
 Diskann-garnet uses these bits to distinguish between differnet kinds of index data so that the same key can be used to fetch different kinds of data. For example, vector data might be stored under the same key, the vector ID, as neighbor lists by setting different context bits for the operation.
 
 ### Key Data Prefixing
 
-In order to reduce allocations in the data access path in Garnet, Garnet needs some place to scribble state into during operations. It uses a single byte immediately preceding the first key byte for this purpose. This means that any key pointer given to Garnet access methods must contain valid space preceding the real key. For this reason, key data pointers are `* mut` and not `* const` and care must be taken to ensure the memory preceding that pointer is valid.
+In order to reduce allocations in the data access path in Garnet, Garnet needs some place to scribble state into during operations. It uses a single byte immediately preceding the first key byte for this purpose. This means that any key pointer given to Garnet access methods must contain valid space preceding the real key. For this reason, key data pointers are `*mut u8` and not `*const u8` and care must be taken to ensure the memory preceding that pointer is valid. In diskann-garnet, we precede the key data with at least 4 bytes of scratch space.
 
 ## Term Types
 
-The data maintained by the index are referred to as terms. Full precision vectors are one kind of term,and neighbor lists are another kind of term.
+The data maintained by the index are referred to as terms. Full precision vectors are one kind of term, and neighbor lists are another kind of term.
 
 The term types in diskann-garnet are: full precision vectors, neighbor lists, quantized vectors, attributes, metadata, and the internal and external ID mappings.
 
 ### Full Precision Vectors
 
-*Key*: Internal ID as bytes
+*Key*: Internal ID as bytes; this key is always 4 bytes.
+*Value*: Vector data bytes, will always be a fixed size of `dimension * mem::size_of::<T>()` where `T` is either f32, u8, or i8.
 
-Full precision vectors are always a fixed size of `dimension * mem::size_of::<ElementType>()`. They are read or written whole or deleted.
-
-In a quantized index, these vectors are used mainly during reranking in most configurations. In a full precision only index, they are the most accessed term.
+The values are read or written whole or deleted. In a quantized index, these
+vectors are used mainly during reranking in most configurations. In a full
+precision only index, they are the most accessed term.
 
 ### Neighbor Lists
 
-*Key*: Internal ID as bytes
+*Key*: Internal ID as bytes; this key is always 4 bytes.
+*Value*: `[u32; M + 1]` stored as bytes, where `M` is the same `M` passed to VADD. Every value in the index will have this fixed size of `(M + 1) * 4` bytes.
 
-Neighbor lists are stored as a fixed size of `(max_neighbors + 1) * mem::size_of::<u32>()` where `max_neighbors` accounts for the graph slack factor. The final entry is the true length of the neighbor list.
+Neighbor lists are stored as a fixed size of `(M + 1) * mem::size_of::<u32>()`. The final entry is the true length of the neighbor list.
 
-For example, in a graph where the degree is 16 and the graph slack factor is 1.3, the size of a neighbor list would be `((16 * 1.3) as u32 + 1) * 4` bytes long. Using fixed size lists this way means that all neighbor list allocations are the same size.
+For example, in a graph where the `M` value is given as 16, the size of a neighbor list would be `(16 + 1) * 4 = 68` bytes long. Using fixed size lists this way means that all neighbor list allocations are the same size.
 
 In a typical index, these are accessed second most often after quantized vectors (in a quantized index) or full precision vectors (in a full precision only index).
 
 ### Quantized Vectors
 
-*Key*: Internal ID as bytes
+*Key*: Internal ID as bytes; this key is always 4 bytes.
+*Value*: Quantized bits for the vector. This varies by quantizer. For BIN-family quantizers, this is 1-bit per dimension plus a fixed overhead of up to 6 bytes. For the Q8 quantizer, this is 20 bytes + 1 byte per dimension.
 
-Quantized vectors a similar to full precision vectors in that they are fixed size and read/written as a whole, although they will often have a more complex representation that just an array of quantized elements.
+Quantized vectors are similar to full precision vectors in that they are fixed size and read/written as a whole, although they will often have a more complex representation than just an array of quantized elements.
 
 In a quantized index, these vectors are the most often accessed piece of data and should be read in a batch when possible.
 
 ### Attributes
 
-*Key*: Internal ID as bytes
+*Key*: External ID as bytes; this is variable length byte string that the user assigned.
+*Value*: Attributes given by the user. Variable length.
 
 When vectors are inserted by the Redis Vector Set API, an arbitrary JSON blob of attributes can be attached. These attributes are stored as a utf-8 string and read/written as a whole unit.
 
 Attributes are ignored during normal searches but will be accessed during a filtered search. The Vector Set API allows users to request the attributes for search results, so even in a normal search these terms may be accessed in order to return the attributes in the results.
-
-### Attributes Index
-
-*Key*: Attribute name + Attribute value as bytes
-
-When vectors are inserted by the Redis Vector Set API, and arbitrary JSON blob of attributes can be attached.
-
-Attributes index should be created for fields with atrribute filtering need, a list of Internal ID are saved under the Attributes Index Key, if the attribute are present in the associated JSON for the Internal ID 
-
-
-Garnet API --> Tsavorite --> VectorSet [DiskANN]--> Tsavorite RAWSTRING [today]
-
-
-Garnet API --> Tsavorite --> VectorSet [DiskANN] --> Tsavorite RAWSTRING + Tsavorite RANGEINDEX [next-gen]
-
 
 ### Internal Terms
 
@@ -99,25 +88,36 @@ The are several terms in the index used for internal state management of the dis
 
 #### Start Points
 
-The start points are the same as other vectors, but the internal IDs of start points begin at `u32::MAX` and go downward. Currently a single start point is supported and will be a frozen copy of the first vector added to the index.
+Currently only a single start point is supported, and it is given the internal ID of 0. Its vector data is the same as the first vector that was inserted, and it will not be returned by search, and it will not be modified during the lifetime of the index.
+
+Start points have no associated attributes.
 
 #### Metadata
 
-Metadata is currently used for the free space map which manages used and available internal IDs.
+Metadata is currently used for the free space map which manages used and available internal IDs and the quantizer tables.
 
 ##### Free Space Map
 
-*Key*: b'_fsm' concatenated with FSM block number as bytes
+*Key*: b'_fsm' concatenated with FSM 32-bit block number as bytes; this key is always 8 bytes in length.
+*Value*: Each FSM block holds 8kB of data, one bit per internal ID represented in the block.
 
 The free space map is used to keep track of which internal IDs are allocated and in use. Please see the [ID Mapping](#id-mapping) section for more details on why mapped IDs are used.
 
-The free space map is a series of blocks where each block is a string of 2-bit values representing the state of the corresponding internal ID. Free IDs are represented by `0b00`, used IDs by `0b01`, and deleted IDs by `0b10`. Blocks are created on demand during insert when they are needed.
+The free space map is a series of blocks where each block is a string of 1-bit values representing the state of the corresponding internal ID. Free IDs are represented by `0b0`, used IDs by `0b1`. Blocks are created on demand during insert when they are needed. Since each block contains 64k internal ID states, the total number of FSM blocks in the index will be at least number of active IDs / 2^16, each of which is 8kB in size.
 
 During startup, the index will scan FSM blocks in sequence to restore state. It will update the correct bits in a FSM block whenever the state of an internal ID changes.
 
+##### Quantizer Tables
+
+*Key*: b'_qnt'; this key is always 4 bytes, but only exists if quantization is used.
+*Value*: For BIN-family: 117 + 6D bytes where D is the dimension. For Q8: 68 + 2D bytes.
+
+Note that for the BIN quantizer, a 1 byte flag precedes the quantizer table which indicates whether quantization backfill is complete. That byte is accounted for in the value sizing above.
+
 #### Internal ID Mapping
 
-*Key*: Internal ID as bytes
+*Key*: Internal ID as bytes; this key is always 4 bytes in length.
+*Value*: External ID; this is variable length byte string that the user assigned.
 
 Each internal ID corresponds to an external ID, which is a byte string of arbitrary length. The external IDs are stored unmodified and read/written as a whole.
 
@@ -125,7 +125,8 @@ Lookup of an external ID will happen during post processing when we return resul
 
 #### External ID Mapping
 
-*Key*: External ID bytes
+*Key*: External ID bytes; this key is a variable length byte string that the user assigned.
+*Value*: Interal ID as bytes; this key is always 4 bytes in length.
 
 Each external ID corresponds to an internal ID which is a u32. The internal IDs are stored as 4 bytes and read/written as a whole.
 
@@ -167,7 +168,7 @@ Vectors which are deleted after candidates are found but before they are returne
 
 Vectors which are deleted and replaced may cause both their vector data to change as well as their attributes. This can happen via concurrent operations on the index; for example, inserting a new vector with the same external ID will overwrite the existing vector. This can also occur as a consequence of in-place or consolidated deletes.
 
-During deletes, the deleted vector's terms are removed, but they will be present in other vectors neighbor lists for some time. In the case of consolidated delete, these vector IDs will remain until consolidation is invoked, and for in-place deletes there is no specific event which enforces removal of the vector's ID from the graph. When search or other operations find the vector ID in a neighbor list and attempt to load it they may find either the vector is missing or that a different vector has now been inserted there. This should be ok as distances will be calculated on the new data and if it is far from the query it will be discarded.
+During deletes, the deleted vector's terms (except for the neighbor list, but this will be fixed in the future) are removed, but they will be present in other vectors neighbor lists for some time. In the case of consolidated delete, these vector IDs will remain until consolidation is invoked, and for in-place deletes there is no specific event which enforces removal of the vector's ID from the graph. When search or other operations find the vector ID in a neighbor list and attempt to load it they may find either the vector is missing or that a different vector has now been inserted there. This should be ok as distances will be calculated on the new data and if it is far from the query it will be discarded.
 
 Filtered search introduces two problems regarding attributes. The first is that the vector IDs and attributes for the vector need to match when results are returned the user. The second is that vector data and vectors attributes must match during the filtered search operation. Currently no guarantees are made about this as each term is stored separately.
 

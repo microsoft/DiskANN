@@ -374,7 +374,7 @@ struct Args {
 
     /// Number of nearest neighbours to compute per query (k).
     ///
-    /// Output files are named step<stage>.gt<recall_at>.
+    /// Output files are named `step<stage>.gt<recall_at>`.
     #[arg(long = "recall-at", short = 'K', required = true)]
     pub recall_at: u32,
 

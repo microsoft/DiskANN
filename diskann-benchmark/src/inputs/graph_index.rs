@@ -326,7 +326,7 @@ impl InlineFilterSearchPhase {
     }
 }
 
-/// A one-to-one correspondence with [`diskann::index::config::IntraBatchCandidates`].
+/// A one-to-one correspondence with [`diskann::graph::config::IntraBatchCandidates`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum IntraBatchCandidates {
@@ -617,7 +617,7 @@ impl IndexLoad {
             save_and_load::get_graph_max_observed_degree(&storage_provider, &self.load_path)?;
 
         let metadata =
-            load_metadata_from_file(&storage_provider, &format!("{}.data", &self.load_path))?;
+            load_metadata_from_file(&storage_provider, &format!("{}.data", self.load_path))?;
 
         let distance: diskann_vector::distance::Metric = self.distance.into();
         let config = config::Builder::new(

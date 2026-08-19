@@ -142,8 +142,6 @@ impl HasId for SimpleNeighborProviderAsync {
 
 impl SimpleNeighborProviderAsync {
     /// Load the graph directly from a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::load_graph`].
     pub fn load_direct<P>(provider: &P, path: &str) -> ANNResult<Self>
     where
         P: StorageReadProvider,
@@ -178,8 +176,6 @@ impl SimpleNeighborProviderAsync {
     }
 
     /// Save `self` directly to a canonical DiskANN graph storage at path `path`.
-    ///
-    /// See also: [`storage::bin::save_graph`].
     pub fn save_direct<P>(&self, provider: &P, start_point: u32, path: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,
