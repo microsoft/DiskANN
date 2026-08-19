@@ -563,9 +563,12 @@ pub(crate) mod disk_index_builder_tests {
         build::builder::build::DiskIndexBuilder,
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
-        search::provider::{
-            aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
-            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        search::{
+            provider::{
+                aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
+                disk_vertex_provider_factory::DiskVertexProviderFactory,
+            },
+            search_mode::SearchMode,
         },
         storage::disk_index_reader::DiskIndexReader,
         utils::QueryStatistics,
@@ -1018,6 +1021,65 @@ pub(crate) mod disk_index_builder_tests {
 
             diskann_providers::test_utils::assert_top_k_exactly_match(
                 q, &gt, &indices, &distances, top_k,
+            );
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn verify_indexed_vectors_match_stored_rows<
+        G: GraphDataType<VectorIdType = u32, AssociatedDataType = ()>,
+    >(
+        params: &TestParams,
+        top_k: usize,
+        search_l: u32,
+        storage_provider: &Arc<VirtualStorageProvider<OverlayFS>>,
+    ) -> ANNResult<()>
+    where
+        G::VectorDataType: PartialEq,
+    {
+        let index_reader = DiskIndexReader::new(
+            get_pq_pivot_file(&params.index_path_prefix),
+            get_compressed_pq_file(&params.index_path_prefix),
+            storage_provider.as_ref(),
+        )?;
+        let vertex_provider_factory = DiskVertexProviderFactory::new(
+            VirtualAlignedReaderFactory::new(
+                get_disk_index_file(&params.index_path_prefix),
+                Arc::clone(storage_provider),
+            ),
+            CachingStrategy::None,
+        )?;
+        let search_engine = DiskIndexSearcher::<G, DiskVertexProviderFactory<G, _>>::new(
+            1,
+            u32::MAX as usize,
+            &index_reader,
+            vertex_provider_factory,
+            params.metric,
+            None,
+        )?;
+        let data =
+            read_bin::<G::VectorDataType>(&mut storage_provider.open_reader(&params.data_path)?)?;
+        assert_eq!(data.ncols(), params.dim);
+        assert_eq!(
+            G::VectorDataType::full_dimension(data.row(0)).unwrap(),
+            params.full_dim,
+        );
+
+        let output = search_engine.search_with_indexed_vectors(
+            data.row(0),
+            top_k as u32,
+            search_l,
+            None,
+            SearchMode::graph(),
+        )?;
+        assert_eq!(output.results.len(), output.stats.result_count as usize);
+        for item in &output.results {
+            assert_eq!(
+                item.indexed_vector.as_ref(),
+                data.row(item.vertex_id as usize),
+                "native indexed vector did not match stored row for vertex {}",
+                item.vertex_id,
             );
         }
 

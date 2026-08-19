@@ -11,7 +11,8 @@ mod disk_index_build_tests {
 
     use crate::{
         build::builder::core::disk_index_builder_tests::{
-            new_vfs, verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
+            new_vfs, verify_indexed_vectors_match_stored_rows,
+            verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
         },
         QuantizationType,
     };
@@ -160,6 +161,13 @@ mod disk_index_build_tests {
         fixture.build::<GraphDataMinMaxVectorUnitData>().unwrap();
 
         verify_search_result_with_ground_truth::<GraphDataMinMaxVectorUnitData>(
+            &fixture.params,
+            top_k,
+            search_l,
+            &fixture.storage_provider,
+        )
+        .unwrap();
+        verify_indexed_vectors_match_stored_rows::<GraphDataMinMaxVectorUnitData>(
             &fixture.params,
             top_k,
             search_l,
