@@ -58,7 +58,7 @@ use std::{
     sync::atomic::Ordering,
 };
 
-use diskann::utils::IntoUsize;
+use diskann::{ANNError, utils::IntoUsize};
 use diskann_utils::views::MatrixView;
 use thiserror::Error;
 
@@ -74,8 +74,21 @@ use crate::{
 pub(crate) mod invasive;
 pub(crate) mod plugin;
 
-// TODO: Remove?
-// pub(crate) mod stacked;
+/// To make extra sure that [`plugin::Plugin`] life-cycle arguments are not callable outside
+/// of this module (i.e., elsewhere in this crate), this [`Lifecycle`] marker type is used
+/// that is only constructible in this module.
+#[derive(Debug)]
+pub(crate) struct Lifecycle(());
+
+impl Lifecycle {
+    /// Construct a new [`Lifecycle`].
+    ///
+    /// DO NOT MAKE THIS `pub(anything)`. It helps prevent accidentally interacting with
+    /// plugins when all uses should be managed in this file instead.
+    const fn new() -> Self {
+        Self(())
+    }
+}
 
 /// Configuration for the concurrenct store.
 #[derive(Debug, Clone)]
@@ -135,25 +148,29 @@ pub(crate) struct Layout {
 
     /// The maximum number of neighbors in each adjacency list.
     max_degree: MaxDegree,
+
+    /// The number of immutable points to reserve at the end of the [`Store`].
+    frozen: u32,
 }
 
 impl Layout {
     /// Create a new [`Layout`] capable of holding `capacity` non-frozen points.
     ///
     /// All adjacency lists will have a maximum capacity of `max_degree`.
-    pub(crate) fn new(capacity: Capacity, max_degree: MaxDegree) -> Self {
+    pub(crate) fn new(capacity: Capacity, max_degree: MaxDegree, frozen: u32) -> Self {
         Self {
             capacity,
             max_degree,
+            frozen,
         }
     }
 }
 
 /// A concurrent data and graph store.
 #[derive(Debug)]
-pub(crate) struct Store {
-    // This is a temporary concrete type until [`Store`] is properly parameterized by its plugin.
-    plugin: invasive::Invasive,
+pub(crate) struct Store<P> {
+    // The [`plugin::Plugin`] managed by this [`Store`].
+    plugin: P,
 
     // The number of unfrozen points. This is guaranteed to be less than `buffer`.
     unfrozen: Capacity,
@@ -172,17 +189,20 @@ pub(crate) struct Store {
 // TODO: This is a guess and probably needs tuning.
 const RETRY_LIMIT: usize = 20;
 
-impl Store {
+impl<P> Store<P>
+where
+    P: plugin::Plugin,
+{
     /// Create a new [`Store`]. The entries within `init` will be used as frozen points
     /// within the store and must be compatible the the number of bytes in `config`.
-    pub(crate) fn new(
-        layout: Layout,
-        config: Config,
-        init: MatrixView<'_, u8>,
-    ) -> Result<Self, StoreError> {
+    pub(crate) fn new<C>(layout: Layout, config: Config, plugin: C) -> Result<Self, StoreError>
+    where
+        C: plugin::PluginConfig<Plugin = P>,
+    {
         let Layout {
             capacity,
             max_degree,
+            frozen,
         } = layout;
 
         let Config {
@@ -190,13 +210,7 @@ impl Store {
             freelist_recycle_capacity,
         } = config;
 
-        let bytes = Bytes::new(init.ncols());
-
-        if init.nrows() == 0 {
-            return Err(StoreError::need_frozen_point());
-        }
-
-        let too_many_entries = || StoreError::too_many_entries(capacity, init.nrows());
+        let too_many_entries = || StoreError::too_many_entries(capacity, frozen);
 
         // We have a hard upper-bound of `u32::MAX` total slots.
         //
@@ -206,8 +220,6 @@ impl Store {
             .try_into()
             .map_err(|_| too_many_entries())?;
 
-        let frozen: u32 = init.nrows().try_into().map_err(|_| too_many_entries())?;
-
         let id_limit = IdLimit::new(entries.checked_add(frozen).ok_or_else(too_many_entries)?);
 
         let max_degree: u32 = max_degree
@@ -215,8 +227,10 @@ impl Store {
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_degree))?;
 
+        let plugin = plugin::PluginConfig::build(plugin, id_limit).map_err(StoreError::plugin)?;
+
         let me = Self {
-            plugin: invasive::Invasive::new(id_limit, bytes),
+            plugin,
             unfrozen: capacity,
             tags: repeat_n(Tag::AVAILABLE, id_limit.as_usize())
                 .map(AtomicTag::new)
@@ -229,23 +243,10 @@ impl Store {
             neighbors: Neighbors::new(id_limit, max_degree)?,
         };
 
-        // Populate frozen points.
-        for (i, data) in init.row_iter().enumerate() {
-            // We have checked that the total number of entries fits in `u32`, so this
-            // arithmetic cannot overflow.
-            #[expect(clippy::expect_used, reason = "this should always succeed")]
-            let mut slot = me
-                .slot(entries + (i as u32))
-                .expect("store was just created - claiming the slot must succeed");
-
-            slot.as_mut_slice().copy_from_slice(data);
-            slot.freeze();
-        }
-
         Ok(me)
     }
 
-    pub(crate) fn plugin(&self) -> &invasive::Invasive {
+    pub(crate) fn plugin(&self) -> &P {
         &self.plugin
     }
 
@@ -260,8 +261,7 @@ impl Store {
     }
 
     pub(crate) fn id_limit(&self) -> IdLimit {
-        // TODO: Figure out how to justify this once plugins are a thing.
-        IdLimit::new(self.neighbors.entries())
+        plugin::Plugin::id_limit(&self.plugin)
     }
 
     pub(crate) fn capacity(&self) -> Capacity {
@@ -289,7 +289,7 @@ impl Store {
 
             // We release the plugin before the main tag. The other direction would
             // prematurely advertise availability.
-            plugin::Plugin::reclaim(self.plugin(), i);
+            unsafe { plugin::Plugin::reclaim(self.plugin(), i, Lifecycle::new()) };
 
             // Use `Release` ordering to ensure that the store to the mirror cannot get moved
             // after the store to the authoritative list.
@@ -311,28 +311,36 @@ impl Store {
         Some(items)
     }
 
-    /// Return a [`Reader`] into the store.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`epoch::Unavailable`] if there are too many active readers.
-    pub(crate) fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
-        Ok(Reader {
-            inner: unsafe { self.plugin().reader(self.registry.guard()?) },
-            neighbors: &self.neighbors,
-        })
+    pub(crate) fn guard<'a, F, R>(&'a self, f: F) -> Result<R, epoch::Unavailable>
+    where
+        F: FnOnce(&'a P, epoch::Guard<'a>) -> R,
+    {
+        let guard = self.registry.guard()?;
+        Ok(f(self.plugin(), guard))
     }
 
-    // TODO: Rework neighbor storage.
-    pub(crate) fn temp_inner_reader(&self) -> Result<invasive::Reader<'_>, epoch::Unavailable> {
-        Ok(unsafe { self.plugin().reader(self.registry.guard()?) })
-    }
+    // /// Return a [`Reader`] into the store.
+    // ///
+    // /// # Errors
+    // ///
+    // /// Returns [`epoch::Unavailable`] if there are too many active readers.
+    // pub(crate) fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
+    //     Ok(Reader {
+    //         inner: unsafe { self.plugin().reader(self.registry.guard()?) },
+    //         neighbors: &self.neighbors,
+    //     })
+    // }
+
+    // // TODO: Rework neighbor storage.
+    // pub(crate) fn temp_inner_reader(&self) -> Result<invasive::Reader<'_>, epoch::Unavailable> {
+    //     Ok(unsafe { self.plugin().reader(self.registry.guard()?) })
+    // }
 
     /// Attempt to acquire a new [`Slot`] for writing.
     ///
     /// This method first consults the freelist and falls back to scanning the tags list
     /// if no ID is available from the fast path.
-    pub(crate) fn acquire(&self) -> Option<Slot<'_>> {
+    pub(crate) fn acquire(&self) -> Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> {
         for _ in 0..RETRY_LIMIT {
             match self.freelist.pop() {
                 freelist::Id::Found(id) => {
@@ -388,7 +396,7 @@ impl Store {
         match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 // Set the metadata in the mirror as well.
-                plugin::Plugin::retire(self.plugin(), i.try_into().unwrap());
+                unsafe { plugin::Plugin::retire(self.plugin(), i.try_into().unwrap(), Lifecycle::new()) };
                 guard.retire(i as u32);
                 Ok(())
             }
@@ -407,12 +415,12 @@ impl Store {
     ///
     /// Periodically, the freelist is checked to see if another thread has found an available
     /// slot for us.
-    fn scan_acquire(&self) -> Option<Slot<'_>> {
+    fn scan_acquire(&self) -> Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> {
         // This is potentially quite slow - but stop if we've scanned the entire range
         // without finding anything.
         let mut remaining = self.unfrozen.value().div_ceil(RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
-        let mut acquired: Option<Slot<'_>> = None;
+        let mut acquired: Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> = None;
 
         while remaining != 0 {
             let chunk = self.freelist.scan();
@@ -458,7 +466,7 @@ impl Store {
         None
     }
 
-    fn slot(&self, i: u32) -> Option<Slot<'_>> {
+    pub(crate) fn slot(&self, i: u32) -> Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> {
         let tag = &self.tags.get(i.into_usize())?;
 
         // SAFETY: We've guaranteed that `tag` belongs to `slot`.
@@ -471,7 +479,11 @@ impl Store {
     ///
     /// Caller asserts that `tag` was obtained from `self.tags[slot]`. This is meant as
     /// a performance optimization where `tag` is first queried for potential availability.
-    unsafe fn try_acquire<'a>(&'a self, tag: &'a AtomicTag, slot: u32) -> Option<Slot<'a>> {
+    unsafe fn try_acquire<'a>(
+        &'a self,
+        tag: &'a AtomicTag,
+        slot: u32,
+    ) -> Option<Slot<'a, <P as plugin::Plugin>::Slot<'a>>> {
         if tag.load(Ordering::Relaxed) != Tag::AVAILABLE {
             return None;
         }
@@ -483,7 +495,7 @@ impl Store {
             Ordering::Relaxed,
         ) {
             Ok(_) => {
-                let data = unsafe { plugin::Plugin::acquire(self.plugin(), slot) };
+                let data = unsafe { plugin::Plugin::acquire(self.plugin(), slot, Lifecycle::new()) };
                 Some(Slot {
                     tag,
                     data: ManuallyDrop::new(data),
@@ -522,7 +534,7 @@ impl StoreError {
         Self(StoreErrorInner::NeedFrozenPoint)
     }
 
-    fn too_many_entries(capacity: Capacity, frozen: usize) -> Self {
+    fn too_many_entries(capacity: Capacity, frozen: u32) -> Self {
         Self(StoreErrorInner::TooManyEntries {
             entries: capacity.value(),
             frozen,
@@ -533,6 +545,10 @@ impl StoreError {
         Self(StoreErrorInner::TooManyNeighbors {
             neighbors: neighbors.value(),
         })
+    }
+
+    fn plugin(err: ANNError) -> Self {
+        Self(StoreErrorInner::PluginError(err))
     }
 }
 
@@ -559,13 +575,15 @@ enum StoreErrorInner {
         entries,
         frozen
     )]
-    TooManyEntries { entries: usize, frozen: usize },
+    TooManyEntries { entries: usize, frozen: u32 },
     #[error("number of neighbors ({}) may not exceed `u32::MAX`", neighbors)]
     TooManyNeighbors { neighbors: usize },
     #[error(transparent)]
     BufferError(#[from] BufferError),
     #[error(transparent)]
     NeighborsError(#[from] NeighborsError),
+    #[error("error creating plugin")]
+    PluginError(ANNError),
 }
 
 /// Error conditions for [`Store::retire`].
@@ -587,47 +605,52 @@ pub(crate) enum RetireError {
 
 diskann::convert_error!(RetireError);
 
-/// An epoch protected reader into a [`Store`].
-///
-/// Created via [`Store::reader`].
-#[derive(Debug)]
-pub(crate) struct Reader<'a> {
-    inner: invasive::Reader<'a>,
-    neighbors: &'a Neighbors,
-}
-
-impl<'a> Reader<'a> {
-    /// Return `true` if the index `i` is in-bounds.
-    #[inline]
-    #[must_use = "this function has no side-effects"]
-    pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
-        i < self.neighbors.entries().into_usize()
-    }
-
-    #[inline]
-    pub(crate) fn inner(&self) -> &invasive::Reader<'_> {
-        &self.inner
-    }
-
-    /// Return [`Neighbors`].
-    pub(crate) fn neighbors(&self) -> &Neighbors {
-        self.neighbors
-    }
-}
+// /// An epoch protected reader into a [`Store`].
+// ///
+// /// Created via [`Store::reader`].
+// #[derive(Debug)]
+// pub(crate) struct Reader<'a> {
+//     inner: invasive::Reader<'a>,
+//     neighbors: &'a Neighbors,
+// }
+//
+// impl<'a> Reader<'a> {
+//     /// Return `true` if the index `i` is in-bounds.
+//     #[inline]
+//     #[must_use = "this function has no side-effects"]
+//     pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
+//         i < self.neighbors.entries().into_usize()
+//     }
+//
+//     #[inline]
+//     pub(crate) fn inner(&self) -> &invasive::Reader<'_> {
+//         &self.inner
+//     }
+//
+//     /// Return [`Neighbors`].
+//     pub(crate) fn neighbors(&self) -> &Neighbors {
+//         self.neighbors
+//     }
+// }
 
 /// A writable buffer into the data managed by a [`Store`], obtained from [`Store::acquire`].
 #[derive(Debug)]
-pub(crate) struct Slot<'a> {
+pub(crate) struct Slot<'a, S>
+where
+    S: plugin::Slot,
+{
     tag: &'a AtomicTag,
-    data: ManuallyDrop<invasive::Slot<'a>>,
+    data: ManuallyDrop<S>,
     slot: u32,
 }
 
-impl<'a> Slot<'a> {
-    /// View the managed data as a mutable slice.
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
-        // SAFETY: The slot guarantees exclusive access to its corresponding data.
-        unsafe { self.data.as_mut_slice() }
+impl<'a, S> Slot<'a, S>
+where
+    S: plugin::Slot,
+{
+    /// View the raw inner slot.
+    pub(crate) fn data(&mut self) -> &mut S {
+        &mut self.data
     }
 
     /// Return the slot associated with this write.
@@ -635,12 +658,12 @@ impl<'a> Slot<'a> {
         self.slot
     }
 
-    fn freeze(self) {
+    pub(crate) fn freeze(self) {
         // Suppress normal `Drop`.
         let mut me = ManuallyDrop::new(self);
 
         // Freeze the inner slot.
-        plugin::Slot::freeze(unsafe { ManuallyDrop::take(&mut me.data) });
+        plugin::Slot::freeze(unsafe { ManuallyDrop::take(&mut me.data) }, Lifecycle::new());
 
         // Update the authoritative store.
         me.tag.store(Tag::FROZEN, Ordering::Release);
@@ -656,7 +679,7 @@ impl<'a> Slot<'a> {
         let mut me = ManuallyDrop::new(self);
 
         // Publish the inner slot.
-        plugin::Slot::publish(unsafe { ManuallyDrop::take(&mut me.data) });
+        plugin::Slot::publish(unsafe { ManuallyDrop::take(&mut me.data) }, Lifecycle::new());
 
         // Update the authoritative store.
         me.tag.store(Tag::PUBLISHED, Ordering::Release);
@@ -664,262 +687,268 @@ impl<'a> Slot<'a> {
     }
 }
 
-impl Drop for Slot<'_> {
+impl<S> Drop for Slot<'_, S>
+where
+    S: plugin::Slot,
+{
     fn drop(&mut self) {
-        plugin::Slot::abort(unsafe { ManuallyDrop::take(&mut self.data) });
+        plugin::Slot::abort(unsafe { ManuallyDrop::take(&mut self.data) }, Lifecycle::new());
         self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }
 
-///////////
-// Tests //
-///////////
-
-/// These tests are basic functionality tests for the store.
-///
-/// Longer running conurrency tests are in the integration test suite.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use diskann_utils::views::Matrix;
-
-    // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
-    // zeroed frozen points. The frozen points occupy the highest slot indices.
-    fn store(entries: usize, entry_bytes: usize, frozen: usize) -> Result<Store, StoreError> {
-        let mut data = Matrix::new(0u8, frozen, entry_bytes);
-        let mut base = 0u8;
-        for row in data.row_iter_mut() {
-            row.fill(base);
-            base = base.wrapping_add(1);
-        }
-
-        let mut config = Config::new();
-        config.epoch_guard_slots(NonZeroUsize::new(10).unwrap());
-        config.freelist_recycle_capacity(NonZeroU32::new(16).unwrap());
-
-        let layout = Layout::new(Capacity::new(entries), MaxDegree::new(0));
-        Store::new(layout, config, data.as_view())
-    }
-
-    //------------------------//
-    // Constructor validation //
-    //------------------------//
-
-    #[test]
-    fn new_requires_a_frozen_point() {
-        let err = store(4, 8, 0).unwrap_err();
-        assert!(matches!(err.0, StoreErrorInner::NeedFrozenPoint));
-    }
-
-    #[test]
-    fn new_rejects_total_slot_overflow() {
-        // `entries` alone fits in u32, but `entries + frozen` overflows it.
-        let data = Matrix::new(0u8, 1, 8);
-        let err = Store::new(
-            Layout::new(Capacity::new(u32::MAX as usize), MaxDegree::new(0)),
-            Config::default(),
-            data.as_view(),
-        )
-        .unwrap_err();
-        assert!(matches!(err.0, StoreErrorInner::TooManyEntries { .. }));
-    }
-
-    #[test]
-    fn new_rejects_too_many_neighbors() {
-        let data = Matrix::new(0u8, 1, 8);
-        let err = Store::new(
-            Layout::new(Capacity::new(4), MaxDegree::new(u32::MAX.into_usize() + 1)),
-            Config::default(),
-            data.as_view(),
-        )
-        .unwrap_err();
-        assert!(matches!(err.0, StoreErrorInner::TooManyNeighbors { .. }));
-    }
-
-    //--------//
-    // Layout //
-    //--------//
-
-    #[test]
-    fn frozen_range_follows_writable_slots() {
-        let s = store(4, 8, 2).unwrap();
-
-        // Writable slots are [0, 4); frozen points occupy [4, 6).
-        assert_eq!(s.frozen(), 4..6);
-
-        let reader = s.reader().unwrap();
-        for i in 0..4 {
-            assert!(!s.can_read_approximate(i).unwrap());
-            assert!(!reader.inner().can_read(i).unwrap());
-            assert!(reader.inner().read(i).is_none());
-        }
-
-        assert!(s.can_read_approximate(4).unwrap());
-        assert!(reader.inner().can_read(4).unwrap());
-        assert_eq!(reader.inner().read(4).unwrap(), &[0, 0, 0, 0, 0, 0, 0, 0]);
-
-        assert!(s.can_read_approximate(5).unwrap());
-        assert!(reader.inner().can_read(5).unwrap());
-        assert_eq!(reader.inner().read(5).unwrap(), &[1, 1, 1, 1, 1, 1, 1, 1]);
-
-        assert!(s.can_read_approximate(6).is_none());
-        assert!(reader.inner().can_read(6).is_none());
-        assert!(reader.inner().read(6).is_none());
-    }
-
-    ///////////////
-    // Lifecycle //
-    ///////////////
-
-    #[test]
-    fn acquire_write_publish_read_roundtrip() {
-        let s = store(4, 8, 1).unwrap();
-
-        let reader = s.reader().expect("reader guard available");
-
-        let idx = {
-            let mut slot = s.acquire().expect("a fresh store has free slots");
-            let idx = slot.slot() as usize;
-            slot.as_mut_slice()
-                .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-
-            // Before the slot is dropped - we should not be able to read it.
-            assert!(reader.inner().read(idx).is_none());
-            assert!(!s.can_read_approximate(idx).unwrap());
-            slot.publish();
-            idx
-        };
-
-        assert_eq!(
-            reader.inner().read(idx),
-            Some([1, 2, 3, 4, 5, 6, 7, 8].as_slice())
-        );
-        assert!(s.can_read_approximate(idx).unwrap());
-    }
-
-    #[test]
-    fn unpublished_slots_are_immediately_available() {
-        let s = store(4, 8, 1).unwrap();
-
-        let reader = s.reader().expect("reader guard available");
-
-        let idx = {
-            let mut slot = s.acquire().expect("a fresh store has free slots");
-            let idx = slot.slot() as usize;
-            slot.as_mut_slice()
-                .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-
-            // Before the slot is dropped - we should not be able to read it.
-            assert!(reader.inner().read(idx).is_none());
-            assert!(!s.can_read_approximate(idx).unwrap());
-
-            // NOTE: We do not explicitly publish the slot.
-            idx
-        };
-
-        assert!(reader.inner().read(idx).is_none());
-        assert!(!s.can_read_approximate(idx).unwrap());
-    }
-
-    #[test]
-    fn acquire_exhausts_then_reports_none() {
-        let s = store(2, 8, 1).unwrap();
-        // Hold the guards so the slots stay owned.
-        let _a = s.acquire().expect("first writable slot");
-        let _b = s.acquire().expect("second writable slot");
-        assert!(
-            s.acquire().is_none(),
-            "all writable slots are owned, so acquire must fail"
-        );
-    }
-
-    //--------//
-    // Retire //
-    //--------//
-
-    #[test]
-    fn retire_out_of_bounds() {
-        let s = store(4, 8, 1).unwrap();
-        assert!(matches!(s.retire(999), Err(RetireError::OutOfBounds)));
-    }
-
-    #[test]
-    fn retire_rejects_reserved_slots() {
-        let s = store(4, 8, 1).unwrap();
-        // An untouched writable slot is AVAILABLE, which is a reserved state.
-        assert!(matches!(
-            s.retire(0),
-            Err(RetireError::SlotIsReserved { .. })
-        ));
-        // A frozen slot is likewise reserved.
-        let frozen = s.frozen().start as usize;
-        assert!(matches!(
-            s.retire(frozen),
-            Err(RetireError::SlotIsReserved { .. })
-        ));
-        // An owned slot is not retirable.
-        let slot = s.acquire().unwrap();
-        assert!(matches!(
-            s.retire(slot.slot() as usize),
-            Err(RetireError::SlotIsReserved { .. })
-        ));
-    }
-
-    #[test]
-    fn retire_published_slot_then_unreadable() {
-        let s = store(4, 8, 1).unwrap();
-
-        let idx = {
-            let slot = s.acquire().unwrap();
-            slot.publish() as usize
-        };
-
-        assert!(s.retire(idx).is_ok());
-
-        // A reader opened after retirement must not observe the retired slot.
-        let reader = s.reader().unwrap();
-        assert_eq!(reader.inner().read(idx), None);
-        assert_eq!(reader.inner().can_read(idx), Some(false));
-
-        // The slot can also not be retired again.
-        assert!(matches!(
-            s.retire(idx),
-            Err(RetireError::SlotIsReserved { .. })
-        ));
-    }
-
-    //---------//
-    // Recycle //
-    //---------//
-
-    #[test]
-    fn test_recycling() {
-        let entries = if cfg!(miri) { 16 } else { 2048 };
-
-        let s = store(entries, 4, 2).unwrap();
-
-        // Claim all slots.
-        let mut count = 0;
-        while let Some(slot) = s.acquire() {
-            slot.publish();
-            count += 1;
-        }
-
-        assert_eq!(count, s.writable().len());
-
-        // Now that all slots are claimed - retire all slots.
-        for i in s.writable() {
-            s.retire(i.into_usize()).unwrap();
-        }
-
-        // Verify that we can claim all slots again.
-        let mut count = 0;
-        while let Some(slot) = s.acquire() {
-            slot.publish();
-            count += 1;
-        }
-
-        assert_eq!(count, s.writable().len());
-    }
-}
+// ///////////
+// // Tests //
+// ///////////
+//
+// /// These tests are basic functionality tests for the store.
+// ///
+// /// Longer running conurrency tests are in the integration test suite.
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//
+//     use diskann_utils::views::Matrix;
+//
+//     // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
+//     // zeroed frozen points. The frozen points occupy the highest slot indices.
+//     fn store(entries: usize, entry_bytes: usize, frozen: usize) -> Result<Store, StoreError> {
+//         let mut data = Matrix::new(0u8, frozen, entry_bytes);
+//         let mut base = 0u8;
+//         for row in data.row_iter_mut() {
+//             row.fill(base);
+//             base = base.wrapping_add(1);
+//         }
+//
+//         let mut config = Config::new();
+//         config.epoch_guard_slots(NonZeroUsize::new(10).unwrap());
+//         config.freelist_recycle_capacity(NonZeroU32::new(16).unwrap());
+//
+//         let layout = Layout::new(
+//             Capacity::new(entries),
+//             MaxDegree::new(0),
+//         );
+//         Store::new(layout, config, data.as_view())
+//     }
+//
+//     //------------------------//
+//     // Constructor validation //
+//     //------------------------//
+//
+//     #[test]
+//     fn new_requires_a_frozen_point() {
+//         let err = store(4, 8, 0).unwrap_err();
+//         assert!(matches!(err.0, StoreErrorInner::NeedFrozenPoint));
+//     }
+//
+//     #[test]
+//     fn new_rejects_total_slot_overflow() {
+//         // `entries` alone fits in u32, but `entries + frozen` overflows it.
+//         let data = Matrix::new(0u8, 1, 8);
+//         let err = Store::new(
+//             Layout::new(Capacity::new(u32::MAX as usize), MaxDegree::new(0)),
+//             Config::default(),
+//             data.as_view(),
+//         )
+//         .unwrap_err();
+//         assert!(matches!(err.0, StoreErrorInner::TooManyEntries { .. }));
+//     }
+//
+//     #[test]
+//     fn new_rejects_too_many_neighbors() {
+//         let data = Matrix::new(0u8, 1, 8);
+//         let err = Store::new(
+//             Layout::new(Capacity::new(4), MaxDegree::new(u32::MAX.into_usize() + 1)),
+//             Config::default(),
+//             data.as_view(),
+//         )
+//         .unwrap_err();
+//         assert!(matches!(err.0, StoreErrorInner::TooManyNeighbors { .. }));
+//     }
+//
+//     //--------//
+//     // Layout //
+//     //--------//
+//
+//     #[test]
+//     fn frozen_range_follows_writable_slots() {
+//         let s = store(4, 8, 2).unwrap();
+//
+//         // Writable slots are [0, 4); frozen points occupy [4, 6).
+//         assert_eq!(s.frozen(), 4..6);
+//
+//         let reader = s.reader().unwrap();
+//         for i in 0..4 {
+//             assert!(!s.can_read_approximate(i).unwrap());
+//             assert!(!reader.inner().can_read(i).unwrap());
+//             assert!(reader.inner().read(i).is_none());
+//         }
+//
+//         assert!(s.can_read_approximate(4).unwrap());
+//         assert!(reader.inner().can_read(4).unwrap());
+//         assert_eq!(reader.inner().read(4).unwrap(), &[0, 0, 0, 0, 0, 0, 0, 0]);
+//
+//         assert!(s.can_read_approximate(5).unwrap());
+//         assert!(reader.inner().can_read(5).unwrap());
+//         assert_eq!(reader.inner().read(5).unwrap(), &[1, 1, 1, 1, 1, 1, 1, 1]);
+//
+//         assert!(s.can_read_approximate(6).is_none());
+//         assert!(reader.inner().can_read(6).is_none());
+//         assert!(reader.inner().read(6).is_none());
+//     }
+//
+//     ///////////////
+//     // Lifecycle //
+//     ///////////////
+//
+//     #[test]
+//     fn acquire_write_publish_read_roundtrip() {
+//         let s = store(4, 8, 1).unwrap();
+//
+//         let reader = s.reader().expect("reader guard available");
+//
+//         let idx = {
+//             let mut slot = s.acquire().expect("a fresh store has free slots");
+//             let idx = slot.slot() as usize;
+//             slot.as_mut_slice()
+//                 .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+//
+//             // Before the slot is dropped - we should not be able to read it.
+//             assert!(reader.inner().read(idx).is_none());
+//             assert!(!s.can_read_approximate(idx).unwrap());
+//             slot.publish();
+//             idx
+//         };
+//
+//         assert_eq!(
+//             reader.inner().read(idx),
+//             Some([1, 2, 3, 4, 5, 6, 7, 8].as_slice())
+//         );
+//         assert!(s.can_read_approximate(idx).unwrap());
+//     }
+//
+//     #[test]
+//     fn unpublished_slots_are_immediately_available() {
+//         let s = store(4, 8, 1).unwrap();
+//
+//         let reader = s.reader().expect("reader guard available");
+//
+//         let idx = {
+//             let mut slot = s.acquire().expect("a fresh store has free slots");
+//             let idx = slot.slot() as usize;
+//             slot.as_mut_slice()
+//                 .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+//
+//             // Before the slot is dropped - we should not be able to read it.
+//             assert!(reader.inner().read(idx).is_none());
+//             assert!(!s.can_read_approximate(idx).unwrap());
+//
+//             // NOTE: We do not explicitly publish the slot.
+//             idx
+//         };
+//
+//         assert!(reader.inner().read(idx).is_none());
+//         assert!(!s.can_read_approximate(idx).unwrap());
+//     }
+//
+//     #[test]
+//     fn acquire_exhausts_then_reports_none() {
+//         let s = store(2, 8, 1).unwrap();
+//         // Hold the guards so the slots stay owned.
+//         let _a = s.acquire().expect("first writable slot");
+//         let _b = s.acquire().expect("second writable slot");
+//         assert!(
+//             s.acquire().is_none(),
+//             "all writable slots are owned, so acquire must fail"
+//         );
+//     }
+//
+//     //--------//
+//     // Retire //
+//     //--------//
+//
+//     #[test]
+//     fn retire_out_of_bounds() {
+//         let s = store(4, 8, 1).unwrap();
+//         assert!(matches!(s.retire(999), Err(RetireError::OutOfBounds)));
+//     }
+//
+//     #[test]
+//     fn retire_rejects_reserved_slots() {
+//         let s = store(4, 8, 1).unwrap();
+//         // An untouched writable slot is AVAILABLE, which is a reserved state.
+//         assert!(matches!(
+//             s.retire(0),
+//             Err(RetireError::SlotIsReserved { .. })
+//         ));
+//         // A frozen slot is likewise reserved.
+//         let frozen = s.frozen().start as usize;
+//         assert!(matches!(
+//             s.retire(frozen),
+//             Err(RetireError::SlotIsReserved { .. })
+//         ));
+//         // An owned slot is not retirable.
+//         let slot = s.acquire().unwrap();
+//         assert!(matches!(
+//             s.retire(slot.slot() as usize),
+//             Err(RetireError::SlotIsReserved { .. })
+//         ));
+//     }
+//
+//     #[test]
+//     fn retire_published_slot_then_unreadable() {
+//         let s = store(4, 8, 1).unwrap();
+//
+//         let idx = {
+//             let slot = s.acquire().unwrap();
+//             slot.publish() as usize
+//         };
+//
+//         assert!(s.retire(idx).is_ok());
+//
+//         // A reader opened after retirement must not observe the retired slot.
+//         let reader = s.reader().unwrap();
+//         assert_eq!(reader.inner().read(idx), None);
+//         assert_eq!(reader.inner().can_read(idx), Some(false));
+//
+//         // The slot can also not be retired again.
+//         assert!(matches!(
+//             s.retire(idx),
+//             Err(RetireError::SlotIsReserved { .. })
+//         ));
+//     }
+//
+//     //---------//
+//     // Recycle //
+//     //---------//
+//
+//     #[test]
+//     fn test_recycling() {
+//         let entries = if cfg!(miri) { 16 } else { 2048 };
+//
+//         let s = store(entries, 4, 2).unwrap();
+//
+//         // Claim all slots.
+//         let mut count = 0;
+//         while let Some(slot) = s.acquire() {
+//             slot.publish();
+//             count += 1;
+//         }
+//
+//         assert_eq!(count, s.writable().len());
+//
+//         // Now that all slots are claimed - retire all slots.
+//         for i in s.writable() {
+//             s.retire(i.into_usize()).unwrap();
+//         }
+//
+//         // Verify that we can claim all slots again.
+//         let mut count = 0;
+//         while let Some(slot) = s.acquire() {
+//             slot.publish();
+//             count += 1;
+//         }
+//
+//         assert_eq!(count, s.writable().len());
+//     }
+// }

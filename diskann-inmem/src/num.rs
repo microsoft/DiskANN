@@ -228,7 +228,9 @@ impl IdLimit {
         // We cannot use the `IntoUsize` trait in a const function unfortunately.
         //
         // Instead, we need to re-create the check that makes this conversion safe.
-        const { assert!(std::mem::size_of::<u32>() <= std::mem::size_of::<usize>()); }
+        const {
+            assert!(std::mem::size_of::<u32>() <= std::mem::size_of::<usize>());
+        }
 
         self.value() as usize
     }

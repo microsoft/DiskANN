@@ -31,7 +31,7 @@ use thiserror::Error;
 
 use crate::{
     buffer::{Buffer, BufferError},
-    num::{Align, Bytes, MaxDegree, IdLimit},
+    num::{Align, Bytes, IdLimit, MaxDegree},
 };
 
 type Id = u32;

@@ -5,14 +5,39 @@
 
 use std::{num::NonZeroUsize, sync::atomic::Ordering};
 
-use diskann::utils::IntoUsize;
+use diskann::{ANNResult, utils::IntoUsize};
 
 use crate::{
     buffer::{Buffer, RawSlice},
     epoch,
     num::{Align, Bytes, Capacity, IdLimit},
     tag::{AtomicTag, Tag},
+    store::Lifecycle,
 };
+
+#[derive(Debug, Clone)]
+pub(crate) struct Config {
+    bytes: Bytes,
+}
+
+impl Config {
+    pub(crate) fn new(bytes: Bytes) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) fn build(self, id_limit: IdLimit) -> ANNResult<Invasive> {
+        let Self { bytes } = self;
+
+        Ok(Invasive::new(id_limit, bytes))
+    }
+}
+
+impl super::plugin::PluginConfig for Config {
+    type Plugin = Invasive;
+    fn build(self, id_limit: IdLimit) -> ANNResult<Invasive> {
+        <Config>::build(self, id_limit)
+    }
+}
 
 /// The invasive store where concurrency tags are stored inline with the data.
 #[derive(Debug)]
@@ -28,6 +53,10 @@ pub(crate) struct Invasive {
 const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 impl Invasive {
+    pub(crate) fn config(bytes: Bytes) -> Config {
+        Config::new(bytes)
+    }
+
     pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Self {
         let unpadded = bytes.checked_add(AtomicTag::SIZE).unwrap();
         let padded_bytes = unpadded
@@ -92,7 +121,7 @@ impl super::plugin::Plugin for Invasive {
         <Invasive>::id_limit(self)
     }
 
-    unsafe fn acquire(&self, i: u32) -> Self::Slot<'_> {
+    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Slot<'_> {
         let Some((tag, data)) = self.data(i.into_usize()) else {
             panic!("index {i} is out-of-bounds");
         };
@@ -111,7 +140,7 @@ impl super::plugin::Plugin for Invasive {
         Slot { tag, data }
     }
 
-    fn reclaim(&self, i: u32) {
+    unsafe fn reclaim(&self, i: u32, _: Lifecycle) {
         let Some((tag, _)) = self.data(i.into_usize()) else {
             panic!("index {i} is out-of-bounds");
         };
@@ -119,7 +148,7 @@ impl super::plugin::Plugin for Invasive {
         tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 
-    fn retire(&self, i: u32) {
+    unsafe fn retire(&self, i: u32, _: Lifecycle) {
         let Some((tag, _)) = self.data(i.into_usize()) else {
             panic!("index {i} is out-of-bounds");
         };
@@ -265,19 +294,19 @@ pub(crate) struct Slot<'a> {
 }
 
 impl<'a> Slot<'a> {
-    pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.data.as_mut_slice() }
     }
 }
 
 impl super::plugin::Slot for Slot<'_> {
-    fn publish(self) {
+    fn publish(self, _: Lifecycle) {
         self.tag.store(Tag::PUBLISHED, Ordering::Release);
     }
-    fn freeze(self) {
+    fn freeze(self, _: Lifecycle) {
         self.tag.store(Tag::FROZEN, Ordering::Release);
     }
-    fn abort(self) {
+    fn abort(self, _: Lifecycle) {
         self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }

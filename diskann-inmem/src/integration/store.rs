@@ -13,7 +13,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use diskann_utils::views::Matrix;
 
 use crate::{
-    num::{Capacity, MaxDegree},
+    num::{Bytes, Capacity, MaxDegree},
     store,
 };
 
@@ -27,7 +27,7 @@ pub struct Config {
 
 #[derive(Debug)]
 pub struct Store {
-    store: store::Store,
+    store: store::Store<store::invasive::Invasive>,
 }
 
 impl Store {
@@ -44,7 +44,7 @@ impl Store {
     /// the frozen point exceeds `u32::MAX`) or if other configuration parameters such as
     /// the number of epoch guard slots are invalid (e.g. zero).
     pub fn new(config: Config) -> Self {
-        let store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0));
+        let store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0), 1);
 
         let mut store_config = store::Config::default();
 
@@ -63,9 +63,10 @@ impl Store {
                 .expect("`freelist_recycle_capacity` must be non-zero"),
             );
 
-        let data = Matrix::new(0u8, 1, config.entry_bytes);
-        let store = store::Store::new(store_layout, store_config, data.as_view())
+        let plugin_config = store::invasive::Invasive::config(Bytes::new(config.entry_bytes));
+        let store = store::Store::new(store_layout, store_config, plugin_config)
             .expect("failed to construct store");
+
         Self { store }
     }
 
@@ -94,7 +95,10 @@ impl Store {
     }
 
     pub fn reader(&self) -> Option<Reader<'_>> {
-        match self.store.reader() {
+        match self
+            .store
+            .guard(|plugin, guard| unsafe { plugin.reader(guard) })
+        {
             Ok(reader) => Some(Reader::new(reader)),
             Err(crate::epoch::Unavailable) => None,
         }
@@ -102,25 +106,25 @@ impl Store {
 }
 
 pub struct Reader<'a> {
-    reader: store::Reader<'a>,
+    reader: store::invasive::Reader<'a>,
 }
 
 impl<'a> Reader<'a> {
-    fn new(reader: store::Reader<'a>) -> Self {
+    fn new(reader: store::invasive::Reader<'a>) -> Self {
         Self { reader }
     }
 
     pub fn read(&self, i: usize) -> Option<&[u8]> {
-        self.reader.inner().read(i)
+        self.reader.read(i)
     }
 }
 
 pub struct Writer<'a> {
-    slot: store::Slot<'a>,
+    slot: store::Slot<'a, store::invasive::Slot<'a>>,
 }
 
 impl<'a> Writer<'a> {
-    fn new(slot: store::Slot<'a>) -> Self {
+    fn new(slot: store::Slot<'a, store::invasive::Slot<'a>>) -> Self {
         Self { slot }
     }
 
@@ -129,6 +133,6 @@ impl<'a> Writer<'a> {
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.slot.as_mut_slice()
+        self.slot.data().as_mut_slice()
     }
 }

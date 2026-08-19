@@ -23,7 +23,10 @@ use crate::{
     counters::LocalCounters,
     layers,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
-    store::{self, Store},
+    store::{
+        self, Store,
+        invasive::{self, Invasive},
+    },
     tag::AtomicTag,
 };
 
@@ -43,7 +46,11 @@ impl<T> Config<T> {
         start_points: Matrix<T>,
     ) -> Self {
         Self {
-            layout: store::Layout::new(capacity, max_degree),
+            layout: store::Layout::new(
+                capacity,
+                max_degree,
+                start_points.nrows().try_into().unwrap(),
+            ),
             metric,
             start_points,
             store: store::Config::default(),
@@ -143,7 +150,7 @@ where
 {
     dim: usize,
     metric: Metric,
-    store: Store,
+    store: Store<Invasive>,
     _type: PhantomData<T>,
 }
 
@@ -177,7 +184,19 @@ where
             store,
         } = config;
 
-        let store = Store::new(layout, store, start_points.as_bytes())?;
+        let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
+        let invasive = Invasive::config(bytes);
+        let store = Store::new(layout, store, invasive)?;
+
+        // Initialize start points.
+        for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
+            let mut slot = store.slot(i).unwrap();
+            slot.data()
+                .as_mut_slice()
+                .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(row));
+
+            slot.freeze();
+        }
 
         Ok(Self {
             dim: start_points.ncols(),
@@ -207,6 +226,12 @@ where
             Ok(())
         }
     }
+
+    fn reader(&self) -> ANNResult<invasive::Reader<'_>> {
+        Ok(self
+            .store
+            .guard(|invasive, guard| unsafe { invasive.reader(guard) })?)
+    }
 }
 
 impl<T> Full<T>
@@ -214,9 +239,8 @@ where
     T: FullPrecision,
 {
     pub(crate) fn get(&self, i: u32) -> ANNResult<Box<[T]>> {
-        let reader = self.store.reader()?;
-
-        let data = match reader.inner().read(i.into_usize()) {
+        let reader = self.reader()?;
+        let data = match reader.read(i.into_usize()) {
             Some(data) => data,
             None => {
                 return Err(ANNError::message("item could not be read"));
@@ -274,7 +298,8 @@ where
             .acquire()
             .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
 
-        slot.as_mut_slice()
+        slot.data()
+            .as_mut_slice()
             .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
 
         Ok(Guard::new(slot))
@@ -283,11 +308,11 @@ where
 
 #[derive(Debug)]
 pub struct Guard<'a> {
-    slot: store::Slot<'a>,
+    slot: store::Slot<'a, invasive::Slot<'a>>,
 }
 
 impl<'a> Guard<'a> {
-    fn new(slot: store::Slot<'a>) -> Self {
+    fn new(slot: store::Slot<'a, invasive::Slot<'a>>) -> Self {
         Self { slot }
     }
 }
@@ -620,8 +645,7 @@ impl FullPrecisionImpl for f32 {
         query: &'a [f32],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
-        let reader = full.store.temp_inner_reader()?;
-
+        let reader = full.reader()?;
         let query = Calf::Borrowed(query);
 
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
@@ -643,7 +667,7 @@ impl FullPrecisionImpl for f32 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<f32, SquaredL2>::new(reader)),
@@ -662,7 +686,7 @@ impl FullPrecisionImpl for f16 {
         query: &'a [f16],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
@@ -685,7 +709,7 @@ impl FullPrecisionImpl for f16 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<f16, SquaredL2>::new(reader)),
@@ -704,7 +728,7 @@ impl FullPrecisionImpl for u8 {
         query: &'a [u8],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let query = Calf::Borrowed(query);
 
@@ -725,7 +749,7 @@ impl FullPrecisionImpl for u8 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<u8, SquaredL2>::new(reader)),
@@ -744,7 +768,7 @@ impl FullPrecisionImpl for i8 {
         query: &'a [i8],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         full.check_dim(query.len())?;
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let query = Calf::Borrowed(query);
 
@@ -759,7 +783,7 @@ impl FullPrecisionImpl for i8 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
-        let reader = full.store.temp_inner_reader()?;
+        let reader = full.reader()?;
 
         let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => Box::new(Prune::<i8, SquaredL2>::new(reader)),
