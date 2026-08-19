@@ -63,7 +63,7 @@ pub(crate) enum LeafBuildError {
 struct LeafBuffers {
     point_values: Vec<f32>,
     neighbors: Vec<LeafNeighbor>,
-    local_adjacency: Vec<AdjacencyList<u32>>,
+    local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
 }
 
@@ -99,11 +99,10 @@ impl LeafBuffers {
     }
 
     fn prepare_local_adjacency(&mut self, point_count: usize) {
-        self.local_adjacency
-            .resize_with(point_count, AdjacencyList::new);
+        self.local_adjacency.resize_with(point_count, Vec::new);
         self.local_adjacency[..point_count]
             .iter_mut()
-            .for_each(AdjacencyList::clear);
+            .for_each(Vec::clear);
     }
 }
 
@@ -124,7 +123,7 @@ impl DirectCandidates {
         Self { lists }
     }
 
-    fn add_leaf(&self, point_ids: &[u32], local_adjacency: &[AdjacencyList<u32>]) {
+    fn add_leaf(&self, point_ids: &[u32], local_adjacency: &[Vec<u32>]) {
         for (&source, additions) in point_ids.iter().zip(local_adjacency) {
             // `add_direct_leaf_candidates` checks every point ID before this append.
             self.lists[source as usize]
@@ -261,7 +260,7 @@ fn add_symmetric_neighbors(
     point_ids: &[u32],
     leaf_k: usize,
     neighbors: &[LeafNeighbor],
-    local_adjacency: &mut [AdjacencyList<u32>],
+    local_adjacency: &mut [Vec<u32>],
 ) {
     for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in source_neighbors {
@@ -625,7 +624,7 @@ mod tests {
 
     #[test]
     fn skips_duplicate_global_ids_without_self_edges() {
-        let mut graph = vec![crate::graph::AdjacencyList::new(); 2];
+        let mut graph = vec![Vec::new(); 2];
         add_symmetric_neighbors(
             &[7, 7],
             1,
@@ -641,13 +640,7 @@ mod tests {
     #[test]
     fn direct_candidate_accumulator_keeps_unique_sorted_lists() {
         let candidates = DirectCandidates::new(2);
-        candidates.add_leaf(
-            &[0, 1],
-            &[
-                crate::graph::AdjacencyList::from_iter_untrusted([1, 1]),
-                crate::graph::AdjacencyList::from_iter_untrusted([0]),
-            ],
-        );
+        candidates.add_leaf(&[0, 1], &[vec![1, 1], vec![0]]);
         assert_eq!(adjacency_lists(candidates.into_lists()), [vec![1], vec![0]]);
     }
 }
