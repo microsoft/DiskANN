@@ -166,25 +166,53 @@ impl std::fmt::Display for Align {
 //-------------------------//
 
 macro_rules! typed_int {
-    ($name:ident, $T:ty) => {
+    ($(#[$doc:meta])* $name:ident, $T:ty $(,)?) => {
+        $(#[$doc])*
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
         pub struct $name($T);
 
         impl $name {
-            pub fn new(value: $T) -> Self {
+            pub const fn new(value: $T) -> Self {
                 Self(value)
             }
 
-            pub fn value(self) -> $T {
+            pub const fn value(self) -> $T {
                 self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, concat!(stringify!($name), "({})"), self.value())
             }
         }
     };
 }
 
-typed_int!(Capacity, usize);
-typed_int!(MaxDegree, usize);
-typed_int!(MaximumId, u32);
+// TODO: Provide a linkable reference for "immutable" points.
+
+typed_int!(
+    /// The number of distinct slots a [`crate::Provider`] or [`crate::Layer`] has capacity
+    /// for. This is logically distinct from [`MaximumId`], which may be greater due too
+    /// immutable points within a storage container.
+    Capacity,
+    usize,
+);
+
+typed_int!(
+    /// The maximum degree of an adjacency list.
+    MaxDegree,
+    usize
+);
+
+typed_int!(
+    /// The **inclusive** maximum ID that a [`crate::Provider`], [`crate::Layer`], or other
+    /// such store in this crate can access in-bounds.
+    ///
+    /// This is related to [`Capacity`] but is often larger due to immutable points.
+    MaximumIds,
+    u32
+);
 
 ///////////
 // Tests //

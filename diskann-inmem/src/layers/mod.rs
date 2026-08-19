@@ -31,7 +31,7 @@ use std::num::NonZeroU16;
 use diskann::ANNResult;
 use thiserror::Error;
 
-use crate::{counters::LocalCounters, num::Bytes};
+use crate::{counters::LocalCounters, num::{Capacity, Bytes, MaxDegree}};
 
 pub mod full;
 pub use full::{Full, FullPrecision};
@@ -44,7 +44,7 @@ pub trait LayerConfig {
 
 /// Base layer for data representations.
 pub trait Layer: Send + Sync + 'static {
-    fn max_degree(&self) -> usize;
+    fn max_degree(&self) -> MaxDegree;
 
     fn retire(&self, i: u32) -> ANNResult<()>;
 
@@ -52,7 +52,7 @@ pub trait Layer: Send + Sync + 'static {
 
     fn maximum(&self) -> u32;
 
-    fn capacity(&self) -> usize;
+    fn capacity(&self) -> Capacity;
 }
 
 pub trait Set<T>: Layer {

@@ -18,7 +18,7 @@ use diskann_vector::distance::Metric;
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-use diskann_inmem::{Provider, layers};
+use diskann_inmem::{Provider, layers, num::{MaxDegree, Capacity}};
 
 use crate::{
     index::{Counters, Index},
@@ -380,8 +380,8 @@ impl Test {
                 let index = match start_points {
                     DatasetView::F32(v) => finish(
                         Provider::new(diskann_inmem::layers::full::Config::<f32>::new(
-                            capacity,
-                            max_degree,
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
                         ))?,
@@ -389,8 +389,8 @@ impl Test {
                     ),
                     DatasetView::F16(v) => finish(
                         Provider::new(diskann_inmem::layers::full::Config::<f16>::new(
-                            capacity,
-                            max_degree,
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
                         ))?,
@@ -398,8 +398,8 @@ impl Test {
                     ),
                     DatasetView::U8(v) => finish(
                         Provider::new(diskann_inmem::layers::full::Config::<u8>::new(
-                            capacity,
-                            max_degree,
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
                         ))?,
@@ -407,8 +407,8 @@ impl Test {
                     ),
                     DatasetView::I8(v) => finish(
                         Provider::new(diskann_inmem::layers::full::Config::<i8>::new(
-                            capacity,
-                            max_degree,
+                            Capacity::new(capacity),
+                            MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
                         ))?,

@@ -31,7 +31,7 @@ use thiserror::Error;
 
 use crate::{
     buffer::{Buffer, BufferError},
-    num::{Align, Bytes},
+    num::{Align, Bytes, MaxDegree},
 };
 
 type Id = u32;
@@ -64,20 +64,20 @@ pub(crate) struct Neighbors {
 
 impl Neighbors {
     /// Construct a new [`Neighbors`] capable of holding `entries` adjacency lists with a
-    /// maximum length of `max_length`.
+    /// maximum length of `max_degree`.
     ///
     /// # Errors
     ///
-    /// Returns an error if `(max_length + 1) * size_of::<u32>()` overflows `usize`
+    /// Returns an error if `(max_degree + 1) * size_of::<u32>()` overflows `usize`
     /// (unreachable on 64-bit targets) or the resulting allocation would exceed
     /// `isize::MAX` bytes.
-    pub(crate) fn new(entries: u32, max_length: u32) -> Result<Self, NeighborsError> {
-        let bytes = max_length
+    pub(crate) fn new(entries: u32, max_degree: u32) -> Result<Self, NeighborsError> {
+        let bytes = max_degree
             .into_usize()
             .checked_add(1)
             .and_then(|len| len.checked_mul(std::mem::size_of::<Id>()))
             .map(Bytes::new)
-            .ok_or(NeighborsError::Overflow(max_length))?;
+            .ok_or(NeighborsError::Overflow(max_degree))?;
 
         // We materialize slices of `Id` into the raw byte buffers.
         //
@@ -101,15 +101,15 @@ impl Neighbors {
     }
 
     /// Return the maximum length for any adjacency list.
-    pub(crate) fn max_length(&self) -> usize {
+    pub(crate) fn max_degree(&self) -> MaxDegree {
         // We reserve 4 bytes at the beginning for the length of the adjacency list.
-        (self.neighbors.stride().value() - std::mem::size_of::<Id>()) / std::mem::size_of::<Id>()
+        MaxDegree::new((self.neighbors.stride().value() - std::mem::size_of::<Id>()) / std::mem::size_of::<Id>())
     }
 
     /// Return the maximum length for any adjacency list as a 32-bit integer.
-    pub(crate) fn max_length_u32(&self) -> u32 {
+    pub(crate) fn max_degree_u32(&self) -> u32 {
         // Lossless by the invariants on `Self::new`.
-        self.max_length() as u32
+        self.max_degree().value() as u32
     }
 
     /// Return the number of adjacency lists contained by this graph.
@@ -144,7 +144,7 @@ impl Neighbors {
         // SAFETY: We hold the read-lock, so reading is safe. From our bounds checks, we
         // know that this pointer is valid.
         let len: usize = unsafe { prefix.as_ptr().cast::<Id>().read() }
-            .min(self.max_length_u32())
+            .min(self.max_degree_u32())
             .into_usize();
 
         let mut resizer = neighbors.resize(len);
@@ -189,7 +189,7 @@ impl Neighbors {
 
         Lock {
             ptr: slice.as_non_null().cast::<Id>(),
-            capacity: self.max_length().into_usize(),
+            capacity: self.max_degree().value(),
             _lock: lock,
         }
     }
@@ -201,24 +201,24 @@ impl Neighbors {
     /// Returns an error if:
     ///
     /// * `i` exceeds [`Self::entries`].
-    /// * `neighbors.len()` exceeds [`Self::max_length_u32`].
+    /// * `neighbors.len()` exceeds [`Self::max_degree_u32`].
     ///
     /// If an error is returned, the graph is left unmodified.
     pub(crate) fn set(&self, i: u32, neighbors: &[u32]) -> Result<(), SetError> {
         self.check(i).map_err(SetError::OutOfBounds)?;
 
         // We can check the length of `neighbors` before acquiring any locks as an early exit.
-        if neighbors.len() > self.max_length().into_usize() {
+        if neighbors.len() > self.max_degree().value() {
             return Err(SetError::TooLong(TooLong {
                 got: neighbors.len(),
-                max: self.max_length_u32(),
+                max: self.max_degree_u32(),
             }));
         }
 
         // SAFETY: We've checked `i` is in-bounds.
         let lock = unsafe { self.lock_unchecked(i) };
 
-        // SAFETY: `neighbors.len() <= self.max_length()`.
+        // SAFETY: `neighbors.len() <= self.max_degree()`.
         unsafe { lock.write_unchecked(neighbors) };
         Ok(())
     }
@@ -235,7 +235,7 @@ impl Neighbors {
 /// Errors returned by [`Neighbors::new`].
 #[derive(Debug, Error)]
 pub(crate) enum NeighborsError {
-    /// Computing the per-list byte size `(max_length + 1) * size_of::<u32>()` overflowed
+    /// Computing the per-list byte size `(max_degree + 1) * size_of::<u32>()` overflowed
     /// `usize`.
     ///
     /// Unreachable on 64-bit targets.
@@ -566,7 +566,7 @@ mod tests {
     fn basic_test() {
         let mut neighbors = Neighbors::new(10, 4).unwrap();
         assert_eq!(neighbors.entries(), 10);
-        assert_eq!(neighbors.max_length(), 4);
+        assert_eq!(neighbors.max_degree(), MaxDegree::new(4));
 
         let mut list = AdjacencyList::new();
         for i in 0..neighbors.entries() {
@@ -576,7 +576,7 @@ mod tests {
             assert!(list.is_empty());
 
             let lock = neighbors.lock(i).unwrap();
-            assert_eq!(lock.capacity(), neighbors.max_length());
+            assert_eq!(lock.capacity(), neighbors.max_degree().value());
             assert_eq!(lock.len(), 0);
             assert!(lock.is_empty());
             assert_eq!(lock.as_slice(), &[]);
@@ -595,7 +595,7 @@ mod tests {
             |round: u32, entry: u32| -> Vec<u32> { (0..(round + 1)).map(|r| entry + r).collect() };
 
         // Test mutation via `Neighbors::set`.
-        for round in 0..neighbors.max_length_u32() {
+        for round in 0..neighbors.max_degree_u32() {
             for i in 0..neighbors.entries() {
                 let v = generate(round, i);
                 neighbors.set(i, &v).unwrap();
@@ -614,7 +614,7 @@ mod tests {
         clear(&mut neighbors);
 
         // Test mutation via `lock + write`.
-        for round in 0..neighbors.max_length_u32() {
+        for round in 0..neighbors.max_degree_u32() {
             for i in 0..neighbors.entries() {
                 let v = generate(round, i);
                 neighbors.lock(i).unwrap().write(&v).unwrap();
@@ -633,7 +633,7 @@ mod tests {
         clear(&mut neighbors);
 
         // Test mutation via `lock + append`.
-        for round in 0..neighbors.max_length_u32() {
+        for round in 0..neighbors.max_degree_u32() {
             for i in 0..neighbors.entries() {
                 neighbors.lock(i).unwrap().append(&[round + i]).unwrap();
             }
@@ -684,9 +684,9 @@ mod tests {
 
     #[test]
     fn many_appends() {
-        let max_length = if cfg!(miri) { 100 } else { 1000 };
+        let max_degree = if cfg!(miri) { 100 } else { 1000 };
 
-        let neighbors = Neighbors::new(1, max_length).unwrap();
+        let neighbors = Neighbors::new(1, max_degree).unwrap();
 
         let num_threads = 4;
         let barrier = std::sync::Barrier::new(num_threads);
@@ -699,7 +699,7 @@ mod tests {
                 s.spawn(move || {
                     barrier_ref.wait();
                     let mut i = thread_id as u32;
-                    let upper = neighbors_ref.max_length() as u32;
+                    let upper = neighbors_ref.max_degree_u32();
                     while i < upper {
                         neighbors_ref.lock(0).unwrap().append(&[i]).unwrap();
                         i += num_threads as u32;
@@ -709,7 +709,7 @@ mod tests {
         });
 
         let mut list = AdjacencyList::new();
-        let expected: Vec<_> = (0..neighbors.max_length()).map(|i| i as u32).collect();
+        let expected: Vec<_> = (0..neighbors.max_degree().value()).map(|i| i as u32).collect();
         neighbors.get(0, &mut list).unwrap();
         list.sort();
 

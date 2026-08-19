@@ -25,7 +25,7 @@ use thiserror::Error;
 use crate::{
     counters::LocalCounters,
     layers,
-    num::Bytes,
+    num::{Bytes, Capacity, MaxDegree},
     store::{self, Store},
     tag::AtomicTag,
 };
@@ -40,8 +40,8 @@ pub struct Config<T> {
 
 impl<T> Config<T> {
     pub fn new(
-        capacity: usize,
-        max_degree: usize,
+        capacity: Capacity,
+        max_degree: MaxDegree,
         metric: Metric,
         start_points: Matrix<T>,
     ) -> Self {
@@ -222,8 +222,8 @@ impl<T> layers::Layer for Full<T>
 where
     T: FullPrecision,
 {
-    fn max_degree(&self) -> usize {
-        self.store.temp_neighbors().max_length()
+    fn max_degree(&self) -> MaxDegree {
+        self.store.temp_neighbors().max_degree()
     }
 
     fn retire(&self, i: u32) -> ANNResult<()> {
@@ -238,7 +238,7 @@ where
         self.store.maximum()
     }
 
-    fn capacity(&self) -> usize {
+    fn capacity(&self) -> Capacity {
         self.store.capacity()
     }
 }

@@ -54,7 +54,7 @@ use crate::{
     ids::IdMap,
     layers,
     neighbors::Neighbors,
-    num::Bytes,
+    num::{Bytes, MaxDegree},
     store::{self, Store},
 };
 
@@ -121,7 +121,7 @@ where
     }
 
     /// Return the maximum number of neighbors that can be stored in the provider's graph.
-    pub fn max_degree(&self) -> usize {
+    pub fn max_degree(&self) -> MaxDegree {
         self.layer.max_degree()
     }
 }
@@ -313,9 +313,9 @@ impl<'a> SearchAccessor<'a> {
     ) -> Self {
         Self {
             neighbors,
-            ids: AdjacencyList::with_capacity(neighbors.max_length()),
+            ids: AdjacencyList::with_capacity(neighbors.max_degree().value()),
             expand_beam,
-            buffer: vec![Default::default(); neighbors.max_length()],
+            buffer: vec![Default::default(); neighbors.max_degree().value()],
             provider,
             start_points,
             counters,
@@ -759,7 +759,7 @@ mod tests {
     };
     use diskann_vector::distance::Metric;
 
-    use crate::layers::Full;
+    use crate::{num::Capacity, layers::Full};
 
     /// The true tests live in the integration tests for this repo.
     ///
@@ -788,8 +788,8 @@ mod tests {
         let degree = 6;
 
         let config = layers::full::Config::new(
-            grid.num_points(size),
-            degree,
+            Capacity::new(grid.num_points(size)),
+            MaxDegree::new(degree),
             Metric::L2,
             Matrix::row_vector(start.into()),
         );
@@ -799,11 +799,11 @@ mod tests {
         // let config = Config::new(grid.num_points(size), degree);
 
         let provider = Provider::<_, u64>::new(config).unwrap();
-        assert_eq!(provider.max_degree(), degree);
+        assert_eq!(provider.max_degree(), MaxDegree::new(degree));
 
         let config = diskann::graph::config::Builder::new(
             2 * (grid.dim() as usize),
-            diskann::graph::config::MaxDegree::new(provider.max_degree()),
+            diskann::graph::config::MaxDegree::new(provider.max_degree().value()),
             10,
             (Metric::L2).into(),
         )

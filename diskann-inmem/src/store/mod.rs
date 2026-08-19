@@ -67,7 +67,7 @@ use crate::{
     epoch::{self, Registry},
     freelist::{self, Freelist},
     neighbors::{Neighbors, NeighborsError},
-    num::Bytes,
+    num::{Bytes, Capacity, MaxDegree},
     tag::{AtomicTag, Tag},
 };
 
@@ -131,20 +131,20 @@ impl Default for Config {
 #[derive(Debug)]
 pub(crate) struct Layout {
     /// The number of non-frozen slots to create space for.
-    entries: usize,
+    capacity: Capacity,
 
     /// The maximum number of neighbors in each adjacency list.
-    max_neighbors: usize,
+    max_degree: MaxDegree,
 }
 
 impl Layout {
-    /// Create a new [`Layout`] capable of holding `entries` non-frozen points.
+    /// Create a new [`Layout`] capable of holding `capacity` non-frozen points.
     ///
-    /// All adjacency lists will have a maximum capacity of `max_neighbors`.
-    pub(crate) fn new(entries: usize, max_neighbors: usize) -> Self {
+    /// All adjacency lists will have a maximum capacity of `max_degree`.
+    pub(crate) fn new(capacity: Capacity, max_degree: MaxDegree) -> Self {
         Self {
-            entries,
-            max_neighbors,
+            capacity,
+            max_degree,
         }
     }
 }
@@ -156,7 +156,7 @@ pub(crate) struct Store {
     plugin: invasive::Invasive,
 
     // The number of unfrozen points. This is guaranteed to be less than `buffer`.
-    unfrozen: usize,
+    unfrozen: Capacity,
 
     // The authoritative source of truth for the state of each slot.
     tags: Vec<AtomicTag>,
@@ -181,8 +181,8 @@ impl Store {
         init: MatrixView<'_, u8>,
     ) -> Result<Self, StoreError> {
         let Layout {
-            entries,
-            max_neighbors,
+            capacity,
+            max_degree,
         } = layout;
 
         let Config {
@@ -196,24 +196,24 @@ impl Store {
             return Err(StoreError::need_frozen_point());
         }
 
-        let too_many_entries = || StoreError::too_many_entries(entries, init.nrows());
+        let too_many_entries = || StoreError::too_many_entries(capacity, init.nrows());
 
         // We have a hard upper-bound of `u32::MAX` total slots.
         //
         // This enforces that bound.
-        let entries: u32 = entries.try_into().map_err(|_| too_many_entries())?;
+        let entries: u32 = capacity.value().try_into().map_err(|_| too_many_entries())?;
 
         let frozen: u32 = init.nrows().try_into().map_err(|_| too_many_entries())?;
 
         let total: u32 = entries.checked_add(frozen).ok_or_else(too_many_entries)?;
 
-        let max_neighbors: u32 = max_neighbors
+        let max_degree: u32 = max_degree.value()
             .try_into()
-            .map_err(|_| StoreError::too_many_neighbors(max_neighbors))?;
+            .map_err(|_| StoreError::too_many_neighbors(max_degree))?;
 
         let me = Self {
             plugin: invasive::Invasive::new(total.into_usize(), bytes),
-            unfrozen: entries.into_usize(),
+            unfrozen: capacity,
             tags: repeat_n(Tag::AVAILABLE, total.into_usize())
                 .map(AtomicTag::new)
                 .collect(),
@@ -222,7 +222,7 @@ impl Store {
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries, freelist_recycle_capacity),
             registry: Registry::with_capacity(epoch_guard_slots),
-            neighbors: Neighbors::new(total, max_neighbors)?,
+            neighbors: Neighbors::new(total, max_degree)?,
         };
 
         // Populate frozen points.
@@ -247,19 +247,19 @@ impl Store {
 
     /// Return the range of slots containing frozen items in `self`.
     pub(crate) fn frozen(&self) -> std::ops::Range<u32> {
-        (self.unfrozen as u32)..self.neighbors.entries()
+        (self.unfrozen.value() as u32)..self.neighbors.entries()
     }
 
     /// Return the maximum degree that can be stored in the graph.
-    pub(crate) fn max_degree(&self) -> usize {
-        self.neighbors.max_length()
+    pub(crate) fn max_degree(&self) -> MaxDegree {
+        self.neighbors.max_degree()
     }
 
     pub(crate) fn maximum(&self) -> u32 {
         self.neighbors.entries()
     }
 
-    pub(crate) fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> Capacity {
         self.unfrozen
     }
 
@@ -405,7 +405,7 @@ impl Store {
     fn scan_acquire(&self) -> Option<Slot<'_>> {
         // This is potentially quite slow - but stop if we've scanned the entire range
         // without finding anything.
-        let mut remaining = self.unfrozen.div_ceil(RETRY_LIMIT);
+        let mut remaining = self.unfrozen.value().div_ceil(RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
         let mut acquired: Option<Slot<'_>> = None;
 
@@ -503,7 +503,7 @@ impl Store {
 
     #[cfg(test)]
     fn writable(&self) -> std::ops::Range<u32> {
-        0..self.unfrozen as u32
+        0..self.unfrozen.value() as u32
     }
 }
 
@@ -517,12 +517,12 @@ impl StoreError {
         Self(StoreErrorInner::NeedFrozenPoint)
     }
 
-    fn too_many_entries(entries: usize, frozen: usize) -> Self {
-        Self(StoreErrorInner::TooManyEntries { entries, frozen })
+    fn too_many_entries(capacity: Capacity, frozen: usize) -> Self {
+        Self(StoreErrorInner::TooManyEntries { entries: capacity.value(), frozen })
     }
 
-    fn too_many_neighbors(neighbors: usize) -> Self {
-        Self(StoreErrorInner::TooManyNeighbors { neighbors })
+    fn too_many_neighbors(neighbors: MaxDegree) -> Self {
+        Self(StoreErrorInner::TooManyNeighbors { neighbors: neighbors.value() })
     }
 }
 
@@ -688,7 +688,7 @@ mod tests {
         config.epoch_guard_slots(NonZeroUsize::new(10).unwrap());
         config.freelist_recycle_capacity(NonZeroU32::new(16).unwrap());
 
-        let layout = Layout::new(entries, 0);
+        let layout = Layout::new(Capacity::new(entries), MaxDegree::new(0));
         Store::new(layout, config, data.as_view())
     }
 
@@ -707,7 +707,7 @@ mod tests {
         // `entries` alone fits in u32, but `entries + frozen` overflows it.
         let data = Matrix::new(0u8, 1, 8);
         let err = Store::new(
-            Layout::new(u32::MAX as usize, 0),
+            Layout::new(Capacity::new(u32::MAX as usize), MaxDegree::new(0)),
             Config::default(),
             data.as_view(),
         )
@@ -719,7 +719,7 @@ mod tests {
     fn new_rejects_too_many_neighbors() {
         let data = Matrix::new(0u8, 1, 8);
         let err = Store::new(
-            Layout::new(4, u32::MAX.into_usize() + 1),
+            Layout::new(Capacity::new(4), MaxDegree::new(u32::MAX.into_usize() + 1)),
             Config::default(),
             data.as_view(),
         )
