@@ -108,6 +108,24 @@ The paired examples are `diskann-benchmark/example/disk-index-api-call-metrics-l
 4. Disable per-query info logging. The indexed-vector final-fetch event is diagnostic and can materially distort latency.
 5. For memory, the existing `PerfLogger` peak is an OS process-lifetime peak, not returned-vector allocation or per-L growth. Use it only with the Load-only, fresh-process, one-L protocol. For independent process peak measurements, use Windows Performance Monitor (PerfMon) or `/usr/bin/time -v` on Linux. Neither replaces the exact payload-byte metric.
 
+### Online GitHub Actions A/B
+
+Run the indexed-vector API mode on both workflow datasets:
+
+```bash
+gh workflow run disk-benchmarks.yml --ref user/yujie/return-indexed-vectors-benchmark -f benchmark_mode=indexed-vector-api -f baseline_ref=user/yujie/return-indexed-vectors -f search_l=2000
+```
+
+Find the resulting run ID, watch it, and download its per-dataset artifacts:
+
+```bash
+gh run list --workflow disk-benchmarks.yml --branch user/yujie/return-indexed-vectors-benchmark --limit 1
+gh run watch <run-id> --exit-status
+gh run download <run-id> --dir artifacts
+```
+
+Each `indexed-vector-api-<dataset>` artifact contains the generated legacy and indexed-vector configs and results, plus the index-build run output. This mode reports the A/B metrics but does not apply the regression tolerance gate.
+
 ## Optional future optimization
 
 If profiling shows per-vector allocation is a bottleneck, the collector could use:
