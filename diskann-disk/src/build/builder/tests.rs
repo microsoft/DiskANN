@@ -7,31 +7,68 @@
 #[cfg(test)]
 mod disk_index_build_tests {
     use crate::test_utils::{GraphDataF32VectorUnitData, GraphDataMinMaxVectorUnitData};
+    use diskann_vector::distance::Metric;
     use rstest::rstest;
 
     use crate::{
         build::builder::core::disk_index_builder_tests::{
             new_vfs, verify_search_result_with_ground_truth, IndexBuildFixture, TestParams,
         },
-        QuantizationType,
+        QuantizationType, SphericalBits,
     };
 
     #[derive(PartialEq)]
     enum BuildType {
         AsyncFP,
         AsyncSQ1Bit,
+        AsyncSpherical1Bit,
         AsyncPQ,
     }
 
     #[rstest]
     pub fn test_disk_index_builder(
         #[values(false, true)] use_sharded_build: bool,
-        #[values(BuildType::AsyncFP, BuildType::AsyncSQ1Bit, BuildType::AsyncPQ)]
+        #[values(
+            BuildType::AsyncFP,
+            BuildType::AsyncSQ1Bit,
+            BuildType::AsyncSpherical1Bit,
+            BuildType::AsyncPQ
+        )]
         build_type: BuildType,
     ) {
         let index_path_prefix = "/disk_index_build/test_disk_index_build".to_string();
 
         run_disk_index_builder_test(index_path_prefix, use_sharded_build, build_type);
+    }
+
+    #[rstest]
+    fn test_spherical_disk_index_builder_with_metric(
+        #[values(Metric::InnerProduct, Metric::Cosine)] metric: Metric,
+    ) {
+        let index_path_prefix = format!(
+            "/disk_index_build/test_spherical_disk_index_build_{:?}_async_SPHERICAL_1",
+            metric
+        );
+        let params = TestParams {
+            l_build: 64,
+            max_degree: 16,
+            index_path_prefix,
+            data_compression_chunk_vector_count: Some(10),
+            build_quantization_type: QuantizationType::Spherical(SphericalBits::One),
+            metric,
+            ..TestParams::default()
+        };
+        let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
+
+        fixture.build::<GraphDataF32VectorUnitData>().unwrap();
+
+        verify_search_result_with_ground_truth::<GraphDataF32VectorUnitData>(
+            &fixture.params,
+            8,
+            130,
+            &fixture.storage_provider,
+        )
+        .unwrap();
     }
 
     // Helper function to run the tests with consistent behavior
@@ -57,6 +94,15 @@ mod disk_index_build_tests {
                         nbits: 1,
                         standard_deviation: None,
                     },
+                    use_sharded_build,
+                    8,   // top_k
+                    130, // search_l
+                );
+            }
+            BuildType::AsyncSpherical1Bit => {
+                run_test(
+                    index_path_prefix,
+                    QuantizationType::Spherical(SphericalBits::One),
                     use_sharded_build,
                     8,   // top_k
                     130, // search_l
