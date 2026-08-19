@@ -543,6 +543,85 @@ where
 mod tests {
     use super::*;
 
+    fn neighbor(id: u32, distance: f32) -> Neighbor<u32> {
+        Neighbor::new(id, distance)
+    }
+
+    #[test]
+    fn in_range_applies_inner_and_outer_radius_boundaries() {
+        let candidates = [
+            neighbor(0, 0.1),
+            neighbor(1, 0.2),
+            neighbor(2, 0.3),
+            neighbor(3, 0.5),
+            neighbor(4, 0.6),
+        ];
+
+        let in_range = InRange::new(0.5, Some(0.2), usize::MAX, candidates);
+
+        let ids: Vec<_> = in_range.iter().map(|candidate| *candidate.id()).collect();
+        assert_eq!(ids, [2, 3]);
+        assert!(!in_range.check(0.2));
+        assert!(in_range.check(0.5));
+    }
+
+    #[test]
+    fn in_range_filters_before_truncating_and_preserves_order() {
+        let candidates = [
+            neighbor(0, 0.8),
+            neighbor(1, 0.3),
+            neighbor(2, 0.7),
+            neighbor(3, 0.2),
+            neighbor(4, 0.1),
+        ];
+
+        let in_range = InRange::new(0.5, None, 2, candidates);
+
+        let ids: Vec<_> = in_range.iter().map(|candidate| *candidate.id()).collect();
+        assert_eq!(ids, [1, 3]);
+        assert_eq!(in_range.len(), 2);
+        assert!(in_range.is_full());
+    }
+
+    #[test]
+    fn in_range_push_rejects_out_of_range_and_over_capacity() {
+        let mut in_range = InRange::new(0.5, Some(0.1), 2, []);
+
+        assert!(!in_range.push(neighbor(0, 0.1)));
+        assert!(!in_range.push(neighbor(1, 0.6)));
+        assert!(in_range.push(neighbor(2, 0.2)));
+        assert!(!in_range.is_full());
+        assert!(in_range.push(neighbor(3, 0.5)));
+        assert!(in_range.is_full());
+        assert!(!in_range.push(neighbor(4, 0.3)));
+    }
+
+    #[test]
+    fn in_range_dedup_sorts_by_distance_and_removes_repeated_ids() {
+        let mut in_range = InRange::new(
+            1.0,
+            None,
+            usize::MAX,
+            [
+                neighbor(2, 0.4),
+                neighbor(1, 0.2),
+                neighbor(1, 0.2),
+                neighbor(3, 0.3),
+            ],
+        );
+
+        in_range.dedup();
+
+        let neighbors = in_range.take();
+        let ids: Vec<_> = neighbors.iter().map(|candidate| *candidate.id()).collect();
+        let distances: Vec<_> = neighbors
+            .iter()
+            .map(|candidate| *candidate.distance())
+            .collect();
+        assert_eq!(ids, [1, 3, 2]);
+        assert_eq!(distances, [0.2, 0.3, 0.4]);
+    }
+
     #[test]
     fn range_builder_defaults_match_new() {
         let from_new = Range::new(100, 0.5).unwrap();
