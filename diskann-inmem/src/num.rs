@@ -46,12 +46,6 @@ impl Bytes {
         }
     }
 
-    /// Perform integer division of `self` by `other`.
-    #[inline]
-    pub(crate) const fn div(self, other: NonZeroUsize) -> Bytes {
-        Bytes::new(self.value() / other.get())
-    }
-
     /// Subtract `other` from `self` without checking for underflow.
     #[inline]
     pub(crate) const fn unchecked_sub(self, other: Bytes) -> Bytes {

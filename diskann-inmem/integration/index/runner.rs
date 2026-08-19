@@ -15,7 +15,6 @@ use diskann_benchmark_runner::{
 };
 use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
-use half::f16;
 use serde::{Deserialize, Serialize};
 
 use diskann_inmem::{

@@ -3,43 +3,52 @@
  * Licensed under the MIT license.
  */
 
+//! A store [`plugin::Plugin`] that maintains in invasive slot state where the data in each
+//! slot is a contiguous slice of memory.
+//!
+//! Slot state is stored as an [`AtomicTag`] immediately after the slot data.
+
 use std::{num::NonZeroUsize, sync::atomic::Ordering};
 
 use diskann::{ANNResult, utils::IntoUsize};
+use thiserror::Error;
 
 use crate::{
     buffer::{Buffer, RawSlice},
     epoch,
-    num::{Align, Bytes, Capacity, IdLimit},
+    num::{Align, Bytes, IdLimit},
+    store::{Lifecycle, Store, plugin},
     tag::{AtomicTag, Tag},
-    store::Lifecycle,
 };
 
+/// A [`plugin::PluginConfig`] for [`Invasive`].
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
+    /// The number of bytes held in each slot.
     bytes: Bytes,
 }
 
 impl Config {
+    /// Create a new [`Config`] for [`Invasive`] reserving `bytes` bytes for each slot.
     pub(crate) fn new(bytes: Bytes) -> Self {
         Self { bytes }
     }
 
+    /// Build an [`Invasive`] store holding `id_limit` slots.
     pub(crate) fn build(self, id_limit: IdLimit) -> ANNResult<Invasive> {
         let Self { bytes } = self;
-
         Ok(Invasive::new(id_limit, bytes))
     }
 }
 
-impl super::plugin::PluginConfig for Config {
+impl plugin::PluginConfig for Config {
     type Plugin = Invasive;
     fn build(self, id_limit: IdLimit) -> ANNResult<Invasive> {
         <Config>::build(self, id_limit)
     }
 }
 
-/// The invasive store where concurrency tags are stored inline with the data.
+/// The invasive store where concurrency tags are stored inline just after the data.
 #[derive(Debug)]
 pub(crate) struct Invasive {
     // The inline tags are `AtomicTag`s stored after the data.
@@ -50,17 +59,19 @@ pub(crate) struct Invasive {
     unpadded: Bytes,
 }
 
-const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-
 impl Invasive {
+    /// Construct the [`Config`] for [`Self`].
+    ///
+    /// See also: [`Config::new`].
     pub(crate) fn config(bytes: Bytes) -> Config {
         Config::new(bytes)
     }
 
+    /// Create a new [`Invasive`] with capacity for `id_limit` slots of `bytes`.
     pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Self {
         let unpadded = bytes.checked_add(AtomicTag::SIZE).unwrap();
         let padded_bytes = unpadded
-            .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
+            .checked_next_multiple_of(Bytes::CACHELINE)
             .unwrap();
 
         Self {
@@ -69,22 +80,22 @@ impl Invasive {
         }
     }
 
+    /// Return the [`IdLimit`] for this store.
     pub(crate) fn id_limit(&self) -> IdLimit {
         // The numeric cast is save because `Invasive::new` takes an `IdLimit` in its
         // constructor, and thus `self.buffer.len()` cannot exceed `u32::MAX`.
         IdLimit::new(self.buffer.len() as u32)
     }
 
-    pub(crate) fn bytes(&self) -> Bytes {
-        self.unpadded
-    }
-
-    pub(crate) unsafe fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
-        Reader {
-            buffer: &self.buffer,
-            unpadded: self.unpadded,
-            _guard: guard,
-        }
+    /// Return a [`Reader`] over [`Self`] inside `store`.
+    pub(crate) fn reader<'a>(store: &'a Store<Self>) -> Result<Reader<'a>, epoch::Unavailable> {
+        store.guard(|this, guard: epoch::Guard<'a>| {
+            Reader {
+                buffer: &this.buffer,
+                unpadded: this.unpadded,
+                _guard: guard
+            }
+        })
     }
 
     /// Return the data at position `i` without bound-checking.
@@ -114,7 +125,7 @@ impl Invasive {
     }
 }
 
-impl super::plugin::Plugin for Invasive {
+impl plugin::Plugin for Invasive {
     type Slot<'a> = Slot<'a>;
 
     fn id_limit(&self) -> IdLimit {
@@ -128,7 +139,7 @@ impl super::plugin::Plugin for Invasive {
 
         // This is a pessimistic check to ensure that the caller is correctly using the
         // `plugin` API.
-        assert_eq!(
+        debug_assert_eq!(
             tag.load(Ordering::Relaxed),
             Tag::AVAILABLE,
             "concurrency violation",
@@ -157,6 +168,7 @@ impl super::plugin::Plugin for Invasive {
     }
 }
 
+/// A reader into an [`Invasive`] store.
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
@@ -200,12 +212,9 @@ impl<'a> Reader<'a> {
     ///
     /// This guarantee only holds while `self` is alive. Construction of a new [`Reader`]
     /// requires a separate check.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this is non-trivial method that likely be used in the future"
-        )
+    #[expect(
+        dead_code,
+        reason = "this is non-trivial method that likely be used in the future"
     )]
     pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
         if !self.is_in_bounds(i) {
@@ -287,6 +296,7 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// A [`plugin::Slot`] for [`Invasive`].
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
     tag: &'a AtomicTag,
@@ -294,12 +304,20 @@ pub(crate) struct Slot<'a> {
 }
 
 impl<'a> Slot<'a> {
+    /// Return the data within this slot as a mutable slice.
+    ///
+    /// The length of this slice is guaranteed to be the number of bytes passed to
+    /// [`Invasive::new`] or [`Config::new`].
     pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: Users of the `plugin::Slot` are obligated to ensure exclusivity.
+        //
+        // Since `Reader` obeys the plugin life-cycle requirements, a concurrent reader
+        // of this data should not be possible.
         unsafe { self.data.as_mut_slice() }
     }
 }
 
-impl super::plugin::Slot for Slot<'_> {
+impl plugin::Slot for Slot<'_> {
     fn publish(self, _: Lifecycle) {
         self.tag.store(Tag::PUBLISHED, Ordering::Release);
     }
@@ -310,3 +328,4 @@ impl super::plugin::Slot for Slot<'_> {
         self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }
+

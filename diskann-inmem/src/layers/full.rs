@@ -121,7 +121,7 @@ where
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
         let expand_beam = T::make_expand_beam(layer, query)?;
         Ok(crate::provider::SearchAccessor::new(
-            layer.store.temp_neighbors(),
+            layer.store.neighbors(),
             expand_beam,
             provider,
             layer.store.frozen(),
@@ -136,7 +136,7 @@ where
         let prune = T::make_prune(layer)?;
         Ok(crate::provider::PruneAccessor::new(
             prune,
-            layer.store.temp_neighbors(),
+            layer.store.neighbors(),
             counters,
         ))
     }
@@ -228,9 +228,7 @@ where
     }
 
     fn reader(&self) -> ANNResult<invasive::Reader<'_>> {
-        Ok(self
-            .store
-            .guard(|invasive, guard| unsafe { invasive.reader(guard) })?)
+        Ok(Invasive::reader(&self.store)?)
     }
 }
 
@@ -259,7 +257,7 @@ where
     T: FullPrecision,
 {
     fn max_degree(&self) -> MaxDegree {
-        self.store.temp_neighbors().max_degree()
+        self.store.neighbors().max_degree()
     }
 
     fn retire(&self, i: u32) -> ANNResult<()> {

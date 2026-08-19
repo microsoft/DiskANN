@@ -10,8 +10,6 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use diskann_utils::views::Matrix;
-
 use crate::{
     num::{Bytes, Capacity, MaxDegree},
     store,
@@ -95,10 +93,7 @@ impl Store {
     }
 
     pub fn reader(&self) -> Option<Reader<'_>> {
-        match self
-            .store
-            .guard(|plugin, guard| unsafe { plugin.reader(guard) })
-        {
+        match store::invasive::Invasive::reader(&self.store) {
             Ok(reader) => Some(Reader::new(reader)),
             Err(crate::epoch::Unavailable) => None,
         }
