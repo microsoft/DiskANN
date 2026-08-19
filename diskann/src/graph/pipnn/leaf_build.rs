@@ -92,14 +92,13 @@ impl LeafBuffers {
                     rows: point_count,
                     columns: dimension_count,
                 })?;
-        let pair_count =
-            point_count
-                .checked_mul(point_count)
-                .ok_or(LeafBuildError::ShapeOverflow {
-                    leaf,
-                    rows: point_count,
-                    columns: point_count,
-                })?;
+        point_count
+            .checked_mul(point_count)
+            .ok_or(LeafBuildError::ShapeOverflow {
+                leaf,
+                rows: point_count,
+                columns: point_count,
+            })?;
         let leaf_k = leaf_neighbor_count(point_count, requested_k);
         let neighbor_count =
             point_count
@@ -112,7 +111,6 @@ impl LeafBuffers {
 
         grow(&mut self.point_values, point_value_count, 0.0);
         grow(&mut self.neighbors, neighbor_count, LeafNeighbor::default());
-        grow(&mut self.seen_pairs, pair_count, false);
         Ok((leaf_k, neighbor_count))
     }
 
@@ -121,6 +119,11 @@ impl LeafBuffers {
         self.local_adjacency[..point_count]
             .iter_mut()
             .for_each(Vec::clear);
+    }
+
+    fn prepare_seen_pairs(&mut self, point_count: usize) {
+        // `prepare` checked this product for the same leaf shape.
+        grow(&mut self.seen_pairs, point_count * point_count, false);
     }
 }
 
@@ -225,6 +228,7 @@ where
                 buffers,
             )?;
             let point_count = point_ids.len();
+            buffers.prepare_seen_pairs(point_count);
             let edge_count = build_symmetric_edge_csr(
                 leaf,
                 point_ids,
