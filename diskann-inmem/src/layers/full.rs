@@ -10,10 +10,7 @@ use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
-    distance::{
-        self, Cosine, CosineNormalized, DistanceProvider, InnerProduct, Metric, Specialize,
-        SquaredL2,
-    },
+    distance::{Cosine, CosineNormalized, InnerProduct, Metric, Specialize, SquaredL2},
 };
 use diskann_wide::{
     ARCH,
@@ -25,12 +22,12 @@ use thiserror::Error;
 use crate::{
     counters::LocalCounters,
     layers,
-    num::{Bytes, Capacity, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree},
     store::{self, Store},
     tag::AtomicTag,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config<T> {
     layout: store::Layout,
     metric: Metric,
@@ -58,7 +55,8 @@ impl<T> Config<T> {
         self
     }
 
-    fn dim(&self) -> usize {
+    /// Return the vector dimension of this configuration and the resulting [`Full`].
+    pub fn dim(&self) -> usize {
         self.start_points.ncols()
     }
 }
@@ -153,7 +151,21 @@ impl<T> Full<T>
 where
     T: 'static,
 {
+    /// Initialize a [`Config`] for this layer.
+    ///
+    /// See also: [`Config::new`].
+    pub fn config(
+        capacity: Capacity,
+        max_degree: MaxDegree,
+        metric: Metric,
+        start_points: Matrix<T>,
+    ) -> Config<T> {
+        Config::new(capacity, max_degree, metric, start_points)
+    }
+
     /// Create a new full-precision layer for data with the given `dim` and `metric`.
+    ///
+    /// See: [`Config::build`].
     fn new(config: Config<T>) -> ANNResult<Self>
     where
         T: FullPrecision,
@@ -234,8 +246,8 @@ where
         self.store.can_read_approximate(i.into_usize())
     }
 
-    fn maximum(&self) -> u32 {
-        self.store.maximum()
+    fn id_limit(&self) -> IdLimit {
+        self.store.id_limit()
     }
 
     fn capacity(&self) -> Capacity {
@@ -488,7 +500,8 @@ impl<'a, const PREFETCH: usize, T, U, D> QueryDistance<'a, PREFETCH, T, U, D> {
 const LOOKAHEAD: usize = 8;
 const BYTES: usize = 0;
 
-impl<const PREFETCH: usize, T, U, D> layers::ExpandBeam for QueryDistance<'_, PREFETCH, T, U, D>
+unsafe impl<const PREFETCH: usize, T, U, D> layers::ExpandBeam
+    for QueryDistance<'_, PREFETCH, T, U, D>
 where
     T: Send + Sync + 'static + Debug,
     U: Send + Sync + 'static + Debug,
@@ -506,6 +519,10 @@ where
                 None => Ok(None),
             }
         }
+    }
+
+    fn id_limit(&self) -> IdLimit {
+        self.reader.id_limit()
     }
 
     unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {

@@ -31,7 +31,10 @@ use std::num::NonZeroU16;
 use diskann::ANNResult;
 use thiserror::Error;
 
-use crate::{counters::LocalCounters, num::{Capacity, Bytes, MaxDegree}};
+use crate::{
+    counters::LocalCounters,
+    num::{Capacity, IdLimit, MaxDegree},
+};
 
 pub mod full;
 pub use full::{Full, FullPrecision};
@@ -46,13 +49,13 @@ pub trait LayerConfig {
 pub trait Layer: Send + Sync + 'static {
     fn max_degree(&self) -> MaxDegree;
 
+    fn id_limit(&self) -> IdLimit;
+
+    fn capacity(&self) -> Capacity;
+
     fn retire(&self, i: u32) -> ANNResult<()>;
 
     fn is_readable(&self, i: u32) -> Option<bool>;
-
-    fn maximum(&self) -> u32;
-
-    fn capacity(&self) -> Capacity;
 }
 
 pub trait Set<T>: Layer {
@@ -65,15 +68,36 @@ pub trait Guard {
     fn publish(self);
 }
 
-pub(crate) trait ExpandBeam: Send + Sync + std::fmt::Debug {
+/// Trait object based implementation of [`diskann::graph::glue::SearchAccessor::expand_beam`].
+///
+/// Dynamic dispatch is used to enable aggressive specialization of this primitive without
+/// monomorphizing the entire search algorithm. Examples specializations include:
+///
+/// * Optimizing for certain fixed dimensions.
+/// * Inlining metric specific distance functions.
+/// * Tailoring prefetching to the dimension.
+///
+/// # Safety
+///
+/// This trait is `unsafe` because [`Self::id_limit`] **must** work for [`Self::expand_beam`]'s
+/// safety pre-conditions.
+pub(crate) unsafe trait ExpandBeam: Send + Sync + std::fmt::Debug {
     /// Evaluate a raw distance against index `i`.
     fn evaluate(&self, i: u32) -> ANNResult<Option<f32>>;
+
+    /// Return an [`IdLimit`] for this primitive.
+    ///
+    /// Callers must be able to use this limit to satisfy the safety pre-conditions for
+    /// [`Self::expand_beam`].
+    ///
+    /// See also: [`IdLimit::is_in_bound`].
+    fn id_limit(&self) -> IdLimit;
 
     /// Compute the distance between the query and each neighbor in `list`.
     ///
     /// # Safety
     ///
-    /// * All items in `list` must in-bounds with respect to `reader`.
+    /// * All items in `list` must in-bounds with respect to [`Self::id_limit`].
     /// * `buffer.len() >= list.len()`.
     unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize>;
 }
@@ -113,7 +137,7 @@ impl<'a> diskann_utils::Reborrow<'a> for PruneKey {
 
 #[derive(Debug, Error)]
 #[error("prune list exceeded u16::MAX")]
-struct Overflow;
+pub(crate) struct Overflow;
 
 diskann::convert_error!(Overflow);
 

@@ -18,7 +18,11 @@ use diskann_vector::distance::Metric;
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-use diskann_inmem::{Provider, layers, num::{MaxDegree, Capacity}};
+use diskann_inmem::{
+    Provider,
+    layers::Full,
+    num::{Capacity, MaxDegree},
+};
 
 use crate::{
     index::{Counters, Index},
@@ -367,19 +371,13 @@ impl Test {
                     );
                 }
 
-                let dim = start_points.ncols();
                 let metric = self.data.metric;
                 let max_degree = self.build.config.max_degree().get();
-                // let config = diskann_inmem::provider::Config::new(
-                //     capacity,
-                //     self.build.config.max_degree().get(),
-                // );
-
                 let index_config = self.build.config.clone();
 
                 let index = match start_points {
                     DatasetView::F32(v) => finish(
-                        Provider::new(diskann_inmem::layers::full::Config::<f32>::new(
+                        Provider::new(Full::config(
                             Capacity::new(capacity),
                             MaxDegree::new(max_degree),
                             metric,
@@ -388,7 +386,7 @@ impl Test {
                         index_config,
                     ),
                     DatasetView::F16(v) => finish(
-                        Provider::new(diskann_inmem::layers::full::Config::<f16>::new(
+                        Provider::new(Full::config(
                             Capacity::new(capacity),
                             MaxDegree::new(max_degree),
                             metric,
@@ -397,7 +395,7 @@ impl Test {
                         index_config,
                     ),
                     DatasetView::U8(v) => finish(
-                        Provider::new(diskann_inmem::layers::full::Config::<u8>::new(
+                        Provider::new(Full::config(
                             Capacity::new(capacity),
                             MaxDegree::new(max_degree),
                             metric,
@@ -406,7 +404,7 @@ impl Test {
                         index_config,
                     ),
                     DatasetView::I8(v) => finish(
-                        Provider::new(diskann_inmem::layers::full::Config::<i8>::new(
+                        Provider::new(Full::config(
                             Capacity::new(capacity),
                             MaxDegree::new(max_degree),
                             metric,

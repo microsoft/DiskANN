@@ -10,7 +10,7 @@ use diskann::utils::IntoUsize;
 use crate::{
     buffer::{Buffer, RawSlice},
     epoch,
-    num::{Align, Bytes},
+    num::{Align, Bytes, Capacity, IdLimit},
     tag::{AtomicTag, Tag},
 };
 
@@ -28,16 +28,22 @@ pub(crate) struct Invasive {
 const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 impl Invasive {
-    pub(crate) fn new(entries: usize, bytes: Bytes) -> Self {
+    pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Self {
         let unpadded = bytes.checked_add(AtomicTag::SIZE).unwrap();
         let padded_bytes = unpadded
             .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
             .unwrap();
 
         Self {
-            buffer: Buffer::new(entries, padded_bytes, Align::_128).unwrap(),
+            buffer: Buffer::new(id_limit.as_usize(), padded_bytes, Align::_128).unwrap(),
             unpadded,
         }
+    }
+
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        // The numeric cast is save because `Invasive::new` takes an `IdLimit` in its
+        // constructor, and thus `self.buffer.len()` cannot exceed `u32::MAX`.
+        IdLimit::new(self.buffer.len() as u32)
     }
 
     pub(crate) fn bytes(&self) -> Bytes {
@@ -81,6 +87,10 @@ impl Invasive {
 
 impl super::plugin::Plugin for Invasive {
     type Slot<'a> = Slot<'a>;
+
+    fn id_limit(&self) -> IdLimit {
+        <Invasive>::id_limit(self)
+    }
 
     unsafe fn acquire(&self, i: u32) -> Self::Slot<'_> {
         let Some((tag, data)) = self.data(i.into_usize()) else {
@@ -146,6 +156,15 @@ impl<'a> Reader<'a> {
     #[must_use = "this function has no side-effects"]
     pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
         i < self.buffer.len()
+    }
+
+    /// Return the [`IdLimit`] for this collection.
+    #[inline]
+    #[must_use = "this function has no side-effects"]
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        // Like `Invasive::id_limit`, the numberic cast is safe because by construction,
+        // the underlying buffer is limited to `u32::MAX`.
+        IdLimit::new(self.buffer.len() as u32)
     }
 
     /// Return `true` if it is safe to read the data at position `i`.

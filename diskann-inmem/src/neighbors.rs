@@ -31,7 +31,7 @@ use thiserror::Error;
 
 use crate::{
     buffer::{Buffer, BufferError},
-    num::{Align, Bytes, MaxDegree},
+    num::{Align, Bytes, MaxDegree, IdLimit},
 };
 
 type Id = u32;
@@ -63,7 +63,7 @@ pub(crate) struct Neighbors {
 }
 
 impl Neighbors {
-    /// Construct a new [`Neighbors`] capable of holding `entries` adjacency lists with a
+    /// Construct a new [`Neighbors`] capable of holding `id_limit` adjacency lists with a
     /// maximum length of `max_degree`.
     ///
     /// # Errors
@@ -71,7 +71,7 @@ impl Neighbors {
     /// Returns an error if `(max_degree + 1) * size_of::<u32>()` overflows `usize`
     /// (unreachable on 64-bit targets) or the resulting allocation would exceed
     /// `isize::MAX` bytes.
-    pub(crate) fn new(entries: u32, max_degree: u32) -> Result<Self, NeighborsError> {
+    pub(crate) fn new(id_limit: IdLimit, max_degree: u32) -> Result<Self, NeighborsError> {
         let bytes = max_degree
             .into_usize()
             .checked_add(1)
@@ -91,10 +91,10 @@ impl Neighbors {
             );
         }
 
-        let neighbors = Buffer::new(entries.into_usize(), bytes, ALIGN)?;
+        let neighbors = Buffer::new(id_limit.as_usize(), bytes, ALIGN)?;
 
         let locks = std::iter::repeat_with(|| RwLock::new(()))
-            .take(entries.into_usize().div_ceil(LOCK_GRANULARITY))
+            .take(id_limit.as_usize().div_ceil(LOCK_GRANULARITY))
             .collect();
 
         Ok(Self { neighbors, locks })
@@ -103,7 +103,10 @@ impl Neighbors {
     /// Return the maximum length for any adjacency list.
     pub(crate) fn max_degree(&self) -> MaxDegree {
         // We reserve 4 bytes at the beginning for the length of the adjacency list.
-        MaxDegree::new((self.neighbors.stride().value() - std::mem::size_of::<Id>()) / std::mem::size_of::<Id>())
+        MaxDegree::new(
+            (self.neighbors.stride().value() - std::mem::size_of::<Id>())
+                / std::mem::size_of::<Id>(),
+        )
     }
 
     /// Return the maximum length for any adjacency list as a 32-bit integer.
@@ -420,7 +423,7 @@ mod tests {
 
     #[test]
     fn out_of_bounds_rejects_indices_beyond_entries() {
-        let n = Neighbors::new(4, 4).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 4).unwrap();
         // entries == 4, so valid indices are 0..=3.
         // Regression test: a buggy `check` using `i == entries()` would let
         // `entries+1`, `entries+2`, ... slip through to UB.
@@ -434,7 +437,7 @@ mod tests {
 
     #[test]
     fn empty_neighbors_rejects_all_access() {
-        let n = Neighbors::new(0, 4).unwrap();
+        let n = Neighbors::new(IdLimit::new(0), 4).unwrap();
         let mut out = AdjacencyList::with_capacity(4);
         for i in [0u32, 1, u32::MAX] {
             assert!(matches!(n.get(i, &mut out), Err(OutOfBounds(_))));
@@ -447,21 +450,21 @@ mod tests {
 
     #[test]
     fn set_rejects_oversized_neighbors() {
-        let n = Neighbors::new(4, 3).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 3).unwrap();
         let too_many = &[1, 2, 3, 4];
         assert!(matches!(n.set(0, too_many), Err(SetError::TooLong(_))));
     }
 
     #[test]
     fn lock_write_rejects_oversized_neighbors() {
-        let n = Neighbors::new(4, 3).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 3).unwrap();
         let lock = n.lock(0).unwrap();
         assert!(lock.write(&[1, 2, 3, 4]).is_err());
     }
 
     #[test]
     fn lock_append_rejects_overflow() {
-        let n = Neighbors::new(4, 3).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 3).unwrap();
         n.set(0, &[1, 2]).unwrap();
         let lock = n.lock(0).unwrap();
         assert!(lock.append(&[3, 4]).is_err());
@@ -469,7 +472,7 @@ mod tests {
 
     #[test]
     fn lock_implements_debug() {
-        let n = Neighbors::new(4, 3).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 3).unwrap();
         let lock = n.lock(0).unwrap();
         let _ = format!("{:?}", lock);
     }
@@ -478,7 +481,7 @@ mod tests {
 
     #[test]
     fn append_preserves_existing_and_adds_new() {
-        let n = Neighbors::new(4, 6).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 6).unwrap();
         n.set(0, &[10, 20]).unwrap();
 
         let lock = n.lock(0).unwrap();
@@ -492,7 +495,7 @@ mod tests {
 
     #[test]
     fn append_to_empty() {
-        let n = Neighbors::new(4, 4).unwrap();
+        let n = Neighbors::new(IdLimit::new(4), 4).unwrap();
 
         let lock = n.lock(0).unwrap();
         assert_eq!(lock.as_slice(), &[]);
@@ -505,7 +508,7 @@ mod tests {
 
     #[test]
     fn append_fills_to_capacity() {
-        let n = Neighbors::new(1, 3).unwrap();
+        let n = Neighbors::new(IdLimit::new(1), 3).unwrap();
         n.set(0, &[1]).unwrap();
 
         let lock = n.lock(0).unwrap();
@@ -518,7 +521,7 @@ mod tests {
 
     #[test]
     fn append_empty_slice_is_noop() {
-        let n = Neighbors::new(1, 4).unwrap();
+        let n = Neighbors::new(IdLimit::new(1), 4).unwrap();
         n.set(0, &[10, 20]).unwrap();
 
         let lock = n.lock(0).unwrap();
@@ -531,7 +534,7 @@ mod tests {
 
     #[test]
     fn write_overwrites_longer_list() {
-        let n = Neighbors::new(1, 5).unwrap();
+        let n = Neighbors::new(IdLimit::new(1), 5).unwrap();
         n.set(0, &[1, 2, 3, 4, 5]).unwrap();
 
         // Overwrite with a shorter list.
@@ -564,7 +567,7 @@ mod tests {
 
     #[test]
     fn basic_test() {
-        let mut neighbors = Neighbors::new(10, 4).unwrap();
+        let mut neighbors = Neighbors::new(IdLimit::new(10), 4).unwrap();
         assert_eq!(neighbors.entries(), 10);
         assert_eq!(neighbors.max_degree(), MaxDegree::new(4));
 
@@ -660,7 +663,7 @@ mod tests {
     #[test]
     fn lock_blocks_get() {
         for _ in 0..10 {
-            let neighbors = Neighbors::new(3, 4).unwrap();
+            let neighbors = Neighbors::new(IdLimit::new(3), 4).unwrap();
             let seq = Sequencer::new();
 
             std::thread::scope(|s| {
@@ -686,7 +689,7 @@ mod tests {
     fn many_appends() {
         let max_degree = if cfg!(miri) { 100 } else { 1000 };
 
-        let neighbors = Neighbors::new(1, max_degree).unwrap();
+        let neighbors = Neighbors::new(IdLimit::new(1), max_degree).unwrap();
 
         let num_threads = 4;
         let barrier = std::sync::Barrier::new(num_threads);
@@ -709,7 +712,9 @@ mod tests {
         });
 
         let mut list = AdjacencyList::new();
-        let expected: Vec<_> = (0..neighbors.max_degree().value()).map(|i| i as u32).collect();
+        let expected: Vec<_> = (0..neighbors.max_degree().value())
+            .map(|i| i as u32)
+            .collect();
         neighbors.get(0, &mut list).unwrap();
         list.sort();
 

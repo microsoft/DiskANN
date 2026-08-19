@@ -206,13 +206,33 @@ typed_int!(
 );
 
 typed_int!(
-    /// The **inclusive** maximum ID that a [`crate::Provider`], [`crate::Layer`], or other
-    /// such store in this crate can access in-bounds.
+    /// One larger than the maximum ID that a [`crate::Provider`], [`crate::Layer`], or
+    /// other such store in this crate can access in-bounds.
     ///
-    /// This is related to [`Capacity`] but is often larger due to immutable points.
-    MaximumIds,
+    /// This implies that access to ids `[0..self)` are in-bounds.
+    ///
+    /// [`Capacity`] is related, but the [`IdLimit`] for a collection may be larger due to
+    /// immutable points.
+    IdLimit,
     u32
 );
+
+impl IdLimit {
+    /// Return `true` if `i` is within `[0..self)`.
+    pub const fn is_in_bounds(self, i: u32) -> bool {
+        i < self.value()
+    }
+
+    /// Return the [`Self::value`] as a [`usize`].
+    pub const fn as_usize(self) -> usize {
+        // We cannot use the `IntoUsize` trait in a const function unfortunately.
+        //
+        // Instead, we need to re-create the check that makes this conversion safe.
+        const { assert!(std::mem::size_of::<u32>() <= std::mem::size_of::<usize>()); }
+
+        self.value() as usize
+    }
+}
 
 ///////////
 // Tests //

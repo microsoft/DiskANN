@@ -223,7 +223,9 @@ mod tests {
             SHARD_SIZE,
             SHARD_SIZE + 1,
             3 * SHARD_SIZE,
-        ].map(Capacity::new) {
+        ]
+        .map(Capacity::new)
+        {
             let map = IdMap::<u32>::new(capacity);
             assert_eq!(map.capacity(), capacity);
         }

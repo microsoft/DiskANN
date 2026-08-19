@@ -30,10 +30,7 @@
 //! * Lack of save/load support: The index is currently ephemeral, but there are plans to
 //!   address this gap.
 
-use std::{
-    hash::Hash,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::hash::Hash;
 
 use diskann::{
     ANNError, ANNResult,
@@ -44,18 +41,14 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider,
-    utils::IntoUsize,
 };
-use diskann_utils::views::Matrix;
-use thiserror::Error;
 
 use crate::{
     counters::{Counters, LocalCounters},
     ids::IdMap,
     layers,
     neighbors::Neighbors,
-    num::{Bytes, MaxDegree},
-    store::{self, Store},
+    num::{IdLimit, MaxDegree},
 };
 
 /// Aggregate trait for the external ID type of [`Provider`].
@@ -295,6 +288,7 @@ pub struct SearchAccessor<'a> {
     neighbors: &'a Neighbors,
     ids: AdjacencyList<u32>,
     expand_beam: Box<dyn layers::ExpandBeam + 'a>,
+    id_limit: IdLimit,
     buffer: Vec<(u32, f32)>,
 
     // The parent provider for the accessor.
@@ -311,10 +305,12 @@ impl<'a> SearchAccessor<'a> {
         start_points: std::ops::Range<u32>,
         counters: LocalCounters<'a>,
     ) -> Self {
+        let id_limit = expand_beam.id_limit();
         Self {
             neighbors,
             ids: AdjacencyList::with_capacity(neighbors.max_degree().value()),
             expand_beam,
+            id_limit,
             buffer: vec![Default::default(); neighbors.max_degree().value()],
             provider,
             start_points,
@@ -378,16 +374,19 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                 self.counters.get_neighbors(1);
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
-                //
-                // TODO: We need safe provenance on the upper bound.
                 self.ids
-                    .retain(|i| pred.eval_mut(i) && *i < self.neighbors.entries());
+                    .retain(|i| pred.eval_mut(i) && self.id_limit.is_in_bounds(*i));
 
                 // This should always hold, but let's double check.
                 assert!(self.buffer.len() >= self.ids.len());
 
-                // SAFETY: We've verified that each entry in `self.ids` is in-bounds and the
-                // `self.buffer` is long enough to hold all the IDs.
+                // SAFETY:
+                //
+                // 1. We've verified that each entry in `self.ids` is in-bounds using
+                //   the `IdLimit` derived from this `ExpandBeam` object (enforced in the
+                //   constructor).
+                //
+                // 2. `self.buffer` is long enough to hold all the IDs.
                 let processed =
                     unsafe { self.expand_beam.expand_beam(&self.ids, &mut self.buffer) }?;
 
@@ -757,9 +756,10 @@ mod tests {
         neighbor::Neighbor,
         provider::{DataProvider, Delete},
     };
+    use diskann_utils::views::Matrix;
     use diskann_vector::distance::Metric;
 
-    use crate::{num::Capacity, layers::Full};
+    use crate::num::Capacity;
 
     /// The true tests live in the integration tests for this repo.
     ///

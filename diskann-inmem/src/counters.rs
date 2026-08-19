@@ -43,7 +43,6 @@ mod inner {
         pub(crate) fn query_distance(&mut self, _i: u64) {}
         pub(crate) fn distance_ref(&self, _i: u64) {}
         pub(crate) fn get_vector(&mut self, _i: u64) {}
-        pub(crate) fn get_vector_ref(&self, _i: u64) {}
         pub(crate) fn set_vector(&mut self, _i: u64) {}
         pub(crate) fn get_neighbors(&mut self, _i: u64) {}
         pub(crate) fn set_neighbors(&mut self, _i: u64) {}
@@ -134,10 +133,6 @@ mod inner {
 
         pub(crate) fn get_vector(&mut self, i: u64) {
             *self.get_vector.get_mut() += i;
-        }
-
-        pub(crate) fn get_vector_ref(&self, i: u64) {
-            self.get_vector.fetch_add(i, Relaxed);
         }
 
         pub(crate) fn set_vector(&mut self, i: u64) {

@@ -5,8 +5,12 @@
 
 use std::fmt::Debug;
 
+use crate::num::IdLimit;
+
 pub(crate) trait Plugin: Debug + 'static {
     type Slot<'a>: Slot;
+
+    fn id_limit(&self) -> IdLimit;
 
     unsafe fn acquire(&self, i: u32) -> Self::Slot<'_>;
     fn reclaim(&self, i: u32);

@@ -67,18 +67,18 @@ use crate::{
     epoch::{self, Registry},
     freelist::{self, Freelist},
     neighbors::{Neighbors, NeighborsError},
-    num::{Bytes, Capacity, MaxDegree},
+    num::{Bytes, Capacity, IdLimit, MaxDegree},
     tag::{AtomicTag, Tag},
 };
 
 pub(crate) mod invasive;
 pub(crate) mod plugin;
-pub(crate) mod stacked;
 
-pub(crate) const TAG_SIZE: Bytes = AtomicTag::SIZE;
+// TODO: Remove?
+// pub(crate) mod stacked;
 
 /// Configuration for the concurrenct store.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// The number of epoch guard slots.
     ///
@@ -128,7 +128,7 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Layout {
     /// The number of non-frozen slots to create space for.
     capacity: Capacity,
@@ -201,20 +201,24 @@ impl Store {
         // We have a hard upper-bound of `u32::MAX` total slots.
         //
         // This enforces that bound.
-        let entries: u32 = capacity.value().try_into().map_err(|_| too_many_entries())?;
+        let entries: u32 = capacity
+            .value()
+            .try_into()
+            .map_err(|_| too_many_entries())?;
 
         let frozen: u32 = init.nrows().try_into().map_err(|_| too_many_entries())?;
 
-        let total: u32 = entries.checked_add(frozen).ok_or_else(too_many_entries)?;
+        let id_limit = IdLimit::new(entries.checked_add(frozen).ok_or_else(too_many_entries)?);
 
-        let max_degree: u32 = max_degree.value()
+        let max_degree: u32 = max_degree
+            .value()
             .try_into()
             .map_err(|_| StoreError::too_many_neighbors(max_degree))?;
 
         let me = Self {
-            plugin: invasive::Invasive::new(total.into_usize(), bytes),
+            plugin: invasive::Invasive::new(id_limit, bytes),
             unfrozen: capacity,
-            tags: repeat_n(Tag::AVAILABLE, total.into_usize())
+            tags: repeat_n(Tag::AVAILABLE, id_limit.as_usize())
                 .map(AtomicTag::new)
                 .collect(),
 
@@ -222,7 +226,7 @@ impl Store {
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries, freelist_recycle_capacity),
             registry: Registry::with_capacity(epoch_guard_slots),
-            neighbors: Neighbors::new(total, max_degree)?,
+            neighbors: Neighbors::new(id_limit, max_degree)?,
         };
 
         // Populate frozen points.
@@ -255,8 +259,9 @@ impl Store {
         self.neighbors.max_degree()
     }
 
-    pub(crate) fn maximum(&self) -> u32 {
-        self.neighbors.entries()
+    pub(crate) fn id_limit(&self) -> IdLimit {
+        // TODO: Figure out how to justify this once plugins are a thing.
+        IdLimit::new(self.neighbors.entries())
     }
 
     pub(crate) fn capacity(&self) -> Capacity {
@@ -518,11 +523,16 @@ impl StoreError {
     }
 
     fn too_many_entries(capacity: Capacity, frozen: usize) -> Self {
-        Self(StoreErrorInner::TooManyEntries { entries: capacity.value(), frozen })
+        Self(StoreErrorInner::TooManyEntries {
+            entries: capacity.value(),
+            frozen,
+        })
     }
 
     fn too_many_neighbors(neighbors: MaxDegree) -> Self {
-        Self(StoreErrorInner::TooManyNeighbors { neighbors: neighbors.value() })
+        Self(StoreErrorInner::TooManyNeighbors {
+            neighbors: neighbors.value(),
+        })
     }
 }
 

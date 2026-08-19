@@ -12,7 +12,10 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use diskann_utils::views::Matrix;
 
-use crate::{num::{Bytes, Capacity, MaxDegree}, store};
+use crate::{
+    num::{Capacity, MaxDegree},
+    store,
+};
 
 #[derive(Debug)]
 pub struct Config {
@@ -41,7 +44,7 @@ impl Store {
     /// the frozen point exceeds `u32::MAX`) or if other configuration parameters such as
     /// the number of epoch guard slots are invalid (e.g. zero).
     pub fn new(config: Config) -> Self {
-        let mut store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0));
+        let store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0));
 
         let mut store_config = store::Config::default();
 
