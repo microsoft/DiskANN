@@ -18,7 +18,7 @@ use crate::{
         search::inline_filter_search::{Ret, inline_filter_search_internal},
         search::{
             Range, RangeSearchError, Search,
-            range_search::{InRange, RangeBuilder},
+            range_search::{InRange, LimitedOutputBuffer, RangeBuilder},
             record::NoopSearchRecord,
             scratch::SearchScratch,
         },
@@ -172,7 +172,7 @@ where
                 self.radius(),
                 self.inner_radius(),
                 max_returned,
-                matched_results.into_iter(),
+                matched_results,
             );
 
             // Merge `matched_results` with the best results from the first round,
@@ -188,7 +188,7 @@ where
                     .chain(matched_in_outer_range.iter()),
             );
 
-            in_outer_range.dedup();
+            in_outer_range.sort_and_dedup();
 
             let stats = if in_outer_range.len()
                 >= ((starting_l as f32) * self.initial_slack()) as usize
@@ -231,10 +231,15 @@ where
                 }
             };
 
-            let truncated_matched = matched_in_outer_range.iter().take(max_returned);
-
+            let mut limited_output =
+                LimitedOutputBuffer::new(output, self.max_returned().unwrap_or(usize::MAX));
             let result_count = processor
-                .post_process(&mut accessor, query, truncated_matched, output)
+                .post_process(
+                    &mut accessor,
+                    query,
+                    matched_in_outer_range.iter(),
+                    &mut limited_output,
+                )
                 .await
                 .into_ann_result()?;
 

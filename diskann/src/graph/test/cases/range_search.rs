@@ -9,18 +9,26 @@
 //! and empty result handling. Integration tests use baselines for regression
 //! protection.
 
-use std::sync::Arc;
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 
 use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self, DiskANNIndex, SearchOutputBuffer,
+        glue::SearchPostProcess,
         index::SearchStats,
         search::Range,
         test::{provider as test_provider, synthetic::Grid},
     },
     neighbor::Neighbor,
+    provider::HasId,
     test::{
         TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
@@ -28,6 +36,43 @@ use crate::{
         tokio::current_thread_runtime,
     },
 };
+
+#[derive(Clone)]
+struct RecordingCopyIds {
+    candidate_count: Arc<AtomicUsize>,
+    saw_start_point: Arc<AtomicBool>,
+}
+
+impl<A, T> SearchPostProcess<A, T> for RecordingCopyIds
+where
+    A: HasId<Id = u32>,
+{
+    type Error = Infallible;
+
+    fn post_process<I, B>(
+        &self,
+        _accessor: &mut A,
+        _query: T,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        let candidates: Vec<_> = candidates.collect();
+        self.candidate_count
+            .store(candidates.len(), Ordering::Relaxed);
+        self.saw_start_point.store(
+            candidates
+                .iter()
+                .any(|candidate| *candidate.id() == u32::MAX),
+            Ordering::Relaxed,
+        );
+        let count = output.extend(candidates);
+        std::future::ready(Ok(count))
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct RangeSearchBaseline {
@@ -410,6 +455,48 @@ fn max_results_respected_and_second_round_triggered() {
     );
 
     assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn max_results_caps_non_start_candidates_after_range_collection() {
+    let rt = current_thread_runtime();
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let starting_l = 4;
+    let max_results = 5;
+    let range_search = Range::builder(starting_l, f32::MAX)
+        .inner_radius(Some(0.0))
+        .max_returned(Some(max_results))
+        .build()
+        .unwrap();
+
+    let candidate_count = Arc::new(AtomicUsize::new(0));
+    let saw_start_point = Arc::new(AtomicBool::new(false));
+    let processor = RecordingCopyIds {
+        candidate_count: Arc::clone(&candidate_count),
+        saw_start_point: Arc::clone(&saw_start_point),
+    };
+    let mut results = Vec::<Neighbor<u32>>::new();
+
+    let stats = rt
+        .block_on(index.search_with(
+            range_search,
+            &test_provider::Strategy::new(),
+            processor,
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    assert_eq!(candidate_count.load(Ordering::Relaxed), max_results + 1);
+    assert!(!saw_start_point.load(Ordering::Relaxed));
+    assert_eq!(results.len(), max_results);
+    assert_eq!(stats.result_count as usize, max_results);
+    assert!(stats.range_search_second_round);
+    assert!(results.iter().all(|result| *result.id() != u32::MAX));
+    assert_range_invariants(&results, f32::MAX, Some(0.0));
     assert_no_duplicates(&results);
 }
 
