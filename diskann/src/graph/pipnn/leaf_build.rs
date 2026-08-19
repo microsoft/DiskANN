@@ -243,7 +243,7 @@ where
             )?;
             hash_prune.add_leaf_edges(
                 point_ids,
-                &buffers.edge_offsets,
+                &buffers.edge_offsets[..point_count + 1],
                 &buffers.edges[..edge_count],
                 &mut buffers.sketch_scratch,
             );
@@ -405,16 +405,14 @@ fn build_symmetric_edge_csr(
         cursor,
     } = buffers;
     let point_count = point_ids.len();
+    grow(offsets, point_count + 1, 0);
+    offsets[..point_count + 1].fill(0);
     if leaf_k == 0 {
-        offsets.resize(point_count + 1, 0);
-        offsets.fill(0);
-        edges.clear();
         return Ok(0);
     }
-    seen.fill(false);
-    offsets.resize(point_count + 1, 0);
-    offsets.fill(0);
 
+    // The prior successful write pass left the active `seen` area clear. This
+    // count pass marks each unique directed edge.
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in neighbors {
             if !neighbor.is_assigned() {
@@ -432,18 +430,21 @@ fn build_symmetric_edge_csr(
     }
 
     let edge_count = offsets[point_count] as usize;
-    edges.resize(edge_count, (0, 0.0));
-    cursor.resize(point_count, 0);
-    cursor.copy_from_slice(&offsets[..point_count]);
-    seen.fill(false);
+    grow(edges, edge_count, (0, 0.0));
+    grow(cursor, point_count, 0);
+    cursor[..point_count].copy_from_slice(&offsets[..point_count]);
+    let edges = &mut edges[..edge_count];
+    let cursor = &mut cursor[..point_count];
 
+    // This pass visits the same directions as the count pass. The first
+    // occurrence writes its edge and clears its mark for the next leaf.
     for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
         for neighbor in neighbors {
             if !neighbor.is_assigned() {
                 continue;
             }
             let target = neighbor.target as usize;
-            write_directed_edge(
+            write_counted_directed_edge(
                 point_count,
                 source,
                 target,
@@ -452,7 +453,7 @@ fn build_symmetric_edge_csr(
                 edges,
                 cursor,
             );
-            write_directed_edge(
+            write_counted_directed_edge(
                 point_count,
                 target,
                 source,
@@ -484,7 +485,7 @@ fn count_directed_edge(
     Ok(())
 }
 
-fn write_directed_edge(
+fn write_counted_directed_edge(
     point_count: usize,
     source: usize,
     target: usize,
@@ -494,8 +495,8 @@ fn write_directed_edge(
     cursor: &mut [u32],
 ) {
     let seen_entry = &mut seen[source * point_count + target];
-    if !*seen_entry {
-        *seen_entry = true;
+    if *seen_entry {
+        *seen_entry = false;
         let edge_slot = cursor[source] as usize;
         edges[edge_slot] = (target as u32, distance);
         cursor[source] += 1;
@@ -1009,6 +1010,7 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(offsets, [0, 1, 2]);
         assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
+        assert!(seen.iter().all(|&entry| !entry));
     }
     #[test]
     fn zero_k_edge_csr_has_empty_adjacency() {
@@ -1034,6 +1036,6 @@ mod tests {
 
         assert_eq!(count, 0);
         assert_eq!(offsets, [0, 0, 0, 0]);
-        assert!(edges.is_empty());
+        assert_eq!(edges, [(99, 99.0)]);
     }
 }
