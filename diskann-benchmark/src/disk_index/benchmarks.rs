@@ -304,6 +304,13 @@ where
         let mut passed = true;
         let mut comparisons = Vec::new();
 
+        anyhow::ensure!(
+            before.search.search_api == after.search.search_api,
+            "search_api mismatch: before={} after={}",
+            before.search.search_api,
+            after.search.search_api,
+        );
+
         // Check build time if both sides have it
         if let (Some(b_build), Some(a_build)) = (&before.build, &after.build) {
             comparisons.push(check_metric(
@@ -401,5 +408,59 @@ where
         } else {
             Ok(PassFail::Fail(result))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn output(search_api: Option<&str>) -> DiskIndexStats {
+        let mut search = json!({
+            "num_threads": 1,
+            "beam_width": 4,
+            "recall_at": 10,
+            "is_flat_search": false,
+            "distance": "squared_l2",
+            "uses_vector_filters": false,
+            "num_nodes_to_cache": null,
+            "search_results_per_l": [{
+                "search_l": 10,
+                "qps": 100.0,
+                "mean_latency": 10.0,
+                "p95_latency": 12,
+                "p999_latency": 14,
+                "mean_ios": 1.0,
+                "mean_io_time": 2.0,
+                "mean_cpu_time": 3.0,
+                "mean_pq_preprocess_time": 4.0,
+                "mean_comparisons": 5.0,
+                "mean_hops": 6.0,
+                "cache_hit_percentage": 90.0,
+                "recall": 0.9
+            }],
+            "span_metrics": {"span_data": []}
+        });
+        if let Some(search_api) = search_api {
+            search["search_api"] = json!(search_api);
+        }
+        serde_json::from_value(json!({"build": null, "search": search})).unwrap()
+    }
+
+    #[test]
+    fn regression_check_rejects_search_api_mismatch() {
+        let before = output(None);
+        let after = output(Some("indexed-vectors"));
+        let input = <DiskIndexOperation as crate::inputs::Example>::example();
+        let tolerances = DiskIndexTolerance::example();
+
+        let error = DiskIndex::<f32>::new()
+            .check(&tolerances, &input, &before, &after)
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "search_api mismatch: before=legacy after=indexed-vectors"
+        );
     }
 }
