@@ -23,7 +23,6 @@ use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
 };
-use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rand::{SeedableRng, prelude::IndexedRandom};
 use rayon::prelude::*;
 
@@ -33,6 +32,7 @@ use super::{
     partition_kernel::{
         PartitionKernelWorkspace, PreparedLeaders, UNASSIGNED_LEADER, assign_leaders,
     },
+    simd::PiPNNSIMDSchema,
 };
 
 // These constants control internal batching and deterministic seed generation.
@@ -106,10 +106,7 @@ pub(super) fn partition<A, M, T>(
     config: &PiPNNConfig,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -136,10 +133,7 @@ fn partition_replica<A, M, T>(
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -197,10 +191,7 @@ fn partition_work_item<A, M, T>(
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<(Vec<WorkItem>, Vec<Vec<u32>>)>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -277,10 +268,7 @@ fn assign_to_leaders<A, M, T>(
     stripe_buffers: &StripeBufferPool,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
@@ -351,10 +339,7 @@ fn assign_point_stripe<A, M, T>(
     assignments: &mut [u32],
 ) -> ANNResult<()>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
     T: VectorRepr,
 {
@@ -555,10 +540,7 @@ fn assignment_stripe_point_count(leader_count: usize) -> usize {
 mod tests {
     use diskann_utils::views::{Matrix, MatrixView};
     use diskann_vector::{Half, distance::Metric};
-    use diskann_wide::{
-        Architecture, SIMDMask, SIMDSelect, SIMDVector,
-        arch::{self, Target1},
-    };
+    use diskann_wide::arch::{self, Target1};
 
     use super::*;
 
@@ -571,10 +553,7 @@ mod tests {
 
     impl<A, T> Target1<A, ANNResult<Vec<Vec<u32>>>, PartitionCall<'_, T>> for DispatchPartition
     where
-        A: Architecture,
-        A::f32x16: std::ops::Div<Output = A::f32x16>,
-        <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-        u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+        A: PiPNNSIMDSchema,
         T: VectorRepr + Send + Sync,
     {
         fn run(self, arch: A, call: PartitionCall<'_, T>) -> ANNResult<Vec<Vec<u32>>> {
