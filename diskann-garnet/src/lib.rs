@@ -632,6 +632,7 @@ pub unsafe extern "C" fn search_vector(
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
+    beam_width: u32,
     _continuation: *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
@@ -651,7 +652,10 @@ pub unsafe extern "C" fn search_vector(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
+    let knn_params = match search::Knn::new(
+        search_exploration_factor as usize,
+        Some(beam_width as usize),
+    ) {
         Ok(params) => params,
         Err(_) => return -1,
     };
@@ -702,6 +706,7 @@ pub unsafe extern "C" fn search_element(
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
+    beam_width: u32,
     _continuation: *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
@@ -716,7 +721,10 @@ pub unsafe extern "C" fn search_element(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
+    let knn_params = match search::Knn::new(
+        search_exploration_factor as usize,
+        Some(beam_width as usize),
+    ) {
         Ok(knn) => knn,
         Err(_) => return -1,
     };

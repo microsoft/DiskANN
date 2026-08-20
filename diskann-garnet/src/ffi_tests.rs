@@ -481,6 +481,7 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
+                1,
                 ptr::null_mut(),
             )
         };
@@ -588,6 +589,7 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
+                1,
                 ptr::null_mut(),
             )
         };
@@ -708,6 +710,7 @@ mod tests {
                 output_id_buffer.len(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
+                1,
                 ptr::null_mut(),
             )
         };
