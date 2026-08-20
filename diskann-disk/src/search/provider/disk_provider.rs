@@ -850,6 +850,18 @@ pub struct SearchResultItem<AssociatedData> {
     pub distance: f32,
 }
 
+pub struct SearchResultWithIndexedVectors<AssociatedData, VectorData> {
+    pub results: Vec<SearchResultItemWithIndexedVector<AssociatedData, VectorData>>,
+    pub stats: SearchResultStats,
+}
+
+pub struct SearchResultItemWithIndexedVector<AssociatedData, VectorData> {
+    pub vertex_id: u32,
+    pub data: AssociatedData,
+    pub distance: f32,
+    pub indexed_vector: Box<[VectorData]>,
+}
+
 impl<Data, ProviderFactory> DiskIndexSearcher<Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -1093,6 +1105,51 @@ where
         }
 
         Ok(search_result)
+    }
+
+    /// Perform a disk search and return valid hits with their indexed vectors.
+    pub fn search_with_indexed_vectors(
+        &self,
+        query: &[Data::VectorDataType],
+        return_list_size: u32,
+        search_list_size: u32,
+        beam_width: Option<usize>,
+        mode: SearchMode<'_>,
+    ) -> ANNResult<SearchResultWithIndexedVectors<Data::AssociatedDataType, Data::VectorDataType>>
+    {
+        let SearchResult { mut results, stats } =
+            self.search(query, return_list_size, search_list_size, beam_width, mode)?;
+        results.truncate(stats.result_count as usize);
+        if results.is_empty() {
+            return Ok(SearchResultWithIndexedVectors {
+                results: Vec::new(),
+                stats,
+            });
+        }
+
+        let ids = results
+            .iter()
+            .map(|result| result.vertex_id)
+            .collect::<Vec<_>>();
+        let graph_header = &self.index.provider().graph_header;
+        let mut vertex_provider = self
+            .vertex_provider_factory
+            .create_vertex_provider(ids.len(), graph_header)?;
+        ensure_vertex_loaded(&mut vertex_provider, &ids)?;
+
+        let results = results
+            .into_iter()
+            .map(|result| {
+                Ok(SearchResultItemWithIndexedVector {
+                    indexed_vector: Box::from(vertex_provider.get_vector(&result.vertex_id)?),
+                    vertex_id: result.vertex_id,
+                    data: result.data,
+                    distance: result.distance,
+                })
+            })
+            .collect::<ANNResult<_>>()?;
+
+        Ok(SearchResultWithIndexedVectors { results, stats })
     }
 
     /// Perform a raw search on the disk index.
@@ -1533,6 +1590,67 @@ mod disk_provider_tests {
         let result =
             read_bin::<u32>(&mut storage_provider.open_reader(query_result_path).unwrap()).unwrap();
         result.into_inner().into_vec()
+    }
+
+    #[rstest]
+    #[case(CachingStrategy::None)]
+    #[case(CachingStrategy::StaticCacheWithBfsNodes(32))]
+    fn test_search_with_indexed_vectors(#[case] caching_strategy: CachingStrategy) {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let searcher = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                caching_strategy,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+        let legacy = searcher
+            .search(&query, 10, 20, None, SearchMode::graph())
+            .unwrap();
+        let indexed = searcher
+            .search_with_indexed_vectors(&query, 10, 20, None, SearchMode::graph())
+            .unwrap();
+
+        assert_eq!(indexed.results.len(), indexed.stats.result_count as usize);
+        assert!(indexed.results.iter().zip(&legacy.results).all(|(a, b)| (
+            a.vertex_id,
+            a.distance
+        ) == (
+            b.vertex_id,
+            b.distance
+        )));
+        let source =
+            read_bin::<f32>(&mut storage_provider.open_reader(TEST_DATA_FILE).unwrap()).unwrap();
+        assert!(indexed
+            .results
+            .iter()
+            .all(|result| result.indexed_vector.as_ref() == source.row(result.vertex_id as usize)));
+
+        let partial = searcher
+            .search_with_indexed_vectors(
+                &query,
+                10,
+                10,
+                None,
+                SearchMode::flat_filtered(|id| matches!(*id, 72 | 87 | 170)),
+            )
+            .unwrap();
+        assert_eq!(partial.results.len(), 3);
+        assert_eq!(partial.stats.result_count, 3);
+
+        let empty = searcher
+            .search_with_indexed_vectors(&query, 10, 10, None, SearchMode::flat_filtered(|_| false))
+            .unwrap();
+        assert!(empty.results.is_empty());
+        assert!(searcher
+            .search_with_indexed_vectors(&query, 2, 1, None, SearchMode::graph())
+            .is_err());
     }
 
     struct TestDiskSearchParams<'a, StorageType> {
