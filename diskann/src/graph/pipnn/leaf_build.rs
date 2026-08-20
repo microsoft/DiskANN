@@ -21,12 +21,12 @@ use parking_lot::Mutex;
 
 use crate::{graph::AdjacencyList, utils::VectorRepr};
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_wide::{Architecture, SIMDMask, SIMDSelect, SIMDVector};
 use rayon::prelude::*;
 
 use super::{
     kernel_metric::LeafMetric,
     leaf_kernel::{LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, select_leaf_neighbors},
+    simd::PiPNNSIMDSchema,
 };
 
 /// Failure while converting leaves into direct graph candidates.
@@ -156,10 +156,7 @@ pub(super) fn build_leaf_candidates<A, M, T>(
     requested_k: usize,
 ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
@@ -196,10 +193,7 @@ fn add_direct_leaf_candidates<A, M, T>(
     candidates: &DirectCandidates,
 ) -> Result<(), LeafBuildError>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
@@ -288,13 +282,11 @@ fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
 mod tests {
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
-    use diskann_wide::{
-        Architecture, SIMDMask, SIMDSelect, SIMDVector,
-        arch::{self, Target1},
-    };
+    use diskann_wide::arch::{self, Target1};
     use half::f16;
     use std::collections::BTreeSet;
 
+    use super::super::simd::PiPNNSIMDSchema;
     use super::{
         DirectCandidates, LeafBuffers, LeafBuildError, add_symmetric_neighbors,
         build_leaf_candidates,
@@ -326,10 +318,7 @@ mod tests {
             LeafBuildCall<'_, T>,
         > for DispatchLeafBuild
     where
-        A: Architecture,
-        A::f32x16: std::ops::Div<Output = A::f32x16>,
-        <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-        u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+        A: PiPNNSIMDSchema,
         T: crate::utils::VectorRepr + 'static,
     {
         fn run(
