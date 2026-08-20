@@ -34,6 +34,7 @@ use diskann_vector::{
 };
 use std::{
     any::TypeId,
+    collections::HashSet,
     future,
     marker::PhantomData,
     mem,
@@ -46,7 +47,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    VectorQuantType,
+    SearchResults, VectorQuantType,
     alloc::AlignToEight,
     fsm::{FreeSpaceMap, FsmError},
     garnet::{Callbacks, Context, GarnetError, GarnetId, Term},
@@ -64,6 +65,10 @@ const QUANT_STATE_KEY: u32 = u32::from_be_bytes(*b"_qnt");
 
 /// Starting capacity of the pre-allocated rerank buffers.
 const RERANK_BUFFER_LENGTH: usize = 1024;
+
+/// Size hint passed to Garnet when batch reading attributes. Attributes are variable
+/// length, so this is only an estimate used to size Garnet's read buffer.
+const ATTRIBUTE_LENGTH_HINT: usize = 1024;
 
 #[derive(Clone)]
 struct AdjList(AdjacencyList<u32>);
@@ -423,9 +428,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
         id: &GarnetId,
         data: &[u8],
     ) -> Result<(), GarnetProviderError> {
+        let mut iid = u32::MAX;
+        if !self.callbacks.read_single_eid(
+            &context.term(Term::IntMap),
+            id,
+            bytemuck::bytes_of_mut(&mut iid),
+        ) {
+            return Err(GarnetError::Read.into());
+        }
+
         if self
             .callbacks
-            .write_eid(&context.term(Term::Attributes), id, data)
+            .write_iid(&context.term(Term::Attributes), iid, data)
         {
             Ok(())
         } else {
@@ -438,9 +452,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         id: &GarnetId,
     ) -> Result<(), GarnetProviderError> {
+        let mut iid = u32::MAX;
+        if !self.callbacks.read_single_eid(
+            &context.term(Term::IntMap),
+            id,
+            bytemuck::bytes_of_mut(&mut iid),
+        ) {
+            return Err(GarnetError::Read.into());
+        }
+
         if self
             .callbacks
-            .delete_eid(&context.term(Term::Attributes), id)
+            .delete_iid(&context.term(Term::Attributes), iid)
         {
             Ok(())
         } else {
@@ -574,22 +597,36 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         task_idx: usize,
         task_count: usize,
-    ) {
+    ) -> bool {
         let quantizer = match &self.quantizer {
             Some(q) => q,
-            None => return,
+            None => {
+                self.callbacks.log(
+                    &context.term(Term::Quantized),
+                    "Error: backfill_quant_vectors: Quantizer not found. Index will operate full precision only mode.",
+                );
+                return false;
+            }
         };
 
         let max_id = self.fsm.max_id_for_backfill() as usize;
         if max_id >= u32::MAX as usize {
             // The max_id was somehow not sampled, so bail.
-            return;
+            self.callbacks.log(
+                &context.term(Term::Quantized),
+                "Error: backfill_quant_vectors: Couldn't calculate max id to backfill. Index will operate full precision only mode.",
+            );
+            return false;
         }
 
         // If we have more tasks than vectors to backfill, we exit the extra tasks early.
         let task_count = task_count.min(max_id + 1);
         if task_idx >= task_count {
-            return;
+            self.callbacks.log(
+                &context.term(Term::Quantized),
+                "Error: backfill_quant_vectors: Bad task index. Index will operate full precision only mode.",
+            );
+            return false;
         }
 
         // Evenly divide the ID range from 0..max_id and determine this thread's backfill
@@ -643,10 +680,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let point = if let Ok(p) = Poly::from_iter(q.iter().copied(), AlignToEight) {
                     p
                 } else {
-                    // NOTE: This return is unrecoverable in the current design, as there is no way
-                    // to signal that backfill has failed. The index will operate on full precision
-                    // vectors only from now on.
-                    return;
+                    self.callbacks.log(
+                        &context.term(Term::Quantized),
+                        "Error quantizing start point; failed to finish backfill. Index will operate full precision only mode.",
+                    );
+                    return false;
                 };
                 self.start_point_quant_cache.insert(0, point);
             }
@@ -662,14 +700,96 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     data[0] = 1;
                 },
             ) {
-                // NOTE: This return is unrecoverable in the current design, as there is no way to
-                // signal that backfill failed.
-                return;
+                self.callbacks.log(
+                    &context.term(Term::Quantized),
+                    "Error saving quantizer state; failed to finish backfill. Index will operate full precision only mode.",
+                );
+                return false;
             }
 
             // Signal to the index that it is now safe to operate in quantized mode.
             self.all_quantized.store(true, Ordering::Release);
         }
+
+        true
+    }
+
+    pub(crate) fn random_members(
+        &self,
+        context: &Context,
+        count: u32,
+        output: &mut SearchResults<'_>,
+    ) -> bool {
+        let mut rng = rand::rng();
+
+        let id_space = self.max_internal_id() as usize + 1;
+        let total_vectors = self.fsm.total_used();
+        let mut remaining = (count as usize).min(total_vectors);
+        let mut chosen = HashSet::new();
+
+        // Deletions leave holes in the ID space, so scale the first batch by the density of
+        // live IDs, then grow it until the request is satisfied or the whole space is covered.
+        let mut batch = remaining
+            .saturating_mul(id_space)
+            .div_ceil(total_vectors.max(1))
+            .clamp(1, id_space);
+
+        while remaining > 0 {
+            for samp in rand::seq::index::sample(&mut rng, id_space, batch) {
+                let samp = samp as u32;
+                if !chosen.insert(samp) {
+                    // Already considered on an earlier round.
+                    continue;
+                }
+                let Ok(eid) = self.to_external_id(context, samp) else {
+                    // Deleted or otherwise unreadable.
+                    continue;
+                };
+
+                let state = output.push_id(eid);
+                remaining -= 1;
+                if remaining == 0 || state == diskann::graph::BufferState::Full {
+                    return true;
+                }
+            }
+
+            if batch == id_space {
+                // The whole ID space was scanned; fewer live IDs exist than were requested.
+                break;
+            }
+            batch = batch.saturating_mul(2).min(id_space);
+        }
+
+        true
+    }
+
+    pub(crate) fn neighbors(
+        &self,
+        context: &Context,
+        id: &GarnetId,
+    ) -> ANNResult<Vec<Neighbor<GarnetId>>> {
+        let iid = self.to_internal_id(context, id)?;
+        let v = self.get_full_vector(context, iid)?;
+        let mut neighbors = AdjacencyList::with_capacity(self.max_degree + 1);
+
+        if !self.get_neighbors(context, iid, &mut neighbors) {
+            return Err(GarnetProviderError::Garnet(GarnetError::Read).into());
+        }
+
+        let d = <T as VectorRepr>::distance(self.metric_type, Some(self.dim));
+        let mut result = Vec::with_capacity(self.max_degree);
+        for &nbr_id in neighbors.iter() {
+            if nbr_id == 0 {
+                // Skip the start point
+                continue;
+            }
+            let nbr_v = self.get_full_vector(context, nbr_id)?;
+            let nbr_eid = self.to_external_id(context, nbr_id)?;
+            let nbr_d = d.evaluate_similarity(&v, &nbr_v);
+            result.push(Neighbor::new(nbr_eid, nbr_d));
+        }
+
+        Ok(result)
     }
 
     /// Returns the quantizer associated with the index.
@@ -825,6 +945,27 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         Ok(())
     }
+
+    /// The size of a stored full vector.
+    fn full_vector_size(&self) -> usize {
+        self.dim * mem::size_of::<T>()
+    }
+
+    /// The size of a stored quant vector.
+    fn quant_vector_size(&self) -> usize {
+        if let Some(quantizer) = &self.quantizer {
+            quantizer.bytes()
+        } else {
+            0
+        }
+    }
+
+    /// Provides an estimate of quantizer state size.
+    /// This is allowed to be wrong, but should ideally be an overestimate.
+    #[cfg(test)]
+    fn quant_state_size(&self) -> usize {
+        self.dim * 6 + 128
+    }
 }
 
 impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
@@ -947,7 +1088,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         // It is not an error to fail deleting attributes; they may not exist.
         let _: bool = self
             .callbacks
-            .delete_eid(&context.term(Term::Attributes), gid);
+            .delete_iid(&context.term(Term::Attributes), id);
 
         // TODO: inplace_delete needs access to neighbors. Delete these once that bug is fixed.
         // See https://github.com/microsoft/DiskANN/issues/1153.
@@ -1084,6 +1225,32 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
             }
         }
     }
+
+    /// Batch read the attributes for `filtered_ids` and record the filter result for each
+    /// into `filtered_decisions`.
+    ///
+    /// Garnet skips ids with no stored attributes, so those keep `default_decision`.
+    fn compute_filter_decisions(&mut self, default_decision: bool) {
+        let Self {
+            provider,
+            context,
+            filtered_ids,
+            filtered_decisions,
+            ..
+        } = self;
+
+        filtered_decisions.clear();
+        filtered_decisions.resize(filtered_ids.len() / 2, default_decision);
+
+        provider.callbacks.read_multi_lpiid::<_, u8>(
+            &context.term(Term::Attributes),
+            filtered_ids,
+            ATTRIBUTE_LENGTH_HINT,
+            |i, attrs| {
+                filtered_decisions[i as usize] = provider.callbacks.matches_filter(context, attrs);
+            },
+        );
+    }
 }
 
 impl<T: VectorRepr> HasId for DynamicAccessor<'_, T> {
@@ -1161,19 +1328,28 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
                 }
             }
 
-            let ctx = if self.quantized {
-                self.context.term(Term::Quantized)
+            let (ctx, length_hint) = if self.quantized {
+                (
+                    self.context.term(Term::Quantized),
+                    self.provider.quant_vector_size(),
+                )
             } else {
-                self.context.term(Term::Vector)
+                (
+                    self.context.term(Term::Vector),
+                    self.provider.full_vector_size(),
+                )
             };
 
             if !self.filtered_ids.is_empty() {
-                self.provider
-                    .callbacks
-                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
+                self.provider.callbacks.read_multi_lpiid(
+                    &ctx,
+                    &self.filtered_ids,
+                    length_hint,
+                    |i, v| {
                         let dist = self.computer.evaluate_similarity(v);
                         on_neighbors(self.filtered_ids[i as usize * 2 + 1], dist);
-                    });
+                    },
+                );
             }
         }
 
@@ -1333,6 +1509,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
             provider.callbacks.read_multi_lpiid(
                 &accessor.context.term(Term::Vector),
                 &accessor.filtered_ids,
+                provider.full_vector_size(),
                 |i, v| {
                     let dist = f.evaluate_similarity(query, bytemuck::cast_slice::<u8, T>(v));
                     reranked.push(Neighbor::new(
@@ -1387,12 +1564,13 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
         // borrow. We put it back at the end to save the allocation.
         let mut id_buffer = mem::take(&mut **self.id_buffer);
 
+        let default_decision = self.provider.callbacks.matches_filter(self.context, &[]);
+
         for nl_id in ids {
             self.provider
                 .get_neighbors(self.context, nl_id, &mut id_buffer);
 
             self.filtered_ids.clear();
-            self.filtered_decisions.clear();
 
             for id in id_buffer.iter().copied().filter(|id| pred.eval_mut(id)) {
                 if id == Self::START_ID {
@@ -1402,34 +1580,44 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
                     };
                     on_neighbors(Decision::reject(id), dist);
                 } else {
-                    let matches = self.provider.callbacks.matches_filter(self.context, id);
-
                     self.filtered_ids.push(4);
                     self.filtered_ids.push(id);
-
-                    self.filtered_decisions.push(matches);
                 }
             }
 
-            let ctx = if self.quantized {
-                self.context.term(Term::Quantized)
+            if self.filtered_ids.is_empty() {
+                continue;
+            }
+
+            let (ctx, length_hint) = if self.quantized {
+                (
+                    self.context.term(Term::Quantized),
+                    self.provider.quant_vector_size(),
+                )
             } else {
-                self.context.term(Term::Vector)
+                (
+                    self.context.term(Term::Vector),
+                    self.provider.full_vector_size(),
+                )
             };
 
-            if !self.filtered_ids.is_empty() {
-                self.provider
-                    .callbacks
-                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
-                        let dist = self.computer.evaluate_similarity(v);
-                        let decision = if self.filtered_decisions[i as usize] {
-                            Decision::accept(self.filtered_ids[i as usize * 2 + 1])
-                        } else {
-                            Decision::reject(self.filtered_ids[i as usize * 2 + 1])
-                        };
-                        on_neighbors(decision, dist);
-                    });
-            }
+            self.compute_filter_decisions(default_decision);
+
+            // Read vectors and calculate distances
+            self.provider.callbacks.read_multi_lpiid(
+                &ctx,
+                &self.filtered_ids,
+                length_hint,
+                |i, v| {
+                    let dist = self.computer.evaluate_similarity(v);
+                    let decision = if self.filtered_decisions[i as usize] {
+                        Decision::accept(self.filtered_ids[i as usize * 2 + 1])
+                    } else {
+                        Decision::reject(self.filtered_ids[i as usize * 2 + 1])
+                    };
+                    on_neighbors(decision, dist);
+                },
+            );
         }
 
         **self.id_buffer = id_buffer;
@@ -1451,6 +1639,8 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
         // borrow. We put it back at the end to save the allocation.
         let mut id_buffer = mem::take(&mut **self.id_buffer);
 
+        let default_decision = self.provider.callbacks.matches_filter(self.context, &[]);
+
         for nl_id in ids {
             self.provider
                 .get_neighbors(self.context, nl_id, &mut id_buffer);
@@ -1458,29 +1648,59 @@ impl<T: VectorRepr> FilteredAccessor for DynamicAccessor<'_, T> {
 
             for id in id_buffer.iter().copied() {
                 if id != Self::START_ID && pred.eval(&id) {
-                    let matches = self.provider.callbacks.matches_filter(self.context, id);
-
-                    if matches && pred.eval_mut(&Accept::new(id)) {
-                        self.filtered_ids.push(4);
-                        self.filtered_ids.push(id);
-                    }
+                    self.filtered_ids.push(4);
+                    self.filtered_ids.push(id);
                 }
             }
 
-            let ctx = if self.quantized {
-                self.context.term(Term::Quantized)
+            if self.filtered_ids.is_empty() {
+                continue;
+            }
+
+            self.compute_filter_decisions(default_decision);
+
+            // Remove non-matching ids
+            let mut index = 0;
+            for (i, &matches) in self.filtered_decisions.iter().enumerate() {
+                if !matches {
+                    continue;
+                }
+
+                let id = self.filtered_ids[i * 2 + 1];
+
+                if pred.eval_mut(&Accept::new(id)) {
+                    self.filtered_ids[index * 2] = 4;
+                    self.filtered_ids[index * 2 + 1] = id;
+                    index += 1;
+                }
+            }
+            self.filtered_ids.truncate(index * 2);
+
+            if self.filtered_ids.is_empty() {
+                continue;
+            }
+
+            let (ctx, length_hint) = if self.quantized {
+                (
+                    self.context.term(Term::Quantized),
+                    self.provider.quant_vector_size(),
+                )
             } else {
-                self.context.term(Term::Vector)
+                (
+                    self.context.term(Term::Vector),
+                    self.provider.full_vector_size(),
+                )
             };
 
-            if !self.filtered_ids.is_empty() {
-                self.provider
-                    .callbacks
-                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
-                        let dist = self.computer.evaluate_similarity(v);
-                        on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
-                    });
-            }
+            self.provider.callbacks.read_multi_lpiid(
+                &ctx,
+                &self.filtered_ids,
+                length_hint,
+                |i, v| {
+                    let dist = self.computer.evaluate_similarity(v);
+                    on_neighbors(Accept::new(self.filtered_ids[i as usize * 2 + 1]), dist);
+                },
+            );
         }
 
         **self.id_buffer = id_buffer;
@@ -1619,19 +1839,28 @@ where
             }
         }
 
-        let ctx = if self.quantized {
-            self.context.term(Term::Quantized)
+        let (ctx, length_hint) = if self.quantized {
+            (
+                self.context.term(Term::Quantized),
+                self.provider.quant_vector_size(),
+            )
         } else {
-            self.context.term(Term::Vector)
+            (
+                self.context.term(Term::Vector),
+                self.provider.full_vector_size(),
+            )
         };
 
         if !self.filtered_ids.is_empty() {
-            self.provider
-                .callbacks
-                .read_multi_lpiid(&ctx, &self.filtered_ids, |id, v| {
+            self.provider.callbacks.read_multi_lpiid(
+                &ctx,
+                &self.filtered_ids,
+                length_hint,
+                |id, v| {
                     self.set
                         .insert(self.filtered_ids[id as usize * 2 + 1], v.into());
-                });
+                },
+            );
         }
 
         Ok((self.set.view(), &self.distance))
@@ -1908,9 +2137,11 @@ mod tests {
 
         // There should be no saved quant state.
         assert!(
-            !provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            !provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state should not be stored yet"
         );
 
@@ -1982,9 +2213,11 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state missing"
         );
 
@@ -2065,7 +2298,7 @@ mod tests {
 
         // Run backfill
         for job_id in 0..4 {
-            provider.backfill_quant_vectors(&ctx, job_id, 4);
+            assert!(provider.backfill_quant_vectors(&ctx, job_id, 4));
         }
 
         // Drop and re-create the index, keeping the same backing store
@@ -2080,9 +2313,11 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state missing"
         );
 
@@ -2096,11 +2331,11 @@ mod tests {
 
         // Every quant vector should be present in the store
         for id in 0..last_inserted_id {
-            assert!(
-                provider
-                    .callbacks
-                    .exists_iid(&ctx.term(Term::Quantized), id)
-            );
+            assert!(provider.callbacks.exists_iid(
+                &ctx.term(Term::Quantized),
+                id,
+                provider.quant_vector_size()
+            ));
         }
 
         // Searches should still work and use quantized vectors
@@ -2169,9 +2404,11 @@ mod tests {
 
         // There should be saved quant state.
         assert!(
-            provider
-                .callbacks
-                .exists_iid(&ctx.term(Term::Metadata), QUANT_STATE_KEY),
+            provider.callbacks.exists_iid(
+                &ctx.term(Term::Metadata),
+                QUANT_STATE_KEY,
+                provider.quant_state_size()
+            ),
             "quant state missing"
         );
 

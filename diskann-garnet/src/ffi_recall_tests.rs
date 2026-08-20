@@ -175,6 +175,7 @@ mod tests {
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
+                callbacks.log_callback(),
                 &mut quant_needed,
             )
         };
@@ -219,6 +220,7 @@ mod tests {
                     output_id_buffer.len(),
                     output_dists.as_mut_ptr(),
                     output_dists.len(),
+                    1,
                     continuation,
                 )
             };
