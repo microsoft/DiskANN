@@ -29,6 +29,14 @@ on:
         required: true
         default: '100'
         type: string
+      api_order:
+        description: 'Timed API order'
+        required: true
+        default: legacy-first
+        type: choice
+        options:
+          - legacy-first
+          - indexed-first
       baseline_ref:
         description: 'A branch, commit SHA, or tag name to compare the current branch with'
         required: true
@@ -243,6 +251,14 @@ jobs:
               raise AssertionError("generated API configs differ by more than search_api")
           PY
 
+      - name: Run indexed-vector API benchmark first
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' && inputs.api_order == 'indexed-first' }}
+        working-directory: diskann_rust
+        run: |
+          target/release/diskann-benchmark \
+            run --input-file target/tmp/${{ matrix.dataset }}_indexed_vectors_config.json \
+            --output-file target/tmp/${{ matrix.dataset }}_indexed_vectors_result.json
+
       - name: Run legacy API benchmark
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
         working-directory: diskann_rust
@@ -251,8 +267,8 @@ jobs:
             run --input-file target/tmp/${{ matrix.dataset }}_legacy_config.json \
             --output-file target/tmp/${{ matrix.dataset }}_legacy_result.json
 
-      - name: Run indexed-vector API benchmark
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+      - name: Run indexed-vector API benchmark last
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' && inputs.api_order == 'legacy-first' }}
         working-directory: diskann_rust
         run: |
           target/release/diskann-benchmark \
