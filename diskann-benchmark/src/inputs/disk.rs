@@ -146,6 +146,23 @@ impl fmt::Display for DiskSearchMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DiskSearchApi {
+    #[default]
+    Legacy,
+    IndexedVectors,
+}
+
+impl fmt::Display for DiskSearchApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Legacy => write!(f, "legacy"),
+            Self::IndexedVectors => write!(f, "indexed-vectors"),
+        }
+    }
+}
+
 /// Search phase configuration
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct DiskSearchPhase {
@@ -155,6 +172,10 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) beam_width: usize,
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
+    #[serde(default)]
+    pub(crate) search_api: DiskSearchApi,
+    #[serde(default)]
+    pub(crate) collect_api_metrics: bool,
     #[cfg(feature = "disk-index")]
     #[serde(default)]
     pub(crate) search_mode: DiskSearchMode,
@@ -353,6 +374,8 @@ impl Example for DiskIndexOperation {
             beam_width: 16,
             recall_at: 10,
             num_threads: 8,
+            search_api: DiskSearchApi::default(),
+            collect_api_metrics: false,
             #[cfg(feature = "disk-index")]
             search_mode: DiskSearchMode {
                 is_flat_search: false,
@@ -483,6 +506,8 @@ impl DiskSearchPhase {
         write_field!(f, "Beam Width", self.beam_width)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
+        write_field!(f, "Search API", self.search_api)?;
+        write_field!(f, "Collect API Metrics", self.collect_api_metrics)?;
         #[cfg(feature = "disk-index")]
         write_field!(f, "Search Mode", self.search_mode)?;
         #[cfg(not(feature = "disk-index"))]
@@ -512,5 +537,90 @@ impl fmt::Display for DiskSearchPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Disk Index Search Phase")?;
         self.summarize_fields(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn search_phase_json() -> serde_json::Value {
+        json!({
+            "queries": "queries.fbin",
+            "groundtruth": "groundtruth.bin",
+            "num_threads": 1,
+            "beam_width": 4,
+            "search_list": [10],
+            "recall_at": 10,
+            "is_flat_search": false,
+            "distance": "squared_l2"
+        })
+    }
+
+    #[test]
+    fn disk_search_api_defaults_to_legacy_for_old_inputs() {
+        let phase: DiskSearchPhase = serde_json::from_value(search_phase_json()).unwrap();
+        assert_eq!(phase.search_api, DiskSearchApi::Legacy);
+        assert!(!phase.collect_api_metrics);
+        assert_eq!(DiskSearchApi::default(), DiskSearchApi::Legacy);
+        assert_eq!(
+            DiskIndexOperation::example().search_phase.search_api,
+            DiskSearchApi::Legacy
+        );
+        assert!(phase.to_string().contains("Search API: legacy"));
+    }
+
+    #[test]
+    fn disk_search_api_uses_kebab_case_serde_and_display() {
+        let mut value = search_phase_json();
+        value["search_api"] = json!("indexed-vectors");
+        let phase: DiskSearchPhase = serde_json::from_value(value).unwrap();
+        assert_eq!(phase.search_api, DiskSearchApi::IndexedVectors);
+        assert_eq!(phase.search_api.to_string(), "indexed-vectors");
+        assert_eq!(
+            serde_json::to_value(phase.search_api).unwrap(),
+            json!("indexed-vectors")
+        );
+    }
+
+    #[test]
+    fn disk_search_api_rejects_unknown_values() {
+        let mut value = search_phase_json();
+        value["search_api"] = json!("return-vectors");
+        let error = serde_json::from_value::<DiskSearchPhase>(value).unwrap_err();
+        assert!(error.to_string().contains("unknown variant"));
+        assert!(error.to_string().contains("indexed-vectors"));
+    }
+
+    fn example_operation(contents: &str) -> DiskIndexOperation {
+        let value: serde_json::Value = serde_json::from_str(contents).unwrap();
+        serde_json::from_value(value["jobs"][0]["content"].clone()).unwrap()
+    }
+
+    #[test]
+    fn api_call_metric_examples_deserialize_and_only_differ_by_selector() {
+        let legacy_contents = include_str!("../../example/disk-index-api-call-metrics-legacy.json");
+        let indexed_contents =
+            include_str!("../../example/disk-index-api-call-metrics-indexed-vectors.json");
+        let legacy = example_operation(legacy_contents);
+        let indexed = example_operation(indexed_contents);
+
+        assert!(matches!(legacy.source, DiskIndexSource::Load(_)));
+        assert!(matches!(indexed.source, DiskIndexSource::Load(_)));
+        assert_eq!(legacy.search_phase.search_list, vec![10]);
+        assert_eq!(indexed.search_phase.search_list, vec![10]);
+        assert!(legacy.search_phase.collect_api_metrics);
+        assert!(indexed.search_phase.collect_api_metrics);
+        assert_eq!(legacy.search_phase.search_api, DiskSearchApi::Legacy);
+        assert_eq!(
+            indexed.search_phase.search_api,
+            DiskSearchApi::IndexedVectors
+        );
+
+        let mut legacy_json: serde_json::Value = serde_json::from_str(legacy_contents).unwrap();
+        let indexed_json: serde_json::Value = serde_json::from_str(indexed_contents).unwrap();
+        legacy_json["jobs"][0]["content"]["search_phase"]["search_api"] = json!("indexed-vectors");
+        assert_eq!(legacy_json, indexed_json);
     }
 }

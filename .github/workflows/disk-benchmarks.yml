@@ -11,6 +11,19 @@ name: Disk Benchmarks
 on:
   workflow_dispatch:
     inputs:
+      benchmark_mode:
+        description: 'Benchmark mode to run'
+        required: true
+        default: regression
+        type: choice
+        options:
+          - regression
+          - indexed-vector-api
+      search_l:
+        description: 'Search-list size for indexed-vector API mode'
+        required: true
+        default: '2000'
+        type: string
       baseline_ref:
         description: 'A branch, commit SHA, or tag name to compare the current branch with'
         required: true
@@ -97,6 +110,7 @@ jobs:
           lfs: true
 
       - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.benchmark_mode != 'indexed-vector-api' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.baseline_ref || 'main' }}
@@ -112,11 +126,13 @@ jobs:
           extract-to: diskann_rust/target/tmp
 
       - name: Copy dataset to baseline
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.benchmark_mode != 'indexed-vector-api' }}
         run: |
           mkdir -p baseline/target/tmp
           cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
 
       - name: Run baseline benchmark
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.benchmark_mode != 'indexed-vector-api' }}
         working-directory: baseline
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
@@ -124,6 +140,7 @@ jobs:
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.benchmark_mode != 'indexed-vector-api' }}
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
@@ -131,6 +148,7 @@ jobs:
             --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.benchmark_mode != 'indexed-vector-api' }}
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
@@ -140,12 +158,245 @@ jobs:
             --before ../baseline/target/tmp/${{ matrix.dataset }}_baseline.json \
             --after target/tmp/${{ matrix.dataset }}_target.json
 
+      - name: Build current benchmark binary
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        working-directory: diskann_rust
+        run: cargo build -p diskann-benchmark --features disk-index --release
+
+      - name: Build benchmark index
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        working-directory: diskann_rust
+        run: |
+          target/release/diskann-benchmark \
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_api_index_build.json
+
+      - name: Generate paired API benchmark configs
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        working-directory: diskann_rust
+        env:
+          SEARCH_L: ${{ inputs.search_l }}
+          SOURCE_CONFIG: ${{ env.PERF_INPUTS }}/${{ matrix.config }}
+          LEGACY_CONFIG: target/tmp/${{ matrix.dataset }}_legacy_config.json
+          INDEXED_CONFIG: target/tmp/${{ matrix.dataset }}_indexed_vectors_config.json
+        run: |
+          python3 - <<'PY'
+          import copy
+          import json
+          import os
+          from pathlib import Path
+
+          search_l = int(os.environ["SEARCH_L"])
+          if not 0 < search_l <= 2**32 - 1:
+              raise ValueError(f"search_l must be in [1, {2**32 - 1}], got {search_l}")
+
+          with Path(os.environ["SOURCE_CONFIG"]).open(encoding="utf-8") as stream:
+              original = json.load(stream)
+
+          if len(original.get("jobs", [])) != 1:
+              raise ValueError("expected exactly one benchmark job in the source config")
+          content = original["jobs"][0].get("content", {})
+          source = content.get("source", {})
+          if source.get("disk-index-source") != "Build":
+              raise ValueError("expected the source config to contain a Build disk index")
+
+          recall_at = content.get("search_phase", {}).get("recall_at")
+          if not isinstance(recall_at, int) or search_l < recall_at:
+              raise ValueError(f"search_l ({search_l}) must be at least recall_at ({recall_at})")
+
+          common = copy.deepcopy(original)
+          common_content = common["jobs"][0]["content"]
+          common_content["source"] = {
+              "disk-index-source": "Load",
+              "data_type": source["data_type"],
+              "load_path": source["save_path"],
+          }
+          search_phase = common_content["search_phase"]
+          search_phase["collect_api_metrics"] = True
+          search_phase["search_list"] = [search_l]
+
+          configs = {
+              "legacy": Path(os.environ["LEGACY_CONFIG"]),
+              "indexed-vectors": Path(os.environ["INDEXED_CONFIG"]),
+          }
+          generated = {}
+          for search_api, path in configs.items():
+              config = copy.deepcopy(common)
+              config["jobs"][0]["content"]["search_phase"]["search_api"] = search_api
+              path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+              generated[search_api] = config
+
+          comparable_legacy = copy.deepcopy(generated["legacy"])
+          comparable_legacy["jobs"][0]["content"]["search_phase"]["search_api"] = "indexed-vectors"
+          if comparable_legacy != generated["indexed-vectors"]:
+              raise AssertionError("generated API configs differ by more than search_api")
+          PY
+
+      - name: Run legacy API benchmark
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        working-directory: diskann_rust
+        run: |
+          target/release/diskann-benchmark \
+            run --input-file target/tmp/${{ matrix.dataset }}_legacy_config.json \
+            --output-file target/tmp/${{ matrix.dataset }}_legacy_result.json
+
+      - name: Run indexed-vector API benchmark
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        working-directory: diskann_rust
+        run: |
+          target/release/diskann-benchmark \
+            run --input-file target/tmp/${{ matrix.dataset }}_indexed_vectors_config.json \
+            --output-file target/tmp/${{ matrix.dataset }}_indexed_vectors_result.json
+
+      - name: Summarize API benchmark results
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        working-directory: diskann_rust
+        env:
+          SEARCH_L: ${{ inputs.search_l }}
+          LEGACY_RESULT: target/tmp/${{ matrix.dataset }}_legacy_result.json
+          INDEXED_RESULT: target/tmp/${{ matrix.dataset }}_indexed_vectors_result.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          expected_l = int(os.environ["SEARCH_L"])
+
+          def finite_number(value, label, *, positive=False):
+              if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                  raise ValueError(f"{label} must be a finite number, got {value!r}")
+              if positive and value <= 0:
+                  raise ValueError(f"{label} must be positive, got {value!r}")
+              if not positive and value < 0:
+                  raise ValueError(f"{label} must be non-negative, got {value!r}")
+              return value
+
+          def search_completed_peak(span_metrics, label):
+              roots = span_metrics.get("spans")
+              if not isinstance(roots, list):
+                  raise ValueError(f"{label}.span_metrics.spans must be a list")
+              stack = list(roots)
+              while stack:
+                  span = stack.pop()
+                  if not isinstance(span, dict):
+                      raise ValueError(f"{label}.span_metrics contains a non-object span")
+                  children = span.get("children", [])
+                  if not isinstance(children, list):
+                      raise ValueError(f"{label}.span_metrics span children must be a list")
+                  stack.extend(children)
+                  if str(span.get("span_name", "")).endswith("-search_completed"):
+                      metrics = span.get("metrics", {})
+                      return finite_number(
+                          metrics.get("peak_memory_usage"),
+                          f"{label}.search_completed.peak_memory_usage",
+                      )
+              raise ValueError(f"{label} result has no search_completed span")
+
+          def load_result(path, expected_api):
+              with Path(path).open(encoding="utf-8") as stream:
+                  records = json.load(stream)
+              label = expected_api
+              if not isinstance(records, list) or len(records) != 1:
+                  raise ValueError(f"{label} output must contain exactly one result record")
+              record = records[0]
+              if not isinstance(record, dict) or record.get("input", {}).get("type") != "disk-index":
+                  raise ValueError(f"{label} output does not contain a disk-index input")
+              results = record.get("results")
+              if not isinstance(results, dict) or results.get("build") is not None:
+                  raise ValueError(f"{label} output must contain Load-only disk-index results")
+              search = results.get("search")
+              if not isinstance(search, dict) or search.get("search_api") != expected_api:
+                  raise ValueError(f"{label} output has the wrong search_api")
+              per_l = search.get("search_results_per_l")
+              if not isinstance(per_l, list) or len(per_l) != 1:
+                  raise ValueError(f"{label} output must contain exactly one search result")
+              result = per_l[0]
+              if not isinstance(result, dict) or result.get("search_l") != expected_l:
+                  actual_l = result.get("search_l") if isinstance(result, dict) else None
+                  raise ValueError(f"{label} output search_l is {actual_l!r}, expected {expected_l}")
+              recall = finite_number(result.get("recall"), f"{label}.recall")
+              if recall > 100:
+                  raise ValueError(f"{label}.recall must be at most 100, got {recall!r}")
+              for field in (
+                  "qps",
+                  "mean_public_api_call_latency_us",
+                  "p95_public_api_call_latency_us",
+                  "p999_public_api_call_latency_us",
+              ):
+                  finite_number(result.get(field), f"{label}.{field}", positive=True)
+              for field in (
+                  "mean_latency",
+                  "p95_latency",
+                  "p999_latency",
+                  "mean_returned_vector_payload_bytes",
+                  "max_returned_vector_payload_bytes",
+              ):
+                  finite_number(result.get(field), f"{label}.{field}")
+              result["search_completed_peak_memory_gb"] = search_completed_peak(
+                  search.get("span_metrics", {}), label
+              )
+              return result
+
+          rows = [
+              ("legacy", load_result(os.environ["LEGACY_RESULT"], "legacy")),
+              (
+                  "indexed-vectors",
+                  load_result(os.environ["INDEXED_RESULT"], "indexed-vectors"),
+              ),
+          ]
+          if rows[0][1]["max_returned_vector_payload_bytes"] != 0:
+              raise ValueError("legacy API returned a nonzero vector payload")
+          if rows[1][1]["max_returned_vector_payload_bytes"] <= 0:
+              raise ValueError("indexed-vectors API returned an empty vector payload")
+
+          print(f"Indexed-vector API A/B summary (L={expected_l})")
+          for name, result in rows:
+              print(f"\n{name}:")
+              print(f"  recall: {result['recall']:.6f}")
+              print(f"  qps: {result['qps']:.3f}")
+              print(
+                  "  internal latency us (mean/p95/p999): "
+                  f"{result['mean_latency']:.3f} / {result['p95_latency']:.3f} / "
+                  f"{result['p999_latency']:.3f}"
+              )
+              print(
+                  "  public API call latency us (mean/p95/p999): "
+                  f"{result['mean_public_api_call_latency_us']:.3f} / "
+                  f"{result['p95_public_api_call_latency_us']:.3f} / "
+                  f"{result['p999_public_api_call_latency_us']:.3f}"
+              )
+              print(
+                  "  returned vector payload bytes (mean/max): "
+                  f"{result['mean_returned_vector_payload_bytes']:.3f} / "
+                  f"{result['max_returned_vector_payload_bytes']:.0f}"
+              )
+              print(
+                  "  search_completed peak_memory_usage GB: "
+                  f"{result['search_completed_peak_memory_gb']:.6f}"
+              )
+          PY
+
       - name: Upload benchmark results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()  # Upload even if validation fails
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.benchmark_mode != 'indexed-vector-api') }}  # Upload even if validation fails
         with:
           name: benchmark-results-${{ matrix.dataset }}
           path: |
             diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
             baseline/target/tmp/${{ matrix.dataset }}_baseline.json
+          retention-days: 30
+
+      - name: Upload API benchmark artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.benchmark_mode == 'indexed-vector-api' }}
+        with:
+          name: indexed-vector-api-${{ matrix.dataset }}
+          path: |
+            diskann_rust/target/tmp/${{ matrix.dataset }}_api_index_build.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_legacy_config.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_indexed_vectors_config.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_legacy_result.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_indexed_vectors_result.json
           retention-days: 30
