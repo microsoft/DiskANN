@@ -310,6 +310,18 @@ where
             before.search.search_api,
             after.search.search_api,
         );
+        let before_k = before
+            .search
+            .return_list_size
+            .unwrap_or(before.search.recall_at);
+        let after_k = after
+            .search
+            .return_list_size
+            .unwrap_or(after.search.recall_at);
+        anyhow::ensure!(
+            before_k == after_k,
+            "return_list_size mismatch: before={before_k} after={after_k}",
+        );
 
         // Check build time if both sides have it
         if let (Some(b_build), Some(a_build)) = (&before.build, &after.build) {

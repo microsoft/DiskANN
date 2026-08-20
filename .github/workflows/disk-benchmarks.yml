@@ -20,9 +20,14 @@ on:
           - regression
           - indexed-vector-api
       search_l:
-        description: 'Search-list size for indexed-vector API mode'
+        description: 'Search-list size L for indexed-vector API mode'
         required: true
         default: '2000'
+        type: string
+      return_k:
+        description: 'Result count K for indexed-vector API mode'
+        required: true
+        default: '100'
         type: string
       baseline_ref:
         description: 'A branch, commit SHA, or tag name to compare the current branch with'
@@ -176,6 +181,7 @@ jobs:
         working-directory: diskann_rust
         env:
           SEARCH_L: ${{ inputs.search_l }}
+          RETURN_K: ${{ inputs.return_k }}
           SOURCE_CONFIG: ${{ env.PERF_INPUTS }}/${{ matrix.config }}
           LEGACY_CONFIG: target/tmp/${{ matrix.dataset }}_legacy_config.json
           INDEXED_CONFIG: target/tmp/${{ matrix.dataset }}_indexed_vectors_config.json
@@ -187,8 +193,12 @@ jobs:
           from pathlib import Path
 
           search_l = int(os.environ["SEARCH_L"])
-          if not 0 < search_l <= 2**32 - 1:
-              raise ValueError(f"search_l must be in [1, {2**32 - 1}], got {search_l}")
+          return_k = int(os.environ["RETURN_K"])
+          if not 0 < return_k <= search_l <= 2**32 - 1:
+              raise ValueError(
+                  f"expected 0 < return_k <= search_l <= {2**32 - 1}, "
+                  f"got return_k={return_k}, search_l={search_l}"
+              )
 
           with Path(os.environ["SOURCE_CONFIG"]).open(encoding="utf-8") as stream:
               original = json.load(stream)
@@ -201,8 +211,8 @@ jobs:
               raise ValueError("expected the source config to contain a Build disk index")
 
           recall_at = content.get("search_phase", {}).get("recall_at")
-          if not isinstance(recall_at, int) or search_l < recall_at:
-              raise ValueError(f"search_l ({search_l}) must be at least recall_at ({recall_at})")
+          if not isinstance(recall_at, int) or return_k < recall_at:
+              raise ValueError(f"return_k ({return_k}) must be at least recall_at ({recall_at})")
 
           common = copy.deepcopy(original)
           common_content = common["jobs"][0]["content"]
@@ -213,6 +223,7 @@ jobs:
           }
           search_phase = common_content["search_phase"]
           search_phase["collect_api_metrics"] = True
+          search_phase["return_list_size"] = return_k
           search_phase["search_list"] = [search_l]
 
           configs = {
@@ -253,6 +264,7 @@ jobs:
         working-directory: diskann_rust
         env:
           SEARCH_L: ${{ inputs.search_l }}
+          RETURN_K: ${{ inputs.return_k }}
           LEGACY_RESULT: target/tmp/${{ matrix.dataset }}_legacy_result.json
           INDEXED_RESULT: target/tmp/${{ matrix.dataset }}_indexed_vectors_result.json
         run: |
@@ -263,6 +275,7 @@ jobs:
           from pathlib import Path
 
           expected_l = int(os.environ["SEARCH_L"])
+          expected_k = int(os.environ["RETURN_K"])
 
           def finite_number(value, label, *, positive=False):
               if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -309,6 +322,11 @@ jobs:
               search = results.get("search")
               if not isinstance(search, dict) or search.get("search_api") != expected_api:
                   raise ValueError(f"{label} output has the wrong search_api")
+              if search.get("return_list_size") != expected_k:
+                  raise ValueError(
+                      f"{label} output return_list_size is {search.get('return_list_size')!r}, "
+                      f"expected {expected_k}"
+                  )
               per_l = search.get("search_results_per_l")
               if not isinstance(per_l, list) or len(per_l) != 1:
                   raise ValueError(f"{label} output must contain exactly one search result")
@@ -351,7 +369,7 @@ jobs:
           if rows[1][1]["max_returned_vector_payload_bytes"] <= 0:
               raise ValueError("indexed-vectors API returned an empty vector payload")
 
-          print(f"Indexed-vector API A/B summary (L={expected_l})")
+          print(f"Indexed-vector API A/B summary (K={expected_k}, L={expected_l})")
           for name, result in rows:
               print(f"\n{name}:")
               print(f"  recall: {result['recall']:.6f}")
