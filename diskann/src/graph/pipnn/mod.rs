@@ -47,14 +47,12 @@ use crate::{
 };
 use diskann_utils::views::MatrixView;
 use diskann_vector::distance::Metric;
-use diskann_wide::{
-    Architecture, SIMDMask, SIMDSelect, SIMDVector,
-    arch::{self, Target1},
-};
+use diskann_wide::arch::{self, Target1};
 use rayon::ThreadPool;
 
-use self::kernel_metric::{
-    Cosine, CosineNormalized, InnerProduct, L2, LeafMetric, PartitionMetric,
+use self::{
+    kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2, LeafMetric, PartitionMetric},
+    simd::PiPNNSIMDSchema,
 };
 
 /// PiPNN partition and leaf-selection policy.
@@ -213,10 +211,7 @@ struct RunBuildGraph;
 impl<A, T> Target1<A, ANNResult<Vec<AdjacencyList<u32>>>, BuildGraphCall<'_, '_, '_, T>>
     for RunBuildGraph
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     T: VectorRepr + Send + Sync + 'static,
 {
     fn run(
@@ -256,10 +251,7 @@ fn build_graph_for<A, M, T>(
     metric: Metric,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric + PartitionMetric,
     T: VectorRepr + Send + Sync + 'static,
 {
