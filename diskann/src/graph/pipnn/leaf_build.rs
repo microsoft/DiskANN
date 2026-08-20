@@ -209,10 +209,7 @@ pub(super) fn add_hash_prune_candidates<A, M, T>(
     hash_prune: &super::hash_prune::HashPrune,
 ) -> Result<(), LeafBuildError>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
@@ -301,10 +298,7 @@ fn gather_leaf_neighbors<A, M, T>(
     buffers: &mut LeafBuffers,
 ) -> Result<usize, LeafBuildError>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
     T: VectorRepr + 'static,
 {

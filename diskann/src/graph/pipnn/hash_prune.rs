@@ -20,13 +20,17 @@
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
 use std::cell::UnsafeCell;
 
-use super::{bf16::f32_to_bf16, lsh::LshSketches};
+use super::{
+    bf16::f32_to_bf16,
+    lsh::{LshSketches, MAX_PLANES},
+    simd::{PiPNNSIMDSchema, PiPNNSIMDVector},
+};
 use crate::{ANNError, ANNResult, graph::AdjacencyList, utils::VectorRepr};
 use bytemuck::Pod;
 use diskann_utils::views::MatrixView;
 use diskann_vector::{prefetch_hint_all, prefetch_hint_all_raw};
 use diskann_wide::{
-    Architecture, SIMDMask, SIMDPartialEq, SIMDPartialOrd, SIMDVector,
+    Architecture, SIMDMask, SIMDPartialEq, SIMDVector,
     arch::{self, Dispatched1, FTarget1, Target},
     lifetime::As,
 };
@@ -343,12 +347,10 @@ where
 
 impl<A> FTarget1<A, u16, RelativeHashArgs> for RelativeHashKernel
 where
-    A: Architecture,
-    A::f32x16: SIMDPartialOrd + std::ops::Sub<Output = A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
 {
     fn run(arch: A, args: RelativeHashArgs) -> u16 {
-        relative_hash_simd::<A::f32x16>(arch, args)
+        relative_hash_simd::<A::HashScore>(arch, args)
     }
 }
 
@@ -383,22 +385,33 @@ where
 /// the bit on every architecture.
 fn relative_hash_simd<F>(arch: F::Arch, args: RelativeHashArgs) -> u16
 where
-    F: SIMDVector<Scalar = f32> + SIMDPartialOrd + std::ops::Sub<Output = F>,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    F: PiPNNSIMDVector,
 {
-    // SAFETY: `src` and `dst` each contain `len` values. Construction checks
-    // `len <= 16 <= F::LANES`. The masked load does not read inactive lanes.
-    let dst = unsafe { F::load_simd_first(arch, args.dst, args.len) };
-    // SAFETY: `dst` and `src` have the same checked length.
-    let src = unsafe { F::load_simd_first(arch, args.src, args.len) };
-    let bits = u64::from(
-        (dst - src)
-            .ge_simd(F::splat(arch, 0.0))
-            .bitmask()
-            .to_underlying(),
-    );
-    let active = ((1_u32 << args.len) - 1) as u16;
-    bits as u16 & active
+    if F::LANES >= MAX_PLANES {
+        // SAFETY: `src` and `dst` each contain `len <= MAX_PLANES <= F::LANES`
+        // values. The masked loads do not read inactive lanes.
+        let dst = unsafe { F::load_simd_first(arch, args.dst, args.len) };
+        // SAFETY: `src` has the same checked length as `dst`.
+        let src = unsafe { F::load_simd_first(arch, args.src, args.len) };
+        let active = (1_u64 << args.len) - 1;
+        return F::active_lanes((dst - src).ge_simd(F::splat(arch, 0.0))) as u16 & active as u16;
+    }
+
+    let mut bits = 0u16;
+    let mut offset = 0usize;
+    while offset < args.len {
+        let chunk_len = (args.len - offset).min(F::LANES);
+        // SAFETY: `offset + chunk_len <= args.len`. The masked loads do not read
+        // inactive lanes.
+        let dst = unsafe { F::load_simd_first(arch, args.dst.add(offset), chunk_len) };
+        // SAFETY: `src` has the same checked length as `dst`.
+        let src = unsafe { F::load_simd_first(arch, args.src.add(offset), chunk_len) };
+        let active = (1_u64 << chunk_len) - 1;
+        let chunk_bits = F::active_lanes((dst - src).ge_simd(F::splat(arch, 0.0))) & active;
+        bits |= (chunk_bits as u16) << offset;
+        offset += chunk_len;
+    }
+    bits
 }
 
 /// Convert a bf16 distance to an order-preserving `u16` key.
