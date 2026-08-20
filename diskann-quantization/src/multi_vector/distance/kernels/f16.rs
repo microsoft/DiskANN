@@ -1,12 +1,16 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! f16 MaxSim.
 //!
 //! There is no f16 leaf: f16 widens to f32 and reuses the f32 pipeline. Both sides widen a
 //! tile at a time into a buffer the walk reuses, which is what the lending [`TileWalk`]
-//! exists for — the whole query never has to be staged at once, and the staged copy stays
+//! exists for. The whole A side never has to be staged at once, and the staged copy stays
 //! inside the cache level its tile was sized for.
+
+use core::num::NonZeroUsize;
 
 use diskann_vector::conversion::SliceCast;
 use diskann_wide::Architecture;
@@ -17,7 +21,7 @@ use diskann_wide::arch::{Scalar, Target2};
 use super::leaves::scalar::{A_PANEL as SC_A, B_PANEL as SC_B};
 #[cfg(target_arch = "x86_64")]
 use super::leaves::v3::{A_PANEL as V3_A, B_PANEL as V3_B};
-use super::tiles::{Cursor, DocTile, QueryTile};
+use super::tiles::{BlockTransposedTile, Cursor, RowMajorTile, contraction, tile_stride};
 use super::{Plan, TileAt, TileBudget, TileWalk, float};
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
@@ -26,18 +30,14 @@ struct Widen<'a, Arch> {
     arch: Arch,
     cursor: Cursor<'a, half::f16>,
     buf: Vec<f32>,
-    k: usize,
+    k: NonZeroUsize,
 }
 
 impl<'a, Arch: Architecture> Widen<'a, Arch>
 where
     SliceCast<f32, half::f16>: for<'x> Target2<Arch, (), &'x mut [f32], &'x [half::f16]>,
 {
-    /// # Panics
-    ///
-    /// Panics if `k` is zero — the entry guards that case before any walk is built.
-    fn new(arch: Arch, src: &'a [half::f16], k: usize, stride: usize) -> Self {
-        assert!(k > 0, "widening walk requires a non-empty contraction");
+    fn new(arch: Arch, src: &'a [half::f16], k: NonZeroUsize, stride: NonZeroUsize) -> Self {
         let cursor = Cursor::new(src, stride);
         let buf = vec![0.0f32; cursor.widest()];
         Self {
@@ -57,32 +57,41 @@ where
     }
 }
 
-/// Widens the padded storage of a block-transposed f16 query.
+/// Widens the padded storage of an f16 [`BlockTransposedRef`].
 ///
 /// Widening is element-wise, so it preserves the block-transposed permutation.
-struct QueryWiden<'a, Arch, const AR: usize>(Widen<'a, Arch>);
+struct BlockTransposedWiden<'a, Arch, const AR: usize>(Widen<'a, Arch>);
 
-impl<'a, Arch: Architecture, const AR: usize> QueryWiden<'a, Arch, AR>
+impl<'a, Arch: Architecture, const AR: usize> BlockTransposedWiden<'a, Arch, AR>
 where
     SliceCast<f32, half::f16>: for<'x> Target2<Arch, (), &'x mut [f32], &'x [half::f16]>,
 {
-    fn new(arch: Arch, view: BlockTransposedRef<'a, half::f16, AR>, a_panels: usize) -> Self {
-        let k = view.padded_ncols();
-        Self(Widen::new(arch, view.as_slice(), k, a_panels * AR * k))
+    fn new(
+        arch: Arch,
+        view: BlockTransposedRef<'a, half::f16, AR>,
+        a_panels: NonZeroUsize,
+    ) -> Self {
+        let k = contraction(view.padded_ncols());
+        Self(Widen::new(
+            arch,
+            view.as_slice(),
+            k,
+            tile_stride(a_panels, AR, k),
+        ))
     }
 }
 
-impl<'t, Arch, const AR: usize> TileAt<'t> for QueryWiden<'_, Arch, AR> {
-    type Tile = QueryTile<'t, f32, AR>;
+impl<'t, Arch, const AR: usize> TileAt<'t> for BlockTransposedWiden<'_, Arch, AR> {
+    type Tile = BlockTransposedTile<'t, f32, AR>;
 }
 
-impl<Arch: Architecture, const AR: usize> TileWalk for QueryWiden<'_, Arch, AR>
+impl<Arch: Architecture, const AR: usize> TileWalk for BlockTransposedWiden<'_, Arch, AR>
 where
     SliceCast<f32, half::f16>: for<'x> Target2<Arch, (), &'x mut [f32], &'x [half::f16]>,
 {
-    fn next(&mut self) -> Option<QueryTile<'_, f32, AR>> {
+    fn next(&mut self) -> Option<BlockTransposedTile<'_, f32, AR>> {
         let k = self.0.k;
-        self.0.next().map(|data| QueryTile::new(data, k))
+        self.0.next().map(|data| BlockTransposedTile::new(data, k))
     }
 
     fn reset(&mut self) {
@@ -90,30 +99,35 @@ where
     }
 }
 
-/// Widens a row-major f16 doc matrix.
-struct DocWiden<'a, Arch, const BR: usize>(Widen<'a, Arch>);
+/// Widens an f16 [`Standard`] matrix.
+struct RowMajorWiden<'a, Arch, const BR: usize>(Widen<'a, Arch>);
 
-impl<'a, Arch: Architecture, const BR: usize> DocWiden<'a, Arch, BR>
+impl<'a, Arch: Architecture, const BR: usize> RowMajorWiden<'a, Arch, BR>
 where
     SliceCast<f32, half::f16>: for<'x> Target2<Arch, (), &'x mut [f32], &'x [half::f16]>,
 {
-    fn new(arch: Arch, docs: MatRef<'a, Standard<half::f16>>, b_panels: usize) -> Self {
-        let k = docs.vector_dim();
-        Self(Widen::new(arch, docs.as_slice(), k, b_panels * BR * k))
+    fn new(arch: Arch, mat: MatRef<'a, Standard<half::f16>>, b_panels: NonZeroUsize) -> Self {
+        let k = contraction(mat.vector_dim());
+        Self(Widen::new(
+            arch,
+            mat.as_slice(),
+            k,
+            tile_stride(b_panels, BR, k),
+        ))
     }
 }
 
-impl<'t, Arch, const BR: usize> TileAt<'t> for DocWiden<'_, Arch, BR> {
-    type Tile = DocTile<'t, f32, BR>;
+impl<'t, Arch, const BR: usize> TileAt<'t> for RowMajorWiden<'_, Arch, BR> {
+    type Tile = RowMajorTile<'t, f32, BR>;
 }
 
-impl<Arch: Architecture, const BR: usize> TileWalk for DocWiden<'_, Arch, BR>
+impl<Arch: Architecture, const BR: usize> TileWalk for RowMajorWiden<'_, Arch, BR>
 where
     SliceCast<f32, half::f16>: for<'x> Target2<Arch, (), &'x mut [f32], &'x [half::f16]>,
 {
-    fn next(&mut self) -> Option<DocTile<'_, f32, BR>> {
+    fn next(&mut self) -> Option<RowMajorTile<'_, f32, BR>> {
         let k = self.0.k;
-        self.0.next().map(|data| DocTile::new(data, k))
+        self.0.next().map(|data| RowMajorTile::new(data, k))
     }
 
     fn reset(&mut self) {
@@ -121,9 +135,14 @@ where
     }
 }
 
-// ── Entry ────────────────────────────────────────────────────────
+///////////
+// Entry //
+///////////
 
-/// The f16 MaxSim entry — the f32 pipeline behind widening walks.
+/// The f16 MaxSim entry: the f32 pipeline behind widening walks.
+///
+/// Operand naming matches [`MaxIp`](super::MaxIp). The block-transposed A side is the
+/// query and the row-major B side the documents.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MaxIpF16;
 
@@ -153,8 +172,8 @@ impl
             state,
             |plan: Plan<V3_A, V3_B>| {
                 (
-                    QueryWiden::new(arch, query, plan.a_panels),
-                    DocWiden::new(arch, docs, plan.b_panels),
+                    BlockTransposedWiden::new(arch, query, plan.a_panels),
+                    RowMajorWiden::new(arch, docs, plan.b_panels),
                 )
             },
         );
@@ -186,8 +205,8 @@ impl
             state,
             |plan: Plan<SC_A, SC_B>| {
                 (
-                    QueryWiden::new(arch, query, plan.a_panels),
-                    DocWiden::new(arch, docs, plan.b_panels),
+                    BlockTransposedWiden::new(arch, query, plan.a_panels),
+                    RowMajorWiden::new(arch, docs, plan.b_panels),
                 )
             },
         );

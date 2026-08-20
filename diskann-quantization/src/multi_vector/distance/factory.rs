@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Factory + concrete `MaxSimKernel<T>` impls for the multi-vector distance
 //! API. BYOTE entry point — see [`build_max_sim`].

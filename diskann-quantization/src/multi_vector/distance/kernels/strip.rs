@@ -1,63 +1,85 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! The accumulator a fill writes and a drain reads.
 //!
-//! Rows are query rows and one column is one doc — note that a doc arrives as a *row* of
-//! the input and lands as a *column* here. Column-major over the whole strip: column `c`
-//! occupies `[c * AR, (c + 1) * AR)`, and slot `p` covers columns `p * BR ..`, so a drain
-//! can address a run of columns without knowing which slot produced them.
+//! Storage is a flat run of `AR`-element chunks. One chunk is what the rest of the module
+//! calls a *column*. Read as memory the strip is therefore row-major with the axes
+//! flipped: an `n × AR` matrix whose rows are the accumulator's columns.
+//!
+//! ```text
+//! AR = 4, BR = 2:
+//!
+//!   memory ->  [ a0 a1 a2 a3 ][ a0 a1 a2 a3 ][ a0 a1 a2 a3 ][ a0 a1 a2 a3 ]
+//!                 column 0       column 1       column 2       column 3
+//!              \___________ slot 0 _________/\___________ slot 1 _________/
+//! ```
+//!
+//! Column `c` occupies `[c * AR, (c + 1) * AR)` and slot `p` covers columns `p * BR ..`,
+//! so [`Strip::columns`] can hand a drain a run that straddles slot boundaries. What the
+//! two axes *mean* is the drain's business, not the strip's. See
+//! [`RawMax`](super::float::RawMax).
 
-use core::slice::ChunksExactMut;
+use core::mem;
 
 use super::{Scratch, SlotsAt};
 
-/// Accumulator for one A-panel against one whole B-tile.
+/// Accumulator for one A-panel against one whole B-tile, carved by its [`Scratch`]
+/// impl into one [`Slot`] per B-panel.
 ///
 /// Holds no cursor: [`Scratch::slots`] restarts from the front on every fill, which is
 /// what lets the same memory be re-lent across tiles without clearing.
 pub(super) struct Strip<'a, T, const AR: usize, const BR: usize> {
-    buf: &'a mut [T],
+    buf: &'a mut [[T; AR]],
 }
 
 impl<'a, T, const AR: usize, const BR: usize> Strip<'a, T, AR, BR> {
-    /// Trailing elements beyond the last whole slot are never touched.
+    /// Trailing elements beyond the last whole column are never touched.
     pub(super) fn new(buf: &'a mut [T]) -> Self {
-        Self { buf }
+        Self {
+            buf: buf.as_chunks_mut::<AR>().0,
+        }
     }
 
-    /// The first `live` columns — the only region the fill just performed wrote.
+    /// The first `live` columns, the region the fill just performed wrote.
     ///
     /// # Panics
     ///
     /// Panics if `live` exceeds the strip's column capacity.
-    pub(super) fn columns(&self, live: usize) -> &[T] {
-        &self.buf[..live * AR]
+    pub(super) fn columns(&self, live: usize) -> &[[T; AR]] {
+        &self.buf[..live]
     }
 }
 
-/// One `AR × BR` accumulator tile, column-major.
+/// The `BR` consecutive columns of a [`Strip`] that one leaf call accumulates into.
 pub(super) struct Slot<'a, T, const AR: usize, const BR: usize> {
-    buf: &'a mut [T],
+    buf: &'a mut [[T; AR]; BR],
 }
 
 impl<T, const AR: usize, const BR: usize> Slot<'_, T, AR, BR> {
-    /// Exactly `AR * BR` elements: [`Slots`] only ever cuts whole tiles.
-    pub(super) fn as_mut_slice(&mut self) -> &mut [T] {
+    pub(super) fn columns(&mut self) -> &mut [[T; AR]; BR] {
         &mut *self.buf
     }
 }
 
-/// Cuts a strip into disjoint slots, stopping short of a trailing partial tile.
+/// Cuts a [`Strip`] into disjoint [`Slot`]s, stopping short of a trailing partial tile.
 ///
-/// Disjointness and that stopping rule are both structural, from `chunks_exact_mut`.
-pub(super) struct Slots<'a, T, const AR: usize, const BR: usize>(ChunksExactMut<'a, T>);
+/// Disjointness and that stopping rule are both structural, from `split_first_chunk_mut`.
+pub(super) struct Slots<'a, T, const AR: usize, const BR: usize> {
+    rest: &'a mut [[T; AR]],
+}
 
 impl<'a, T, const AR: usize, const BR: usize> Iterator for Slots<'a, T, AR, BR> {
     type Item = Slot<'a, T, AR, BR>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|buf| Slot { buf })
+        // A reborrow through `&mut self` cannot reach `'a`, so the remainder is moved out
+        // and put back. Too short a remainder leaves it empty, which is where it ends.
+        let (buf, rest) = mem::take(&mut self.rest).split_first_chunk_mut::<BR>()?;
+        self.rest = rest;
+        Some(Slot { buf })
     }
 }
 
@@ -68,7 +90,9 @@ impl<'s, T, const AR: usize, const BR: usize> SlotsAt<'s> for Strip<'_, T, AR, B
 
 impl<T, const AR: usize, const BR: usize> Scratch for Strip<'_, T, AR, BR> {
     fn slots(&mut self) -> Slots<'_, T, AR, BR> {
-        Slots(self.buf.chunks_exact_mut(AR * BR))
+        Slots {
+            rest: &mut *self.buf,
+        }
     }
 }
 
@@ -82,7 +106,7 @@ mod tests {
         let mut strip = Strip::<u32, 4, 2>::new(&mut buf);
 
         for (n, mut slot) in strip.slots().enumerate() {
-            slot.as_mut_slice().fill(n as u32 + 1);
+            slot.columns().as_flattened_mut().fill(n as u32 + 1);
         }
         assert_eq!(strip.slots().count(), 3);
 
@@ -98,7 +122,10 @@ mod tests {
         let strip = Strip::<u32, 4, 2>::new(&mut buf);
 
         // Three columns straddle the first slot (2 columns) into the second.
-        assert_eq!(strip.columns(3), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        assert_eq!(strip.columns(0), &[] as &[u32]);
+        assert_eq!(
+            strip.columns(3),
+            &[[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
+        );
+        assert_eq!(strip.columns(0), &[] as &[[u32; 4]]);
     }
 }
