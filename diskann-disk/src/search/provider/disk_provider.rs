@@ -926,6 +926,16 @@ where
     }
 }
 
+impl<Data, VP> Drop for DiskAccessor<'_, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    fn drop(&mut self) {
+        self.scratch.distance_cache.clear();
+    }
+}
+
 /// [`DiskIndexSearcher`] is a helper class to make it easy to construct index
 /// and do repeated search operations. It is a wrapper around the index.
 /// This is useful for drivers such as search_disk_index.exe in tools.
