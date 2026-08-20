@@ -11,7 +11,7 @@ mod partition;
 pub(super) use leaf::LeafMetric;
 pub(super) use partition::PartitionMetric;
 
-use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
+use super::simd::PiPNNSIMDVector;
 
 pub(super) struct L2;
 pub(super) struct Cosine;
@@ -32,8 +32,7 @@ pub(super) struct PartitionNorms<'a> {
 #[inline(always)]
 pub(super) fn cosine_distance_simd<F>(arch: F::Arch, dot: F, source_norm: F, target_norm: F) -> F
 where
-    F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
+    F: PiPNNSIMDVector,
 {
     let zero = F::default(arch);
     let one = F::splat(arch, 1.0);
@@ -41,8 +40,12 @@ where
     let source_zero = source_norm.lt_simd(minimum_norm);
     let target_zero = target_norm.lt_simd(minimum_norm);
     let denominator = source_norm * target_norm;
-    let safe_denominator = source_zero.select(one, target_zero.select(one, denominator));
-    let cosine = source_zero.select(zero, target_zero.select(zero, dot / safe_denominator));
+    let safe_denominator = F::select(source_zero, one, F::select(target_zero, one, denominator));
+    let cosine = F::select(
+        source_zero,
+        zero,
+        F::select(target_zero, zero, dot / safe_denominator),
+    );
     let negative_one = F::splat(arch, -1.0);
     one - negative_one.max_simd(cosine.min_simd(one))
 }

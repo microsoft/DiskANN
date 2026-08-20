@@ -20,11 +20,12 @@ use diskann_linalg::Transpose;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 #[cfg(test)]
 use diskann_vector::distance::Metric;
-use diskann_wide::{
-    Architecture, Const, SIMDFloat, SIMDMask, SIMDPartialOrd, SIMDSelect, SIMDVector,
-};
+use diskann_wide::{SIMDMask, SIMDVector};
 
-use super::kernel_metric::{PartitionMetric, PartitionNorms};
+use super::{
+    kernel_metric::{PartitionMetric, PartitionNorms},
+    simd::{PiPNNSIMDSchema, PiPNNSIMDVector},
+};
 
 /// No sampled partition center was rankable for this output slot.
 pub(super) const UNASSIGNED_LEADER: u32 = u32::MAX;
@@ -90,10 +91,7 @@ pub(super) fn assign_leaders<A, M>(
     workspace: &mut PartitionKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
 {
     let point_count = points.nrows();
@@ -145,10 +143,7 @@ fn rank_leader_dots<A, M>(
     output: MutMatrixView<'_, u32>,
     ranked_leaders: &mut Vec<(u32, f32)>,
 ) where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
 {
     let fanout = output.ncols();
@@ -157,24 +152,22 @@ fn rank_leader_dots<A, M>(
     }
 
     ranked_leaders.resize(fanout, (UNASSIGNED_LEADER, f32::INFINITY));
-    select_point_leaders::<A::f32x16, M>(arch, input.dots, input.norms, output, ranked_leaders);
+    select_point_leaders::<A, M>(arch, input.dots, input.norms, output, ranked_leaders);
 }
 
 /// Rank sampled partition centers for each assigned point.
 ///
 /// The function keeps nearest-first order for every point. Full SIMD groups use
 /// metric-specific formulas. Remaining leaders use the matching single formula.
-fn select_point_leaders<F, M>(
-    arch: F::Arch,
+fn select_point_leaders<A, M>(
+    arch: A,
     dots: MatrixView<'_, f32>,
     norms: PartitionNorms<'_>,
     mut output: MutMatrixView<'_, u32>,
     ranked_leaders: &mut [(u32, f32)],
 ) where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
+    A: PiPNNSIMDSchema,
     M: PartitionMetric,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let leader_count = dots.ncols();
     let fanout = output.ncols();
@@ -185,15 +178,15 @@ fn select_point_leaders<F, M>(
         .enumerate()
     {
         ranked_leaders.fill((UNASSIGNED_LEADER, f32::INFINITY));
-        let point_simd = M::point_simd::<F>(arch, norms, point);
+        let point_simd = M::point_simd(arch, norms, point);
         let point_single = M::point_single(norms, point);
-        let simd_prefix = leader_count - leader_count % F::LANES;
+        let simd_prefix = leader_count - leader_count % M::Simd::<A>::LANES;
 
-        for first_leader in (0..simd_prefix).step_by(F::LANES) {
+        for first_leader in (0..simd_prefix).step_by(M::Simd::<A>::LANES) {
             // SAFETY: This group is inside the point's leader row.
-            let dot_products = unsafe { F::load_simd(arch, point_dots.as_ptr().add(first_leader)) };
-            let rankings =
-                M::rankings_simd::<F>(arch, norms, point_simd, dot_products, first_leader);
+            let dot_products =
+                unsafe { M::Simd::<A>::load_simd(arch, point_dots.as_ptr().add(first_leader)) };
+            let rankings = M::rankings_simd(arch, norms, point_simd, dot_products, first_leader);
             insert_leader_lanes(rankings, first_leader, ranked_leaders);
         }
 
@@ -213,8 +206,7 @@ fn select_point_leaders<F, M>(
 /// sampled-leader order, which preserves tie order.
 fn insert_leader_lanes<F>(scores: F, first_leader: usize, ranked_leaders: &mut [(u32, f32)])
 where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDPartialOrd,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    F: PiPNNSIMDVector,
 {
     let threshold = F::splat(scores.arch(), ranked_leaders[ranked_leaders.len() - 1].1);
     let eligible = scores.lt_simd(threshold);
@@ -222,8 +214,9 @@ where
         return;
     }
 
-    let values: [f32; 16] = scores.to_array();
-    let mut lanes = u64::from(eligible.bitmask().to_underlying());
+    let values = scores.to_array();
+    let values = values.as_ref();
+    let mut lanes = F::active_lanes(eligible);
     while lanes != 0 {
         let lane = lanes.trailing_zeros() as usize;
         lanes &= lanes - 1;
@@ -264,10 +257,7 @@ struct DispatchPartitionForTest(Metric);
 #[cfg(test)]
 impl<A> diskann_wide::arch::Target1<A, (), DispatchedPartitionCall<'_>> for DispatchPartitionForTest
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
 {
     fn run(self, arch: A, call: DispatchedPartitionCall<'_>) {
         use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
