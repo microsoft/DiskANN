@@ -172,6 +172,8 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) beam_width: usize,
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) return_list_size: Option<u32>,
     #[serde(default)]
     pub(crate) search_api: DiskSearchApi,
     #[serde(default)]
@@ -284,6 +286,10 @@ impl DiskIndexBuild {
 }
 
 impl DiskSearchPhase {
+    pub(crate) fn return_list_size(&self) -> u32 {
+        self.return_list_size.unwrap_or(self.recall_at)
+    }
+
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries
             .resolve(checker)
@@ -306,21 +312,25 @@ impl DiskSearchPhase {
             .context("invalid disk search mode")?;
 
         // basic numeric sanity checks
+        if self.recall_at == 0 {
+            anyhow::bail!("recall_at must be positive");
+        }
+        let return_list_size = self.return_list_size();
+        if return_list_size < self.recall_at {
+            anyhow::bail!("return_list_size must be at least recall_at");
+        }
         if self.search_list.is_empty() {
             anyhow::bail!("search_list must have at least one value");
         }
         if self
             .search_list
             .iter()
-            .any(|&l| l == 0 || l < self.recall_at)
+            .any(|&l| l == 0 || l < return_list_size)
         {
-            anyhow::bail!("search_list must contain positive values only");
+            anyhow::bail!("search_list values must be at least return_list_size");
         }
         if self.beam_width == 0 {
             anyhow::bail!("beam_width must be positive");
-        }
-        if self.recall_at == 0 {
-            anyhow::bail!("recall_at must be positive");
         }
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
@@ -373,6 +383,7 @@ impl Example for DiskIndexOperation {
             search_list: vec![64, 128, 256, 512],
             beam_width: 16,
             recall_at: 10,
+            return_list_size: None,
             num_threads: 8,
             search_api: DiskSearchApi::default(),
             collect_api_metrics: false,
@@ -505,6 +516,7 @@ impl DiskSearchPhase {
         }
         write_field!(f, "Beam Width", self.beam_width)?;
         write_field!(f, "Recall@", self.recall_at)?;
+        write_field!(f, "Return K", self.return_list_size())?;
         write_field!(f, "Threads", self.num_threads)?;
         write_field!(f, "Search API", self.search_api)?;
         write_field!(f, "Collect API Metrics", self.collect_api_metrics)?;
@@ -563,6 +575,7 @@ mod tests {
         let phase: DiskSearchPhase = serde_json::from_value(search_phase_json()).unwrap();
         assert_eq!(phase.search_api, DiskSearchApi::Legacy);
         assert!(!phase.collect_api_metrics);
+        assert_eq!(phase.return_list_size(), phase.recall_at);
         assert_eq!(DiskSearchApi::default(), DiskSearchApi::Legacy);
         assert_eq!(
             DiskIndexOperation::example().search_phase.search_api,

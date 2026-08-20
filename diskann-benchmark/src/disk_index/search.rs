@@ -50,6 +50,8 @@ pub(super) struct DiskSearchStats {
     pub(super) num_threads: usize,
     pub(super) beam_width: usize,
     pub(super) recall_at: u32,
+    #[serde(default)]
+    pub(super) return_list_size: Option<u32>,
     pub(crate) is_flat_search: bool,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
@@ -148,6 +150,7 @@ impl DiskSearchResult {
         search_l: u32,
         total_time_as_secs: f32,
         num_queries: usize,
+        result_dim: u32,
         gt_context: &GroundTruthContext,
     ) -> anyhow::Result<DiskSearchResult> {
         let total_ios = statistics::get_sum_stats(statistics, |stats| stats.total_io_operations);
@@ -161,7 +164,7 @@ impl DiskSearchResult {
 
         let recall = if let Some(var_gt) = &gt_context.gt_ids_variable_length {
             let ours: Vec<Vec<u32>> = result_ids
-                .chunks_exact(gt_context.recall_at as usize)
+                .chunks_exact(result_dim as usize)
                 .enumerate()
                 .map(|(qi, chunk)| {
                     let written = result_counts[qi] as usize;
@@ -187,7 +190,7 @@ impl DiskSearchResult {
                 gt_context.gt_dists.as_ref(),
                 gt_context.gt_dim,
                 result_ids,
-                gt_context.recall_at,
+                result_dim,
                 KRecallAtN::new(gt_context.recall_at, gt_context.recall_at)?,
             )?;
             recall_value as f32
@@ -288,6 +291,7 @@ where
         search_params.recall_at,
         storage_provider,
     )?;
+    let return_list_size = search_params.return_list_size();
 
     // Setup disk index components
     let pivot_path = get_pq_pivot_file(&index_load.load_path);
@@ -329,9 +333,8 @@ where
         let mut statistics_vec: Vec<QueryStatistics> =
             vec![QueryStatistics::default(); num_queries];
         let mut result_counts: Vec<u32> = vec![0; num_queries];
-        let mut result_ids: Vec<u32> = vec![0; (search_params.recall_at as usize) * num_queries];
-        let mut result_dists: Vec<f32> =
-            vec![0.0; (search_params.recall_at as usize) * num_queries];
+        let mut result_ids: Vec<u32> = vec![0; (return_list_size as usize) * num_queries];
+        let mut result_dists: Vec<f32> = vec![0.0; (return_list_size as usize) * num_queries];
         let start = Instant::now();
 
         let mut l_span = {
@@ -347,8 +350,8 @@ where
                 let zipped = queries
                     .par_row_iter()
                     .zip(vector_filters.par_iter())
-                    .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                    .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                    .zip(result_ids.par_chunks_mut(return_list_size as usize))
+                    .zip(result_dists.par_chunks_mut(return_list_size as usize))
                     .zip(statistics_vec.par_iter_mut())
                     .zip(result_counts.par_iter_mut());
 
@@ -367,7 +370,7 @@ where
 
                         match searcher.search(
                             q,
-                            search_params.recall_at,
+                            return_list_size,
                             l,
                             Some(search_params.beam_width),
                             mode,
@@ -375,7 +378,7 @@ where
                             Ok(search_result) => {
                                 *stats = search_result.stats.query_statistics;
                                 let base_count = (search_result.stats.result_count as usize)
-                                    .min(search_params.recall_at as usize)
+                                    .min(return_list_size as usize)
                                     .min(search_result.results.len());
 
                                 *rc = base_count as u32;
@@ -406,8 +409,8 @@ where
                 let zipped = queries
                     .par_row_iter()
                     .zip(vector_filters.par_iter())
-                    .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                    .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                    .zip(result_ids.par_chunks_mut(return_list_size as usize))
+                    .zip(result_dists.par_chunks_mut(return_list_size as usize))
                     .zip(statistics_vec.par_iter_mut())
                     .zip(result_counts.par_iter_mut());
 
@@ -423,7 +426,7 @@ where
 
                         match searcher.search_with_indexed_vectors(
                             q,
-                            search_params.recall_at,
+                            return_list_size,
                             l,
                             Some(search_params.beam_width),
                             mode,
@@ -431,7 +434,7 @@ where
                             Ok(search_result) => {
                                 *stats = search_result.stats.query_statistics;
                                 let base_count = (search_result.stats.result_count as usize)
-                                    .min(search_params.recall_at as usize)
+                                    .min(return_list_size as usize)
                                     .min(search_result.results.len());
 
                                 *rc = base_count as u32;
@@ -467,8 +470,8 @@ where
                 let zipped = queries
                     .par_row_iter()
                     .zip(vector_filters.par_iter())
-                    .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                    .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                    .zip(result_ids.par_chunks_mut(return_list_size as usize))
+                    .zip(result_dists.par_chunks_mut(return_list_size as usize))
                     .zip(statistics_vec.par_iter_mut())
                     .zip(result_counts.par_iter_mut())
                     .zip(public_api_call_latencies_us.par_iter_mut());
@@ -486,7 +489,7 @@ where
                         let api_start = Instant::now();
                         let search_result = searcher.search(
                             q,
-                            search_params.recall_at,
+                            return_list_size,
                             l,
                             Some(search_params.beam_width),
                             mode,
@@ -498,7 +501,7 @@ where
                             Ok(search_result) => {
                                 *stats = search_result.stats.query_statistics;
                                 let base_count = (search_result.stats.result_count as usize)
-                                    .min(search_params.recall_at as usize)
+                                    .min(return_list_size as usize)
                                     .min(search_result.results.len());
 
                                 *rc = base_count as u32;
@@ -531,8 +534,8 @@ where
                 let zipped = queries
                     .par_row_iter()
                     .zip(vector_filters.par_iter())
-                    .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                    .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                    .zip(result_ids.par_chunks_mut(return_list_size as usize))
+                    .zip(result_dists.par_chunks_mut(return_list_size as usize))
                     .zip(statistics_vec.par_iter_mut())
                     .zip(result_counts.par_iter_mut())
                     .zip(public_api_call_latencies_us.par_iter_mut())
@@ -554,7 +557,7 @@ where
                         let api_start = Instant::now();
                         let search_result = searcher.search_with_indexed_vectors(
                             q,
-                            search_params.recall_at,
+                            return_list_size,
                             l,
                             Some(search_params.beam_width),
                             mode,
@@ -566,7 +569,7 @@ where
                             Ok(search_result) => {
                                 *stats = search_result.stats.query_statistics;
                                 let base_count = (search_result.stats.result_count as usize)
-                                    .min(search_params.recall_at as usize)
+                                    .min(return_list_size as usize)
                                     .min(search_result.results.len());
 
                                 *rc = base_count as u32;
@@ -624,6 +627,7 @@ where
             l,
             total_time.as_secs_f32(),
             num_queries,
+            return_list_size,
             &gt_context,
         )?;
 
@@ -649,6 +653,7 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
+        return_list_size: Some(return_list_size),
         is_flat_search: search_params.search_mode.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
@@ -752,6 +757,11 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Threads,          : {}", self.num_threads)?;
         writeln!(f, "Beam width,       : {}", self.beam_width)?;
         writeln!(f, "Recall at,        : {}", self.recall_at)?;
+        writeln!(
+            f,
+            "Return K,         : {}",
+            self.return_list_size.unwrap_or(self.recall_at)
+        )?;
         writeln!(f, "Flat search,      : {}", self.is_flat_search)?;
         writeln!(f, "Distance,         : {}", self.distance)?;
         writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
