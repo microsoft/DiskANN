@@ -55,10 +55,14 @@ mod test_utils;
 
 const ADAPTIVE_L_SAMPLES: usize = 1000;
 
+/// State of index readiness
 #[derive(Debug, PartialEq)]
 enum IndexState {
+    /// No starting points are present in the graph
     NoStartPoints,
+    /// Some thread is currently in the process of setting start points
     SettingStartPoints,
+    /// Start points set; index ready for normal operation
     Ready,
 }
 impl From<usize> for IndexState {
@@ -73,12 +77,19 @@ impl From<usize> for IndexState {
     }
 }
 
+/// Index wrapper type.
+/// An `&Arc<Index>` is what will be given out over the FFI.
 pub(crate) struct Index {
+    /// The type-erased index
     inner: Box<dyn DynIndex>,
+    /// The quantizer type of the index
     quant_type: VectorQuantType,
+    /// A marker for index readiness; uses `IndexState` as the value
     state: AtomicUsize,
 }
 
+/// Element type of vectors in the index
+/// NOTE: This must match the definition on the C# side.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum VectorValueType {
@@ -87,6 +98,8 @@ pub enum VectorValueType {
     XB8,
 }
 
+/// Quantizer type of the index
+/// NOTE: This must match the definition on the C# side.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum VectorQuantType {
@@ -100,6 +113,10 @@ pub enum VectorQuantType {
     XBinU8,
 }
 
+/// Helper struct to manage the FFI buffers for handling search results
+///
+/// NOTE: The ids will be 4-byte length prefixed, and external IDs are arbitrary length
+/// byte strings.
 struct SearchResults<'a> {
     ids: &'a mut [u8],
     dists: &'a mut [f32],
@@ -108,6 +125,7 @@ struct SearchResults<'a> {
 }
 
 impl SearchResults<'_> {
+    /// Construct from the raw pointers
     fn new(ids: *mut u8, ids_len: usize, dists: *mut f32, dists_len: usize) -> Self {
         let ids = unsafe { slice::from_raw_parts_mut(ids, ids_len) };
         let dists = unsafe { slice::from_raw_parts_mut(dists, dists_len) };
@@ -121,6 +139,8 @@ impl SearchResults<'_> {
         }
     }
 
+    /// Push an ID only into the results.
+    /// This is primarily used by `random_members` which does not use distances.
     fn push_id(&mut self, id: GarnetId) -> diskann::graph::BufferState {
         self.push(Neighbor::new(id, 0.0))
     }
@@ -177,6 +197,8 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
     }
 }
 
+/// Helper generic function to create the correct type-erased `Arc<Index>`.
+/// This also returns a bool indicating whether quantization is needed.
 fn create_index_impl<T: VectorRepr>(
     quant_type: VectorQuantType,
     config: config::Config,
@@ -219,6 +241,18 @@ fn create_index_impl<T: VectorRepr>(
     ))
 }
 
+/// Create an index.
+///
+/// Constructs a type-erased DiskANN index object as a `Arc<Index>` and return a pointer
+/// to the leaked Arc. This pointer must be freed with `drop_index()`.
+///
+/// Returns `ptr::null()` if there is an error. Sets the `quantization_needed` outvar if
+/// the index requires quantization callbacks during its lifecycle.
+///
+/// Note that `quantization_needed` can be set to false even when a quantizer is used. The
+/// flag controls whether supplemental control is needed from Garnet to manage quantizers
+/// which require training and backfill.
+///
 /// # Safety
 ///
 /// FFI
@@ -324,6 +358,10 @@ pub unsafe extern "C" fn create_index(
     }
 }
 
+/// Drop an index.
+///
+/// This is the only valid way to free an index pointer created with `create_index()`.
+///
 /// # Safety
 ///
 /// FFI
@@ -333,6 +371,7 @@ pub unsafe extern "C" fn drop_index(_ctx: u64, index_ptr: *const c_void) {
     let _ = unsafe { Arc::from_raw(index_ptr.cast::<Index>()) };
 }
 
+/// `Cow` type for `Poly<[u8], AlignToEight>` types.
 enum PolyCow<'a> {
     Owned(Poly<[u8], AlignToEight>),
     Borrowed(&'a [u8]),
@@ -361,6 +400,11 @@ impl<'a> From<Poly<[u8], AlignToEight>> for PolyCow<'a> {
     }
 }
 
+/// Helper function to interpret the vector pointer and size into a usable Rust
+/// type. This will return either a borrowed or owned vector depending on how
+/// the pointer is aligned. Since Garnet doesn't guarantee the alignment, if it
+/// is not 4-byte aligned, we must allocate an appropriately aligned buffer to
+/// access it as its correct element type.
 fn interpret_vector<'a>(
     quant_type: VectorQuantType,
     vector_data: &'a *const u8,
@@ -405,6 +449,11 @@ fn interpret_vector<'a>(
     Some(v)
 }
 
+/// Return type for `insert()`.
+///
+/// `Fail` and `Success` are obvious. `SuccessStartTraining` is used when enough vectors have
+/// been inserted to start training the quantizer. That return value signals to Garnet that
+/// `build_quant_table` should be called.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InsertResult {
     Fail,
@@ -497,6 +546,7 @@ pub unsafe extern "C" fn insert(
     }
 }
 
+/// Ensures the index is ready to be used, and if not, runs the `init` function.
 fn ensure_index_ready_or_init<F, E>(index: &Index, init: F) -> Option<E>
 where
     F: FnOnce() -> Option<E>,
@@ -543,7 +593,7 @@ where
 /// Once this function returns `true`, Garnet will invoke several `backfill_quant_vectors()`
 /// calls from a thread pool. If it returns false, it may be re-invoked to try again.
 ///
-///  # Safety
+/// # Safety
 ///
 /// FFI
 #[unsafe(no_mangle)]
@@ -557,6 +607,8 @@ pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_voi
 /// Once quantization tables are successfully built, Garnet invokes this an arbitrary number of
 /// times from a thread pool. Each invocation is told its index and the total number of
 /// invocations so that each invocation can correctly pick and size its work.
+///
+/// Returns true for success and false otherwise.
 ///
 /// # Safety
 ///
@@ -575,6 +627,12 @@ pub unsafe extern "C" fn backfill_quant_vectors(
         .backfill_quant_vectors(&ctx, task_index, task_count)
 }
 
+/// Set the attributes for a vector.
+///
+/// Setting attributes with `attribute_len == 0` is equivalent to deleting them.
+///
+/// Returns true for success and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -614,6 +672,8 @@ pub unsafe extern "C" fn set_attribute(
     true
 }
 
+/// Search the closest vectors to the given query vector.
+///
 /// # Safety
 ///
 /// FFI
@@ -688,6 +748,8 @@ pub unsafe extern "C" fn search_vector(
     }
 }
 
+/// Search the closest vectors to the given existing vector in the index.
+///
 /// # Safety
 ///
 /// FFI
@@ -760,6 +822,12 @@ pub unsafe extern "C" fn search_element(
     }
 }
 
+/// Continue getting results for a previously executed search.
+///
+/// NOTE: This is currently unimplemented.
+///
+/// Positive return values are the count of vectors returned. `-1` will be returned on errors.
+///
 /// # Safety
 ///
 /// FFI
@@ -777,6 +845,10 @@ pub unsafe extern "C" fn continue_search(
     -1
 }
 
+/// Remove a vector from the index.
+///
+/// Returns true on success and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -799,6 +871,8 @@ pub unsafe extern "C" fn remove(
     index.inner.remove(&ctx, &id).is_ok()
 }
 
+/// Return the approximate count of vectors in the index.
+///
 /// # Safety
 ///
 /// FFI
@@ -809,6 +883,10 @@ pub unsafe extern "C" fn card(_ctx: u64, index_ptr: *const c_void) -> u64 {
     index.inner.approximate_count()
 }
 
+/// Check if a given internal ID is a valid vector.
+///
+/// Returns true if the vector exists, and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -832,6 +910,10 @@ pub unsafe extern "C" fn check_internal_id_valid(
     index.inner.internal_id_exists(&ctx, id)
 }
 
+/// Check if a given external ID is a valid vector.
+///
+/// Returns true if the vector exists, and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -850,6 +932,12 @@ pub unsafe extern "C" fn check_external_id_valid(
     index.inner.external_id_exists(&ctx, &id)
 }
 
+/// Returns random vectors from the index.
+///
+/// This is primarily a debugging aid.
+///
+/// Returns true on success and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -876,6 +964,13 @@ pub unsafe extern "C" fn random_members(
     index.inner.random_members(&ctx, count, &mut output)
 }
 
+/// Return the neighbors for an index vector.
+///
+/// This is primarily a debugging aid. It returns both the neighbors' IDs and their
+/// distance from the given vector.
+///
+/// Returns the number of results or `-1` on error.
+///
 /// # Safety
 ///
 /// FFI

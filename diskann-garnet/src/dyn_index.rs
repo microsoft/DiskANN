@@ -20,12 +20,16 @@ use diskann_providers::index::wrapped_async::DiskANNIndex;
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.
 pub(crate) trait DynIndex: Send + Sync {
+    /// Inserts a vector with id into the index
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
 
+    /// Sets the attributes for a vector
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
 
+    /// Deletes the attributes for a vector
     fn delete_attributes(&self, context: &Context, id: &GarnetId) -> ANNResult<()>;
 
+    /// Searches for the nearest neighbors of a vector
     fn search_vector(
         &self,
         context: &Context,
@@ -34,6 +38,7 @@ pub(crate) trait DynIndex: Send + Sync {
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
+    /// Searches for the nearest neighbors of an existing vector in the index
     fn search_element(
         &self,
         context: &Context,
@@ -42,6 +47,7 @@ pub(crate) trait DynIndex: Send + Sync {
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
+    /// Filtered search for a vector
     fn filtered_search_vector(
         &self,
         context: &Context,
@@ -50,6 +56,7 @@ pub(crate) trait DynIndex: Send + Sync {
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
+    /// Filtered search for an existing vector in the index
     fn filtered_search_element(
         &self,
         context: &Context,
@@ -58,24 +65,41 @@ pub(crate) trait DynIndex: Send + Sync {
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
+    /// Delete a vector from the index
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()>;
 
+    /// Return an approximate count of vectors in the index
     fn approximate_count(&self) -> u64;
 
+    /// Set a start point if one doesn't already exist.
+    /// If there is already a start point, this is a no-op.
     fn maybe_set_start_point(&self, context: &Context, data: &[u8]) -> ANNResult<()>;
 
+    /// Check if a vector exists by its internal id.
+    /// Returns true if the vector exists and false otherwise.
     fn internal_id_exists(&self, context: &Context, id: u32) -> bool;
 
+    /// Check if a vector exists by its external id.
+    /// Returns true if the vector exists false otherwise.
     fn external_id_exists(&self, context: &Context, id: &GarnetId) -> bool;
 
+    /// Train the quantizer.
+    /// Returns true if training was successful and false otherwise.
     fn train_quantizer(&self, context: &Context) -> bool;
 
+    /// Quantize a group of previously inserted vectors.
+    /// This function will be called `task_count` times with `task_idx` as a zero-based
+    /// identifier of the group. This will attempt to quantize `total_vectors / task_count`
+    /// vectors and returns true if it was successful and false otherwise.
     fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize)
     -> bool;
 
+    /// Return `count` random vectors from the index.
+    /// Returns true on success and false otherwise.
     fn random_members(&self, context: &Context, count: u32, output: &mut SearchResults<'_>)
     -> bool;
 
+    /// Returns the neighbors of and distances from the target vector
     fn neighbors(&self, context: &Context, id: &GarnetId) -> ANNResult<Vec<Neighbor<GarnetId>>>;
 }
 
