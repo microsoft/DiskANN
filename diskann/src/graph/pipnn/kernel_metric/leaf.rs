@@ -4,14 +4,20 @@
  */
 
 use diskann_utils::views::MatrixView;
-use diskann_wide::{SIMDFloat, SIMDSelect, SIMDVector};
+use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector};
 
+use super::super::simd::{PiPNNSIMDSchema, PiPNNSIMDVector};
 use super::{
     Cosine, CosineNormalized, InnerProduct, L2, cosine_distance_simd, cosine_distance_single,
 };
 
 /// Compute leaf distances for one concrete metric.
 pub(in super::super) trait LeafMetric: Send + Sync + 'static {
+    /// SIMD representation for leaf distance scores.
+    type Simd<A>: PiPNNSIMDVector<Arch = A>
+    where
+        A: PiPNNSIMDSchema;
+
     /// Prepare one contiguous metric-specific norm for each leaf-local point.
     fn prepare_leaf_norms(_dots: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.clear();
@@ -19,11 +25,11 @@ pub(in super::super) trait LeafMetric: Send + Sync + 'static {
 
     /// Prepare one source norm for reuse across SIMD target groups.
     #[inline(always)]
-    fn source_simd<F>(arch: F::Arch, _norms: &[f32], _source: usize) -> F
+    fn source_simd<A>(arch: A, _norms: &[f32], _source: usize) -> Self::Simd<A>
     where
-        F: SIMDVector<Scalar = f32>,
+        A: PiPNNSIMDSchema,
     {
-        F::default(arch)
+        Self::Simd::<A>::default(arch)
     }
 
     /// Prepare one source norm for reuse across single target values.
@@ -33,16 +39,15 @@ pub(in super::super) trait LeafMetric: Send + Sync + 'static {
     }
 
     /// Compute distances for one complete SIMD group.
-    fn distances_simd<F>(
-        arch: F::Arch,
+    fn distances_simd<A>(
+        arch: A,
         norms: &[f32],
-        source_norms: F,
-        dot_products: F,
+        source_norms: Self::Simd<A>,
+        dot_products: Self::Simd<A>,
         first_target: usize,
-    ) -> F
+    ) -> Self::Simd<A>
     where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>;
+        A: PiPNNSIMDSchema;
 
     /// Compute one distance outside the complete SIMD prefix.
     fn distance_single(norms: &[f32], source_norm: f32, dot_product: f32, target: usize) -> f32;
@@ -52,7 +57,7 @@ pub(in super::super) trait LeafMetric: Send + Sync + 'static {
 #[inline(always)]
 fn load_norms_simd<F>(arch: F::Arch, norms: &[f32], first_norm: usize) -> F
 where
-    F: SIMDVector<Scalar = f32>,
+    F: PiPNNSIMDVector,
 {
     let last_norm = first_norm + F::LANES;
     let norm_group = &norms[first_norm..last_norm];
@@ -62,6 +67,11 @@ where
 }
 
 impl LeafMetric for L2 {
+    type Simd<A>
+        = A::LeafScore
+    where
+        A: PiPNNSIMDSchema;
+
     fn prepare_leaf_norms(dots: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.resize(dots.nrows(), 0.0);
         for (point, norm) in norms.iter_mut().enumerate() {
@@ -70,11 +80,11 @@ impl LeafMetric for L2 {
     }
 
     #[inline(always)]
-    fn source_simd<F>(arch: F::Arch, norms: &[f32], source: usize) -> F
+    fn source_simd<A>(arch: A, norms: &[f32], source: usize) -> Self::Simd<A>
     where
-        F: SIMDVector<Scalar = f32>,
+        A: PiPNNSIMDSchema,
     {
-        F::splat(arch, norms[source])
+        Self::Simd::<A>::splat(arch, norms[source])
     }
 
     #[inline(always)]
@@ -83,20 +93,19 @@ impl LeafMetric for L2 {
     }
 
     #[inline(always)]
-    fn distances_simd<F>(
-        arch: F::Arch,
+    fn distances_simd<A>(
+        arch: A,
         norms: &[f32],
-        source_norms: F,
-        dot_products: F,
+        source_norms: Self::Simd<A>,
+        dot_products: Self::Simd<A>,
         first_target: usize,
-    ) -> F
+    ) -> Self::Simd<A>
     where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>,
+        A: PiPNNSIMDSchema,
     {
-        let target_norms = load_norms_simd::<F>(arch, norms, first_target);
-        (F::splat(arch, -2.0).mul_add_simd(dot_products, source_norms) + target_norms)
-            .max_simd(F::default(arch))
+        let target_norms = load_norms_simd::<Self::Simd<A>>(arch, norms, first_target);
+        (Self::Simd::<A>::splat(arch, -2.0).mul_add_simd(dot_products, source_norms) + target_norms)
+            .max_simd(Self::Simd::<A>::default(arch))
     }
 
     #[inline(always)]
@@ -106,6 +115,11 @@ impl LeafMetric for L2 {
 }
 
 impl LeafMetric for Cosine {
+    type Simd<A>
+        = A::LeafScore
+    where
+        A: PiPNNSIMDSchema;
+
     fn prepare_leaf_norms(dots: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.resize(dots.nrows(), 0.0);
         for (point, norm) in norms.iter_mut().enumerate() {
@@ -114,11 +128,11 @@ impl LeafMetric for Cosine {
     }
 
     #[inline(always)]
-    fn source_simd<F>(arch: F::Arch, norms: &[f32], source: usize) -> F
+    fn source_simd<A>(arch: A, norms: &[f32], source: usize) -> Self::Simd<A>
     where
-        F: SIMDVector<Scalar = f32>,
+        A: PiPNNSIMDSchema,
     {
-        F::splat(arch, norms[source])
+        Self::Simd::<A>::splat(arch, norms[source])
     }
 
     #[inline(always)]
@@ -127,20 +141,19 @@ impl LeafMetric for Cosine {
     }
 
     #[inline(always)]
-    fn distances_simd<F>(
-        arch: F::Arch,
+    fn distances_simd<A>(
+        arch: A,
         norms: &[f32],
-        source_norms: F,
-        dot_products: F,
+        source_norms: Self::Simd<A>,
+        dot_products: Self::Simd<A>,
         first_target: usize,
-    ) -> F
+    ) -> Self::Simd<A>
     where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>,
+        A: PiPNNSIMDSchema,
     {
-        let target_norms = load_norms_simd::<F>(arch, norms, first_target);
+        let target_norms = load_norms_simd::<Self::Simd<A>>(arch, norms, first_target);
         cosine_distance_simd(arch, dot_products, source_norms, target_norms)
-            .max_simd(F::default(arch))
+            .max_simd(Self::Simd::<A>::default(arch))
     }
 
     #[inline(always)]
@@ -150,19 +163,23 @@ impl LeafMetric for Cosine {
 }
 
 impl LeafMetric for CosineNormalized {
-    #[inline(always)]
-    fn distances_simd<F>(
-        arch: F::Arch,
-        _norms: &[f32],
-        _source_norms: F,
-        dot_products: F,
-        _first_target: usize,
-    ) -> F
+    type Simd<A>
+        = A::LeafScore
     where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>,
+        A: PiPNNSIMDSchema;
+
+    #[inline(always)]
+    fn distances_simd<A>(
+        arch: A,
+        _norms: &[f32],
+        _source_norms: Self::Simd<A>,
+        dot_products: Self::Simd<A>,
+        _first_target: usize,
+    ) -> Self::Simd<A>
+    where
+        A: PiPNNSIMDSchema,
     {
-        F::splat(arch, 1.0) - dot_products
+        Self::Simd::<A>::splat(arch, 1.0) - dot_products
     }
 
     #[inline(always)]
@@ -172,19 +189,23 @@ impl LeafMetric for CosineNormalized {
 }
 
 impl LeafMetric for InnerProduct {
-    #[inline(always)]
-    fn distances_simd<F>(
-        arch: F::Arch,
-        _norms: &[f32],
-        _source_norms: F,
-        dot_products: F,
-        _first_target: usize,
-    ) -> F
+    type Simd<A>
+        = A::LeafScore
     where
-        F: SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = F>,
-        F::Mask: SIMDSelect<F>,
+        A: PiPNNSIMDSchema;
+
+    #[inline(always)]
+    fn distances_simd<A>(
+        arch: A,
+        _norms: &[f32],
+        _source_norms: Self::Simd<A>,
+        dot_products: Self::Simd<A>,
+        _first_target: usize,
+    ) -> Self::Simd<A>
+    where
+        A: PiPNNSIMDSchema,
     {
-        F::default(arch) - dot_products
+        Self::Simd::<A>::default(arch) - dot_products
     }
 
     #[inline(always)]

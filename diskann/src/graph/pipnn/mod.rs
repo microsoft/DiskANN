@@ -24,6 +24,8 @@
 //! output and workspace.
 #[allow(dead_code)]
 mod kernel_metric;
+#[allow(dead_code)]
+mod simd;
 
 #[allow(dead_code)]
 mod leaf_kernel;

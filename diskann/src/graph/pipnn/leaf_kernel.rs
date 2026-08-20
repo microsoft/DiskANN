@@ -23,9 +23,12 @@
 
 use crate::{ANNError, ANNResult};
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector};
+use diskann_wide::{SIMDPartialOrd, SIMDVector};
 
-use super::kernel_metric::LeafMetric;
+use super::{
+    kernel_metric::LeafMetric,
+    simd::{PiPNNSIMDSchema, PiPNNSIMDVector},
+};
 
 /// One leaf-local neighbor and its metric distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -98,11 +101,8 @@ pub(super) fn select_leaf_neighbors<A, M>(
     workspace: &mut LeafKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let point_count = points.nrows();
     let dot_count = point_count * point_count;
@@ -136,11 +136,8 @@ fn rank_leaf_dots<A, M>(
     worst: &mut Vec<f32>,
 ) -> Result<(), LeafKernelError>
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     validate_neighbor_count(input, &output)?;
     let neighbor_count = output.ncols();
@@ -153,10 +150,10 @@ where
     worst.fill(f32::INFINITY);
 
     match neighbor_count {
-        1 => scan_fixed_width::<A::f32x16, M, 1>(arch, input, norms, output.as_mut_slice(), worst),
-        2 => scan_fixed_width::<A::f32x16, M, 2>(arch, input, norms, output.as_mut_slice(), worst),
-        3 => scan_fixed_width::<A::f32x16, M, 3>(arch, input, norms, output.as_mut_slice(), worst),
-        _ => scan_runtime_width::<A::f32x16, M>(
+        1 => scan_fixed_width::<A, M, 1>(arch, input, norms, output.as_mut_slice(), worst),
+        2 => scan_fixed_width::<A, M, 2>(arch, input, norms, output.as_mut_slice(), worst),
+        3 => scan_fixed_width::<A, M, 3>(arch, input, norms, output.as_mut_slice(), worst),
+        _ => scan_runtime_width::<A, M>(
             arch,
             input,
             norms,
@@ -189,39 +186,35 @@ fn validate_neighbor_count(
 }
 
 /// Select neighbors with a fixed output width.
-fn scan_fixed_width<F, M, const N: usize>(
-    arch: F::Arch,
+fn scan_fixed_width<A, M, const N: usize>(
+    arch: A,
     input: MatrixView<'_, f32>,
     norms: &[f32],
     output: &mut [LeafNeighbor],
     worst: &mut [f32],
 ) where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let (rows, _) = output.as_chunks_mut::<N>();
-    scan_point_pairs::<F, M, _>(arch, input, norms, worst, |source, target, distance| {
+    scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
         insert_fixed_neighbor(&mut rows[source], target, distance)
     });
 }
 
 /// Select neighbors with a runtime output width.
-fn scan_runtime_width<F, M>(
-    arch: F::Arch,
+fn scan_runtime_width<A, M>(
+    arch: A,
     input: MatrixView<'_, f32>,
     norms: &[f32],
     output: &mut [LeafNeighbor],
     width: usize,
     worst: &mut [f32],
 ) where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
-    scan_point_pairs::<F, M, _>(arch, input, norms, worst, |source, target, distance| {
+    scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
         let first = source * width;
         insert_runtime_neighbor(&mut output[first..first + width], target, distance)
     });
@@ -232,18 +225,16 @@ fn scan_runtime_width<F, M>(
 /// The function reads the strict lower triangle once. It offers each distance to
 /// both endpoint lists. SIMD groups and single values preserve pair scan order.
 #[inline(never)]
-fn scan_point_pairs<F, M, I>(
-    arch: F::Arch,
+fn scan_point_pairs<A, M, I>(
+    arch: A,
     input: MatrixView<'_, f32>,
     norms: &[f32],
     worst: &mut [f32],
     mut insert: I,
 ) where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<16>> + SIMDFloat + std::ops::Div<Output = F>,
-    F::Mask: SIMDSelect<F>,
+    A: PiPNNSIMDSchema,
     M: LeafMetric,
     I: FnMut(usize, u32, f32) -> f32,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
 {
     let point_count = input.nrows();
     let dots = input.as_slice();
@@ -251,27 +242,28 @@ fn scan_point_pairs<F, M, I>(
 
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_simd = M::source_simd::<F>(arch, norms, source);
+        let source_simd = M::source_simd(arch, norms, source);
         let source_single = M::source_single(norms, source);
         // SAFETY: `rank_leaf_dots` created one threshold for each point.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
-        let simd_prefix = source - source % F::LANES;
+        let simd_prefix = source - source % M::Simd::<A>::LANES;
 
         while target < simd_prefix {
             // SAFETY: This complete SIMD group is in the strict-lower prefix.
             let dot_products =
-                unsafe { F::load_simd(arch, dots.as_ptr().add(source_start + target)) };
-            let distances = M::distances_simd::<F>(arch, norms, source_simd, dot_products, target);
-            let source_eligible = distances.lt_simd(F::splat(arch, source_worst));
+                unsafe { M::Simd::<A>::load_simd(arch, dots.as_ptr().add(source_start + target)) };
+            let distances = M::distances_simd(arch, norms, source_simd, dot_products, target);
+            let source_eligible = distances.lt_simd(M::Simd::<A>::splat(arch, source_worst));
             // SAFETY: The complete target group is below `source < point_count`.
-            let target_worst = unsafe { F::load_simd(arch, worst_ptr.add(target)) };
+            let target_worst = unsafe { M::Simd::<A>::load_simd(arch, worst_ptr.add(target)) };
             let target_eligible = distances.lt_simd(target_worst);
-            let source_bits = u64::from(source_eligible.bitmask().to_underlying());
-            let target_bits = u64::from(target_eligible.bitmask().to_underlying());
+            let source_bits = M::Simd::<A>::active_lanes(source_eligible);
+            let target_bits = M::Simd::<A>::active_lanes(target_eligible);
 
             if source_bits | target_bits != 0 {
-                let values: [f32; 16] = distances.to_array();
+                let values = distances.to_array();
+                let values = values.as_ref();
                 let mut source_bits = source_bits;
                 while source_bits != 0 {
                     let lane = source_bits.trailing_zeros() as usize;
@@ -292,7 +284,7 @@ fn scan_point_pairs<F, M, I>(
                     unsafe { *worst_ptr.add(target_source) = new_worst };
                 }
             }
-            target += F::LANES;
+            target += M::Simd::<A>::LANES;
         }
 
         while target < source {
@@ -382,10 +374,7 @@ struct DispatchLeafForTest(diskann_vector::distance::Metric);
 impl<A> diskann_wide::arch::Target1<A, Result<(), LeafKernelError>, DispatchedLeafCall<'_>>
     for DispatchLeafForTest
 where
-    A: Architecture,
-    A::f32x16: std::ops::Div<Output = A::f32x16>,
-    <A::f32x16 as SIMDVector>::Mask: SIMDSelect<A::f32x16>,
-    u64: From<<<<A::f32x16 as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+    A: PiPNNSIMDSchema,
 {
     fn run(self, arch: A, call: DispatchedLeafCall<'_>) -> Result<(), LeafKernelError> {
         use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
