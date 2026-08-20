@@ -1127,28 +1127,44 @@ where
             });
         }
 
-        let ids = results
-            .iter()
-            .map(|result| result.vertex_id)
-            .collect::<Vec<_>>();
-        let graph_header = &self.index.provider().graph_header;
-        let mut vertex_provider = self
-            .vertex_provider_factory
-            .create_vertex_provider(ids.len(), graph_header)?;
-        ensure_vertex_loaded(&mut vertex_provider, &ids)?;
+        let provider = self.index.provider();
+        let mut scratch = PoolOption::try_pooled(
+            &self.scratch_pool,
+            &DiskSearchScratchArgs {
+                graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
+                pq_dim: provider.pq_data.get_dim(),
+                num_pq_chunks: provider.pq_data.get_num_chunks(),
+                num_pq_centers: provider.pq_data.get_num_centers(),
+                vertex_factory: &self.vertex_provider_factory,
+                graph_header: &provider.graph_header,
+            },
+        )?;
+
+        const BATCH_SIZE: usize = 128;
+        let mut indexed_vectors = Vec::with_capacity(results.len());
+        for batch in results.chunks(BATCH_SIZE) {
+            let ids = batch
+                .iter()
+                .map(|result| result.vertex_id)
+                .collect::<Vec<_>>();
+            ensure_vertex_loaded(&mut scratch.vertex_provider, &ids)?;
+            for id in ids {
+                indexed_vectors.push(Box::from(scratch.vertex_provider.get_vector(&id)?));
+            }
+        }
 
         let results = results
             .into_iter()
-            .map(|result| {
-                Ok(SearchResultItemWithIndexedVector {
-                    indexed_vector: Box::from(vertex_provider.get_vector(&result.vertex_id)?),
+            .zip(indexed_vectors)
+            .map(
+                |(result, indexed_vector)| SearchResultItemWithIndexedVector {
+                    indexed_vector,
                     vertex_id: result.vertex_id,
                     data: result.data,
                     distance: result.distance,
-                })
-            })
-            .collect::<ANNResult<_>>()?;
-
+                },
+            )
+            .collect();
         Ok(SearchResultWithIndexedVectors { results, stats })
     }
 
@@ -1628,6 +1644,15 @@ mod disk_provider_tests {
         let source =
             read_bin::<f32>(&mut storage_provider.open_reader(TEST_DATA_FILE).unwrap()).unwrap();
         assert!(indexed
+            .results
+            .iter()
+            .all(|result| result.indexed_vector.as_ref() == source.row(result.vertex_id as usize)));
+
+        let batched = searcher
+            .search_with_indexed_vectors(&query, 129, 129, None, SearchMode::graph())
+            .unwrap();
+        assert_eq!(batched.results.len(), 129);
+        assert!(batched
             .results
             .iter()
             .all(|result| result.indexed_vector.as_ref() == source.row(result.vertex_id as usize)));
