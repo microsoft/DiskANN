@@ -164,7 +164,7 @@ where
             self.index_writer.get_dataset_file(),
             self.pq_storage.get_compressed_data_path().into(),
             &quantizer_context,
-        )?;
+        );
         generator.generate_data(
             storage_provider,
             pool,
