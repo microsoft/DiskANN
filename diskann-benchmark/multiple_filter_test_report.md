@@ -708,6 +708,35 @@ The mixed-query counts were independently scanned from the raw TSV and matched e
 present in `filtered_test4`, so these results validate persisted storage and query-provider
 performance rather than end-to-end ANN latency.
 
+## 8.10 100M filtered recall and latency
+
+The truth-only query TSV was deduplicated into 2,147 logical queries. Each predicate is exactly:
+
+```text
+language:<locale> AND provider:<provider-id>
+```
+
+The 34,229 variable-length truth IDs were mapped from external offer IDs to graph row IDs. Every
+truth ID was independently checked against its hybrid predicate; all matched.
+
+A 100M-vector UINT8 graph was built with max degree 32, L-build 100, alpha 1.2, and 16 threads.
+Build time was 2,871.1 seconds. Search used k=10, one task, three repetitions, and the hybrid
+provider/language index.
+
+| L | Recall@10 | AVG | P99 | P99.9 |
+|---:|---:|---:|---:|---:|
+| 50 | 20.64% | 2.75 ms | 17.77 ms | 21.94 ms |
+| 100 | 22.43% | 4.40 ms | 28.53 ms | 38.60 ms |
+| 200 | 24.02% | 7.31 ms | 47.03 ms | 59.16 ms |
+| 400 | 24.62% | 13.06 ms | 84.28 ms | 106.71 ms |
+| 800 | 25.31% | 25.03 ms | 166.99 ms | 210.27 ms |
+| 1600 | 25.53% | 50.34 ms | 355.92 ms | 449.42 ms |
+
+Recall plateaus near 25.5% even as L and latency increase sharply. The filter and truth-ID mapping
+are internally consistent, so the remaining gap is graph quality and/or a mismatch between the
+provided production truth semantics and exact squared-L2 nearest-neighbor truth. This benchmark
+should not be used to tune the hybrid representation until that truth definition is confirmed.
+
 ## 10. Artifacts
 
 ### 10.1 Original PMax benchmark (`Q:\test6\filtered_test2\bench\full\`)
@@ -735,5 +764,12 @@ performance rather than end-to-end ANN latency.
 - Persisted hybrid labels: `provider_language.hybrid.bin`
 - Encoder: `diskann-tools/src/bin/build_hybrid_label_index.rs`
 - Probe tool: `diskann-tools/src/bin/probe_hybrid_label_index.rs`
+- UINT8 vectors: `base.provider_language.u8bin`
+- Deduplicated queries: `queries.provider_language.u8bin`
+- Predicates: `query_predicates.provider_language.jsonl`
+- Variable-length truth: `groundtruth.provider_language.bin`
+- Graph: `index.provider_language.r32_l100` and `.data`
+- Recall results: `hybrid_recall_100m.results.json` and
+  `hybrid_recall_100m.high_l.results.json`
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._

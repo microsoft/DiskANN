@@ -418,6 +418,9 @@ pub(crate) enum SearchPhase {
     /// `diskann-label-index` artifact instead of the raw labels JSONL.
     TopkMultihopEncodedBitsliceDnf(MultihopFilterSearchPhase),
     /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
+    /// hybrid `diskann-label-index` artifact instead of the raw labels JSONL.
+    TopkMultihopEncodedHybridDnf(MultihopFilterSearchPhase),
+    /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
     /// `diskann-label-index` artifact instead of the raw labels JSONL.
     TopkMultihopEncodedBitsliceAst(MultihopFilterSearchPhase),
     /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
@@ -465,6 +468,7 @@ impl SearchPhase {
             Self::TopkMultihopEncodedBitsliceDnf(_) => {
                 SearchPhaseKind::TopkMultihopEncodedBitsliceDnf
             }
+            Self::TopkMultihopEncodedHybridDnf(_) => SearchPhaseKind::TopkMultihopEncodedHybridDnf,
             Self::TopkMultihopEncodedBitsliceAst(_) => {
                 SearchPhaseKind::TopkMultihopEncodedBitsliceAst
             }
@@ -615,6 +619,18 @@ impl SearchPhase {
         }
     }
 
+    pub(crate) fn as_topk_multihop_encoded_hybrid_dnf(
+        &self,
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopEncodedHybridDnf(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopEncodedHybridDnf,
+                self.kind(),
+            )),
+        }
+    }
+
     pub(crate) fn as_topk_multihop_encoded_bitmap_ast(
         &self,
     ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
@@ -678,6 +694,7 @@ impl SearchPhase {
             SearchPhase::TopkMultihopLiveFilterBitslice(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopLiveFilterBitsliceDnf(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopEncodedBitsliceDnf(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopEncodedHybridDnf(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopEncodedBitsliceAst(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopEncodedBitmapAst(phase) => phase.validate(checker),
             SearchPhase::TopkInlineLiveFilterBitsliceDnf(phase) => phase.validate(checker),
@@ -700,6 +717,7 @@ pub(crate) enum SearchPhaseKind {
     TopkMultihopLiveFilterBitslice,
     TopkMultihopLiveFilterBitsliceDnf,
     TopkMultihopEncodedBitsliceDnf,
+    TopkMultihopEncodedHybridDnf,
     TopkMultihopEncodedBitsliceAst,
     TopkMultihopEncodedBitmapAst,
     TopkInlineLiveFilterBitsliceDnf,
@@ -721,6 +739,7 @@ impl SearchPhaseKind {
             Self::TopkMultihopLiveFilterBitslice => "topk-multihop-live-filter-bitslice",
             Self::TopkMultihopLiveFilterBitsliceDnf => "topk-multihop-live-filter-bitslice-dnf",
             Self::TopkMultihopEncodedBitsliceDnf => "topk-multihop-encoded-bitslice-dnf",
+            Self::TopkMultihopEncodedHybridDnf => "topk-multihop-encoded-hybrid-dnf",
             Self::TopkMultihopEncodedBitsliceAst => "topk-multihop-encoded-bitslice-ast",
             Self::TopkMultihopEncodedBitmapAst => "topk-multihop-encoded-bitmap-ast",
             Self::TopkInlineLiveFilterBitsliceDnf => "topk-inline-live-filter-bitslice-dnf",

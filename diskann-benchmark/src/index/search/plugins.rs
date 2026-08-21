@@ -320,6 +320,18 @@ impl TopkMultihopEncodedBitsliceDnf {
     }
 }
 
+/// A multi-hop encoded-filter plugin backed by a hybrid dense/sparse label index and a flat
+/// OR-of-AND query plan compiled during benchmark setup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopEncodedHybridDnf;
+
+impl TopkMultihopEncodedHybridDnf {
+    /// Returns [`SearchPhaseKind::TopkMultihopEncodedHybridDnf`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopEncodedHybridDnf
+    }
+}
+
 /// A multi-hop encoded-filter plugin backed by a pre-encoded bitslice label index and a recursive
 /// AST query compiled during benchmark setup.
 #[derive(Debug, Clone, Copy)]
