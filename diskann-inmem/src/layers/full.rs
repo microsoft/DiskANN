@@ -109,39 +109,6 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
 }
 
-impl<T> FullPrecision for T
-where
-    T: FullPrecisionImpl,
-{
-    fn __search_accessor<'a>(
-        layer: &'a Full<Self>,
-        query: &'a [Self],
-        provider: &'a (dyn std::any::Any + Send + Sync),
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        let expand_beam = T::make_expand_beam(layer, query)?;
-        Ok(crate::provider::SearchAccessor::new(
-            layer.store.neighbors(),
-            expand_beam,
-            provider,
-            layer.store.frozen(),
-            counters,
-        ))
-    }
-
-    fn __prune_accessor<'a>(
-        layer: &'a Full<Self>,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
-        let prune = T::make_prune(layer)?;
-        Ok(crate::provider::PruneAccessor::new(
-            prune,
-            layer.store.neighbors(),
-            counters,
-        ))
-    }
-}
-
 /// Full-precision data layer.
 #[derive(Debug)]
 pub struct Full<T>
@@ -381,7 +348,8 @@ struct Prune<'a, T, D> {
 
 impl<'a, T, D> Prune<'a, T, D> {
     fn new(reader: store::invasive::Reader<'a>) -> Self {
-        assert!(
+        // This should be ensured at construction time
+        debug_assert!(
             reader
                 .bytes()
                 .value()
@@ -468,7 +436,7 @@ impl<T> std::ops::Deref for Calf<'_, T> {
 /// allow `f16` queries to be pre-converted to `f32`, saving on-the-fly conversion that
 /// would otherwise be needed.
 #[derive(Debug)]
-struct QueryDistance<'a, const PREFETCH: usize, T, U, D> {
+struct QueryDistance<'a, const PREFETCH_DIM: usize, T, U, D> {
     // The original query.
     query: Calf<'a, T>,
     // A reader into a layer's store.
@@ -479,9 +447,8 @@ struct QueryDistance<'a, const PREFETCH: usize, T, U, D> {
     _distance: PhantomData<D>,
 }
 
-impl<'a, const PREFETCH: usize, T, U, D> QueryDistance<'a, PREFETCH, T, U, D> {
+impl<'a, const PREFETCH_DIM: usize, T, U, D> QueryDistance<'a, PREFETCH_DIM, T, U, D> {
     fn new(query: Calf<'a, T>, reader: store::invasive::Reader<'a>) -> Self {
-        // TODO: Check PREFETCH and `query` with the reader's size.
         Self {
             query,
             reader,
@@ -512,10 +479,18 @@ impl<'a, const PREFETCH: usize, T, U, D> QueryDistance<'a, PREFETCH, T, U, D> {
         if x.len() != self.bytes() {
             self.error(x.len())
         } else {
-            // SAFETY: We've validated that `x` has the correct length.
-            let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.query.len()) };
-            Ok(D::run(ARCH, (*self.query).into(), x))
+            Ok(unsafe { self.run_unchecked(x) })
         }
+    }
+
+    #[inline(always)]
+    unsafe fn run_unchecked(&self, x: &[u8]) -> f32
+    where
+        D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>,
+    {
+        // SAFETY: We've validated that `x` has the correct length.
+        let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.query.len()) };
+        D::run(ARCH, (*self.query).into(), x)
     }
 }
 
@@ -597,8 +572,10 @@ where
 
             // SAFETY: Caller asserts that `i` is in-bounds.
             if let Some(data) = unsafe { self.reader.read_in_bounds(i.into_usize()) } {
+                let distance = unsafe { self.run_unchecked(data) };
+
                 // SAFETY: Inherited from caller.
-                *unsafe { buffer.get_unchecked_mut(processed) } = (i, self.run(data)?);
+                *unsafe { buffer.get_unchecked_mut(processed) } = (i, distance);
                 processed += 1;
             }
         }
@@ -797,6 +774,48 @@ impl FullPrecisionImpl for i8 {
         Ok(output)
     }
 }
+
+/// We use a macro to stamp out implementations of [`FullPrecision`] instead of using a
+/// blanket implementation from [`FullPrecisionImpl`] to make implementations more
+/// discoverable through the generated rust-doc.
+macro_rules! impl_full_precision {
+    ($T:ty) => {
+        impl FullPrecision for $T {
+            fn __search_accessor<'a>(
+                layer: &'a Full<Self>,
+                query: &'a [Self],
+                provider: &'a (dyn std::any::Any + Send + Sync),
+                counters: LocalCounters<'a>,
+            ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+                let expand_beam = <$T>::make_expand_beam(layer, query)?;
+                Ok(crate::provider::SearchAccessor::new(
+                    layer.store.neighbors(),
+                    expand_beam,
+                    provider,
+                    layer.store.frozen(),
+                    counters,
+                ))
+            }
+
+            fn __prune_accessor<'a>(
+                layer: &'a Full<Self>,
+                counters: LocalCounters<'a>,
+            ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
+                let prune = <$T>::make_prune(layer)?;
+                Ok(crate::provider::PruneAccessor::new(
+                    prune,
+                    layer.store.neighbors(),
+                    counters,
+                ))
+            }
+        }
+    };
+    ($($Ts:ty),* $(,)?) => {
+        $(impl_full_precision!($Ts);)*
+    }
+}
+
+impl_full_precision!(f32, f16, u8, i8);
 
 ///////////
 // Tests //

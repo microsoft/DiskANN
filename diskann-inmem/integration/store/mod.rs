@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Concurrency stress test for the in-memory [`Store`](diskann_inmem::integration::store::Store).
+//! Concurrency stress test for the in-memory [stores](diskann_inmem::integration::store).
 //!
 //! Reader, writer, and retirer threads hammer the epoch-based store concurrently while a
 //! per-guard invariant checker verifies the store's safety guarantees:
@@ -11,6 +11,8 @@
 //! 1. Reads are never torn.
 //! 2. A readable value is stable for the lifetime of a single reader guard.
 //! 3. A slot never resurrects (`readable -> unreadable -> readable`) within one guard.
+//!
+//! This module exposes shared functionality that is instantiated by different plugins.
 
 #![expect(
     clippy::unwrap_used,
@@ -143,45 +145,91 @@ impl std::fmt::Display for Setup {
     }
 }
 
+/// A testable store.
+///
+/// Readers are split into a [`ReaderState`], which is used to produce a shorter lived [`Reader`].
+///
+/// The reason for this is two fold:
+///
+/// 1. We rely on [`Reader`]s being dropped to allow epochs to advance.
+/// 2. A separate [`ReaderState`] allows correctness checking data structures (e.g. hash maps)
+///    to be allocated once and used for the duration of the test.
+///
+///    Since the goal is to hammer the underlying store as hard as possible, amortizing
+///    allocations makes a non-negligible difference.
 trait Testable: std::fmt::Debug + Sized + Sync {
+    /// The writer.
     type Writer<'a>: Writer
     where
         Self: 'a;
 
+    /// Shared reader-state to enable allocation amortization.
     type ReaderState<'a>: ReaderState
     where
         Self: 'a;
 
+    /// Construct a [`Writer`] into a slot. Returns `None` is an available slot could not
+    /// be found.
     fn writer(&self) -> Option<Self::Writer<'_>>;
 
+    /// Create the [`ReaderState`]. This will be called once per reader thread.
     fn reader_state<'a>(
         &'a self,
         capacity_hint: usize,
         shared: &'a Shared<Self>,
     ) -> Self::ReaderState<'a>;
 
+    /// Attempt to retire slot `i`. Return `true` on success, otherwise return `false`.
     fn retire(&self, i: usize) -> bool;
 
+    /// Attempt to advance the epoch and reclaim retired slots.
+    ///
+    /// Return `None` if we failed to advance the epoch. Otherwise, return the number of
+    /// slots reclaimed.
     fn reclaim(&self) -> Option<usize>;
 
+    /// Return the number of readable slots. Assume indices `[0..readable_slots)` are valid
+    /// for reading.
     fn readable_slots(&self) -> usize;
+
+    /// Return the number of writable slots. Assume indices `[0..writable_slots)` are valid
+    /// for writing.
     fn writable_slots(&self) -> usize;
 }
 
+/// A writable slot.
 trait Writer: std::fmt::Debug {
+    /// Perform any writes, using `stamp` as a unique tag.
     fn write(self, stamp: u64);
 }
 
+/// Amortized shared state for reader tasks.
 trait ReaderState: std::fmt::Debug {
+    /// The type of the [`Reader`].
     type Reader<'a>: Reader;
 
+    /// Attempt to run the closure `f` on a [`Reader`] into the state's parent store.
+    ///
+    /// Return `true` if a reader was obtained and `f` was called. Otherwise return `false`.
+    ///
+    /// The callback style mechanism is used to allow implementations to stack-allocate some
+    /// variables. This allows validation implementations to hold onto references into the
+    /// parent store by doing the following:
+    ///
+    /// 1. Stack allocate the internal "reader" to the store. The reader will have an epoch
+    ///    guard.
+    ///
+    /// 2. Borrow from that reader to construct [`Self::Reader`], allowing [`Self::Reader`]
+    ///    to borrow items directly from the internal reader.
     #[must_use]
     fn try_with_reader<F>(&mut self, f: F) -> bool
     where
         F: FnOnce(Self::Reader<'_>);
 }
 
+/// A read validator for a [`Testable`].
 trait Reader: std::fmt::Debug {
+    /// Observe the state of `i`, panicking if an invalid transition has been observed.
     fn observe(&mut self, i: usize);
 }
 
@@ -189,9 +237,9 @@ trait Reader: std::fmt::Debug {
 // Output //
 ////////////
 
-/// Summary statistics produced by a [`StoreStress`] run.
+/// Summary statistics produced by a [`Shared`] run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoreStressStats {
+pub struct Stats {
     elapsed_secs: f64,
     reads: u64,
     acquires_ok: u64,
@@ -205,7 +253,7 @@ pub struct StoreStressStats {
     peak_live: usize,
 }
 
-impl std::fmt::Display for StoreStressStats {
+impl std::fmt::Display for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut kv = KeyValue::new();
         kv.push("elapsed_secs", &self.elapsed_secs);
@@ -272,7 +320,7 @@ impl Drop for LocalMax<'_> {
     }
 }
 
-fn run_benchmark<T>(store: T, setup: &Setup) -> anyhow::Result<StoreStressStats>
+fn run_benchmark<T>(store: T, setup: &Setup) -> anyhow::Result<Stats>
 where
     T: Testable,
 {
@@ -334,7 +382,7 @@ where
     }
 
     let elapsed = start.elapsed();
-    let stats = StoreStressStats {
+    let stats = Stats {
         elapsed_secs: elapsed.as_secs_f64(),
         reads: shared.reads.load(Relaxed),
         acquires_ok: shared.acquires_ok.load(Relaxed),

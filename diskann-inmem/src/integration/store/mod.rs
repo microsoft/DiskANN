@@ -3,6 +3,12 @@
  * Licensed under the MIT license.
  */
 
+//! This module exposes "public" integration-test wrappers for the various internal store
+//! mechanisms to drive larger concurrency tests.
+//!
+//! These implementationa have a similar structure. A [`boilerplate`] macro is used to ensure
+//! the capabilities exposed are mostly the same.
+
 pub mod checked;
 pub mod invasive;
 
@@ -12,6 +18,7 @@ macro_rules! boilerplate {
         for<$read_lt:lifetime> $read:ty => $reader:ident,
         for<$slot_lt:lifetime> $slot:ty => $writer:ident,
     ) => {
+        /// A test store wraper.
         #[derive(Debug)]
         pub struct $store {
             store: $crate::store::Store<$plugin>,
@@ -19,12 +26,12 @@ macro_rules! boilerplate {
 
         impl $store {
             /// Return the total number of slots, including the frozen point.
-            pub fn slots(&self) -> usize {
+            pub fn readable_slots(&self) -> usize {
                 self.store.frozen().end as usize
             }
 
             /// Return the range of writable (non-frozen) slot indices.
-            pub fn writable(&self) -> usize {
+            pub fn writable_slots(&self) -> usize {
                 self.store.frozen().start as usize
             }
 
@@ -56,6 +63,7 @@ macro_rules! boilerplate {
             }
         }
 
+        /// A reader for the test store.
         #[derive(Debug)]
         pub struct $reader<$read_lt> {
             reader: $read,
@@ -67,6 +75,7 @@ macro_rules! boilerplate {
             }
         }
 
+        /// A writer for the test store.
         #[derive(Debug)]
         pub struct $writer<$slot_lt> {
             slot: $crate::store::Slot<$slot_lt, $slot>,
@@ -77,6 +86,7 @@ macro_rules! boilerplate {
                 Self { slot }
             }
 
+            /// Publish the slot - making it accessible to readers.
             pub fn publish(self) {
                 self.slot.publish();
             }

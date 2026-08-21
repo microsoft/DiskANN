@@ -5,6 +5,7 @@
 
 #![expect(
     clippy::expect_used,
+    clippy::unwrap_used,
     reason = "integration test tools are not production code"
 )]
 

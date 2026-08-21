@@ -13,7 +13,7 @@ pub(super) fn register(registry: &mut dbr::Registry) -> Result<(), dbr::Registry
     registry.register("invasive-store-stress-test", Stress)
 }
 
-/// Configuration for a [`StoreStress`] run.
+/// Configuration for a [`Stress`] run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Input {
     /// Shared stress test setup.
@@ -77,7 +77,7 @@ struct Stress;
 
 impl dbr::Benchmark for Stress {
     type Input = Input;
-    type Output = super::StoreStressStats;
+    type Output = super::Stats;
 
     fn try_match(
         &self,
@@ -174,11 +174,11 @@ impl super::Testable for invasive::Store {
     }
 
     fn readable_slots(&self) -> usize {
-        <invasive::Store>::slots(self)
+        <invasive::Store>::readable_slots(self)
     }
 
     fn writable_slots(&self) -> usize {
-        <invasive::Store>::writable(self)
+        <invasive::Store>::writable_slots(self)
     }
 }
 
