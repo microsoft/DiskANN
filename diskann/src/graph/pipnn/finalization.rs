@@ -166,7 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn preserves_lists_within_the_degree_bound() {
+    fn row_within_the_degree_bound_is_only_canonicalized() {
+        // Given
         let data = [0.0_f32, 1.0, 2.0, 3.0];
         let data = MatrixView::try_from(&data[..], 4, 1).unwrap();
         let candidates = vec![
@@ -175,14 +176,18 @@ mod tests {
             candidate_list([]),
             candidate_list([]),
         ];
+        let expected_canonical_row = [1, 3];
 
-        let actual = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
+        // When
+        let actual_rows = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
 
-        assert_eq!(&*actual[0], &[1, 3]);
+        // Then
+        assert_eq!(&*actual_rows[0], &expected_canonical_row);
     }
 
     #[test]
-    fn prunes_an_overfull_list_with_the_vamana_kernel() {
+    fn overfull_row_keeps_the_nearest_unoccluded_neighbors() {
+        // Given
         let data = [0.0_f32, 1.0, 2.0, -3.0];
         let data = MatrixView::try_from(&data[..], 4, 1).unwrap();
         let candidates = vec![
@@ -191,14 +196,18 @@ mod tests {
             candidate_list([]),
             candidate_list([]),
         ];
+        let expected_pruned_row = [1, 3];
 
-        let actual = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
+        // When
+        let actual_rows = prune_overfull(data, candidates, &graph_config(2), Metric::L2).unwrap();
 
-        assert_eq!(&*actual[0], &[1, 3]);
+        // Then
+        assert_eq!(&*actual_rows[0], &expected_pruned_row);
     }
 
     #[test]
     fn reused_workspace_matches_fresh_pruning() {
+        // Given
         let data = [0.0_f32, 1.0, 2.0, -3.0, 4.0];
         let data = MatrixView::try_from(&data[..], 5, 1).unwrap();
         let first = [3, 2, 1];
@@ -217,18 +226,26 @@ mod tests {
             .num_threads(1)
             .build()
             .unwrap();
-        let fresh_first = pool
+        // When
+        let expected_first_row_from_fresh_workspace = pool
             .install(|| prune_overfull(data, candidates(&first, &[]), &graph, Metric::L2))
             .unwrap();
-        let fresh_second = pool
+        let expected_second_row_from_fresh_workspace = pool
             .install(|| prune_overfull(data, candidates(&[], &second), &graph, Metric::L2))
             .unwrap();
 
-        let reused = pool
+        let actual_rows_from_reused_workspace = pool
             .install(|| prune_overfull(data, candidates(&first, &second), &graph, Metric::L2))
             .unwrap();
 
-        assert_eq!(&*reused[0], &*fresh_first[0]);
-        assert_eq!(&*reused[1], &*fresh_second[1]);
+        // Then
+        assert_eq!(
+            &*actual_rows_from_reused_workspace[0],
+            &*expected_first_row_from_fresh_workspace[0]
+        );
+        assert_eq!(
+            &*actual_rows_from_reused_workspace[1],
+            &*expected_second_row_from_fresh_workspace[1]
+        );
     }
 }
