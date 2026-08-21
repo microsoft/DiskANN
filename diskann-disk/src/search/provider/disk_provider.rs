@@ -21,7 +21,8 @@ use diskann::{
         ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
         search::{AdaptiveL, InlineFilterSearch, Knn},
-        search_output_buffer, DiskANNIndex,
+        search_output_buffer::{self, BufferState, IdDistanceAssociatedData},
+        DiskANNIndex,
     },
     neighbor::{self, Neighbor, NeighborPriorityQueue},
     provider::{DataProvider, DefaultContext, HasId, NoopGuard},
@@ -327,7 +328,7 @@ type IndexedVectorOutput<'a, VectorData> = Option<&'a mut [IndexedVector<VectorD
 type SearchPayload<AssociatedData, VectorData> = (u32, AssociatedData, IndexedVector<VectorData>);
 
 struct SearchOutput<'a, A, V> {
-    output: search_output_buffer::IdDistanceAssociatedData<'a, u32, A>,
+    output: IdDistanceAssociatedData<'a, u32, A>,
     indexed_vectors: IndexedVectorOutput<'a, V>,
 }
 
@@ -337,18 +338,20 @@ impl<'a, A, V> SearchOutput<'a, A, V> {
         distances: &'a mut [f32],
         associated_data: &'a mut [A],
         indexed_vectors: IndexedVectorOutput<'a, V>,
-    ) -> Self {
-        if let Some(vectors) = &indexed_vectors {
-            assert_eq!(ids.len(), vectors.len());
+    ) -> ANNResult<Self> {
+        if indexed_vectors
+            .as_ref()
+            .is_some_and(|vectors| ids.len() != vectors.len())
+        {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "ids and indexed_vectors must have the same length",
+            ));
         }
-        Self {
-            output: search_output_buffer::IdDistanceAssociatedData::new(
-                ids,
-                distances,
-                associated_data,
-            ),
+        Ok(Self {
+            output: IdDistanceAssociatedData::new(ids, distances, associated_data),
             indexed_vectors,
-        }
+        })
     }
 }
 
@@ -359,20 +362,19 @@ impl<A: Clone + Send, V> search_output_buffer::SearchOutputBuffer<SearchPayload<
         search_output_buffer::SearchOutputBuffer::size_hint(&self.output)
     }
 
-    fn push(
-        &mut self,
-        neighbor: Neighbor<SearchPayload<A, V>>,
-    ) -> search_output_buffer::BufferState {
-        let position = search_output_buffer::SearchOutputBuffer::current_len(&self.output);
+    fn push(&mut self, neighbor: Neighbor<SearchPayload<A, V>>) -> BufferState {
+        let position = self.current_len();
+        if position == self.output.capacity() {
+            return BufferState::Full;
+        }
+
         let ((id, data, vector), distance) = neighbor.as_tuple();
         let state = search_output_buffer::SearchOutputBuffer::push(
             &mut self.output,
             Neighbor::new((id, data), distance),
         );
-        if search_output_buffer::SearchOutputBuffer::current_len(&self.output) != position {
-            if let Some(vectors) = &mut self.indexed_vectors {
-                vectors[position] = vector;
-            }
+        if let Some(vectors) = &mut self.indexed_vectors {
+            vectors[position] = vector;
         }
         state
     }
@@ -387,9 +389,7 @@ impl<A: Clone + Send, V> search_output_buffer::SearchOutputBuffer<SearchPayload<
     {
         let start = self.current_len();
         for neighbor in iter {
-            let previous = self.current_len();
-            let state = self.push(neighbor);
-            if self.current_len() == previous || state.is_full() {
+            if self.push(neighbor).is_full() {
                 break;
             }
         }
@@ -987,7 +987,7 @@ pub struct SearchResultItem<AssociatedData> {
     pub distance: f32,
 }
 
-pub struct SearchResultWithIndexedVectors<AssociatedData, VectorData> {
+pub struct SearchResultWithVectors<AssociatedData, VectorData> {
     pub results: Vec<SearchResultItemWithIndexedVector<AssociatedData, VectorData>>,
     pub stats: SearchResultStats,
 }
@@ -1256,8 +1256,7 @@ where
         search_list_size: u32,
         beam_width: Option<usize>,
         mode: SearchMode<'_>,
-    ) -> ANNResult<SearchResultWithIndexedVectors<Data::AssociatedDataType, Data::VectorDataType>>
-    {
+    ) -> ANNResult<SearchResultWithVectors<Data::AssociatedDataType, Data::VectorDataType>> {
         let result_count = return_list_size as usize;
         let mut query_stats = QueryStatistics::default();
         let mut indices = vec![0u32; result_count];
@@ -1301,7 +1300,7 @@ where
             })
             .collect::<ANNResult<Vec<_>>>()?;
 
-        Ok(SearchResultWithIndexedVectors { results, stats })
+        Ok(SearchResultWithVectors { results, stats })
     }
 
     /// Perform a raw search on the disk index.
@@ -1362,7 +1361,7 @@ where
             &mut distances[..k_value],
             &mut associated_data[..k_value],
             indexed_vectors.map(|vectors| &mut vectors[..k_value]),
-        );
+        )?;
 
         let timer = Instant::now();
 
@@ -1499,7 +1498,7 @@ mod disk_provider_tests {
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
     use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
-    use diskann_utils::{io::read_bin, test_data_root};
+    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
@@ -1566,6 +1565,7 @@ mod disk_provider_tests {
             thread_num: 1,
             query_file_path: TEST_QUERY_10PTS_100DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
+            source_data_file_path: None,
             k: 10,
             l: 20,
         });
@@ -1576,6 +1576,7 @@ mod disk_provider_tests {
             thread_num: 5,
             query_file_path: TEST_QUERY_10PTS_100DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
+            source_data_file_path: None,
             k: 10,
             l: 20,
         });
@@ -1608,6 +1609,7 @@ mod disk_provider_tests {
             thread_num: 1,
             query_file_path: TEST_QUERY_10PTS_128DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+            source_data_file_path: Some(TEST_DATA_FILE),
             k: 10,
             l: 20,
         });
@@ -1618,33 +1620,10 @@ mod disk_provider_tests {
             thread_num: 5,
             query_file_path: TEST_QUERY_10PTS_128DIM,
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
+            source_data_file_path: Some(TEST_DATA_FILE),
             k: 10,
             l: 20,
         });
-
-        let query = vec![0.1f32; 128];
-        let plain = search_engine
-            .search(&query, 10, 20, None, SearchMode::graph())
-            .unwrap();
-        let indexed = search_engine
-            .search_with_indexed_vectors(&query, 10, 20, None, SearchMode::graph())
-            .unwrap();
-        let source =
-            read_bin::<f32>(&mut storage_provider.open_reader(TEST_DATA_FILE).unwrap()).unwrap();
-
-        assert!(plain
-            .results
-            .iter()
-            .zip(&indexed.results)
-            .all(|(left, right)| (left.vertex_id, left.distance)
-                == (right.vertex_id, right.distance)));
-        assert_eq!(indexed.results.len(), indexed.stats.result_count as usize);
-        for item in &indexed.results {
-            assert_eq!(
-                item.indexed_vector.as_ref(),
-                source.row(item.vertex_id as usize)
-            );
-        }
     }
 
     fn get_truth_associated_data<StorageReader: StorageReadProvider>(
@@ -1808,6 +1787,58 @@ mod disk_provider_tests {
         result.into_inner().into_vec()
     }
 
+    fn load_source_data<StorageReader: StorageReadProvider>(
+        storage_provider: &StorageReader,
+        path: &str,
+    ) -> Matrix<f32> {
+        read_bin(&mut storage_provider.open_reader(path).unwrap()).unwrap()
+    }
+
+    fn assert_indexed_results_match(
+        indexed: &SearchResultWithVectors<(), f32>,
+        expected_result_count: u32,
+        expected_io_operations: u32,
+        expected_results: impl IntoIterator<Item = (u32, f32)>,
+        source: Option<&Matrix<f32>>,
+        vector_dimension: usize,
+    ) {
+        assert_eq!(indexed.stats.result_count, expected_result_count);
+        assert_eq!(indexed.results.len(), expected_result_count as usize);
+        assert_eq!(
+            indexed.stats.query_statistics.total_io_operations,
+            expected_io_operations
+        );
+        for (actual, expected) in indexed.results.iter().zip(expected_results) {
+            assert_eq!((actual.vertex_id, actual.distance), expected);
+            if let Some(source) = source {
+                assert_eq!(
+                    actual.indexed_vector.as_ref(),
+                    source.row(actual.vertex_id as usize)
+                );
+            } else {
+                assert_eq!(actual.indexed_vector.len(), vector_dimension);
+            }
+        }
+    }
+
+    fn assert_indexed_search_results_match(
+        result: &SearchResult<()>,
+        indexed: &SearchResultWithVectors<(), f32>,
+        source: &Matrix<f32>,
+    ) {
+        assert_indexed_results_match(
+            indexed,
+            result.stats.result_count,
+            result.stats.query_statistics.total_io_operations,
+            result
+                .results
+                .iter()
+                .map(|item| (item.vertex_id, item.distance)),
+            Some(source),
+            source.ncols(),
+        );
+    }
+
     struct TestDiskSearchParams<'a, StorageType> {
         storage_provider: &'a StorageType,
         index_search_engine: &'a DiskIndexSearcher<
@@ -1820,6 +1851,7 @@ mod disk_provider_tests {
         thread_num: u64,
         query_file_path: &'a str,
         truth_result_file_path: &'a str,
+        source_data_file_path: Option<&'a str>,
         k: usize,
         l: usize,
     }
@@ -1852,6 +1884,9 @@ mod disk_provider_tests {
         .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
+        let source = params
+            .source_data_file_path
+            .map(|path| load_source_data(params.storage_provider, path));
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
         queries
@@ -1888,6 +1923,25 @@ mod disk_provider_tests {
                 assert!(
                     result_unwrapped.query_statistics.total_vertices_loaded > 0,
                     "Expected vertices loaded to be greater than 0"
+                );
+
+                let indexed = params
+                    .index_search_engine
+                    .search_with_indexed_vectors(
+                        query,
+                        params.k as u32,
+                        params.l as u32,
+                        None,
+                        SearchMode::graph(),
+                    )
+                    .unwrap();
+                assert_indexed_results_match(
+                    &indexed,
+                    result_unwrapped.result_count,
+                    result_unwrapped.query_statistics.total_io_operations,
+                    indices.iter().copied().zip(distances.iter().copied()),
+                    source.as_ref(),
+                    query.len(),
                 );
 
                 // Compare res with truth_slice using assert_eq!
@@ -2067,6 +2121,17 @@ mod disk_provider_tests {
             Err(_) => {}
             Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
         }
+
+        match search_engine.search_with_indexed_vectors(
+            &query,
+            return_list_size,
+            search_list_size,
+            None,
+            SearchMode::graph(),
+        ) {
+            Err(error) => assert_eq!(error_kind(&error), ErrorKind::IndexError),
+            Ok(_) => panic!("Expected error when search_list_size < return_list_size"),
+        }
     }
 
     #[test]
@@ -2092,7 +2157,7 @@ mod disk_provider_tests {
         let mut associated_data = vec![(); k];
 
         let mut result_output_buffer =
-            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None);
+            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None).unwrap();
         let io_tracker = IOTracker::default();
         let strategy =
             search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll, false);
@@ -2193,6 +2258,18 @@ mod disk_provider_tests {
                 SearchMode::diverse_graph(params),
             )
             .unwrap();
+        let indexed = search_engine
+            .search_with_indexed_vectors(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                SearchMode::diverse_graph(params),
+            )
+            .unwrap();
+        let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
+        assert_indexed_search_results_match(&result, &indexed, &source);
+
         let det_div_ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
 
         assert_eq!(
@@ -2326,7 +2403,7 @@ mod disk_provider_tests {
         let mut associated_data = vec![(); original_k];
 
         let mut result_output_buffer =
-            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None);
+            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None).unwrap();
         let io_tracker = IOTracker::default();
         let strategy =
             search_engine.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll, false);
@@ -2376,7 +2453,7 @@ mod disk_provider_tests {
         let mut distances2 = vec![0f32; original_k];
         let mut associated_data2 = vec![(); original_k];
         let mut result_output_buffer2 =
-            SearchOutput::new(&mut indices2, &mut distances2, &mut associated_data2, None);
+            SearchOutput::new(&mut indices2, &mut distances2, &mut associated_data2, None).unwrap();
         let io_tracker2 = IOTracker::default();
         let strategy2 =
             search_engine.search_strategy(&io_tracker2, PostprocessStrategy::AcceptAll, false);
@@ -2493,6 +2570,7 @@ mod disk_provider_tests {
         10,
         vec![152, 118, 72, 170, 87, 141, 79, 207, 124, 86],
         vec![256101.7, 256675.3, 256709.69, 256712.5, 256760.08, 256958.5, 257006.1, 257025.7, 257105.67, 257107.67],
+        false,
     )]
     // This case validates post-filtering using 2 ids which are not present in the unfiltered result set.
     // It is expected that the post-filtering will return an empty result
@@ -2502,24 +2580,29 @@ mod disk_provider_tests {
         0,
         vec![0; 10],
         vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        false,
     )]
     // This case validates pre-filtering using 2 ids which are not present in the unfiltered result set.
-    // It is expected that the pre-filtering will do search over matching ids
+    // It is expected that the pre-filtering will do search over matching ids.
+    // It also verifies indexed-vector output for FlatScan.
     #[case(
         |id: &u32| *id == 0 || *id == 1,
         true,
         2,
         vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         vec![257247.28, 258179.28, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        true,
     )]
     // This case validates post-filtering using 3 ids from the unfiltered result set.
-    // It is expected that the post-filtering will filter out non-matching ids
+    // It is expected that the post-filtering will filter out non-matching ids.
+    // It also verifies indexed-vector output and partial-result alignment for Graph.
     #[case(
         |id: &u32| *id == 72 || *id == 87 || *id == 170,
         false,
         3,
         vec![72, 170, 87, 0, 0, 0, 0, 0, 0, 0],
         vec![256709.69, 256712.5, 256760.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        true,
     )]
     // This case validates pre-filtering using 3 ids from the unfiltered result set.
     // It is expected that the pre-filtering will do search over matching ids
@@ -2529,6 +2612,7 @@ mod disk_provider_tests {
         3,
         vec![72, 170, 87, 0, 0, 0, 0, 0, 0, 0],
         vec![256709.69, 256712.5, 256760.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        false,
     )]
     fn test_search_with_vector_filter(
         #[case] vector_filter: fn(&u32) -> bool,
@@ -2536,6 +2620,7 @@ mod disk_provider_tests {
         #[case] expected_result_count: u32,
         #[case] expected_indices: Vec<u32>,
         #[case] expected_distances: Vec<f32>,
+        #[case] check_indexed_vectors: bool,
     ) {
         // Exact distances can vary slightly depending on the architecture used
         // to compute distances due to different unrolling strategies and SIMD widthd.
@@ -2641,6 +2726,14 @@ mod disk_provider_tests {
             check_distances(&actual_distances, &expected_distances),
             "Expected distances to match"
         );
+
+        if check_indexed_vectors {
+            let indexed = search_engine
+                .search_with_indexed_vectors(&query, 10, 10, None, make_mode())
+                .unwrap();
+            let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
+            assert_indexed_search_results_match(&result_with_filter_unwrapped, &indexed, &source);
+        }
     }
 
     // ===========================================================================
@@ -2740,6 +2833,20 @@ mod disk_provider_tests {
                 ),
             )
             .expect("inline filter search with AdaptiveL must succeed");
+        let indexed = search_engine
+            .search_with_indexed_vectors(
+                &query,
+                10,
+                10,
+                None,
+                SearchMode::inline_filter(
+                    predicate,
+                    Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+                ),
+            )
+            .expect("indexed-vector inline filter search with AdaptiveL must succeed");
+        let source = load_source_data(storage_provider.as_ref(), TEST_DATA_FILE);
+        assert_indexed_search_results_match(&result, &indexed, &source);
 
         // `result.results` is pre-allocated to `return_list_size`; only the
         // first `result_count` entries are populated. The trailing entries
@@ -2788,7 +2895,7 @@ mod disk_provider_tests {
         let mut associated_data = vec![(); k];
 
         let mut result_output_buffer =
-            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None);
+            SearchOutput::new(&mut indices, &mut distances, &mut associated_data, None).unwrap();
 
         let io_tracker = IOTracker::default();
         let strategy =
