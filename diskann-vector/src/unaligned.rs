@@ -22,6 +22,14 @@ pub struct UnalignedSlice<'a, T> {
     _lifetime: PhantomData<&'a T>,
 }
 
+/// SAFETY: `UnalignedSlice` is like a `&[T]`: it can be sent to other threads when `&T` is
+/// send - implying the bound `T: Sync`.
+unsafe impl<T> Send for UnalignedSlice<'_, T> where T: Sync {}
+
+/// SAFETY: `UnalignedSlice` is like a `&[T]`: it can be shared with other threads when `&T`
+/// is send, implying the bound `T: Sync`.
+unsafe impl<T> Sync for UnalignedSlice<'_, T> where T: Sync {}
+
 impl<'a, T> UnalignedSlice<'a, T> {
     /// Construct a new [`UnalignedSlice`] over the region `[ptr, ptr.add(len))`.
     ///
