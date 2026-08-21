@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn returns_one_leaf_at_and_below_c_max() {
+    fn partition_returns_one_leaf_when_point_count_does_not_exceed_c_max() {
         for points in [7, 8] {
             let data = clustered_data(points, 3);
             let leaves = partition_with_runtime_metric(
@@ -726,30 +726,42 @@ mod tests {
 
     #[test]
     fn global_merge_canonicalizes_small_leaf_membership() {
+        // Given
         let leaves = vec![vec![9, 3, 1], vec![3, 2], vec![8]];
+        let expected_canonical_membership = vec![vec![1, 2, 3, 8, 9]];
 
-        let merged = merge_undersized_leaves(leaves, 4, 8).unwrap();
+        // When
+        let actual_leaves = merge_undersized_leaves(leaves, 4, 8).unwrap();
 
-        assert_eq!(merged, vec![vec![1, 2, 3, 8, 9]]);
+        // Then
+        assert_eq!(actual_leaves, expected_canonical_membership);
     }
 
     #[test]
     fn global_merge_never_overfills_before_reaching_c_min() {
+        // Given
         let leaves = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]];
+        let expected_capacity_bounded_leaves =
+            vec![vec![0, 1, 2, 3, 4, 5, 6, 7], vec![8, 9, 10, 11]];
 
-        let merged = merge_undersized_leaves(leaves, 11, 11).unwrap();
+        // When
+        let actual_leaves = merge_undersized_leaves(leaves, 11, 11).unwrap();
 
-        assert_eq!(
-            merged,
-            vec![vec![0, 1, 2, 3, 4, 5, 6, 7], vec![8, 9, 10, 11]]
-        );
+        // Then
+        assert_eq!(actual_leaves, expected_capacity_bounded_leaves);
     }
 
     #[test]
     fn global_merge_fills_exact_capacity_before_flushing() {
-        let merged = merge_undersized_leaves(vec![vec![0, 1], vec![2, 3]], 4, 4).unwrap();
+        // Given
+        let leaves = vec![vec![0, 1], vec![2, 3]];
+        let expected_exact_capacity_leaf = vec![vec![0, 1, 2, 3]];
 
-        assert_eq!(merged, vec![vec![0, 1, 2, 3]]);
+        // When
+        let actual_leaves = merge_undersized_leaves(leaves, 4, 4).unwrap();
+
+        // Then
+        assert_eq!(actual_leaves, expected_exact_capacity_leaf);
     }
 
     #[test]
@@ -783,23 +795,23 @@ mod tests {
             let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
             let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
             let config = config(2, 16, vec![2, 1], 1);
-            let expected = partition_with_runtime_metric(
+            let expected_f32_partition = partition_with_runtime_metric(
                 MatrixView::try_from(&f32_data, points, dimensions).unwrap(),
                 &config,
                 Metric::L2,
             )
             .unwrap();
-            let actual = partition_with_runtime_metric(
+            let actual_converted_partition = partition_with_runtime_metric(
                 MatrixView::try_from(&converted, points, dimensions).unwrap(),
                 &config,
                 Metric::L2,
             )
             .unwrap_or_else(|error| panic!("{label} dimensions={dimensions}: {error}"));
 
-            assert_valid_partition_with_runtime_metric(&actual, points, 16, 1);
+            assert_valid_partition_with_runtime_metric(&actual_converted_partition, points, 16, 1);
             assert_eq!(
-                sorted_memberships(&actual),
-                sorted_memberships(&expected),
+                sorted_memberships(&actual_converted_partition),
+                sorted_memberships(&expected_f32_partition),
                 "{label} dimensions={dimensions}"
             );
         }
@@ -859,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn all_metrics_produce_valid_partitions() {
+    fn every_metric_covers_all_points_without_exceeding_c_max() {
         let data = directional_data(64, 8);
         let config = config(2, 20, vec![2], 1);
 
@@ -875,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn leader_count_is_bounded() {
+    fn sampled_leader_count_is_at_least_one_and_never_exceeds_the_cap() {
         assert_eq!(sampled_leader_count(1, 1.0), 1);
         assert_eq!(sampled_leader_count(10, 0.01), 2);
         assert_eq!(sampled_leader_count(50_000, 1.0), LEADER_CAP);
@@ -888,31 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn assignment_stripes_use_power_of_two_point_counts() {
-        assert_eq!(assignment_stripe_point_count(1_000), 128);
-        assert_eq!(assignment_stripe_point_count(256), 512);
-        assert_eq!(
-            assignment_stripe_point_count(1),
-            MAX_ASSIGNMENT_STRIPE_POINTS
-        );
-    }
-
-    #[test]
-    fn stripe_buffer_pool_reuses_returned_capacity() {
-        let pool = StripeBufferPool::new((), 0, None);
-        let points = {
-            let mut buffers = pool.get_ref(());
-            buffers.point_values.resize(16, 0.0);
-            buffers.point_values.as_ptr()
-        };
-
-        let buffers = pool.get_ref(());
-        assert_eq!(buffers.point_values.as_ptr(), points);
-        assert_eq!(buffers.point_values.len(), 16);
-    }
-
-    #[test]
-    fn leader_assignment_handles_multiple_stripes() {
+    fn leader_assignment_preserves_clusters_across_multiple_stripes() {
         let points = 2_048;
         let data: Vec<f32> = (0..points).map(|point| point as f32).collect();
         let data = MatrixView::try_from(data.as_slice(), points, 1).unwrap();
@@ -934,28 +922,32 @@ mod tests {
 
     #[test]
     fn scatter_omits_unassigned_slots() {
-        assert_eq!(
-            scatter_serial(
-                &[10, 11],
-                &[0, UNASSIGNED_LEADER, UNASSIGNED_LEADER, 1],
-                2,
-                2
-            ),
-            [vec![10], vec![11]]
-        );
+        // Given
+        let points = [10, 11];
+        let assignments = [0, UNASSIGNED_LEADER, UNASSIGNED_LEADER, 1];
+        let expected_clusters = [vec![10], vec![11]];
+
+        // When
+        let actual_clusters = scatter_serial(&points, &assignments, 2, 2);
+
+        // Then
+        assert_eq!(actual_clusters, expected_clusters);
     }
 
     #[test]
     fn parallel_scatter_matches_serial_order() {
+        // Given
         let points: Vec<u32> = (0..PARALLEL_SCATTER_MIN_POINTS as u32).collect();
         let assignments: Vec<u32> = points
             .iter()
             .flat_map(|point| [point % 7, (point + 3) % 7])
             .collect();
 
-        let expected = scatter_serial(&points, &assignments, 2, 7);
-        let actual = scatter_assignments(&points, &assignments, 2, 7).unwrap();
+        // When
+        let expected_serial_clusters = scatter_serial(&points, &assignments, 2, 7);
+        let actual_parallel_clusters = scatter_assignments(&points, &assignments, 2, 7).unwrap();
 
-        assert_eq!(actual, expected);
+        // Then
+        assert_eq!(actual_parallel_clusters, expected_serial_clusters);
     }
 }

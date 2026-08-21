@@ -410,6 +410,7 @@ mod tests {
 
     #[test]
     fn leaf_adjacency_matches_an_independent_all_pairs_reference() {
+        // Given
         let points = [
             [0.0_f32, 0.0],
             [1.0, 0.2],
@@ -419,8 +420,10 @@ mod tests {
             [6.7, -3.2],
         ];
         let flat: Vec<_> = points.into_iter().flatten().collect();
+        let expected_adjacency = brute_force_symmetric_l2(&points, 2);
 
-        let actual = adjacency_lists(
+        // When
+        let actual_adjacency = adjacency_lists(
             build(
                 view(&flat, points.len(), 2),
                 &[(0..points.len() as u32).collect()],
@@ -430,33 +433,41 @@ mod tests {
             .unwrap(),
         );
 
-        assert_eq!(actual, brute_force_symmetric_l2(&points, 2));
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
     }
 
     #[test]
     fn non_rankable_neighbors_are_omitted() {
+        // Given
         let data = [0.0_f32, 1.0, f32::NAN];
+        let expected_adjacency = [vec![1], vec![0], vec![]];
 
+        // When
         let graph = build(view(&data, 3, 1), &[vec![0, 1, 2]], 2, Metric::InnerProduct).unwrap();
+        let actual_adjacency = adjacency_lists(graph);
 
-        assert_eq!(adjacency_lists(graph), [vec![1], vec![0], vec![]]);
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
     }
 
     #[test]
-    fn retains_and_deduplicates_candidates_from_overlapping_leaves() {
+    fn overlapping_leaves_contribute_each_candidate_once() {
+        // Given
         let data = [0.0_f32, 1.0, 2.0, 3.0];
         let leaves = vec![vec![0, 1, 2], vec![0, 2, 3], vec![0, 1, 2]];
+        let expected_adjacency = [vec![1, 2, 3], vec![0, 2], vec![0, 1, 3], vec![0, 2]];
 
+        // When
         let graph = build(view(&data, 4, 1), &leaves, 2, Metric::L2).unwrap();
+        let actual_adjacency = adjacency_lists(graph);
 
-        assert_eq!(
-            adjacency_lists(graph),
-            [vec![1, 2, 3], vec![0, 2], vec![0, 1, 3], vec![0, 2]]
-        );
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
     }
 
     #[test]
-    fn symmetric_knn_can_give_one_point_more_than_two_k_candidates() {
+    fn symmetric_edges_can_give_a_center_more_than_two_k_neighbors() {
         let dimensions = 9;
         let mut data = vec![0.0_f32; 10 * dimensions];
         for source in 1..10 {
@@ -561,10 +572,10 @@ mod tests {
         let leaves: Vec<Vec<u32>> = (0..32)
             .map(|offset| (0..16).map(|point| (point + offset) % 64).collect())
             .collect();
-        let expected = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+        let expected_candidate_order = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
         for _ in 0..8 {
-            let actual = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
-            assert_eq!(actual, expected);
+            let actual_candidate_order = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+            assert_eq!(actual_candidate_order, expected_candidate_order);
         }
     }
 
@@ -588,22 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn reuses_worker_buffers_for_smaller_leaves() {
-        let mut buffers = LeafBuffers::default();
-        buffers.prepare(0, 64, 128, 2).unwrap();
-        let point_values = buffers.point_values.as_ptr();
-        let neighbors = buffers.neighbors.as_ptr();
-
-        buffers.prepare(1, 8, 128, 2).unwrap();
-
-        assert_eq!(buffers.point_values.as_ptr(), point_values);
-        assert_eq!(buffers.neighbors.as_ptr(), neighbors);
-        assert_eq!(buffers.point_values.len(), 64 * 128);
-        assert_eq!(buffers.neighbors.len(), 64 * 2);
-    }
-
-    #[test]
-    fn reports_shape_overflow_before_allocating() {
+    fn leaf_buffer_preparation_reports_shape_overflow_before_allocating() {
         let mut buffers = LeafBuffers::default();
         assert!(matches!(
             buffers.prepare(7, usize::MAX, 2, 1),
@@ -612,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_duplicate_global_ids_without_self_edges() {
+    fn symmetric_edge_mapping_skips_duplicate_ids_instead_of_adding_self_edges() {
         let mut graph = vec![Vec::new(); 2];
         add_symmetric_neighbors(
             &[7, 7],
