@@ -27,10 +27,9 @@
 //! * Quantization + reranking: The current version of this index targets just a single
 //!   data-store and is planned to be addressed in the near future.
 //!
-//! * Lack of save/load support: The index is currently ephemeral, but there are plans to
-//!   address this gap.
 
 use std::{
+    collections::{HashMap, HashSet},
     hash::Hash,
     num::{NonZeroU32, NonZeroUsize},
 };
@@ -62,6 +61,16 @@ pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
 
 impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
 
+/// Stable 128-bit external tag represented as two little-endian `u64` words.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Tag128 {
+    /// Least-significant 64 bits.
+    pub low: u64,
+    /// Most-significant 64 bits.
+    pub high: u64,
+}
+
 /// An in-memory data-provider for DiskANN's graph indexing algorithms.
 ///
 /// The first type parameter `L` is a [`layers::Layer`] for describing the kind of data
@@ -84,6 +93,17 @@ where
     // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
     // all counter related operations are no-ops.
     counters: Counters,
+}
+
+pub(crate) struct SnapshotState<M> {
+    pub rows: Vec<SnapshotRow<M>>,
+    pub frozen: SnapshotRow<()>,
+}
+
+pub(crate) struct SnapshotRow<M> {
+    pub tag: M,
+    pub vector: Vec<u8>,
+    pub neighbors: Vec<u32>,
 }
 
 impl<L, M> Provider<L, M>
@@ -130,6 +150,113 @@ where
         })
     }
 
+    pub(crate) fn new_from_snapshot<T>(
+        layer: L,
+        config: Config,
+        vectors: &[Vec<T>],
+        external_ids: &[Option<M>],
+        adjacency: &[Vec<u32>],
+        frozen_index: usize,
+    ) -> Result<Self, ProviderError>
+    where
+        L: for<'a> layers::Set<&'a [T]>,
+    {
+        fn snapshot_error(message: impl Into<String>) -> ProviderError {
+            ProviderError::LoadingSnapshot(ANNError::message(message.into()))
+        }
+
+        if vectors.len() != external_ids.len() || vectors.len() != adjacency.len() {
+            return Err(snapshot_error(
+                "snapshot vectors, external IDs, and adjacency lengths must match",
+            ));
+        }
+        if frozen_index >= vectors.len() {
+            return Err(snapshot_error("snapshot frozen index is out of bounds"));
+        }
+        if external_ids[frozen_index].is_some() {
+            return Err(snapshot_error(
+                "snapshot frozen point must not have an external ID",
+            ));
+        }
+        if external_ids
+            .iter()
+            .enumerate()
+            .any(|(i, id)| i != frozen_index && id.is_none())
+        {
+            return Err(snapshot_error(
+                "snapshot writable points must have external IDs",
+            ));
+        }
+        let writable = vectors.len() - 1;
+        if writable > config.capacity() {
+            return Err(snapshot_error(
+                "snapshot contains more writable points than configured capacity",
+            ));
+        }
+
+        let bytes = layers::Layer::bytes(&layer);
+        let mut frozen = Matrix::new(0u8, 1, bytes.value());
+        layers::Set::set(&layer, vectors[frozen_index].as_slice(), frozen.row_mut(0))
+            .map_err(ProviderError::LoadingSnapshot)?;
+
+        let mut store_config = store::Config::new(config.capacity(), bytes, config.max_degree());
+        if let Some(slots) = config.epoch_guard_slots {
+            store_config.epoch_guard_slots(slots);
+        }
+        if let Some(capacity) = config.freelist_recycle_capacity {
+            store_config.freelist_recycle_capacity(capacity);
+        }
+
+        let store = Store::new(store_config, frozen.as_view())
+            .map_err(|err| ProviderError::CreatingStore(Box::new(err)))?;
+        let mapping = IdMap::new(config.capacity());
+        let mut remap = vec![u32::MAX; vectors.len()];
+        remap[frozen_index] = store.frozen().start;
+
+        for (old_id, (vector, external_id)) in std::iter::zip(vectors, external_ids).enumerate() {
+            let Some(external_id) = external_id else {
+                continue;
+            };
+            let mut slot = store
+                .acquire()
+                .ok_or_else(|| snapshot_error("could not allocate a snapshot slot"))?;
+            layers::Set::set(&layer, vector.as_slice(), slot.as_mut_slice())
+                .map_err(ProviderError::LoadingSnapshot)?;
+            mapping
+                .insert(external_id.clone(), slot.slot())
+                .map_err(|err| ProviderError::LoadingSnapshot(ANNError::from(err)))?;
+            remap[old_id] = slot.publish();
+        }
+
+        let reader = store
+            .reader()
+            .map_err(|err| ProviderError::LoadingSnapshot(ANNError::from(err)))?;
+        for (old_id, old_neighbors) in adjacency.iter().enumerate() {
+            let mut neighbors = Vec::with_capacity(old_neighbors.len());
+            for old_neighbor in old_neighbors {
+                let mapped = remap
+                    .get(old_neighbor.into_usize())
+                    .copied()
+                    .filter(|id| *id != u32::MAX)
+                    .ok_or_else(|| snapshot_error("snapshot adjacency ID is out of bounds"))?;
+                neighbors.push(mapped);
+            }
+            reader
+                .neighbors()
+                .set(remap[old_id], &neighbors)
+                .map_err(|err| ProviderError::LoadingSnapshot(ANNError::from(err)))?;
+        }
+        drop(reader);
+
+        Ok(Self {
+            store,
+            layer,
+            mapping,
+            config,
+            counters: Counters::new(),
+        })
+    }
+
     /// A local set of counters that update the provider-wide counters in bulk.
     fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
@@ -140,10 +267,115 @@ where
         self.store.max_degree()
     }
 
+    /// Return the internal IDs reserved for frozen start points.
+    pub fn frozen_ids(&self) -> std::ops::Range<u32> {
+        self.store.frozen()
+    }
+
+    /// Return the number of active external IDs owned by this provider.
+    pub fn active_count(&self) -> usize {
+        self.mapping.len()
+    }
+
+    /// Return the external-ID allocation represented by the provider mapping.
+    pub fn external_id_memory_bytes(&self) -> usize {
+        self.config
+            .capacity()
+            .saturating_mul(std::mem::size_of::<M>())
+    }
+
+    /// Return a snapshot of active external IDs.
+    pub fn external_ids(&self) -> Vec<M> {
+        self.mapping.external_ids()
+    }
+
     /// Return a snapshot of the current event counters.
     #[cfg(feature = "integration-test")]
     pub fn counters(&self) -> crate::integration::counters::CounterSnapshot {
         self.counters.snapshot()
+    }
+}
+
+impl<M> Provider<layers::Full<u8>, M>
+where
+    M: Id,
+{
+    pub(crate) fn snapshot_state(&self) -> Result<SnapshotState<M>, ProviderError> {
+        let reader = self
+            .store
+            .reader()
+            .map_err(|error| ProviderError::Snapshot(ANNError::from(error)))?;
+        let mut selected = Vec::new();
+        for external in self.mapping.external_ids() {
+            let internal = self.mapping.to_internal(&external).ok_or_else(|| {
+                ProviderError::Snapshot(ANNError::message(
+                    "external tag changed while starting snapshot",
+                ))
+            })?;
+            selected.push((internal, external));
+        }
+        selected.sort_unstable_by_key(|(internal, _)| *internal);
+
+        let frozen_ids = self.store.frozen();
+        if frozen_ids.len() != 1 {
+            return Err(ProviderError::Snapshot(ANNError::message(
+                "streaming snapshot requires exactly one frozen point",
+            )));
+        }
+        let frozen_internal = frozen_ids.start;
+        let mut dense = HashMap::with_capacity(selected.len() + 1);
+        for (snapshot_id, (internal, _)) in selected.iter().enumerate() {
+            dense.insert(*internal, snapshot_id as u32);
+        }
+        dense.insert(frozen_internal, selected.len() as u32);
+
+        let capture_neighbors =
+            |internal: u32, self_dense: u32| -> Result<Vec<u32>, ProviderError> {
+                let mut adjacency = AdjacencyList::new();
+                reader
+                    .neighbors()
+                    .get(internal, &mut adjacency)
+                    .map_err(|error| ProviderError::Snapshot(ANNError::from(error)))?;
+                let mut unique = HashSet::new();
+                Ok(adjacency
+                    .iter()
+                    .filter_map(|neighbor| dense.get(neighbor).copied())
+                    .filter(|neighbor| *neighbor != self_dense && unique.insert(*neighbor))
+                    .collect::<Vec<_>>())
+            };
+
+        let mut rows = Vec::with_capacity(selected.len());
+        for (snapshot_id, (internal, tag)) in selected.into_iter().enumerate() {
+            let vector = reader.read(internal.into_usize()).ok_or_else(|| {
+                ProviderError::Snapshot(ANNError::message(
+                    "selected point changed while creating snapshot",
+                ))
+            })?;
+            if self.mapping.to_internal(&tag) != Some(internal) {
+                return Err(ProviderError::Snapshot(ANNError::message(
+                    "external tag changed while creating snapshot",
+                )));
+            }
+            rows.push(SnapshotRow {
+                tag,
+                vector: vector.to_vec(),
+                neighbors: capture_neighbors(internal, snapshot_id as u32)?,
+            });
+        }
+
+        let frozen = SnapshotRow {
+            tag: (),
+            vector: reader
+                .read(frozen_internal.into_usize())
+                .ok_or_else(|| {
+                    ProviderError::Snapshot(ANNError::message(
+                        "frozen point changed while creating snapshot",
+                    ))
+                })?
+                .to_vec(),
+            neighbors: capture_neighbors(frozen_internal, rows.len() as u32)?,
+        };
+        Ok(SnapshotState { rows, frozen })
     }
 }
 
@@ -153,6 +385,10 @@ pub enum ProviderError {
     SettingStartPoints(#[from] ANNError),
     #[error("could not create data store")]
     CreatingStore(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("could not load mutable snapshot")]
+    LoadingSnapshot(#[source] ANNError),
+    #[error("could not capture mutable snapshot")]
+    Snapshot(#[source] ANNError),
 }
 
 /// Configuration for [`Provider`].

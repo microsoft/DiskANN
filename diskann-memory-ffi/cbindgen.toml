@@ -1,0 +1,40 @@
+language = "C++"
+namespace = "DiskANN"
+include_guard = "DISKANN_MEMORY_FFI_H"
+pragma_once = true
+documentation = true
+usize_is_size_t = true
+style = "both"
+
+[parse]
+parse_deps = false
+
+[export]
+include = [
+    "DiskANNError",
+    "Metric",
+    "TagType",
+    "DeleteMethod",
+    "DiskANNResult",
+    "IndexConfiguration",
+    "SearchParams",
+    "SearchResult",
+    "ByteSlice",
+    "DiskANNStatus",
+    "TableStats",
+    "diskann_load_memory_index_u8",
+    "diskann_search_memory_index_u8",
+    "diskann_free_memory_index",
+    "diskann_insert_streaming_index_u8",
+    "diskann_is_max_insert_streaming_index",
+    "diskann_delete_streaming_index",
+    "diskann_should_consolidate_delete_streaming_index",
+    "diskann_consolidate_delete_streaming_index",
+    "diskann_dump_streaming_index",
+    "diskann_get_table_stats",
+    "diskann_free_streaming_index",
+    "diskann_free_error_message",
+]
+
+[fn]
+must_use = "WARN_UNUSED_RESULT"

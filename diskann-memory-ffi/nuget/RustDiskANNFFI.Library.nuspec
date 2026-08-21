@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>RustDiskANNFFI.Library</id>
+    <version>0.2.0</version>
+    <authors>Microsoft</authors>
+    <owners>Microsoft</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <readme>docs\README.md</readme>
+    <projectUrl>https://github.com/microsoft/DiskANN</projectUrl>
+    <description>Native Rust DiskANN read-only and Ads streaming UINT8 C ABI for Windows x64.</description>
+    <summary>Rust DiskANN native FFI library.</summary>
+    <tags>microsoft diskann rust ffi native</tags>
+    <repository type="git" url="https://github.com/microsoft/DiskANN" />
+  </metadata>
+  <files>
+    <file src="stage\**\*" target="." />
+  </files>
+</package>

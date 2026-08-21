@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <RustDiskANNFFILibraryRoot>$(MSBuildThisFileDirectory)..\</RustDiskANNFFILibraryRoot>
+    <RustDiskANNFFILibraryNativeConfiguration Condition="'$(Configuration)' == 'Debug'">debug</RustDiskANNFFILibraryNativeConfiguration>
+    <RustDiskANNFFILibraryNativeConfiguration Condition="'$(RustDiskANNFFILibraryNativeConfiguration)' == ''">release</RustDiskANNFFILibraryNativeConfiguration>
+    <RustDiskANNFFILibraryBinDir>$(RustDiskANNFFILibraryRoot)x64\bin\$(RustDiskANNFFILibraryNativeConfiguration)\</RustDiskANNFFILibraryBinDir>
+    <RustDiskANNFFILibraryLibDir>$(RustDiskANNFFILibraryRoot)x64\lib\$(RustDiskANNFFILibraryNativeConfiguration)\</RustDiskANNFFILibraryLibDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(RustDiskANNFFILibraryRoot)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(RustDiskANNFFILibraryLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>diskann_memory_ffi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Target Name="CopyRustDiskANNFFILibrary" AfterTargets="Build" Condition="'$(Platform)' == 'x64'">
+    <ItemGroup>
+      <RustDiskANNFFIRuntime Include="$(RustDiskANNFFILibraryBinDir)diskann_memory_ffi.dll" />
+      <RustDiskANNFFIRuntime Include="$(RustDiskANNFFILibraryBinDir)diskann_memory_ffi.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(RustDiskANNFFIRuntime)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

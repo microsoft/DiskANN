@@ -21,8 +21,13 @@ mod store;
 
 pub mod layers;
 pub mod provider;
+mod streaming;
 
-pub use provider::{Context, Provider, Strategy};
+pub use provider::{Context, Provider, Strategy, Tag128};
+pub use streaming::{
+    StreamingSnapshot, StreamingSnapshotConfig, StreamingSnapshotError, StreamingTag,
+    load_streaming_snapshot, save_streaming_snapshot,
+};
 
 #[cfg(test)]
 mod test;

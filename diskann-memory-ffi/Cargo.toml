@@ -1,0 +1,31 @@
+[package]
+name = "diskann-memory-ffi"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[lib]
+name = "diskann_memory_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+diskann.workspace = true
+diskann-inmem.workspace = true
+diskann-providers.workspace = true
+diskann-vector.workspace = true
+
+[build-dependencies]
+cbindgen = "0.29.0"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"

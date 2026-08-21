@@ -62,9 +62,15 @@ where
     /// A default multi-threaded runtime will be created and owned by `Self`. For a single-threaded
     /// runtime use [`new_with_current_thread_runtime`](Self::new_with_current_thread_runtime), or
     /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle).
-    pub fn new_with_multi_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
+    /// `thread_hint` sizes DiskANN's internal scratch resources; it does not configure Tokio
+    /// worker threads.
+    pub fn new_with_multi_thread_runtime(
+        config: graph::Config,
+        data_provider: DP,
+        thread_hint: NonZeroUsize,
+    ) -> Self {
         let (rt, handle) = create_multi_thread_runtime();
-        Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
+        Self::new_internal(config, data_provider, Some(rt), handle, Some(thread_hint))
     }
 
     /// Construct a synchronous `DiskANNIndex` with its own single-threaded `tokio::runtime::Runtime`.

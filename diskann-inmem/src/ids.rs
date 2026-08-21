@@ -94,6 +94,20 @@ where
         self.forward.contains_key(external)
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.forward.len()
+    }
+
+    pub(crate) fn external_ids(&self) -> Vec<I>
+    where
+        I: Clone,
+    {
+        self.forward
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     /// Look up the internal id for an external id.
     pub(crate) fn to_internal<Q>(&self, external: &Q) -> Option<u32>
     where
@@ -325,6 +339,31 @@ mod tests {
         assert_eq!(map.to_internal("alpha"), Some(1));
         assert!(!map.contains_external("beta"));
         assert_eq!(map.to_internal("beta"), None);
+    }
+
+    #[test]
+    fn wide_external_ids_with_matching_low_bits_remain_distinct() {
+        let u64_map = IdMap::<u64>::new(4);
+        let first = 0x0000_0001_aabb_ccddu64;
+        let second = 0x0000_0002_aabb_ccddu64;
+        u64_map.insert(first, 0).unwrap();
+        u64_map.insert(second, 1).unwrap();
+        assert_eq!(u64_map.to_internal(&first), Some(0));
+        assert_eq!(u64_map.to_internal(&second), Some(1));
+
+        let wide_map = IdMap::<crate::provider::Tag128>::new(4);
+        let first = crate::provider::Tag128 {
+            low: 0xaabb_ccdd,
+            high: 1,
+        };
+        let second = crate::provider::Tag128 {
+            low: 0xaabb_ccdd,
+            high: 2,
+        };
+        wide_map.insert(first, 0).unwrap();
+        wide_map.insert(second, 1).unwrap();
+        assert_eq!(wide_map.to_internal(&first), Some(0));
+        assert_eq!(wide_map.to_internal(&second), Some(1));
     }
 
     #[test]
