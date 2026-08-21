@@ -40,7 +40,7 @@ use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 
 use crate::{
     index::result::AggregatedSearchResults,
-    inputs::graph_index::{SearchPhase, TopkDeterminantDiversityPhase},
+    inputs::graph_index::{SearchPhase, SearchPhaseKind, TopkDeterminantDiversityPhase},
 };
 
 /// A dyn-compatible search plugin for `DP`.
@@ -245,5 +245,126 @@ impl TopkInlineFilter {
 
     pub(crate) const fn as_str() -> &'static str {
         "topk + inline filter"
+    }
+}
+
+/// A search plugin for multi-hop filtered search that evaluates the filter predicate live
+/// (per visited node) against an in-memory attribute index, instead of a precomputed bitmap.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilter;
+
+impl TopkMultihopLiveFilter {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilter`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilter
+    }
+}
+
+/// A multi-hop live-filter plugin backed by a flat CSR attribute index (contiguous
+/// `offsets`/`values` arrays) instead of the roaring `HashMap<u32, RoaringTreemap>`, so each
+/// per-node match reads one contiguous row rather than chasing heap-allocated roaring sets.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterCsr;
+
+impl TopkMultihopLiveFilterCsr {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterCsr`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterCsr
+    }
+}
+
+/// A multi-hop live-filter plugin that materializes the query's whole match set once (via roaring
+/// set-algebra over per-attribute posting lists) into a dense bitset, then answers each per-node
+/// match with an O(1) bit test. The materialization is timed as part of the query.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterBitmap;
+
+impl TopkMultihopLiveFilterBitmap {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterBitmap`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterBitmap
+    }
+}
+
+/// A multi-hop live-filter plugin that adapts per query: it materializes the match set's roaring
+/// bitmap once, and (by cardinality) either densifies to a bitset (selective) or falls back to the
+/// CSR row-scan (broad) — aiming to win across all selectivities.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterAuto;
+
+impl TopkMultihopLiveFilterAuto {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterAuto`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterAuto
+    }
+}
+
+/// A multi-hop live-filter plugin backed by per-attribute dense bitsets (bit-sliced), built at
+/// index time: `is_match` is one O(1) bit test per terminal with no per-query build.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterBitslice;
+
+impl TopkMultihopLiveFilterBitslice {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterBitslice`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterBitslice
+    }
+}
+
+/// A multi-hop live-filter plugin backed by bit slices and a flat OR-of-AND query plan.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopLiveFilterBitsliceDnf;
+
+impl TopkMultihopLiveFilterBitsliceDnf {
+    /// Returns [`SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf
+    }
+}
+
+/// A multi-hop encoded-filter plugin backed by a pre-encoded bitslice label index and a flat
+/// OR-of-AND query plan compiled during benchmark setup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopEncodedBitsliceDnf;
+
+impl TopkMultihopEncodedBitsliceDnf {
+    /// Returns [`SearchPhaseKind::TopkMultihopEncodedBitsliceDnf`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopEncodedBitsliceDnf
+    }
+}
+
+/// A multi-hop encoded-filter plugin backed by a pre-encoded bitslice label index and a recursive
+/// AST query compiled during benchmark setup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopEncodedBitsliceAst;
+
+impl TopkMultihopEncodedBitsliceAst {
+    /// Returns [`SearchPhaseKind::TopkMultihopEncodedBitsliceAst`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopEncodedBitsliceAst
+    }
+}
+
+/// A multi-hop encoded-filter plugin backed by a pre-encoded roaring-postings label index whose
+/// recursive AST query is materialized to a dense bitmap during benchmark setup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkMultihopEncodedBitmapAst;
+
+impl TopkMultihopEncodedBitmapAst {
+    /// Returns [`SearchPhaseKind::TopkMultihopEncodedBitmapAst`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopEncodedBitmapAst
+    }
+}
+
+/// An inline-filtered search plugin backed by bit slices and a flat OR-of-AND query plan.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkInlineLiveFilterBitsliceDnf;
+
+impl TopkInlineLiveFilterBitsliceDnf {
+    /// Returns [`SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf
     }
 }

@@ -472,6 +472,7 @@ dependencies = [
  "diskann-disk",
  "diskann-inmem",
  "diskann-label-filter",
+ "diskann-label-index",
  "diskann-providers",
  "diskann-quantization",
  "diskann-tools",
@@ -664,6 +665,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tracing",
+]
+
+[[package]]
+name = "diskann-label-index"
+version = "0.55.1-pre.1"
+dependencies = [
+ "roaring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

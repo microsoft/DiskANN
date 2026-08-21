@@ -46,7 +46,10 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::graph_index::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, MultihopFilterSearchPhase,
+        SearchPhase,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -79,6 +82,16 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::FilteredRange)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
+            .search(plugins::TopkMultihopLiveFilter)
+            .search(plugins::TopkMultihopLiveFilterCsr)
+            .search(plugins::TopkMultihopLiveFilterBitmap)
+            .search(plugins::TopkMultihopLiveFilterAuto)
+            .search(plugins::TopkMultihopLiveFilterBitslice)
+            .search(plugins::TopkMultihopLiveFilterBitsliceDnf)
+            .search(plugins::TopkMultihopEncodedBitsliceDnf)
+            .search(plugins::TopkMultihopEncodedBitsliceAst)
+            .search(plugins::TopkMultihopEncodedBitmapAst)
+            .search(plugins::TopkInlineLiveFilterBitsliceDnf)
             .search(plugins::TopkInlineFilter)
             .search(plugins::DeterminantDiversity),
     )?;
@@ -411,6 +424,70 @@ impl<S> Strategy<S> {
     {
         self.0.clone()
     }
+}
+
+fn run_multihop_encoded<DP, S>(
+    index: Arc<DiskANNIndex<DP>>,
+    phase: &MultihopFilterSearchPhase,
+    strategy: &Strategy<S>,
+    mode: utils::filters::EncodedQueryMode,
+    expected_format: diskann_label_index::LabelIndexFormat,
+) -> anyhow::Result<AggregatedSearchResults>
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    let queries: Arc<Matrix<DP::Element>> =
+        Arc::new(datafiles::load_dataset(datafiles::BinFile(&phase.queries))?);
+
+    let groundtruth = datafiles::load_range_groundtruth(datafiles::BinFile(&phase.groundtruth))?;
+
+    let steps = search::knn::SearchSteps::new(
+        phase.reps,
+        &phase.num_threads,
+        &phase.runs,
+        GroundTruthMode::Flexible,
+    );
+
+    // For encoded-label-index search phases, `data_labels` intentionally points at the persisted
+    // encoded label-index file, not the raw labels JSONL. Loading that index and parsing/validating
+    // the predicate JSONL (including ASTExpr -> LabelExpression conversion plus AST-JSON or DNF
+    // source preparation) stay outside timing. Each timed repetition/search-L rebuilds fresh lazy
+    // providers so the first `is_match` includes `EncodedLabelIndex::{query, query_ast_json}`,
+    // label-id lookup, AST parsing/compilation, and bitmap AST dense materialization.
+    let label_index = utils::filters::load_encoded_label_index(&phase.data_labels)?;
+    if label_index.format() != expected_format {
+        anyhow::bail!(
+            "encoded search mode expected {:?} label storage, but {} contains {:?}",
+            expected_format,
+            phase.data_labels.display(),
+            label_index.format()
+        );
+    }
+    let query_sources = utils::filters::prepare_encoded_query_sources(
+        label_index.as_ref(),
+        &phase.query_predicates,
+        mode,
+    )?;
+    let make_multihop = || {
+        let providers =
+            utils::filters::make_encoded_query_providers(label_index.clone(), &query_sources);
+        benchmark_core::search::graph::MultiHop::new(
+            index.clone(),
+            queries.clone(),
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )
+    };
+
+    let result = search::knn::run_fresh_multihop(make_multihop, &groundtruth, steps)?;
+    Ok(AggregatedSearchResults::Topk(result))
 }
 
 //------//
@@ -757,6 +834,580 @@ where
         )?;
 
         let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//--------------------//
+// MultihopLiveFilter //
+//--------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopLiveFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        // Build the in-memory attribute index once (a one-time index build), then construct a
+        // live per-query provider that evaluates the predicate against each visited node's
+        // attributes during search.
+        let attribute_index = utils::filters::build_inline_attribute_index(&multihop.data_labels)?;
+        let providers =
+            utils::filters::make_live_providers(&attribute_index, &multihop.query_predicates)?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//--------------------------//
+// MultihopLiveFilter (CSR) //
+//--------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopLiveFilterCsr
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter_csr()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        // Build the in-memory CSR attribute index once, then construct a live per-query provider
+        // that evaluates the predicate against each visited node's contiguous attribute row.
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_csr(&multihop.data_labels)?;
+        let providers =
+            utils::filters::make_live_providers_csr(&attribute_index, &multihop.query_predicates)?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//-----------------------------//
+// MultihopLiveFilter (Bitmap)  //
+//-----------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopLiveFilterBitmap
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter_bitmap()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        // Build the posting-list index once. Fresh providers are constructed for every benchmark
+        // repetition/search-L so lazy match-set materialization is charged to each query execution.
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_posting(&multihop.data_labels)?;
+        let make_multihop = || {
+            let providers = utils::filters::make_live_providers_posting(
+                &attribute_index,
+                &multihop.query_predicates,
+            )?;
+            benchmark_core::search::graph::MultiHop::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+                providers.into(),
+            )
+        };
+
+        let result = search::knn::run_fresh_multihop(make_multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//---------------------------//
+// MultihopLiveFilter (Auto)  //
+//---------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopLiveFilterAuto
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter_auto()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_auto(&multihop.data_labels)?;
+        // Recreate providers for every repetition/search-L so the lazy strategy decision and any
+        // dense materialization cannot be amortized across benchmark executions.
+        let make_multihop = || {
+            let providers = utils::filters::make_live_providers_auto(
+                &attribute_index,
+                &multihop.query_predicates,
+            )?;
+            benchmark_core::search::graph::MultiHop::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+                providers.into(),
+            )
+        };
+
+        let result = search::knn::run_fresh_multihop(make_multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//--------------------------------//
+// MultihopLiveFilter (Bitslice)   //
+//--------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopLiveFilterBitslice
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter_bitslice()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_bitslice(&multihop.data_labels)?;
+        let providers = utils::filters::make_live_providers_bitslice(
+            &attribute_index,
+            &multihop.query_predicates,
+        )?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//------------------------------------//
+// MultihopLiveFilter (Bitslice DNF)   //
+//------------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>>
+    for plugins::TopkMultihopLiveFilterBitsliceDnf
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_live_filter_bitslice_dnf()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_bitslice(&multihop.data_labels)?;
+        let providers = utils::filters::make_live_providers_bitslice_dnf(
+            &attribute_index,
+            &multihop.query_predicates,
+        )?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//--------------------------------------//
+// MultihopEncodedFilter (Bitslice DNF) //
+//--------------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopEncodedBitsliceDnf
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        run_multihop_encoded(
+            index,
+            phase.as_topk_multihop_encoded_bitslice_dnf()?,
+            strategy,
+            utils::filters::EncodedQueryMode::Dnf,
+            diskann_label_index::LabelIndexFormat::Bitslice,
+        )
+    }
+}
+
+//--------------------------------------//
+// MultihopEncodedFilter (Bitslice AST) //
+//--------------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopEncodedBitsliceAst
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        run_multihop_encoded(
+            index,
+            phase.as_topk_multihop_encoded_bitslice_ast()?,
+            strategy,
+            utils::filters::EncodedQueryMode::Ast,
+            diskann_label_index::LabelIndexFormat::Bitslice,
+        )
+    }
+}
+
+//------------------------------------//
+// MultihopEncodedFilter (Bitmap AST) //
+//------------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopEncodedBitmapAst
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        run_multihop_encoded(
+            index,
+            phase.as_topk_multihop_encoded_bitmap_ast()?,
+            strategy,
+            utils::filters::EncodedQueryMode::Ast,
+            diskann_label_index::LabelIndexFormat::Bitmap,
+        )
+    }
+}
+
+//---------------------------------//
+// InlineFilter (Bitslice DNF)      //
+//---------------------------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>>
+    for plugins::TopkInlineLiveFilterBitsliceDnf
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let inline = phase.as_topk_inline_live_filter_bitslice_dnf()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&inline.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            inline.reps,
+            &inline.num_threads,
+            &inline.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        let attribute_index =
+            utils::filters::build_inline_attribute_index_bitslice(&inline.data_labels)?;
+        let providers = utils::filters::make_live_providers_bitslice_dnf(
+            &attribute_index,
+            &inline.query_predicates,
+        )?;
+
+        let inline = benchmark_core::search::graph::InlineFilterSearch::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            providers.into(),
+            inline.adaptive_l()?,
+        )?;
+
+        let result = search::knn::run(&inline, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
     }
 }

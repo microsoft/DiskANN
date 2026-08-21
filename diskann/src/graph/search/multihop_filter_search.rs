@@ -212,14 +212,13 @@ where
         // Expand each two-hop candidate: if its neighbor is a match, compute its distance
         // to the query and insert into `scratch.visited`
         // If it is not a match, do nothing
-        let two_hop_expansion_candidate_ids: Vec<I> = candidates_two_hop_expansion
-            .iter()
-            .map(|n| *n.id())
-            .collect();
+        let two_hop_expansion_count = candidates_two_hop_expansion.len();
 
         accessor
             .expand_beam_accept_only(
-                two_hop_expansion_candidate_ids.iter().copied(),
+                candidates_two_hop_expansion
+                    .iter()
+                    .map(|neighbor| *neighbor.id()),
                 glue::NotInMut::new(&mut scratch.visited),
                 |id, distance| {
                     two_hop_neighbors.push(Neighbor::new(id.into_inner(), distance));
@@ -233,7 +232,7 @@ where
             .for_each(|neighbor| scratch.best.insert(*neighbor));
 
         scratch.cmps += two_hop_neighbors.len() as u32;
-        scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
+        scratch.hops += two_hop_expansion_count as u32;
     }
 
     Ok(Ret {

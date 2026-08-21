@@ -59,6 +59,7 @@ pub mod tests {
 
 pub mod attribute;
 pub mod document;
+pub mod live_filter;
 pub mod query;
 pub mod set;
 
@@ -69,6 +70,12 @@ pub mod kv_index;
 pub mod stores;
 
 // Re-exports for convenience
+pub use live_filter::{
+    FrozenAttributeIndex, FrozenAttributeIndexAuto, FrozenAttributeIndexBitslice,
+    FrozenAttributeIndexCsr, FrozenAttributeIndexPosting, InlineAttributeIndex,
+    InlineAttributeIndexAuto, InlineAttributeIndexBitslice, InlineAttributeIndexCsr,
+    InlineAttributeIndexPosting,
+};
 pub use parser::ast::{ASTExpr, CompareOp};
 pub use parser::evaluator::eval_query_expr;
 pub use parser::query_parser::{get_value_by_path, parse_query_filter};
