@@ -27,7 +27,10 @@ use crate::{
         result::BuildResult,
         search::plugins::{Plugin, Plugins},
     },
-    inputs::{bftree::BfTreeFullPrecisionBuild, graph_index::SearchPhase},
+    inputs::{
+        bftree::{BfTreeBuild, QuantConfig},
+        graph_index::SearchPhase,
+    },
     utils::{self, tokio},
 };
 
@@ -70,11 +73,14 @@ impl<T> Benchmark for BfTreeFullPrecision<T>
 where
     T: VectorRepr + AsDataType + SampleableForStart + 'static,
 {
-    type Input = BfTreeFullPrecisionBuild;
+    type Input = BfTreeBuild;
     type Output = BuildResult;
 
     fn try_match(&self, input: &Self::Input, context: &MatchContext) -> Score {
         let mut score = context.success(0);
+        if !matches!(input.quantization(), QuantConfig::None) {
+            score.fail(1, &"Full-precision index does not support quantization");
+        }
         utils::match_data_type::<T>(&mut score, input.data_type());
         if !self.plugins.is_match(input.search_phase()) {
             score.fail(
@@ -97,7 +103,7 @@ where
 
     fn run(
         &self,
-        input: &Self::Input,
+        input: &BfTreeBuild,
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {

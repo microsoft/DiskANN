@@ -26,15 +26,11 @@
           "recall_k": 10
         },
         "runbook_params": {
-          "runbook_path": "example_runbook.yaml",
+          "runbook_path": "stream_capacity_runbook.yaml",
           "dataset_name": "sift-small-256",
           "gt_directory": "example_runbook_gt",
           "ip_delete_method": {
-            "method": "visited_and_top_k",
-            "params": {
-              "k_value": 10,
-              "l_value": 40
-            }
+            "method": "one_hop"
           },
           "ip_delete_num_to_replace": 3
         },

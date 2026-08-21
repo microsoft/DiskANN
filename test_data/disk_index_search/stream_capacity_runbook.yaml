@@ -1,0 +1,24 @@
+# Regression guardrail for bf-tree direct (non-Managed) streaming.
+#
+# The direct path uses absolute runbook tag IDs as provider slot IDs, so the
+# provider must be sized to the dataset ID space, not the runbook's maximum
+# concurrent active-point count. This runbook deliberately drives the maximum
+# tag (191) above the maximum number of concurrently-active points (128) via a
+# delete-then-insert sequence, so a provider sized to `max_pts` would fail with
+# "Vector id is out of boundary in the dataset" on stage 3.
+#
+# There are no search stages, so no groundtruth files are required.
+sift-small-256:
+  max_pts: 128
+  1:
+    operation: "insert"
+    start: 0
+    end: 128
+  2:
+    operation: "delete"
+    start: 0
+    end: 64
+  3:
+    operation: "insert"
+    start: 128
+    end: 192

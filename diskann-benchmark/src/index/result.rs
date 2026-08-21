@@ -16,13 +16,13 @@ use crate::{
 // BuildResult  //
 //////////////////
 #[derive(Debug, Serialize)]
-pub(crate) struct BuildResult {
-    pub(crate) build: Option<BuildStats>,
-    pub(crate) search: AggregatedSearchResults,
+pub(super) struct BuildResult {
+    pub(super) build: Option<BuildStats>,
+    pub(super) search: AggregatedSearchResults,
 }
 
 impl BuildResult {
-    pub(crate) fn new(build: Option<BuildStats>, search: AggregatedSearchResults) -> Self {
+    pub(super) fn new(build: Option<BuildStats>, search: AggregatedSearchResults) -> Self {
         Self { build, search }
     }
 }
@@ -45,9 +45,9 @@ impl std::fmt::Display for BuildResult {
 
 #[cfg(any(feature = "product-quantization", feature = "scalar-quantization",))]
 #[derive(Debug, Serialize)]
-pub(crate) struct QuantBuildResult {
-    pub(crate) quant_training_time: MicroSeconds,
-    pub(crate) build: BuildResult,
+pub(super) struct QuantBuildResult {
+    pub(super) quant_training_time: MicroSeconds,
+    pub(super) build: BuildResult,
 }
 
 #[cfg(any(feature = "product-quantization", feature = "scalar-quantization",))]
@@ -67,7 +67,7 @@ impl std::fmt::Display for QuantBuildResult {
 ///////////////////
 
 #[derive(Debug, Serialize)]
-pub(crate) enum AggregatedSearchResults {
+pub(super) enum AggregatedSearchResults {
     Topk(Vec<SearchResults>),
     Range(Vec<RangeSearchResults>),
 }
@@ -83,18 +83,18 @@ impl std::fmt::Display for AggregatedSearchResults {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct SearchResults {
-    pub(crate) num_tasks: usize,
-    pub(crate) search_n: usize,
-    pub(crate) search_l: usize,
-    pub(crate) qps: Vec<f64>,
-    pub(crate) search_latencies: Vec<MicroSeconds>,
-    pub(crate) mean_latencies: Vec<f64>,
-    pub(crate) p90_latencies: Vec<MicroSeconds>,
-    pub(crate) p99_latencies: Vec<MicroSeconds>,
-    pub(crate) recall: utils::recall::RecallMetrics,
-    pub(crate) mean_cmps: f32,
-    pub(crate) mean_hops: f32,
+pub(super) struct SearchResults {
+    pub(super) num_tasks: usize,
+    pub(super) search_n: usize,
+    pub(super) search_l: usize,
+    pub(super) qps: Vec<f64>,
+    pub(super) search_latencies: Vec<MicroSeconds>,
+    pub(super) mean_latencies: Vec<f64>,
+    pub(super) p90_latencies: Vec<MicroSeconds>,
+    pub(super) p99_latencies: Vec<MicroSeconds>,
+    pub(super) recall: utils::recall::RecallMetrics,
+    pub(super) mean_cmps: f32,
+    pub(super) mean_hops: f32,
 }
 
 impl SearchResults {
@@ -229,15 +229,15 @@ impl std::fmt::Display for DisplayWrapper<'_, [SearchResults]> {
 ////////////////////////
 
 #[derive(Debug, Serialize)]
-pub(crate) struct RangeSearchResults {
-    pub(crate) num_tasks: usize,
-    pub(crate) initial_l: usize,
-    pub(crate) qps: Vec<f64>,
-    pub(crate) search_latencies: Vec<MicroSeconds>,
-    pub(crate) mean_latencies: Vec<f64>,
-    pub(crate) p90_latencies: Vec<MicroSeconds>,
-    pub(crate) p99_latencies: Vec<MicroSeconds>,
-    pub(crate) average_precision: utils::recall::AveragePrecisionMetrics,
+pub(super) struct RangeSearchResults {
+    pub(super) num_tasks: usize,
+    pub(super) initial_l: usize,
+    pub(super) qps: Vec<f64>,
+    pub(super) search_latencies: Vec<MicroSeconds>,
+    pub(super) mean_latencies: Vec<f64>,
+    pub(super) p90_latencies: Vec<MicroSeconds>,
+    pub(super) p99_latencies: Vec<MicroSeconds>,
+    pub(super) average_precision: utils::recall::AveragePrecisionMetrics,
 }
 
 impl RangeSearchResults {

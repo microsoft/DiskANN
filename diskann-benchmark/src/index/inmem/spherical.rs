@@ -113,18 +113,18 @@ mod imp {
 
     /// A [`Benchmark`] for spherical-quantized searches containing a dynamic list of search
     /// types.
-    pub(crate) struct SphericalQ<const NBITS: usize> {
+    pub(super) struct SphericalQ<const NBITS: usize> {
         search: search::plugins::Plugins<SQProvider, SearchPhase, exhaustive::SphericalQuery>,
     }
 
     impl<const NBITS: usize> SphericalQ<NBITS> {
-        pub(crate) fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self {
                 search: search::plugins::Plugins::new(),
             }
         }
 
-        pub(crate) fn search<P>(mut self, plugin: P) -> Self
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
         where
             P: search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
                 + 'static,
@@ -189,32 +189,32 @@ mod imp {
                 fn try_match(&self, input: &SphericalQuantBuild, context: &MatchContext) -> Score {
                     let mut score = context.success(0);
 
-                    if input.build.multi_insert().is_some() {
+                    if input.build().multi_insert().is_some() {
                         score.fail(1, &"Spherical Quantization does not support multi-insert");
                     }
 
-                    if !f32::is_match(input.build.data_type()) {
+                    if !f32::is_match(input.build().data_type()) {
                         score.fail(
                             1,
                             &format_args!(
                                 "Only `float32` data type is supported. Instead, got {}",
-                                input.build.data_type()
+                                input.build().data_type()
                             ),
                         );
                     }
 
-                    if !self.search.is_match(&input.search_phase) {
+                    if !self.search.is_match(input.search_phase()) {
                         score.fail(
                             1,
                             &format_args!(
                                 "Unsupported search phase: \"{}\" - expected one of {}",
-                                input.search_phase.kind(),
+                                input.search_phase().kind(),
                                 self.search.format_kinds(),
                             ),
                         )
                     }
 
-                    let num_bits = input.num_bits.get();
+                    let num_bits = input.num_bits().get();
                     if num_bits != $N {
                         let penalty = ($N as usize)
                             .abs_diff(num_bits)
@@ -250,31 +250,31 @@ mod imp {
                     mut output: &mut dyn Output,
                 ) -> anyhow::Result<SphericalBuildResult> {
                     assert_eq!(
-                        input.num_bits.get(),
+                        input.num_bits().get(),
                         $N,
                         "INTERNAL ERROR: this should not have passed the match check"
                     );
 
                     writeln!(output, "{}", input)?;
 
-                    let build = &input.build;
+                    let build = input.build();
 
                     let data: Arc<Matrix<f32>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
                     let m: diskann_vector::distance::Metric = build.distance().into();
-                    let pre_scale = match input.pre_scale {
-                        Some(v) => v.try_into()?,
+                    let pre_scale = match input.pre_scale() {
+                        Some(&v) => v.try_into()?,
                         None => diskann_quantization::spherical::PreScale::None,
                     };
 
                     let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                         data.as_view(),
-                        (&input.transform_kind).into(),
+                        (input.transform_kind()).into(),
                         m.try_into()?,
                         pre_scale,
-                        &mut rand::rngs::StdRng::seed_from_u64(input.seed),
+                        &mut rand::rngs::StdRng::seed_from_u64(input.seed()),
                         GlobalAllocator,
                     )?;
 
@@ -316,10 +316,10 @@ mod imp {
                     // Save construction stats before running queries.
                     checkpoint.checkpoint(&result)?;
 
-                    for layout in input.query_layouts.iter() {
-                        let search = self
-                            .search
-                            .run(index.clone(), &input.search_phase, layout)?;
+                    for layout in input.query_layouts().iter() {
+                        let search =
+                            self.search
+                                .run(index.clone(), input.search_phase(), layout)?;
 
                         result.append(SearchRun {
                             layout: *layout,
