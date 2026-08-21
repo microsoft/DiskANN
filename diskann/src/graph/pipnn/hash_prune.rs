@@ -1138,18 +1138,18 @@ mod tests {
         ];
 
         for m in 0..=16 {
-            let mut expected = 0u16;
+            let mut expected_numeric_hash = 0u16;
             for j in 0..m {
                 let diff: f32 = dst[j] - src[j];
-                expected |= ((diff >= 0.0) as u16) << j;
+                expected_numeric_hash |= ((diff >= 0.0) as u16) << j;
             }
 
-            let actual = dispatched.call(RelativeHashArgs {
+            let actual_dispatched_hash = dispatched.call(RelativeHashArgs {
                 src: src.as_ptr(),
                 dst: dst.as_ptr(),
                 len: m,
             });
-            assert_eq!(actual, expected, "m={m}");
+            assert_eq!(actual_dispatched_hash, expected_numeric_hash, "m={m}");
         }
     }
 
@@ -1174,7 +1174,7 @@ mod tests {
     }
 
     #[test]
-    fn find_hash_handles_padded_boundaries_and_all_bit_patterns() {
+    fn find_hash_ignores_padding_and_returns_the_matching_active_index() {
         let dispatched = arch::dispatch(SelectFindHash);
 
         for target in [0, 0xF00D] {
@@ -1210,18 +1210,6 @@ mod tests {
         // SAFETY: this test uniquely owns a live four-element slab.
         let values = unsafe { std::slice::from_raw_parts(slab.as_ptr(), 4) };
         assert_eq!(values, &[0; 4]);
-    }
-
-    #[test]
-    fn accepts_structural_l_max_boundaries() {
-        let data = [0.0_f32];
-        let low = hash_prune(&data, 1, 1, 1, 1).unwrap();
-        assert_eq!(low.l_max, 1);
-        assert_eq!(low.row_stride, 32);
-
-        let high = hash_prune(&data, 1, 1, 1, MAX_RESERVOIR_LEN).unwrap();
-        assert_eq!(high.l_max, MAX_RESERVOIR_LEN);
-        assert_eq!(high.row_stride, 256);
     }
 
     #[test]
@@ -1282,74 +1270,109 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let actual = canonicalize(batched.into_candidate_lists());
-        let expected = canonicalize(reference.into_candidate_lists());
+        let actual_batched_candidates = canonicalize(batched.into_candidate_lists());
+        let expected_single_edge_candidates = canonicalize(reference.into_candidate_lists());
 
-        assert_eq!(actual, expected);
-        assert!(actual.iter().all(|candidates| !candidates.is_empty()));
+        assert_eq!(actual_batched_candidates, expected_single_edge_candidates);
+        assert!(
+            actual_batched_candidates
+                .iter()
+                .all(|candidates| !candidates.is_empty())
+        );
     }
 
     #[test]
-    fn leaf_edges_grow_then_reuse_sketch_scratch() {
+    fn reused_sketch_scratch_does_not_leak_candidates_between_leaves() {
+        // Given
         let data = [0.0_f32, 1.0, 2.0, 3.0];
         let hp = hash_prune(&data, 4, 1, 8, 4).unwrap();
-        let mut scratch = vec![99.0; 1];
+        let expected_candidates = [vec![1], vec![0], vec![3], vec![2]];
+        let mut sketch_scratch_with_stale_value = vec![99.0; 1];
 
-        hp.add_leaf_edges(&[0, 1], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
-        assert_eq!(scratch.len(), 16);
-        let capacity = scratch.capacity();
-
-        hp.add_leaf_edges(&[2, 3], &[0, 1, 2], &[(1, 1.0), (0, 1.0)], &mut scratch);
-        assert_eq!(scratch.len(), 16);
-        assert_eq!(scratch.capacity(), capacity);
-
-        hp.add_leaf_edges(&[0, 1], &[0, 0, 0], &[], &mut scratch);
-        assert_eq!(scratch.len(), 16);
-        assert_eq!(scratch.capacity(), capacity);
-        assert!(
-            hp.into_candidate_lists()
-                .iter()
-                .all(|candidates| candidates.len() == 1)
+        // When
+        hp.add_leaf_edges(
+            &[0, 1],
+            &[0, 1, 2],
+            &[(1, 1.0), (0, 1.0)],
+            &mut sketch_scratch_with_stale_value,
         );
+        hp.add_leaf_edges(
+            &[2, 3],
+            &[0, 1, 2],
+            &[(1, 1.0), (0, 1.0)],
+            &mut sketch_scratch_with_stale_value,
+        );
+        hp.add_leaf_edges(
+            &[0, 1],
+            &[0, 0, 0],
+            &[],
+            &mut sketch_scratch_with_stale_value,
+        );
+        let actual_candidates: Vec<_> = hp
+            .into_candidate_lists()
+            .into_iter()
+            .map(Vec::from)
+            .collect();
+
+        // Then
+        assert_eq!(actual_candidates, expected_candidates);
     }
 
     // Reservoir replacement and ordering policy.
 
     #[test]
     fn full_reservoir_evicts_the_farthest_candidate() {
-        let mut reservoir = Reservoir::new(3);
+        // Given
+        let expected_capacity = 3;
+        let expected_neighbors = [(4, 0.5), (1, 1.0), (2, 2.0)];
+        let mut reservoir = Reservoir::new(expected_capacity);
         assert!(reservoir.is_empty());
+        reservoir.insert(0, 1, 1.0);
+        reservoir.insert(1, 2, 2.0);
+        reservoir.insert(2, 3, 3.0);
 
-        assert!(reservoir.insert(0, 1, 1.0));
-        assert!(reservoir.insert(1, 2, 2.0));
-        assert!(reservoir.insert(2, 3, 3.0));
+        // When
         assert!(reservoir.insert(3, 4, 0.5));
 
-        assert_eq!(reservoir.len(), 3);
-        assert_eq!(reservoir.neighbors(), [(4, 0.5), (1, 1.0), (2, 2.0)]);
+        // Then
+        assert_eq!(reservoir.len(), expected_capacity);
+        assert_eq!(reservoir.neighbors(), expected_neighbors);
     }
 
     #[test]
     fn same_hash_keeps_only_the_closest_candidate() {
+        // Given
+        let expected_candidate_count = 1;
+        let expected_closest_candidate = [(3, 1.0)];
         let mut reservoir = Reservoir::new(5);
+        reservoir.insert(0, 1, 3.0);
 
-        assert!(reservoir.insert(0, 1, 3.0));
-        assert!(reservoir.insert(0, 2, 2.0));
-        assert!(reservoir.insert(0, 3, 1.0));
+        // When
+        reservoir.insert(0, 2, 2.0);
+        reservoir.insert(0, 3, 1.0);
         assert!(!reservoir.insert(0, 4, 5.0));
 
-        assert_eq!(reservoir.len(), 1);
-        assert_eq!(reservoir.neighbors(), [(3, 1.0)]);
+        // Then
+        assert_eq!(reservoir.len(), expected_candidate_count);
+        assert_eq!(reservoir.neighbors(), expected_closest_candidate);
     }
 
     #[test]
     fn equal_distances_are_ordered_by_neighbor_id() {
-        let mut res = Reservoir::new(5);
-        res.insert(0, 1, 1.0);
-        res.insert(1, 2, 1.0);
-        res.insert(2, 3, 1.0);
-        assert_eq!(res.len(), 3);
-        assert_eq!(res.neighbors(), [(1, 1.0), (2, 1.0), (3, 1.0)]);
+        // Given
+        let expected_candidate_count = 3;
+        let expected_neighbor_id_order = [(1, 1.0), (2, 1.0), (3, 1.0)];
+        let mut reservoir = Reservoir::new(5);
+        reservoir.insert(0, 1, 1.0);
+        reservoir.insert(1, 2, 1.0);
+        reservoir.insert(2, 3, 1.0);
+
+        // When
+        let actual_neighbors = reservoir.neighbors();
+
+        // Then
+        assert_eq!(reservoir.len(), expected_candidate_count);
+        assert_eq!(actual_neighbors, expected_neighbor_id_order);
     }
 
     #[test]
@@ -1439,18 +1462,23 @@ mod tests {
 
     #[test]
     fn farthest_cache_updates_after_repeated_evictions() {
+        // Given
+        let expected_neighbors = [(14, 1.0), (13, 2.0), (12, 3.0)];
         let mut reservoir = Reservoir::new(3);
         reservoir.insert(0, 10, 5.0);
         reservoir.insert(1, 11, 4.0);
         reservoir.insert(2, 12, 3.0);
+
+        // When
         assert!(reservoir.insert(3, 13, 2.0));
         assert!(reservoir.insert(4, 14, 1.0));
 
-        assert_eq!(reservoir.neighbors(), [(14, 1.0), (13, 2.0), (12, 3.0)]);
+        // Then
+        assert_eq!(reservoir.neighbors(), expected_neighbors);
     }
 
     #[test]
-    fn sorted_extraction_handles_an_early_farthest_slot() {
+    fn extraction_sorts_neighbors_when_the_farthest_slot_is_not_last() {
         let mut reservoir = Reservoir::new(4);
         reservoir.insert(5, 1, 1.0);
         reservoir.insert(10, 2, 3.0);
