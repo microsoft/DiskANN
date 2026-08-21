@@ -60,3 +60,85 @@ pub(super) fn cosine_distance_single(dot: f32, source_norm: f32, target_norm: f3
         1.0 - (-1.0_f32).max(1.0_f32.min(cosine))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::cosine_distance_single;
+
+    mod cosine_distance_single_tests {
+        use super::cosine_distance_single;
+
+        #[test]
+        fn cosine_zero_source_norm_produces_unit_distance() {
+            // Given
+            let source_norm = 0.0;
+            let zero_norm_similarity = 0.0;
+            let expected_one_minus_zero_similarity = 1.0 - zero_norm_similarity;
+
+            // When
+            let actual_distance = cosine_distance_single(100.0, source_norm, 2.0);
+
+            // Then
+            assert_eq!(actual_distance, expected_one_minus_zero_similarity);
+        }
+
+        #[test]
+        fn cosine_zero_target_norm_produces_unit_distance() {
+            // Given
+            let target_norm = 0.0;
+            let zero_norm_similarity = 0.0;
+            let expected_one_minus_zero_similarity = 1.0 - zero_norm_similarity;
+
+            // When
+            let actual_distance = cosine_distance_single(-100.0, 2.0, target_norm);
+
+            // Then
+            assert_eq!(actual_distance, expected_one_minus_zero_similarity);
+        }
+
+        #[test]
+        fn cosine_similarity_above_one_clamps_to_zero_distance() {
+            // Given
+            let dot_product_above_valid_similarity = 5.0;
+            let maximum_cosine_similarity = 1.0;
+            let expected_one_minus_maximum_similarity = 1.0 - maximum_cosine_similarity;
+
+            // When
+            let actual_distance =
+                cosine_distance_single(dot_product_above_valid_similarity, 2.0, 2.0);
+
+            // Then
+            assert_eq!(actual_distance, expected_one_minus_maximum_similarity);
+        }
+
+        #[test]
+        fn cosine_similarity_below_negative_one_clamps_to_distance_two() {
+            // Given
+            let dot_product_below_valid_similarity = -5.0;
+            let minimum_cosine_similarity = -1.0;
+            let expected_one_minus_minimum_similarity = 1.0 - minimum_cosine_similarity;
+
+            // When
+            let actual_distance =
+                cosine_distance_single(dot_product_below_valid_similarity, 2.0, 2.0);
+
+            // Then
+            assert_eq!(actual_distance, expected_one_minus_minimum_similarity);
+        }
+
+        #[test]
+        fn cosine_nan_similarity_follows_the_diskann_min_max_rule() {
+            // Given
+            let nan_dot_product = f32::NAN;
+            // `f32::min` keeps its finite operand when the other operand is NaN.
+            let finite_operand_selected_by_min = 1.0;
+            let expected_one_minus_selected_operand = 1.0 - finite_operand_selected_by_min;
+
+            // When
+            let actual_distance = cosine_distance_single(nan_dot_product, 1.0, 1.0);
+
+            // Then
+            assert_eq!(actual_distance, expected_one_minus_selected_operand);
+        }
+    }
+}

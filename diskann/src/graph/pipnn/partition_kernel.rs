@@ -18,8 +18,6 @@ use std::marker::PhantomData;
 use crate::{ANNError, ANNResult};
 use diskann_linalg::Transpose;
 use diskann_utils::views::{MatrixView, MutMatrixView};
-#[cfg(test)]
-use diskann_vector::distance::Metric;
 use diskann_wide::{SIMDMask, SIMDVector};
 
 use super::{
@@ -245,73 +243,53 @@ fn insert_leader(ranked_leaders: &mut [(u32, f32)], leader: u32, score: f32) {
 }
 
 #[cfg(test)]
-struct DispatchedPartitionCall<'a> {
-    input: PartitionInput<'a>,
-    output: MutMatrixView<'a, u32>,
-    ranked_leaders: &'a mut Vec<(u32, f32)>,
-}
+mod tests {
+    use super::*;
+    use crate::graph::pipnn::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+    use diskann_utils::views::{Matrix, MatrixView, MutMatrixView};
+    use diskann_vector::distance::Metric;
+    use diskann_wide::arch::{self, Target1};
 
-#[cfg(test)]
-struct DispatchPartitionForTest(Metric);
+    struct KernelCall<'a> {
+        input: PartitionInput<'a>,
+        output: MutMatrixView<'a, u32>,
+        ranked_leaders: &'a mut Vec<(u32, f32)>,
+    }
 
-#[cfg(test)]
-impl<A> diskann_wide::arch::Target1<A, (), DispatchedPartitionCall<'_>> for DispatchPartitionForTest
-where
-    A: PiPNNSIMDSchema,
-{
-    fn run(self, arch: A, call: DispatchedPartitionCall<'_>) {
-        use super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+    struct DispatchMetric(Metric);
 
-        match self.0 {
-            Metric::L2 => {
-                rank_leader_dots::<A, L2>(arch, call.input, call.output, call.ranked_leaders)
+    impl<A> Target1<A, (), KernelCall<'_>> for DispatchMetric
+    where
+        A: PiPNNSIMDSchema,
+    {
+        fn run(self, arch: A, call: KernelCall<'_>) {
+            match self.0 {
+                Metric::L2 => {
+                    rank_leader_dots::<A, L2>(arch, call.input, call.output, call.ranked_leaders)
+                }
+                Metric::Cosine => rank_leader_dots::<A, Cosine>(
+                    arch,
+                    call.input,
+                    call.output,
+                    call.ranked_leaders,
+                ),
+                Metric::CosineNormalized => rank_leader_dots::<A, CosineNormalized>(
+                    arch,
+                    call.input,
+                    call.output,
+                    call.ranked_leaders,
+                ),
+                Metric::InnerProduct => rank_leader_dots::<A, InnerProduct>(
+                    arch,
+                    call.input,
+                    call.output,
+                    call.ranked_leaders,
+                ),
             }
-            Metric::Cosine => {
-                rank_leader_dots::<A, Cosine>(arch, call.input, call.output, call.ranked_leaders)
-            }
-            Metric::CosineNormalized => rank_leader_dots::<A, CosineNormalized>(
-                arch,
-                call.input,
-                call.output,
-                call.ranked_leaders,
-            ),
-            Metric::InnerProduct => rank_leader_dots::<A, InnerProduct>(
-                arch,
-                call.input,
-                call.output,
-                call.ranked_leaders,
-            ),
         }
     }
-}
 
-#[cfg(test)]
-fn dispatch_nearest_leaders(
-    metric: Metric,
-    input: PartitionInput<'_>,
-    output: MutMatrixView<'_, u32>,
-    ranked_leaders: &mut Vec<(u32, f32)>,
-) {
-    diskann_wide::arch::dispatch1_no_features(
-        DispatchPartitionForTest(metric),
-        DispatchedPartitionCall {
-            input,
-            output,
-            ranked_leaders,
-        },
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::kernel_metric::{
-        Cosine, CosineNormalized, InnerProduct, L2, PartitionMetric,
-    };
-
-    use super::*;
-    use diskann_vector::distance::Metric;
-
-    fn test_input<'a>(
+    fn partition_input<'a>(
         dots: &'a [f32],
         point_count: usize,
         leader_count: usize,
@@ -327,439 +305,348 @@ mod tests {
         }
     }
 
-    // This oracle checks SIMD groups, single values, and retained-leader order.
-    // It uses the single-value ranking formula for metric `M`.
-    fn ranking_reference<M: PartitionMetric>(
+    fn rank_partition_leaders(
+        metric: Metric,
         input: PartitionInput<'_>,
         fanout: usize,
-        output: &mut [u32],
-    ) {
-        for (point, (point_dots, point_output)) in input
+    ) -> Vec<u32> {
+        let mut output = Matrix::new(u32::MAX, input.dots.nrows(), fanout);
+        arch::dispatch1_no_features(
+            DispatchMetric(metric),
+            KernelCall {
+                input,
+                output: output.as_mut_view(),
+                ranked_leaders: &mut Vec::new(),
+            },
+        );
+        output.into_inner().into_vec()
+    }
+
+    fn reference_score(metric: Metric, dot: f32, point_norm: f32, leader_norm: f32) -> f32 {
+        match metric {
+            Metric::L2 => (-2.0_f32).mul_add(dot, leader_norm),
+            Metric::CosineNormalized => 1.0 - dot,
+            Metric::InnerProduct => -dot,
+            Metric::Cosine => {
+                if point_norm < f32::MIN_POSITIVE.sqrt() || leader_norm < f32::MIN_POSITIVE.sqrt() {
+                    1.0
+                } else {
+                    1.0 - (dot / (point_norm * leader_norm)).clamp(-1.0, 1.0)
+                }
+            }
+        }
+    }
+
+    fn reference_assignments(metric: Metric, input: PartitionInput<'_>, fanout: usize) -> Vec<u32> {
+        let mut output = vec![UNASSIGNED_LEADER; input.dots.nrows() * fanout];
+        for (point, (dots, assignments)) in input
             .dots
             .row_iter()
             .zip(output.chunks_exact_mut(fanout))
             .enumerate()
         {
-            let point_norm = M::point_single(input.norms, point);
-            let mut ranked_leaders = vec![(u32::MAX, f32::INFINITY); fanout];
-            for (leader, &dot) in point_dots.iter().enumerate() {
-                insert_leader(
-                    &mut ranked_leaders,
-                    leader as u32,
-                    M::ranking_single(input.norms, point_norm, dot, leader),
-                );
-            }
-            for (destination, &(leader, _)) in point_output.iter_mut().zip(&ranked_leaders) {
-                *destination = leader;
-            }
-        }
-    }
-
-    fn single_ranking<M: PartitionMetric>(
-        dot_product: f32,
-        point_norms: &[f32],
-        leader_norms: &[f32],
-    ) -> f32 {
-        let norms = PartitionNorms {
-            point_norms,
-            leader_norms,
-        };
-        M::ranking_single(norms, M::point_single(norms, 0), dot_product, 0)
-    }
-
-    #[test]
-    fn single_ranking_matches_metric_contract() {
-        assert_eq!(single_ranking::<L2>(2.0, &[], &[9.0]), 5.0);
-        assert_eq!(single_ranking::<CosineNormalized>(0.25, &[], &[]), 0.75);
-        assert_eq!(single_ranking::<InnerProduct>(3.0, &[], &[]), -3.0);
-        assert_eq!(single_ranking::<Cosine>(4.0, &[2.0], &[4.0]), 0.5);
-        assert_eq!(single_ranking::<Cosine>(5.0, &[2.0], &[2.0]), 0.0);
-        assert_eq!(single_ranking::<Cosine>(-5.0, &[2.0], &[2.0]), 2.0);
-        assert_eq!(single_ranking::<Cosine>(4.0, &[0.0], &[4.0]), 1.0);
-        assert_eq!(single_ranking::<Cosine>(1.0, &[f32::NAN], &[1.0]), 0.0);
-    }
-
-    #[test]
-    fn cosine_special_norms_match_single_and_dispatched_kernel() {
-        let leader_count = 17;
-        let point_norms = [0.0, 0.0, f32::MIN_POSITIVE.sqrt(), f32::NAN];
-        let dots = vec![1.0; point_norms.len() * leader_count];
-        let mut leader_norms = vec![1.0; leader_count];
-        leader_norms[..4].copy_from_slice(&[
-            0.0,
-            f32::MIN_POSITIVE.sqrt() / 2.0,
-            f32::MIN_POSITIVE.sqrt(),
-            f32::NAN,
-        ]);
-        let input = test_input(
-            &dots,
-            point_norms.len(),
-            leader_count,
-            &point_norms,
-            &leader_norms,
-        );
-        let mut expected = vec![u32::MAX; point_norms.len() * 2];
-        ranking_reference::<Cosine>(input, 2, &mut expected);
-        let mut actual = vec![u32::MAX; point_norms.len() * 2];
-        dispatch_nearest_leaders(
-            Metric::Cosine,
-            input,
-            MutMatrixView::try_from(actual.as_mut_slice(), point_norms.len(), 2).unwrap(),
-            &mut Vec::new(),
-        );
-
-        assert_eq!(actual, expected);
-        assert_eq!(&actual[..4], &[0, 1, 0, 1]);
-        assert_eq!(&actual[6..], &[2, 3]);
-    }
-
-    #[test]
-    fn topk_orders_candidates_and_preserves_ties() {
-        let mut ranked_leaders = vec![(u32::MAX, f32::INFINITY); 4];
-        for (leader, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 1.0)] {
-            insert_leader(&mut ranked_leaders, leader, distance);
-        }
-        insert_leader(&mut ranked_leaders, 5, f32::NAN);
-
-        assert_eq!(ranked_leaders[..], [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)]);
-    }
-
-    #[test]
-    fn vector_pipeline_assigns_cosine_leaders_and_reuses_workspace() {
-        let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let leaders =
-            PreparedLeaders::<Cosine>::new(MatrixView::try_from(&leader_values[..], 3, 2).unwrap());
-        let point_values = [0.9, 0.1, -0.8, 0.2];
-        let points = MatrixView::try_from(&point_values[..], 2, 2).unwrap();
-        let mut output = [u32::MAX; 4];
-        let mut workspace = PartitionKernelWorkspace::default();
-        assign_leaders::<_, Cosine>(
-            diskann_wide::ARCH,
-            points,
-            &leaders,
-            MutMatrixView::try_from(&mut output[..], 2, 2).unwrap(),
-            &mut workspace,
-        )
-        .unwrap();
-
-        assert_eq!(output, [0, 1, 2, 1]);
-        let dot_scratch = workspace.dot_scratch.as_ptr();
-        let point_norm_scratch = workspace.point_norm_scratch.as_ptr();
-        let ranked_leader_scratch = workspace.ranked_leader_scratch.as_ptr();
-
-        let mut smaller_output = [u32::MAX; 2];
-        assign_leaders::<_, Cosine>(
-            diskann_wide::ARCH,
-            MatrixView::try_from(&point_values[..2], 1, 2).unwrap(),
-            &leaders,
-            MutMatrixView::try_from(&mut smaller_output[..], 1, 2).unwrap(),
-            &mut workspace,
-        )
-        .unwrap();
-
-        assert_eq!(smaller_output, [0, 1]);
-        assert_eq!(workspace.dot_scratch.as_ptr(), dot_scratch);
-        assert_eq!(workspace.point_norm_scratch.as_ptr(), point_norm_scratch);
-        assert_eq!(
-            workspace.ranked_leader_scratch.as_ptr(),
-            ranked_leader_scratch
-        );
-    }
-
-    #[test]
-    fn ranked_leaders_reuses_runtime_fanout_capacity() {
-        let dots = [0.0; 32];
-        let input = test_input(&dots, 1, 32, &[], &[]);
-        let mut ranked_leaders = Vec::new();
-        let mut wide_output = [u32::MAX; 32];
-        dispatch_nearest_leaders(
-            Metric::InnerProduct,
-            input,
-            MutMatrixView::try_from(&mut wide_output[..], 1, 32).unwrap(),
-            &mut ranked_leaders,
-        );
-        let allocation = ranked_leaders.as_ptr();
-
-        let mut narrow_output = [u32::MAX; 3];
-        dispatch_nearest_leaders(
-            Metric::InnerProduct,
-            input,
-            MutMatrixView::try_from(&mut narrow_output[..], 1, 3).unwrap(),
-            &mut ranked_leaders,
-        );
-
-        assert_eq!(ranked_leaders.as_ptr(), allocation);
-        assert_eq!(ranked_leaders.len(), 3);
-    }
-}
-#[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "deterministic test fixture construction must abort on invalid setup"
-)]
-mod integration_tests {
-    use super::{PartitionInput, PartitionNorms, UNASSIGNED_LEADER, dispatch_nearest_leaders};
-    use diskann_utils::views::{Matrix, MatrixView};
-    use diskann_vector::distance::Metric;
-
-    fn test_input<'a>(
-        dots: &'a [f32],
-        point_count: usize,
-        leader_count: usize,
-        point_norms: &'a [f32],
-        leader_norms: &'a [f32],
-    ) -> PartitionInput<'a> {
-        PartitionInput {
-            dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
-            norms: PartitionNorms {
-                point_norms,
-                leader_norms,
-            },
-        }
-    }
-
-    fn brute_force_reference(input: PartitionInput<'_>, fanout: usize, metric: Metric) -> Vec<u32> {
-        let point_count = input.dots.nrows();
-        let leader_count = input.dots.ncols();
-        let point_norms = input.norms.point_norms;
-        let leader_norms = input.norms.leader_norms;
-        let mut assignments = vec![u32::MAX; point_count * fanout];
-        for (point, (point_dots, point_assignments)) in input
-            .dots
-            .as_slice()
-            .chunks_exact(leader_count)
-            .zip(assignments.chunks_exact_mut(fanout))
-            .enumerate()
-        {
-            let point_norm = point_norms.get(point).copied().unwrap_or(0.0);
-            let mut candidates: Vec<_> = point_dots
+            let point_norm = input.norms.point_norms.get(point).copied().unwrap_or(0.0);
+            let mut candidates: Vec<_> = dots
                 .iter()
                 .enumerate()
                 .filter_map(|(leader, &dot)| {
-                    let leader_norm = leader_norms.get(leader).copied().unwrap_or(0.0);
-                    let score = match metric {
-                        Metric::L2 => (-2.0_f32).mul_add(dot, leader_norm),
-                        Metric::CosineNormalized => 1.0 - dot,
-                        Metric::InnerProduct => -dot,
-                        Metric::Cosine => {
-                            1.0 - if point_norm == 0.0 || leader_norm == 0.0 {
-                                0.0
-                            } else {
-                                let cosine = dot / (point_norm * leader_norm);
-                                (-1.0_f32).max(1.0_f32.min(cosine))
-                            }
-                        }
-                    };
+                    let leader_norm = input.norms.leader_norms.get(leader).copied().unwrap_or(0.0);
+                    let score = reference_score(metric, dot, point_norm, leader_norm);
                     (score.partial_cmp(&f32::INFINITY) == Some(std::cmp::Ordering::Less))
                         .then_some((leader as u32, score))
                 })
                 .collect();
-            candidates.sort_by(|left, right| left.1.partial_cmp(&right.1).unwrap());
-            for (destination, (leader, _)) in point_assignments.iter_mut().zip(candidates) {
+            candidates.sort_by(|left, right| left.1.total_cmp(&right.1));
+            for (destination, (leader, _)) in assignments.iter_mut().zip(candidates) {
                 *destination = leader;
             }
         }
-        assignments
+        output
     }
 
-    fn differential_data(metric: Metric, leader_count: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-        let dots = (0..2 * leader_count)
-            .map(|index| {
-                let leader = index % leader_count;
-                let point = index / leader_count;
-                let base = ((leader * 13 + point * 7) % 19) as f32 - 9.0;
-                if leader == 2 || leader == 3 {
-                    1.0
-                } else if leader + 1 == leader_count {
-                    f32::NAN
-                } else {
-                    base * 0.25
-                }
-            })
-            .collect();
+    /// Build two score rows whose preferred leader direction is opposite.
+    /// The fractional scores cross complete SIMD groups and scalar tails.
+    fn lane_boundary_fixture(
+        metric: Metric,
+        leader_count: usize,
+    ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        let mut dots = Vec::with_capacity(2 * leader_count);
+        for point in 0..2 {
+            for leader in 0..leader_count {
+                let fraction = leader as f32 / leader_count as f32;
+                dots.push(if point == 0 { fraction } else { 1.0 - fraction });
+            }
+        }
         let point_norms = if metric == Metric::Cosine {
-            vec![0.0, 4.0]
+            vec![1.0; 2]
         } else {
             Vec::new()
         };
         let leader_norms = match metric {
-            Metric::Cosine => (0..leader_count)
-                .map(|leader| {
-                    if leader == 1 {
-                        0.0
-                    } else if leader == 2 || leader == 3 {
-                        3.0
-                    } else {
-                        1.0 + leader as f32
-                    }
-                })
-                .collect(),
-            Metric::L2 => (0..leader_count)
-                .map(|leader| {
-                    let norm = if leader == 2 || leader == 3 {
-                        3.0
-                    } else {
-                        leader as f32 + 1.0
-                    };
-                    norm * norm
-                })
-                .collect(),
+            Metric::L2 | Metric::Cosine => vec![1.0; leader_count],
             Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
         };
         (dots, point_norms, leader_norms)
     }
 
-    fn run_partition_kernel(metric: Metric, input: PartitionInput<'_>, fanout: usize) -> Vec<u32> {
-        let mut output = Matrix::new(u32::MAX, input.dots.nrows(), fanout);
-        dispatch_nearest_leaders(metric, input, output.as_mut_view(), &mut Vec::new());
-        output.into_inner().into_vec()
-    }
+    mod insert_leader_tests {
+        use super::*;
 
-    #[test]
-    fn dispatched_kernel_matches_reference_across_simd_width_boundaries() {
-        for metric in [
-            Metric::L2,
-            Metric::Cosine,
-            Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            for leader_count in [2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
-                let (dots, point_norms, leader_norms) = differential_data(metric, leader_count);
-                let input = test_input(&dots, 2, leader_count, &point_norms, &leader_norms);
-                for fanout in [1, 2, 16, 17, 32] {
-                    if fanout >= leader_count {
-                        continue;
-                    }
-                    assert_eq!(
-                        run_partition_kernel(metric, input, fanout),
-                        brute_force_reference(input, fanout, metric),
-                        "{metric:?}, leaders={leader_count}, k={fanout}"
-                    );
-                }
-            }
+        #[test]
+        fn topk_keeps_nearest_first_order_and_scan_order_ties() {
+            // Given
+            let expected_ranked_leaders = [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)];
+            let mut ranked_leaders = vec![(UNASSIGNED_LEADER, f32::INFINITY); 4];
+
+            // When
+            insert_leader(&mut ranked_leaders, 0, 4.0);
+            insert_leader(&mut ranked_leaders, 1, 1.0);
+            insert_leader(&mut ranked_leaders, 2, 3.0);
+            insert_leader(&mut ranked_leaders, 3, 2.0);
+            insert_leader(&mut ranked_leaders, 4, 1.0);
+
+            // Then
+            assert_eq!(ranked_leaders, expected_ranked_leaders);
+        }
+
+        #[test]
+        fn nan_score_does_not_enter_the_topk() {
+            // Given
+            let expected_ranked_leaders = [(0, 0.25), (UNASSIGNED_LEADER, f32::INFINITY)];
+            let mut ranked_leaders = vec![(UNASSIGNED_LEADER, f32::INFINITY); 2];
+
+            // When
+            insert_leader(&mut ranked_leaders, 0, 0.25);
+            insert_leader(&mut ranked_leaders, 1, f32::NAN);
+
+            // Then
+            assert_eq!(ranked_leaders, expected_ranked_leaders);
         }
     }
 
-    #[test]
-    fn non_rankable_leaders_leave_unassigned_slots() {
-        let dots = [-0.25, f32::NAN];
+    mod assign_leaders_tests {
+        use super::*;
 
-        assert_eq!(
-            run_partition_kernel(Metric::InnerProduct, test_input(&dots, 1, 2, &[], &[]), 2),
-            [0, UNASSIGNED_LEADER]
-        );
-    }
+        #[test]
+        fn cosine_pipeline_assigns_each_point_to_its_nearest_leaders() {
+            // Given
+            let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
+            let leaders = PreparedLeaders::<Cosine>::new(
+                MatrixView::try_from(&leader_values[..], 3, 2).unwrap(),
+            );
+            let point_values = [0.9, 0.1, -0.8, 0.2];
+            let points = MatrixView::try_from(&point_values[..], 2, 2).unwrap();
+            let expected_leaders_by_descending_cosine_similarity = [0, 1, 2, 1];
+            let mut actual_assignments = [UNASSIGNED_LEADER; 4];
 
-    #[test]
-    fn l2_keeps_the_first_leader_when_boundary_distances_tie() {
-        #[rustfmt::skip]
-        let dots = [
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 2.0, 4.0, 6.0,
-        ];
-        let norms = [0.0, 1.0, 4.0, 9.0];
+            // When
+            assign_leaders::<_, Cosine>(
+                diskann_wide::ARCH,
+                points,
+                &leaders,
+                MutMatrixView::try_from(&mut actual_assignments[..], 2, 2).unwrap(),
+                &mut PartitionKernelWorkspace::default(),
+            )
+            .unwrap();
 
-        assert_eq!(
-            run_partition_kernel(Metric::L2, test_input(&dots, 2, 4, &[], &norms), 2),
-            [0, 1, 2, 1]
-        );
-    }
-
-    #[test]
-    fn l2_single_matches_fused_simd_ranking() {
-        let mut dots = [0.0; 17];
-        dots[0] = f32::MAX;
-        dots[16] = f32::MAX;
-        let leader_squared_norms = [f32::MAX; 17];
-
-        assert_eq!(
-            run_partition_kernel(
-                Metric::L2,
-                test_input(&dots, 1, 17, &[], &leader_squared_norms,),
-                1,
-            ),
-            [0]
-        );
-    }
-
-    #[test]
-    fn supports_every_partition_metric() {
-        #[rustfmt::skip]
-        let dots = [
-            1.0, 0.0, -1.0,
-            2.0, 6.0, 0.0,
-        ];
-        for (metric, point_norms, leader_norms, expected) in [
-            (Metric::L2, &[][..], &[1.0, 4.0, 9.0][..], [0, 1, 1, 0]),
-            (
-                Metric::Cosine,
-                &[1.0, 4.0][..],
-                &[1.0, 2.0, 3.0][..],
-                [0, 1, 1, 0],
-            ),
-            (Metric::CosineNormalized, &[][..], &[][..], [0, 1, 1, 0]),
-            (Metric::InnerProduct, &[][..], &[][..], [0, 1, 1, 0]),
-        ] {
+            // Then
             assert_eq!(
-                run_partition_kernel(
-                    metric,
-                    test_input(&dots, 2, 3, point_norms, leader_norms),
-                    2,
-                ),
-                expected,
-                "metric {metric:?}"
+                actual_assignments,
+                expected_leaders_by_descending_cosine_similarity
+            );
+        }
+
+        #[test]
+        fn reused_workspace_matches_fresh_leader_assignment() {
+            // Given
+            let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
+            let leaders = PreparedLeaders::<Cosine>::new(
+                MatrixView::try_from(&leader_values[..], 3, 2).unwrap(),
+            );
+            let point_values = [0.9, 0.1, -0.8, 0.2];
+            let smaller_points = MatrixView::try_from(&point_values[..2], 1, 2).unwrap();
+            let mut reused_workspace = PartitionKernelWorkspace::default();
+            let mut discarded_large_output = [UNASSIGNED_LEADER; 4];
+            assign_leaders::<_, Cosine>(
+                diskann_wide::ARCH,
+                MatrixView::try_from(&point_values[..], 2, 2).unwrap(),
+                &leaders,
+                MutMatrixView::try_from(&mut discarded_large_output[..], 2, 2).unwrap(),
+                &mut reused_workspace,
+            )
+            .unwrap();
+            let mut expected_assignments_from_fresh_workspace = [UNASSIGNED_LEADER; 2];
+            assign_leaders::<_, Cosine>(
+                diskann_wide::ARCH,
+                smaller_points,
+                &leaders,
+                MutMatrixView::try_from(&mut expected_assignments_from_fresh_workspace[..], 1, 2)
+                    .unwrap(),
+                &mut PartitionKernelWorkspace::default(),
+            )
+            .unwrap();
+
+            // When
+            let mut actual_assignments_from_reused_workspace = [UNASSIGNED_LEADER; 2];
+            assign_leaders::<_, Cosine>(
+                diskann_wide::ARCH,
+                smaller_points,
+                &leaders,
+                MutMatrixView::try_from(&mut actual_assignments_from_reused_workspace[..], 1, 2)
+                    .unwrap(),
+                &mut reused_workspace,
+            )
+            .unwrap();
+
+            // Then
+            assert_eq!(
+                actual_assignments_from_reused_workspace,
+                expected_assignments_from_fresh_workspace
             );
         }
     }
 
-    #[test]
-    fn cosine_treats_a_zero_norm_as_zero_similarity() {
-        assert_eq!(
-            run_partition_kernel(
+    mod rank_leader_dots_tests {
+        use super::*;
+        use rstest::rstest;
+
+        #[rstest]
+        #[case::two_leaders_fanout_one(2, 1)]
+        #[case::scalar_fanout_two(7, 2)]
+        #[case::lane_minus_one(15, 3)]
+        #[case::one_complete_lane(16, 3)]
+        #[case::lane_plus_one(17, 4)]
+        #[case::two_lanes_minus_one(31, 7)]
+        #[case::two_complete_lanes(32, 7)]
+        #[case::two_lanes_plus_one(33, 7)]
+        #[trace]
+        fn dispatched_partition_ranking_matches_scalar_reference_across_lane_boundaries(
+            #[values(
+                Metric::L2,
                 Metric::Cosine,
-                test_input(&[100.0, -100.0], 1, 2, &[0.0], &[1.0, 1.0]),
+                Metric::CosineNormalized,
+                Metric::InnerProduct
+            )]
+            metric: Metric,
+            #[case] leader_count: usize,
+            #[case] fanout: usize,
+        ) {
+            // Given
+            let (dots, point_norms, leader_norms) = lane_boundary_fixture(metric, leader_count);
+            let input = partition_input(&dots, 2, leader_count, &point_norms, &leader_norms);
+            let expected_assignments = reference_assignments(metric, input, fanout);
+
+            // When
+            let actual_assignments = rank_partition_leaders(metric, input, fanout);
+
+            // Then
+            assert_eq!(actual_assignments, expected_assignments);
+        }
+
+        #[test]
+        fn equal_l2_scores_keep_sampled_leader_order() {
+            // Given
+            let dots = [0.0, 0.0, 0.0, 0.0];
+            let leader_squared_norms = [1.0, 1.0, 1.0, 1.0];
+            let expected_sampled_leader_order = [0, 1];
+
+            // When
+            let actual_assignments = rank_partition_leaders(
+                Metric::L2,
+                partition_input(&dots, 1, 4, &[], &leader_squared_norms),
                 2,
-            ),
-            [0, 1]
-        );
-    }
+            );
 
-    #[test]
-    fn finite_max_distance_fills_the_final_simd_slot() {
-        let mut dots = [0.0; 8];
-        dots[7] = -f32::MAX;
-        assert_eq!(
-            run_partition_kernel(Metric::InnerProduct, test_input(&dots, 1, 8, &[], &[]), 8),
-            [0, 1, 2, 3, 4, 5, 6, 7]
-        );
-    }
+            // Then
+            assert_eq!(actual_assignments, expected_sampled_leader_order);
+        }
 
-    #[test]
-    fn ignores_nan_distances_without_displacing_finite_leaders() {
-        assert_eq!(
-            run_partition_kernel(
-                Metric::InnerProduct,
-                test_input(&[f32::NAN, 3.0, 2.0], 1, 3, &[], &[]),
+        #[test]
+        fn cosine_zero_norm_keeps_sampled_leader_order() {
+            // Given
+            let dots = [100.0, -100.0];
+            let point_norms = [0.0];
+            let leader_norms = [1.0, 1.0];
+            let expected_sampled_leader_order = [0, 1];
+
+            // When
+            let actual_assignments = rank_partition_leaders(
+                Metric::Cosine,
+                partition_input(&dots, 1, 2, &point_norms, &leader_norms),
                 2,
-            ),
-            [1, 2]
-        );
-    }
+            );
 
-    #[test]
-    fn accepts_empty_points_and_zero_fanout() {
-        assert!(
-            run_partition_kernel(Metric::InnerProduct, test_input(&[], 0, 3, &[], &[]), 2)
-                .is_empty()
-        );
-        assert!(
-            run_partition_kernel(
+            // Then
+            assert_eq!(actual_assignments, expected_sampled_leader_order);
+        }
+
+        #[test]
+        fn f32_max_score_is_still_a_rankable_leader() {
+            // Given
+            let mut dots = [0.0; 8];
+            dots[7] = -f32::MAX;
+            let expected_all_leaders_in_scan_order = [0, 1, 2, 3, 4, 5, 6, 7];
+
+            // When
+            let actual_assignments = rank_partition_leaders(
                 Metric::InnerProduct,
-                test_input(&[1.0, 2.0, 3.0], 1, 3, &[], &[]),
+                partition_input(&dots, 1, 8, &[], &[]),
+                8,
+            );
+
+            // Then
+            assert_eq!(actual_assignments, expected_all_leaders_in_scan_order);
+        }
+
+        #[test]
+        fn nan_leader_does_not_displace_finite_leaders() {
+            // Given
+            let dots = [f32::NAN, 3.0, 2.0];
+            let expected_finite_leaders = [1, 2];
+
+            // When
+            let actual_assignments = rank_partition_leaders(
+                Metric::InnerProduct,
+                partition_input(&dots, 1, 3, &[], &[]),
+                2,
+            );
+
+            // Then
+            assert_eq!(actual_assignments, expected_finite_leaders);
+        }
+
+        #[test]
+        fn empty_point_matrix_produces_no_assignments() {
+            // Given
+            let dots = [];
+            let expected_no_assignments: [u32; 0] = [];
+
+            // When
+            let actual_assignments = rank_partition_leaders(
+                Metric::InnerProduct,
+                partition_input(&dots, 0, 3, &[], &[]),
+                2,
+            );
+
+            // Then
+            assert_eq!(actual_assignments, expected_no_assignments);
+        }
+
+        #[test]
+        fn zero_fanout_produces_no_assignments() {
+            // Given
+            let dots = [1.0, 2.0, 3.0];
+            let expected_no_assignments: [u32; 0] = [];
+
+            // When
+            let actual_assignments = rank_partition_leaders(
+                Metric::InnerProduct,
+                partition_input(&dots, 1, 3, &[], &[]),
                 0,
-            )
-            .is_empty()
-        );
+            );
+
+            // Then
+            assert_eq!(actual_assignments, expected_no_assignments);
+        }
     }
 }
