@@ -12,7 +12,7 @@ use diskann_benchmark_runner::{App, Registry, output};
 /// Build a [`Registry`] with all integration benchmarks registered.
 fn registry() -> anyhow::Result<Registry> {
     let mut registry = Registry::new();
-    registry.register("store-stress", store::StoreStress)?;
+    store::register(&mut registry)?;
     index::register(&mut registry)?;
     Ok(registry)
 }

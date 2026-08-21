@@ -11,7 +11,7 @@ use std::{
 use diskann::utils::IntoUsize;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{epoch, num::IdLimit};
+use crate::{epoch, num::IdLimit, store::Store};
 
 use super::{Lifecycle, plugin};
 
@@ -21,11 +21,123 @@ enum State {
     Available,
     Readable {
         value: u64,
-        retired: AtomicBool,
     },
     Frozen {
         value: u64,
     },
+}
+
+#[derive(Debug, Default)]
+struct Entry {
+    readable: AtomicBool,
+    state: RwLock<State>,
+}
+
+impl Entry {
+    #[must_use]
+    fn is_readable(&self) -> bool {
+        self.readable.load(Ordering::Acquire)
+    }
+
+    fn try_read(&self) -> Option<ReadEntry<'_>> {
+        if self.is_readable() {
+            Some(self.expect_read())
+        } else {
+            None
+        }
+    }
+
+    fn expect_read(&self) -> ReadEntry<'_> {
+        // NOTE: we *DO NOT* check for `entry.is_readable()` because there is a race where
+        // the slot is retired after checking the readable state but before this function
+        // is called. We still expect to acquire the `RwLockReadGuard` in this situation.
+
+        let Some(guard) = self.state.try_read() else {
+            panic!("concurrency violation when acquiring read guard");
+        };
+
+        ReadEntry {
+            readable: &self.readable,
+            guard,
+        }
+    }
+
+    fn expect_write(&self) -> WriteEntry<'_> {
+        assert!(
+            !self.is_readable(),
+            "concurrency violation - entry should not be readable"
+        );
+
+        // Correct usage of the concurrency protocol means that this `try_write` failing
+        // is a bug.
+        let Some(guard) = self.state.try_write() else {
+            panic!("concurrency violation when acquiring write guard");
+        };
+
+        WriteEntry {
+            readable: &self.readable,
+            guard,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReadEntry<'a> {
+    readable: &'a AtomicBool,
+    guard: RwLockReadGuard<'a, State>,
+}
+
+impl ReadEntry<'_> {
+    fn retire(self) {
+        assert_matches!(*self.guard, State::Readable { .. });
+
+        // TODO: Document the slightly weird order.
+        drop(self.guard);
+        self.readable.store(false, Ordering::Release);
+    }
+
+    fn state(&self) -> &State {
+        &self.guard
+    }
+}
+
+#[derive(Debug)]
+struct WriteEntry<'a> {
+    readable: &'a AtomicBool,
+    guard: RwLockWriteGuard<'a, State>,
+}
+
+impl WriteEntry<'_> {
+    fn publish(mut self, value: u64) {
+        let old = self.replace(State::Readable { value });
+        assert_matches!(old, State::Available);
+
+        drop(self.guard);
+        self.readable.store(true, Ordering::Release);
+    }
+
+    fn freeze(mut self, value: u64) {
+        let old = self.replace(State::Frozen { value });
+        assert_matches!(old, State::Available);
+
+        drop(self.guard);
+        self.readable.store(true, Ordering::Release);
+    }
+
+    fn reclaim(mut self) {
+        let old = self.replace(State::Available);
+        assert_matches!(old, State::Readable { .. });
+    }
+
+    /// Replace the proctected state with `state`, returning the old state.
+    fn replace(&mut self, mut state: State) -> State {
+        std::mem::swap(&mut *self.guard, &mut state);
+        state
+    }
+
+    fn state(&self) -> &State {
+        &self.guard
+    }
 }
 
 #[derive(Debug)]
@@ -47,7 +159,7 @@ impl plugin::PluginConfig for Config {
 
 #[derive(Debug)]
 pub(crate) struct Checked {
-    states: Vec<RwLock<State>>,
+    entries: Vec<Entry>,
 }
 
 impl Checked {
@@ -57,58 +169,28 @@ impl Checked {
 
     pub(crate) fn new(id_limit: IdLimit) -> Self {
         Self {
-            states: std::iter::repeat_with(|| RwLock::new(State::default()))
+            entries: std::iter::repeat_with(|| Entry::default())
                 .take(id_limit.as_usize())
                 .collect(),
         }
     }
 
     pub(crate) fn id_limit(&self) -> IdLimit {
-        IdLimit::new(self.states.len().try_into().unwrap())
+        IdLimit::new(self.entries.len().try_into().unwrap())
     }
 
-    fn expect_write(&self, i: u32) -> RwLockWriteGuard<'_, State> {
-        let i = i.into_usize();
-
-        // Note: this will panic if `i` is out-of-bounds.
-        let entry = &self.states[i];
-
-        // Correct usage of the concurrency protocol means that this `try_write` failing
-        // is a bug.
-        let Some(guard) = entry.try_write() else {
-            panic!("concurrency violation when acquiring write guard");
-        };
-
-        guard
-    }
-
-    fn expect_read(&self, i: u32) -> RwLockReadGuard<'_, State> {
-        let i = i.into_usize();
-
-        // Note: this will panic if `i` is out-of-bounds.
-        let entry = &self.states[i];
-
-        // Correct usage of the concurrency protocol means that this `try_read` failing
-        // is a bug.
-        let Some(guard) = entry.try_read() else {
-            panic!("concurrency violation when acquiring read guard");
-        };
-
-        guard
-    }
-
-    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
-        Reader {
-            parent: self,
+    pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
+        store.guard(|this, guard: epoch::Guard<'_>| Reader {
+            parent: this,
             _guard: guard,
-        }
+        })
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct Value<'a> {
     value: u64,
-    _guard: RwLockReadGuard<'a, State>,
+    _entry: ReadEntry<'a>,
 }
 
 impl Value<'_> {
@@ -125,37 +207,15 @@ pub(crate) struct Reader<'a> {
 
 impl Reader<'_> {
     pub(crate) fn read(&self, i: u32) -> Option<Value<'_>> {
-        // This is kind of messy. The overall summary is this:
-        //
-        // 1. `i` has to be inbounds.
-        // 2. We have to be able to read the slot (if a write guard is active, then we
-        //    clearly should not be reading).
-        // 3a. If the state is frozen, then we can read it.
-        // 3b. If the state is readable and not retired, we can read it.
-        //
-        //     What happens if we transition to retired just after reading?
-        //
-        //     Fortunately, the EBR guard will keep the slot from being reclaimed until
-        //     the current `Reader` goes out-of-scope. Holding onto the
-        //     `RwLockReadGuard` allows us to detect bugs in the EBR protocol as
-        //     `Checked::expect_write` will fail on reclamation if a returned `Value`
-        //     is still active.
-        if let Some(state) = self.parent.states.get(i.into_usize())
-            && let Some(guard) = state.try_read()
-        {
-            let value = match &*guard {
-                State::Frozen { value } => *value,
-                State::Readable { value, retired } => {
-                    if retired.load(Ordering::Relaxed) {
-                        return None;
-                    }
-                    *value
-                }
-                _ => return None,
+        if let Some(entry) = self.parent.entries.get(i.into_usize())?.try_read() {
+            let value = match entry.state() {
+                State::Frozen { value } | State::Readable { value } => value,
+                State::Available => panic!("concurrency violation"),
             };
+
             Some(Value {
-                value,
-                _guard: guard,
+                value: *value,
+                _entry: entry,
             })
         } else {
             None
@@ -171,51 +231,30 @@ impl plugin::Plugin for Checked {
     }
 
     unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Slot<'_> {
-        let guard = self.expect_write(i);
-        assert_matches!(*guard, State::Available, "slot is in an invalid state");
-        Slot::new(guard)
+        Slot::new(self.entries[i.into_usize()].expect_write())
     }
 
     unsafe fn retire(&self, i: u32, _: Lifecycle) {
-        let guard = self.expect_read(i);
-        match &*guard {
-            State::Available => panic!("invalid \"Available\" state"),
-            State::Readable { retired, .. } => {
-                let old = retired.swap(true, Ordering::Relaxed);
-                if old {
-                    panic!("slot {i} was retired multiple times");
-                }
-            }
-            State::Frozen { .. } => panic!("tried to retire frozen point {i}"),
-        }
+        self.entries[i.into_usize()].expect_read().retire();
     }
 
     unsafe fn reclaim(&self, i: u32, _: Lifecycle) {
-        let mut guard = self.expect_write(i);
-        match &*guard {
-            State::Available => panic!("invalid \"Available\" state"),
-            State::Readable { retired, .. } => {
-                assert!(
-                    retired.load(Ordering::Relaxed),
-                    "tried to reclaim {i} before it has been retired!",
-                );
-            }
-            State::Frozen { .. } => panic!("tried to reclaim frozen point {i}"),
-        }
-
-        *guard = State::Available;
+        self.entries[i.into_usize()].expect_write().reclaim();
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
-    guard: RwLockWriteGuard<'a, State>,
+    entry: WriteEntry<'a>,
     value: Option<u64>,
 }
 
 impl<'a> Slot<'a> {
-    fn new(guard: RwLockWriteGuard<'a, State>) -> Self {
-        Self { guard, value: None }
+    fn new(entry: WriteEntry<'a>) -> Self {
+        Self {
+            entry,
+            value: None,
+        }
     }
 
     pub(crate) fn set(&mut self, value: u64) {
@@ -224,20 +263,17 @@ impl<'a> Slot<'a> {
 }
 
 impl plugin::Slot for Slot<'_> {
-    fn publish(mut self, _: Lifecycle) {
+    fn publish(self, _: Lifecycle) {
         let value = self.value.expect("`value` was not set");
-        *self.guard = State::Readable {
-            value,
-            retired: AtomicBool::new(false),
-        };
+        self.entry.publish(value);
     }
 
-    fn freeze(mut self, _: Lifecycle) {
+    fn freeze(self, _: Lifecycle) {
         let value = self.value.expect("`value` was not set");
-        *self.guard = State::Frozen { value };
+        self.entry.freeze(value);
     }
 
-    fn abort(mut self, _: Lifecycle) {
-        *self.guard = State::Available;
+    fn abort(self, _: Lifecycle) {
+        assert_matches!(self.entry.state(), State::Available);
     }
 }

@@ -73,8 +73,8 @@ use crate::{
 pub(crate) mod invasive;
 pub(crate) mod plugin;
 
-#[cfg(test)]
-mod checked;
+#[cfg(any(test, feature = "integration-test"))]
+pub(crate) mod checked;
 
 /// To make extra sure that [`plugin::Plugin`] life-cycle arguments are not callable outside
 /// of this module (i.e., elsewhere in this crate), this [`Lifecycle`] marker type is used
@@ -134,6 +134,23 @@ impl Config {
     ) -> &mut Self {
         self.freelist_recycle_capacity = freelist_recycle_capacity;
         self
+    }
+
+    /// An exhaustive constructor initializing everye element.
+    ///
+    /// This is under the "integration-test" since it will change to reflect the state
+    /// of the underlying data structure, potentially causing more churn for users if it
+    /// were unconditionally exposed.
+    #[cfg(feature = "integration-test")]
+    #[doc(hidden)]
+    pub fn __exhaustive(
+        epoch_guard_slots: NonZeroUsize,
+        freelist_recycle_capacity: NonZeroU32,
+    ) -> Self {
+        Self {
+            epoch_guard_slots,
+            freelist_recycle_capacity,
+        }
     }
 }
 
@@ -690,7 +707,7 @@ mod tests {
     }
 
     fn reader(store: &Store<Checked>) -> checked::Reader<'_> {
-        store.guard(|checked, guard| checked.reader(guard)).unwrap()
+        Checked::reader(store).unwrap()
     }
 
     //------------------------//

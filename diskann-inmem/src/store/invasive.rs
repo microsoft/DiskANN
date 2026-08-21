@@ -70,9 +70,7 @@ impl Invasive {
     /// Create a new [`Invasive`] with capacity for `id_limit` slots of `bytes`.
     pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Self {
         let unpadded = bytes.checked_add(AtomicTag::SIZE).unwrap();
-        let padded_bytes = unpadded
-            .checked_next_multiple_of(Bytes::CACHELINE)
-            .unwrap();
+        let padded_bytes = unpadded.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
 
         Self {
             buffer: Buffer::new(id_limit.as_usize(), padded_bytes, Align::_128).unwrap(),
@@ -88,13 +86,11 @@ impl Invasive {
     }
 
     /// Return a [`Reader`] over [`Self`] inside `store`.
-    pub(crate) fn reader<'a>(store: &'a Store<Self>) -> Result<Reader<'a>, epoch::Unavailable> {
-        store.guard(|this, guard: epoch::Guard<'a>| {
-            Reader {
-                buffer: &this.buffer,
-                unpadded: this.unpadded,
-                _guard: guard
-            }
+    pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
+        store.guard(|this, guard: epoch::Guard<'_>| Reader {
+            buffer: &this.buffer,
+            unpadded: this.unpadded,
+            _guard: guard,
         })
     }
 
@@ -328,4 +324,3 @@ impl plugin::Slot for Slot<'_> {
         self.tag.store(Tag::AVAILABLE, Ordering::Release);
     }
 }
-
