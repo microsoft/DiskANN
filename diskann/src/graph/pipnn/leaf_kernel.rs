@@ -195,10 +195,11 @@ fn scan_fixed_width<A, M, const N: usize>(
 ) where
     A: PiPNNSIMDSchema,
     M: LeafMetric,
+    [LeafNeighbor; N]: SortedInsert<LeafNeighbor>,
 {
     let (rows, _) = output.as_chunks_mut::<N>();
     scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
-        insert_fixed_neighbor(&mut rows[source], target, distance)
+        insert_neighbor(&mut rows[source], target, distance)
     });
 }
 
@@ -216,7 +217,7 @@ fn scan_runtime_width<A, M>(
 {
     scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
         let first = source * width;
-        insert_runtime_neighbor(&mut output[first..first + width], target, distance)
+        insert_neighbor(&mut output[first..first + width], target, distance)
     });
 }
 
@@ -308,55 +309,79 @@ fn scan_point_pairs<A, M, I>(
     }
 }
 
-/// Insert one target into a fixed-width retained neighbor set.
-#[inline(always)]
-fn insert_fixed_neighbor<const N: usize>(
-    neighbors: &mut [LeafNeighbor; N],
-    target: u32,
-    distance: f32,
-) -> f32 {
-    let entry = LeafNeighbor::new(target, distance);
-    if N == 1 {
-        neighbors[0] = entry;
-        return distance;
-    }
-    if N == 2 {
-        let first = neighbors[0];
-        if distance < first.distance {
-            neighbors[0] = entry;
-            neighbors[1] = first;
-            return first.distance;
-        }
-        neighbors[1] = entry;
-        return distance;
-    }
-
-    let (first, second) = (neighbors[0], neighbors[1]);
-    if distance < first.distance {
-        neighbors[0] = entry;
-        neighbors[1] = first;
-        neighbors[2] = second;
-    } else if distance < second.distance {
-        neighbors[1] = entry;
-        neighbors[2] = second;
-    } else {
-        neighbors[2] = entry;
-        return distance;
-    }
-    second.distance
+/// Insert one value that passed the retained set threshold.
+trait SortedInsert<T: Copy> {
+    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T;
 }
 
-/// Insert one target into a runtime-width retained neighbor set.
-#[inline(always)]
-fn insert_runtime_neighbor(neighbors: &mut [LeafNeighbor], target: u32, distance: f32) -> f32 {
-    let last = neighbors.len() - 1;
-    let mut slot = last;
-    while slot > 0 && distance < neighbors[slot - 1].distance {
-        neighbors[slot] = neighbors[slot - 1];
-        slot -= 1;
+impl<T: Copy> SortedInsert<T> for [T; 1] {
+    #[inline(always)]
+    fn insert_sorted_by(&mut self, value: T, _precedes: impl Fn(T, T) -> bool) -> T {
+        self[0] = value;
+        value
     }
-    neighbors[slot] = LeafNeighbor::new(target, distance);
-    neighbors[last].distance
+}
+
+impl<T: Copy> SortedInsert<T> for [T; 2] {
+    #[inline(always)]
+    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+        let first = self[0];
+        if precedes(value, first) {
+            self[0] = value;
+            self[1] = first;
+            first
+        } else {
+            self[1] = value;
+            value
+        }
+    }
+}
+
+impl<T: Copy> SortedInsert<T> for [T; 3] {
+    #[inline(always)]
+    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+        let (first, second) = (self[0], self[1]);
+        if precedes(value, first) {
+            self[0] = value;
+            self[1] = first;
+            self[2] = second;
+            second
+        } else if precedes(value, second) {
+            self[1] = value;
+            self[2] = second;
+            second
+        } else {
+            self[2] = value;
+            value
+        }
+    }
+}
+
+impl<T: Copy> SortedInsert<T> for [T] {
+    #[inline(always)]
+    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+        let last = self.len() - 1;
+        let mut slot = last;
+        while slot > 0 && precedes(value, self[slot - 1]) {
+            self[slot] = self[slot - 1];
+            slot -= 1;
+        }
+        self[slot] = value;
+        self[last]
+    }
+}
+
+#[inline(always)]
+fn insert_neighbor<R>(neighbors: &mut R, target: u32, distance: f32) -> f32
+where
+    R: SortedInsert<LeafNeighbor> + ?Sized,
+{
+    neighbors
+        .insert_sorted_by(
+            LeafNeighbor::new(target, distance),
+            |candidate, retained| candidate.distance < retained.distance,
+        )
+        .distance
 }
 
 #[cfg(test)]
@@ -480,25 +505,50 @@ mod tests {
     }
 
     #[test]
-    fn fixed_insertion_orders_candidates() {
-        let mut output = [LeafNeighbor::default(); 3];
-        let mut worst = f32::INFINITY;
-
-        for (target, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 0.5)] {
-            if distance < worst {
-                worst = insert_fixed_neighbor(&mut output, target, distance);
+    fn sorted_insert_specializations_order_candidates() {
+        fn retain<R>(neighbors: &mut R) -> f32
+        where
+            R: SortedInsert<LeafNeighbor> + ?Sized,
+        {
+            let mut worst = f32::INFINITY;
+            for (target, distance) in [(0, 4.0), (1, 1.0), (2, 3.0), (3, 2.0), (4, 0.5)] {
+                if distance < worst {
+                    worst = insert_neighbor(neighbors, target, distance);
+                }
             }
+            worst
         }
 
+        let mut one = [LeafNeighbor::default(); 1];
+        assert_eq!(retain(&mut one), 0.5);
+        assert_eq!(one, [LeafNeighbor::new(4, 0.5)]);
+
+        let mut two = [LeafNeighbor::default(); 2];
+        assert_eq!(retain(&mut two), 1.0);
+        assert_eq!(two, [LeafNeighbor::new(4, 0.5), LeafNeighbor::new(1, 1.0)]);
+
+        let mut three = [LeafNeighbor::default(); 3];
+        assert_eq!(retain(&mut three), 2.0);
         assert_eq!(
-            output,
+            three,
             [
                 LeafNeighbor::new(4, 0.5),
                 LeafNeighbor::new(1, 1.0),
                 LeafNeighbor::new(3, 2.0),
             ]
         );
-        assert_eq!(worst, 2.0);
+
+        let mut runtime = [LeafNeighbor::default(); 4];
+        assert_eq!(retain(runtime.as_mut_slice()), 3.0);
+        assert_eq!(
+            runtime,
+            [
+                LeafNeighbor::new(4, 0.5),
+                LeafNeighbor::new(1, 1.0),
+                LeafNeighbor::new(3, 2.0),
+                LeafNeighbor::new(2, 3.0),
+            ]
+        );
     }
 
     #[test]
