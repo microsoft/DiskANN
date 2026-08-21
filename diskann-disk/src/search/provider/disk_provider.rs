@@ -987,11 +987,13 @@ pub struct SearchResultItem<AssociatedData> {
     pub distance: f32,
 }
 
+/// Search results that include the native indexed vector for each neighbor.
 pub struct SearchResultWithVectors<AssociatedData, VectorData> {
     pub results: Vec<SearchResultItemWithIndexedVector<AssociatedData, VectorData>>,
     pub stats: SearchResultStats,
 }
 
+/// A nearest-neighbor result with its native indexed vector.
 pub struct SearchResultItemWithIndexedVector<AssociatedData, VectorData> {
     pub vertex_id: u32,
     pub data: AssociatedData,
@@ -1249,6 +1251,10 @@ where
         Ok(search_result)
     }
 
+    /// Perform a search on the disk index and return each result with its native indexed vector.
+    ///
+    /// Unlike [`Self::search`], this returns only valid results, so the result list length equals
+    /// `stats.result_count`.
     pub fn search_with_indexed_vectors(
         &self,
         query: &[Data::VectorDataType],
