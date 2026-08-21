@@ -11,7 +11,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use crate::{
-    num::{Bytes, Capacity, MaxDegree},
+    num::{Capacity, MaxDegree},
     store::{self, checked},
 };
 

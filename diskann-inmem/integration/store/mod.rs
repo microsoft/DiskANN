@@ -467,7 +467,7 @@ where
         let mut ops = Local::new(&self.ops);
         let mut reads = Local::new(&self.reads);
 
-        let mut reader_state = self.store.reader_state(window, &self);
+        let mut reader_state = self.store.reader_state(window, self);
 
         while !self.should_stop() {
             ops.add(1);

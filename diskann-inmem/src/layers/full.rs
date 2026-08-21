@@ -535,7 +535,7 @@ where
 {
     fn evaluate(&self, i: u32) -> ANNResult<Option<f32>> {
         if !self.reader.is_in_bounds(i.into_usize()) {
-            return Err(ANNError::new(OutOfBounds(i)));
+            Err(ANNError::new(OutOfBounds(i)))
         } else {
             match unsafe { self.reader.read_in_bounds(i.into_usize()) } {
                 Some(data) => Ok(Some(self.run(data)?)),
@@ -561,6 +561,8 @@ where
         for j in 0..lookahead {
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
             // as the validity of the prefetch bounds.
+            //
+            // We do not materialize the `RawSlice` as a reference.
             unsafe {
                 crate::arch::prefetch(
                     self.reader
@@ -579,6 +581,8 @@ where
             if j != len {
                 // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
                 // well as the validity of the prefetch bounds.
+                //
+                // We do not materialize the `RawSlice` as a reference.
                 unsafe {
                     crate::arch::prefetch(
                         self.reader

@@ -197,8 +197,7 @@ pub(super) struct ReaderState<'a> {
 }
 
 impl super::ReaderState for ReaderState<'_> {
-    type Reader<'a>
-        = Reader<'a>;
+    type Reader<'a> = Reader<'a>;
 
     fn try_with_reader<F>(&mut self, f: F) -> bool
     where

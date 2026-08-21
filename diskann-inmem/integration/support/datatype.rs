@@ -193,7 +193,7 @@ impl<'a> SliceMut<'a> {
 
         match (self, rhs) {
             (SliceMut::F32(dst), Slice::F32(src)) => dst.copy_from_slice(src),
-            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, |x| cast_f16_to_f32(x)),
+            (SliceMut::F32(dst), Slice::F16(src)) => map(dst, src, cast_f16_to_f32),
             (SliceMut::F32(dst), Slice::U8(src)) => map(dst, src, |x| x.into()),
             (SliceMut::F32(dst), Slice::I8(src)) => map(dst, src, |x| x.into()),
 

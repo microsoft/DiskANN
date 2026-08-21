@@ -449,10 +449,6 @@ impl<'a> Distance<'a> {
     }
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "prune does not allow fallible distance functions yet"
-)]
 impl diskann_vector::DistanceFunction<layers::PruneKey, layers::PruneKey, f32> for Distance<'_> {
     #[inline]
     fn evaluate_similarity(&self, x: layers::PruneKey, y: layers::PruneKey) -> f32 {

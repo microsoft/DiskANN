@@ -155,7 +155,9 @@ impl super::ReaderState for ReaderState<'_> {
     where
         F: FnOnce(Self::Reader<'_>),
     {
-        let Some(reader) = self.store.reader() else { return false; };
+        let Some(reader) = self.store.reader() else {
+            return false;
+        };
         let observed = HashMap::with_capacity(self.capacity_hint);
 
         f(Reader {

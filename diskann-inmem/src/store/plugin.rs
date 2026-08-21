@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! # EBR lifecycle hooks for [`super::Store`].
+//! # EBR lifecycle hooks for [`super::Store`]
 //!
 //! Please read this section carefully - the protocol is not difficult, but it *is* subtle.
 //!
@@ -68,7 +68,6 @@
 //! state. Further, the store commits the destination state only after the plugin API call
 //! completes.
 
-use diskann::ANNResult;
 use std::fmt::Debug;
 
 use crate::num::IdLimit;
@@ -80,8 +79,11 @@ pub(crate) trait PluginConfig: Debug {
     /// The type of the resulting [`Plugin`].
     type Plugin: Plugin;
 
+    /// Construction errors.
+    type Error: std::error::Error + Send + Sync + 'static;
+
     /// Build the associated [`Plugin`] from self with the [`IdLimit`].
-    fn build(self, id_limit: IdLimit) -> ANNResult<Self::Plugin>;
+    fn build(self, id_limit: IdLimit) -> Result<Self::Plugin, Self::Error>;
 }
 
 /// A lifecycle backend for [`super::Store`]'s EBR scheme.

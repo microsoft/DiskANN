@@ -141,7 +141,7 @@ impl Config {
     /// This is under the "integration-test" since it will change to reflect the state
     /// of the underlying data structure, potentially causing more churn for users if it
     /// were unconditionally exposed.
-    #[cfg(feature = "integration-test")]
+    #[cfg(any(test, feature = "integration-test"))]
     #[doc(hidden)]
     pub fn __exhaustive(
         epoch_guard_slots: NonZeroUsize,
@@ -293,6 +293,7 @@ where
         let drain = self.registry.try_advance()?;
         let items = drain.len();
         for i in drain {
+            #[expect(clippy::panic, reason = "this is an unrecoverable program bug")]
             let Some(tag) = self.tags.get(i.into_usize()) else {
                 panic!(
                     "received an invalid ID ({}) while reclaiming slots - max allowed is {}",
@@ -303,6 +304,12 @@ where
 
             // We release the plugin before the main tag. The other direction would
             // prematurely advertise availability.
+            //
+            // SAFETY: IDs only get added to the `epoch::Registry` only upon retiring, and
+            // are not released until the registry confirms that all guards active then the
+            // id was retired have been dropped.
+            //
+            // Therefore, this slot has no accessors and is ready to be reclaimed.
             unsafe { plugin::Plugin::reclaim(self.plugin(), i, Lifecycle::new()) };
 
             // Use `Release` ordering to ensure that the store to the mirror cannot get moved
@@ -393,8 +400,12 @@ where
         match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 // Set the metadata in the mirror as well.
+                //
+                // SAFETY: The above compare-exchange ensures that we transitioned the
+                // authoritative state from "published" to "retired" and prevents other
+                // threads from attempting the same transition.
                 unsafe {
-                    plugin::Plugin::retire(self.plugin(), i.try_into().unwrap(), Lifecycle::new())
+                    plugin::Plugin::retire(self.plugin(), i as u32, Lifecycle::new())
                 };
                 guard.retire(i as u32);
                 Ok(())
@@ -494,8 +505,14 @@ where
             Ordering::Relaxed,
         ) {
             Ok(_) => {
+                // SAFETY: The above compare-exchange ensures that this slot was previously
+                // "available" and prevents other threads from trying acquire this slot.
+                //
+                // The `Slot` data structure ensures that exactly one of the terminal methods
+                // for `plugin::Slot` is called.
                 let data =
                     unsafe { plugin::Plugin::acquire(self.plugin(), slot, Lifecycle::new()) };
+
                 Some(Slot {
                     tag,
                     data: ManuallyDrop::new(data),
@@ -543,8 +560,12 @@ impl StoreError {
         })
     }
 
-    fn plugin(err: ANNError) -> Self {
-        Self(StoreErrorInner::PluginError(err))
+    #[track_caller]
+    fn plugin<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self(StoreErrorInner::PluginError(ANNError::new(err)))
     }
 }
 
@@ -600,6 +621,10 @@ pub(crate) enum RetireError {
 diskann::convert_error!(RetireError);
 
 /// A writable buffer into the data managed by a [`Store`], obtained from [`Store::acquire`].
+///
+/// This is the only safe way to interace with a [`plugin::Slot`] since this ensure that one
+/// of the terminal methods is called. Dropping a [`Slot`] without calling [`Slot::publish`]
+/// or [`Slot::freeze`] automatically invokes [`plugin::Slot::abort`].
 #[derive(Debug)]
 pub(crate) struct Slot<'a, S>
 where
@@ -630,6 +655,7 @@ where
 
         // Freeze the inner slot.
         plugin::Slot::freeze(
+            // SAFETY: The `ManuallyDrop` `data` is not used after this call.
             unsafe { ManuallyDrop::take(&mut me.data) },
             Lifecycle::new(),
         );
@@ -649,6 +675,7 @@ where
 
         // Publish the inner slot.
         plugin::Slot::publish(
+            // SAFETY: The `ManuallyDrop` `data` is not used after this call.
             unsafe { ManuallyDrop::take(&mut me.data) },
             Lifecycle::new(),
         );
@@ -665,6 +692,7 @@ where
 {
     fn drop(&mut self) {
         plugin::Slot::abort(
+            // SAFETY: The `ManuallyDrop` `data` is not used after this call.
             unsafe { ManuallyDrop::take(&mut self.data) },
             Lifecycle::new(),
         );
@@ -688,9 +716,8 @@ mod tests {
     // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
     // zeroed frozen points. The frozen points occupy the highest slot indices.
     fn store(entries: usize, frozen: u32) -> Result<Store<Checked>, StoreError> {
-        let mut config = Config::new();
-        config.epoch_guard_slots(NonZeroUsize::new(10).unwrap());
-        config.freelist_recycle_capacity(NonZeroU32::new(16).unwrap());
+        let config =
+            Config::__exhaustive(NonZeroUsize::new(10).unwrap(), NonZeroU32::new(16).unwrap());
 
         let layout = Layout::new(Capacity::new(entries), MaxDegree::new(0), frozen);
         let store = Store::new(layout, config, Checked::config())?;
