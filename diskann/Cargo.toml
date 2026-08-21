@@ -37,6 +37,7 @@ futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
 rand.workspace = true
 relative-path = "2.0.1"
+rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync"] }
