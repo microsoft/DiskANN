@@ -16,14 +16,20 @@ use std::{
 use crate::data_model::GraphDataType;
 use diskann::{
     error::IntoANNResult,
+    flat::{
+        knn_search as flat_knn_search, DistancesUnordered, SearchStats as FlatSearchStats,
+        SearchStrategy as FlatSearchStrategy,
+    },
     graph::{
         self,
         ext::labeled::{self, QueryLabelProvider},
-        glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
+        glue::{
+            self, DefaultPostProcessor, SearchPostProcess, SearchStrategy as GraphSearchStrategy,
+        },
         search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
-    neighbor::{self, Neighbor, NeighborPriorityQueue},
+    neighbor::{self, Neighbor},
     provider::{DataProvider, DefaultContext, HasId, NoopGuard},
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -37,11 +43,15 @@ use diskann_providers::{
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::{
+    future::SendFuture,
     object_pool::{ObjectPool, PoolOption, TryAsPooled},
     views::Matrix,
 };
 
-use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
+use crate::search::pq::{
+    prepare_query, PQBatchScratch, PQData, PQQueryComputer, PQQueryComputerArgs,
+    PQQueryComputerStorage,
+};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
 use tracing::debug;
@@ -217,15 +227,11 @@ where
 /// `clippy::type_complexity`'s default threshold.
 type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
 
-/// Encodes whether to accept all candidates at rerank time or apply a
-/// specific predicate. Used by `RerankAndFilter` and
-/// `DeterminantDiversityAndFilter` instead of `Option<PostprocessFilter>`
-/// so call sites are self-documenting without relying on comments to
-/// explain what `None` means.
+/// Encodes whether to accept all candidates or apply a specific predicate.
+/// Used by `RerankAndFilter`, `DeterminantDiversityAndFilter`, and the flat visitor.
 #[derive(Clone, Copy)]
 pub enum PostprocessStrategy<'a> {
-    /// Accept every candidate — no predicate is called. Used by `FlatScan`
-    /// (filtered at scan time) and `InlineFilter` (filtered at visit time).
+    /// Accept every candidate — no predicate is called.
     AcceptAll,
     /// Apply the given predicate; non-matching candidates are dropped.
     Apply(PostprocessFilter<'a>),
@@ -238,9 +244,7 @@ where
 {
     // Borrowed from `search_internal` so the strategy can be passed by value
     io_tracker: &'a IOTracker,
-    /// Consumed only by `default_post_processor()` → `RerankAndFilter`.
-    /// `FlatScan` and `InlineFilter` filter earlier in their pipelines and
-    /// pass `AcceptAll` here to avoid a redundant second pass.
+    /// Used by the flat visitor and the default post-processor.
     postprocess_filter: PostprocessStrategy<'a>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
@@ -248,6 +252,10 @@ where
 
     /// Scratch pool for disk search operations that need allocations.
     scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
+
+    pq_data: &'a PQData,
+    metric: Metric,
+    query_computer_pool: &'a Arc<ObjectPool<PQQueryComputerStorage>>,
 }
 
 // Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
@@ -287,6 +295,29 @@ impl IOTracker {
     }
 }
 
+impl<Data, ProviderFactory> DiskSearchStrategy<'_, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    fn prepare_query_computer(&self, query: &[Data::VectorDataType]) -> ANNResult<PQQueryComputer> {
+        let timer = Instant::now();
+        let query = Data::VectorDataType::as_f32(query).into_ann_result()?;
+        let args = PQQueryComputerArgs::new(
+            self.pq_data.get_dim(),
+            self.pq_data.get_num_chunks(),
+            self.pq_data.get_num_centers(),
+        );
+        let mut computer = PQQueryComputer::pooled(self.query_computer_pool, args)?;
+        prepare_query(&mut computer, self.pq_data, self.metric, &query)?;
+        IOTracker::add_time(
+            &self.io_tracker.preprocess_time_us,
+            timer.elapsed().as_micros() as u64,
+        );
+        Ok(computer)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct RerankAndFilter<'a> {
     filter: PostprocessStrategy<'a>,
@@ -319,6 +350,59 @@ impl<'a> DeterminantDiversityAndFilter<'a> {
     }
 }
 
+fn rerank_and_filter<Data, VP, I, B>(
+    filter: PostprocessStrategy<'_>,
+    provider: &DiskProvider<Data>,
+    scratch: &mut DiskSearchScratch<Data, VP>,
+    query: &[Data::VectorDataType],
+    candidates: I,
+    output: &mut B,
+) -> ANNResult<usize>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+    I: Iterator<Item = Neighbor<u32>>,
+    B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + ?Sized,
+{
+    let mut uncached_ids = Vec::new();
+    let mut reranked: Vec<_> = {
+        let mut process = |id: u32| {
+            if let Some(entry) = scratch.distance_cache.get(&id) {
+                Some(Neighbor::new((id, entry.1), entry.0))
+            } else {
+                uncached_ids.push(id);
+                None
+            }
+        };
+        match filter {
+            PostprocessStrategy::AcceptAll => candidates
+                .map(|candidate| *candidate.id())
+                .filter_map(&mut process)
+                .collect(),
+            PostprocessStrategy::Apply(predicate) => candidates
+                .map(|candidate| *candidate.id())
+                .filter(|id| predicate(id))
+                .filter_map(&mut process)
+                .collect(),
+        }
+    };
+
+    if !uncached_ids.is_empty() {
+        ensure_vertex_loaded(&mut scratch.vertex_provider, &uncached_ids)?;
+        for id in uncached_ids {
+            let vector = scratch.vertex_provider.get_vector(&id)?;
+            let distance = provider
+                .distance_comparer
+                .evaluate_similarity(query, vector);
+            let data = *scratch.vertex_provider.get_associated_data(&id)?;
+            reranked.push(Neighbor::new((id, data), distance));
+        }
+    }
+
+    reranked.sort_unstable_by(neighbor::ord::fast_distance);
+    Ok(output.extend(reranked))
+}
+
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
@@ -346,45 +430,14 @@ where
             + Send
             + ?Sized,
     {
-        let provider = accessor.provider;
-
-        let mut uncached_ids = Vec::new();
-        let mut reranked: Vec<_> = {
-            let mut process = |n: u32| {
-                if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
-                    Some(Neighbor::new((n, entry.1), entry.0))
-                } else {
-                    uncached_ids.push(n);
-                    None
-                }
-            };
-            match self.filter {
-                PostprocessStrategy::AcceptAll => candidates
-                    .map(|n| *n.id())
-                    .filter_map(&mut process)
-                    .collect(),
-                PostprocessStrategy::Apply(f) => candidates
-                    .map(|n| *n.id())
-                    .filter(|id| f(id))
-                    .filter_map(&mut process)
-                    .collect(),
-            }
-        };
-        if !uncached_ids.is_empty() {
-            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
-            for n in &uncached_ids {
-                let v = accessor.scratch.vertex_provider.get_vector(n)?;
-                let d = provider.distance_comparer.evaluate_similarity(query, v);
-                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
-                reranked.push(Neighbor::new((*n, *a), d));
-            }
-        }
-
-        // Sort the full precision distances.
-        reranked.sort_unstable_by(neighbor::ord::fast_distance);
-
-        // Store the reranked results.
-        Ok(output.extend(reranked))
+        rerank_and_filter(
+            self.filter,
+            accessor.provider,
+            &mut accessor.scratch,
+            query,
+            candidates,
+            output,
+        )
     }
 }
 
@@ -506,7 +559,7 @@ where
 }
 
 impl<'this, Data, ProviderFactory>
-    SearchStrategy<'this, DiskProvider<Data>, &'this [Data::VectorDataType]>
+    GraphSearchStrategy<'this, DiskProvider<Data>, &'this [Data::VectorDataType]>
     for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -521,13 +574,57 @@ where
         _context: &DefaultContext,
         query: &'this [Data::VectorDataType],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        let query_computer = self.prepare_query_computer(query)?;
         DiskAccessor::new(
             provider,
             self.io_tracker,
             query,
+            query_computer,
             self.vertex_provider_factory,
             self.scratch_pool,
         )
+    }
+}
+
+impl<'strategy, 'query, Data, ProviderFactory>
+    FlatSearchStrategy<DiskProvider<Data>, &'query [Data::VectorDataType]>
+    for DiskSearchStrategy<'strategy, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    type ElementRef<'a> = &'a [u8];
+    type QueryComputer = PQQueryComputer;
+    type QueryComputerError = ANNError;
+    type Visitor<'a>
+        = FlatVisitor<'a, Data, ProviderFactory::VertexProviderType>
+    where
+        Self: 'a,
+        DiskProvider<Data>: 'a;
+    type Error = ANNError;
+
+    fn create_visitor<'a>(
+        &'a self,
+        provider: &'a DiskProvider<Data>,
+        _context: &'a DefaultContext,
+    ) -> Result<Self::Visitor<'a>, Self::Error> {
+        let filter = match self.postprocess_filter {
+            PostprocessStrategy::AcceptAll => None,
+            PostprocessStrategy::Apply(filter) => Some(filter),
+        };
+        FlatVisitor::new(
+            provider,
+            filter,
+            self.vertex_provider_factory,
+            self.scratch_pool,
+        )
+    }
+
+    fn build_query_computer(
+        &self,
+        query: &'query [Data::VectorDataType],
+    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
+        self.prepare_query_computer(query)
     }
 }
 
@@ -560,16 +657,14 @@ where
     VP: VertexProvider<Data>,
 {
     distance_cache: HashMap<u32, (f32, Data::AssociatedDataType)>,
-    pq_scratch: PQScratch,
+    pq_batch_scratch: PQBatchScratch,
     vertex_provider: VP,
 }
 
 #[derive(Clone)]
 struct DiskSearchScratchArgs<'a, ProviderFactory> {
     graph_degree: usize,
-    pq_dim: usize,
     num_pq_chunks: usize,
-    num_pq_centers: usize,
     vertex_factory: &'a ProviderFactory,
     graph_header: &'a GraphHeader,
 }
@@ -583,12 +678,7 @@ where
     type Error = ANNError;
 
     fn try_create(args: &DiskSearchScratchArgs<ProviderFactory>) -> Result<Self, Self::Error> {
-        let pq_scratch = PQScratch::new(
-            args.graph_degree,
-            args.pq_dim,
-            args.num_pq_chunks,
-            args.num_pq_centers,
-        )?;
+        let pq_batch_scratch = PQBatchScratch::new(args.graph_degree, args.num_pq_chunks)?;
 
         const DEFAULT_BEAM_WIDTH: usize = 0; // Setting as 0 to avoid preallocation of memory.
         let vertex_provider = args
@@ -597,7 +687,7 @@ where
 
         Ok(Self {
             distance_cache: HashMap::new(),
-            pq_scratch,
+            pq_batch_scratch,
             vertex_provider,
         })
     }
@@ -620,6 +710,7 @@ where
     provider: &'a DiskProvider<Data>,
     io_tracker: &'a IOTracker,
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
+    query_computer: PQQueryComputer,
     query: &'a [Data::VectorDataType],
 }
 
@@ -634,18 +725,18 @@ where
     where
         F: FnMut(f32, u32),
     {
-        let pq_scratch = &mut self.scratch.pq_scratch;
+        let pq_scratch = &mut self.scratch.pq_batch_scratch;
         compute_pq_distance(
             ids,
             self.provider.pq_data.get_num_chunks(),
-            &pq_scratch.aligned_pqtable_dist_scratch,
+            self.query_computer.lookup_table(),
             self.provider.pq_data.pq_compressed_data().as_slice(),
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;
 
         for (i, id) in ids.iter().enumerate() {
-            let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
+            let distance = self.scratch.pq_batch_scratch.aligned_dist_scratch[i];
             f(distance, *id);
         }
 
@@ -659,6 +750,159 @@ where
     VP: VertexProvider<Data>,
 {
     type Id = u32;
+}
+
+pub struct FlatVisitor<'a, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    provider: &'a DiskProvider<Data>,
+    filter: Option<PostprocessFilter<'a>>,
+    scratch: PoolOption<DiskSearchScratch<Data, VP>>,
+}
+
+impl<'a, Data, VP> FlatVisitor<'a, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    fn new<VPF>(
+        provider: &'a DiskProvider<Data>,
+        filter: Option<PostprocessFilter<'a>>,
+        vertex_provider_factory: &'a VPF,
+        scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, VP>>>,
+    ) -> ANNResult<Self>
+    where
+        VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
+    {
+        let pq_points = provider.pq_data.pq_compressed_data().nrows();
+        if pq_points != provider.num_points {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "PQ data contains {pq_points} points, expected {}",
+                provider.num_points,
+            ));
+        }
+
+        let scratch = PoolOption::try_pooled(
+            scratch_pool,
+            &DiskSearchScratchArgs {
+                graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
+                num_pq_chunks: provider.pq_data.get_num_chunks(),
+                vertex_factory: vertex_provider_factory,
+                graph_header: &provider.graph_header,
+            },
+        )?;
+
+        Ok(Self {
+            provider,
+            filter,
+            scratch,
+        })
+    }
+}
+
+impl<Data, VP> HasId for FlatVisitor<'_, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Id = u32;
+}
+
+impl<Data, VP> DistancesUnordered<PQQueryComputer> for FlatVisitor<'_, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type ElementRef<'a> = &'a [u8];
+    type Error = ANNError;
+
+    fn distances_unordered<F>(
+        &mut self,
+        computer: &PQQueryComputer,
+        mut f: F,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        F: Send + FnMut(Self::Id, f32),
+    {
+        async move {
+            let batch_size = self.scratch.pq_batch_scratch.max_vectors();
+            if batch_size == 0 {
+                return Err(diskann_error!(
+                    ErrorKind::IndexError,
+                    "pq scratch must support at least one vector",
+                ));
+            }
+
+            let mut ids = Vec::with_capacity(batch_size);
+            let mut remaining = (0..self.provider.num_points as u32)
+                .filter(|id| self.filter.is_none_or(|filter| filter(id)));
+
+            loop {
+                ids.clear();
+                ids.extend(remaining.by_ref().take(batch_size));
+                if ids.is_empty() {
+                    break;
+                }
+
+                let scratch = &mut self.scratch.pq_batch_scratch;
+                compute_pq_distance(
+                    &ids,
+                    self.provider.pq_data.get_num_chunks(),
+                    computer.lookup_table(),
+                    self.provider.pq_data.pq_compressed_data().as_slice(),
+                    &mut scratch.aligned_pq_coord_scratch,
+                    &mut scratch.aligned_dist_scratch,
+                )?;
+
+                for (id, distance) in
+                    std::iter::zip(&ids, &scratch.aligned_dist_scratch[..ids.len()])
+                {
+                    f(*id, *distance);
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        FlatVisitor<'_, Data, VP>,
+        &[Data::VectorDataType],
+        (u32, Data::AssociatedDataType),
+    > for RerankAndFilter<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+
+    async fn post_process<I, B>(
+        &self,
+        visitor: &mut FlatVisitor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        rerank_and_filter(
+            self.filter,
+            visitor.provider,
+            &mut visitor.scratch,
+            query,
+            candidates,
+            output,
+        )
+    }
 }
 
 impl<Data, VP> glue::SearchAccessor for DiskAccessor<'_, Data, VP>
@@ -730,45 +974,28 @@ where
         provider: &'a DiskProvider<Data>,
         io_tracker: &'a IOTracker,
         query: &'a [Data::VectorDataType],
+        query_computer: PQQueryComputer,
         vertex_provider_factory: &'a VPF,
         scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, VP>>>,
     ) -> ANNResult<Self>
     where
         VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
     {
-        let mut scratch = PoolOption::try_pooled(
+        let scratch = PoolOption::try_pooled(
             scratch_pool,
             &DiskSearchScratchArgs {
                 graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
-                pq_dim: provider.pq_data.get_dim(),
                 num_pq_chunks: provider.pq_data.get_num_chunks(),
-                num_pq_centers: provider.pq_data.get_num_centers(),
                 vertex_factory: vertex_provider_factory,
                 graph_header: &provider.graph_header,
             },
         )?;
 
-        // Decode caller's native vector representation into `f32`; downstream PQ kernels operate purely on `&[f32]`.
-        let f32_query = Data::VectorDataType::as_f32(query).into_ann_result()?;
-        scratch.pq_scratch.set(&f32_query)?;
-        let start_vertex_id = provider.graph_header.metadata().medoid as u32;
-
-        let timer = Instant::now();
-        quantizer_preprocess(
-            &mut scratch.pq_scratch,
-            &provider.pq_data,
-            provider.metric,
-            &[start_vertex_id],
-        )?;
-        IOTracker::add_time(
-            &io_tracker.preprocess_time_us,
-            timer.elapsed().as_micros() as u64,
-        );
-
         Ok(Self {
             provider,
             io_tracker,
             scratch,
+            query_computer,
             query,
         })
     }
@@ -817,6 +1044,8 @@ pub struct DiskIndexSearcher<
 
     /// Scratch pool for disk search operations that need allocations.
     scratch_pool: Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
+
+    query_computer_pool: Arc<ObjectPool<PQQueryComputerStorage>>,
 }
 
 #[derive(Debug)]
@@ -895,13 +1124,17 @@ where
         let pq_data = disk_index_reader.get_pq_data();
         let scratch_pool_args = DiskSearchScratchArgs {
             graph_degree: graph_header.max_degree::<Data::VectorDataType>()?,
-            pq_dim: pq_data.get_dim(),
             num_pq_chunks: pq_data.get_num_chunks(),
-            num_pq_centers: pq_data.get_num_centers(),
             vertex_factory: &vertex_provider_factory,
             graph_header: &graph_header,
         };
         let scratch_pool = Arc::new(ObjectPool::try_new(&scratch_pool_args, 0, None)?);
+        let query_computer_args = PQQueryComputerArgs::new(
+            pq_data.get_dim(),
+            pq_data.get_num_chunks(),
+            pq_data.get_num_centers(),
+        );
+        let query_computer_pool = Arc::new(ObjectPool::try_new(query_computer_args, 0, None)?);
 
         let disk_provider = DiskProvider::new(
             disk_index_reader,
@@ -917,6 +1150,7 @@ where
             runtime,
             vertex_provider_factory,
             scratch_pool,
+            query_computer_pool,
         })
     }
 
@@ -926,11 +1160,15 @@ where
         io_tracker: &'a IOTracker,
         postprocess_filter: PostprocessStrategy<'a>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
+        let provider = self.index.provider();
         DiskSearchStrategy {
             io_tracker,
             postprocess_filter,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
+            pq_data: &provider.pq_data,
+            metric: provider.metric,
+            query_computer_pool: &self.query_computer_pool,
         }
     }
 
@@ -946,63 +1184,33 @@ where
         &self,
         strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
         query: &[Data::VectorDataType],
-        vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
         neighbors_before_reranking: usize,
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
     where
         OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
     {
-        let provider = self.index.provider();
-        let mut accessor = strategy
-            .search_accessor(provider, &DefaultContext, query)
-            .into_ann_result()?;
-
-        // Derive the batch size from the scratch data structure. Providing too many vectors
-        // will panic.
-        let batch_size = accessor.scratch.pq_scratch.max_vectors();
-
-        // This check should always hold since `graph_degree` comes from
-        // `diskann::graph::Config` and is forced to be non-zero. But this is defensive
-        // against misconfiguration.
-        if batch_size == 0 {
-            return Err(diskann_error!(
+        let k = NonZeroUsize::new(neighbors_before_reranking).ok_or_else(|| {
+            diskann_error!(
                 ErrorKind::IndexError,
-                "pq scratch must support at least one vector",
-            ));
-        }
-
-        let mut id_buffer = Vec::with_capacity(batch_size);
-
-        let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
-        let mut cmps = 0u32;
-
-        // `None` short-circuits to `true` — no dyn-fn call per node on the
-        // unfiltered (recall-baseline) path.
-        let mut iter =
-            (0..provider.num_points as u32).filter(|id| vector_filter.is_none_or(|f| f(id)));
-        loop {
-            id_buffer.clear();
-            id_buffer.extend(iter.by_ref().take(batch_size));
-
-            if id_buffer.is_empty() {
-                break;
-            }
-
-            accessor.pq_distances(&id_buffer, |dist, id| best.insert(Neighbor::new(id, dist)))?;
-            cmps += id_buffer.len() as u32;
-        }
-
-        let result_count = strategy
-            .default_post_processor()
-            .post_process(&mut accessor, query, best.iter(), output)
-            .await
-            .into_ann_result()?;
+                "flat search list size must be greater than zero",
+            )
+        })?;
+        let FlatSearchStats { cmps, result_count } = flat_knn_search(
+            self.index.provider(),
+            k,
+            strategy,
+            RerankAndFilter::new(PostprocessStrategy::AcceptAll),
+            &DefaultContext,
+            query,
+            output,
+        )
+        .await?;
 
         Ok(graph::index::SearchStats {
             cmps,
             hops: 0,
-            result_count: result_count as u32,
+            result_count,
             range_search_second_round: false,
         })
     }
@@ -1140,11 +1348,15 @@ where
         //                    as the post-processor over the L candidate pool.
         let stats = match mode {
             SearchMode::FlatScan { filter } => {
-                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    filter
+                        .as_deref()
+                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                );
                 self.runtime.block_on(self.flat_search(
                     &strategy,
                     query,
-                    filter.as_deref(),
                     l,
                     &mut result_output_buffer,
                 ))?
@@ -2374,6 +2586,93 @@ mod disk_provider_tests {
             check_distances(&actual_distances, &expected_distances),
             "Expected distances to match"
         );
+    }
+
+    #[test]
+    fn unfiltered_flat_scan_matches_baseline() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let result = search_engine
+            .search(&[0.1; 128], 10, 10, None, SearchMode::flat())
+            .unwrap();
+
+        let expected = [
+            (152, 256101.7),
+            (115, 256400.48),
+            (98, 256451.28),
+            (73, 256572.89),
+            (20, 256623.28),
+            (173, 256636.9),
+            (95, 256661.28),
+            (137, 256673.7),
+            (118, 256675.3),
+            (72, 256709.69),
+        ];
+        assert_eq!(result.results.len(), expected.len());
+        for (index, (actual, (expected_id, expected_distance))) in
+            std::iter::zip(&result.results, expected).enumerate()
+        {
+            assert_eq!(
+                actual.vertex_id, expected_id,
+                "flat baseline ID mismatch at result {index}",
+            );
+            assert!(
+                (actual.distance - expected_distance).abs() <= 0.02,
+                "flat baseline distance mismatch at result {index}: expected \
+                 {expected_distance}, got {}",
+                actual.distance,
+            );
+        }
+
+        assert!(result
+            .results
+            .windows(2)
+            .all(|pair| pair[0].distance <= pair[1].distance));
+        assert_eq!(result.stats.cmps, 256);
+        assert_eq!(result.stats.result_count, 10);
+    }
+
+    #[test]
+    fn flat_filter_runs_once_per_point() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let calls = AtomicUsize::new(0);
+
+        search_engine
+            .search(
+                &[0.1; 128],
+                10,
+                10,
+                None,
+                SearchMode::flat_filtered(|_| {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    true
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 256);
     }
 
     // ===========================================================================

@@ -26,7 +26,7 @@
 pub mod index;
 pub mod strategy;
 
-pub use index::{FlatIndex, SearchStats};
+pub use index::{FlatIndex, SearchStats, knn_search};
 pub use strategy::{DistancesUnordered, SearchStrategy};
 
 #[cfg(test)]
