@@ -388,20 +388,20 @@ mod tests {
     use half::f16;
 
     #[test]
-    fn integer_normalized_cosine_uses_unnormalized_cosine() {
+    fn integer_normalized_cosine_falls_back_to_cosine() {
         for metric in [
             Metric::L2,
             Metric::Cosine,
             Metric::CosineNormalized,
             Metric::InnerProduct,
         ] {
-            let expected = if metric == Metric::CosineNormalized {
+            let expected_effective_metric = if metric == Metric::CosineNormalized {
                 Metric::Cosine
             } else {
                 metric
             };
-            assert_eq!(effective_metric::<u8>(metric), expected);
-            assert_eq!(effective_metric::<i8>(metric), expected);
+            assert_eq!(effective_metric::<u8>(metric), expected_effective_metric);
+            assert_eq!(effective_metric::<i8>(metric), expected_effective_metric);
             assert_eq!(effective_metric::<f32>(metric), metric);
             assert_eq!(effective_metric::<f16>(metric), metric);
         }
@@ -477,10 +477,11 @@ mod build_graph_tests {
         let graph = graph_config(Metric::L2, 2);
         let pool = pool(2);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let expected_single_leaf_adjacency = [vec![1], vec![0, 2], vec![1, 3], vec![2]];
 
-        let actual = build_graph(data, &context).unwrap();
+        let actual_graph = build_graph(data, &context).unwrap();
 
-        assert_eq!(rows(actual), [vec![1], vec![0, 2], vec![1, 3], vec![2]]);
+        assert_eq!(rows(actual_graph), expected_single_leaf_adjacency);
 
         let graph = graph_config(Metric::L2, 1);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
@@ -508,11 +509,12 @@ mod build_graph_tests {
             replicas: 1,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::InnerProduct, &pool).unwrap();
+        let expected_rankable_adjacency = [vec![1], vec![0], vec![]];
 
-        let actual = build_graph(data, &context).unwrap();
+        let actual_graph = build_graph(data, &context).unwrap();
 
-        assert_graph_invariants(&actual, 3, 2);
-        assert_eq!(rows(actual), [vec![1], vec![0], vec![]]);
+        assert_graph_invariants(&actual_graph, 3, 2);
+        assert_eq!(rows(actual_graph), expected_rankable_adjacency);
     }
 
     #[test]
@@ -531,10 +533,10 @@ mod build_graph_tests {
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
 
-        let actual = build_graph(data, &context).unwrap();
+        let actual_graph = build_graph(data, &context).unwrap();
 
-        assert_graph_invariants(&actual, 5, 1);
-        assert!(actual.iter().all(|row| row.len() == 1));
+        assert_graph_invariants(&actual_graph, 5, 1);
+        assert!(actual_graph.iter().all(|row| row.len() == 1));
     }
 
     #[test]
@@ -551,7 +553,7 @@ mod build_graph_tests {
     }
 
     #[test]
-    fn supports_every_source_type_and_metric() {
+    fn graph_build_accepts_each_supported_source_type_and_metric() {
         fn build<T: crate::utils::VectorRepr + Send + Sync + 'static>(
             values: &[T],
             metric: Metric,
@@ -560,8 +562,8 @@ mod build_graph_tests {
             let graph = graph_config(metric, 2);
             let pool = pool(2);
             let context = PiPNNBuildContext::new(pipnn_config(), &graph, metric, &pool).unwrap();
-            let actual = build_graph(data, &context).unwrap();
-            assert_graph_invariants(&actual, 6, 2);
+            let actual_graph = build_graph(data, &context).unwrap();
+            assert_graph_invariants(&actual_graph, 6, 2);
         }
 
         let values = [
@@ -606,7 +608,7 @@ mod build_graph_tests {
     }
 
     #[test]
-    fn is_deterministic_for_a_fixed_pool_size() {
+    fn graph_build_is_deterministic_for_a_fixed_pool_size() {
         let data: Vec<f32> = (0..96 * 4)
             .map(|value| ((value * 17 + 3) % 101) as f32)
             .collect();
@@ -655,9 +657,9 @@ mod build_graph_tests {
             };
             let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
 
-            let actual = build_graph(data, &context)
+            let actual_graph = build_graph(data, &context)
                 .unwrap_or_else(|error| panic!("randomized case {case} failed: {error}"));
-            assert_graph_invariants(&actual, points, degree);
+            assert_graph_invariants(&actual_graph, points, degree);
         }
     }
 
