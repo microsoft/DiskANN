@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn computes_expected_sketch_shape() {
+    fn sketch_shape_has_one_value_per_point_and_plane() {
         let data = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
         let sketches = build_pool(2)
             .install(|| LshSketches::try_new(view(&data, 3, 2), 4, 42))
@@ -140,7 +140,7 @@ mod tests {
             .collect();
 
         for seed in [42, 99] {
-            let actual = build_pool(2)
+            let actual_sketches = build_pool(2)
                 .install(|| LshSketches::try_new(view(&data, npoints, ndims), planes, seed))
                 .unwrap();
 
@@ -148,7 +148,7 @@ mod tests {
             let hyperplanes: Vec<f32> = (0..planes * ndims)
                 .map(|_| StandardNormal.sample(&mut rng))
                 .collect();
-            let expected: Vec<f32> = data
+            let expected_serial_sketch_values: Vec<f32> = data
                 .chunks_exact(ndims)
                 .flat_map(|point| {
                     hyperplanes
@@ -156,7 +156,11 @@ mod tests {
                         .map(|plane| point.iter().zip(plane).map(|(x, h)| x * h).sum())
                 })
                 .collect();
-            assert_eq!(actual.sketches(), expected, "seed={seed}");
+            assert_eq!(
+                actual_sketches.sketches(),
+                expected_serial_sketch_values,
+                "seed={seed}"
+            );
         }
     }
 
@@ -180,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_shape_overflow() {
+    fn sketch_construction_rejects_shape_overflow() {
         for data in [
             view(&[] as &[f32], 0, usize::MAX),
             view(&[] as &[f32], usize::MAX, 0),

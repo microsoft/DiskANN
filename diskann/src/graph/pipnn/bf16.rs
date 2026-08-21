@@ -31,7 +31,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_bf16_exact_values() {
+    fn bf16_roundtrip_preserves_exactly_representable_values() {
         // bf16 has 7 mantissa bits. Pick f32 values whose lower 16 mantissa
         // bits are zero so the truncation is lossless.
         for &x in &[0.0_f32, 1.0, 2.0, 0.5, 0.25, 4.0, -1.0, -0.5] {
@@ -41,7 +41,7 @@ mod tests {
     }
 
     #[test]
-    fn truncation_is_within_relative_tolerance() {
+    fn bf16_truncation_keeps_relative_error_below_one_percent() {
         // A non-exact finite value has at most about 2^-7 relative truncation error.
         use std::f32::consts::{E, PI};
         for &x in &[1e-10_f32, 1e10, PI, E] {
@@ -52,7 +52,7 @@ mod tests {
     }
 
     #[test]
-    fn special_values_preserve_their_upper_bits() {
+    fn bf16_conversion_preserves_the_upper_bits_of_special_values() {
         for value in [
             0.0_f32,
             -0.0,
@@ -63,10 +63,10 @@ mod tests {
             f32::MIN_POSITIVE,
             -f32::MIN_POSITIVE,
         ] {
-            let expected = value.to_bits() & 0xFFFF_0000;
+            let expected_upper_bits = value.to_bits() & 0xFFFF_0000;
             assert_eq!(
                 bf16_to_f32(f32_to_bf16(value)).to_bits(),
-                expected,
+                expected_upper_bits,
                 "value_bits={:08x}",
                 value.to_bits()
             );
@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn finite_truncation_moves_toward_zero() {
+    fn bf16_truncation_moves_finite_values_toward_zero() {
         for value in [f32::MIN_POSITIVE, 0.1, 1.1, std::f32::consts::PI, f32::MAX] {
             let positive = bf16_to_f32(f32_to_bf16(value));
             let negative = bf16_to_f32(f32_to_bf16(-value));
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn ordering_preserved_for_non_negative() {
+    fn bf16_encoding_preserves_non_negative_value_order() {
         // For non-negative f32, bf16 (as u16) preserves ordering.
         let xs: [f32; 6] = [0.0, 1e-10, 0.1, 1.0, 10.0, 1e10];
         let bs: Vec<u16> = xs.iter().map(|&x| f32_to_bf16(x)).collect();

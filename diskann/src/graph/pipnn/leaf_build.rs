@@ -920,19 +920,24 @@ mod tests {
     }
 
     #[test]
-    fn symmetric_edge_csr_matches_expected_adjacency() {
+    fn symmetric_edge_csr_contains_both_directions_in_source_order() {
+        // Given
         let point_ids = [10, 20, 30];
         let neighbors = [
             LeafNeighbor::new(1, 1.0),
             LeafNeighbor::new(2, 2.0),
             LeafNeighbor::new(1, 1.5),
         ];
+        let expected_edge_count = 4;
+        let expected_offsets = [0, 1, 3, 4];
+        let expected_edges = [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)];
         let mut seen = vec![false; 9];
         let mut offsets = Vec::new();
         let mut edges = Vec::new();
         let mut cursor = Vec::new();
 
-        let count = build_symmetric_edge_csr(
+        // When
+        let actual_edge_count = build_symmetric_edge_csr(
             0,
             &point_ids,
             1,
@@ -946,10 +951,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count, 4);
-        assert_eq!(offsets, [0, 1, 3, 4]);
-        assert_eq!(edges, [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)]);
+        // Then
+        assert_eq!(actual_edge_count, expected_edge_count);
+        assert_eq!(offsets, expected_offsets);
+        assert_eq!(edges, expected_edges);
     }
+
     #[test]
     fn symmetric_edge_csr_omits_unassigned_neighbors() {
         let point_ids = [10, 20];
