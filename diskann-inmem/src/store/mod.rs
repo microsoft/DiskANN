@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! A concurrent in-memory data store for uniformly sized data.
+//! A concurrent in-memory data store for driving [`plugin::Plugin`]s.
 //!
 //! This supports concurrent data access, deletes, and inserts through a safe interface.
 //! Data is stored internally in slots indexed from `[0..N)` with `K` points reserved at the
@@ -11,14 +11,19 @@
 //!
 //! ## Reading
 //!
-//! Read access requires a [`Reader`] produced by [`Store::reader`]. [`Reader::read`]
-//! provides read-only access to data at slot `i` if the data is valid for reads.
+//! A [`Store`] provides no direct way of reading data. Instead, the [`plugin::Plugin`] is
+//! responsible for exposing an appropriate reader (e.g., [`invasive::Invasive::reader`]) in
+//! accordance with its lifecycle implementation. [`Store::guard`] can be used for
+//! this purpose by acquiring an [`epoch::Guard`] for a [`Store`].
 //!
 //! ## Writing
 //!
 //! [`Store::acquire`] is used to find and claim an unused internal [`Slot`]. A [`Slot`]
-//! provides write access to its corresponding data which is published when the [`Slot`] is
-//! dropped.
+//! provides write access to its corresponding [`Slot::data`]. Either [`Slot::publish`] or
+//! [`Slot::freeze`] can be used to make data readable.
+//!
+//! If a [`Slot`] is dropped, its corresponding slot is returned to the [`Store`] without
+//! publishing its contents.
 //!
 //! The index of the slot chosen may be obtained via [`Slot::slot`].
 //!
@@ -26,7 +31,7 @@
 //!
 //! Data is deleted via [`Store::retire`]. This immediately marks the corresponding slot as
 //! unavailable for future readers. However, the retired slot will not be reused until the
-//! [`Store`] can guarantee that no [`Reader`]s that could be using the data are active.
+//! [`Store`] can guarantee that no readers that could be using the data are active.
 //!
 //! Slots are automatically reclaimed as part of slot acquisition in the "writing" phase.
 //!
@@ -39,17 +44,12 @@
 //! # Details
 //!
 //! This uses an implementation of the epoch-based reclamation (EBR) provided by [`Registry`].
-//! Concurrency tags are mirrored inline with the stored data (just after the data payload)
-//! to keep memory access localized. As such, high-performance implementations will want to
-//! fetch the last cache line of data first to ensure the tag is resident in cache for faster
-//! data checks.
+//! Plugins follow the lifecycle process defined in the [plugin module docs](plugin).
 //!
 //! The EBR scheme allows readers to safely access data while only generating read traffic to
 //! the CPU caches. The cost is that there is a delay between when slots are retired and when
-//! they can be reused, with a long lived [`Reader`] blocking this reclamation. As such,
-//! users of this data structure should ensure that [`Reader`]s are reasonably short lived.
-//!
-//! Internally, the data belongs to a single allocation.
+//! they can be reused, with a long lived reader blocking this reclamation. As such, users of
+//! this data structure should ensure that readers are reasonably short lived.
 
 use std::{
     iter::repeat_n,
@@ -92,7 +92,7 @@ impl Lifecycle {
     }
 }
 
-/// Configuration for the concurrenct store.
+/// Configuration for the concurrent store.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The number of epoch guard slots.
@@ -136,11 +136,11 @@ impl Config {
         self
     }
 
-    /// An exhaustive constructor initializing everye element.
+    /// An exhaustive constructor initializing every element.
     ///
-    /// This is under the "integration-test" since it will change to reflect the state
-    /// of the underlying data structure, potentially causing more churn for users if it
-    /// were unconditionally exposed.
+    /// This is exposed under "integration-test" since it will change to reflect the state
+    /// of the underlying data structure, potentially causing more churn for users if it were
+    /// unconditionally exposed.
     #[cfg(any(test, feature = "integration-test"))]
     #[doc(hidden)]
     pub fn __exhaustive(
@@ -160,6 +160,7 @@ impl Default for Config {
     }
 }
 
+/// Layout parameters for [`Store`] and the corresponding [`plugin::Plugin`].
 #[derive(Debug, Clone)]
 pub(crate) struct Layout {
     /// The number of non-frozen slots to create space for.
@@ -173,7 +174,13 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    /// Create a new [`Layout`] capable of holding `capacity` non-frozen points.
+    /// Create a new [`Layout`] capable of holding `capacity` non-frozen points and `frozen`
+    /// reserved points at the end.
+    ///
+    /// After construction, the only distinction between non-frozen and frozen points is that
+    /// IDs for frozen points will not be selected through [`Store::acquire`]. Frozen slots
+    /// IDs can be obtained via [`Store::frozen`], and direct acquisition can be done with
+    /// [`Store::slot`].
     ///
     /// All adjacency lists will have a maximum capacity of `max_degree`.
     pub(crate) fn new(capacity: Capacity, max_degree: MaxDegree, frozen: u32) -> Self {
@@ -191,11 +198,13 @@ pub(crate) struct Store<P> {
     // The [`plugin::Plugin`] managed by this [`Store`].
     plugin: P,
 
-    // The number of unfrozen points. This is guaranteed to be less than `buffer`.
+    // The number of unfrozen points.
     unfrozen: Capacity,
 
     // The authoritative source of truth for the state of each slot.
     tags: Vec<AtomicTag>,
+
+    // Acceleration of finding free slot IDs.
     freelist: Freelist,
 
     // EBR registry.
@@ -212,8 +221,7 @@ impl<P> Store<P>
 where
     P: plugin::Plugin,
 {
-    /// Create a new [`Store`]. The entries within `init` will be used as frozen points
-    /// within the store and must be compatible the the number of bytes in `config`.
+    /// Create a new [`Store`].
     pub(crate) fn new<C>(layout: Layout, config: Config, plugin: C) -> Result<Self, StoreError>
     where
         C: plugin::PluginConfig<Plugin = P>,
@@ -248,6 +256,11 @@ where
 
         let plugin = plugin::PluginConfig::build(plugin, id_limit).map_err(StoreError::plugin)?;
 
+        let plugin_id_limit = plugin.id_limit();
+        if plugin_id_limit != id_limit {
+            return Err(StoreError::invalid_construction(plugin_id_limit, id_limit));
+        }
+
         let me = Self {
             plugin,
             unfrozen: capacity,
@@ -265,6 +278,7 @@ where
         Ok(me)
     }
 
+    /// Return the [`plugin::Plugin`] for this store.
     pub(crate) fn plugin(&self) -> &P {
         &self.plugin
     }
@@ -274,14 +288,19 @@ where
         (self.unfrozen.value() as u32)..self.neighbors.entries()
     }
 
+    /// Return the [`IdLimit`] for this store.
     pub(crate) fn id_limit(&self) -> IdLimit {
-        plugin::Plugin::id_limit(&self.plugin)
+        // The numeric cast is safe: We verify during construction that `self.tags.len()` fits
+        // in a `u32`.
+        IdLimit::new(self.tags.len() as u32)
     }
 
+    /// Return the [`Capacity`] for this store.
     pub(crate) fn capacity(&self) -> Capacity {
         self.unfrozen
     }
 
+    /// Return the [`Neighbors`] for this store.
     pub(crate) fn neighbors(&self) -> &Neighbors {
         &self.neighbors
     }
@@ -305,9 +324,9 @@ where
             // We release the plugin before the main tag. The other direction would
             // prematurely advertise availability.
             //
-            // SAFETY: IDs only get added to the `epoch::Registry` only upon retiring, and
-            // are not released until the registry confirms that all guards active then the
-            // id was retired have been dropped.
+            // SAFETY: IDs only get added to the `epoch::Registry` upon retiring, and are
+            // not released until the registry confirms that all guards active when the id
+            // was retired have been dropped.
             //
             // Therefore, this slot has no accessors and is ready to be reclaimed.
             unsafe { plugin::Plugin::reclaim(self.plugin(), i, Lifecycle::new()) };
@@ -318,8 +337,9 @@ where
             // The `load + check` is just runtime validation. The calling thread is expected
             // to have exclusive ownership of this tag.
             //
-            // Using a load + store avoids using a CAS style loop, which can be cheaper for
-            // the bulk styl operations we're going here at the cost of precision.
+            // Using a load followed by a store avoids a CAS loop, which may be cheaper for
+            // bulk reclamation at the cost of detecting concurrent modification only through
+            // the assertion.
             assert_eq!(
                 tag.load(Ordering::Relaxed),
                 Tag::RETIRING,
@@ -332,6 +352,11 @@ where
         Some(items)
     }
 
+    /// Create an [`epoch::Guard`] for the [`epoch::Registry`] within `self` and invoke `f`
+    /// with that guard, returning the result.
+    ///
+    /// This can be used by [`plugin::Plugin`] readers to establish a verifiable chain of
+    /// custody for an [`epoch::Guard`] over the plugin.
     pub(crate) fn guard<'a, F, R>(&'a self, f: F) -> Result<R, epoch::Unavailable>
     where
         F: FnOnce(&'a P, epoch::Guard<'a>) -> R,
@@ -404,9 +429,7 @@ where
                 // SAFETY: The above compare-exchange ensures that we transitioned the
                 // authoritative state from "published" to "retired" and prevents other
                 // threads from attempting the same transition.
-                unsafe {
-                    plugin::Plugin::retire(self.plugin(), i as u32, Lifecycle::new())
-                };
+                unsafe { plugin::Plugin::retire(self.plugin(), i as u32, Lifecycle::new()) };
                 guard.retire(i as u32);
                 Ok(())
             }
@@ -426,8 +449,8 @@ where
     /// Periodically, the freelist is checked to see if another thread has found an available
     /// slot for us.
     fn scan_acquire(&self) -> Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> {
-        // This is potentially quite slow - but stop if we've scanned the entire range
-        // without finding anything.
+        // This is potentially quite slow, so scan approximately `1 / RETRY_LIMIT` of the
+        // writable range. The outer retry loop provides broader coverage.
         let mut remaining = self.unfrozen.value().div_ceil(RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
         let mut acquired: Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> = None;
@@ -476,6 +499,10 @@ where
         None
     }
 
+    /// Attempt to directly acquire a [`Slot`] to id `i`.
+    ///
+    /// Returns `None` if `i` is not within [`Self::id_limit`] or if the slot is not currently
+    /// acquirable.
     pub(crate) fn slot(&self, i: u32) -> Option<Slot<'_, <P as plugin::Plugin>::Slot<'_>>> {
         let tag = &self.tags.get(i.into_usize())?;
 
@@ -501,12 +528,15 @@ where
         match tag.compare_exchange(
             Tag::AVAILABLE,
             Tag::OWNED,
-            Ordering::Relaxed,
+            Ordering::Acquire,
             Ordering::Relaxed,
         ) {
             Ok(_) => {
                 // SAFETY: The above compare-exchange ensures that this slot was previously
-                // "available" and prevents other threads from trying acquire this slot.
+                // "available" and prevents other threads from trying to acquire this slot.
+                // The acquire ordering synchronizes with the release transition to
+                // "available", making plugin reclamation or abort work visible before
+                // `Plugin::acquire`.
                 //
                 // The `Slot` data structure ensures that exactly one of the terminal methods
                 // for `plugin::Slot` is called.
@@ -525,10 +555,10 @@ where
 
     /// Return whether or not it is probably okay to read from the slot `i`.
     ///
-    /// This check is approximate and non-synchronizing. To fully check, [`Reader::can_read`]
-    /// must be used.
+    /// This check is approximate and non-synchronizing. A full check requires the
+    /// plugin-specific reader.
     ///
-    /// Returns `None` is index `i` is out-of-bounds.
+    /// Returns `None` if `i` is not within [`Self::id_limit`].
     pub(crate) fn can_read_approximate(&self, i: usize) -> Option<bool> {
         self.tags
             .get(i)
@@ -567,6 +597,10 @@ impl StoreError {
     {
         Self(StoreErrorInner::PluginError(ANNError::new(err)))
     }
+
+    fn invalid_construction(got: IdLimit, expected: IdLimit) -> Self {
+        Self(StoreErrorInner::InvalidConstruction { got, expected })
+    }
 }
 
 impl From<BufferError> for StoreError {
@@ -599,6 +633,8 @@ enum StoreErrorInner {
     NeighborsError(#[from] NeighborsError),
     #[error("error creating plugin")]
     PluginError(ANNError),
+    #[error("requested {} but the plugin returned {}", expected, got)]
+    InvalidConstruction { got: IdLimit, expected: IdLimit },
 }
 
 /// Error conditions for [`Store::retire`].
@@ -622,7 +658,7 @@ diskann::convert_error!(RetireError);
 
 /// A writable buffer into the data managed by a [`Store`], obtained from [`Store::acquire`].
 ///
-/// This is the only safe way to interace with a [`plugin::Slot`] since this ensure that one
+/// This is the only safe way to interact with a [`plugin::Slot`] since this ensures that one
 /// of the terminal methods is called. Dropping a [`Slot`] without calling [`Slot::publish`]
 /// or [`Slot::freeze`] automatically invokes [`plugin::Slot::abort`].
 #[derive(Debug)]
@@ -706,12 +742,26 @@ where
 
 /// These tests are basic functionality tests for the store.
 ///
-/// Longer running conurrency tests are in the integration test suite.
+/// Longer running concurrency tests are in the integration test suite.
 #[cfg(test)]
 mod tests {
     use super::{checked::Checked, *};
 
     use std::assert_matches;
+
+    /// A faulty config for [`Checked`] that doesn't respect the [`IdLimit`].
+    #[derive(Debug)]
+    struct FaultyConfig;
+
+    impl plugin::PluginConfig for FaultyConfig {
+        type Plugin = Checked;
+        type Error = diskann::error::Infallible;
+
+        fn build(self, id_limit: IdLimit) -> Result<Checked, diskann::error::Infallible> {
+            let faulty = id_limit.value().checked_sub(1).unwrap_or(1);
+            Ok(Checked::new(IdLimit::new(faulty)))
+        }
+    }
 
     // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
     // zeroed frozen points. The frozen points occupy the highest slot indices.
@@ -721,7 +771,6 @@ mod tests {
 
         let layout = Layout::new(Capacity::new(entries), MaxDegree::new(0), frozen);
         let store = Store::new(layout, config, Checked::config())?;
-
         assert_eq!(store.frozen().len(), frozen.into_usize());
 
         for (i, id) in store.frozen().enumerate() {
@@ -750,7 +799,7 @@ mod tests {
             Checked::config(),
         )
         .unwrap_err();
-        assert!(matches!(err.0, StoreErrorInner::TooManyEntries { .. }));
+        assert_matches!(err.0, StoreErrorInner::TooManyEntries { .. });
     }
 
     #[test]
@@ -765,7 +814,21 @@ mod tests {
             Checked::config(),
         )
         .unwrap_err();
-        assert!(matches!(err.0, StoreErrorInner::TooManyNeighbors { .. }));
+        assert_matches!(err.0, StoreErrorInner::TooManyNeighbors { .. });
+    }
+
+    #[test]
+    fn new_rejects_faulty_plugin() {
+        let err = Store::new(
+            Layout::new(
+                Capacity::new(4),
+                MaxDegree::new(10),
+                0,
+            ),
+            Config::default(),
+            FaultyConfig,
+        ).unwrap_err();
+        assert_matches!(err.0, StoreErrorInner::InvalidConstruction { .. });
     }
 
     //--------//
