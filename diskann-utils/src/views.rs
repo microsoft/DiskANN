@@ -211,7 +211,7 @@ where
     /// The length of the base must be equal to `nrows * ncols`.
     pub fn try_from(data: T, nrows: usize, ncols: usize) -> Result<Self, TryFromError<T>> {
         let len = data.as_slice().len();
-        if len != nrows * ncols {
+        if nrows.checked_mul(ncols) != Some(len) {
             Err(TryFromError { data, nrows, ncols })
         } else {
             Ok(Self { data, nrows, ncols })
@@ -1053,6 +1053,8 @@ mod tests {
             m.unwrap_err().to_string(),
             "tried to construct a matrix view with 5 rows and 4 columns over a slice of length 12"
         );
+
+        assert!(MatrixView::try_from(&[] as &[usize], usize::MAX / 2 + 1, 2).is_err());
     }
 
     #[test]

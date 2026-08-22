@@ -354,6 +354,8 @@ jobs:
               --package diskann-wide \
               --package diskann-vector \
               --package diskann-quantization \
+              --package diskann \
+              --features pipnn \
               -- --skip compile_tests \
                  --skip pivots::tests::run_test_happy_path
 
@@ -416,6 +418,8 @@ jobs:
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
+            --package diskann \
+            --features pipnn \
             -- --skip compile_tests
 
   test-workspace:
@@ -459,6 +463,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

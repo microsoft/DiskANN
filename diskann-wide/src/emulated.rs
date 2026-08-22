@@ -199,6 +199,15 @@ where
     }
 }
 
+impl<const N: usize, A> std::ops::Div for Emulated<f32, N, A> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn div(self, rhs: Self) -> Self {
+        Self::from_arch_fn(self.1, |i| self.0[i] / rhs.0[i])
+    }
+}
+
 /// MulAdd
 impl<T, const N: usize, A> SIMDMulAdd for Emulated<T, N, A>
 where
@@ -902,6 +911,10 @@ mod test_emulated {
     test_emulated!(f32, 4);
     test_emulated!(f32, 8);
     test_emulated!(f32, 16);
+    test_utils::ops::test_div!(Emulated<f32, 1>, 0x32f0d2991be50f13, SC);
+    test_utils::ops::test_div!(Emulated<f32, 4>, 0xf65f08475f5e30c9, SC);
+    test_utils::ops::test_div!(Emulated<f32, 8>, 0x31e044b2369bf812, SC);
+    test_utils::ops::test_div!(Emulated<f32, 16>, 0x87f74cf00a528a2d, SC);
     // test_emulated!(f64, 8);
 
     // unsigned integer

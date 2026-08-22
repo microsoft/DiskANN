@@ -8,6 +8,9 @@ pub use search_output_buffer::{
     BufferState, IdDistance, IdDistanceAssociatedData, SearchOutputBuffer,
 };
 
+#[cfg(feature = "pipnn")]
+pub mod pipnn;
+
 pub mod adjacencylist;
 pub use adjacencylist::AdjacencyList;
 
