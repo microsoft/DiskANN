@@ -3,11 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroUsize;
+use crate::num::Bytes;
 
-use crate::num::{Bytes};
-
-pub(crate) unsafe trait Prefetch: std::fmt::Debug + Send + Sync + 'static + Copy {
+pub(crate) unsafe trait Prefetch:
+    std::fmt::Debug + Send + Sync + 'static + Copy
+{
     fn bytes(self) -> Bytes;
     unsafe fn prefetch(self, ptr: *const u8);
 }
@@ -52,29 +52,43 @@ unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
     }
 }
 
-// #[derive(Debug, Clone, Copy)]
-// pub(crate) struct JumpTable {
-//     bytes: Bytes,
-// }
-//
-// impl JumpTable {
-//     pub(crate) const fn new(bytes: Bytes) -> Self {
-//         Self {
-//             bytes,
-//         }
-//     }
-// }
-//
-// unsafe impl Prefetch for JumpTable {
-//     fn bytes(self) -> Bytes {
-//         self.bytes
-//     }
-//
-//     #[inline(always)]
-//     unsafe fn prefetch(self, ptr: *const u8) {
-//         unsafe { prefetch_up_to_8(ptr, self.bytes().value().div_ceil(Bytes::CACHELINE.value())) }
-//     }
-// }
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct JumpTable {
+    bytes: Bytes,
+    back: usize,
+    last: usize,
+}
+
+impl JumpTable {
+    pub(crate) fn new(bytes: Bytes) -> Self {
+        let stride = Bytes::CACHELINE.value();
+        let lines = bytes.value().div_ceil(stride);
+
+        let back = 7 * lines.min(8);
+        let last = if lines > 8 {
+            stride * (lines - 1)
+        } else {
+            0
+        };
+
+        Self {
+            bytes,
+            back,
+            last,
+        }
+    }
+}
+
+unsafe impl Prefetch for JumpTable {
+    fn bytes(self) -> Bytes {
+        self.bytes
+    }
+
+    #[inline(always)]
+    unsafe fn prefetch(self, ptr: *const u8) {
+        unsafe { prefetch_up_to_8(ptr, self.back, self.last) }
+    }
+}
 
 /// Prefetch `len` bytes beginning at `ptr`.
 ///
@@ -106,47 +120,42 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
     }
 }
 
-// #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-// #[inline(always)]
-// pub unsafe fn prefetch_up_to_8(ptr: *const u8, lines: usize) {
-//     use std::arch::x86_64::*;
-//
-//     const STRIDE: usize = Bytes::CACHELINE.value();
-//     const PREFETCH_INSTRUCTION_BYTES: usize = 7;
-//
-//     let lines = if lines > 8 {
-//         unsafe { _mm_prefetch(ptr.cast::<i8>().add(STRIDE * (lines - 1)), _MM_HINT_T0); }
-//         8
-//     } else {
-//         lines
-//     };
-//
-//     let back = PREFETCH_INSTRUCTION_BYTES * lines;
-//     let ptr = ptr.wrapping_sub(128);
-//
-//     unsafe {
-//         std::arch::asm! {
-//             // Obtain the address of the label - the base of our prefetch table.
-//             "lea {tmp}, [rip + 3f]",
-//             "sub {tmp}, {back}",
-//             "notrack jmp {tmp}",
-//             "2:",
-//             "prefetcht0 byte ptr [{base} + 576]",
-//             "prefetcht0 byte ptr [{base} + 512]",
-//             "prefetcht0 byte ptr [{base} + 448]",
-//             "prefetcht0 byte ptr [{base} + 384]",
-//             "prefetcht0 byte ptr [{base} + 320]",
-//             "prefetcht0 byte ptr [{base} + 256]",
-//             "prefetcht0 byte ptr [{base} + 192]",
-//             "prefetcht0 byte ptr [{base} + 128]",
-//             "3:",
-//             back = in(reg) back,
-//             base = in(reg_abcd) ptr,
-//             tmp = out(reg) _,
-//             options(readonly, nostack, preserves_flags),
-//         }
-//     }
-// }
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline(always)]
+pub unsafe fn prefetch_up_to_8(ptr: *const u8, back: usize, last: usize) {
+    use std::arch::x86_64::*;
+
+    // const STRIDE: usize = Bytes::CACHELINE.value();
+    // const PREFETCH_INSTRUCTION_BYTES: usize = 7;
+
+    if last != 0 {
+        unsafe { _mm_prefetch(ptr.cast::<i8>().add(last), _MM_HINT_T0); }
+    }
+
+    let ptr = ptr.wrapping_sub(128);
+    unsafe {
+        std::arch::asm! {
+            // Obtain the address of the label - the base of our prefetch table.
+            "lea {tmp}, [rip + 3f]",
+            "sub {tmp}, {back}",
+            "notrack jmp {tmp}",
+            "2:",
+            "prefetcht0 byte ptr [{base} + 576]",
+            "prefetcht0 byte ptr [{base} + 512]",
+            "prefetcht0 byte ptr [{base} + 448]",
+            "prefetcht0 byte ptr [{base} + 384]",
+            "prefetcht0 byte ptr [{base} + 320]",
+            "prefetcht0 byte ptr [{base} + 256]",
+            "prefetcht0 byte ptr [{base} + 192]",
+            "prefetcht0 byte ptr [{base} + 128]",
+            "3:",
+            back = in(reg) back,
+            base = in(reg_abcd) ptr,
+            tmp = out(reg) _,
+            options(readonly, nostack, preserves_flags),
+        }
+    }
+}
 
 /// Prefetch `len` bytes beginning at `ptr`.
 ///
@@ -175,4 +184,3 @@ pub(crate) unsafe fn prefetch(_ptr: *const u8, _len: usize) {}
 //         }
 //     }
 // }
-

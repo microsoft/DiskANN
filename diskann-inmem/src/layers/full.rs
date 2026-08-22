@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, num::NonZeroUsize, marker::PhantomData};
 
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_utils::views::Matrix;
@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::{
     arch::Prefetch,
     counters::LocalCounters,
-    layers,
+    epoch, layers,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
     store::{
         self, Store,
@@ -37,7 +37,10 @@ pub struct Config<T> {
     metric: Metric,
     start_points: Matrix<T>,
     store: store::Config,
+    lookahead: Option<NonZeroUsize>,
 }
+
+const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 impl<T> Config<T> {
     pub fn new(
@@ -55,11 +58,17 @@ impl<T> Config<T> {
             metric,
             start_points,
             store: store::Config::default(),
+            lookahead: Some(DEFAULT_LOOKAHEAD),
         }
     }
 
     pub fn store(mut self, config: store::Config) -> Self {
         self.store = config;
+        self
+    }
+
+    pub fn prefetch(mut self, lookahead: Option<NonZeroUsize>) -> Self {
+        self.lookahead = lookahead;
         self
     }
 
@@ -118,6 +127,7 @@ where
 {
     store: Store<Invasive>,
     metric: Metric,
+    lookahead: Option<NonZeroUsize>,
     _type: PhantomData<T>,
 }
 
@@ -149,6 +159,7 @@ where
             metric,
             start_points,
             store,
+            lookahead,
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
@@ -168,6 +179,7 @@ where
         Ok(Self {
             store,
             metric,
+            lookahead,
             _type: PhantomData,
         })
     }
@@ -193,7 +205,7 @@ where
         }
     }
 
-    fn reader(&self) -> ANNResult<invasive::Reader<'_>> {
+    fn reader(&self) -> Result<invasive::Reader<'_>, epoch::Unavailable> {
         Ok(Invasive::reader(&self.store)?)
     }
 }
@@ -429,6 +441,89 @@ impl<T> std::ops::Deref for Calf<'_, T> {
     }
 }
 
+/// A temporary precursor for [`QueryDistance`] to simplify macros.
+#[derive(Debug)]
+struct IntoQueryDistance<'a, T, U> {
+    query: Calf<'a, T>,
+    reader: store::invasive::Reader<'a>,
+    lookahead: Option<NonZeroUsize>,
+    _data: PhantomData<U>,
+}
+
+impl<'a, T, U> IntoQueryDistance<'a, T, U> {
+    /// Construct a new [`IntoQueryDistance`] - verifying that
+    fn new(full: &'a Full<U>, query: Calf<'a, T>) -> ANNResult<Self> {
+        full.check_dim(query.len())?;
+        let reader = full.reader()?;
+        let lookahead = full.lookahead;
+        Ok(Self {
+            query,
+            reader,
+            lookahead,
+            _data: PhantomData,
+        })
+    }
+
+    fn bytes_plus_tag(&self) -> Bytes {
+        self.reader.bytes_plus_tag()
+    }
+}
+
+trait Distance<T, U>: std::fmt::Debug + Send + Sync + 'static {
+    fn eval(&self, x: UnalignedSlice<'_, T>, u: UnalignedSlice<'_, U>) -> f32;
+}
+
+#[derive(Debug)]
+struct Pure<D>(PhantomData<D>);
+
+impl<D> Pure<D> {
+    const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T, U, D> Distance<T, U> for Pure<D>
+where
+    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>
+        + std::fmt::Debug + Send + Sync + 'static,
+{
+    #[inline(always)]
+    fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
+        D::run(ARCH, x, y)
+    }
+}
+
+#[derive(Debug)]
+struct PureNoInline<D>(PhantomData<D>);
+
+impl<D> PureNoInline<D> {
+    const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T, U, D> Distance<T, U> for PureNoInline<D>
+where
+    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>
+    + std::fmt::Debug + Send + Sync + 'static,
+{
+    #[inline(never)]
+    fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
+        D::run(ARCH, x, y)
+    }
+}
+
+impl<T, U> Distance<T, U> for diskann_vector::distance::Distance<T, U>
+where
+    T: std::fmt::Debug + 'static,
+    U: std::fmt::Debug + 'static,
+{
+    #[inline(always)]
+    fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
+        self.call_unaligned(x, y)
+    }
+}
+
 /// A fused query distance based on [`diskann_vector::PureDistanceFunction`] to enable
 /// inlining of the final distance function (`D`).
 ///
@@ -441,23 +536,28 @@ struct QueryDistance<'a, P, T, U, D> {
     query: Calf<'a, T>,
     // A reader into a layer's store.
     reader: store::invasive::Reader<'a>,
+    // THe prefetch look-ahead.
+    lookahead: Option<NonZeroUsize>,
     // The type of the data prefetcher.
     prefetch: P,
+    // The type of the distance used for the arguments
+    distance: D,
     // The type of the data in the original dataset.
     _data: PhantomData<U>,
-    // The type of the `PureDistanceFunction` used for the implementation.
-    _distance: PhantomData<D>,
 }
 
 impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
-    fn new(
-        query: Calf<'a, T>,
-        reader: store::invasive::Reader<'a>,
-        prefetch: P,
-    ) -> Self
+    fn new(into: IntoQueryDistance<'a, T, U>, prefetch: P, distance: D) -> Self
     where
         P: Prefetch,
     {
+        let IntoQueryDistance {
+            query,
+            reader,
+            lookahead,
+            _data,
+        } = into;
+
         assert_eq!(
             prefetch.bytes(),
             reader.bytes_plus_tag(),
@@ -467,9 +567,10 @@ impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
         Self {
             query,
             reader,
+            lookahead,
             prefetch,
-            _data: PhantomData,
-            _distance: PhantomData,
+            distance,
+            _data,
         }
     }
 
@@ -477,53 +578,25 @@ impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
         std::mem::size_of::<U>() * self.query.len()
     }
 
-    fn error(&self, len: usize) -> ANNResult<f32> {
-        let error = QueryDistanceError {
-            expected: self.bytes(),
-            xlen: len,
-        };
-
-        Err(ANNError::new(error))
-    }
-
-    #[inline(always)]
-    fn run(&self, x: &[u8]) -> ANNResult<f32>
-    where
-        D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>,
-    {
-        if x.len() != self.bytes() {
-            self.error(x.len())
-        } else {
-            Ok(unsafe { self.run_unchecked(x) })
-        }
-    }
-
     #[inline(always)]
     unsafe fn run_unchecked(&self, x: &[u8]) -> f32
     where
-        D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>,
+        D: Distance<T, U>,
     {
         debug_assert_eq!(x.len(), self.bytes());
 
         // SAFETY: We've validated that `x` has the correct length.
         let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.query.len()) };
-        D::run(ARCH, (*self.query).into(), x)
+        self.distance.eval((*self.query).into(), x)
     }
 }
 
-// TEMPORARY DEFINITIONS
-const LOOKAHEAD: usize = 8;
-
-unsafe impl<P, T, U, D> layers::ExpandBeam
-    for QueryDistance<'_, P, T, U, D>
+unsafe impl<P, T, U, D> layers::ExpandBeam for QueryDistance<'_, P, T, U, D>
 where
     P: Prefetch,
     T: Send + Sync + 'static + Debug,
     U: Send + Sync + 'static + Debug,
-    D: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, U>>
-        + Send
-        + Sync
-        + Debug,
+    D: Distance<T, U>,
 {
     fn evaluate(&self, i: u32) -> ANNResult<Option<f32>> {
         if !self.reader.is_in_bounds(i.into_usize()) {
@@ -542,13 +615,8 @@ where
 
     unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
         let len = list.len();
-        let lookahead = LOOKAHEAD.min(len);
-
-        // let bytes = if PREFETCH == 0 {
-        //     self.reader.bytes().value()
-        // } else {
-        //     PREFETCH * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
-        // };
+        // let lookahead = self.lookahead.map(|l| l.get()).unwrap_or(0).min(len);
+        let lookahead = 8.min(len);
 
         for j in 0..lookahead {
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
@@ -623,25 +691,25 @@ const fn compute_bytes<T>(dim: usize) -> usize {
 }
 
 macro_rules! mint {
-    ($query:ident, $reader:ident, $T:ty => { $N:literal, $f:ident }) => {{
-        mint!($query, $reader, { $T, $T } => { $N, $f })
+    ($into:ident, $T:ty => { $N:literal, $f:ident }) => {{
+        mint!($into, { $T, $T } => { $N, $f })
     }};
-    ($query:ident, $reader:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
-        Box::new(QueryDistance::<_, $T, $U, Specialize<$N, $f>>::new(
-            $query,
-            $reader,
+    ($into:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
+        Box::new(QueryDistance::<_, $T, $U, _>::new(
+            $into,
             $crate::arch::Unrolled::<{ compute_bytes::<$U>($N) }>::new(),
+            Pure::<Specialize<$N, $f>>::new(),
         ))
     }};
-    ($query:ident, $reader:ident, $T:ty => $f:ident) => {{
-        mint!($query, $reader, { $T, $T } => $f)
+    ($into:ident, $T:ty => $f:ident) => {{
+        mint!($into, { $T, $T } => $f)
     }};
-    ($query:ident, $reader:ident, { $T:ty, $U:ty } => $f:ident) => {{
-        let bytes = $reader.bytes_plus_tag();
-        Box::new(QueryDistance::<_, $T, $U, $f>::new(
-            $query,
-            $reader,
+    ($into:ident, { $T:ty, $U:ty } => $f:ident) => {{
+        let bytes = $into.bytes_plus_tag();
+        Box::new(QueryDistance::<_, $T, $U, _>::new(
+            $into,
             $crate::arch::Loop::new(bytes),
+            Pure::<$f>::new(),
         ))
     }};
 }
@@ -651,23 +719,18 @@ impl FullPrecisionImpl for f32 {
         full: &'a Full<f32>,
         query: &'a [f32],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        full.check_dim(query.len())?;
-        let reader = full.reader()?;
-        let query = Calf::Borrowed(query);
-
+        let into = IntoQueryDistance::new(full, Calf::Borrowed(query))?;
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
-                if full.dim() == 100 {
-                    mint!(query, reader, f32 => { 100, SquaredL2 })
-                } else {
-                    mint!(query, reader, f32 => SquaredL2)
-                }
+                // if full.dim() == 100 {
+                //     mint!(into, f32 => { 100, SquaredL2 })
+                // } else {
+                    mint!(into, f32 => SquaredL2)
+                // }
             }
-            Metric::InnerProduct => {
-                mint!(query, reader, f32 => InnerProduct)
-            }
-            Metric::Cosine => mint!(query, reader, f32 => Cosine),
-            Metric::CosineNormalized => mint!(query, reader, f32 => CosineNormalized),
+            Metric::InnerProduct => mint!(into, f32 => InnerProduct),
+            Metric::Cosine => mint!(into, f32 => Cosine),
+            Metric::CosineNormalized => mint!(into, f32 => CosineNormalized),
         };
 
         Ok(output)
@@ -692,24 +755,23 @@ impl FullPrecisionImpl for f16 {
         full: &'a Full<f16>,
         query: &'a [f16],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        full.check_dim(query.len())?;
-        let reader = full.reader()?;
-
         let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
+        let into = IntoQueryDistance::new(full, query)?;
+
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
-                if full.dim() == 100 {
-                    mint!(query, reader, { f32, f16 } => { 100, SquaredL2 })
-                } else {
-                    mint!(query, reader, { f32, f16 } => SquaredL2)
-                }
+                // if full.dim() == 100 {
+                //     mint!(into, { f32, f16 } => { 100, SquaredL2 })
+                // } else {
+                    mint!(into, { f32, f16 } => SquaredL2)
+                // }
             }
-            Metric::InnerProduct => mint!(query, reader, { f32, f16 } => InnerProduct),
-            Metric::Cosine => mint!(query, reader, { f32, f16 } => Cosine),
-            Metric::CosineNormalized => mint!(query, reader, { f32, f16 } => CosineNormalized),
+            Metric::InnerProduct => mint!(into, { f32, f16 } => InnerProduct),
+            Metric::Cosine => mint!(into, { f32, f16 } => Cosine),
+            Metric::CosineNormalized => mint!(into, { f32, f16 } => CosineNormalized),
         };
 
         Ok(output)
@@ -734,22 +796,19 @@ impl FullPrecisionImpl for u8 {
         full: &'a Full<u8>,
         query: &'a [u8],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        full.check_dim(query.len())?;
-        let reader = full.reader()?;
-
-        let query = Calf::Borrowed(query);
+        let into = IntoQueryDistance::new(full, Calf::Borrowed(query))?;
 
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
-                if full.dim() == 128 {
-                    mint!(query, reader, u8 => { 128, SquaredL2 })
-                } else {
-                    mint!(query, reader, u8 => SquaredL2)
-                }
+                // if full.dim() == 128 {
+                //     mint!(into, u8 => { 128, SquaredL2 })
+                // } else {
+                    mint!(into, u8 => SquaredL2)
+                // }
             }
-            Metric::InnerProduct => mint!(query, reader, u8 => InnerProduct),
-            Metric::Cosine => mint!(query, reader, u8 => Cosine),
-            Metric::CosineNormalized => mint!(query, reader, u8 => Cosine),
+            Metric::InnerProduct => mint!(into, u8 => InnerProduct),
+            Metric::Cosine => mint!(into, u8 => Cosine),
+            Metric::CosineNormalized => mint!(into, u8 => Cosine),
         };
 
         Ok(output)
@@ -774,16 +833,13 @@ impl FullPrecisionImpl for i8 {
         full: &'a Full<i8>,
         query: &'a [i8],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        full.check_dim(query.len())?;
-        let reader = full.reader()?;
-
-        let query = Calf::Borrowed(query);
+        let into = IntoQueryDistance::new(full, Calf::Borrowed(query))?;
 
         let output: Box<dyn layers::ExpandBeam + 'a> = match full.metric {
-            Metric::L2 => mint!(query, reader, i8 => SquaredL2),
-            Metric::InnerProduct => mint!(query, reader, i8 => InnerProduct),
-            Metric::Cosine => mint!(query, reader, i8 => Cosine),
-            Metric::CosineNormalized => mint!(query, reader, i8 => Cosine),
+            Metric::L2 => mint!(into, i8 => SquaredL2),
+            Metric::InnerProduct => mint!(into, i8 => InnerProduct),
+            Metric::Cosine => mint!(into, i8 => Cosine),
+            Metric::CosineNormalized => mint!(into, i8 => Cosine),
         };
 
         Ok(output)

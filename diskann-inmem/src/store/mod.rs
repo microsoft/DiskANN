@@ -820,14 +820,11 @@ mod tests {
     #[test]
     fn new_rejects_faulty_plugin() {
         let err = Store::new(
-            Layout::new(
-                Capacity::new(4),
-                MaxDegree::new(10),
-                0,
-            ),
+            Layout::new(Capacity::new(4), MaxDegree::new(10), 0),
             Config::default(),
             FaultyConfig,
-        ).unwrap_err();
+        )
+        .unwrap_err();
         assert_matches!(err.0, StoreErrorInner::InvalidConstruction { .. });
     }
 
