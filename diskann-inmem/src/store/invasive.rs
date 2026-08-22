@@ -125,6 +125,16 @@ impl Invasive {
         IdLimit::new(self.buffer.len() as u32)
     }
 
+    /// Return the number of bytes for each entry.
+    pub(crate) fn bytes(&self) -> Bytes {
+        self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
+    }
+
+    /// Return the number of bytes plus the atomic tag.
+    pub(crate) fn bytes_plus_tag(&self) -> Bytes {
+        self.unpadded
+    }
+
     /// Return a [`Reader`] over [`Self`] inside `store`.
     pub(crate) fn reader(store: &Store<Self>) -> Result<Reader<'_>, epoch::Unavailable> {
         store.guard(|this, guard: epoch::Guard<'_>| Reader {
@@ -362,7 +372,12 @@ impl<'a> Reader<'a> {
 
     /// Return the number of bytes for each entry.
     pub(crate) fn bytes(&self) -> Bytes {
-        self.unpadded.unchecked_sub(AtomicTag::SIZE)
+        self.bytes_plus_tag().unchecked_sub(AtomicTag::SIZE)
+    }
+
+    /// Return the number of bytes plus the atomic tag.
+    pub(crate) fn bytes_plus_tag(&self) -> Bytes {
+        self.unpadded
     }
 }
 

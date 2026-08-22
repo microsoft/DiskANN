@@ -69,6 +69,12 @@ impl Bytes {
         Self::new(std::mem::size_of::<T>())
     }
 
+    /// Return the number of bytes occupied by the slice.
+    #[inline]
+    pub const fn of_slice<T>(x: &[T]) -> Self {
+        Self(std::mem::size_of_val::<[T]>(x))
+    }
+
     /// Return `true` if `self` is zero.
     pub const fn is_zero(self) -> bool {
         self.0 == 0
@@ -160,17 +166,18 @@ impl std::fmt::Display for Align {
 //-------------------------//
 
 macro_rules! typed_int {
-    ($(#[$doc:meta])* $name:ident, $T:ty $(,)?) => {
+    ($(#[$doc:meta])* $vis:vis $name:ident, $T:ty $(,)?) => {
         $(#[$doc])*
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-        pub struct $name($T);
+        #[repr(transparent)]
+        $vis struct $name($T);
 
         impl $name {
-            pub const fn new(value: $T) -> Self {
+            $vis const fn new(value: $T) -> Self {
                 Self(value)
             }
 
-            pub const fn value(self) -> $T {
+            $vis const fn value(self) -> $T {
                 self.0
             }
         }
@@ -189,13 +196,13 @@ typed_int!(
     /// The number of distinct slots a [`crate::Provider`] or [`crate::Layer`] has capacity
     /// for. This is logically distinct from [`MaximumId`], which may be greater due too
     /// immutable points within a storage container.
-    Capacity,
+    pub Capacity,
     usize,
 );
 
 typed_int!(
     /// The maximum degree of an adjacency list.
-    MaxDegree,
+    pub MaxDegree,
     usize
 );
 
@@ -207,7 +214,7 @@ typed_int!(
     ///
     /// [`Capacity`] is related, but the [`IdLimit`] for a collection may be larger due to
     /// immutable points.
-    IdLimit,
+    pub IdLimit,
     u32
 );
 
@@ -229,6 +236,12 @@ impl IdLimit {
         self.value() as usize
     }
 }
+
+// typed_int!(
+//     /// Temp
+//     pub(crate) CacheLines,
+//     NonZeroUsize,
+// )
 
 ///////////
 // Tests //

@@ -20,6 +20,7 @@ use half::f16;
 use thiserror::Error;
 
 use crate::{
+    arch::Prefetch,
     counters::LocalCounters,
     layers,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
@@ -115,9 +116,8 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    dim: usize,
-    metric: Metric,
     store: Store<Invasive>,
+    metric: Metric,
     _type: PhantomData<T>,
 }
 
@@ -166,21 +166,20 @@ where
         }
 
         Ok(Self {
-            dim: start_points.ncols(),
-            metric,
             store,
+            metric,
             _type: PhantomData,
         })
     }
 
     /// Return the logical dimension of the data handled by this [`layers::Layer`].
     pub fn dim(&self) -> usize {
-        self.dim
+        self.bytes().value() / std::mem::size_of::<T>()
     }
 
     /// Return the number of bytes of the data handles by this [`layers::Layer`].
     pub fn bytes(&self) -> Bytes {
-        Bytes::new(self.dim() * std::mem::size_of::<T>())
+        self.store.plugin().bytes()
     }
 
     fn check_dim(&self, dim: usize) -> Result<(), QueryDistanceError> {
@@ -271,6 +270,7 @@ where
     }
 }
 
+/// A [`layers::Guard`] for [`Full`].
 #[derive(Debug)]
 pub struct Guard<'a> {
     slot: store::Slot<'a, invasive::Slot<'a>>,
@@ -436,22 +436,38 @@ impl<T> std::ops::Deref for Calf<'_, T> {
 /// allow `f16` queries to be pre-converted to `f32`, saving on-the-fly conversion that
 /// would otherwise be needed.
 #[derive(Debug)]
-struct QueryDistance<'a, const PREFETCH_DIM: usize, T, U, D> {
+struct QueryDistance<'a, P, T, U, D> {
     // The original query.
     query: Calf<'a, T>,
     // A reader into a layer's store.
     reader: store::invasive::Reader<'a>,
+    // The type of the data prefetcher.
+    prefetch: P,
     // The type of the data in the original dataset.
     _data: PhantomData<U>,
     // The type of the `PureDistanceFunction` used for the implementation.
     _distance: PhantomData<D>,
 }
 
-impl<'a, const PREFETCH_DIM: usize, T, U, D> QueryDistance<'a, PREFETCH_DIM, T, U, D> {
-    fn new(query: Calf<'a, T>, reader: store::invasive::Reader<'a>) -> Self {
+impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
+    fn new(
+        query: Calf<'a, T>,
+        reader: store::invasive::Reader<'a>,
+        prefetch: P,
+    ) -> Self
+    where
+        P: Prefetch,
+    {
+        assert_eq!(
+            prefetch.bytes(),
+            reader.bytes_plus_tag(),
+            "invalid prefetcher"
+        );
+
         Self {
             query,
             reader,
+            prefetch,
             _data: PhantomData,
             _distance: PhantomData,
         }
@@ -470,7 +486,6 @@ impl<'a, const PREFETCH_DIM: usize, T, U, D> QueryDistance<'a, PREFETCH_DIM, T, 
         Err(ANNError::new(error))
     }
 
-    // TODO: Since we control the reader - we can avoid the length check.
     #[inline(always)]
     fn run(&self, x: &[u8]) -> ANNResult<f32>
     where
@@ -488,6 +503,8 @@ impl<'a, const PREFETCH_DIM: usize, T, U, D> QueryDistance<'a, PREFETCH_DIM, T, 
     where
         D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>,
     {
+        debug_assert_eq!(x.len(), self.bytes());
+
         // SAFETY: We've validated that `x` has the correct length.
         let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.query.len()) };
         D::run(ARCH, (*self.query).into(), x)
@@ -496,11 +513,11 @@ impl<'a, const PREFETCH_DIM: usize, T, U, D> QueryDistance<'a, PREFETCH_DIM, T, 
 
 // TEMPORARY DEFINITIONS
 const LOOKAHEAD: usize = 8;
-const BYTES: usize = 0;
 
-unsafe impl<const PREFETCH: usize, T, U, D> layers::ExpandBeam
-    for QueryDistance<'_, PREFETCH, T, U, D>
+unsafe impl<P, T, U, D> layers::ExpandBeam
+    for QueryDistance<'_, P, T, U, D>
 where
+    P: Prefetch,
     T: Send + Sync + 'static + Debug,
     U: Send + Sync + 'static + Debug,
     D: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, U>>
@@ -513,7 +530,7 @@ where
             Err(ANNError::new(OutOfBounds(i)))
         } else {
             match unsafe { self.reader.read_in_bounds(i.into_usize()) } {
-                Some(data) => Ok(Some(self.run(data)?)),
+                Some(data) => Ok(Some(unsafe { self.run_unchecked(data) })),
                 None => Ok(None),
             }
         }
@@ -527,11 +544,11 @@ where
         let len = list.len();
         let lookahead = LOOKAHEAD.min(len);
 
-        let bytes = if PREFETCH == 0 {
-            self.reader.bytes().value()
-        } else {
-            PREFETCH * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
-        };
+        // let bytes = if PREFETCH == 0 {
+        //     self.reader.bytes().value()
+        // } else {
+        //     PREFETCH * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+        // };
 
         for j in 0..lookahead {
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
@@ -539,12 +556,11 @@ where
             //
             // We do not materialize the `RawSlice` as a reference.
             unsafe {
-                crate::arch::prefetch(
+                self.prefetch.prefetch(
                     self.reader
                         .read_raw_unchecked(list.get_unchecked(j).into_usize())
                         .as_ptr()
                         .cast(),
-                    bytes,
                 )
             }
         }
@@ -559,12 +575,11 @@ where
                 //
                 // We do not materialize the `RawSlice` as a reference.
                 unsafe {
-                    crate::arch::prefetch(
+                    self.prefetch.prefetch(
                         self.reader
                             .read_raw_unchecked(list.get_unchecked(j).into_usize())
                             .as_ptr()
                             .cast(),
-                        bytes,
                     )
                 }
                 j += 1;
@@ -603,18 +618,31 @@ struct QueryDistanceError {
 
 diskann::convert_error!(QueryDistanceError);
 
+const fn compute_bytes<T>(dim: usize) -> usize {
+    dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
+}
+
 macro_rules! mint {
     ($query:ident, $reader:ident, $T:ty => { $N:literal, $f:ident }) => {{
         mint!($query, $reader, { $T, $T } => { $N, $f })
     }};
     ($query:ident, $reader:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
-        Box::new(QueryDistance::<$N, $T, $U, Specialize<$N, $f>>::new($query, $reader))
+        Box::new(QueryDistance::<_, $T, $U, Specialize<$N, $f>>::new(
+            $query,
+            $reader,
+            $crate::arch::Unrolled::<{ compute_bytes::<$U>($N) }>::new(),
+        ))
     }};
     ($query:ident, $reader:ident, $T:ty => $f:ident) => {{
         mint!($query, $reader, { $T, $T } => $f)
     }};
     ($query:ident, $reader:ident, { $T:ty, $U:ty } => $f:ident) => {{
-        Box::new(QueryDistance::<0, $T, $U, $f>::new($query, $reader))
+        let bytes = $reader.bytes_plus_tag();
+        Box::new(QueryDistance::<_, $T, $U, $f>::new(
+            $query,
+            $reader,
+            $crate::arch::Loop::new(bytes),
+        ))
     }};
 }
 
