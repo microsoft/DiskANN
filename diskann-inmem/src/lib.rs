@@ -9,13 +9,13 @@
 
 pub mod num;
 
-pub mod arch;
 mod buffer;
 mod counters;
 mod epoch;
 mod freelist;
 mod ids;
 mod neighbors;
+mod prefetch;
 mod tag;
 
 mod store;

@@ -8,8 +8,19 @@ use crate::num::Bytes;
 pub(crate) unsafe trait Prefetch:
     std::fmt::Debug + Send + Sync + 'static + Copy
 {
-    fn bytes(self) -> Bytes;
+    /// Check that slices of length `bytes` are compatible with this prefetcher.
+    fn check(self, bytes: Bytes);
     unsafe fn prefetch(self, ptr: *const u8);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NoPrefetch;
+
+unsafe impl Prefetch for NoPrefetch {
+    fn check(self, bytes: Bytes) {}
+
+    #[inline(always)]
+    unsafe fn prefetch(self, ptr: *const u8) {}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -22,13 +33,13 @@ impl Loop {
 }
 
 unsafe impl Prefetch for Loop {
-    fn bytes(self) -> Bytes {
-        self.0
+    fn check(self, bytes: Bytes) {
+        assert!(bytes == self.0);
     }
 
     #[inline(always)]
     unsafe fn prefetch(self, ptr: *const u8) {
-        unsafe { prefetch(ptr, self.bytes().value()) }
+        unsafe { prefetch(ptr, self.0.value()) }
     }
 }
 
@@ -42,53 +53,109 @@ impl<const BYTES: usize> Unrolled<BYTES> {
 }
 
 unsafe impl<const BYTES: usize> Prefetch for Unrolled<BYTES> {
-    fn bytes(self) -> Bytes {
-        Bytes::new(BYTES)
+    fn check(self, bytes: Bytes) {
+        assert_eq!(bytes, Bytes::new(BYTES));
     }
 
     #[inline(always)]
     unsafe fn prefetch(self, ptr: *const u8) {
-        unsafe { prefetch(ptr, self.bytes().value()) }
+        unsafe { prefetch(ptr, BYTES) }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct JumpTable {
-    bytes: Bytes,
-    back: usize,
-    last: usize,
-}
+pub(crate) struct Binned<const LINES: usize>;
 
-impl JumpTable {
-    pub(crate) fn new(bytes: Bytes) -> Self {
-        let stride = Bytes::CACHELINE.value();
-        let lines = bytes.value().div_ceil(stride);
-
-        let back = 7 * lines.min(8);
-        let last = if lines > 8 {
-            stride * (lines - 1)
-        } else {
-            0
-        };
-
-        Self {
-            bytes,
-            back,
-            last,
-        }
+impl<const LINES: usize> Binned<LINES> {
+    pub(crate) const fn new() -> Self {
+        Self
     }
 }
 
-unsafe impl Prefetch for JumpTable {
-    fn bytes(self) -> Bytes {
-        self.bytes
+unsafe impl<const LINES: usize> Prefetch for Binned<LINES> {
+    fn check(self, bytes: Bytes) {
+        let lower = Bytes::CACHELINE
+            .checked_mul(LINES.saturating_sub(1))
+            .unwrap();
+        let upper = Bytes::CACHELINE.checked_mul(LINES).unwrap();
+
+        assert!(bytes > lower);
+        assert!(bytes <= upper);
     }
 
     #[inline(always)]
     unsafe fn prefetch(self, ptr: *const u8) {
-        unsafe { prefetch_up_to_8(ptr, self.back, self.last) }
+        unsafe { prefetch(ptr, Bytes::CACHELINE.value() * LINES) }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BinnedPlus<const LINES: usize>(Bytes);
+
+impl<const LINES: usize> BinnedPlus<LINES> {
+    pub(crate) const fn new(bytes: Bytes) -> Self {
+        assert!(bytes.value() > Bytes::CACHELINE.value() * LINES);
+        Self(bytes)
+    }
+}
+
+unsafe impl<const LINES: usize> Prefetch for BinnedPlus<LINES> {
+    fn check(self, bytes: Bytes) {
+        assert_eq!(bytes, self.0)
+    }
+
+    #[inline(always)]
+    unsafe fn prefetch(self, ptr: *const u8) {
+        use std::arch::x86_64::*;
+
+        let ptr = ptr.cast::<i8>();
+
+        unsafe { _mm_prefetch(ptr.add(self.0.value()), _MM_HINT_T0) };
+
+        let stride = Bytes::CACHELINE.value();
+        for i in 0..LINES {
+            unsafe { _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0) };
+        }
+    }
+}
+
+// #[derive(Debug, Clone, Copy)]
+// pub(crate) struct JumpTable {
+//     bytes: Bytes,
+//     back: usize,
+//     last: usize,
+// }
+//
+// impl JumpTable {
+//     pub(crate) fn new(bytes: Bytes) -> Self {
+//         let stride = Bytes::CACHELINE.value();
+//         let lines = bytes.value().div_ceil(stride);
+//
+//         let back = 7 * lines.min(8);
+//         let last = if lines > 8 {
+//             stride * (lines - 1)
+//         } else {
+//             0
+//         };
+//
+//         Self {
+//             bytes,
+//             back,
+//             last,
+//         }
+//     }
+// }
+//
+// unsafe impl Prefetch for JumpTable {
+//     fn bytes(self) -> Bytes {
+//         self.bytes
+//     }
+//
+//     #[inline(always)]
+//     unsafe fn prefetch(self, ptr: *const u8) {
+//         unsafe { prefetch_up_to_8(ptr, self.back, self.last) }
+//     }
+// }
 
 /// Prefetch `len` bytes beginning at `ptr`.
 ///
@@ -112,7 +179,7 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
 
     // SAFETY: Inherited from caller.
     unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
-    for i in 0..(lines - 1).min(8) {
+    for i in 0..(lines - 1) {
         // SAFETY: Inherited from caller.
         unsafe {
             _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
@@ -129,7 +196,9 @@ pub unsafe fn prefetch_up_to_8(ptr: *const u8, back: usize, last: usize) {
     // const PREFETCH_INSTRUCTION_BYTES: usize = 7;
 
     if last != 0 {
-        unsafe { _mm_prefetch(ptr.cast::<i8>().add(last), _MM_HINT_T0); }
+        unsafe {
+            _mm_prefetch(ptr.cast::<i8>().add(last), _MM_HINT_T0);
+        }
     }
 
     let ptr = ptr.wrapping_sub(128);

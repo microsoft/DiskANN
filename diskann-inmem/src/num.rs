@@ -46,6 +46,11 @@ impl Bytes {
         }
     }
 
+    #[inline]
+    const fn unchecked_mul(self, other: usize) -> Bytes {
+        Bytes::new(self.value() * other)
+    }
+
     /// Subtract `other` from `self` without checking for underflow.
     #[inline]
     pub(crate) const fn unchecked_sub(self, other: Bytes) -> Bytes {

@@ -3,14 +3,14 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt::Debug, num::NonZeroUsize, marker::PhantomData};
+use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
-    distance::{Cosine, CosineNormalized, InnerProduct, Metric, Specialize, SquaredL2},
+    distance::{Cosine, CosineNormalized, InnerProduct, Metric, Specialize, SquaredL2, DistanceProvider},
 };
 use diskann_wide::{
     ARCH,
@@ -20,7 +20,7 @@ use half::f16;
 use thiserror::Error;
 
 use crate::{
-    arch::Prefetch,
+    prefetch::{self, Prefetch},
     counters::LocalCounters,
     epoch, layers,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
@@ -40,7 +40,7 @@ pub struct Config<T> {
     lookahead: Option<NonZeroUsize>,
 }
 
-const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(12).unwrap();
 
 impl<T> Config<T> {
     pub fn new(
@@ -194,9 +194,17 @@ where
         self.store.plugin().bytes()
     }
 
-    fn check_dim(&self, dim: usize) -> Result<(), QueryDistanceError> {
+    pub fn bytes_plus_tag(&self) -> Bytes {
+        self.store.plugin().bytes_plus_tag()
+    }
+
+    pub fn metric(&self) -> Metric {
+        self.metric
+    }
+
+    fn check_dim(&self, dim: usize) -> Result<(), ExpandBeamError> {
         if self.dim() != dim {
-            Err(QueryDistanceError {
+            Err(ExpandBeamError {
                 expected: self.dim(),
                 xlen: dim,
             })
@@ -355,11 +363,14 @@ struct Prune<'a, T, D> {
     // A reader into a layer's store.
     reader: store::invasive::Reader<'a>,
     // Type type of the `PureDistanceFunction` used for the implementation.
-    _distance: PhantomData<D>,
+    distance: D,
 }
 
 impl<'a, T, D> Prune<'a, T, D> {
-    fn new(reader: store::invasive::Reader<'a>) -> Self {
+    fn new(
+        reader: store::invasive::Reader<'a>,
+        distance: D,
+    ) -> Self {
         // This should be ensured at construction time
         debug_assert!(
             reader
@@ -372,18 +383,20 @@ impl<'a, T, D> Prune<'a, T, D> {
         Self {
             buffer: Vec::new(),
             reader,
-            _distance: PhantomData,
+            distance,
         }
     }
+
+    fn boxed(self) -> Box<Self> {
+        Box::new(self)
+    }
+
 }
 
 impl<T, D> layers::Prune for Prune<'_, T, D>
 where
-    T: Send + Sync + 'static + Debug,
-    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, T>>
-        + Send
-        + Sync
-        + Debug,
+    T: Debug + Send + Sync + 'static,
+    D: Distance<T, T>,
 {
     fn prepare(
         &mut self,
@@ -416,13 +429,13 @@ where
     }
 
     fn evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
-        D::run(ARCH, self.buffer[a.index()], self.buffer[b.index()])
+        self.distance.eval(self.buffer[a.index()], self.buffer[b.index()])
     }
 }
 
-///////////////////
-// QueryDistance //
-///////////////////
+////////////////
+// ExpandBeam //
+////////////////
 
 // A baby [`std::borrow::Cow`].
 #[derive(Debug)]
@@ -441,17 +454,17 @@ impl<T> std::ops::Deref for Calf<'_, T> {
     }
 }
 
-/// A temporary precursor for [`QueryDistance`] to simplify macros.
+/// A temporary precursor for [`ExpandBeam`] to simplify macros.
 #[derive(Debug)]
-struct IntoQueryDistance<'a, T, U> {
+struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, T>,
     reader: store::invasive::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
 
-impl<'a, T, U> IntoQueryDistance<'a, T, U> {
-    /// Construct a new [`IntoQueryDistance`] - verifying that
+impl<'a, T, U> IntoExpandBeam<'a, T, U> {
+    /// Construct a new [`IntoExpandBeam`] - verifying that
     fn new(full: &'a Full<U>, query: Calf<'a, T>) -> ANNResult<Self> {
         full.check_dim(query.len())?;
         let reader = full.reader()?;
@@ -485,29 +498,12 @@ impl<D> Pure<D> {
 impl<T, U, D> Distance<T, U> for Pure<D>
 where
     D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>
-        + std::fmt::Debug + Send + Sync + 'static,
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
 {
     #[inline(always)]
-    fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
-        D::run(ARCH, x, y)
-    }
-}
-
-#[derive(Debug)]
-struct PureNoInline<D>(PhantomData<D>);
-
-impl<D> PureNoInline<D> {
-    const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<T, U, D> Distance<T, U> for PureNoInline<D>
-where
-    D: for<'any> FTarget2<Current, f32, UnalignedSlice<'any, T>, UnalignedSlice<'any, U>>
-    + std::fmt::Debug + Send + Sync + 'static,
-{
-    #[inline(never)]
     fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
         D::run(ARCH, x, y)
     }
@@ -531,7 +527,7 @@ where
 /// allow `f16` queries to be pre-converted to `f32`, saving on-the-fly conversion that
 /// would otherwise be needed.
 #[derive(Debug)]
-struct QueryDistance<'a, P, T, U, D> {
+struct ExpandBeam<'a, P, T, U, D> {
     // The original query.
     query: Calf<'a, T>,
     // A reader into a layer's store.
@@ -546,24 +542,19 @@ struct QueryDistance<'a, P, T, U, D> {
     _data: PhantomData<U>,
 }
 
-impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
-    fn new(into: IntoQueryDistance<'a, T, U>, prefetch: P, distance: D) -> Self
+impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
+    fn new(into: IntoExpandBeam<'a, T, U>, prefetch: P, distance: D) -> Self
     where
         P: Prefetch,
     {
-        let IntoQueryDistance {
+        let IntoExpandBeam {
             query,
             reader,
             lookahead,
             _data,
         } = into;
 
-        assert_eq!(
-            prefetch.bytes(),
-            reader.bytes_plus_tag(),
-            "invalid prefetcher"
-        );
-
+        prefetch.check(reader.bytes_plus_tag());
         Self {
             query,
             reader,
@@ -576,6 +567,10 @@ impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
 
     fn bytes(&self) -> usize {
         std::mem::size_of::<U>() * self.query.len()
+    }
+
+    fn boxed(self) -> Box<Self> {
+        Box::new(self)
     }
 
     #[inline(always)]
@@ -591,7 +586,7 @@ impl<'a, P, T, U, D> QueryDistance<'a, P, T, U, D> {
     }
 }
 
-unsafe impl<P, T, U, D> layers::ExpandBeam for QueryDistance<'_, P, T, U, D>
+unsafe impl<P, T, U, D> layers::ExpandBeam for ExpandBeam<'_, P, T, U, D>
 where
     P: Prefetch,
     T: Send + Sync + 'static + Debug,
@@ -615,8 +610,8 @@ where
 
     unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
         let len = list.len();
-        // let lookahead = self.lookahead.map(|l| l.get()).unwrap_or(0).min(len);
-        let lookahead = 8.min(len);
+        let lookahead = self.lookahead.map(|l| l.get()).unwrap_or(0).min(len);
+        // let lookahead = 8.min(len);
 
         for j in 0..lookahead {
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
@@ -679,38 +674,41 @@ diskann::convert_error!(OutOfBounds);
     self.expected,
     self.xlen,
 )]
-struct QueryDistanceError {
+struct ExpandBeamError {
     expected: usize,
     xlen: usize,
 }
 
-diskann::convert_error!(QueryDistanceError);
+diskann::convert_error!(ExpandBeamError);
 
 const fn compute_bytes<T>(dim: usize) -> usize {
     dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
 }
 
-macro_rules! mint {
-    ($into:ident, $T:ty => { $N:literal, $f:ident }) => {{
-        mint!($into, { $T, $T } => { $N, $f })
-    }};
-    ($into:ident, { $T:ty, $U:ty } => { $N:literal, $f:ident }) => {{
-        Box::new(QueryDistance::<_, $T, $U, _>::new(
+macro_rules! expand_beam {
+    ($into:ident, { $T:ty, $N:literal, $f:ident }) => {{
+        Box::new(ExpandBeam::<_, _, $T, _>::new(
             $into,
-            $crate::arch::Unrolled::<{ compute_bytes::<$U>($N) }>::new(),
+            prefetch::Unrolled::<{ compute_bytes::<$T>($N) }>::new(),
             Pure::<Specialize<$N, $f>>::new(),
         ))
     }};
-    ($into:ident, $T:ty => $f:ident) => {{
-        mint!($into, { $T, $T } => $f)
-    }};
-    ($into:ident, { $T:ty, $U:ty } => $f:ident) => {{
+    ($into:ident, $f:ident) => {{
         let bytes = $into.bytes_plus_tag();
-        Box::new(QueryDistance::<_, $T, $U, _>::new(
+        Box::new(ExpandBeam::new(
             $into,
-            $crate::arch::Loop::new(bytes),
+            prefetch::Loop::new(bytes),
             Pure::<$f>::new(),
         ))
+    }};
+}
+
+macro_rules! prune {
+    ($self:ty, $reader:ident, $f:ident) => {{
+        Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed()
+    }};
+    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
+        Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed()
     }};
 }
 
@@ -719,18 +717,19 @@ impl FullPrecisionImpl for f32 {
         full: &'a Full<f32>,
         query: &'a [f32],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        let into = IntoQueryDistance::new(full, Calf::Borrowed(query))?;
+        let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
+
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
-                // if full.dim() == 100 {
-                //     mint!(into, f32 => { 100, SquaredL2 })
-                // } else {
-                    mint!(into, f32 => SquaredL2)
-                // }
+                if full.dim() == 100 {
+                    expand_beam!(into, { f32, 100, SquaredL2 })
+                } else {
+                    expand_beam!(into, SquaredL2)
+                }
             }
-            Metric::InnerProduct => mint!(into, f32 => InnerProduct),
-            Metric::Cosine => mint!(into, f32 => Cosine),
-            Metric::CosineNormalized => mint!(into, f32 => CosineNormalized),
+            Metric::InnerProduct => expand_beam!(into, InnerProduct),
+            Metric::Cosine => expand_beam!(into, Cosine),
+            Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
         };
 
         Ok(output)
@@ -740,10 +739,10 @@ impl FullPrecisionImpl for f32 {
         let reader = full.reader()?;
 
         let output: Box<dyn layers::Prune> = match full.metric {
-            Metric::L2 => Box::new(Prune::<f32, SquaredL2>::new(reader)),
-            Metric::InnerProduct => Box::new(Prune::<f32, InnerProduct>::new(reader)),
-            Metric::Cosine => Box::new(Prune::<f32, Cosine>::new(reader)),
-            Metric::CosineNormalized => Box::new(Prune::<f32, CosineNormalized>::new(reader)),
+            Metric::L2 => prune!(Self, reader, SquaredL2),
+            Metric::InnerProduct => prune!(Self, reader, InnerProduct),
+            Metric::Cosine => prune!(Self, reader, Cosine),
+            Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
 
         Ok(output)
@@ -759,19 +758,19 @@ impl FullPrecisionImpl for f16 {
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
-        let into = IntoQueryDistance::new(full, query)?;
+        let into = IntoExpandBeam::new(full, query)?;
 
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
-                // if full.dim() == 100 {
-                //     mint!(into, { f32, f16 } => { 100, SquaredL2 })
-                // } else {
-                    mint!(into, { f32, f16 } => SquaredL2)
-                // }
+                if full.dim() == 100 {
+                    expand_beam!(into, { f16, 100, SquaredL2 })
+                } else {
+                    expand_beam!(into, SquaredL2)
+                }
             }
-            Metric::InnerProduct => mint!(into, { f32, f16 } => InnerProduct),
-            Metric::Cosine => mint!(into, { f32, f16 } => Cosine),
-            Metric::CosineNormalized => mint!(into, { f32, f16 } => CosineNormalized),
+            Metric::InnerProduct => expand_beam!(into, InnerProduct),
+            Metric::Cosine => expand_beam!(into, Cosine),
+            Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
         };
 
         Ok(output)
@@ -781,10 +780,10 @@ impl FullPrecisionImpl for f16 {
         let reader = full.reader()?;
 
         let output: Box<dyn layers::Prune> = match full.metric {
-            Metric::L2 => Box::new(Prune::<f16, SquaredL2>::new(reader)),
-            Metric::InnerProduct => Box::new(Prune::<f16, InnerProduct>::new(reader)),
-            Metric::Cosine => Box::new(Prune::<f16, Cosine>::new(reader)),
-            Metric::CosineNormalized => Box::new(Prune::<f16, CosineNormalized>::new(reader)),
+            Metric::L2 => prune!(Self, reader, SquaredL2),
+            Metric::InnerProduct => prune!(Self, reader, InnerProduct),
+            Metric::Cosine => prune!(Self, reader, Cosine),
+            Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
 
         Ok(output)
@@ -796,19 +795,18 @@ impl FullPrecisionImpl for u8 {
         full: &'a Full<u8>,
         query: &'a [u8],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        let into = IntoQueryDistance::new(full, Calf::Borrowed(query))?;
+        let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
         let output: Box<dyn layers::ExpandBeam> = match full.metric {
             Metric::L2 => {
-                // if full.dim() == 128 {
-                //     mint!(into, u8 => { 128, SquaredL2 })
-                // } else {
-                    mint!(into, u8 => SquaredL2)
-                // }
+                if full.dim() == 128 {
+                    expand_beam!(into, { u8, 128, SquaredL2 })
+                } else {
+                    expand_beam!(into, SquaredL2)
+                }
             }
-            Metric::InnerProduct => mint!(into, u8 => InnerProduct),
-            Metric::Cosine => mint!(into, u8 => Cosine),
-            Metric::CosineNormalized => mint!(into, u8 => Cosine),
+            Metric::InnerProduct => expand_beam!(into, InnerProduct),
+            Metric::Cosine | Metric::CosineNormalized => expand_beam!(into, Cosine),
         };
 
         Ok(output)
@@ -816,12 +814,13 @@ impl FullPrecisionImpl for u8 {
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = full.reader()?;
+        let dim = full.dim();
 
         let output: Box<dyn layers::Prune> = match full.metric {
-            Metric::L2 => Box::new(Prune::<u8, SquaredL2>::new(reader)),
-            Metric::InnerProduct => Box::new(Prune::<u8, InnerProduct>::new(reader)),
-            Metric::Cosine => Box::new(Prune::<u8, Cosine>::new(reader)),
-            Metric::CosineNormalized => Box::new(Prune::<u8, CosineNormalized>::new(reader)),
+            Metric::L2 => prune!(Self, reader, SquaredL2),
+            Metric::InnerProduct => prune!(Self, reader, InnerProduct),
+            Metric::Cosine => prune!(Self, reader, Cosine),
+            Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
 
         Ok(output)
@@ -833,28 +832,32 @@ impl FullPrecisionImpl for i8 {
         full: &'a Full<i8>,
         query: &'a [i8],
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
-        let into = IntoQueryDistance::new(full, Calf::Borrowed(query))?;
+        let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let output: Box<dyn layers::ExpandBeam + 'a> = match full.metric {
-            Metric::L2 => mint!(into, i8 => SquaredL2),
-            Metric::InnerProduct => mint!(into, i8 => InnerProduct),
-            Metric::Cosine => mint!(into, i8 => Cosine),
-            Metric::CosineNormalized => mint!(into, i8 => Cosine),
-        };
+        let distance = <Self as DistanceProvider<Self>>::distance_comparer(
+            full.metric(),
+            Some(full.dim()),
+        );
+
+        let output: Box<dyn layers::ExpandBeam + 'a> = ExpandBeam::new(
+            into,
+            prefetch::Loop::new(full.bytes_plus_tag()),
+            distance,
+        ).boxed();
 
         Ok(output)
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = full.reader()?;
+        let dim = full.dim();
 
-        let output: Box<dyn layers::Prune> = match full.metric {
-            Metric::L2 => Box::new(Prune::<i8, SquaredL2>::new(reader)),
-            Metric::InnerProduct => Box::new(Prune::<i8, InnerProduct>::new(reader)),
-            Metric::Cosine => Box::new(Prune::<i8, Cosine>::new(reader)),
-            Metric::CosineNormalized => Box::new(Prune::<i8, CosineNormalized>::new(reader)),
-        };
+        let distance = <Self as DistanceProvider<Self>>::distance_comparer(
+            full.metric(),
+            Some(full.dim()),
+        );
 
+        let output: Box<dyn layers::Prune> = Prune::<Self, _>::new(reader, distance).boxed();
         Ok(output)
     }
 }
@@ -913,7 +916,7 @@ impl_full_precision!(f32, f16, u8, i8);
 //     use rand::{Rng, SeedableRng, rngs::StdRng};
 //
 //     use super::*;
-//     // Bring the inherent-call traits into method scope. The `Distance` / `QueryDistance`
+//     // Bring the inherent-call traits into method scope. The `Distance` / `ExpandBeam`
 //     // traits are not imported: their methods are reached through `&dyn _` trait objects,
 //     // which does not require the trait to be in scope.
 //     use crate::layers::{AsDistance as _, QueryVisitor, Search as _, Set as _};
@@ -951,16 +954,16 @@ impl_full_precision!(f32, f16, u8, i8);
 //         (0..dim).map(|_| T::sample(rng)).collect()
 //     }
 //
-//     /// A [`QueryVisitor`] that simply boxes the minted kernel so the test can probe it
+//     /// A [`QueryVisitor`] that simply boxes the query kernel so the test can probe it
 //     /// directly. Exercises both `visit` (dynamic) and `visit_sized` (specialized) paths.
 //     struct Collect;
 //
 //     impl<'a> QueryVisitor<'a> for Collect {
-//         type Output = Box<dyn layers::QueryDistance + 'a>;
+//         type Output = Box<dyn layers::ExpandBeam + 'a>;
 //
 //         fn visit<Q>(self, distance: Q) -> Self::Output
 //         where
-//             Q: layers::QueryDistance + 'a,
+//             Q: layers::ExpandBeam + 'a,
 //         {
 //             Box::new(distance)
 //         }
