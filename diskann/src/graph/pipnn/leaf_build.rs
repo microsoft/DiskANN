@@ -284,6 +284,7 @@ mod tests {
     use diskann_vector::distance::Metric;
     use diskann_wide::arch::{self, Target1};
     use half::f16;
+    use rstest::rstest;
     use std::collections::BTreeSet;
 
     use super::super::simd::PiPNNSIMDSchema;
@@ -292,11 +293,11 @@ mod tests {
         build_leaf_candidates,
     };
 
-    fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
+    fn matrix_view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
         MatrixView::try_from(data, rows, columns).unwrap()
     }
 
-    fn pool() -> rayon::ThreadPool {
+    fn leaf_build_pool() -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
@@ -351,7 +352,7 @@ mod tests {
         }
     }
 
-    fn build<T>(
+    fn build_candidate_graph<T>(
         data: MatrixView<'_, T>,
         leaves: &[Vec<u32>],
         k: usize,
@@ -360,7 +361,7 @@ mod tests {
     where
         T: crate::utils::VectorRepr + 'static,
     {
-        pool().install(|| {
+        leaf_build_pool().install(|| {
             arch::dispatch1_no_features(
                 DispatchLeafBuild(metric),
                 LeafBuildCall {
@@ -374,6 +375,20 @@ mod tests {
 
     fn adjacency_lists(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
         graph.into_iter().map(Vec::from).collect()
+    }
+
+    fn circular_overlapping_leaves(
+        point_count: usize,
+        leaf_count: usize,
+        leaf_size: usize,
+    ) -> Vec<Vec<u32>> {
+        (0..leaf_count)
+            .map(|offset| {
+                (0..leaf_size)
+                    .map(|point| ((point + offset) % point_count) as u32)
+                    .collect()
+            })
+            .collect()
     }
 
     fn brute_force_symmetric_l2(data: &[[f32; 2]], k: usize) -> Vec<Vec<u32>> {
@@ -424,8 +439,8 @@ mod tests {
 
         // When
         let actual_adjacency = adjacency_lists(
-            build(
-                view(&flat, points.len(), 2),
+            build_candidate_graph(
+                matrix_view(&flat, points.len(), 2),
                 &[(0..points.len() as u32).collect()],
                 2,
                 Metric::L2,
@@ -444,7 +459,13 @@ mod tests {
         let expected_adjacency = [vec![1], vec![0], vec![]];
 
         // When
-        let graph = build(view(&data, 3, 1), &[vec![0, 1, 2]], 2, Metric::InnerProduct).unwrap();
+        let graph = build_candidate_graph(
+            matrix_view(&data, 3, 1),
+            &[vec![0, 1, 2]],
+            2,
+            Metric::InnerProduct,
+        )
+        .unwrap();
         let actual_adjacency = adjacency_lists(graph);
 
         // Then
@@ -459,7 +480,8 @@ mod tests {
         let expected_adjacency = [vec![1, 2, 3], vec![0, 2], vec![0, 1, 3], vec![0, 2]];
 
         // When
-        let graph = build(view(&data, 4, 1), &leaves, 2, Metric::L2).unwrap();
+        let graph =
+            build_candidate_graph(matrix_view(&data, 4, 1), &leaves, 2, Metric::L2).unwrap();
         let actual_adjacency = adjacency_lists(graph);
 
         // Then
@@ -474,8 +496,8 @@ mod tests {
             data[source * dimensions + source - 1] = 1.0;
         }
 
-        let graph = build(
-            view(&data, 10, dimensions),
+        let graph = build_candidate_graph(
+            matrix_view(&data, 10, dimensions),
             &[(0..10).collect()],
             1,
             Metric::L2,
@@ -491,12 +513,20 @@ mod tests {
         }));
     }
 
-    fn source_graph<T>(data: &[T], points: usize, dimensions: usize) -> Vec<Vec<u32>>
+    fn build_l2_candidate_graph<T>(data: &[T], points: usize, dimensions: usize) -> Vec<Vec<u32>>
     where
         T: crate::utils::VectorRepr + 'static,
     {
         let leaves = vec![(0..points as u32).collect()];
-        adjacency_lists(build(view(data, points, dimensions), &leaves, 2, Metric::L2).unwrap())
+        adjacency_lists(
+            build_candidate_graph(
+                matrix_view(data, points, dimensions),
+                &leaves,
+                2,
+                Metric::L2,
+            )
+            .unwrap(),
+        )
     }
 
     fn assert_source_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
@@ -512,14 +542,14 @@ mod tests {
                 .map(|index| {
                     let source = index / dimensions;
                     let dimension = index % dimensions;
-                    ((source * 7 + dimension * 3 + source * dimension) % 23) as u8
+                    (source + dimension) as u8
                 })
                 .collect();
             let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
             let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
             assert_eq!(
-                source_graph(&converted, points, dimensions),
-                source_graph(&f32_data, points, dimensions),
+                build_l2_candidate_graph(&converted, points, dimensions),
+                build_l2_candidate_graph(&f32_data, points, dimensions),
                 "{label} dimensions={dimensions}"
             );
         }
@@ -542,60 +572,87 @@ mod tests {
         assert_source_conversion_matches_f32("i8", |value| value as i8 - 11);
     }
 
-    #[test]
-    fn all_metrics_produce_symmetric_unique_non_self_candidates() {
-        let data = [1.0_f32, 0.0, 0.8, 0.2, 0.0, 1.0, -1.0, 0.0];
-        let leaves = vec![vec![0, 1, 2, 3], vec![0, 1, 2, 3]];
-
-        for metric in [
+    #[rstest]
+    fn candidate_graph_is_symmetric_unique_and_non_self(
+        #[values(
             Metric::L2,
             Metric::Cosine,
             Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            let graph = build(view(&data, 4, 2), &leaves, 2, metric).unwrap();
-            for (source, neighbors) in graph.iter().enumerate() {
-                assert!(neighbors.iter().all(|&target| target as usize != source));
-                assert!(
-                    neighbors
-                        .iter()
-                        .all(|&target| graph[target as usize].contains(source as u32))
-                );
-                assert!(neighbors.windows(2).all(|pair| pair[0] < pair[1]));
-            }
+            Metric::InnerProduct
+        )]
+        metric: Metric,
+    ) {
+        // Given
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        let unit_vectors = [1.0_f32, 0.0, diagonal, diagonal, 0.0, 1.0, -1.0, 0.0];
+        let leaves = vec![vec![0, 1, 2, 3], vec![0, 1, 2, 3]];
+
+        // When
+        let graph =
+            build_candidate_graph(matrix_view(&unit_vectors, 4, 2), &leaves, 2, metric).unwrap();
+
+        // Then
+        for (source, neighbors) in graph.iter().enumerate() {
+            assert!(neighbors.iter().all(|&target| target as usize != source));
+            assert!(
+                neighbors
+                    .iter()
+                    .all(|&target| graph[target as usize].contains(source as u32))
+            );
+            assert!(neighbors.windows(2).all(|pair| pair[0] < pair[1]));
         }
     }
 
     #[test]
     fn parallel_leaf_schedule_does_not_change_candidate_order() {
         let data: Vec<f32> = (0..64).map(|value| value as f32).collect();
-        let leaves: Vec<Vec<u32>> = (0..32)
-            .map(|offset| (0..16).map(|point| (point + offset) % 64).collect())
-            .collect();
-        let expected_candidate_order = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+        let leaves = circular_overlapping_leaves(64, 32, 16);
+        let expected_candidate_order =
+            build_candidate_graph(matrix_view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
         for _ in 0..8 {
-            let actual_candidate_order = build(view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
+            let actual_candidate_order =
+                build_candidate_graph(matrix_view(&data, 64, 1), &leaves, 2, Metric::L2).unwrap();
             assert_eq!(actual_candidate_order, expected_candidate_order);
         }
     }
 
     #[test]
-    fn singleton_and_zero_k_leaves_add_no_candidates() {
-        let data = [0.0_f32, 1.0, 2.0];
-        let singleton = build(
-            view(&data, 3, 1),
-            &[vec![0], vec![1], vec![2]],
-            1,
-            Metric::L2,
-        )
-        .unwrap();
-        let zero_k = build(view(&data, 3, 1), &[vec![0, 1, 2]], 0, Metric::L2).unwrap();
-        assert!(
-            singleton
-                .iter()
-                .chain(&zero_k)
-                .all(|candidates| candidates.is_empty())
+    fn singleton_leaves_add_no_candidates() {
+        // Given
+        let point_values = [0.0_f32, 1.0, 2.0];
+        let singleton_leaves = [vec![0], vec![1], vec![2]];
+        let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
+
+        // When
+        let actual_adjacency = adjacency_lists(
+            build_candidate_graph(
+                matrix_view(&point_values, 3, 1),
+                &singleton_leaves,
+                1,
+                Metric::L2,
+            )
+            .unwrap(),
         );
+
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
+    }
+
+    #[test]
+    fn zero_k_adds_no_candidates() {
+        // Given
+        let point_values = [0.0_f32, 1.0, 2.0];
+        let leaves = [vec![0, 1, 2]];
+        let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
+
+        // When
+        let actual_adjacency = adjacency_lists(
+            build_candidate_graph(matrix_view(&point_values, 3, 1), &leaves, 0, Metric::L2)
+                .unwrap(),
+        );
+
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
     }
 
     #[test]
