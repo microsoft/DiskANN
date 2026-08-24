@@ -566,26 +566,40 @@ mod tests {
         output
     }
 
-    /// Build a unit-diagonal lower Gram matrix for the lane-boundary sweep.
-    /// Similarity decreases as the point-index separation increases.
-    fn index_distance_lower_gram(points: usize) -> Vec<f32> {
-        let mut dots = vec![f32::NAN; points * points];
+    /// Build a Gram matrix from points on the line `x = 1`.
+    ///
+    /// Normalized cosine receives unit vectors because that metric assumes
+    /// normalized source data. Other metrics receive the original vectors.
+    fn lane_boundary_gram_from_point_vectors(metric: Metric, points: usize) -> Vec<f32> {
+        let denominator = (points + 1) as f32;
+        let point_vectors: Vec<_> = (0..points)
+            .map(|point| {
+                let vector = [1.0, (point + 1) as f32 / denominator];
+                if metric == Metric::CosineNormalized {
+                    let norm = vector[0].hypot(vector[1]);
+                    [vector[0] / norm, vector[1] / norm]
+                } else {
+                    vector
+                }
+            })
+            .collect();
+        let mut gram = vec![0.0; points * points];
         for source in 0..points {
-            dots[source * points + source] = 1.0;
-            for target in 0..source {
-                let separation = (source - target) as f32;
-                dots[source * points + target] = 1.0 - separation / points as f32;
+            for target in 0..points {
+                gram[source * points + target] = point_vectors[source][0]
+                    * point_vectors[target][0]
+                    + point_vectors[source][1] * point_vectors[target][1];
             }
         }
-        dots
+        gram
     }
 
-    fn square_matrix_with_constant_diagonal(points: usize, diagonal: f32) -> Vec<f32> {
-        let mut values = vec![0.0; points * points];
+    fn gram_with_uniform_self_dots(points: usize, self_dot: f32) -> Vec<f32> {
+        let mut gram = vec![0.0; points * points];
         for point in 0..points {
-            values[point * points + point] = diagonal;
+            gram[point * points + point] = self_dot;
         }
-        values
+        gram
     }
 
     mod insert_neighbor_tests {
@@ -821,7 +835,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn l2_pipeline_orders_neighbors_by_squared_distance() {
+        fn orders_neighbors_by_squared_distance_with_l2() {
             // Given
             let values = [0.0_f32, 1.0, 3.0, 10.0];
             let points = MatrixView::try_from(&values[..], 4, 1).unwrap();
@@ -922,7 +936,7 @@ mod tests {
             #[case] requested_k: usize,
         ) {
             // Given
-            let dots = index_distance_lower_gram(point_count);
+            let dots = lane_boundary_gram_from_point_vectors(metric, point_count);
             let expected_neighbors = reference_neighbors(metric, &dots, point_count, requested_k);
 
             // When
@@ -932,99 +946,111 @@ mod tests {
             assert_eq!(actual_neighbors, expected_neighbors);
         }
 
-        const UNIT_SQUARED_NORM: f32 = 1.0;
-        const POINT_0_1_DOT: f32 = 0.0;
-        const POINT_0_2_DOT: f32 = -1.0;
-        const POINT_1_2_DOT: f32 = 0.5;
+        const POINT_ZERO: [f32; 2] = [1.0, 0.0];
+        const POINT_ONE: [f32; 2] = [0.0, 1.0];
+        const POINT_TWO: [f32; 2] = [0.6, 0.8];
 
-        #[rustfmt::skip]
-    const THREE_POINT_LOWER_GRAM: [f32; 9] = [
-        UNIT_SQUARED_NORM, f32::NAN,          f32::NAN,
-        POINT_0_1_DOT,      UNIT_SQUARED_NORM, f32::NAN,
-        POINT_0_2_DOT,      POINT_1_2_DOT,     UNIT_SQUARED_NORM,
-    ];
+        fn point_dot(left: [f32; 2], right: [f32; 2]) -> f32 {
+            left[0] * right[0] + left[1] * right[1]
+        }
 
-        fn rank_three_point_fixture(metric: Metric) -> Vec<LeafNeighbor> {
-            rank_neighbors(metric, &THREE_POINT_LOWER_GRAM, 3, 1).1
+        fn three_unit_point_gram() -> [f32; 9] {
+            let points = [POINT_ZERO, POINT_ONE, POINT_TWO];
+            std::array::from_fn(|index| {
+                let source = index / points.len();
+                let target = index % points.len();
+                point_dot(points[source], points[target])
+            })
+        }
+
+        fn rank_three_unit_points(metric: Metric) -> Vec<LeafNeighbor> {
+            rank_neighbors(metric, &three_unit_point_gram(), 3, 1).1
         }
 
         #[test]
-        fn l2_selects_the_nearest_target_from_the_lower_gram_triangle() {
+        fn selects_the_smallest_squared_distance_neighbor_for_each_point_with_l2() {
             // Given
+            let point_zero_two_distance = point_dot(POINT_ZERO, POINT_ZERO)
+                + point_dot(POINT_TWO, POINT_TWO)
+                - 2.0 * point_dot(POINT_ZERO, POINT_TWO);
+            let point_one_two_distance = point_dot(POINT_ONE, POINT_ONE)
+                + point_dot(POINT_TWO, POINT_TWO)
+                - 2.0 * point_dot(POINT_ONE, POINT_TWO);
             let expected_neighbors = [
-                LeafNeighbor::new(1, 2.0 * UNIT_SQUARED_NORM - 2.0 * POINT_0_1_DOT),
-                LeafNeighbor::new(2, 2.0 * UNIT_SQUARED_NORM - 2.0 * POINT_1_2_DOT),
-                LeafNeighbor::new(1, 2.0 * UNIT_SQUARED_NORM - 2.0 * POINT_1_2_DOT),
+                LeafNeighbor::new(2, point_zero_two_distance),
+                LeafNeighbor::new(2, point_one_two_distance),
+                LeafNeighbor::new(1, point_one_two_distance),
             ];
 
             // When
-            let actual_neighbors = rank_three_point_fixture(Metric::L2);
+            let actual_neighbors = rank_three_unit_points(Metric::L2);
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
         }
 
         #[test]
-        fn cosine_selects_the_nearest_target_from_the_lower_gram_triangle() {
+        fn selects_the_highest_similarity_neighbor_for_each_point_with_cosine() {
             // Given
             let expected_neighbors = [
-                LeafNeighbor::new(1, 1.0 - POINT_0_1_DOT),
-                LeafNeighbor::new(2, 1.0 - POINT_1_2_DOT),
-                LeafNeighbor::new(1, 1.0 - POINT_1_2_DOT),
+                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ZERO, POINT_TWO)),
+                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
+                LeafNeighbor::new(1, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
             ];
 
             // When
-            let actual_neighbors = rank_three_point_fixture(Metric::Cosine);
+            let actual_neighbors = rank_three_unit_points(Metric::Cosine);
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
         }
 
         #[test]
-        fn normalized_cosine_selects_the_largest_dot_product() {
+        fn selects_the_highest_dot_product_neighbor_for_each_point_with_normalized_cosine() {
             // Given
             let expected_neighbors = [
-                LeafNeighbor::new(1, 1.0 - POINT_0_1_DOT),
-                LeafNeighbor::new(2, 1.0 - POINT_1_2_DOT),
-                LeafNeighbor::new(1, 1.0 - POINT_1_2_DOT),
+                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ZERO, POINT_TWO)),
+                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
+                LeafNeighbor::new(1, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
             ];
 
             // When
-            let actual_neighbors = rank_three_point_fixture(Metric::CosineNormalized);
+            let actual_neighbors = rank_three_unit_points(Metric::CosineNormalized);
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
         }
 
         #[test]
-        fn inner_product_selects_the_largest_dot_product() {
+        fn selects_the_highest_dot_product_neighbor_for_each_point_with_inner_product() {
             // Given
             let expected_neighbors = [
-                LeafNeighbor::new(1, -POINT_0_1_DOT),
-                LeafNeighbor::new(2, -POINT_1_2_DOT),
-                LeafNeighbor::new(1, -POINT_1_2_DOT),
+                LeafNeighbor::new(2, -point_dot(POINT_ZERO, POINT_TWO)),
+                LeafNeighbor::new(2, -point_dot(POINT_ONE, POINT_TWO)),
+                LeafNeighbor::new(1, -point_dot(POINT_ONE, POINT_TWO)),
             ];
 
             // When
-            let actual_neighbors = rank_three_point_fixture(Metric::InnerProduct);
+            let actual_neighbors = rank_three_unit_points(Metric::InnerProduct);
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
         }
 
         #[test]
-        fn equal_l2_distances_keep_target_scan_order() {
+        fn equal_distances_keep_target_scan_order_with_l2() {
             // Given
             let unit_squared_norm = 1.0;
             let tied_dot_product = 0.0;
             let expected_tied_distance = 2.0 * unit_squared_norm - 2.0 * tied_dot_product;
+            // This is the Gram matrix of four orthogonal unit vectors.
             #[rustfmt::skip]
-        let dots = [
-            unit_squared_norm, f32::NAN,          f32::NAN,          f32::NAN,
-            tied_dot_product,  unit_squared_norm, f32::NAN,          f32::NAN,
-            tied_dot_product,  tied_dot_product,  unit_squared_norm, f32::NAN,
-            tied_dot_product,  tied_dot_product,  tied_dot_product,  unit_squared_norm,
-        ];
+            let gram = [
+                unit_squared_norm, tied_dot_product,  tied_dot_product,  tied_dot_product,
+                tied_dot_product,  unit_squared_norm, tied_dot_product,  tied_dot_product,
+                tied_dot_product,  tied_dot_product,  unit_squared_norm, tied_dot_product,
+                tied_dot_product,  tied_dot_product,  tied_dot_product,  unit_squared_norm,
+            ];
             let expected_neighbors_in_scan_order = [
                 LeafNeighbor::new(1, expected_tied_distance),
                 LeafNeighbor::new(2, expected_tied_distance),
@@ -1037,22 +1063,22 @@ mod tests {
             ];
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::L2, &dots, 4, 2).1;
+            let actual_neighbors = rank_neighbors(Metric::L2, &gram, 4, 2).1;
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors_in_scan_order);
         }
 
         #[test]
-        fn scalar_l2_distance_stays_finite_when_twice_the_dot_product_overflows() {
+        fn scalar_distance_stays_finite_when_twice_the_dot_product_overflows_with_l2() {
             // Given
             let dot_product = f32::from_bits(f32::MAX.to_bits() - 1);
             let unfused_twice_dot_product = 2.0 * dot_product;
             let expected_fused_distance = (-2.0_f32).mul_add(dot_product, f32::MAX) + f32::MAX;
-            let dots = [f32::MAX, 0.0, dot_product, f32::MAX];
+            let gram = [f32::MAX, dot_product, dot_product, f32::MAX];
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::L2, &dots, 2, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::L2, &gram, 2, 1).1;
 
             // Then
             assert!(unfused_twice_dot_product.is_infinite());
@@ -1064,18 +1090,19 @@ mod tests {
         }
 
         #[test]
-        fn simd_l2_distance_stays_finite_when_twice_the_dot_product_overflows() {
+        fn simd_distance_stays_finite_when_twice_the_dot_product_overflows_with_l2() {
             // Given
             let dot_product = f32::from_bits(f32::MAX.to_bits() - 1);
             let unfused_twice_dot_product = 2.0 * dot_product;
             let expected_fused_distance = (-2.0_f32).mul_add(dot_product, f32::MAX) + f32::MAX;
             let expected_simd_neighbor_target = 0;
             let points = 17;
-            let mut dots = square_matrix_with_constant_diagonal(points, f32::MAX);
-            dots[16 * points] = dot_product;
+            let mut gram = gram_with_uniform_self_dots(points, f32::MAX);
+            gram[16 * points] = dot_product;
+            gram[16] = dot_product;
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::L2, &dots, points, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::L2, &gram, points, 1).1;
 
             // Then
             assert!(unfused_twice_dot_product.is_infinite());
@@ -1087,33 +1114,36 @@ mod tests {
         }
 
         #[test]
-        fn cosine_zero_norm_produces_unit_distance() {
+        fn zero_norm_produces_unit_distance_with_cosine() {
             // Given
+            // This is the Gram matrix of one zero vector and two orthogonal unit vectors.
             #[rustfmt::skip]
-        let dots = [
-            0.0, 99.0, 99.0,
-            0.0,  1.0, 99.0,
-            0.0,  0.0,  1.0,
-        ];
+            let gram = [
+                0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0,
+            ];
             let expected_zero_norm_neighbors =
                 [LeafNeighbor::new(1, 1.0), LeafNeighbor::new(2, 1.0)];
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::Cosine, &dots, 3, 2).1;
+            let actual_neighbors = rank_neighbors(Metric::Cosine, &gram, 3, 2).1;
 
             // Then
             assert_eq!(&actual_neighbors[..2], &expected_zero_norm_neighbors);
         }
 
         #[test]
-        fn cosine_similarity_above_one_clamps_to_zero_distance() {
+        fn similarity_above_one_clamps_to_zero_distance_with_cosine() {
             // Given
-            let dots = [1.0, 0.0, 2.0, 1.0];
+            // A small excess models dot-product roundoff above cosine similarity one.
+            let rounded_dot_product = 1.000_001;
+            let gram = [1.0, rounded_dot_product, rounded_dot_product, 1.0];
             let maximum_cosine_similarity = 1.0;
             let expected_one_minus_maximum_similarity = 1.0 - maximum_cosine_similarity;
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::Cosine, &dots, 2, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::Cosine, &gram, 2, 1).1;
 
             // Then
             assert_eq!(
@@ -1123,14 +1153,16 @@ mod tests {
         }
 
         #[test]
-        fn cosine_similarity_below_negative_one_clamps_to_distance_two() {
+        fn similarity_below_negative_one_clamps_to_distance_two_with_cosine() {
             // Given
-            let dots = [1.0, 0.0, -2.0, 1.0];
+            // A small excess models dot-product roundoff below cosine similarity minus one.
+            let rounded_dot_product = -1.000_001;
+            let gram = [1.0, rounded_dot_product, rounded_dot_product, 1.0];
             let minimum_cosine_similarity = -1.0;
             let expected_one_minus_minimum_similarity = 1.0 - minimum_cosine_similarity;
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::Cosine, &dots, 2, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::Cosine, &gram, 2, 1).1;
 
             // Then
             assert_eq!(
@@ -1140,14 +1172,15 @@ mod tests {
         }
 
         #[test]
-        fn cosine_subnormal_norm_is_treated_as_zero() {
+        fn subnormal_norm_is_treated_as_zero_with_cosine() {
             // Given
-            let dots = [f32::MIN_POSITIVE / 2.0, 0.0, 1.0, 1.0];
+            let subnormal_self_dot = f32::MIN_POSITIVE / 2.0;
+            let gram = [subnormal_self_dot, 0.0, 0.0, 1.0];
             let zero_norm_similarity = 0.0;
             let expected_one_minus_zero_similarity = 1.0 - zero_norm_similarity;
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::Cosine, &dots, 2, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::Cosine, &gram, 2, 1).1;
 
             // Then
             assert_eq!(
@@ -1162,12 +1195,13 @@ mod tests {
             let points = 4;
             let expected_leaf_k = 3;
             let expected_last_neighbor = LeafNeighbor::new(0, f32::MAX);
-            let mut dots = vec![0.0; points * points];
-            dots[3 * points] = -f32::MAX;
+            let mut gram = gram_with_uniform_self_dots(points, f32::MAX);
+            gram[3 * points] = -f32::MAX;
+            gram[3] = -f32::MAX;
 
             // When
             let (actual_leaf_k, actual_neighbors) =
-                rank_neighbors(Metric::InnerProduct, &dots, points, expected_leaf_k);
+                rank_neighbors(Metric::InnerProduct, &gram, points, expected_leaf_k);
 
             // Then
             assert_eq!(actual_leaf_k, expected_leaf_k);
@@ -1180,11 +1214,11 @@ mod tests {
         #[test]
         fn scalar_nan_distance_leaves_the_neighbor_slot_unassigned() {
             // Given
-            let dots = [1.0, 0.0, f32::NAN, 1.0];
+            let gram = [1.0, f32::NAN, f32::NAN, 1.0];
             let expected_unassigned_neighbors = [LeafNeighbor::default(), LeafNeighbor::default()];
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::CosineNormalized, &dots, 2, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::CosineNormalized, &gram, 2, 1).1;
 
             // Then
             assert_eq!(actual_neighbors, expected_unassigned_neighbors);
@@ -1194,12 +1228,13 @@ mod tests {
         fn simd_nan_distance_cannot_replace_a_finite_neighbor() {
             // Given
             let points = 17;
-            let mut dots = square_matrix_with_constant_diagonal(points, 1.0);
-            dots[16 * points] = f32::NAN;
+            let mut gram = gram_with_uniform_self_dots(points, 1.0);
+            gram[16 * points] = f32::NAN;
+            gram[16] = f32::NAN;
             let expected_finite_neighbor = LeafNeighbor::new(1, 1.0);
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::CosineNormalized, &dots, points, 1).1;
+            let actual_neighbors = rank_neighbors(Metric::CosineNormalized, &gram, points, 1).1;
 
             // Then
             assert_eq!(actual_neighbors[16], expected_finite_neighbor);

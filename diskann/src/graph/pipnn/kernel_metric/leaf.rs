@@ -226,38 +226,45 @@ mod tests {
         use super::*;
 
         #[test]
-        fn l2_leaf_norms_equal_the_gram_diagonal() {
+        fn leaf_norms_equal_point_self_dot_products_with_l2() {
             // Given
-            let first_squared_norm = 4.0_f32;
-            let second_squared_norm = 9.0_f32;
-            let lower_gram_values = [first_squared_norm, 0.0, 0.0, second_squared_norm];
-            let lower_gram = MatrixView::try_from(&lower_gram_values[..], 2, 2).unwrap();
-            let expected_gram_diagonal = [first_squared_norm, second_squared_norm];
+            let first_point = [2.0_f32, 1.0];
+            let second_point = [1.0_f32, 3.0];
+            let first_self_dot = first_point[0] * first_point[0] + first_point[1] * first_point[1];
+            let cross_dot = first_point[0] * second_point[0] + first_point[1] * second_point[1];
+            let second_self_dot =
+                second_point[0] * second_point[0] + second_point[1] * second_point[1];
+            let gram_values = [first_self_dot, cross_dot, cross_dot, second_self_dot];
+            let gram = MatrixView::try_from(&gram_values[..], 2, 2).unwrap();
+            let expected_point_self_dots = [first_self_dot, second_self_dot];
             let mut actual_norms = Vec::new();
 
             // When
-            L2::prepare_leaf_norms(lower_gram, &mut actual_norms);
+            L2::prepare_leaf_norms(gram, &mut actual_norms);
 
             // Then
-            assert_eq!(actual_norms, expected_gram_diagonal);
+            assert_eq!(actual_norms, expected_point_self_dots);
         }
 
         #[test]
-        fn cosine_leaf_norms_equal_square_roots_of_the_gram_diagonal() {
+        fn leaf_norms_equal_point_l2_norms_with_cosine() {
             // Given
-            let first_squared_norm = 4.0_f32;
-            let second_squared_norm = 9.0_f32;
-            let lower_gram_values = [first_squared_norm, 0.0, 0.0, second_squared_norm];
-            let lower_gram = MatrixView::try_from(&lower_gram_values[..], 2, 2).unwrap();
-            let expected_square_roots_of_diagonal =
-                [first_squared_norm.sqrt(), second_squared_norm.sqrt()];
+            let first_point = [2.0_f32, 1.0];
+            let second_point = [1.0_f32, 3.0];
+            let first_self_dot = first_point[0] * first_point[0] + first_point[1] * first_point[1];
+            let cross_dot = first_point[0] * second_point[0] + first_point[1] * second_point[1];
+            let second_self_dot =
+                second_point[0] * second_point[0] + second_point[1] * second_point[1];
+            let gram_values = [first_self_dot, cross_dot, cross_dot, second_self_dot];
+            let gram = MatrixView::try_from(&gram_values[..], 2, 2).unwrap();
+            let expected_point_l2_norms = [first_self_dot.sqrt(), second_self_dot.sqrt()];
             let mut actual_norms = Vec::new();
 
             // When
-            Cosine::prepare_leaf_norms(lower_gram, &mut actual_norms);
+            Cosine::prepare_leaf_norms(gram, &mut actual_norms);
 
             // Then
-            assert_eq!(actual_norms, expected_square_roots_of_diagonal);
+            assert_eq!(actual_norms, expected_point_l2_norms);
         }
     }
 
@@ -265,7 +272,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn l2_distance_equals_squared_norm_sum_minus_twice_the_dot_product() {
+        fn distance_equals_squared_norm_sum_minus_twice_the_dot_product_with_l2() {
             // Given
             let source_squared_norm = 4.0;
             let target_squared_norm = 9.0;
@@ -283,7 +290,7 @@ mod tests {
         }
 
         #[test]
-        fn l2_clamps_negative_roundoff_to_zero() {
+        fn negative_roundoff_is_clamped_to_zero_with_l2() {
             // Given
             let source_squared_norm = 1.0;
             let target_squared_norm = 1.0;
@@ -304,7 +311,7 @@ mod tests {
         }
 
         #[test]
-        fn cosine_distance_equals_one_minus_dot_over_norm_product() {
+        fn distance_equals_one_minus_dot_over_norm_product_with_cosine() {
             // Given
             let source_norm = 2.0;
             let target_norm = 4.0;
@@ -320,7 +327,7 @@ mod tests {
         }
 
         #[test]
-        fn normalized_cosine_distance_is_one_minus_the_dot_product() {
+        fn distance_equals_one_minus_the_dot_product_with_normalized_cosine() {
             // Given
             let dot_product = 0.25;
             let expected_one_minus_dot = 1.0 - dot_product;
@@ -333,7 +340,7 @@ mod tests {
         }
 
         #[test]
-        fn inner_product_distance_is_the_negative_dot_product() {
+        fn distance_equals_the_negative_dot_product_with_inner_product() {
             // Given
             let dot_product = 3.0;
             let expected_negative_dot = -dot_product;
