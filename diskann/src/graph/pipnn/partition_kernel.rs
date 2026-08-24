@@ -608,6 +608,26 @@ mod tests {
         }
 
         #[test]
+        fn zero_point_norm_keeps_first_leader_in_a_complete_simd_group_with_cosine() {
+            // Given
+            let leader_count = 17;
+            let dots = [0.0; 17];
+            let point_norms = [0.0];
+            let leader_norms = [1.0; 17];
+            let expected_first_leader = [0];
+
+            // When
+            let actual_assignment = rank_partition_leaders(
+                Metric::Cosine,
+                partition_input(&dots, 1, leader_count, &point_norms, &leader_norms),
+                1,
+            );
+
+            // Then
+            assert_eq!(actual_assignment, expected_first_leader);
+        }
+
+        #[test]
         fn f32_max_score_is_still_a_rankable_leader() {
             // Given
             let maximum_rankable_score = f32::MAX;

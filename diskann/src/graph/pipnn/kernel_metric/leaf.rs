@@ -221,6 +221,25 @@ impl LeafMetric for InnerProduct {
 )]
 mod tests {
     use super::*;
+    use diskann_wide::{ARCH, SIMDVector, arch::Current};
+
+    fn simd_distances<M: LeafMetric>(
+        norms: &[f32],
+        source: usize,
+        dot_products: [f32; 16],
+        first_target: usize,
+    ) -> [f32; 16] {
+        assert_eq!(M::Simd::<Current>::LANES, 16);
+        let source_norms = M::source_simd(ARCH, norms, source);
+        // SAFETY: the input and output contain exactly one complete SIMD vector.
+        unsafe {
+            let dots = M::Simd::<Current>::load_simd(ARCH, dot_products.as_ptr());
+            let distances = M::distances_simd(ARCH, norms, source_norms, dots, first_target);
+            let mut output = [0.0; 16];
+            distances.store_simd(output.as_mut_ptr());
+            output
+        }
+    }
 
     mod prepare_leaf_norms_tests {
         use super::*;
@@ -350,6 +369,68 @@ mod tests {
 
             // Then
             assert_eq!(actual_distance, expected_negative_dot);
+        }
+    }
+
+    mod distances_simd_tests {
+        use super::*;
+
+        #[test]
+        fn every_lane_uses_squared_norm_sum_minus_twice_the_dot_product_with_l2() {
+            let source_squared_norm = 4.0;
+            let target_squared_norm = 9.0;
+            let dot_product = 6.0;
+            let expected_distance = source_squared_norm + target_squared_norm - 2.0 * dot_product;
+            let mut squared_norms = [target_squared_norm; 17];
+            squared_norms[0] = source_squared_norm;
+
+            let actual_distances = simd_distances::<L2>(&squared_norms, 0, [dot_product; 16], 1);
+
+            assert_eq!(actual_distances, [expected_distance; 16]);
+        }
+
+        #[test]
+        fn nan_dot_products_clamp_to_zero_in_every_lane_with_l2() {
+            let squared_norms = [1.0; 17];
+            let expected_non_negative_distance = 0.0;
+
+            let actual_distances = simd_distances::<L2>(&squared_norms, 0, [f32::NAN; 16], 1);
+
+            assert_eq!(actual_distances, [expected_non_negative_distance; 16]);
+        }
+
+        #[test]
+        fn every_lane_uses_one_minus_normalized_dot_with_cosine() {
+            let source_norm = 2.0;
+            let target_norm = 4.0;
+            let dot_product = 4.0;
+            let expected_distance = 1.0 - dot_product / (source_norm * target_norm);
+            let mut norms = [target_norm; 17];
+            norms[0] = source_norm;
+
+            let actual_distances = simd_distances::<Cosine>(&norms, 0, [dot_product; 16], 1);
+
+            assert_eq!(actual_distances, [expected_distance; 16]);
+        }
+
+        #[test]
+        fn every_lane_uses_one_minus_dot_product_with_normalized_cosine() {
+            let dot_product = 0.25;
+            let expected_distance = 1.0 - dot_product;
+
+            let actual_distances = simd_distances::<CosineNormalized>(&[], 0, [dot_product; 16], 0);
+
+            assert_eq!(actual_distances, [expected_distance; 16]);
+        }
+
+        #[test]
+        fn every_lane_uses_negative_dot_product_with_inner_product() {
+            let dot_product = 3.0;
+            let expected_distance = -dot_product;
+
+            let actual_distances = simd_distances::<InnerProduct>(&[], 0, [dot_product; 16], 0);
+
+            assert_eq!(actual_distances, [expected_distance; 16]);
         }
     }
 }
