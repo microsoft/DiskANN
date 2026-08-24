@@ -763,6 +763,35 @@ provider-and-language conjunctions. It is a useful latency upper bound, but its 
 is too expensive as a universal policy. The next tuning step is field- and query-aware promotion
 under a fixed dense-memory budget.
 
+## 8.12 Indexed BruteForceKNN sidecar
+
+The AdsSnr hybrid prototype was rebuilt with a canonical memory-mapped data file and compact
+HashStore postings:
+
+- each sparse candidate's ID, UINT8 embedding, and integer label list are stored once;
+- each sparse label posting stores only sorted `uint32` canonical data indices;
+- labels are translated through one deterministic string-to-integer dictionary.
+
+At the same static 10K threshold, 528 of the 2,147 queries contain at least one sparse label and
+route to exact BruteForceKNN. The remaining 1,619 dense-only queries reuse the existing 10K hybrid
+DiskANN path.
+
+| Metric | Indexed BF+ANN | Previous static-10K | Original hybrid |
+|---|---:|---:|---:|
+| Recall@150 | **50.04%** | 25.54% | 25.54% |
+| AVG | 3.59 ms | **2.94 ms** | 7.11 ms |
+| P99 | 16.10 ms | **14.19 ms** | 49.18 ms |
+| P999 | 21.40 ms | **18.83 ms** | 63.82 ms |
+| Persisted sidecar | **1.31 GiB** | 8.77 GiB | 540.7 MiB |
+| Build time | ~202.2 s | 192.4 s | 152.1 s |
+
+The indexed sidecar reduces storage by **85.0%** versus static-10K and improves recall by
+**24.50 percentage points**, at a 22.4% AVG and roughly 13.5% tail-latency cost. Compared with the
+original hybrid, it is 1.98x faster at AVG, 3.05x faster at P99, and 2.98x faster at P999.
+
+The first dense-only repetition incurred graph page faults, so the comparison combines querywise
+latencies from warm repetitions 2 and 3. Sparse-routed recall is 100%; dense-only recall is 33.75%.
+
 ## 10. Artifacts
 
 ### 10.1 Original PMax benchmark (`Q:\test6\filtered_test2\bench\full\`)
@@ -800,5 +829,10 @@ under a fixed dense-memory budget.
   `hybrid_recall_100m.high_l.results.json`
 - K=150/L=150 threshold comparison:
   `hybrid_threshold10000_recall150_l150.results.json`
+- Indexed BruteForceKNN sidecar:
+  `provider_language_bfknn_t10000.bin` and `provider_language_bfknn_t10000.bfdata`
+- Indexed sidecar comparison:
+  `bfknn_indexed_threshold10000_comparison.json` and
+  `bfknn_indexed_threshold10000_report.md`
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
