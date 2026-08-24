@@ -264,7 +264,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn leader_norm_equals_the_sum_of_squared_components_with_l2() {
+        fn returns_the_squared_euclidean_norm_of_each_leader_for_l2() {
             // Given
             let first_leader = [1.0_f32, 2.0];
             let second_leader = [3.0_f32, 4.0];
@@ -289,7 +289,7 @@ mod tests {
         }
 
         #[test]
-        fn leader_norm_equals_the_l2_norm_with_cosine() {
+        fn returns_the_euclidean_norm_of_each_leader_for_cosine() {
             // Given
             let first_leader = [1.0_f32, 2.0];
             let second_leader = [3.0_f32, 4.0];
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn point_norm_equals_the_l2_norm_with_cosine() {
+    fn returns_the_euclidean_norm_of_each_point_for_cosine() {
         // Given
         let first_point = [1.0_f32, 2.0];
         let second_point = [3.0_f32, 4.0];

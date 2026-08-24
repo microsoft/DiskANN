@@ -226,7 +226,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn leaf_norms_equal_point_self_dot_products_with_l2() {
+        fn returns_the_squared_euclidean_norm_of_each_point_for_l2() {
             // Given
             let first_point = [2.0_f32, 1.0];
             let second_point = [1.0_f32, 3.0];
@@ -247,7 +247,7 @@ mod tests {
         }
 
         #[test]
-        fn leaf_norms_equal_point_l2_norms_with_cosine() {
+        fn returns_the_euclidean_norm_of_each_point_for_cosine() {
             // Given
             let first_point = [2.0_f32, 1.0];
             let second_point = [1.0_f32, 3.0];
