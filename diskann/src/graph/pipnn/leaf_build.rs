@@ -1016,6 +1016,7 @@ mod tests {
     #[test]
     fn zero_k_edge_csr_has_empty_adjacency() {
         let point_ids = [10, 20, 30];
+        let zero_k = 0;
         let mut seen = vec![false; 9];
         let mut offsets = Vec::new();
         let mut edges = vec![(99, 99.0)];
@@ -1024,7 +1025,7 @@ mod tests {
         let count = build_symmetric_edge_csr(
             0,
             &point_ids,
-            0,
+            zero_k,
             &[],
             EdgeBuffers {
                 seen: &mut seen,
