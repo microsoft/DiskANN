@@ -350,7 +350,7 @@ where
     A: PiPNNSIMDSchema,
 {
     fn run(arch: A, args: RelativeHashArgs) -> u16 {
-        relative_hash_simd::<A::HashScore>(arch, args)
+        relative_hash_simd::<A::Vector>(arch, args)
     }
 }
 
