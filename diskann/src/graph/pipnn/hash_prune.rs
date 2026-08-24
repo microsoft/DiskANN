@@ -922,7 +922,7 @@ impl HashPrune {
 mod tests {
     use super::*;
 
-    fn hash_prune<T: VectorRepr>(
+    fn build_hash_prune<T: VectorRepr>(
         data: &[T],
         points: usize,
         dimensions: usize,
@@ -937,7 +937,7 @@ mod tests {
         )
     }
 
-    struct Reservoir {
+    struct TestReservoir {
         state: ReservoirState,
         hashes: Vec<u16>,
         distances: Vec<u16>,
@@ -946,7 +946,7 @@ mod tests {
         l_max: u8,
     }
 
-    impl Reservoir {
+    impl TestReservoir {
         fn new(l_max: usize) -> Self {
             assert!(l_max <= MAX_RESERVOIR_LEN);
             let row_stride = l_max.next_multiple_of(32).max(32);
@@ -1069,7 +1069,11 @@ mod tests {
         let points = 5;
         for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
             let raw: Vec<u8> = (0..points * dimensions)
-                .map(|index| ((index * 7 + index / dimensions * 3) % 23) as u8)
+                .map(|index| {
+                    let point = index / dimensions;
+                    let dimension = index % dimensions;
+                    (point + dimension) as u8
+                })
                 .collect();
             let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
             let f32_data: Vec<f32> = raw.iter().copied().map(&reference).collect();
@@ -1232,8 +1236,8 @@ mod tests {
     #[test]
     fn batched_leaf_edges_match_single_edge_reference() {
         let data = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let batched = hash_prune(&data, 4, 2, 8, 8).unwrap();
-        let reference = hash_prune(&data, 4, 2, 8, 8).unwrap();
+        let batched = build_hash_prune(&data, 4, 2, 8, 8).unwrap();
+        let reference = build_hash_prune(&data, 4, 2, 8, 8).unwrap();
         let point_ids = [0, 1, 2, 3];
         let offsets = [0, 3, 6, 9, 12];
         let edges = [
@@ -1285,7 +1289,7 @@ mod tests {
     fn reused_sketch_scratch_does_not_leak_candidates_between_leaves() {
         // Given
         let data = [0.0_f32, 1.0, 2.0, 3.0];
-        let hp = hash_prune(&data, 4, 1, 8, 4).unwrap();
+        let hp = build_hash_prune(&data, 4, 1, 8, 4).unwrap();
         let expected_candidates = [vec![1], vec![0], vec![3], vec![2]];
         let mut sketch_scratch_with_stale_value = vec![99.0; 1];
 
@@ -1318,14 +1322,14 @@ mod tests {
         assert_eq!(actual_candidates, expected_candidates);
     }
 
-    // Reservoir replacement and ordering policy.
+    // TestReservoir replacement and ordering policy.
 
     #[test]
     fn full_reservoir_evicts_the_farthest_candidate() {
         // Given
         let expected_capacity = 3;
         let expected_neighbors = [(4, 0.5), (1, 1.0), (2, 2.0)];
-        let mut reservoir = Reservoir::new(expected_capacity);
+        let mut reservoir = TestReservoir::new(expected_capacity);
         assert!(reservoir.is_empty());
         reservoir.insert(0, 1, 1.0);
         reservoir.insert(1, 2, 2.0);
@@ -1344,7 +1348,7 @@ mod tests {
         // Given
         let expected_candidate_count = 1;
         let expected_closest_candidate = [(3, 1.0)];
-        let mut reservoir = Reservoir::new(5);
+        let mut reservoir = TestReservoir::new(5);
         reservoir.insert(0, 1, 3.0);
 
         // When
@@ -1362,7 +1366,7 @@ mod tests {
         // Given
         let expected_candidate_count = 3;
         let expected_neighbor_id_order = [(1, 1.0), (2, 1.0), (3, 1.0)];
-        let mut reservoir = Reservoir::new(5);
+        let mut reservoir = TestReservoir::new(5);
         reservoir.insert(0, 1, 1.0);
         reservoir.insert(1, 2, 1.0);
         reservoir.insert(2, 3, 1.0);
@@ -1379,7 +1383,7 @@ mod tests {
     fn same_hash_bf16_ties_are_history_independent() {
         for order in [[0, 1], [1, 0]] {
             let candidates = [(7, 20, 1.0), (7, 10, 1.0)];
-            let mut reservoir = Reservoir::new(2);
+            let mut reservoir = TestReservoir::new(2);
             for index in order {
                 let (hash, neighbor, distance) = candidates[index];
                 reservoir.insert(hash, neighbor, distance);
@@ -1400,7 +1404,7 @@ mod tests {
         ];
         let candidates = [(1, 30, 1.0), (2, 10, 1.0), (3, 20, 1.0)];
         for order in permutations {
-            let mut reservoir = Reservoir::new(2);
+            let mut reservoir = TestReservoir::new(2);
             for index in order {
                 let (hash, neighbor, distance) = candidates[index];
                 reservoir.insert(hash, neighbor, distance);
@@ -1419,25 +1423,24 @@ mod tests {
         use rayon::prelude::*;
 
         let data = vec![0.0f32; 100 * 4];
-        let parallel = hash_prune(&data, 100, 4, 4, 10).unwrap();
-        let serial = hash_prune(&data, 100, 4, 4, 10).unwrap();
+        let parallel = build_hash_prune(&data, 100, 4, 4, 10).unwrap();
+        let serial = build_hash_prune(&data, 100, 4, 4, 10).unwrap();
 
         (0..50).into_par_iter().for_each(|source| {
-            add_edge(&parallel, source, (source + 1) % 100, 1.0);
-            add_edge(&parallel, (source + 1) % 100, source, 1.0);
+            add_edge(&parallel, source, source + 1, 1.0);
+            add_edge(&parallel, source + 1, source, 1.0);
         });
         for source in 0..50 {
-            add_edge(&serial, source, (source + 1) % 100, 1.0);
-            add_edge(&serial, (source + 1) % 100, source, 1.0);
+            add_edge(&serial, source, source + 1, 1.0);
+            add_edge(&serial, source + 1, source, 1.0);
         }
 
         assert_eq!(parallel.into_nearest_lists(5), serial.into_nearest_lists(5));
     }
 
-    #[test]
-    fn extraction_returns_full_candidates_and_truncates_to_nearest_degree() {
+    fn hash_prune_with_ranked_source_zero_candidates() -> HashPrune {
         #[rustfmt::skip]
-        let data = [
+        let point_vectors = [
              0.0,  0.0,
              1.0,  0.0,
              0.0,  1.0,
@@ -1447,24 +1450,46 @@ mod tests {
             -1.0,  1.0,
              1.0, -1.0,
         ];
-        let full = hash_prune(&data, 8, 2, 16, 10).unwrap();
-        let nearest = hash_prune(&data, 8, 2, 16, 10).unwrap();
+        let hash_prune = build_hash_prune(&point_vectors, 8, 2, 16, 10).unwrap();
+        // Use the neighbor ID as distance so the extraction order is explicit.
         for target in 1..8 {
-            add_edge(&full, 0, target, target as f32);
-            add_edge(&nearest, 0, target, target as f32);
+            add_edge(&hash_prune, 0, target, target as f32);
         }
+        hash_prune
+    }
 
-        let mut full_ids = full.into_candidate_lists()[0].to_vec();
-        full_ids.sort_unstable();
-        assert_eq!(full_ids, (1..8).collect::<Vec<_>>());
-        assert_eq!(&*nearest.into_nearest_lists(2)[0], &[1, 2]);
+    #[test]
+    fn candidate_extraction_returns_every_retained_neighbor() {
+        // Given
+        let hash_prune = hash_prune_with_ranked_source_zero_candidates();
+        let expected_neighbor_ids: Vec<_> = (1..8).collect();
+
+        // When
+        let mut actual_neighbor_ids = hash_prune.into_candidate_lists()[0].to_vec();
+        actual_neighbor_ids.sort_unstable();
+
+        // Then
+        assert_eq!(actual_neighbor_ids, expected_neighbor_ids);
+    }
+
+    #[test]
+    fn nearest_extraction_keeps_the_requested_closest_neighbors() {
+        // Given
+        let hash_prune = hash_prune_with_ranked_source_zero_candidates();
+        let expected_nearest_ids = [1, 2];
+
+        // When
+        let actual_nearest_lists = hash_prune.into_nearest_lists(2);
+
+        // Then
+        assert_eq!(&*actual_nearest_lists[0], &expected_nearest_ids);
     }
 
     #[test]
     fn farthest_cache_updates_after_repeated_evictions() {
         // Given
         let expected_neighbors = [(14, 1.0), (13, 2.0), (12, 3.0)];
-        let mut reservoir = Reservoir::new(3);
+        let mut reservoir = TestReservoir::new(3);
         reservoir.insert(0, 10, 5.0);
         reservoir.insert(1, 11, 4.0);
         reservoir.insert(2, 12, 3.0);
@@ -1479,7 +1504,7 @@ mod tests {
 
     #[test]
     fn extraction_sorts_neighbors_when_the_farthest_slot_is_not_last() {
-        let mut reservoir = Reservoir::new(4);
+        let mut reservoir = TestReservoir::new(4);
         reservoir.insert(5, 1, 1.0);
         reservoir.insert(10, 2, 3.0);
         reservoir.insert(15, 3, 2.0);

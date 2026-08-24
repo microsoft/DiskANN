@@ -107,67 +107,81 @@ impl LshSketches {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    fn build_pool(threads: usize) -> rayon::ThreadPool {
+    fn thread_pool(threads: usize) -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .unwrap()
     }
 
-    fn view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
+    fn matrix_view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
         MatrixView::try_from(data, rows, columns).unwrap()
     }
 
     #[test]
     fn sketch_shape_has_one_value_per_point_and_plane() {
-        let data = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let sketches = build_pool(2)
-            .install(|| LshSketches::try_new(view(&data, 3, 2), 4, 42))
+        // Given
+        let point_vectors = [[1.0_f32, 0.0], [0.0, 1.0], [-1.0, 0.0]];
+        let point_count = point_vectors.len();
+        let dimensions = point_vectors[0].len();
+        let plane_count = 4;
+        let expected_sketch_value_count = point_count * plane_count;
+        let data: Vec<_> = point_vectors.into_iter().flatten().collect();
+
+        // When
+        let sketches = thread_pool(2)
+            .install(|| {
+                LshSketches::try_new(matrix_view(&data, point_count, dimensions), plane_count, 42)
+            })
             .unwrap();
 
-        assert_eq!(sketches.num_planes(), 4);
-        assert_eq!(sketches.sketches().len(), 12);
+        // Then
+        assert_eq!(sketches.num_planes(), plane_count);
+        assert_eq!(sketches.sketches().len(), expected_sketch_value_count);
     }
 
-    #[test]
-    fn sketches_match_seeded_serial_hyperplane_reference() {
-        let npoints = 3;
-        let ndims = 4;
+    #[rstest]
+    #[case::first_seed(42)]
+    #[case::second_seed(99)]
+    fn sketches_match_seeded_serial_hyperplane_reference(#[case] seed: u64) {
+        // Given
+        let point_vectors = [
+            [-3.0_f32, -2.0, -1.0, 0.0],
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 8.0],
+        ];
+        let npoints = point_vectors.len();
+        let ndims = point_vectors[0].len();
         let planes = 5;
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|value| value as f32 - 3.0)
+        let data: Vec<_> = point_vectors.into_iter().flatten().collect();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let hyperplanes: Vec<f32> = (0..planes * ndims)
+            .map(|_| StandardNormal.sample(&mut rng))
+            .collect();
+        let expected_serial_sketch_values: Vec<f32> = data
+            .chunks_exact(ndims)
+            .flat_map(|point| {
+                hyperplanes
+                    .chunks_exact(ndims)
+                    .map(|plane| point.iter().zip(plane).map(|(x, h)| x * h).sum())
+            })
             .collect();
 
-        for seed in [42, 99] {
-            let actual_sketches = build_pool(2)
-                .install(|| LshSketches::try_new(view(&data, npoints, ndims), planes, seed))
-                .unwrap();
+        // When
+        let actual_sketches = thread_pool(2)
+            .install(|| LshSketches::try_new(matrix_view(&data, npoints, ndims), planes, seed))
+            .unwrap();
 
-            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-            let hyperplanes: Vec<f32> = (0..planes * ndims)
-                .map(|_| StandardNormal.sample(&mut rng))
-                .collect();
-            let expected_serial_sketch_values: Vec<f32> = data
-                .chunks_exact(ndims)
-                .flat_map(|point| {
-                    hyperplanes
-                        .chunks_exact(ndims)
-                        .map(|plane| point.iter().zip(plane).map(|(x, h)| x * h).sum())
-                })
-                .collect();
-            assert_eq!(
-                actual_sketches.sketches(),
-                expected_serial_sketch_values,
-                "seed={seed}"
-            );
-        }
+        // Then
+        assert_eq!(actual_sketches.sketches(), expected_serial_sketch_values);
     }
 
     #[test]
     fn zero_points_produce_an_empty_sketch() {
-        let sketches = build_pool(2)
-            .install(|| LshSketches::try_new(view(&[] as &[f32], 0, 7), 4, 42))
+        let sketches = thread_pool(2)
+            .install(|| LshSketches::try_new(matrix_view(&[] as &[f32], 0, 7), 4, 42))
             .unwrap();
 
         assert_eq!(sketches.num_planes(), 4);
@@ -176,22 +190,37 @@ mod tests {
 
     #[test]
     fn zero_dimensions_produce_zero_dot_products() {
-        let sketches = build_pool(2)
-            .install(|| LshSketches::try_new(view(&[] as &[f32], 3, 0), 2, 42))
+        // Given
+        let point_count = 3;
+        let plane_count = 2;
+        let expected_zero_dot_products = vec![0.0; point_count * plane_count];
+
+        // When
+        let sketches = thread_pool(2)
+            .install(|| {
+                LshSketches::try_new(matrix_view(&[] as &[f32], point_count, 0), plane_count, 42)
+            })
             .unwrap();
 
-        assert_eq!(sketches.sketches(), &[0.0; 6]);
+        // Then
+        assert_eq!(sketches.sketches(), expected_zero_dot_products);
     }
 
-    #[test]
-    fn sketch_construction_rejects_shape_overflow() {
-        for data in [
-            view(&[] as &[f32], 0, usize::MAX),
-            view(&[] as &[f32], usize::MAX, 0),
-        ] {
-            let error =
-                LshSketches::try_new(data, 2, 42).expect_err("overflowing LSH shape must fail");
-            assert!(error.to_string().contains("overflows"));
-        }
+    #[rstest]
+    #[case::point_count_times_plane_count(usize::MAX, 0)]
+    #[case::dimension_times_plane_count(0, usize::MAX)]
+    fn sketch_construction_rejects_shape_overflow(
+        #[case] point_count: usize,
+        #[case] dimensions: usize,
+    ) {
+        // Given
+        let empty_data = matrix_view(&[] as &[f32], point_count, dimensions);
+
+        // When
+        let error =
+            LshSketches::try_new(empty_data, 2, 42).expect_err("overflowing LSH shape must fail");
+
+        // Then
+        assert!(error.to_string().contains("overflows"));
     }
 }
