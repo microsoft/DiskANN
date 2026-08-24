@@ -180,11 +180,24 @@ mod tests {
 
     #[test]
     fn zero_points_produce_an_empty_sketch() {
+        // Given
+        let zero_point_count = 0;
+        let dimensions = 7;
+        let plane_count = 4;
+
+        // When
         let sketches = thread_pool(2)
-            .install(|| LshSketches::try_new(matrix_view(&[] as &[f32], 0, 7), 4, 42))
+            .install(|| {
+                LshSketches::try_new(
+                    matrix_view(&[] as &[f32], zero_point_count, dimensions),
+                    plane_count,
+                    42,
+                )
+            })
             .unwrap();
 
-        assert_eq!(sketches.num_planes(), 4);
+        // Then
+        assert_eq!(sketches.num_planes(), plane_count);
         assert!(sketches.sketches().is_empty());
     }
 
@@ -192,13 +205,18 @@ mod tests {
     fn zero_dimensions_produce_zero_dot_products() {
         // Given
         let point_count = 3;
+        let zero_dimensions = 0;
         let plane_count = 2;
         let expected_zero_dot_products = vec![0.0; point_count * plane_count];
 
         // When
         let sketches = thread_pool(2)
             .install(|| {
-                LshSketches::try_new(matrix_view(&[] as &[f32], point_count, 0), plane_count, 42)
+                LshSketches::try_new(
+                    matrix_view(&[] as &[f32], point_count, zero_dimensions),
+                    plane_count,
+                    42,
+                )
             })
             .unwrap();
 
