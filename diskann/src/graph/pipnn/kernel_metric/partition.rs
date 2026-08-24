@@ -264,7 +264,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn l2_leader_norm_is_the_sum_of_squared_components() {
+        fn leader_norm_equals_the_sum_of_squared_components_with_l2() {
             // Given
             let first_leader = [1.0_f32, 2.0];
             let second_leader = [3.0_f32, 4.0];
@@ -289,7 +289,7 @@ mod tests {
         }
 
         #[test]
-        fn cosine_leader_norm_is_the_square_root_of_the_squared_component_sum() {
+        fn leader_norm_equals_the_l2_norm_with_cosine() {
             // Given
             let first_leader = [1.0_f32, 2.0];
             let second_leader = [3.0_f32, 4.0];
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn cosine_point_norm_is_the_square_root_of_the_squared_component_sum() {
+    fn point_norm_equals_the_l2_norm_with_cosine() {
         // Given
         let first_point = [1.0_f32, 2.0];
         let second_point = [3.0_f32, 4.0];
@@ -343,7 +343,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn l2_ranking_equals_leader_squared_norm_minus_twice_the_dot_product() {
+        fn ranking_equals_leader_squared_norm_minus_twice_the_dot_product_with_l2() {
             // Given
             let dot_product = 2.0;
             let leader_squared_norm = 9.0;
@@ -357,7 +357,7 @@ mod tests {
         }
 
         #[test]
-        fn cosine_ranking_equals_one_minus_dot_over_norm_product() {
+        fn ranking_equals_one_minus_dot_over_norm_product_with_cosine() {
             // Given
             let dot_product = 4.0;
             let point_norm = 2.0;
@@ -372,7 +372,7 @@ mod tests {
         }
 
         #[test]
-        fn normalized_cosine_ranking_is_one_minus_the_dot_product() {
+        fn ranking_equals_one_minus_the_dot_product_with_normalized_cosine() {
             // Given
             let dot_product = 0.25;
             let expected_one_minus_dot = 1.0 - dot_product;
@@ -385,7 +385,7 @@ mod tests {
         }
 
         #[test]
-        fn inner_product_ranking_is_the_negative_dot_product() {
+        fn ranking_equals_the_negative_dot_product_with_inner_product() {
             // Given
             let dot_product = 3.0;
             let expected_negative_dot = -dot_product;

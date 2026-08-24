@@ -364,26 +364,52 @@ mod tests {
         output
     }
 
-    /// Build two score rows whose preferred leader direction is opposite.
-    /// The fractional scores cross complete SIMD groups and scalar tails.
-    fn lane_boundary_fixture(
+    /// Build ranking input from two axis points and leaders between those axes.
+    ///
+    /// The first point prefers early leaders. The second point prefers late leaders.
+    fn lane_boundary_input_from_point_and_leader_vectors(
         metric: Metric,
         leader_count: usize,
     ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-        let mut dots = Vec::with_capacity(2 * leader_count);
-        for point in 0..2 {
-            for leader in 0..leader_count {
-                let fraction = leader as f32 / leader_count as f32;
-                dots.push(if point == 0 { fraction } else { 1.0 - fraction });
-            }
-        }
+        let points = [[1.0_f32, 0.0], [0.0, 1.0]];
+        let denominator = (leader_count + 1) as f32;
+        let leaders: Vec<_> = (0..leader_count)
+            .map(|leader| {
+                let second_component = (leader + 1) as f32 / denominator;
+                let vector = [1.0 - second_component, second_component];
+                if metric == Metric::CosineNormalized {
+                    let norm = vector[0].hypot(vector[1]);
+                    [vector[0] / norm, vector[1] / norm]
+                } else {
+                    vector
+                }
+            })
+            .collect();
+        let dots = points
+            .iter()
+            .flat_map(|point| {
+                leaders
+                    .iter()
+                    .map(|leader| point[0] * leader[0] + point[1] * leader[1])
+            })
+            .collect();
         let point_norms = if metric == Metric::Cosine {
-            vec![1.0; 2]
+            points
+                .iter()
+                .map(|point| point[0].hypot(point[1]))
+                .collect()
         } else {
             Vec::new()
         };
         let leader_norms = match metric {
-            Metric::L2 | Metric::Cosine => vec![1.0; leader_count],
+            Metric::L2 => leaders
+                .iter()
+                .map(|leader| leader[0] * leader[0] + leader[1] * leader[1])
+                .collect(),
+            Metric::Cosine => leaders
+                .iter()
+                .map(|leader| leader[0].hypot(leader[1]))
+                .collect(),
             Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
         };
         (dots, point_norms, leader_norms)
@@ -428,7 +454,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn cosine_pipeline_assigns_each_point_to_its_nearest_leaders() {
+        fn assigns_each_point_to_highest_similarity_leaders_with_cosine() {
             // Given
             let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
             let leaders = PreparedLeaders::<Cosine>::new(
@@ -532,7 +558,8 @@ mod tests {
             #[case] fanout: usize,
         ) {
             // Given
-            let (dots, point_norms, leader_norms) = lane_boundary_fixture(metric, leader_count);
+            let (dots, point_norms, leader_norms) =
+                lane_boundary_input_from_point_and_leader_vectors(metric, leader_count);
             let input = partition_input(&dots, 2, leader_count, &point_norms, &leader_norms);
             let expected_assignments = reference_assignments(metric, input, fanout);
 
@@ -544,7 +571,7 @@ mod tests {
         }
 
         #[test]
-        fn equal_l2_scores_keep_sampled_leader_order() {
+        fn equal_scores_keep_sampled_leader_order_with_l2() {
             // Given
             let dots = [0.0, 0.0, 0.0, 0.0];
             let leader_squared_norms = [1.0, 1.0, 1.0, 1.0];
@@ -562,9 +589,9 @@ mod tests {
         }
 
         #[test]
-        fn cosine_zero_norm_keeps_sampled_leader_order() {
+        fn zero_norm_keeps_sampled_leader_order_with_cosine() {
             // Given
-            let dots = [100.0, -100.0];
+            let dots = [0.0, 0.0];
             let point_norms = [0.0];
             let leader_norms = [1.0, 1.0];
             let expected_sampled_leader_order = [0, 1];
@@ -583,8 +610,10 @@ mod tests {
         #[test]
         fn f32_max_score_is_still_a_rankable_leader() {
             // Given
+            let maximum_rankable_score = f32::MAX;
+            let dot_product_that_produces_it = -maximum_rankable_score;
             let mut dots = [0.0; 8];
-            dots[7] = -f32::MAX;
+            dots[7] = dot_product_that_produces_it;
             let expected_all_leaders_in_scan_order = [0, 1, 2, 3, 4, 5, 6, 7];
 
             // When
