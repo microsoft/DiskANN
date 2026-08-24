@@ -10,7 +10,9 @@ use diskann_utils::views::Matrix;
 use diskann_vector::{
     UnalignedSlice,
     conversion::SliceCast,
-    distance::{Cosine, CosineNormalized, InnerProduct, Metric, Specialize, SquaredL2, DistanceProvider},
+    distance::{
+        Cosine, CosineNormalized, DistanceProvider, InnerProduct, Metric, Specialize, SquaredL2,
+    },
 };
 use diskann_wide::{
     ARCH,
@@ -20,10 +22,10 @@ use half::f16;
 use thiserror::Error;
 
 use crate::{
-    prefetch::{self, Prefetch},
     counters::LocalCounters,
     epoch, layers,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
+    prefetch::{self, Prefetch},
     store::{
         self, Store,
         invasive::{self, Invasive},
@@ -232,7 +234,6 @@ where
         };
 
         let mut buf: Box<[_]> = std::iter::repeat_n(T::zeroed(), self.dim()).collect();
-
         bytemuck::must_cast_slice_mut::<T, u8>(&mut buf).copy_from_slice(data);
         Ok(buf)
     }
@@ -367,10 +368,7 @@ struct Prune<'a, T, D> {
 }
 
 impl<'a, T, D> Prune<'a, T, D> {
-    fn new(
-        reader: store::invasive::Reader<'a>,
-        distance: D,
-    ) -> Self {
+    fn new(reader: store::invasive::Reader<'a>, distance: D) -> Self {
         // This should be ensured at construction time
         debug_assert!(
             reader
@@ -390,7 +388,6 @@ impl<'a, T, D> Prune<'a, T, D> {
     fn boxed(self) -> Box<Self> {
         Box::new(self)
     }
-
 }
 
 impl<T, D> layers::Prune for Prune<'_, T, D>
@@ -401,7 +398,7 @@ where
     fn prepare(
         &mut self,
         items: hashbrown::hash_map::IterMut<'_, u32, Option<layers::PruneKey>>,
-    ) -> ANNResult<layers::PruneKey> {
+    ) -> ANNResult<usize> {
         let mut counter = layers::PruneKey::counter();
         self.buffer.clear();
         self.buffer.reserve(items.len());
@@ -421,15 +418,16 @@ where
                 // someone will provide a prune list exceeding `u16::MAX`.
                 //
                 // In addition, `diskann` limits this bound as well.
-                counter = counter.inc()?;
+                counter = counter.increment()?;
             }
         }
 
-        Ok(counter)
+        Ok(counter.index())
     }
 
     fn evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
-        self.distance.eval(self.buffer[a.index()], self.buffer[b.index()])
+        self.distance
+            .eval(self.buffer[a.index()], self.buffer[b.index()])
     }
 }
 
@@ -476,14 +474,10 @@ impl<'a, T, U> IntoExpandBeam<'a, T, U> {
             _data: PhantomData,
         })
     }
-
-    fn bytes_plus_tag(&self) -> Bytes {
-        self.reader.bytes_plus_tag()
-    }
 }
 
 trait Distance<T, U>: std::fmt::Debug + Send + Sync + 'static {
-    fn eval(&self, x: UnalignedSlice<'_, T>, u: UnalignedSlice<'_, U>) -> f32;
+    fn eval(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32;
 }
 
 #[derive(Debug)]
@@ -535,7 +529,7 @@ struct ExpandBeam<'a, P, T, U, D> {
     // THe prefetch look-ahead.
     lookahead: Option<NonZeroUsize>,
     // The type of the data prefetcher.
-    prefetch: P,
+    prefetch: prefetch::Checked<P>,
     // The type of the distance used for the arguments
     distance: D,
     // The type of the data in the original dataset.
@@ -554,7 +548,10 @@ impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
             _data,
         } = into;
 
-        prefetch.check(reader.bytes_plus_tag());
+        // TAG: PREFETCH-CHECK
+        let prefetch = prefetch::Checked::new(prefetch, reader.bytes_plus_tag())
+            .expect("internal APIs should only provide valid prefetcher");
+
         Self {
             query,
             reader,
@@ -609,22 +606,19 @@ where
     }
 
     unsafe fn expand_beam(&self, list: &[u32], buffer: &mut [(u32, f32)]) -> ANNResult<usize> {
+        debug_assert!(buffer.len() >= list.len());
+
         let len = list.len();
         let lookahead = self.lookahead.map(|l| l.get()).unwrap_or(0).min(len);
-        // let lookahead = 8.min(len);
 
-        for j in 0..lookahead {
+        for j in list.iter().take(lookahead) {
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
             // as the validity of the prefetch bounds.
             //
             // We do not materialize the `RawSlice` as a reference.
             unsafe {
-                self.prefetch.prefetch(
-                    self.reader
-                        .read_raw_unchecked(list.get_unchecked(j).into_usize())
-                        .as_ptr()
-                        .cast(),
-                )
+                let raw = self.reader.read_raw_unchecked(j.into_usize());
+                self.prefetch.prefetch(raw.as_ptr(), raw.len());
             }
         }
 
@@ -638,12 +632,10 @@ where
                 //
                 // We do not materialize the `RawSlice` as a reference.
                 unsafe {
-                    self.prefetch.prefetch(
-                        self.reader
-                            .read_raw_unchecked(list.get_unchecked(j).into_usize())
-                            .as_ptr()
-                            .cast(),
-                    )
+                    let raw = self
+                        .reader
+                        .read_raw_unchecked(list.get_unchecked(j).into_usize());
+                    self.prefetch.prefetch(raw.as_ptr(), raw.len());
                 }
                 j += 1;
             }
@@ -694,22 +686,17 @@ macro_rules! expand_beam {
         ))
     }};
     ($into:ident, $f:ident) => {{
-        let bytes = $into.bytes_plus_tag();
         Box::new(ExpandBeam::new(
             $into,
-            prefetch::Loop::new(bytes),
+            prefetch::Loop::new(),
             Pure::<$f>::new(),
         ))
     }};
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{
-        Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed()
-    }};
-    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
-        Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed()
-    }};
+    ($self:ty, $reader:ident, $f:ident) => {{ Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed() }};
+    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{ Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed() }};
 }
 
 impl FullPrecisionImpl for f32 {
@@ -834,16 +821,11 @@ impl FullPrecisionImpl for i8 {
     ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let distance = <Self as DistanceProvider<Self>>::distance_comparer(
-            full.metric(),
-            Some(full.dim()),
-        );
+        let distance =
+            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn layers::ExpandBeam + 'a> = ExpandBeam::new(
-            into,
-            prefetch::Loop::new(full.bytes_plus_tag()),
-            distance,
-        ).boxed();
+        let output: Box<dyn layers::ExpandBeam + 'a> =
+            ExpandBeam::new(into, prefetch::Loop::new(), distance).boxed();
 
         Ok(output)
     }
@@ -852,10 +834,8 @@ impl FullPrecisionImpl for i8 {
         let reader = full.reader()?;
         let dim = full.dim();
 
-        let distance = <Self as DistanceProvider<Self>>::distance_comparer(
-            full.metric(),
-            Some(full.dim()),
-        );
+        let distance =
+            <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
 
         let output: Box<dyn layers::Prune> = Prune::<Self, _>::new(reader, distance).boxed();
         Ok(output)
@@ -908,197 +888,520 @@ impl_full_precision!(f32, f16, u8, i8);
 // Tests //
 ///////////
 
-// #[cfg(test)]
-// #[cfg(not(miri))]
-// mod tests {
-//     use std::fmt::Display;
-//
-//     use rand::{Rng, SeedableRng, rngs::StdRng};
-//
-//     use super::*;
-//     // Bring the inherent-call traits into method scope. The `Distance` / `ExpandBeam`
-//     // traits are not imported: their methods are reached through `&dyn _` trait objects,
-//     // which does not require the trait to be in scope.
-//     use crate::layers::{AsDistance as _, QueryVisitor, Search as _, Set as _};
-//
-//     /// Generate random elements of a layer's data type from a seeded RNG.
-//     trait Sample: bytemuck::Pod {
-//         fn sample<R: Rng>(rng: &mut R) -> Self;
-//     }
-//
-//     impl Sample for f32 {
-//         fn sample<R: Rng>(rng: &mut R) -> Self {
-//             rng.random_range(-1.0f32..1.0f32)
-//         }
-//     }
-//
-//     impl Sample for f16 {
-//         fn sample<R: Rng>(rng: &mut R) -> Self {
-//             f16::from_f32(rng.random_range(-1.0f32..1.0f32))
-//         }
-//     }
-//
-//     impl Sample for u8 {
-//         fn sample<R: Rng>(rng: &mut R) -> Self {
-//             rng.random()
-//         }
-//     }
-//
-//     impl Sample for i8 {
-//         fn sample<R: Rng>(rng: &mut R) -> Self {
-//             rng.random()
-//         }
-//     }
-//
-//     fn gen_vec<T: Sample, R: Rng>(rng: &mut R, dim: usize) -> Vec<T> {
-//         (0..dim).map(|_| T::sample(rng)).collect()
-//     }
-//
-//     /// A [`QueryVisitor`] that simply boxes the query kernel so the test can probe it
-//     /// directly. Exercises both `visit` (dynamic) and `visit_sized` (specialized) paths.
-//     struct Collect;
-//
-//     impl<'a> QueryVisitor<'a> for Collect {
-//         type Output = Box<dyn layers::ExpandBeam + 'a>;
-//
-//         fn visit<Q>(self, distance: Q) -> Self::Output
-//         where
-//             Q: layers::ExpandBeam + 'a,
-//         {
-//             Box::new(distance)
-//         }
-//     }
-//
-//     /// Compare two distances allowing for floating-point reassociation between the
-//     /// specialized / converted kernels and the dynamic reference.
-//     fn approx_eq(got: f32, want: f32) -> bool {
-//         (got - want).abs() <= 1e-3 + 1e-4 * want.abs()
-//     }
-//
-//     /// Exercise every `Full<T>` API across dimensions `1..=max_dim`.
-//     ///
-//     /// For each dimension we check that `bytes`/`set` agree, that `distance` and
-//     /// `query_distance` are consistent with `DistanceProvider`, and that all of these
-//     /// reject byte slices that are too long or too short.
-//     fn test_impl<T>(max_dim: usize, ctx: &dyn Display)
-//     where
-//         T: FullPrecision + Sample + DistanceProvider<T>,
-//     {
-//         let mut rng = StdRng::seed_from_u64(0x0D15_0ACE ^ max_dim as u64);
-//         let metrics = [
-//             Metric::L2,
-//             Metric::InnerProduct,
-//             Metric::Cosine,
-//             Metric::CosineNormalized,
-//         ];
-//
-//         for dim in 1..=max_dim {
-//             let a = gen_vec::<T, _>(&mut rng, dim);
-//             let b = gen_vec::<T, _>(&mut rng, dim);
-//
-//             // `bytes` and `set` agree: the encoded buffer equals the raw cast bytes.
-//             let layer = Full::<T>::new(dim, Metric::L2);
-//             assert_eq!(
-//                 layer.bytes().value(),
-//                 dim * std::mem::size_of::<T>(),
-//                 "{ctx}: dim {dim}: unexpected byte length",
-//             );
-//
-//             let mut a_bytes = vec![0u8; layer.bytes().value()];
-//             layer.set(&a, &mut a_bytes).unwrap();
-//             assert_eq!(
-//                 a_bytes.as_slice(),
-//                 bytemuck::cast_slice::<T, u8>(&a),
-//                 "{ctx}: dim {dim}: set mismatch",
-//             );
-//
-//             let mut b_bytes = vec![0u8; layer.bytes().value()];
-//             layer.set(&b, &mut b_bytes).unwrap();
-//
-//             for metric in metrics {
-//                 let full = Full::<T>::new(dim, metric);
-//
-//                 // Reference value straight from `DistanceProvider`.
-//                 let reference =
-//                     <T as DistanceProvider<T>>::distance_comparer(metric, Some(dim)).call(&a, &b);
-//
-//                 // `distance` is built from the same comparer, so it must match exactly.
-//                 let distance = full.as_distance();
-//                 let via_distance = distance.evaluate(&a_bytes, &b_bytes).unwrap();
-//                 assert_eq!(
-//                     via_distance, reference,
-//                     "{ctx}: dim {dim}, metric {metric:?}: distance != DistanceProvider",
-//                 );
-//
-//                 // `query_distance` computes the same geometry. Specialized and f16-converted
-//                 // kernels may reassociate the summation, so compare approximately.
-//                 let query = full.query_distance(a.as_slice(), Collect).unwrap();
-//                 let via_query = query.evaluate(&b_bytes).unwrap();
-//                 assert!(
-//                     approx_eq(via_query, via_distance),
-//                     "{ctx}: dim {dim}, metric {metric:?}: query {via_query} != distance {via_distance}",
-//                 );
-//
-//                 // Every distance API rejects byte slices that are too long or too short.
-//                 let short = &a_bytes[..a_bytes.len() - 1];
-//                 let mut long = a_bytes.clone();
-//                 long.push(0);
-//
-//                 assert!(distance.evaluate(short, &b_bytes).is_err());
-//                 assert!(distance.evaluate(&long, &b_bytes).is_err());
-//                 assert!(distance.evaluate(&a_bytes, short).is_err());
-//                 assert!(distance.evaluate(&a_bytes, &long).is_err());
-//
-//                 assert!(query.evaluate(short).is_err());
-//                 assert!(query.evaluate(&long).is_err());
-//             }
-//
-//             // `set` rejects mis-sized element and buffer slices.
-//             let mut buf = vec![0u8; layer.bytes().value()];
-//             let too_many = gen_vec::<T, _>(&mut rng, dim + 1);
-//             assert!(
-//                 layer.set(&too_many, &mut buf).is_err(),
-//                 "{ctx}: dim {dim}: set accepted an over-long element slice",
-//             );
-//
-//             assert!(
-//                 layer.query_distance(&too_many, Collect).is_err(),
-//                 "{ctx}: dim {dim}: incorrect query lengths should be rejected"
-//             );
-//
-//             let mut short_buf = vec![0u8; layer.bytes().value().saturating_sub(1)];
-//             assert!(
-//                 layer.set(&a, &mut short_buf).is_err(),
-//                 "{ctx}: dim {dim}: set accepted an under-sized buffer",
-//             );
-//
-//             let too_few = gen_vec::<T, _>(&mut rng, dim - 1);
-//             assert!(
-//                 layer.query_distance(&too_few, Collect).is_err(),
-//                 "{ctx}: dim {dim}: incorrect query lengths should be rejected"
-//             );
-//         }
-//     }
-//
-//     // `max_dim` must exceed the largest specialized dimension for each type so the
-//     // const-generic (`visit_sized`) paths are covered alongside the dynamic ones.
-//     #[test]
-//     fn full_f32() {
-//         test_impl::<f32>(256, &"f32");
-//     }
-//
-//     #[test]
-//     fn full_f16() {
-//         test_impl::<f16>(256, &"f16");
-//     }
-//
-//     #[test]
-//     fn full_u8() {
-//         test_impl::<u8>(160, &"u8");
-//     }
-//
-//     #[test]
-//     fn full_i8() {
-//         test_impl::<i8>(160, &"i8");
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::fmt::Display;
+
+    use diskann_utils::lazy_format;
+    use hashbrown::{HashMap, HashSet};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    /// Generate random elements of a layer's data type from a seeded RNG.
+    trait Sample: bytemuck::Pod {
+        fn sample<R: Rng>(rng: &mut R) -> Self;
+    }
+
+    impl Sample for f32 {
+        fn sample<R: Rng>(rng: &mut R) -> Self {
+            rng.random_range(-1.0f32..1.0f32)
+        }
+    }
+
+    impl Sample for f16 {
+        fn sample<R: Rng>(rng: &mut R) -> Self {
+            diskann_wide::cast_f32_to_f16(rng.random_range(-1.0f32..1.0f32))
+        }
+    }
+
+    impl Sample for u8 {
+        fn sample<R: Rng>(rng: &mut R) -> Self {
+            rng.random()
+        }
+    }
+
+    impl Sample for i8 {
+        fn sample<R: Rng>(rng: &mut R) -> Self {
+            rng.random()
+        }
+    }
+
+    fn gen_vec<T: Sample>(dim: usize, rng: &mut impl Rng) -> Vec<T> {
+        (0..dim).map(|_| T::sample(rng)).collect()
+    }
+
+    /// Compare two distances allowing for floating-point reassociation between the
+    /// specialized / converted kernels and the dynamic reference.
+    #[must_use]
+    fn approx_eq(got: f32, want: f32) -> bool {
+        (got - want).abs() <= 1e-3 + 1e-4 * want.abs()
+    }
+
+    /// A simple test `Full` containing 1-dimensional `f32` values.
+    ///
+    /// This is used in dedicated `ExpandBeam` and `Prune` tests in a miri-friendly way.
+    ///
+    /// Two start points are included, initializd to `capacity` and `capacity + 1`.
+    fn test_full(capacity: Capacity) -> (Full<f32>, HashMap<u32, f32>) {
+        let start_points = [capacity.value() as f32, (capacity.value() + 1) as f32];
+
+        let full = <_ as layers::LayerConfig>::build(Full::<f32>::config(
+            capacity,
+            MaxDegree::new(0),
+            Metric::L2,
+            Matrix::column_vector(Box::new(start_points)),
+        ))
+        .unwrap();
+
+        assert_eq!(full.dim(), 1, "start points only have one dimension");
+        assert_eq!(full.bytes(), Bytes::size_of::<f32>());
+        assert_eq!(
+            full.bytes_plus_tag(),
+            Bytes::size_of::<f32>()
+                .checked_add(Bytes::size_of::<AtomicTag>())
+                .unwrap()
+        );
+        assert_eq!(full.metric(), Metric::L2);
+        assert_eq!(
+            <_ as layers::Layer>::id_limit(&full),
+            IdLimit::new(capacity.value() as u32 + 2)
+        );
+        assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
+
+        let points: HashMap<u32, f32> = {
+            let reader = full.reader().unwrap();
+            assert_eq!(
+                reader.read(capacity.value()).unwrap(),
+                bytemuck::bytes_of(&start_points[0])
+            );
+            assert_eq!(
+                reader.read(capacity.value() + 1).unwrap(),
+                bytemuck::bytes_of(&start_points[1])
+            );
+
+            [
+                (capacity.value() as u32, start_points[0]),
+                ((capacity.value() + 1) as u32, start_points[1]),
+            ]
+            .into_iter()
+            .collect()
+        };
+
+        (full, points)
+    }
+
+    #[derive(Debug)]
+    struct TestDistance;
+
+    impl Distance<f32, f32> for TestDistance {
+        fn eval(&self, x: UnalignedSlice<'_, f32>, y: UnalignedSlice<'_, f32>) -> f32 {
+            assert_eq!(x.len(), 1);
+            assert_eq!(y.len(), 1);
+
+            unsafe { x.as_ptr().read_unaligned() + y.as_ptr().read_unaligned() }
+        }
+    }
+
+    /// A Miri-friendly test for [`ExpandBeam`].
+    ///
+    /// This test covers the following:
+    ///
+    /// 1. Prefetches are in-bounds for all lookaheads.
+    /// 2. [`ExpandBeam`] doesn't lie about its [`IdLimit`].
+    /// 3. [`ExpandBeam`] various methods are internally consistent with eachother and
+    ///    consistent with the parent [`Full`] for item readability.
+    /// 4. [`ExpandBeam::expand_beam`] calls in order and visits all items in the input list.
+    #[test]
+    fn test_expand_beam() {
+        let capacity = Capacity::new(20);
+        let id_limit = IdLimit::new(22);
+
+        let (mut full, mut points) = test_full(capacity);
+
+        assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
+        assert_eq!(<_ as layers::Layer>::id_limit(&full), id_limit);
+
+        let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
+
+        // Insert the values 0 to 10.
+        for i in 0u32..10 {
+            let guard = <_ as layers::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
+
+            let id = <_ as layers::Guard>::id(&guard);
+
+            assert!(
+                available.remove(&id),
+                "insertion should return available slots",
+            );
+
+            assert!(
+                points.insert(id, i as f32).is_none(),
+                "insertion should not repeat",
+            );
+
+            <_ as layers::Guard>::publish(guard);
+        }
+
+        // Lookaheads to try.
+        let lookaheads: &[Option<NonZeroUsize>] = &[
+            None,
+            NonZeroUsize::new(1),
+            NonZeroUsize::new(2),
+            NonZeroUsize::new(5),
+            NonZeroUsize::new(10),
+            NonZeroUsize::new(100),
+        ];
+
+        // This is the main loop for testing `ExpandBeam`.
+        //
+        // We do several things.
+        //
+        // 1. We try to insert two additional IDs, but hold don't publish their guards.
+        //    This tests that we avoid items being readable until they are published.
+        //
+        // 2. We commit and insert two new points but immediately retire them.
+        //    This tests that we correctly make these points unreadable.
+        for lookahead in lookaheads {
+            full.lookahead = *lookahead;
+
+            let g0 = <_ as layers::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
+            let g1 = <_ as layers::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
+            let g2 = <_ as layers::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
+            let g3 = <_ as layers::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
+
+            {
+                let g0_id = <_ as layers::Guard>::id(&g0);
+                <_ as layers::Guard>::publish(g0);
+                <_ as layers::Layer>::retire(&full, g0_id).unwrap();
+            }
+
+            {
+                let g1_id = <_ as layers::Guard>::id(&g1);
+                <_ as layers::Guard>::publish(g1);
+                <_ as layers::Layer>::retire(&full, g1_id).unwrap();
+            }
+
+            let query = -1.0f32;
+
+            let into =
+                IntoExpandBeam::new(&full, Calf::Borrowed(std::slice::from_ref(&query))).unwrap();
+
+            let mut expand = ExpandBeam::new(into, prefetch::Loop::new(), TestDistance);
+
+            assert_eq!(<_ as layers::ExpandBeam>::id_limit(&expand), id_limit);
+
+            let mut buf = Vec::<(u32, f32)>::new();
+            let mut list = Vec::<u32>::new();
+
+            // Use triangular indexing from `0..id_limit` with `points` serving as the
+            // groundtruth.
+            //
+            // Note that we purposely make `list` extra long with redundant indices to help
+            // catch indexing bugs inside `ExpanBeam`.
+            for i in 0..=id_limit.value() {
+                list.clear();
+                list.extend((0..i).rev());
+                list.extend(0..i);
+
+                buf.resize(list.len(), Default::default());
+
+                let read =
+                    unsafe { <_ as layers::ExpandBeam>::expand_beam(&expand, &list, &mut buf) }
+                        .unwrap();
+
+                let expected: Vec<(u32, f32)> = list
+                    .iter()
+                    .copied()
+                    .filter_map(|id| match points.get(&id) {
+                        Some(point) => {
+                            let expected = point + query;
+
+                            assert!(
+                                <_ as layers::Layer>::is_readable(&full, id).unwrap(),
+                                "point should be readable"
+                            );
+
+                            assert_eq!(
+                                <_ as layers::ExpandBeam>::evaluate(&expand, id).unwrap(),
+                                Some(expected),
+                                "readable points should return valid distances",
+                            );
+
+                            Some((id, expected))
+                        }
+                        None => {
+                            assert!(
+                                !<_ as layers::Layer>::is_readable(&full, id).unwrap(),
+                                "points not yielded by ExpandBeam should be unreadable"
+                            );
+
+                            assert!(
+                                <_ as layers::ExpandBeam>::evaluate(&expand, id)
+                                    .unwrap()
+                                    .is_none(),
+                                "unreable points should return `None` for their distance",
+                            );
+
+                            None
+                        }
+                    })
+                    .collect();
+
+                assert_eq!(&buf[..read], &*expected);
+            }
+
+            assert!(
+                <_ as layers::ExpandBeam>::evaluate(&expand, id_limit.value()).is_err(),
+                "`ExpandBeam::evaluate` should catch out-of-bounds errors",
+            );
+
+            // Ensure we hold onto `g2` and `g3` for the duration of the above check.
+            drop(g2);
+            drop(g3);
+        }
+    }
+
+    fn test_prune_inner(
+        points: &HashMap<u32, f32>,
+        prune: &mut Prune<f32, TestDistance>,
+        ids: &[u32],
+    ) {
+        let mut items: HashMap<u32, Option<layers::PruneKey>> =
+            ids.iter().map(|id| (*id, None)).collect();
+
+        let processed = <_ as layers::Prune>::prepare(prune, items.iter_mut()).unwrap();
+        assert_eq!(processed, items.values().filter(|i| i.is_some()).count());
+
+        // Ensure that `prepare` agrees with `points`.
+        for (k, v) in items.iter() {
+            match v {
+                Some(_) => assert!(points.contains_key(k)),
+                None => assert!(!points.contains_key(k)),
+            }
+        }
+
+        fn filter((k, v): (&u32, &Option<layers::PruneKey>)) -> Option<(u32, layers::PruneKey)> {
+            v.map(|v| (*k, v))
+        }
+
+        // Ensure that distances agree.
+        for (k0, v0) in items.iter().filter_map(filter) {
+            for (k1, v1) in items.iter().filter_map(filter) {
+                // Manually implement `TestDistance`.
+                let expected = points[&k0] + points[&k1];
+                let got = <_ as layers::Prune>::evaluate(prune, v0, v1);
+                assert_eq!(expected, got);
+            }
+        }
+    }
+
+    /// A Miri-friendly test for `Prune`.
+    #[test]
+    fn test_prune() {
+        let capacity = Capacity::new(20);
+        let id_limit = IdLimit::new(22);
+
+        let (mut full, mut points) = test_full(capacity);
+
+        assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
+        assert_eq!(<_ as layers::Layer>::id_limit(&full), id_limit);
+
+        let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
+
+        // Insert the values 0 to 10.
+        for i in 0u32..10 {
+            let guard = <_ as layers::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
+
+            let id = <_ as layers::Guard>::id(&guard);
+
+            assert!(
+                available.remove(&id),
+                "insertion should return available slots",
+            );
+
+            assert!(
+                points.insert(id, i as f32).is_none(),
+                "insertion should not repeat",
+            );
+
+            <_ as layers::Guard>::publish(guard);
+        }
+
+        // We do several things.
+        //
+        // 1. We try to insert two additional IDs, but hold don't publish their guards.
+        //    This tests that we avoid items being readable until they are published.
+        //
+        // 2. We commit and insert two new points but immediately retire them.
+        //    This tests that we correctly make these points unreadable.
+        let g0 = <_ as layers::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
+        let g1 = <_ as layers::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
+        let g2 = <_ as layers::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
+        let g3 = <_ as layers::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
+
+        {
+            let g0_id = <_ as layers::Guard>::id(&g0);
+            <_ as layers::Guard>::publish(g0);
+            <_ as layers::Layer>::retire(&full, g0_id).unwrap();
+        }
+
+        {
+            let g1_id = <_ as layers::Guard>::id(&g1);
+            <_ as layers::Guard>::publish(g1);
+            <_ as layers::Layer>::retire(&full, g1_id).unwrap();
+        }
+
+        let mut prune = Prune::new(full.reader().unwrap(), TestDistance);
+
+        // Note that we emit reads above the `IdLimit`, which we expect to be silently
+        // rejected.
+        for i in 0..=(id_limit.value() + 5) {
+            let mut ids: Vec<u32> = (0..i).collect();
+            test_prune_inner(&points, &mut prune, &ids);
+
+            ids.reverse();
+            test_prune_inner(&points, &mut prune, &ids);
+        }
+
+        // Drop the guards - verifying that they are held in-limbo during the test.
+        drop(g2);
+        drop(g3);
+    }
+
+    //----------------------//
+    // Specialization Tests //
+    //----------------------//
+
+    // These test make sure that the mapping for metrics and specializations are routed
+    // correctly. They do not exhaustively test the `ExpandBeam` kernls as these are left
+    // to tests that are more Miri friendly.
+    fn test_dispatch<T>(dim: usize, metric: Metric, seed: u64, ctx: &dyn Display)
+    where
+        T: FullPrecision + FullPrecisionImpl + Sample + DistanceProvider<T>,
+    {
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let start_point = gen_vec::<T>(dim, &mut rng);
+        let query = gen_vec::<T>(dim, &mut rng);
+
+        let full = <_ as layers::LayerConfig>::build(Full::<T>::config(
+            Capacity::new(1),
+            MaxDegree::new(0),
+            metric,
+            Matrix::<T>::row_vector(start_point.clone().into()),
+        ))
+        .unwrap();
+
+        let start_id: u32 = 1;
+
+        let internal_query = {
+            let guard = <_ as layers::Set<&[T]>>::set(&full, &query).unwrap();
+            let id = <_ as layers::Guard>::id(&guard);
+            <_ as layers::Guard>::publish(guard);
+            id
+        };
+
+        let distance = <T as DistanceProvider<T>>::distance_comparer(metric, None);
+        let expected = distance.call(&start_point, &query);
+
+        // Expand Beam - both `evaluate` and `expand_beam` share the same distance computer,
+        // so we can just test `evaluate`.
+        {
+            let expand_beam = <T as FullPrecisionImpl>::make_expand_beam(&full, &query).unwrap();
+            let got = expand_beam.evaluate(start_id).unwrap().unwrap();
+            assert!(
+                approx_eq(expected, got),
+                "{ctx} - expected {expected}, got {got}"
+            );
+        }
+
+        // Prune
+        {
+            let mut prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
+            let mut points: HashMap<u32, Option<layers::PruneKey>> =
+                [(internal_query, None), (start_id, None)]
+                    .into_iter()
+                    .collect();
+            prune.prepare(points.iter_mut()).unwrap();
+            let got = prune.evaluate(points[&internal_query].unwrap(), points[&start_id].unwrap());
+            assert!(
+                approx_eq(expected, got),
+                "{ctx} - expected {expected}, got {got}"
+            );
+        }
+    }
+
+    fn metrics() -> [Metric; 4] {
+        [
+            Metric::L2,
+            Metric::InnerProduct,
+            Metric::Cosine,
+            Metric::CosineNormalized,
+        ]
+    }
+
+    #[test]
+    fn test_f32_dynamic() {
+        let dim = 10;
+        for m in metrics() {
+            test_dispatch::<f32>(dim, m, 0x917a80fc68f66e04, &lazy_format!("dynamic-{m}-f32"));
+        }
+    }
+
+    // Test the specialized dispatches.
+    #[test]
+    fn test_f32_specialized() {
+        test_dispatch::<f32>(
+            100,
+            Metric::L2,
+            0x917a80fc68f66e04,
+            &lazy_format!("dynamic-l2-f32-100"),
+        );
+    }
+
+    #[test]
+    fn test_f16_dynamic() {
+        let dim = 10;
+        for m in metrics() {
+            test_dispatch::<f16>(dim, m, 0x917a80fc68f66e04, &lazy_format!("dynamic-{m}-f16"));
+        }
+    }
+
+    // Test the specialized dispatches.
+    #[test]
+    fn test_f16_specialized() {
+        test_dispatch::<f16>(
+            100,
+            Metric::L2,
+            0x917a80fc68f66e04,
+            &lazy_format!("dynamic-l2-f16-100"),
+        );
+    }
+
+    #[test]
+    fn test_u8_dynamic() {
+        let dim = 10;
+        for m in [Metric::L2, Metric::InnerProduct, Metric::Cosine] {
+            test_dispatch::<u8>(dim, m, 0x917a80fc68f66e04, &lazy_format!("dynamic-{m}-u8"));
+        }
+    }
+
+    #[test]
+    fn test_u8_specialized() {
+        test_dispatch::<u8>(
+            128,
+            Metric::L2,
+            0x917a80fc68f66e04,
+            &lazy_format!("dynamic-l2-u8-100"),
+        );
+    }
+
+    #[test]
+    fn test_i8_dynamic() {
+        let dim = 10;
+        for m in [Metric::L2, Metric::InnerProduct, Metric::Cosine] {
+            test_dispatch::<i8>(dim, m, 0x917a80fc68f66e04, &lazy_format!("dynamic-{m}-i8"));
+        }
+    }
+}

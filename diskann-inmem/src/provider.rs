@@ -449,11 +449,23 @@ impl<'a> Distance<'a> {
     }
 }
 
-impl diskann_vector::DistanceFunction<layers::PruneKey, layers::PruneKey, f32> for Distance<'_> {
+/// An opaque element-ref for [`PruneAccessor`].
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct ElementRef(layers::PruneKey);
+
+impl<'a> diskann_utils::Reborrow<'a> for ElementRef {
+    type Target = ElementRef;
+    fn reborrow(&'a self) -> Self {
+        *self
+    }
+}
+
+impl diskann_vector::DistanceFunction<ElementRef, ElementRef, f32> for Distance<'_> {
     #[inline]
-    fn evaluate_similarity(&self, x: layers::PruneKey, y: layers::PruneKey) -> f32 {
+    fn evaluate_similarity(&self, x: ElementRef, y: ElementRef) -> f32 {
         self.counters.distance_ref(1);
-        self.prune.evaluate(x, y)
+        self.prune.evaluate(x.0, y.0)
     }
 }
 
@@ -467,7 +479,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     where
         Self: 'a;
 
-    type ElementRef<'a> = layers::PruneKey;
+    type ElementRef<'a> = ElementRef;
 
     type View<'a>
         = &'a Self
@@ -492,8 +504,8 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     {
         self.keys.clear();
         self.keys.extend(itr.map(|i| (i, None)));
-        let count = self.prune.prepare(self.keys.iter_mut())?;
-        self.counters.get_vector(count.as_u64());
+        let count: usize = self.prune.prepare(self.keys.iter_mut())?;
+        self.counters.get_vector(count as u64);
 
         Ok((self, Distance::new(&*self.prune, self.counters.fork())))
     }
@@ -557,14 +569,14 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
 }
 
 impl workingset::View<u32> for &PruneAccessor<'_> {
-    type ElementRef<'a> = layers::PruneKey;
+    type ElementRef<'a> = ElementRef;
     type Element<'a>
-        = layers::PruneKey
+        = ElementRef
     where
         Self: 'a;
 
-    fn get(&self, id: u32) -> Option<layers::PruneKey> {
-        *self.keys.get(&id)?
+    fn get(&self, id: u32) -> Option<ElementRef> {
+        self.keys.get(&id)?.map(|v| ElementRef(v))
     }
 }
 
