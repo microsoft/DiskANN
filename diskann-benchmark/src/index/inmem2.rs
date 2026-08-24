@@ -480,7 +480,7 @@ where
             MaxDegree::new(input.build.config.max_degree().get()),
             input.data.distance,
             start,
-        );
+        )?;
 
         let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(
@@ -843,7 +843,6 @@ where
         let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.search.queries,
         ))?);
-        let dim = dataset.ncols();
 
         // Compute the medoid of the dataset as the single start point.
         let start = StartPointStrategy::Medoid.compute(dataset.as_view())?;
@@ -853,7 +852,7 @@ where
             MaxDegree::new(index_config.max_degree().get()),
             input.data.distance,
             start,
-        );
+        )?;
 
         let provider = Provider::<_, u32>::new(config)?;
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
