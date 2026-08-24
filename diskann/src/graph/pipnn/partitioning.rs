@@ -541,6 +541,7 @@ mod tests {
     use diskann_utils::views::{Matrix, MatrixView};
     use diskann_vector::{Half, distance::Metric};
     use diskann_wide::arch::{self, Target1};
+    use rstest::rstest;
 
     use super::*;
 
@@ -583,7 +584,12 @@ mod tests {
         arch::dispatch1_no_features(DispatchPartition(metric), PartitionCall { data, config })
     }
 
-    fn config(c_min: usize, c_max: usize, fanout: Vec<usize>, replicas: usize) -> PiPNNConfig {
+    fn partition_config(
+        c_min: usize,
+        c_max: usize,
+        fanout: Vec<usize>,
+        replicas: usize,
+    ) -> PiPNNConfig {
         PiPNNConfig {
             c_max,
             c_min,
@@ -594,7 +600,12 @@ mod tests {
         }
     }
 
-    fn clustered_data(points: usize, dimensions: usize) -> Matrix<f32> {
+    fn separated_point_clusters(points: usize, dimensions: usize) -> Matrix<f32> {
+        const POINTS_PER_CLUSTER: usize = 8;
+        const CLUSTER_SEPARATION: f32 = 10.0;
+        const POINT_OFFSET: f32 = 0.001;
+        const DIMENSION_OFFSET: f32 = 0.01;
+
         Matrix::new(
             diskann_utils::views::Init({
                 let mut position = 0usize;
@@ -602,7 +613,10 @@ mod tests {
                     let point = position / dimensions;
                     let dimension = position % dimensions;
                     position += 1;
-                    (point / 8) as f32 * 10.0 + dimension as f32 * 0.01 + point as f32 * 0.001
+                    let cluster = point / POINTS_PER_CLUSTER;
+                    cluster as f32 * CLUSTER_SEPARATION
+                        + point as f32 * POINT_OFFSET
+                        + dimension as f32 * DIMENSION_OFFSET
                 }
             }),
             points,
@@ -610,7 +624,7 @@ mod tests {
         )
     }
 
-    fn directional_data(points: usize, dimensions: usize) -> Matrix<f32> {
+    fn unit_circle_points(points: usize, dimensions: usize) -> Matrix<f32> {
         Matrix::new(
             diskann_utils::views::Init({
                 let mut position = 0usize;
@@ -644,7 +658,7 @@ mod tests {
         memberships
     }
 
-    fn assert_valid_partition_with_runtime_metric(
+    fn assert_partition_invariants(
         leaves: &[Vec<u32>],
         points: usize,
         c_max: usize,
@@ -669,49 +683,82 @@ mod tests {
         assert!(counts.iter().all(|&count| count >= replicas));
     }
 
-    #[test]
-    fn partition_returns_one_leaf_when_point_count_does_not_exceed_c_max() {
-        for points in [7, 8] {
-            let data = clustered_data(points, 3);
-            let leaves = partition_with_runtime_metric(
-                data.as_view(),
-                &config(2, 8, vec![2], 1),
-                Metric::L2,
-            )
-            .unwrap();
-            assert_eq!(leaves, vec![(0..points as u32).collect::<Vec<_>>()]);
-        }
+    #[rstest]
+    #[case::below_c_max(7)]
+    #[case::at_c_max(8)]
+    fn partition_returns_one_leaf_when_point_count_does_not_exceed_c_max(
+        #[case] point_count: usize,
+    ) {
+        // Given
+        let data = separated_point_clusters(point_count, 3);
+        let expected_leaf = vec![(0..point_count as u32).collect::<Vec<_>>()];
+
+        // When
+        let actual_leaves = partition_with_runtime_metric(
+            data.as_view(),
+            &partition_config(2, 8, vec![2], 1),
+            Metric::L2,
+        )
+        .unwrap();
+
+        // Then
+        assert_eq!(actual_leaves, expected_leaf);
     }
 
     #[test]
-    fn partition_is_fixed_seed_deterministic_and_bounded() {
-        let data = clustered_data(96, 8);
-        let config = config(4, 16, vec![3, 2], 2);
+    fn partition_membership_is_deterministic_for_a_fixed_seed() {
+        // Given
+        let data = separated_point_clusters(96, 8);
+        let config = partition_config(4, 16, vec![3, 2], 2);
 
-        let first = partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
-        let second = partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
+        // When
+        let first_partition =
+            partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
+        let second_partition =
+            partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
 
-        assert_eq!(sorted_memberships(&first), sorted_memberships(&second));
-        assert_valid_partition_with_runtime_metric(&first, 96, 16, 2);
-        assert!(first.iter().map(Vec::len).sum::<usize>() > 96 * 2);
+        // Then
+        assert_eq!(
+            sorted_memberships(&first_partition),
+            sorted_memberships(&second_partition)
+        );
+    }
+
+    #[test]
+    fn partition_respects_capacity_and_replica_coverage() {
+        // Given
+        let data = separated_point_clusters(96, 8);
+        let config = partition_config(4, 16, vec![3, 2], 2);
+
+        // When
+        let partition = partition_with_runtime_metric(data.as_view(), &config, Metric::L2).unwrap();
+
+        // Then
+        assert_partition_invariants(&partition, 96, 16, 2);
     }
 
     #[test]
     fn partition_remains_bounded_after_the_fanout_schedule_is_exhausted() {
-        let data = clustered_data(80, 4);
-        let leaves =
-            partition_with_runtime_metric(data.as_view(), &config(2, 8, vec![2], 1), Metric::L2)
-                .unwrap();
+        let data = separated_point_clusters(80, 4);
+        let leaves = partition_with_runtime_metric(
+            data.as_view(),
+            &partition_config(2, 8, vec![2], 1),
+            Metric::L2,
+        )
+        .unwrap();
 
-        assert_valid_partition_with_runtime_metric(&leaves, 80, 8, 1);
+        assert_partition_invariants(&leaves, 80, 8, 1);
     }
 
     #[test]
     fn duplicate_points_return_iteration_limit_instead_of_oversized_leaf() {
         let data = Matrix::new(1.0f32, 24, 4);
-        let error =
-            partition_with_runtime_metric(data.as_view(), &config(2, 4, vec![1], 1), Metric::L2)
-                .unwrap_err();
+        let error = partition_with_runtime_metric(
+            data.as_view(),
+            &partition_config(2, 4, vec![1], 1),
+            Metric::L2,
+        )
+        .unwrap_err();
         let error = error.downcast::<PartitionError>().unwrap();
 
         assert!(matches!(
@@ -766,15 +813,15 @@ mod tests {
 
     #[test]
     fn replicas_cover_every_point_once_or_more_per_replica() {
-        let data = directional_data(72, 5);
+        let data = unit_circle_points(72, 5);
         let leaves = partition_with_runtime_metric(
             data.as_view(),
-            &config(3, 12, vec![3, 2], 3),
+            &partition_config(3, 12, vec![3, 2], 3),
             Metric::CosineNormalized,
         )
         .unwrap();
 
-        assert_valid_partition_with_runtime_metric(&leaves, 72, 12, 3);
+        assert_partition_invariants(&leaves, 72, 12, 3);
     }
 
     fn assert_partition_conversion_matches_f32<T>(label: &str, convert: impl Fn(u8) -> T)
@@ -789,12 +836,12 @@ mod tests {
                 .map(|index| {
                     let point = index / dimensions;
                     let dimension = index % dimensions;
-                    ((point * 5 + dimension * 7 + point * dimension) % 23) as u8
+                    (point + dimension) as u8
                 })
                 .collect();
             let f32_data: Vec<f32> = raw.iter().map(|&value| value as f32).collect();
             let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
-            let config = config(2, 16, vec![2, 1], 1);
+            let config = partition_config(2, 16, vec![2, 1], 1);
             let expected_f32_partition = partition_with_runtime_metric(
                 MatrixView::try_from(&f32_data, points, dimensions).unwrap(),
                 &config,
@@ -808,7 +855,7 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{label} dimensions={dimensions}: {error}"));
 
-            assert_valid_partition_with_runtime_metric(&actual_converted_partition, points, 16, 1);
+            assert_partition_invariants(&actual_converted_partition, points, 16, 1);
             assert_eq!(
                 sorted_memberships(&actual_converted_partition),
                 sorted_memberships(&expected_f32_partition),
@@ -834,8 +881,8 @@ mod tests {
     }
 
     #[test]
-    fn l2_leader_norms_preserve_sequential_reduction_order() {
-        fn next(state: &mut u64) -> f32 {
+    fn leader_assignment_preserves_sequential_norm_reduction_with_l2() {
+        fn next_reassociation_regression_value(state: &mut u64) -> f32 {
             *state ^= *state << 13;
             *state ^= *state >> 7;
             *state ^= *state << 17;
@@ -845,19 +892,27 @@ mod tests {
         // Sequential and SIMD-reassociated leader norms select different top-1
         // leaders for this case. Dot products still use the production GEMM. The
         // test changes only the leader-norm reduction.
-        let dimensions = 129;
-        let mut state = 0x3a85_f952_c718_6e49;
-        let point: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
-        let leader_zero: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
-        let leader_one: Vec<f32> = (0..dimensions).map(|_| next(&mut state)).collect();
+        const REDUCTION_BOUNDARY_DIMENSIONS: usize = 129;
+        const REASSOCIATION_REGRESSION_SEED: u64 = 0x3a85_f952_c718_6e49;
+        let mut state = REASSOCIATION_REGRESSION_SEED;
+        let point: Vec<f32> = (0..REDUCTION_BOUNDARY_DIMENSIONS)
+            .map(|_| next_reassociation_regression_value(&mut state))
+            .collect();
+        let leader_zero: Vec<f32> = (0..REDUCTION_BOUNDARY_DIMENSIONS)
+            .map(|_| next_reassociation_regression_value(&mut state))
+            .collect();
+        let leader_one: Vec<f32> = (0..REDUCTION_BOUNDARY_DIMENSIONS)
+            .map(|_| next_reassociation_regression_value(&mut state))
+            .collect();
         let data: Vec<f32> = leader_zero
             .into_iter()
             .chain(leader_one)
             .chain(point)
             .collect();
-        let data = MatrixView::try_from(data.as_slice(), 3, dimensions).unwrap();
+        let data = MatrixView::try_from(data.as_slice(), 3, REDUCTION_BOUNDARY_DIMENSIONS).unwrap();
+        let expected_clusters = [vec![], vec![2]];
 
-        let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
+        let actual_clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
             diskann_wide::ARCH,
             data,
             &[2],
@@ -867,36 +922,50 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(clusters, [vec![], vec![2]]);
+        assert_eq!(actual_clusters, expected_clusters);
     }
 
-    #[test]
-    fn every_metric_covers_all_points_without_exceeding_c_max() {
-        let data = directional_data(64, 8);
-        let config = config(2, 20, vec![2], 1);
-
-        for metric in [
+    #[rstest]
+    fn partition_covers_all_points_without_exceeding_c_max(
+        #[values(
             Metric::L2,
             Metric::Cosine,
             Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            let leaves = partition_with_runtime_metric(data.as_view(), &config, metric).unwrap();
-            assert_valid_partition_with_runtime_metric(&leaves, 64, 20, 1);
-        }
+            Metric::InnerProduct
+        )]
+        metric: Metric,
+    ) {
+        // Given
+        let data = unit_circle_points(64, 8);
+        let config = partition_config(2, 20, vec![2], 1);
+
+        // When
+        let leaves = partition_with_runtime_metric(data.as_view(), &config, metric).unwrap();
+
+        // Then
+        assert_partition_invariants(&leaves, 64, 20, 1);
     }
 
-    #[test]
-    fn sampled_leader_count_is_at_least_one_and_never_exceeds_the_cap() {
-        assert_eq!(sampled_leader_count(1, 1.0), 1);
-        assert_eq!(sampled_leader_count(10, 0.01), 2);
-        assert_eq!(sampled_leader_count(50_000, 1.0), LEADER_CAP);
+    #[rstest]
+    #[case::single_point_minimum(1, 1.0, 1)]
+    #[case::sampled_count(10, 0.01, 2)]
+    #[case::leader_cap(50_000, 1.0, LEADER_CAP)]
+    fn sampled_leader_count_respects_data_size_sampling_and_cap(
+        #[case] point_count: usize,
+        #[case] sampling_probability: f64,
+        #[case] expected_leader_count: usize,
+    ) {
+        assert_eq!(
+            sampled_leader_count(point_count, sampling_probability),
+            expected_leader_count
+        );
     }
 
-    #[test]
-    fn replica_seed_derivation_is_stable_and_distinct() {
-        assert_eq!(replica_seed(0), 1_000);
-        assert_eq!(replica_seed(1), 8_919);
+    #[rstest]
+    #[case::first_replica(0, 1_000)]
+    #[case::second_replica(1, 8_919)]
+    fn replica_seed_is_stable(#[case] replica: usize, #[case] expected_seed: u64) {
+        assert_eq!(replica_seed(replica), expected_seed);
     }
 
     #[test]
@@ -937,15 +1006,34 @@ mod tests {
     #[test]
     fn parallel_scatter_matches_serial_order() {
         // Given
+        let leader_count = 7;
+        let leaders_per_point = 2;
+        let second_leader_offset = 3;
         let points: Vec<u32> = (0..PARALLEL_SCATTER_MIN_POINTS as u32).collect();
         let assignments: Vec<u32> = points
             .iter()
-            .flat_map(|point| [point % 7, (point + 3) % 7])
+            .flat_map(|point| {
+                [
+                    point % leader_count,
+                    (point + second_leader_offset) % leader_count,
+                ]
+            })
             .collect();
 
         // When
-        let expected_serial_clusters = scatter_serial(&points, &assignments, 2, 7);
-        let actual_parallel_clusters = scatter_assignments(&points, &assignments, 2, 7).unwrap();
+        let expected_serial_clusters = scatter_serial(
+            &points,
+            &assignments,
+            leaders_per_point,
+            leader_count as usize,
+        );
+        let actual_parallel_clusters = scatter_assignments(
+            &points,
+            &assignments,
+            leaders_per_point,
+            leader_count as usize,
+        )
+        .unwrap();
 
         // Then
         assert_eq!(actual_parallel_clusters, expected_serial_clusters);

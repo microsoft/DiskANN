@@ -188,8 +188,13 @@ mod tests {
     #[test]
     fn overfull_row_keeps_the_nearest_unoccluded_neighbors() {
         // Given
-        let data = [0.0_f32, 1.0, 2.0, -3.0];
-        let data = MatrixView::try_from(&data[..], 4, 1).unwrap();
+        let point_values = [
+            0.0_f32, // source
+            1.0,     // nearest point on the positive ray
+            2.0,     // farther point occluded by point 1
+            -3.0,    // point on the opposite ray
+        ];
+        let data = MatrixView::try_from(&point_values[..], 4, 1).unwrap();
         let candidates = vec![
             candidate_list([3, 2, 1]),
             candidate_list([]),
