@@ -196,27 +196,31 @@ impl LeafMetric for InnerProduct {
 )]
 mod tests {
     use super::*;
-    use diskann_wide::{ARCH, SIMDVector, arch::Current};
 
-    fn simd_distances<M: LeafMetric>(
-        norms: &[f32],
-        source: usize,
-        dot_products: [f32; 16],
-        first_target: usize,
-    ) -> [f32; 16] {
-        type TestVector = <Current as PiPNNSIMDSchema>::Vector;
-        assert_eq!(16 % TestVector::LANES, 0);
-        let source_norms = M::source_simd(ARCH, norms, source);
-        let mut output = [0.0; 16];
-        for first in (0..16).step_by(TestVector::LANES) {
-            // SAFETY: each offset starts one complete SIMD group in both arrays.
-            unsafe {
-                let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
-                M::distances_simd(ARCH, norms, source_norms, dots, first_target + first)
-                    .store_simd(output.as_mut_ptr().add(first));
+    mod test_support {
+        use super::*;
+        use diskann_wide::{ARCH, SIMDVector, arch::Current};
+
+        pub(super) fn run_distances_simd<M: LeafMetric>(
+            norms: &[f32],
+            source: usize,
+            dot_products: [f32; 16],
+            first_target: usize,
+        ) -> [f32; 16] {
+            type TestVector = <Current as PiPNNSIMDSchema>::Vector;
+            assert_eq!(16 % TestVector::LANES, 0);
+            let source_norms = M::source_simd(ARCH, norms, source);
+            let mut output = [0.0; 16];
+            for first in (0..16).step_by(TestVector::LANES) {
+                // SAFETY: each offset starts one complete SIMD group in both arrays.
+                unsafe {
+                    let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
+                    M::distances_simd(ARCH, norms, source_norms, dots, first_target + first)
+                        .store_simd(output.as_mut_ptr().add(first));
+                }
             }
+            output
         }
-        output
     }
 
     mod prepare_leaf_norms_tests {
@@ -351,6 +355,7 @@ mod tests {
     }
 
     mod distances_simd_tests {
+        use super::test_support::run_distances_simd;
         use super::*;
 
         #[test]
@@ -362,7 +367,8 @@ mod tests {
             let mut squared_norms = [target_squared_norm; 17];
             squared_norms[0] = source_squared_norm;
 
-            let actual_distances = simd_distances::<L2>(&squared_norms, 0, [dot_product; 16], 1);
+            let actual_distances =
+                run_distances_simd::<L2>(&squared_norms, 0, [dot_product; 16], 1);
 
             assert_eq!(actual_distances, [expected_distance; 16]);
         }
@@ -372,7 +378,7 @@ mod tests {
             let squared_norms = [1.0; 17];
             let expected_non_negative_distance = 0.0;
 
-            let actual_distances = simd_distances::<L2>(&squared_norms, 0, [f32::NAN; 16], 1);
+            let actual_distances = run_distances_simd::<L2>(&squared_norms, 0, [f32::NAN; 16], 1);
 
             assert_eq!(actual_distances, [expected_non_negative_distance; 16]);
         }
@@ -386,7 +392,7 @@ mod tests {
             let mut norms = [target_norm; 17];
             norms[0] = source_norm;
 
-            let actual_distances = simd_distances::<Cosine>(&norms, 0, [dot_product; 16], 1);
+            let actual_distances = run_distances_simd::<Cosine>(&norms, 0, [dot_product; 16], 1);
 
             assert_eq!(actual_distances, [expected_distance; 16]);
         }
@@ -396,7 +402,8 @@ mod tests {
             let dot_product = 0.25;
             let expected_distance = 1.0 - dot_product;
 
-            let actual_distances = simd_distances::<CosineNormalized>(&[], 0, [dot_product; 16], 0);
+            let actual_distances =
+                run_distances_simd::<CosineNormalized>(&[], 0, [dot_product; 16], 0);
 
             assert_eq!(actual_distances, [expected_distance; 16]);
         }
@@ -406,7 +413,7 @@ mod tests {
             let dot_product = 3.0;
             let expected_distance = -dot_product;
 
-            let actual_distances = simd_distances::<InnerProduct>(&[], 0, [dot_product; 16], 0);
+            let actual_distances = run_distances_simd::<InnerProduct>(&[], 0, [dot_product; 16], 0);
 
             assert_eq!(actual_distances, [expected_distance; 16]);
         }

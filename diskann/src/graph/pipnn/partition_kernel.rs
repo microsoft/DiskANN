@@ -248,171 +248,199 @@ mod tests {
     use crate::graph::pipnn::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
     use diskann_utils::views::{Matrix, MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
-    use diskann_wide::arch::{self, Target1};
 
-    struct KernelCall<'a> {
-        input: PartitionInput<'a>,
-        output: MutMatrixView<'a, u32>,
-        ranked_leaders: &'a mut Vec<(u32, f32)>,
-    }
+    mod test_support {
+        use super::*;
+        use diskann_wide::arch::{self, Target1};
 
-    struct DispatchMetric(Metric);
-
-    impl<A> Target1<A, (), KernelCall<'_>> for DispatchMetric
-    where
-        A: PiPNNSIMDSchema,
-    {
-        fn run(self, arch: A, call: KernelCall<'_>) {
-            match self.0 {
-                Metric::L2 => {
-                    rank_leader_dots::<A, L2>(arch, call.input, call.output, call.ranked_leaders)
-                }
-                Metric::Cosine => rank_leader_dots::<A, Cosine>(
-                    arch,
-                    call.input,
-                    call.output,
-                    call.ranked_leaders,
-                ),
-                Metric::CosineNormalized => rank_leader_dots::<A, CosineNormalized>(
-                    arch,
-                    call.input,
-                    call.output,
-                    call.ranked_leaders,
-                ),
-                Metric::InnerProduct => rank_leader_dots::<A, InnerProduct>(
-                    arch,
-                    call.input,
-                    call.output,
-                    call.ranked_leaders,
-                ),
-            }
+        struct KernelCall<'a> {
+            input: PartitionInput<'a>,
+            output: MutMatrixView<'a, u32>,
+            ranked_leaders: &'a mut Vec<(u32, f32)>,
         }
-    }
 
-    fn partition_input<'a>(
-        dots: &'a [f32],
-        point_count: usize,
-        leader_count: usize,
-        point_norms: &'a [f32],
-        leader_norms: &'a [f32],
-    ) -> PartitionInput<'a> {
-        PartitionInput {
-            dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
-            norms: PartitionNorms {
-                point_norms,
-                leader_norms,
-            },
-        }
-    }
+        struct DispatchMetric(Metric);
 
-    fn rank_partition_leaders(
-        metric: Metric,
-        input: PartitionInput<'_>,
-        fanout: usize,
-    ) -> Vec<u32> {
-        let mut output = Matrix::new(u32::MAX, input.dots.nrows(), fanout);
-        arch::dispatch1_no_features(
-            DispatchMetric(metric),
-            KernelCall {
-                input,
-                output: output.as_mut_view(),
-                ranked_leaders: &mut Vec::new(),
-            },
-        );
-        output.into_inner().into_vec()
-    }
-
-    fn reference_score(metric: Metric, dot: f32, point_norm: f32, leader_norm: f32) -> f32 {
-        match metric {
-            Metric::L2 => (-2.0_f32).mul_add(dot, leader_norm),
-            Metric::CosineNormalized => 1.0 - dot,
-            Metric::InnerProduct => -dot,
-            Metric::Cosine => {
-                if point_norm < f32::MIN_POSITIVE.sqrt() || leader_norm < f32::MIN_POSITIVE.sqrt() {
-                    1.0
-                } else {
-                    1.0 - (dot / (point_norm * leader_norm)).clamp(-1.0, 1.0)
-                }
-            }
-        }
-    }
-
-    fn reference_assignments(metric: Metric, input: PartitionInput<'_>, fanout: usize) -> Vec<u32> {
-        let mut output = vec![UNASSIGNED_LEADER; input.dots.nrows() * fanout];
-        for (point, (dots, assignments)) in input
-            .dots
-            .row_iter()
-            .zip(output.chunks_exact_mut(fanout))
-            .enumerate()
+        impl<A> Target1<A, (), KernelCall<'_>> for DispatchMetric
+        where
+            A: PiPNNSIMDSchema,
         {
-            let point_norm = input.norms.point_norms.get(point).copied().unwrap_or(0.0);
-            let mut candidates: Vec<_> = dots
-                .iter()
+            fn run(self, arch: A, call: KernelCall<'_>) {
+                match self.0 {
+                    Metric::L2 => rank_leader_dots::<A, L2>(
+                        arch,
+                        call.input,
+                        call.output,
+                        call.ranked_leaders,
+                    ),
+                    Metric::Cosine => rank_leader_dots::<A, Cosine>(
+                        arch,
+                        call.input,
+                        call.output,
+                        call.ranked_leaders,
+                    ),
+                    Metric::CosineNormalized => rank_leader_dots::<A, CosineNormalized>(
+                        arch,
+                        call.input,
+                        call.output,
+                        call.ranked_leaders,
+                    ),
+                    Metric::InnerProduct => rank_leader_dots::<A, InnerProduct>(
+                        arch,
+                        call.input,
+                        call.output,
+                        call.ranked_leaders,
+                    ),
+                }
+            }
+        }
+
+        pub(super) fn partition_input<'a>(
+            dots: &'a [f32],
+            point_count: usize,
+            leader_count: usize,
+            point_norms: &'a [f32],
+            leader_norms: &'a [f32],
+        ) -> PartitionInput<'a> {
+            PartitionInput {
+                dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
+                norms: PartitionNorms {
+                    point_norms,
+                    leader_norms,
+                },
+            }
+        }
+
+        pub(super) fn with_rank_leader_dots_fixture<F>(
+            input: PartitionInput<'_>,
+            nearest_leader_count: usize,
+            run: F,
+        ) -> Vec<u32>
+        where
+            F: FnOnce(PartitionInput<'_>, MutMatrixView<'_, u32>, &mut Vec<(u32, f32)>),
+        {
+            let mut output = Matrix::new(u32::MAX, input.dots.nrows(), nearest_leader_count);
+            run(input, output.as_mut_view(), &mut Vec::new());
+            output.into_inner().into_vec()
+        }
+
+        /// Run the production ranker through runtime architecture and metric dispatch.
+        pub(super) fn run_rank_leader_dots(
+            metric: Metric,
+            input: PartitionInput<'_>,
+            nearest_leader_count: usize,
+        ) -> Vec<u32> {
+            let mut output = Matrix::new(u32::MAX, input.dots.nrows(), nearest_leader_count);
+            arch::dispatch1_no_features(
+                DispatchMetric(metric),
+                KernelCall {
+                    input,
+                    output: output.as_mut_view(),
+                    ranked_leaders: &mut Vec::new(),
+                },
+            );
+            output.into_inner().into_vec()
+        }
+
+        fn reference_score(metric: Metric, dot: f32, point_norm: f32, leader_norm: f32) -> f32 {
+            match metric {
+                Metric::L2 => (-2.0_f32).mul_add(dot, leader_norm),
+                Metric::CosineNormalized => 1.0 - dot,
+                Metric::InnerProduct => -dot,
+                Metric::Cosine => {
+                    if point_norm < f32::MIN_POSITIVE.sqrt()
+                        || leader_norm < f32::MIN_POSITIVE.sqrt()
+                    {
+                        1.0
+                    } else {
+                        1.0 - (dot / (point_norm * leader_norm)).clamp(-1.0, 1.0)
+                    }
+                }
+            }
+        }
+
+        pub(super) fn reference_assignments(
+            metric: Metric,
+            input: PartitionInput<'_>,
+            nearest_leader_count: usize,
+        ) -> Vec<u32> {
+            let mut output = vec![UNASSIGNED_LEADER; input.dots.nrows() * nearest_leader_count];
+            for (point, (dots, assignments)) in input
+                .dots
+                .row_iter()
+                .zip(output.chunks_exact_mut(nearest_leader_count))
                 .enumerate()
-                .filter_map(|(leader, &dot)| {
-                    let leader_norm = input.norms.leader_norms.get(leader).copied().unwrap_or(0.0);
-                    let score = reference_score(metric, dot, point_norm, leader_norm);
-                    (score.partial_cmp(&f32::INFINITY) == Some(std::cmp::Ordering::Less))
-                        .then_some((leader as u32, score))
+            {
+                let point_norm = input.norms.point_norms.get(point).copied().unwrap_or(0.0);
+                let mut candidates: Vec<_> = dots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(leader, &dot)| {
+                        let leader_norm =
+                            input.norms.leader_norms.get(leader).copied().unwrap_or(0.0);
+                        let score = reference_score(metric, dot, point_norm, leader_norm);
+                        (score.partial_cmp(&f32::INFINITY) == Some(std::cmp::Ordering::Less))
+                            .then_some((leader as u32, score))
+                    })
+                    .collect();
+                candidates.sort_by(|left, right| left.1.total_cmp(&right.1));
+                for (destination, (leader, _)) in assignments.iter_mut().zip(candidates) {
+                    *destination = leader;
+                }
+            }
+            output
+        }
+
+        /// Build ranking input from two axis points and leaders between those axes.
+        ///
+        /// The first point prefers early leaders. The second point prefers late leaders.
+        pub(super) fn lane_boundary_input_from_point_and_leader_vectors(
+            metric: Metric,
+            leader_count: usize,
+        ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+            let points = [[1.0_f32, 0.0], [0.0, 1.0]];
+            let denominator = (leader_count + 1) as f32;
+            let leaders: Vec<_> = (0..leader_count)
+                .map(|leader| {
+                    let second_component = (leader + 1) as f32 / denominator;
+                    let vector = [1.0 - second_component, second_component];
+                    if metric == Metric::CosineNormalized {
+                        let norm = vector[0].hypot(vector[1]);
+                        [vector[0] / norm, vector[1] / norm]
+                    } else {
+                        vector
+                    }
                 })
                 .collect();
-            candidates.sort_by(|left, right| left.1.total_cmp(&right.1));
-            for (destination, (leader, _)) in assignments.iter_mut().zip(candidates) {
-                *destination = leader;
-            }
-        }
-        output
-    }
-
-    /// Build ranking input from two axis points and leaders between those axes.
-    ///
-    /// The first point prefers early leaders. The second point prefers late leaders.
-    fn lane_boundary_input_from_point_and_leader_vectors(
-        metric: Metric,
-        leader_count: usize,
-    ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-        let points = [[1.0_f32, 0.0], [0.0, 1.0]];
-        let denominator = (leader_count + 1) as f32;
-        let leaders: Vec<_> = (0..leader_count)
-            .map(|leader| {
-                let second_component = (leader + 1) as f32 / denominator;
-                let vector = [1.0 - second_component, second_component];
-                if metric == Metric::CosineNormalized {
-                    let norm = vector[0].hypot(vector[1]);
-                    [vector[0] / norm, vector[1] / norm]
-                } else {
-                    vector
-                }
-            })
-            .collect();
-        let dots = points
-            .iter()
-            .flat_map(|point| {
-                leaders
+            let dots = points
+                .iter()
+                .flat_map(|point| {
+                    leaders
+                        .iter()
+                        .map(|leader| point[0] * leader[0] + point[1] * leader[1])
+                })
+                .collect();
+            let point_norms = if metric == Metric::Cosine {
+                points
                     .iter()
-                    .map(|leader| point[0] * leader[0] + point[1] * leader[1])
-            })
-            .collect();
-        let point_norms = if metric == Metric::Cosine {
-            points
-                .iter()
-                .map(|point| point[0].hypot(point[1]))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let leader_norms = match metric {
-            Metric::L2 => leaders
-                .iter()
-                .map(|leader| leader[0] * leader[0] + leader[1] * leader[1])
-                .collect(),
-            Metric::Cosine => leaders
-                .iter()
-                .map(|leader| leader[0].hypot(leader[1]))
-                .collect(),
-            Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
-        };
-        (dots, point_norms, leader_norms)
+                    .map(|point| point[0].hypot(point[1]))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let leader_norms = match metric {
+                Metric::L2 => leaders
+                    .iter()
+                    .map(|leader| leader[0] * leader[0] + leader[1] * leader[1])
+                    .collect(),
+                Metric::Cosine => leaders
+                    .iter()
+                    .map(|leader| leader[0].hypot(leader[1]))
+                    .collect(),
+                Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
+            };
+            (dots, point_norms, leader_norms)
+        }
     }
 
     mod insert_leader_tests {
@@ -533,12 +561,13 @@ mod tests {
     }
 
     mod rank_leader_dots_tests {
+        use super::test_support::*;
         use super::*;
         use rstest::rstest;
 
         #[rstest]
-        #[case::two_leaders_fanout_one(2, 1)]
-        #[case::scalar_fanout_two(7, 2)]
+        #[case::two_leaders_select_one(2, 1)]
+        #[case::scalar_select_two(7, 2)]
         #[case::lane_minus_one(15, 3)]
         #[case::one_complete_lane(16, 3)]
         #[case::lane_plus_one(17, 4)]
@@ -555,16 +584,16 @@ mod tests {
             )]
             metric: Metric,
             #[case] leader_count: usize,
-            #[case] fanout: usize,
+            #[case] nearest_leader_count: usize,
         ) {
             // Given
             let (dots, point_norms, leader_norms) =
                 lane_boundary_input_from_point_and_leader_vectors(metric, leader_count);
             let input = partition_input(&dots, 2, leader_count, &point_norms, &leader_norms);
-            let expected_assignments = reference_assignments(metric, input, fanout);
+            let expected_assignments = reference_assignments(metric, input, nearest_leader_count);
 
             // When
-            let actual_assignments = rank_partition_leaders(metric, input, fanout);
+            let actual_assignments = run_rank_leader_dots(metric, input, nearest_leader_count);
 
             // Then
             assert_eq!(actual_assignments, expected_assignments);
@@ -573,15 +602,23 @@ mod tests {
         #[test]
         fn equal_scores_keep_sampled_leader_order_with_l2() {
             // Given
+            let point_count = 1;
+            let leader_count = 4;
+            let nearest_leader_count = 2;
             let dots = [0.0, 0.0, 0.0, 0.0];
             let leader_squared_norms = [1.0, 1.0, 1.0, 1.0];
             let expected_sampled_leader_order = [0, 1];
 
+            let input =
+                partition_input(&dots, point_count, leader_count, &[], &leader_squared_norms);
+
             // When
-            let actual_assignments = rank_partition_leaders(
-                Metric::L2,
-                partition_input(&dots, 1, 4, &[], &leader_squared_norms),
-                2,
+            let actual_assignments = with_rank_leader_dots_fixture(
+                input,
+                nearest_leader_count,
+                |input, output, ranked_leaders| {
+                    rank_leader_dots::<_, L2>(diskann_wide::ARCH, input, output, ranked_leaders);
+                },
             );
 
             // Then
@@ -591,16 +628,34 @@ mod tests {
         #[test]
         fn zero_norm_keeps_sampled_leader_order_with_cosine() {
             // Given
+            let point_count = 1;
+            let leader_count = 2;
+            let nearest_leader_count = 2;
             let dots = [0.0, 0.0];
             let point_norms = [0.0];
             let leader_norms = [1.0, 1.0];
             let expected_sampled_leader_order = [0, 1];
 
+            let input = partition_input(
+                &dots,
+                point_count,
+                leader_count,
+                &point_norms,
+                &leader_norms,
+            );
+
             // When
-            let actual_assignments = rank_partition_leaders(
-                Metric::Cosine,
-                partition_input(&dots, 1, 2, &point_norms, &leader_norms),
-                2,
+            let actual_assignments = with_rank_leader_dots_fixture(
+                input,
+                nearest_leader_count,
+                |input, output, ranked_leaders| {
+                    rank_leader_dots::<_, Cosine>(
+                        diskann_wide::ARCH,
+                        input,
+                        output,
+                        ranked_leaders,
+                    );
+                },
             );
 
             // Then
@@ -610,17 +665,25 @@ mod tests {
         #[test]
         fn zero_point_norm_keeps_first_leader_in_a_complete_simd_group_with_cosine() {
             // Given
+            let point_count = 1;
             let leader_count = 17;
+            let nearest_leader_count = 1;
             let dots = [0.0; 17];
             let point_norms = [0.0];
             let leader_norms = [1.0; 17];
             let expected_first_leader = [0];
 
             // When
-            let actual_assignment = rank_partition_leaders(
+            let actual_assignment = run_rank_leader_dots(
                 Metric::Cosine,
-                partition_input(&dots, 1, leader_count, &point_norms, &leader_norms),
-                1,
+                partition_input(
+                    &dots,
+                    point_count,
+                    leader_count,
+                    &point_norms,
+                    &leader_norms,
+                ),
+                nearest_leader_count,
             );
 
             // Then
@@ -630,17 +693,29 @@ mod tests {
         #[test]
         fn f32_max_score_is_still_a_rankable_leader() {
             // Given
+            let point_count = 1;
+            let leader_count = 8;
+            let nearest_leader_count = leader_count;
             let maximum_rankable_score = f32::MAX;
             let dot_product_that_produces_it = -maximum_rankable_score;
             let mut dots = [0.0; 8];
             dots[7] = dot_product_that_produces_it;
             let expected_all_leaders_in_scan_order = [0, 1, 2, 3, 4, 5, 6, 7];
 
+            let input = partition_input(&dots, point_count, leader_count, &[], &[]);
+
             // When
-            let actual_assignments = rank_partition_leaders(
-                Metric::InnerProduct,
-                partition_input(&dots, 1, 8, &[], &[]),
-                8,
+            let actual_assignments = with_rank_leader_dots_fixture(
+                input,
+                nearest_leader_count,
+                |input, output, ranked_leaders| {
+                    rank_leader_dots::<_, InnerProduct>(
+                        diskann_wide::ARCH,
+                        input,
+                        output,
+                        ranked_leaders,
+                    );
+                },
             );
 
             // Then
@@ -650,14 +725,26 @@ mod tests {
         #[test]
         fn nan_leader_does_not_displace_finite_leaders() {
             // Given
+            let point_count = 1;
+            let leader_count = 3;
+            let nearest_leader_count = 2;
             let dots = [f32::NAN, 3.0, 2.0];
             let expected_finite_leaders = [1, 2];
 
+            let input = partition_input(&dots, point_count, leader_count, &[], &[]);
+
             // When
-            let actual_assignments = rank_partition_leaders(
-                Metric::InnerProduct,
-                partition_input(&dots, 1, 3, &[], &[]),
-                2,
+            let actual_assignments = with_rank_leader_dots_fixture(
+                input,
+                nearest_leader_count,
+                |input, output, ranked_leaders| {
+                    rank_leader_dots::<_, InnerProduct>(
+                        diskann_wide::ARCH,
+                        input,
+                        output,
+                        ranked_leaders,
+                    );
+                },
             );
 
             // Then
@@ -667,31 +754,27 @@ mod tests {
         #[test]
         fn empty_point_matrix_produces_no_assignments() {
             // Given
-            let dots = [];
+            let empty_point_count = 0;
+            let leader_count = 3;
+            let nearest_leader_count = 2;
+            let no_dot_products = [];
             let expected_no_assignments: [u32; 0] = [];
 
-            // When
-            let actual_assignments = rank_partition_leaders(
-                Metric::InnerProduct,
-                partition_input(&dots, 0, 3, &[], &[]),
-                2,
-            );
-
-            // Then
-            assert_eq!(actual_assignments, expected_no_assignments);
-        }
-
-        #[test]
-        fn zero_fanout_produces_no_assignments() {
-            // Given
-            let dots = [1.0, 2.0, 3.0];
-            let expected_no_assignments: [u32; 0] = [];
+            let input =
+                partition_input(&no_dot_products, empty_point_count, leader_count, &[], &[]);
 
             // When
-            let actual_assignments = rank_partition_leaders(
-                Metric::InnerProduct,
-                partition_input(&dots, 1, 3, &[], &[]),
-                0,
+            let actual_assignments = with_rank_leader_dots_fixture(
+                input,
+                nearest_leader_count,
+                |input, output, ranked_leaders| {
+                    rank_leader_dots::<_, InnerProduct>(
+                        diskann_wide::ARCH,
+                        input,
+                        output,
+                        ranked_leaders,
+                    );
+                },
             );
 
             // Then

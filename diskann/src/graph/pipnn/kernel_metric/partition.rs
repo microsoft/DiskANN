@@ -220,46 +220,50 @@ impl PartitionMetric for InnerProduct {
 )]
 mod tests {
     use super::*;
-    use diskann_wide::{ARCH, SIMDVector, arch::Current};
 
-    fn simd_rankings<M: PartitionMetric>(
-        point_norms: &[f32],
-        leader_norms: &[f32],
-        point: usize,
-        dot_products: [f32; 16],
-        first_leader: usize,
-    ) -> [f32; 16] {
-        type TestVector = <Current as PiPNNSIMDSchema>::Vector;
-        assert_eq!(16 % TestVector::LANES, 0);
-        let norms = PartitionNorms {
-            point_norms,
-            leader_norms,
-        };
-        let point_norm = M::point_simd(ARCH, norms, point);
-        let mut output = [0.0; 16];
-        for first in (0..16).step_by(TestVector::LANES) {
-            // SAFETY: each offset starts one complete SIMD group in both arrays.
-            unsafe {
-                let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
-                M::rankings_simd(ARCH, norms, point_norm, dots, first_leader + first)
-                    .store_simd(output.as_mut_ptr().add(first));
+    mod test_support {
+        use super::*;
+        use diskann_wide::{ARCH, SIMDVector, arch::Current};
+
+        pub(super) fn run_rankings_simd<M: PartitionMetric>(
+            point_norms: &[f32],
+            leader_norms: &[f32],
+            point: usize,
+            dot_products: [f32; 16],
+            first_leader: usize,
+        ) -> [f32; 16] {
+            type TestVector = <Current as PiPNNSIMDSchema>::Vector;
+            assert_eq!(16 % TestVector::LANES, 0);
+            let norms = PartitionNorms {
+                point_norms,
+                leader_norms,
+            };
+            let point_norm = M::point_simd(ARCH, norms, point);
+            let mut output = [0.0; 16];
+            for first in (0..16).step_by(TestVector::LANES) {
+                // SAFETY: each offset starts one complete SIMD group in both arrays.
+                unsafe {
+                    let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
+                    M::rankings_simd(ARCH, norms, point_norm, dots, first_leader + first)
+                        .store_simd(output.as_mut_ptr().add(first));
+                }
             }
+            output
         }
-        output
-    }
 
-    fn rank_single_leader<M: PartitionMetric>(
-        dot_product: f32,
-        point_norm: f32,
-        leader_norm: f32,
-    ) -> f32 {
-        let point_norms = [point_norm];
-        let leader_norms = [leader_norm];
-        let norms = PartitionNorms {
-            point_norms: &point_norms,
-            leader_norms: &leader_norms,
-        };
-        M::ranking_single(norms, M::point_single(norms, 0), dot_product, 0)
+        pub(super) fn run_ranking_single<M: PartitionMetric>(
+            dot_product: f32,
+            point_norm: f32,
+            leader_norm: f32,
+        ) -> f32 {
+            let point_norms = [point_norm];
+            let leader_norms = [leader_norm];
+            let norms = PartitionNorms {
+                point_norms: &point_norms,
+                leader_norms: &leader_norms,
+            };
+            M::ranking_single(norms, M::point_single(norms, 0), dot_product, 0)
+        }
     }
 
     mod prepare_leader_norms_tests {
@@ -342,6 +346,7 @@ mod tests {
     }
 
     mod ranking_single_tests {
+        use super::test_support::run_ranking_single;
         use super::*;
 
         #[test]
@@ -352,7 +357,7 @@ mod tests {
             let expected_leader_norm_minus_twice_dot = leader_squared_norm - 2.0 * dot_product;
 
             // When
-            let actual_ranking = rank_single_leader::<L2>(dot_product, 0.0, leader_squared_norm);
+            let actual_ranking = run_ranking_single::<L2>(dot_product, 0.0, leader_squared_norm);
 
             // Then
             assert_eq!(actual_ranking, expected_leader_norm_minus_twice_dot);
@@ -367,7 +372,7 @@ mod tests {
             let expected_one_minus_normalized_dot = 1.0 - dot_product / (point_norm * leader_norm);
 
             // When
-            let actual_ranking = rank_single_leader::<Cosine>(dot_product, point_norm, leader_norm);
+            let actual_ranking = run_ranking_single::<Cosine>(dot_product, point_norm, leader_norm);
 
             // Then
             assert_eq!(actual_ranking, expected_one_minus_normalized_dot);
@@ -380,7 +385,7 @@ mod tests {
             let expected_one_minus_dot = 1.0 - dot_product;
 
             // When
-            let actual_ranking = rank_single_leader::<CosineNormalized>(dot_product, 0.0, 0.0);
+            let actual_ranking = run_ranking_single::<CosineNormalized>(dot_product, 0.0, 0.0);
 
             // Then
             assert_eq!(actual_ranking, expected_one_minus_dot);
@@ -393,7 +398,7 @@ mod tests {
             let expected_negative_dot = -dot_product;
 
             // When
-            let actual_ranking = rank_single_leader::<InnerProduct>(dot_product, 0.0, 0.0);
+            let actual_ranking = run_ranking_single::<InnerProduct>(dot_product, 0.0, 0.0);
 
             // Then
             assert_eq!(actual_ranking, expected_negative_dot);
@@ -401,6 +406,7 @@ mod tests {
     }
 
     mod rankings_simd_tests {
+        use super::test_support::run_rankings_simd;
         use super::*;
 
         #[test]
@@ -409,7 +415,7 @@ mod tests {
             let dot_product = 2.0;
             let expected_ranking = leader_squared_norm - 2.0 * dot_product;
             let actual_rankings =
-                simd_rankings::<L2>(&[], &[leader_squared_norm; 16], 0, [dot_product; 16], 0);
+                run_rankings_simd::<L2>(&[], &[leader_squared_norm; 16], 0, [dot_product; 16], 0);
             assert_eq!(actual_rankings, [expected_ranking; 16]);
         }
 
@@ -419,8 +425,13 @@ mod tests {
             let leader_norm = 4.0;
             let dot_product = 4.0;
             let expected_ranking = 1.0 - dot_product / (point_norm * leader_norm);
-            let actual_rankings =
-                simd_rankings::<Cosine>(&[point_norm], &[leader_norm; 16], 0, [dot_product; 16], 0);
+            let actual_rankings = run_rankings_simd::<Cosine>(
+                &[point_norm],
+                &[leader_norm; 16],
+                0,
+                [dot_product; 16],
+                0,
+            );
             assert_eq!(actual_rankings, [expected_ranking; 16]);
         }
 
@@ -429,7 +440,7 @@ mod tests {
             let dot_product = 0.25;
             let expected_ranking = 1.0 - dot_product;
             let actual_rankings =
-                simd_rankings::<CosineNormalized>(&[], &[], 0, [dot_product; 16], 0);
+                run_rankings_simd::<CosineNormalized>(&[], &[], 0, [dot_product; 16], 0);
             assert_eq!(actual_rankings, [expected_ranking; 16]);
         }
 
@@ -437,7 +448,8 @@ mod tests {
         fn every_lane_uses_negative_dot_product_with_inner_product() {
             let dot_product = 3.0;
             let expected_ranking = -dot_product;
-            let actual_rankings = simd_rankings::<InnerProduct>(&[], &[], 0, [dot_product; 16], 0);
+            let actual_rankings =
+                run_rankings_simd::<InnerProduct>(&[], &[], 0, [dot_product; 16], 0);
             assert_eq!(actual_rankings, [expected_ranking; 16]);
         }
 
@@ -449,7 +461,7 @@ mod tests {
             let expected_fused_ranking = (-2.0_f32).mul_add(dot_product, leader_squared_norm);
 
             let actual_rankings =
-                simd_rankings::<L2>(&[], &[leader_squared_norm; 16], 0, [dot_product; 16], 0);
+                run_rankings_simd::<L2>(&[], &[leader_squared_norm; 16], 0, [dot_product; 16], 0);
 
             assert!(unfused_twice_dot_product.is_infinite());
             assert!(expected_fused_ranking.is_finite());
