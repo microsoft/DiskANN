@@ -199,7 +199,7 @@ fn scan_fixed_width<A, M, const N: usize>(
 {
     let (rows, _) = output.as_chunks_mut::<N>();
     scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
-        insert_neighbor(&mut rows[source], target, distance)
+        insert_eligible_neighbor(&mut rows[source], target, distance)
     });
 }
 
@@ -217,7 +217,7 @@ fn scan_runtime_width<A, M>(
 {
     scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
         let first = source * width;
-        insert_neighbor(&mut output[first..first + width], target, distance)
+        insert_eligible_neighbor(&mut output[first..first + width], target, distance)
     });
 }
 
@@ -309,17 +309,19 @@ fn scan_point_pairs<A, M, I>(
     }
 }
 
-/// Insert one value that precedes the current last retained value.
+/// Insert one value that the caller has already found eligible.
 ///
-/// The caller checks eligibility before insertion. The returned value is the new
-/// last retained value for the next eligibility check.
+/// The caller must prove that `value` precedes the current last retained value.
+/// This method intentionally does not repeat that check. A caller that violates
+/// the precondition replaces a valid retained value and corrupts the top-k set.
+/// The return value is the new last retained value.
 trait SortedInsert<T: Copy> {
-    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T;
+    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T;
 }
 
 impl<T: Copy> SortedInsert<T> for [T; 1] {
     #[inline(always)]
-    fn insert_sorted_by(&mut self, value: T, _precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible_sorted_by(&mut self, value: T, _precedes: impl Fn(T, T) -> bool) -> T {
         self[0] = value;
         value
     }
@@ -327,7 +329,7 @@ impl<T: Copy> SortedInsert<T> for [T; 1] {
 
 impl<T: Copy> SortedInsert<T> for [T; 2] {
     #[inline(always)]
-    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
         let first = self[0];
         if precedes(value, first) {
             self[0] = value;
@@ -342,7 +344,7 @@ impl<T: Copy> SortedInsert<T> for [T; 2] {
 
 impl<T: Copy> SortedInsert<T> for [T; 3] {
     #[inline(always)]
-    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
         let (first, second) = (self[0], self[1]);
         if precedes(value, first) {
             self[0] = value;
@@ -362,7 +364,7 @@ impl<T: Copy> SortedInsert<T> for [T; 3] {
 
 impl<T: Copy> SortedInsert<T> for [T] {
     #[inline(always)]
-    fn insert_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
         let last = self.len() - 1;
         let mut slot = last;
         while slot > 0 && precedes(value, self[slot - 1]) {
@@ -374,16 +376,18 @@ impl<T: Copy> SortedInsert<T> for [T] {
     }
 }
 
-/// Insert one candidate that is nearer than the current farthest neighbor.
+/// Insert one candidate that the caller has already found nearer than the current farthest.
 ///
-/// Return the new farthest retained distance for the next candidate check.
+/// This function intentionally does not reject an ineligible candidate. The pair
+/// scan owns the eligibility check so it can filter SIMD lanes before insertion.
+/// The return value is the new farthest retained distance.
 #[inline(always)]
-fn insert_neighbor<R>(neighbors: &mut R, target: u32, distance: f32) -> f32
+fn insert_eligible_neighbor<R>(neighbors: &mut R, target: u32, distance: f32) -> f32
 where
     R: SortedInsert<LeafNeighbor> + ?Sized,
 {
     neighbors
-        .insert_sorted_by(
+        .insert_eligible_sorted_by(
             LeafNeighbor::new(target, distance),
             |candidate, retained| candidate.distance < retained.distance,
         )
@@ -602,11 +606,11 @@ mod tests {
         gram
     }
 
-    mod insert_neighbor_tests {
+    mod insert_eligible_neighbor_tests {
         use super::*;
 
         #[test]
-        fn one_slot_insertion_replaces_the_retained_neighbor() {
+        fn nearer_candidate_replaces_the_only_retained_neighbor() {
             // Given
             let retained_neighbor = LeafNeighbor::new(1, 4.0);
             let nearer_candidate = LeafNeighbor::new(2, 2.0);
@@ -614,7 +618,7 @@ mod tests {
             let mut actual_neighbors = [retained_neighbor];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 nearer_candidate.target,
                 nearer_candidate.distance,
@@ -625,7 +629,27 @@ mod tests {
         }
 
         #[test]
-        fn two_slot_insertion_places_a_nearer_candidate_first() {
+        fn direct_call_does_not_recheck_candidate_eligibility() {
+            // Given: deliberately bypass the pair scan's eligibility check.
+            let nearest = LeafNeighbor::new(1, 1.0);
+            let current_farthest = LeafNeighbor::new(2, 3.0);
+            let ineligible_farther_candidate = LeafNeighbor::new(3, 5.0);
+            let expected_unchecked_result = [nearest, ineligible_farther_candidate];
+            let mut actual_neighbors = [nearest, current_farthest];
+
+            // When
+            insert_eligible_neighbor(
+                &mut actual_neighbors,
+                ineligible_farther_candidate.target,
+                ineligible_farther_candidate.distance,
+            );
+
+            // Then
+            assert_eq!(actual_neighbors, expected_unchecked_result);
+        }
+
+        #[test]
+        fn nearer_candidate_moves_to_the_front_of_two_retained_neighbors() {
             // Given
             let nearest = LeafNeighbor::new(1, 1.0);
             let farthest = LeafNeighbor::new(2, 3.0);
@@ -634,7 +658,7 @@ mod tests {
             let mut actual_neighbors = [nearest, farthest];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 nearer_candidate.target,
                 nearer_candidate.distance,
@@ -645,7 +669,7 @@ mod tests {
         }
 
         #[test]
-        fn two_slot_insertion_places_a_middle_distance_last() {
+        fn middle_distance_candidate_replaces_the_farther_of_two_neighbors() {
             // Given
             let nearest = LeafNeighbor::new(1, 1.0);
             let farthest = LeafNeighbor::new(2, 3.0);
@@ -654,7 +678,7 @@ mod tests {
             let mut actual_neighbors = [nearest, farthest];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 eligible_candidate.target,
                 eligible_candidate.distance,
@@ -665,7 +689,7 @@ mod tests {
         }
 
         #[test]
-        fn three_slot_insertion_places_the_nearest_candidate_first() {
+        fn nearest_candidate_moves_to_the_front_of_three_retained_neighbors() {
             // Given
             let nearest = LeafNeighbor::new(1, 1.0);
             let middle = LeafNeighbor::new(2, 2.0);
@@ -675,7 +699,7 @@ mod tests {
             let mut actual_neighbors = [nearest, middle, farthest];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 nearer_candidate.target,
                 nearer_candidate.distance,
@@ -686,7 +710,7 @@ mod tests {
         }
 
         #[test]
-        fn three_slot_insertion_places_a_middle_candidate_between_neighbors() {
+        fn middle_candidate_is_inserted_between_three_retained_neighbors() {
             // Given
             let nearest = LeafNeighbor::new(1, 1.0);
             let middle = LeafNeighbor::new(2, 2.0);
@@ -696,7 +720,7 @@ mod tests {
             let mut actual_neighbors = [nearest, middle, farthest];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 middle_candidate.target,
                 middle_candidate.distance,
@@ -707,7 +731,7 @@ mod tests {
         }
 
         #[test]
-        fn three_slot_insertion_replaces_the_farthest_neighbor() {
+        fn closer_candidate_replaces_the_farthest_of_three_neighbors() {
             // Given
             let nearest = LeafNeighbor::new(1, 1.0);
             let middle = LeafNeighbor::new(2, 2.0);
@@ -717,7 +741,7 @@ mod tests {
             let mut actual_neighbors = [nearest, middle, farthest];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 eligible_candidate.target,
                 eligible_candidate.distance,
@@ -728,7 +752,7 @@ mod tests {
         }
 
         #[test]
-        fn runtime_width_insertion_shifts_only_the_later_neighbors() {
+        fn middle_candidate_shifts_only_farther_runtime_neighbors() {
             // Given
             let first = LeafNeighbor::new(1, 1.0);
             let second = LeafNeighbor::new(2, 2.0);
@@ -739,7 +763,7 @@ mod tests {
             let mut actual_neighbors = [first, second, third, fourth];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 actual_neighbors.as_mut_slice(),
                 candidate.target,
                 candidate.distance,
@@ -750,7 +774,7 @@ mod tests {
         }
 
         #[test]
-        fn sorted_insertion_preserves_existing_order_for_equal_distances() {
+        fn equal_distance_candidate_stays_after_the_existing_neighbor() {
             // Given
             let nearest = LeafNeighbor::new(1, 1.0);
             let existing_tie = LeafNeighbor::new(2, 2.0);
@@ -760,7 +784,7 @@ mod tests {
             let mut actual_neighbors = [nearest, existing_tie, farthest];
 
             // When
-            insert_neighbor(
+            insert_eligible_neighbor(
                 &mut actual_neighbors,
                 tied_candidate.target,
                 tied_candidate.distance,
@@ -775,7 +799,7 @@ mod tests {
         use super::leaf_neighbor_count;
 
         #[test]
-        fn empty_leaf_cannot_retain_neighbors() {
+        fn returns_zero_when_the_leaf_is_empty() {
             // Given
             let point_count = 0;
             let requested_k = 3;
@@ -789,7 +813,7 @@ mod tests {
         }
 
         #[test]
-        fn singleton_leaf_cannot_retain_its_source_point() {
+        fn returns_zero_when_the_leaf_contains_only_the_source() {
             // Given
             let point_count = 1;
             let requested_k = 3;
@@ -803,7 +827,7 @@ mod tests {
         }
 
         #[test]
-        fn requested_k_above_available_neighbors_is_clamped() {
+        fn returns_the_non_self_point_count_when_requested_k_is_larger() {
             // Given
             let point_count = 4;
             let requested_k = 4;
@@ -817,7 +841,7 @@ mod tests {
         }
 
         #[test]
-        fn requested_k_within_available_neighbors_is_unchanged() {
+        fn returns_requested_k_when_enough_non_self_points_exist() {
             // Given
             let point_count = 8;
             let requested_k = 5;
@@ -862,6 +886,35 @@ mod tests {
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
+        }
+
+        #[test]
+        fn later_farther_candidate_cannot_replace_the_retained_neighbor() {
+            // Given
+            let point_values = [0.0_f32, 10.0, 1.0];
+            let source = 2;
+            let first_scanned_target = 0_u32;
+            let later_farther_target = 1_usize;
+            let expected_distance =
+                (point_values[source] - point_values[first_scanned_target as usize]).powi(2);
+            let later_distance =
+                (point_values[source] - point_values[later_farther_target]).powi(2);
+            let expected_nearest_neighbor =
+                LeafNeighbor::new(first_scanned_target, expected_distance);
+            assert!(later_distance > expected_distance);
+            let mut actual_neighbors = [LeafNeighbor::default(); 3];
+
+            // When
+            select_leaf_neighbors::<_, L2>(
+                diskann_wide::ARCH,
+                MatrixView::try_from(&point_values[..], 3, 1).unwrap(),
+                MutMatrixView::try_from(&mut actual_neighbors[..], 3, 1).unwrap(),
+                &mut LeafKernelWorkspace::default(),
+            )
+            .unwrap();
+
+            // Then
+            assert_eq!(actual_neighbors[source], expected_nearest_neighbor);
         }
 
         #[test]
@@ -1134,6 +1187,21 @@ mod tests {
         }
 
         #[test]
+        fn zero_target_norm_remains_rankable_in_a_complete_simd_group_with_cosine() {
+            // Given
+            let points = 17;
+            let mut gram = gram_with_uniform_self_dots(points, 1.0);
+            gram[0] = 0.0;
+            let expected_zero_norm_neighbor = LeafNeighbor::new(0, 1.0);
+
+            // When
+            let actual_neighbors = rank_neighbors(Metric::Cosine, &gram, points, 1).1;
+
+            // Then
+            assert_eq!(actual_neighbors[16], expected_zero_norm_neighbor);
+        }
+
+        #[test]
         fn similarity_above_one_clamps_to_zero_distance_with_cosine() {
             // Given
             // A small excess models dot-product roundoff above cosine similarity one.
@@ -1224,17 +1292,44 @@ mod tests {
             assert_eq!(actual_neighbors, expected_unassigned_neighbors);
         }
 
-        #[test]
-        fn simd_nan_distance_cannot_replace_a_finite_neighbor() {
+        #[rstest]
+        #[case::normalized_cosine(Metric::CosineNormalized, 1.0)]
+        #[case::inner_product(Metric::InnerProduct, -0.0)]
+        fn simd_nan_distance_cannot_replace_a_finite_neighbor(
+            #[case] metric: Metric,
+            #[case] expected_distance: f32,
+        ) {
             // Given
             let points = 17;
             let mut gram = gram_with_uniform_self_dots(points, 1.0);
             gram[16 * points] = f32::NAN;
             gram[16] = f32::NAN;
-            let expected_finite_neighbor = LeafNeighbor::new(1, 1.0);
+            let expected_finite_neighbor = LeafNeighbor::new(1, expected_distance);
 
             // When
-            let actual_neighbors = rank_neighbors(Metric::CosineNormalized, &gram, points, 1).1;
+            let actual_neighbors = rank_neighbors(metric, &gram, points, 1).1;
+
+            // Then
+            assert_eq!(actual_neighbors[16], expected_finite_neighbor);
+        }
+
+        #[rstest]
+        #[case::l2(Metric::L2, 2.0)]
+        #[case::normalized_cosine(Metric::CosineNormalized, 1.0)]
+        #[case::inner_product(Metric::InnerProduct, -0.0)]
+        fn simd_positive_infinity_cannot_fill_a_neighbor_slot(
+            #[case] metric: Metric,
+            #[case] expected_distance: f32,
+        ) {
+            // Given: negative-infinite dot products produce positive-infinite scores here.
+            let points = 17;
+            let mut gram = gram_with_uniform_self_dots(points, 1.0);
+            gram[16 * points] = f32::NEG_INFINITY;
+            gram[16] = f32::NEG_INFINITY;
+            let expected_finite_neighbor = LeafNeighbor::new(1, expected_distance);
+
+            // When
+            let actual_neighbors = rank_neighbors(metric, &gram, points, 1).1;
 
             // Then
             assert_eq!(actual_neighbors[16], expected_finite_neighbor);

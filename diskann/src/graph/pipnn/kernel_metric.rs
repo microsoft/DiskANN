@@ -63,7 +63,28 @@ pub(super) fn cosine_distance_single(dot: f32, source_norm: f32, target_norm: f3
 
 #[cfg(test)]
 mod tests {
-    use super::cosine_distance_single;
+    use super::super::simd::PiPNNSIMDSchema;
+    use super::{cosine_distance_simd, cosine_distance_single};
+    use diskann_wide::{ARCH, SIMDVector, arch::Current};
+
+    fn simd_cosine_distances(
+        dot_products: [f32; 16],
+        source_norms: [f32; 16],
+        target_norms: [f32; 16],
+    ) -> [f32; 16] {
+        type TestVector = <Current as PiPNNSIMDSchema>::LeafScore;
+        assert_eq!(TestVector::LANES, 16);
+        // SAFETY: each input and output contains exactly one complete SIMD vector.
+        unsafe {
+            let dots = TestVector::load_simd(ARCH, dot_products.as_ptr());
+            let sources = TestVector::load_simd(ARCH, source_norms.as_ptr());
+            let targets = TestVector::load_simd(ARCH, target_norms.as_ptr());
+            let distances = cosine_distance_simd(ARCH, dots, sources, targets);
+            let mut output = [0.0; 16];
+            distances.store_simd(output.as_mut_ptr());
+            output
+        }
+    }
 
     mod cosine_distance_single_tests {
         use super::cosine_distance_single;
@@ -139,6 +160,67 @@ mod tests {
 
             // Then
             assert_eq!(actual_distance, expected_one_minus_selected_operand);
+        }
+    }
+
+    mod cosine_distance_simd_tests {
+        use super::simd_cosine_distances;
+
+        #[test]
+        fn zero_source_norm_produces_unit_distance_in_every_lane() {
+            let actual_distances = simd_cosine_distances([0.0; 16], [0.0; 16], [2.0; 16]);
+            assert_eq!(actual_distances, [1.0; 16]);
+        }
+
+        #[test]
+        fn zero_target_norm_produces_unit_distance_in_every_lane() {
+            let actual_distances = simd_cosine_distances([0.0; 16], [2.0; 16], [0.0; 16]);
+            assert_eq!(actual_distances, [1.0; 16]);
+        }
+
+        #[test]
+        fn subnormal_norm_produces_unit_distance_in_every_lane() {
+            let subnormal_norm = f32::MIN_POSITIVE.sqrt() / 2.0;
+            let actual_distances =
+                simd_cosine_distances([0.0; 16], [2.0; 16], [subnormal_norm; 16]);
+            assert_eq!(actual_distances, [1.0; 16]);
+        }
+
+        #[test]
+        fn roundoff_past_similarity_bounds_is_clamped_in_every_lane() {
+            let dot_above_norm_product = 4.000_001;
+            let dot_below_negative_norm_product = -4.000_001;
+            let dot_products = [
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_above_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+                dot_below_negative_norm_product,
+            ];
+            let expected_distances = [
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
+            ];
+
+            let actual_distances = simd_cosine_distances(dot_products, [2.0; 16], [2.0; 16]);
+
+            assert_eq!(actual_distances, expected_distances);
+        }
+
+        #[test]
+        fn nan_similarity_clamps_to_zero_distance_in_every_lane() {
+            let actual_distances = simd_cosine_distances([f32::NAN; 16], [1.0; 16], [1.0; 16]);
+            assert_eq!(actual_distances, [0.0; 16]);
         }
     }
 }
