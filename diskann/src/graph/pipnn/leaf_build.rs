@@ -642,13 +642,21 @@ mod tests {
     fn zero_k_adds_no_candidates() {
         // Given
         let point_values = [0.0_f32, 1.0, 2.0];
+        let point_count = 3;
+        let dimensions = 1;
+        let zero_k = 0;
         let leaves = [vec![0, 1, 2]];
         let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
 
         // When
         let actual_adjacency = adjacency_lists(
-            build_candidate_graph(matrix_view(&point_values, 3, 1), &leaves, 0, Metric::L2)
-                .unwrap(),
+            build_candidate_graph(
+                matrix_view(&point_values, point_count, dimensions),
+                &leaves,
+                zero_k,
+                Metric::L2,
+            )
+            .unwrap(),
         );
 
         // Then
