@@ -15,11 +15,6 @@ use super::{
 
 /// Compute partition rankings for one concrete metric.
 pub(in super::super) trait PartitionMetric: Send + Sync + 'static {
-    /// SIMD representation for partition ranking scores.
-    type Simd<A>: PiPNNSIMDVector<Arch = A>
-    where
-        A: PiPNNSIMDSchema;
-
     /// Prepare one norm value for each point in the active stripe.
     fn prepare_point_norms(_points: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.clear();
@@ -32,11 +27,11 @@ pub(in super::super) trait PartitionMetric: Send + Sync + 'static {
 
     /// Prepare one point norm for reuse across SIMD leader groups.
     #[inline(always)]
-    fn point_simd<A>(arch: A, _norms: PartitionNorms<'_>, _point: usize) -> Self::Simd<A>
+    fn point_simd<A>(arch: A, _norms: PartitionNorms<'_>, _point: usize) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        Self::Simd::<A>::default(arch)
+        A::Vector::default(arch)
     }
 
     /// Prepare one point norm for reuse across single leader values.
@@ -49,10 +44,10 @@ pub(in super::super) trait PartitionMetric: Send + Sync + 'static {
     fn rankings_simd<A>(
         arch: A,
         norms: PartitionNorms<'_>,
-        point_norms: Self::Simd<A>,
-        dot_products: Self::Simd<A>,
+        point_norms: A::Vector,
+        dot_products: A::Vector,
         first_leader: usize,
-    ) -> Self::Simd<A>
+    ) -> A::Vector
     where
         A: PiPNNSIMDSchema;
 
@@ -79,11 +74,6 @@ where
 }
 
 impl PartitionMetric for L2 {
-    type Simd<A>
-        = A::PartitionScore
-    where
-        A: PiPNNSIMDSchema;
-
     fn prepare_leader_norms(leaders: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.resize(leaders.nrows(), 0.0);
         for (norm, leader) in norms.iter_mut().zip(leaders.row_iter()) {
@@ -95,15 +85,15 @@ impl PartitionMetric for L2 {
     fn rankings_simd<A>(
         arch: A,
         norms: PartitionNorms<'_>,
-        _point_norms: Self::Simd<A>,
-        dot_products: Self::Simd<A>,
+        _point_norms: A::Vector,
+        dot_products: A::Vector,
         first_leader: usize,
-    ) -> Self::Simd<A>
+    ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        let leader_norms = load_norms_simd::<Self::Simd<A>>(arch, norms.leader_norms, first_leader);
-        Self::Simd::<A>::splat(arch, -2.0).mul_add_simd(dot_products, leader_norms)
+        let leader_norms = load_norms_simd::<A::Vector>(arch, norms.leader_norms, first_leader);
+        A::Vector::splat(arch, -2.0).mul_add_simd(dot_products, leader_norms)
     }
 
     #[inline(always)]
@@ -118,11 +108,6 @@ impl PartitionMetric for L2 {
 }
 
 impl PartitionMetric for Cosine {
-    type Simd<A>
-        = A::PartitionScore
-    where
-        A: PiPNNSIMDSchema;
-
     fn prepare_point_norms(points: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.resize(points.nrows(), 0.0);
         for (norm, point) in norms.iter_mut().zip(points.row_iter()) {
@@ -138,11 +123,11 @@ impl PartitionMetric for Cosine {
     }
 
     #[inline(always)]
-    fn point_simd<A>(arch: A, norms: PartitionNorms<'_>, point: usize) -> Self::Simd<A>
+    fn point_simd<A>(arch: A, norms: PartitionNorms<'_>, point: usize) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        Self::Simd::<A>::splat(arch, norms.point_norms[point])
+        A::Vector::splat(arch, norms.point_norms[point])
     }
 
     #[inline(always)]
@@ -154,14 +139,14 @@ impl PartitionMetric for Cosine {
     fn rankings_simd<A>(
         arch: A,
         norms: PartitionNorms<'_>,
-        point_norms: Self::Simd<A>,
-        dot_products: Self::Simd<A>,
+        point_norms: A::Vector,
+        dot_products: A::Vector,
         first_leader: usize,
-    ) -> Self::Simd<A>
+    ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        let leader_norms = load_norms_simd::<Self::Simd<A>>(arch, norms.leader_norms, first_leader);
+        let leader_norms = load_norms_simd::<A::Vector>(arch, norms.leader_norms, first_leader);
         cosine_distance_simd(arch, dot_products, point_norms, leader_norms)
     }
 
@@ -177,23 +162,18 @@ impl PartitionMetric for Cosine {
 }
 
 impl PartitionMetric for CosineNormalized {
-    type Simd<A>
-        = A::PartitionScore
-    where
-        A: PiPNNSIMDSchema;
-
     #[inline(always)]
     fn rankings_simd<A>(
         arch: A,
         _norms: PartitionNorms<'_>,
-        _point_norms: Self::Simd<A>,
-        dot_products: Self::Simd<A>,
+        _point_norms: A::Vector,
+        dot_products: A::Vector,
         _first_leader: usize,
-    ) -> Self::Simd<A>
+    ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        Self::Simd::<A>::splat(arch, 1.0) - dot_products
+        A::Vector::splat(arch, 1.0) - dot_products
     }
 
     #[inline(always)]
@@ -208,23 +188,18 @@ impl PartitionMetric for CosineNormalized {
 }
 
 impl PartitionMetric for InnerProduct {
-    type Simd<A>
-        = A::PartitionScore
-    where
-        A: PiPNNSIMDSchema;
-
     #[inline(always)]
     fn rankings_simd<A>(
         arch: A,
         _norms: PartitionNorms<'_>,
-        _point_norms: Self::Simd<A>,
-        dot_products: Self::Simd<A>,
+        _point_norms: A::Vector,
+        dot_products: A::Vector,
         _first_leader: usize,
-    ) -> Self::Simd<A>
+    ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        Self::Simd::<A>::default(arch) - dot_products
+        A::Vector::default(arch) - dot_products
     }
 
     #[inline(always)]
@@ -254,20 +229,23 @@ mod tests {
         dot_products: [f32; 16],
         first_leader: usize,
     ) -> [f32; 16] {
-        assert_eq!(M::Simd::<Current>::LANES, 16);
+        type TestVector = <Current as PiPNNSIMDSchema>::Vector;
+        assert_eq!(16 % TestVector::LANES, 0);
         let norms = PartitionNorms {
             point_norms,
             leader_norms,
         };
         let point_norm = M::point_simd(ARCH, norms, point);
-        // SAFETY: the input and output contain exactly one complete SIMD vector.
-        unsafe {
-            let dots = M::Simd::<Current>::load_simd(ARCH, dot_products.as_ptr());
-            let rankings = M::rankings_simd(ARCH, norms, point_norm, dots, first_leader);
-            let mut output = [0.0; 16];
-            rankings.store_simd(output.as_mut_ptr());
-            output
+        let mut output = [0.0; 16];
+        for first in (0..16).step_by(TestVector::LANES) {
+            // SAFETY: each offset starts one complete SIMD group in both arrays.
+            unsafe {
+                let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
+                M::rankings_simd(ARCH, norms, point_norm, dots, first_leader + first)
+                    .store_simd(output.as_mut_ptr().add(first));
+            }
         }
+        output
     }
 
     fn rank_single_leader<M: PartitionMetric>(

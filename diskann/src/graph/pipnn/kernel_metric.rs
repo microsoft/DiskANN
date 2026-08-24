@@ -72,18 +72,20 @@ mod tests {
         source_norms: [f32; 16],
         target_norms: [f32; 16],
     ) -> [f32; 16] {
-        type TestVector = <Current as PiPNNSIMDSchema>::LeafScore;
-        assert_eq!(TestVector::LANES, 16);
-        // SAFETY: each input and output contains exactly one complete SIMD vector.
-        unsafe {
-            let dots = TestVector::load_simd(ARCH, dot_products.as_ptr());
-            let sources = TestVector::load_simd(ARCH, source_norms.as_ptr());
-            let targets = TestVector::load_simd(ARCH, target_norms.as_ptr());
-            let distances = cosine_distance_simd(ARCH, dots, sources, targets);
-            let mut output = [0.0; 16];
-            distances.store_simd(output.as_mut_ptr());
-            output
+        type TestVector = <Current as PiPNNSIMDSchema>::Vector;
+        assert_eq!(16 % TestVector::LANES, 0);
+        let mut output = [0.0; 16];
+        for first in (0..16).step_by(TestVector::LANES) {
+            // SAFETY: each offset starts one complete SIMD group in every array.
+            unsafe {
+                let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
+                let sources = TestVector::load_simd(ARCH, source_norms.as_ptr().add(first));
+                let targets = TestVector::load_simd(ARCH, target_norms.as_ptr().add(first));
+                cosine_distance_simd(ARCH, dots, sources, targets)
+                    .store_simd(output.as_mut_ptr().add(first));
+            }
         }
+        output
     }
 
     mod cosine_distance_single_tests {
