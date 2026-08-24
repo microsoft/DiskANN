@@ -55,18 +55,22 @@ campaign), not in `diskann-benchmark/example/`.
           "merge_threshold": 40,
           "batch_size": 4096,
           "reassign_neighbors": 10,
-          "reassign_l": 64,
           "warmup_centroids": 100,
           "warmup_points": 10000,
           "warmup_iters": 15,
-          "assign_l": 64,
           "two_means_iters": 12,
           "capacity_mult": 3,
           "normalize": false,
-          "graph_degree": 32,
-          "graph_slack": 1.2,
-          "graph_l_build": 64,
-          "graph_alpha": 1.2,
+          "routing": {
+            "graph": {
+              "assign_l": 64,
+              "reassign_l": 64,
+              "graph_degree": 32,
+              "graph_slack": 1.2,
+              "graph_l_build": 64,
+              "graph_alpha": 1.2
+            }
+          },
           "num_threads": 16,
           "seed": 0,
           "save_path": "<absolute-output-prefix>",

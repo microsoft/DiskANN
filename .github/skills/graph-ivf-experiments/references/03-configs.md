@@ -55,17 +55,21 @@ Constructs the index and saves it. No `search_phase`, so it produces only build 
         "warmup_centroids": 100,    // seed clustering …
         "warmup_points": 10000,     // … over the first N points
         "warmup_iters": 15,
-        "assign_l": 64,
         "two_means_iters": 6,       // split quality
         "reassign_neighbors": 32,   // "s" in the run names
-        "reassign_l": 256,
         "capacity_mult": 3,
         "normalize": true,
 
-        "graph_degree": 32,         // centroid navigation graph
-        "graph_slack": 1.2,
-        "graph_l_build": 64,
-        "graph_alpha": 1.2,
+        "routing": {                // centroid navigation graph
+          "graph": {
+            "assign_l": 64,
+            "reassign_l": 256,      // omit ⇒ max(reassign_neighbors, assign_l)
+            "graph_degree": 32,
+            "graph_slack": 1.2,
+            "graph_l_build": 64,
+            "graph_alpha": 1.2
+          }
+        },
 
         "num_threads": 16,
         "seed": 0,
@@ -123,6 +127,12 @@ at explicit runbook search stages. See [stage 7](./07-online-runbooks.md) for th
 schema, input audit, query/truthset subsetting, and long-run validation procedure.
 
 ## Rules
+
+**`routing` is a tagged enum, not flat fields.** Either `"routing": {"graph": {…}}` or
+`"routing": "exact"` (scores every live centroid, takes no parameters); omitting it gives
+the graph mode with default knobs. The build struct is `deny_unknown_fields`, so the older
+flat spelling — `"assign_l"`/`"graph_degree"` beside `"split_threshold"` — is now rejected
+at parse time. `--dry-run` catches this without starting a build.
 
 **Fractions are in `(0.0, 1.0]`.** For `C` clusters the runner probes
 `ceil(cluster_fraction * C)` lists and records that effective `nlist`. The centroid beam
