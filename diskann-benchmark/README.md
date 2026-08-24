@@ -322,7 +322,7 @@ A job is one `source` (how the index comes to exist) plus an optional final
 | `OnlineRunbook` | Replay BigANN insert/delete/search stages against a live online index, then flush it once. | nested `build`, `runbook`, and `search` objects; see below |
 | `Load` | Search an index built by an earlier job. | `load_path` |
 
-`batch_size` (default `1`) controls how many points an `Online` build consumes at
+`batch_size` (required) controls how many points an `Online` build consumes at
 a time. There is one write path and a single insert is a batch of one, so `1` is
 the reference semantics: route a point, split its cluster if it overflowed. A
 larger value — a few thousand matches how a real writer arrives — defers splitting
@@ -414,6 +414,7 @@ An online runbook source has this shape:
     "distance": "squared_l2",
     "dim": 100,
     "split_threshold": 120,
+    "batch_size": 4096,
     "merge_threshold": 40,
     "reassign_neighbors": 10,
     "routing": { "graph": { "graph_degree": 32, "graph_l_build": 64 } },

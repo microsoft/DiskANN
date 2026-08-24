@@ -251,7 +251,8 @@ pub(crate) struct GraphIvfOnlineBuild {
     /// split every cluster that overflowed with one joint k-means rather than
     /// one bisection at a time; a few thousand matches how a real writer
     /// arrives. That joint split changes the partition, and therefore recall.
-    #[serde(default = "default_batch_size")]
+    /// Required rather than defaulted: the choice changes both build time and
+    /// recall, so a config has to state it.
     pub(crate) batch_size: usize,
     /// Hard cap on live clusters. Omit (or `null`) for uncapped, data-driven growth.
     #[serde(default)]
@@ -325,9 +326,6 @@ const fn default_reassign_neighbors() -> usize {
 }
 const fn default_capacity_mult() -> usize {
     3
-}
-const fn default_batch_size() -> usize {
-    1
 }
 const fn default_min_clusters() -> usize {
     1
@@ -1206,6 +1204,7 @@ mod tests {
                 "distance": "squared_l2",
                 "dim": 384,
                 "split_threshold": 759,
+                "batch_size": 1,
                 "num_threads": 16,
                 "seed": 0,
                 "save_path": "{save_path}"
