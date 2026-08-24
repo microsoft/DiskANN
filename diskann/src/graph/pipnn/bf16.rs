@@ -29,58 +29,68 @@ fn bf16_to_f32(v: u16) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn bf16_roundtrip_preserves_exactly_representable_values() {
-        // bf16 has 7 mantissa bits. Pick f32 values whose lower 16 mantissa
-        // bits are zero so the truncation is lossless.
-        for &x in &[0.0_f32, 1.0, 2.0, 0.5, 0.25, 4.0, -1.0, -0.5] {
-            let back = bf16_to_f32(f32_to_bf16(x));
-            assert_eq!(back, x, "exact bf16 roundtrip failed for {}", x);
-        }
+    #[rstest]
+    fn bf16_roundtrip_preserves_exactly_representable_values(
+        #[values(0.0_f32, 1.0, 2.0, 0.5, 0.25, 4.0, -1.0, -0.5)] value: f32,
+    ) {
+        // Given: bf16 has seven mantissa bits, and these values have zero low mantissa bits.
+        let expected_value = value;
+
+        // When
+        let actual_value = bf16_to_f32(f32_to_bf16(value));
+
+        // Then
+        assert_eq!(actual_value, expected_value);
     }
 
-    #[test]
-    fn bf16_truncation_keeps_relative_error_below_one_percent() {
-        // A non-exact finite value has at most about 2^-7 relative truncation error.
-        use std::f32::consts::{E, PI};
-        for &x in &[1e-10_f32, 1e10, PI, E] {
-            let back = bf16_to_f32(f32_to_bf16(x));
-            let rel = ((back - x) / x).abs();
-            assert!(rel <= 0.01, "{} → {}: rel error {} > 1%", x, back, rel);
-        }
+    #[rstest]
+    fn bf16_truncation_keeps_relative_error_below_one_percent(
+        #[values(1e-10_f32, 1e10, std::f32::consts::PI, std::f32::consts::E)] value: f32,
+    ) {
+        // Given: bf16 truncation has at most about 2^-7 relative error for finite values.
+        let maximum_relative_error = 0.01;
+
+        // When
+        let truncated = bf16_to_f32(f32_to_bf16(value));
+        let actual_relative_error = ((truncated - value) / value).abs();
+
+        // Then
+        assert!(actual_relative_error <= maximum_relative_error);
     }
 
-    #[test]
-    fn bf16_conversion_preserves_the_upper_bits_of_special_values() {
-        for value in [
-            0.0_f32,
-            -0.0,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::NAN,
-            f32::from_bits(0xFFC1_2345),
-            f32::MIN_POSITIVE,
-            -f32::MIN_POSITIVE,
-        ] {
-            let expected_upper_bits = value.to_bits() & 0xFFFF_0000;
-            assert_eq!(
-                bf16_to_f32(f32_to_bf16(value)).to_bits(),
-                expected_upper_bits,
-                "value_bits={:08x}",
-                value.to_bits()
-            );
-        }
+    #[rstest]
+    #[case::positive_zero(0.0)]
+    #[case::negative_zero(-0.0)]
+    #[case::positive_infinity(f32::INFINITY)]
+    #[case::negative_infinity(f32::NEG_INFINITY)]
+    #[case::positive_nan(f32::NAN)]
+    #[case::negative_nan(f32::from_bits(0xFFC1_2345))]
+    #[case::minimum_positive(f32::MIN_POSITIVE)]
+    #[case::negative_minimum_positive(-f32::MIN_POSITIVE)]
+    fn bf16_conversion_preserves_the_upper_bits_of_special_values(#[case] value: f32) {
+        // Given
+        let expected_upper_bits = value.to_bits() & 0xFFFF_0000;
+
+        // When
+        let actual_bits = bf16_to_f32(f32_to_bf16(value)).to_bits();
+
+        // Then
+        assert_eq!(actual_bits, expected_upper_bits);
     }
 
-    #[test]
-    fn bf16_truncation_moves_finite_values_toward_zero() {
-        for value in [f32::MIN_POSITIVE, 0.1, 1.1, std::f32::consts::PI, f32::MAX] {
-            let positive = bf16_to_f32(f32_to_bf16(value));
-            let negative = bf16_to_f32(f32_to_bf16(-value));
-            assert!((0.0..=value).contains(&positive), "value={value}");
-            assert!((-value..=0.0).contains(&negative), "value={value}");
-        }
+    #[rstest]
+    fn bf16_truncation_moves_finite_values_toward_zero(
+        #[values(f32::MIN_POSITIVE, 0.1, 1.1, std::f32::consts::PI, f32::MAX)] value: f32,
+    ) {
+        // When
+        let positive_truncation = bf16_to_f32(f32_to_bf16(value));
+        let negative_truncation = bf16_to_f32(f32_to_bf16(-value));
+
+        // Then
+        assert!((0.0..=value).contains(&positive_truncation));
+        assert!((-value..=0.0).contains(&negative_truncation));
     }
 
     #[test]
