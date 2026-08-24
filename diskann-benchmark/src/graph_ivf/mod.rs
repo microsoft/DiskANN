@@ -19,14 +19,15 @@ cfg_if::cfg_if! {
             benchmarks::register_benchmarks(registry)
         }
     } else {
-        crate::utils::stub_impl!(
-            "graph-ivf",
-            inputs::graph_ivf::GraphIvfOperation
-        );
-
         /// Register a stub that guides users to enable the `graph-ivf` feature.
         pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-            imp::register("graph-ivf", registry)
+            registry.register_partially_gated::<crate::inputs::graph_ivf::GraphIvfOperation>(
+                "graph-ivf",
+                diskann_benchmark_runner::Features::new("graph-ivf"),
+                "Graph-IVF build and search",
+            )?;
+
+            Ok(())
         }
     }
 }
