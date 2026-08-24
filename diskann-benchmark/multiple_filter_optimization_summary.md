@@ -383,6 +383,35 @@ Bitmap materialization can remain competitive for a very selective predicate bec
 set is small. Bitslice+DNF provides the stronger overall result and avoids the severe broad-filter
 latency spikes. Across S1-S9, it improves geometric-mean P99 by **1.94x** and P999 by **1.77x**.
 
+## 100M provider/language hybrid-index tuning
+
+The 100M-vector provider/language workload contains 64,524 provider IDs and 887 languages, so one
+dense row per label is not practical. The persisted Hybrid format stores frequent labels as
+Bitslice rows and the tail as contiguous sorted `u32` postings.
+
+Two thresholds were built and measured:
+
+| Metric | Memory break-even (3,125,000) | Static 10K |
+|---|---:|---:|
+| Dense labels | 8 | 750 |
+| Sparse labels | 65,403 | 64,661 |
+| Sparse AVG length | 1,775 | 146 |
+| Sparse MAX length | 3,111,690 | 9,993 |
+| Persisted size | 540.7 MiB | 8.77 GiB |
+| Build time | 152.1 s | 192.4 s |
+
+Matched K=150, L=150, one-task, three-repetition results:
+
+| Filter | Recall@150 | AVG baseline -> 10K | P99 baseline -> 10K | P999 baseline -> 10K |
+|---|---:|---:|---:|---:|
+| Language only | 78.20% | 4.17 -> **3.72 ms** | 18.62 -> **10.80 ms** | 24.32 -> **16.62 ms** |
+| Language AND provider | 25.54% | 7.11 -> **2.94 ms** | 49.18 -> **14.19 ms** | 63.82 -> **18.83 ms** |
+
+The 10K threshold improves the combined filter by **2.42x AVG**, **3.47x P99**, and
+**3.39x P999**, but costs roughly 16x more label-index memory. The preferred production direction
+is query-aware promotion under a dense-memory budget: force query-active languages dense, then
+promote provider IDs by query frequency and measured sparse-probe cost.
+
 ## Trade-offs and recommendation
 
 | Area | Bitmap+AST | Bitslice+DNF |
@@ -397,12 +426,14 @@ For the PMax workload with 596 labels, the recommended implementation is
 `topk-multihop-encoded-bitslice-dnf`. It preserves the proven multihop recall behavior and delivers
 the best overall query-time latency. Bitslice memory grows linearly with
 `label_count * vector_count`, so high-cardinality datasets should retain Bitmap+AST or use an
-adaptive representation rather than allocating a dense slice for every label.
+adaptive representation rather than allocating a dense slice for every label. For the 100M
+provider/language workload, use the Hybrid format with a query-aware dense budget rather than the
+memory-only threshold or an unrestricted 10K threshold.
 
 ## Main implementation locations
 
 - `diskann/src/graph/search/multihop_filter_search.rs`: two-hop filtered graph traversal.
-- `diskann-label-index/src/lib.rs`: persisted Bitmap/Bitslice formats and AST/DNF query compilation.
+- `diskann-label-index/src/lib.rs`: persisted Bitmap/Bitslice/Hybrid formats and AST/DNF query compilation.
 - `diskann-label-filter/src/live_filter.rs`: specialized Bitslice and flat-DNF evaluation.
 - `diskann-benchmark/src/index/benchmarks.rs`: query-inclusive encoded-label benchmark wiring.
-- `diskann-benchmark/src/index/search/plugins.rs`: `topk-multihop-encoded-bitslice-dnf` plugin.
+- `diskann-benchmark/src/index/search/plugins.rs`: encoded Bitslice and Hybrid DNF plugins.

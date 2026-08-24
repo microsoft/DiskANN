@@ -737,6 +737,32 @@ are internally consistent, so the remaining gap is graph quality and/or a mismat
 provided production truth semantics and exact squared-L2 nearest-neighbor truth. This benchmark
 should not be used to tune the hybrid representation until that truth definition is confirmed.
 
+## 8.11 Static 10K hybrid threshold
+
+To reduce large sparse posting probes, a second hybrid index classified every label with at least
+10,000 matches as dense.
+
+| Metric | Memory break-even | Static 10K |
+|---|---:|---:|
+| Dense labels | 8 | 750 |
+| Sparse labels | 65,403 | 64,661 |
+| Sparse AVG length | 1,775 | 146 |
+| Sparse MAX length | 3,111,690 | 9,993 |
+| Persisted size | 540.7 MiB | 8.77 GiB |
+| Build time | 152.1 s | 192.4 s |
+
+K=150, L=150, one task, three repetitions:
+
+| Filter | Recall@150 | AVG baseline -> 10K | P99 baseline -> 10K | P999 baseline -> 10K |
+|---|---:|---:|---:|---:|
+| Language only | 78.20% | 4.17 -> **3.72 ms** | 18.62 -> **10.80 ms** | 24.32 -> **16.62 ms** |
+| Language AND provider | 25.54% | 7.11 -> **2.94 ms** | 49.18 -> **14.19 ms** | 63.82 -> **18.83 ms** |
+
+The static 10K threshold confirms that long sparse postings dominate tail latency, especially for
+provider-and-language conjunctions. It is a useful latency upper bound, but its 8.77 GiB footprint
+is too expensive as a universal policy. The next tuning step is field- and query-aware promotion
+under a fixed dense-memory budget.
+
 ## 10. Artifacts
 
 ### 10.1 Original PMax benchmark (`Q:\test6\filtered_test2\bench\full\`)
@@ -762,6 +788,7 @@ should not be used to tune the hybrid representation until that truth definition
 - Raw base data: `EmbOffer.Global.100M.tsv`
 - Raw query sample: `EmbQuery.1k.tsv`
 - Persisted hybrid labels: `provider_language.hybrid.bin`
+- Static-10K hybrid labels: `provider_language.hybrid.threshold10000.bin`
 - Encoder: `diskann-tools/src/bin/build_hybrid_label_index.rs`
 - Probe tool: `diskann-tools/src/bin/probe_hybrid_label_index.rs`
 - UINT8 vectors: `base.provider_language.u8bin`
@@ -771,5 +798,7 @@ should not be used to tune the hybrid representation until that truth definition
 - Graph: `index.provider_language.r32_l100` and `.data`
 - Recall results: `hybrid_recall_100m.results.json` and
   `hybrid_recall_100m.high_l.results.json`
+- K=150/L=150 threshold comparison:
+  `hybrid_threshold10000_recall150_l150.results.json`
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
