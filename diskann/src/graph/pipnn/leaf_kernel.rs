@@ -248,19 +248,19 @@ fn scan_point_pairs<A, M, I>(
         // SAFETY: `rank_leaf_dots` created one threshold for each point.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
-        let simd_prefix = source - source % M::Simd::<A>::LANES;
+        let simd_prefix = source - source % A::Vector::LANES;
 
         while target < simd_prefix {
             // SAFETY: This complete SIMD group is in the strict-lower prefix.
             let dot_products =
-                unsafe { M::Simd::<A>::load_simd(arch, dots.as_ptr().add(source_start + target)) };
+                unsafe { A::Vector::load_simd(arch, dots.as_ptr().add(source_start + target)) };
             let distances = M::distances_simd(arch, norms, source_simd, dot_products, target);
-            let source_eligible = distances.lt_simd(M::Simd::<A>::splat(arch, source_worst));
+            let source_eligible = distances.lt_simd(A::Vector::splat(arch, source_worst));
             // SAFETY: The complete target group is below `source < point_count`.
-            let target_worst = unsafe { M::Simd::<A>::load_simd(arch, worst_ptr.add(target)) };
+            let target_worst = unsafe { A::Vector::load_simd(arch, worst_ptr.add(target)) };
             let target_eligible = distances.lt_simd(target_worst);
-            let source_bits = M::Simd::<A>::active_lanes(source_eligible);
-            let target_bits = M::Simd::<A>::active_lanes(target_eligible);
+            let source_bits = A::Vector::active_lanes(source_eligible);
+            let target_bits = A::Vector::active_lanes(target_eligible);
 
             if source_bits | target_bits != 0 {
                 let values = distances.to_array();
@@ -285,7 +285,7 @@ fn scan_point_pairs<A, M, I>(
                     unsafe { *worst_ptr.add(target_source) = new_worst };
                 }
             }
-            target += M::Simd::<A>::LANES;
+            target += A::Vector::LANES;
         }
 
         while target < source {

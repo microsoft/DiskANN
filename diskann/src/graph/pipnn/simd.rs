@@ -40,14 +40,10 @@ where
     }
 }
 
-/// Stage-specific SIMD representations for one architecture.
+/// PiPNN SIMD representation for one architecture.
 pub(super) trait PiPNNSIMDSchema: Architecture {
-    /// SIMD representation for leaf distance scores.
-    type LeafScore: PiPNNSIMDVector<Arch = Self>;
-    /// SIMD representation for partition ranking scores.
-    type PartitionScore: PiPNNSIMDVector<Arch = Self>;
-    /// SIMD representation for relative-hash sketch comparisons.
-    type HashScore: PiPNNSIMDVector<Arch = Self>;
+    /// SIMD vector used by every numerical stage.
+    type Vector: PiPNNSIMDVector<Arch = Self>;
 }
 
 impl<A> PiPNNSIMDSchema for A
@@ -55,7 +51,5 @@ where
     A: Architecture,
     DefaultVector<A>: PiPNNSIMDVector<Arch = A>,
 {
-    type LeafScore = DefaultVector<A>;
-    type PartitionScore = DefaultVector<A>;
-    type HashScore = DefaultVector<A>;
+    type Vector = DefaultVector<A>;
 }

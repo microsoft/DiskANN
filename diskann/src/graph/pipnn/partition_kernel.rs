@@ -178,12 +178,12 @@ fn select_point_leaders<A, M>(
         ranked_leaders.fill((UNASSIGNED_LEADER, f32::INFINITY));
         let point_simd = M::point_simd(arch, norms, point);
         let point_single = M::point_single(norms, point);
-        let simd_prefix = leader_count - leader_count % M::Simd::<A>::LANES;
+        let simd_prefix = leader_count - leader_count % A::Vector::LANES;
 
-        for first_leader in (0..simd_prefix).step_by(M::Simd::<A>::LANES) {
+        for first_leader in (0..simd_prefix).step_by(A::Vector::LANES) {
             // SAFETY: This group is inside the point's leader row.
             let dot_products =
-                unsafe { M::Simd::<A>::load_simd(arch, point_dots.as_ptr().add(first_leader)) };
+                unsafe { A::Vector::load_simd(arch, point_dots.as_ptr().add(first_leader)) };
             let rankings = M::rankings_simd(arch, norms, point_simd, dot_products, first_leader);
             insert_leader_lanes(rankings, first_leader, ranked_leaders);
         }
