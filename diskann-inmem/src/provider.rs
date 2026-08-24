@@ -576,7 +576,7 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
         Self: 'a;
 
     fn get(&self, id: u32) -> Option<ElementRef> {
-        self.keys.get(&id)?.map(|v| ElementRef(v))
+        self.keys.get(&id)?.map(ElementRef)
     }
 }
 
@@ -800,7 +800,8 @@ mod tests {
             MaxDegree::new(degree),
             Metric::L2,
             Matrix::row_vector(start.into()),
-        );
+        )
+        .unwrap();
 
         // let full = Full::<f32>::new(grid.dim().into(), Metric::L2);
 

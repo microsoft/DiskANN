@@ -22,11 +22,6 @@ where
         Ok(Self(prefetcher))
     }
 
-    /// Check if `self` can prefetch slices of length `len`.
-    pub(crate) fn check(self, len: Bytes) -> Result<(), InvalidPrefetch> {
-        self.0.check(len)
-    }
-
     /// Prefetch the slice defined by `[ptr, ptr.add(len.value()))`.
     ///
     /// # Safety
@@ -36,8 +31,16 @@ where
     ///
     /// * `self` must be compatible with `len`, either through [`Self::new`] or [`Self::check`].
     pub(crate) unsafe fn prefetch(self, ptr: *const u8, len: Bytes) {
-        debug_assert!(self.0.check(len).is_ok());
+        debug_assert!(self.check(len).is_ok());
+
+        // SAFETY: Inherited from caller.
         unsafe { self.0.prefetch(ptr, len) }
+    }
+
+    /// Check if `self` can prefetch slices of length `len`.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check(self, len: Bytes) -> Result<(), InvalidPrefetch> {
+        self.0.check(len)
     }
 
     #[cfg(test)]
@@ -215,7 +218,7 @@ mod test {
     #[test]
     fn test_loop() {
         let p = Loop::new();
-        for i in (0..=1024) {
+        for i in 0..=1024 {
             let v = vec![0u8; i];
 
             let checked = Checked::new(p, Bytes::new(v.len())).unwrap();

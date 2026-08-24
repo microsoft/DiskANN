@@ -381,7 +381,7 @@ impl Test {
                             MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
-                        ))?,
+                        )?)?,
                         index_config,
                     ),
                     DatasetView::F16(v) => finish(
@@ -390,7 +390,7 @@ impl Test {
                             MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
-                        ))?,
+                        )?)?,
                         index_config,
                     ),
                     DatasetView::U8(v) => finish(
@@ -399,7 +399,7 @@ impl Test {
                             MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
-                        ))?,
+                        )?)?,
                         index_config,
                     ),
                     DatasetView::I8(v) => finish(
@@ -408,7 +408,7 @@ impl Test {
                             MaxDegree::new(max_degree),
                             metric,
                             v.to_owned(),
-                        ))?,
+                        )?)?,
                         index_config,
                     ),
                 };

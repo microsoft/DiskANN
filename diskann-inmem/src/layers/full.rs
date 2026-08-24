@@ -3,6 +3,38 @@
  * Licensed under the MIT license.
  */
 
+//! # Full-Precision
+//!
+//! A concurrent data store for [`crate::Provider`] enabling full-precision searches and
+//! inserts for collections consisting of `f32`, `f16`, `u8`, or `i8` data types.
+//!
+//! The [`FullPrecision`] generic bound can be used to constrain these data types.
+
+mod internal_docs {
+    //! Internally, the [`super::layers::Search`] and [`super::layers::Insert`] traits
+    //! are implemented via [`super::FullPrecisionImpl`], which creates:
+    //!
+    //! * [`super::ExpandBeam`]: For index search.
+    //! * [`super::Prune`]: For index construction.
+    //!
+    //! These two structs are modular with respect to their exact distance function and
+    //! prefetcher. Since [`super::layers::ExpandBeam`] and [`super::layers::Prune`] are
+    //! used as trait objects, this allows the implementation structs in this module to be
+    //! highly specialized, including:
+    //!
+    //! * Inlining of distance functions.
+    //! * Specializing distance functions on dimension.
+    //! * Specializing prefetches on dimension.
+    //! * Dispatching to different micro-architecture levels.
+    //! * Specialized query preprocessing.
+    //!
+    //! Picking the best combination of all of these requires extensive experimentation.
+    //! The choices made here are mainly heuristic defaults, meant to try to balance
+    //! performance with compile time.
+    //!
+    //! Feel free to experiment and create optimized implementations for workloads that need it.
+}
+
 use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
@@ -33,74 +65,6 @@ use crate::{
     tag::AtomicTag,
 };
 
-#[derive(Debug, Clone)]
-pub struct Config<T> {
-    layout: store::Layout,
-    metric: Metric,
-    start_points: Matrix<T>,
-    store: store::Config,
-    lookahead: Option<NonZeroUsize>,
-}
-
-const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(12).unwrap();
-
-impl<T> Config<T> {
-    pub fn new(
-        capacity: Capacity,
-        max_degree: MaxDegree,
-        metric: Metric,
-        start_points: Matrix<T>,
-    ) -> Self {
-        Self {
-            layout: store::Layout::new(
-                capacity,
-                max_degree,
-                start_points.nrows().try_into().unwrap(),
-            ),
-            metric,
-            start_points,
-            store: store::Config::default(),
-            lookahead: Some(DEFAULT_LOOKAHEAD),
-        }
-    }
-
-    pub fn store(mut self, config: store::Config) -> Self {
-        self.store = config;
-        self
-    }
-
-    pub fn prefetch(mut self, lookahead: Option<NonZeroUsize>) -> Self {
-        self.lookahead = lookahead;
-        self
-    }
-
-    /// Return the vector dimension of this configuration and the resulting [`Full`].
-    pub fn dim(&self) -> usize {
-        self.start_points.ncols()
-    }
-}
-
-impl<T> layers::LayerConfig for Config<T>
-where
-    T: FullPrecision,
-{
-    type Layer = Full<T>;
-
-    fn build(self) -> ANNResult<Full<T>> {
-        Full::new(self)
-    }
-}
-
-trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
-    fn make_expand_beam<'a>(
-        full: &'a Full<Self>,
-        query: &'a [Self],
-    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>>;
-
-    #[doc(hidden)]
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>>;
-}
-
 /// A useful trait bound for types compatible with [`Full`].
 ///
 /// This encompasses *everything* required for `Full: layers::Insert` and can be used as
@@ -119,6 +83,123 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
         layer: &'a Full<Self>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
+}
+
+/// A configuration struct for [`Full`].
+#[derive(Debug, Clone)]
+pub struct Config<T> {
+    layout: store::Layout,
+    metric: Metric,
+    start_points: Matrix<T>,
+    store: store::Config,
+    lookahead: Option<NonZeroUsize>,
+}
+
+const DEFAULT_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(12).unwrap();
+
+impl<T> Config<T> {
+    /// Create a new [`Config`] for a [`Full`].
+    ///
+    /// The resulting store will hold `capacity` writable items and `start_points.nrows()`
+    /// frozen points at internal IDs `[capacity, capacity + start_points.nrows())`. The
+    /// dimensionality of the full-precision data will be inferred from
+    /// `start_points.ncols()`.
+    ///
+    /// The associated graph will be bounded with `max_degree` and `metric` will be used to
+    /// compute distances among the stored points.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the number of start points exceeds `u32::MAX` or the number of
+    /// bytes required for each point exceeds `usize::MAX`.
+    pub fn new(
+        capacity: Capacity,
+        max_degree: MaxDegree,
+        metric: Metric,
+        start_points: Matrix<T>,
+    ) -> Result<Self, ConfigError> {
+        let num_start_points: u32 = match start_points.nrows().try_into() {
+            Ok(points) => points,
+            Err(_) => return Err(ConfigError::TooManyStartPoints(start_points.nrows())),
+        };
+
+        // Check that we won't overflow when computing the number of bytes required for each
+        // data point. This can happen if `start_points` has 0 rows but a large number of
+        // columns.
+        if start_points
+            .ncols()
+            .checked_mul(std::mem::size_of::<T>())
+            .is_none()
+        {
+            return Err(ConfigError::DimTooLarge(start_points.ncols()));
+        }
+
+        Ok(Self {
+            layout: store::Layout::new(capacity, max_degree, num_start_points),
+            metric,
+            start_points,
+            store: store::Config::default(),
+            lookahead: Some(DEFAULT_LOOKAHEAD),
+        })
+    }
+
+    /// Override the [`store::Config`] for tailoring concurrency details.
+    pub fn store(mut self, config: store::Config) -> Self {
+        self.store = config;
+        self
+    }
+
+    /// Set the prefetch lookahead.
+    ///
+    /// This controls how many iterations ahead in
+    /// [`diskann::graph::glue::SearchAccessor::expand_beam`] data is prefetched into the CPU
+    /// cache. Passing `None` disables prefetching.
+    pub fn prefetch(mut self, lookahead: Option<NonZeroUsize>) -> Self {
+        self.lookahead = lookahead;
+        self
+    }
+
+    /// Return the vector dimension of this configuration and the resulting [`Full`].
+    pub fn dim(&self) -> usize {
+        self.start_points.ncols()
+    }
+}
+
+/// Errors that can arise when constructing [`Config`].
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ConfigError {
+    #[error("{} start points exceed `u32::MAX`", 0)]
+    TooManyStartPoints(usize),
+    #[error(
+        "the number of bytes to hold {}-dimensional data exceeds `usize::MAX`",
+        0
+    )]
+    DimTooLarge(usize),
+}
+
+diskann::convert_error!(ConfigError);
+
+impl<T> layers::LayerConfig for Config<T>
+where
+    T: FullPrecision,
+{
+    type Layer = Full<T>;
+
+    fn build(self) -> ANNResult<Full<T>> {
+        Full::new(self)
+    }
+}
+
+/// Internal helper for implementing [`FullPrecision`].
+trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
+    fn make_expand_beam<'a>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
+    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>>;
+
+    #[doc(hidden)]
+    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>>;
 }
 
 /// Full-precision data layer.
@@ -140,16 +221,20 @@ where
     /// Initialize a [`Config`] for this layer.
     ///
     /// See also: [`Config::new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors described by [`Config::new`].
     pub fn config(
         capacity: Capacity,
         max_degree: MaxDegree,
         metric: Metric,
         start_points: Matrix<T>,
-    ) -> Config<T> {
+    ) -> Result<Config<T>, ConfigError> {
         Config::new(capacity, max_degree, metric, start_points)
     }
 
-    /// Create a new full-precision layer for data with the given `dim` and `metric`.
+    /// Create a new full-precision layer from `config`.
     ///
     /// See: [`Config::build`].
     fn new(config: Config<T>) -> ANNResult<Self>
@@ -170,7 +255,13 @@ where
 
         // Initialize start points.
         for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
-            let mut slot = store.slot(i).unwrap();
+            #[expect(
+                clippy::expect_used,
+                reason = "failing this is an internal, unrecoverable bug"
+            )]
+            let mut slot = store
+                .slot(i)
+                .expect("internal store should leave frozen-points available for writing");
             slot.data()
                 .as_mut_slice()
                 .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(row));
@@ -191,15 +282,17 @@ where
         self.bytes().value() / std::mem::size_of::<T>()
     }
 
-    /// Return the number of bytes of the data handles by this [`layers::Layer`].
+    /// Return the number of payload bytes in each stored vector.
     pub fn bytes(&self) -> Bytes {
         self.store.plugin().bytes()
     }
 
-    pub fn bytes_plus_tag(&self) -> Bytes {
+    #[cfg(test)]
+    fn bytes_plus_tag(&self) -> Bytes {
         self.store.plugin().bytes_plus_tag()
     }
 
+    /// Return the [`Metric`] for this layer.
     pub fn metric(&self) -> Metric {
         self.metric
     }
@@ -216,7 +309,7 @@ where
     }
 
     fn reader(&self) -> Result<invasive::Reader<'_>, epoch::Unavailable> {
-        Ok(Invasive::reader(&self.store)?)
+        Invasive::reader(&self.store)
     }
 }
 
@@ -353,87 +446,9 @@ where
     }
 }
 
-///////////
-// Prune //
-///////////
-
-#[derive(Debug)]
-struct Prune<'a, T, D> {
-    // Buffered data to prune over.
-    buffer: Vec<UnalignedSlice<'a, T>>,
-    // A reader into a layer's store.
-    reader: store::invasive::Reader<'a>,
-    // Type type of the `PureDistanceFunction` used for the implementation.
-    distance: D,
-}
-
-impl<'a, T, D> Prune<'a, T, D> {
-    fn new(reader: store::invasive::Reader<'a>, distance: D) -> Self {
-        // This should be ensured at construction time
-        debug_assert!(
-            reader
-                .bytes()
-                .value()
-                .is_multiple_of(std::mem::size_of::<T>()),
-            "internal inveriant violated",
-        );
-
-        Self {
-            buffer: Vec::new(),
-            reader,
-            distance,
-        }
-    }
-
-    fn boxed(self) -> Box<Self> {
-        Box::new(self)
-    }
-}
-
-impl<T, D> layers::Prune for Prune<'_, T, D>
-where
-    T: Debug + Send + Sync + 'static,
-    D: Distance<T, T>,
-{
-    fn prepare(
-        &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<layers::PruneKey>>,
-    ) -> ANNResult<usize> {
-        let mut counter = layers::PruneKey::counter();
-        self.buffer.clear();
-        self.buffer.reserve(items.len());
-
-        for (id, key) in items {
-            if let Some(v) = self.reader.read(id.into_usize()) {
-                self.buffer.push(unsafe {
-                    UnalignedSlice::new(
-                        v.as_ptr().cast::<T>(),
-                        self.reader.bytes().value() / std::mem::size_of::<T>(),
-                    )
-                });
-
-                *key = Some(counter);
-
-                // Potential overflow issue - but it's exceedingly unlikely that
-                // someone will provide a prune list exceeding `u16::MAX`.
-                //
-                // In addition, `diskann` limits this bound as well.
-                counter = counter.increment()?;
-            }
-        }
-
-        Ok(counter.index())
-    }
-
-    fn evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
-        self.distance
-            .eval(self.buffer[a.index()], self.buffer[b.index()])
-    }
-}
-
-////////////////
-// ExpandBeam //
-////////////////
+//----------------------//
+// Expand Beam (Search) //
+//----------------------//
 
 // A baby [`std::borrow::Cow`].
 #[derive(Debug)]
@@ -462,7 +477,8 @@ struct IntoExpandBeam<'a, T, U> {
 }
 
 impl<'a, T, U> IntoExpandBeam<'a, T, U> {
-    /// Construct a new [`IntoExpandBeam`] - verifying that
+    /// Construct a new [`IntoExpandBeam`], validating the query dimension and acquiring a
+    /// reader for `full`.
     fn new(full: &'a Full<U>, query: Calf<'a, T>) -> ANNResult<Self> {
         full.check_dim(query.len())?;
         let reader = full.reader()?;
@@ -526,7 +542,7 @@ struct ExpandBeam<'a, P, T, U, D> {
     query: Calf<'a, T>,
     // A reader into a layer's store.
     reader: store::invasive::Reader<'a>,
-    // THe prefetch look-ahead.
+    // The prefetch lookahead.
     lookahead: Option<NonZeroUsize>,
     // The type of the data prefetcher.
     prefetch: prefetch::Checked<P>,
@@ -549,8 +565,12 @@ impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
         } = into;
 
         // TAG: PREFETCH-CHECK
+        #[expect(
+            clippy::expect_used,
+            reason = "internal APIs should only provide valid prefetchers"
+        )]
         let prefetch = prefetch::Checked::new(prefetch, reader.bytes_plus_tag())
-            .expect("internal APIs should only provide valid prefetcher");
+            .expect("internal APIs should only provide valid prefetchers");
 
         Self {
             query,
@@ -570,6 +590,12 @@ impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
         Box::new(self)
     }
 
+    /// Compute the distance between the embedded query and `x`.
+    ///
+    /// # Safety
+    ///
+    /// `x.len()` must be exactly `self.bytes()` bytes long and contain
+    /// `self.query.len()` valid values of `U`.
     #[inline(always)]
     unsafe fn run_unchecked(&self, x: &[u8]) -> f32
     where
@@ -583,6 +609,9 @@ impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
     }
 }
 
+// SAFETY: Our implementation of `layers::ExpandBeam::id_limit` is consistent with our
+// `layers::ExpandBeam::expand_beam` implementation. They are both dependent on
+// `invasive::Reader`'s internal bounds.
 unsafe impl<P, T, U, D> layers::ExpandBeam for ExpandBeam<'_, P, T, U, D>
 where
     P: Prefetch,
@@ -594,8 +623,14 @@ where
         if !self.reader.is_in_bounds(i.into_usize()) {
             Err(ANNError::new(OutOfBounds(i)))
         } else {
+            // SAFETY: We have checked that `i` is in-bounds.
             match unsafe { self.reader.read_in_bounds(i.into_usize()) } {
-                Some(data) => Ok(Some(unsafe { self.run_unchecked(data) })),
+                Some(data) => {
+                    // SAFETY: Since we just read `data` from `self.reader`, we know it's
+                    // exactly `self.bytes()` long.
+                    let distance = unsafe { self.run_unchecked(data) };
+                    Ok(Some(distance))
+                }
                 None => Ok(None),
             }
         }
@@ -615,6 +650,8 @@ where
             // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as well
             // as the validity of the prefetch bounds.
             //
+            // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon construction.
+            //
             // We do not materialize the `RawSlice` as a reference.
             unsafe {
                 let raw = self.reader.read_raw_unchecked(j.into_usize());
@@ -630,6 +667,9 @@ where
                 // SAFETY: The in-bounds constraint is assured by the caller, both for `j` as
                 // well as the validity of the prefetch bounds.
                 //
+                // We validated `self.prefetch` with `self.reader.bytes_with_tag()` upon
+                // construction.
+                //
                 // We do not materialize the `RawSlice` as a reference.
                 unsafe {
                     let raw = self
@@ -642,6 +682,8 @@ where
 
             // SAFETY: Caller asserts that `i` is in-bounds.
             if let Some(data) = unsafe { self.reader.read_in_bounds(i.into_usize()) } {
+                // SAFETY: We just read `data` from `self.reader`, so it has a length of
+                // exactly `self.bytes()`.
                 let distance = unsafe { self.run_unchecked(data) };
 
                 // SAFETY: Inherited from caller.
@@ -673,6 +715,95 @@ struct ExpandBeamError {
 
 diskann::convert_error!(ExpandBeamError);
 
+//-------//
+// Prune //
+//-------//
+
+#[derive(Debug)]
+struct Prune<'a, T, D> {
+    // Buffered data to prune over.
+    buffer: Vec<UnalignedSlice<'a, T>>,
+    // A reader into a layer's store.
+    reader: store::invasive::Reader<'a>,
+    // The distance implementation used for pruning.
+    distance: D,
+}
+
+impl<'a, T, D> Prune<'a, T, D> {
+    fn new(reader: store::invasive::Reader<'a>, distance: D) -> Self {
+        // This should be ensured at construction time
+        debug_assert!(
+            reader
+                .bytes()
+                .value()
+                .is_multiple_of(std::mem::size_of::<T>()),
+            "internal invariant violated",
+        );
+
+        Self {
+            buffer: Vec::new(),
+            reader,
+            distance,
+        }
+    }
+
+    fn boxed(self) -> Box<Self> {
+        Box::new(self)
+    }
+}
+
+impl<T, D> layers::Prune for Prune<'_, T, D>
+where
+    T: Debug + Send + Sync + 'static,
+    D: Distance<T, T>,
+{
+    fn prepare(
+        &mut self,
+        items: hashbrown::hash_map::IterMut<'_, u32, Option<layers::PruneKey>>,
+    ) -> ANNResult<usize> {
+        let mut counter = layers::PruneKey::counter();
+        self.buffer.clear();
+        self.buffer.reserve(items.len());
+
+        for (id, key) in items {
+            if let Some(v) = self.reader.read(id.into_usize()) {
+                // SAFETY: We have checked that it is safe to read this data vector and
+                // `self.reader` is preventing any mutation for `self`'s lifetime.
+                //
+                // Further, we know the raw slice has a length exactly `self.reader.bytes()`,
+                // so the formed `UnalignedSlice` is within a single allocated object.
+                let unaligned = unsafe {
+                    UnalignedSlice::new(
+                        v.as_ptr().cast::<T>(),
+                        self.reader.bytes().value() / std::mem::size_of::<T>(),
+                    )
+                };
+
+                self.buffer.push(unaligned);
+
+                *key = Some(counter);
+
+                // Potential overflow issue - but it's exceedingly unlikely that
+                // someone will provide a prune list exceeding `u16::MAX`.
+                //
+                // In addition, `diskann` limits this bound as well.
+                counter = counter.increment()?;
+            }
+        }
+
+        Ok(counter.index())
+    }
+
+    fn evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
+        self.distance
+            .eval(self.buffer[a.index()], self.buffer[b.index()])
+    }
+}
+
+/////////////////
+// Dispatching //
+/////////////////
+
 const fn compute_bytes<T>(dim: usize) -> usize {
     dim * std::mem::size_of::<T>() + (AtomicTag::SIZE).value()
 }
@@ -695,8 +826,12 @@ macro_rules! expand_beam {
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{ Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed() }};
-    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{ Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed() }};
+    ($self:ty, $reader:ident, $f:ident) => {{
+        Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed()
+    }};
+    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
+        Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed()
+    }};
 }
 
 impl FullPrecisionImpl for f32 {
@@ -801,7 +936,6 @@ impl FullPrecisionImpl for u8 {
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = full.reader()?;
-        let dim = full.dim();
 
         let output: Box<dyn layers::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -832,7 +966,6 @@ impl FullPrecisionImpl for i8 {
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
         let reader = full.reader()?;
-        let dim = full.dim();
 
         let distance =
             <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
@@ -942,16 +1075,19 @@ mod tests {
     ///
     /// This is used in dedicated `ExpandBeam` and `Prune` tests in a miri-friendly way.
     ///
-    /// Two start points are included, initializd to `capacity` and `capacity + 1`.
+    /// Two start points are included, initialized to `capacity` and `capacity + 1`.
     fn test_full(capacity: Capacity) -> (Full<f32>, HashMap<u32, f32>) {
         let start_points = [capacity.value() as f32, (capacity.value() + 1) as f32];
 
-        let full = <_ as layers::LayerConfig>::build(Full::<f32>::config(
-            capacity,
-            MaxDegree::new(0),
-            Metric::L2,
-            Matrix::column_vector(Box::new(start_points)),
-        ))
+        let full = <_ as layers::LayerConfig>::build(
+            Full::<f32>::config(
+                capacity,
+                MaxDegree::new(0),
+                Metric::L2,
+                Matrix::column_vector(Box::new(start_points)),
+            )
+            .unwrap(),
+        )
         .unwrap();
 
         assert_eq!(full.dim(), 1, "start points only have one dimension");
@@ -999,6 +1135,8 @@ mod tests {
             assert_eq!(x.len(), 1);
             assert_eq!(y.len(), 1);
 
+            // SAFETY: `UnalignedSlice`s must point to valid data, and we've checked that
+            // the length of each slice is exactly 1. Therefore, the pointer read is safe.
             unsafe { x.as_ptr().read_unaligned() + y.as_ptr().read_unaligned() }
         }
     }
@@ -1009,9 +1147,10 @@ mod tests {
     ///
     /// 1. Prefetches are in-bounds for all lookaheads.
     /// 2. [`ExpandBeam`] doesn't lie about its [`IdLimit`].
-    /// 3. [`ExpandBeam`] various methods are internally consistent with eachother and
+    /// 3. [`ExpandBeam`]'s methods are internally consistent with each other and
     ///    consistent with the parent [`Full`] for item readability.
-    /// 4. [`ExpandBeam::expand_beam`] calls in order and visits all items in the input list.
+    /// 4. [`ExpandBeam::expand_beam`] preserves input order and visits every item in the
+    ///    input list.
     #[test]
     fn test_expand_beam() {
         let capacity = Capacity::new(20);
@@ -1057,10 +1196,10 @@ mod tests {
         //
         // We do several things.
         //
-        // 1. We try to insert two additional IDs, but hold don't publish their guards.
-        //    This tests that we avoid items being readable until they are published.
+        // 1. We insert two additional IDs but hold their guards without publishing.
+        //    This tests that items remain unreadable until they are published.
         //
-        // 2. We commit and insert two new points but immediately retire them.
+        // 2. We publish two new points and immediately retire them.
         //    This tests that we correctly make these points unreadable.
         for lookahead in lookaheads {
             full.lookahead = *lookahead;
@@ -1087,7 +1226,7 @@ mod tests {
             let into =
                 IntoExpandBeam::new(&full, Calf::Borrowed(std::slice::from_ref(&query))).unwrap();
 
-            let mut expand = ExpandBeam::new(into, prefetch::Loop::new(), TestDistance);
+            let expand = ExpandBeam::new(into, prefetch::Loop::new(), TestDistance);
 
             assert_eq!(<_ as layers::ExpandBeam>::id_limit(&expand), id_limit);
 
@@ -1098,7 +1237,7 @@ mod tests {
             // groundtruth.
             //
             // Note that we purposely make `list` extra long with redundant indices to help
-            // catch indexing bugs inside `ExpanBeam`.
+            // catch indexing bugs inside `ExpandBeam`.
             for i in 0..=id_limit.value() {
                 list.clear();
                 list.extend((0..i).rev());
@@ -1106,6 +1245,10 @@ mod tests {
 
                 buf.resize(list.len(), Default::default());
 
+                // SAFETY: By construction, all entries in `list` are within `id_limit`
+                // (verified against this `ExpandBeam` instance.
+                //
+                // Also by construction `buf` is at least as long as `list`.
                 let read =
                     unsafe { <_ as layers::ExpandBeam>::expand_beam(&expand, &list, &mut buf) }
                         .unwrap();
@@ -1140,7 +1283,7 @@ mod tests {
                                 <_ as layers::ExpandBeam>::evaluate(&expand, id)
                                     .unwrap()
                                     .is_none(),
-                                "unreable points should return `None` for their distance",
+                                "unreadable points should return `None` for their distance",
                             );
 
                             None
@@ -1202,7 +1345,7 @@ mod tests {
         let capacity = Capacity::new(20);
         let id_limit = IdLimit::new(22);
 
-        let (mut full, mut points) = test_full(capacity);
+        let (full, mut points) = test_full(capacity);
 
         assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
         assert_eq!(<_ as layers::Layer>::id_limit(&full), id_limit);
@@ -1230,10 +1373,10 @@ mod tests {
 
         // We do several things.
         //
-        // 1. We try to insert two additional IDs, but hold don't publish their guards.
-        //    This tests that we avoid items being readable until they are published.
+        // 1. We insert two additional IDs but hold their guards without publishing.
+        //    This tests that items remain unreadable until they are published.
         //
-        // 2. We commit and insert two new points but immediately retire them.
+        // 2. We publish two new points and immediately retire them.
         //    This tests that we correctly make these points unreadable.
         let g0 = <_ as layers::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
         let g1 = <_ as layers::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
@@ -1285,12 +1428,15 @@ mod tests {
         let start_point = gen_vec::<T>(dim, &mut rng);
         let query = gen_vec::<T>(dim, &mut rng);
 
-        let full = <_ as layers::LayerConfig>::build(Full::<T>::config(
-            Capacity::new(1),
-            MaxDegree::new(0),
-            metric,
-            Matrix::<T>::row_vector(start_point.clone().into()),
-        ))
+        let full = <_ as layers::LayerConfig>::build(
+            Full::<T>::config(
+                Capacity::new(1),
+                MaxDegree::new(0),
+                metric,
+                Matrix::<T>::row_vector(start_point.clone().into()),
+            )
+            .unwrap(),
+        )
         .unwrap();
 
         let start_id: u32 = 1;
