@@ -41,6 +41,7 @@ use crate::{
 pub(crate) const LISTS_SUFFIX: &str = ".graphivf_lists";
 pub(crate) const META_SUFFIX: &str = ".graphivf_meta";
 pub(crate) const CENTROIDS_SUFFIX: &str = ".graphivf_centroids.fbin";
+pub(crate) const GRAPH_SUFFIX: &str = ".graphivf_graph";
 
 /// The platform-specific aligned reader produced by [`AlignedFileReaderFactory`]
 /// (io_uring on Linux, IOCP on Windows, buffered elsewhere).
@@ -316,7 +317,8 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         // Stored vector width: the canonical `T` width for pre-compressed
         // corpora, otherwise the logical dimension of `work`.
         let stored_dim = stored.map(|m| m.ncols()).unwrap_or(dim);
-        // Persist centroids so the graph can be rebuilt on load.
+        // Persist centroids: the graph is saved alongside them, but a load that
+        // cannot reuse it rebuilds from these.
         let write_centroids_start = Instant::now();
         let centroids_path = with_suffix(prefix, CENTROIDS_SUFFIX);
         storage::write_centroids(&centroids_path, centroids_mat.as_view())?;
@@ -328,6 +330,10 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         //    `InnerProduct`). The search-time structure is rebuilt with the
         //    search metric on load.
         let build_graph_start = Instant::now();
+        let num_centroids = centroids_mat.nrows();
+        // Snapshotting the graph below needs a vector of the centroid dimension
+        // to open an accessor with, and the matrix is about to be moved.
+        let probe: Vec<f32> = centroids_mat.row(0).to_vec();
         let centroids = CentroidSource::new(
             params.routing,
             centroids_mat,
@@ -335,6 +341,14 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             VMetric::L2,
         )?;
         profile.build_graph = build_graph_start.elapsed();
+
+        // Persist the graph so a load can replay it rather than rebuild it.
+        let write_graph_start = Instant::now();
+        let snapshot = centroids.snapshot_graph(num_centroids, &probe)?;
+        if let Some(snapshot) = &snapshot {
+            storage::write_graph(&with_suffix(prefix, GRAPH_SUFFIX), snapshot)?;
+        }
+        profile.write_graph = write_graph_start.elapsed();
 
         // 3. Assign every corpus point to its nearest centroid.
         let assign_start = Instant::now();
@@ -363,6 +377,7 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
             element_size: std::mem::size_of::<T>(),
             num_points: num_points as u64,
             graph: params.routing.stored_graph_params(),
+            has_graph: snapshot.is_some(),
             counts,
             offsets,
         };
@@ -380,19 +395,30 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         })
     }
 
-    /// Load a previously built index. The centroid lookup structure is rebuilt
-    /// in memory from the persisted centroids using `num_threads` workers.
+    /// Load a previously built index.
     ///
     /// `centroid_search` selects how clusters are located at query time and is a
     /// property of this handle, not of the persisted index — the same files can
     /// be loaded either way, which is what makes an exact scan usable as a
     /// ground-truth reference for a graph-navigated index.
     ///
+    /// In graph mode the centroid graph saved with the index is replayed rather
+    /// than rebuilt, and is then navigated by whatever distance this index
+    /// searches with. It is rebuilt from the persisted centroids, using
+    /// `num_threads` workers, only when there is no saved graph to replay: the
+    /// index was written before graph persistence existed, or it was built with
+    /// exact routing and so has no graph. Exact mode never reads the graph at
+    /// all.
+    ///
     /// # Errors
     ///
     /// Returns an error if the persisted element size does not match `T`. This
     /// is a size check (e.g. it distinguishes `f32` from [`diskann_vector::Half`]),
     /// not a full type check.
+    ///
+    /// Also returns an error if the metadata records a persisted centroid graph
+    /// that is missing, unreadable, or inconsistent with the centroids. Such an
+    /// index is damaged, and rebuilding the graph instead would hide that.
     pub fn load(
         prefix: &Path,
         num_threads: usize,
@@ -418,11 +444,26 @@ impl<T: VectorRepr> GraphIvfIndex<T> {
         // navigates the centroids by inner product (the f32 IP distance is
         // negated, so the maximum-IP centroids still come first); `L2`/`Cosine`
         // navigate by squared-L2.
-        let centroids = CentroidSource::new(
-            CentroidRouting::for_load(centroid_search, layout.graph),
+        let search_metric = metric.search_metric();
+        let routing = CentroidRouting::for_load(centroid_search, layout.graph);
+        // Reuse the persisted graph whenever this handle will navigate one. The
+        // saved edges *are* the index's centroid graph, so they are replayed as
+        // written; `search_metric` decides only how that graph is walked, not
+        // which graph it is. Both facts are settled from the metadata, so an
+        // exact load never touches the graph file and stays as cheap as it has
+        // always been.
+        let persisted = match (routing, layout.has_graph) {
+            (CentroidRouting::Graph { .. }, true) => {
+                Some(storage::read_graph(&with_suffix(prefix, GRAPH_SUFFIX))?)
+            }
+            _ => None,
+        };
+        let centroids = CentroidSource::load(
+            routing,
             centroids_mat,
             num_threads,
-            metric.search_metric(),
+            search_metric,
+            persisted.as_ref(),
         )?;
 
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);

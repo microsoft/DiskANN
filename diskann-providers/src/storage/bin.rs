@@ -288,6 +288,15 @@ where
             tracing::debug!("Point found with no out-neighbors, point# {}", num_points);
         }
 
+        // A corrupt length would otherwise index past the buffer sized from the
+        // header's max degree.
+        if num_neighbors.into_usize() > max_degree {
+            return Err(ANNError::message(format!(
+                "point# {num_points} declares {num_neighbors} out-neighbors, above the maximum \
+                 degree {max_degree} in the header"
+            )));
+        }
+
         let buffer = &mut buffer[..num_neighbors.into_usize()];
         file.read_u32_into::<LittleEndian>(buffer)?;
         graph.set_adjacency_list(num_points, buffer)?;

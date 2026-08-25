@@ -37,6 +37,8 @@ pub struct BuildProfile {
     pub write_centroids: Duration,
     /// Building the in-memory centroid (Vamana) graph.
     pub build_graph: Duration,
+    /// Capturing that graph's adjacency and writing it to disk.
+    pub write_graph: Duration,
     /// Assigning every corpus point to its nearest centroid via graph search.
     pub assign: Duration,
     /// Encoding and writing the per-cluster inverted lists to disk.
@@ -51,13 +53,14 @@ pub struct BuildProfile {
 impl BuildProfile {
     /// The phases in execution order paired with their labels (excludes
     /// [`total`](Self::total)).
-    pub fn phases(&self) -> [(&'static str, Duration); 8] {
+    pub fn phases(&self) -> [(&'static str, Duration); 9] {
         [
             ("normalize", self.normalize),
             ("sample", self.sample),
             ("kmeans", self.kmeans),
             ("write_centroids", self.write_centroids),
             ("build_graph", self.build_graph),
+            ("write_graph", self.write_graph),
             ("assign", self.assign),
             ("write_lists", self.write_lists),
             ("write_metadata", self.write_metadata),

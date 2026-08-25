@@ -369,7 +369,7 @@ The static and online build schemas are deliberately disjoint and use
 `deny_unknown_fields`: a
 config that mixes k-means knobs into an online build is a hard error rather than a set of
 silently ignored keys. `save_path` and `load_path` are index *prefixes* — the
-`.graphivf_meta`, `.graphivf_lists` and `.graphivf_centroids.fbin` suffixes are added by
+`.graphivf_meta`, `.graphivf_lists`, `.graphivf_centroids.fbin` and `.graphivf_graph` suffixes are added by
 the backend. A relative `save_path` is resolved against the working directory, not the
 runner's `output_directory`; setting `output_directory` alongside a graph-IVF build is
 rejected rather than silently ignored.

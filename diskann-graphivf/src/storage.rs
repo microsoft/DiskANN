@@ -5,7 +5,7 @@
 
 //! On-disk layout for the inverted lists and the index metadata.
 //!
-//! Three files are written next to a user-supplied path prefix:
+//! Four files are written next to a user-supplied path prefix:
 //!
 //! * `<prefix>.graphivf_lists` — the inverted lists. For every cluster, in
 //!   ascending cluster-id order, the bytes are `[ids: u32 x count][vectors:
@@ -15,6 +15,10 @@
 //! * `<prefix>.graphivf_meta` — a compact header plus the per-cluster point
 //!   counts. Byte offsets are recomputed from the counts on load.
 //! * `<prefix>.graphivf_centroids.fbin` — the centroid matrix, always `f32`.
+//! * `<prefix>.graphivf_graph` — the centroid graph's adjacency, written
+//!   whenever the index was built with one. Absent for an exact-routed build,
+//!   which never constructs a graph; the metadata says which of the two applies
+//!   so a load never has to probe the filesystem to find out.
 //!
 //! Because every list is variable length, a read for cluster `c` reads the
 //! smallest 512-aligned byte window that fully contains the list and indexes
@@ -33,6 +37,7 @@ use diskann_utils::io::write_bin;
 use diskann_utils::views::MatrixView;
 
 use crate::{
+    centroids::GraphSnapshot,
     params::{GraphParams, Metric},
     GraphIvfError, Result,
 };
@@ -47,7 +52,20 @@ pub(crate) const ALIGN: u64 = 512;
 const RECORD_ALIGN: u64 = 4;
 
 const MAGIC: u32 = 0x4756_4947; // "GIVF" little-endian
-const VERSION: u32 = 1;
+
+/// Current metadata version, written by every save.
+///
+/// Version 1 recorded only the centroid graph's *recipe* and rebuilt the graph
+/// on every load. Version 2 additionally records whether the graph itself was
+/// persisted. Version 1 files still load: they simply take the rebuild path,
+/// which is what they have always done.
+const VERSION: u32 = 2;
+
+/// Oldest metadata version still readable.
+const MIN_VERSION: u32 = 1;
+
+const GRAPH_MAGIC: u32 = 0x4752_4947; // "GIRG" little-endian
+const GRAPH_VERSION: u32 = 1;
 
 /// Assignment sentinel for a corpus row that is not in the index — either never
 /// inserted or since deleted. [`write_lists_stored`] skips these rows, so a
@@ -88,6 +106,13 @@ pub(crate) struct Layout {
     pub element_size: usize,
     pub num_points: u64,
     pub graph: GraphParams,
+    /// Whether the centroid graph was saved alongside the index.
+    ///
+    /// `false` when the index was built with exact routing, and so has no graph,
+    /// or when it predates graph persistence. Recorded rather than inferred from
+    /// whether the file happens to exist, so that a missing graph file is a
+    /// detectable fault instead of a silent rebuild.
+    pub has_graph: bool,
     /// Number of points in each cluster, indexed by cluster id.
     pub counts: Vec<u32>,
     /// Prefix-sum byte offsets into the list file; `offsets[c]` is the start of
@@ -293,6 +318,7 @@ pub(crate) fn write_metadata(path: &Path, layout: &Layout) -> Result<()> {
     w.write_u32::<LittleEndian>(layout.graph.l_build as u32)?;
     w.write_f32::<LittleEndian>(layout.graph.slack)?;
     w.write_f32::<LittleEndian>(layout.graph.alpha)?;
+    w.write_u32::<LittleEndian>(layout.has_graph as u32)?;
     w.write_all(bytemuck::cast_slice(&layout.counts))?;
     w.flush()?;
     Ok(())
@@ -306,7 +332,7 @@ pub(crate) fn read_metadata(path: &Path) -> Result<Layout> {
         return Err(GraphIvfError::malformed("bad metadata magic"));
     }
     let version = r.read_u32::<LittleEndian>()?;
-    if version != VERSION {
+    if !(MIN_VERSION..=VERSION).contains(&version) {
         return Err(GraphIvfError::malformed(format!(
             "unsupported metadata version {version}"
         )));
@@ -324,6 +350,22 @@ pub(crate) fn read_metadata(path: &Path) -> Result<Layout> {
         alpha: r.read_f32::<LittleEndian>()?,
     };
 
+    // Version 1 never persisted a graph, so the field is absent and a rebuild is
+    // the only option.
+    let has_graph = if version >= 2 {
+        match r.read_u32::<LittleEndian>()? {
+            0 => false,
+            1 => true,
+            other => {
+                return Err(GraphIvfError::malformed(format!(
+                    "invalid centroid graph flag {other}"
+                )))
+            }
+        }
+    } else {
+        false
+    };
+
     let mut counts = vec![0u32; num_clusters];
     r.read_exact(bytemuck::cast_slice_mut(&mut counts))?;
     let offsets = compute_offsets(&counts, dim, element_size);
@@ -334,9 +376,75 @@ pub(crate) fn read_metadata(path: &Path) -> Result<Layout> {
         element_size,
         num_points,
         graph,
+        has_graph,
         counts,
         offsets,
     })
+}
+
+/// Write a centroid graph's adjacency to `path`.
+pub(crate) fn write_graph(path: &Path, snapshot: &GraphSnapshot) -> Result<()> {
+    let mut w = BufWriter::new(File::create(path)?);
+    w.write_u32::<LittleEndian>(GRAPH_MAGIC)?;
+    w.write_u32::<LittleEndian>(GRAPH_VERSION)?;
+    w.write_u64::<LittleEndian>(snapshot.num_centroids() as u64)?;
+
+    write_edges(&mut w, &snapshot.start)?;
+    for neighbors in &snapshot.adjacency {
+        write_edges(&mut w, neighbors)?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+fn write_edges(w: &mut impl Write, edges: &[u32]) -> Result<()> {
+    w.write_u32::<LittleEndian>(edges.len() as u32)?;
+    w.write_all(bytemuck::cast_slice(edges))?;
+    Ok(())
+}
+
+/// Read a centroid graph's adjacency from `path`.
+///
+/// # Errors
+///
+/// Returns an error if the file is not a centroid graph, was written by a newer
+/// version, or declares an adjacency list longer than the node count allows.
+pub(crate) fn read_graph(path: &Path) -> Result<GraphSnapshot> {
+    let mut r = BufReader::new(File::open(path)?);
+    let magic = r.read_u32::<LittleEndian>()?;
+    if magic != GRAPH_MAGIC {
+        return Err(GraphIvfError::malformed("bad centroid graph magic"));
+    }
+    let version = r.read_u32::<LittleEndian>()?;
+    if version != GRAPH_VERSION {
+        return Err(GraphIvfError::malformed(format!(
+            "unsupported centroid graph version {version}"
+        )));
+    }
+    let num_centroids = r.read_u64::<LittleEndian>()? as usize;
+
+    // A node cannot have more distinct out-edges than there are nodes to point
+    // at, start point included. Bounding each list by that keeps a corrupt
+    // length from turning into a huge allocation.
+    let max_edges = num_centroids + 1;
+    let start = read_edges(&mut r, max_edges)?;
+    let adjacency = (0..num_centroids)
+        .map(|_| read_edges(&mut r, max_edges))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(GraphSnapshot { adjacency, start })
+}
+
+fn read_edges(r: &mut impl Read, max_edges: usize) -> Result<Vec<u32>> {
+    let len = r.read_u32::<LittleEndian>()? as usize;
+    if len > max_edges {
+        return Err(GraphIvfError::malformed(format!(
+            "centroid graph adjacency list of length {len} exceeds the {max_edges} nodes available"
+        )));
+    }
+    let mut edges = vec![0u32; len];
+    r.read_exact(bytemuck::cast_slice_mut(&mut edges))?;
+    Ok(edges)
 }
 
 #[cfg(test)]
@@ -414,6 +522,7 @@ mod tests {
             element_size: F32_SZ,
             num_points: 103,
             graph: GraphParams::default(),
+            has_graph: false,
             counts: counts.clone(),
             offsets,
         };
@@ -445,6 +554,7 @@ mod tests {
             element_size: F32_SZ,
             num_points: 0,
             graph: GraphParams::default(),
+            has_graph: false,
             counts,
             offsets,
         };
@@ -486,6 +596,7 @@ mod tests {
             element_size: F32_SZ,
             num_points: num_points as u64,
             graph: GraphParams::default(),
+            has_graph: false,
             counts,
             offsets,
         };
@@ -540,6 +651,7 @@ mod tests {
             element_size: F16_SZ,
             num_points: num_points as u64,
             graph: GraphParams::default(),
+            has_graph: false,
             counts,
             offsets,
         };
@@ -580,6 +692,7 @@ mod tests {
                 l_build: 96,
                 alpha: 1.3,
             },
+            has_graph: true,
             counts: counts.clone(),
             offsets,
         };
@@ -599,8 +712,97 @@ mod tests {
         assert_eq!(loaded.graph.l_build, 96);
         assert_eq!(loaded.graph.slack, 1.5);
         assert_eq!(loaded.graph.alpha, 1.3);
+        assert!(loaded.has_graph);
         // Offsets are recomputed identically from the persisted counts.
         assert_eq!(loaded.offsets, compute_offsets(&counts, dim, F16_SZ));
+    }
+
+    /// An index saved without a centroid graph must say so, rather than leaving
+    /// a load to guess from whether a file happens to exist.
+    #[test]
+    fn metadata_records_absent_graph() {
+        let counts = vec![1u32];
+        let offsets = compute_offsets(&counts, 2, F32_SZ);
+        let layout = Layout {
+            dim: 2,
+            metric: Metric::L2,
+            element_size: F32_SZ,
+            num_points: 1,
+            graph: GraphParams::default(),
+            has_graph: false,
+            counts,
+            offsets,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.bin");
+        write_metadata(&path, &layout).unwrap();
+        assert!(!read_metadata(&path).unwrap().has_graph);
+    }
+
+    /// Metadata written before graph persistence existed still loads, and takes
+    /// the rebuild path because it records no graph.
+    #[test]
+    fn version_1_metadata_still_loads() {
+        let counts = [2u32, 1];
+        let dim = 3;
+        let mut raw = Vec::new();
+        raw.write_u32::<LittleEndian>(MAGIC).unwrap();
+        raw.write_u32::<LittleEndian>(1).unwrap(); // version 1
+        raw.write_u32::<LittleEndian>(Metric::L2.as_u8() as u32)
+            .unwrap();
+        raw.write_u32::<LittleEndian>(F32_SZ as u32).unwrap();
+        raw.write_u32::<LittleEndian>(dim as u32).unwrap();
+        raw.write_u64::<LittleEndian>(3).unwrap();
+        raw.write_u64::<LittleEndian>(counts.len() as u64).unwrap();
+        raw.write_u32::<LittleEndian>(32).unwrap(); // degree
+        raw.write_u32::<LittleEndian>(64).unwrap(); // l_build
+        raw.write_f32::<LittleEndian>(1.2).unwrap(); // slack
+        raw.write_f32::<LittleEndian>(1.2).unwrap(); // alpha
+        raw.write_all(bytemuck::cast_slice(&counts)).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta_v1.bin");
+        fs::write(&path, &raw).unwrap();
+
+        let loaded = read_metadata(&path).unwrap();
+        assert!(!loaded.has_graph);
+        assert_eq!(loaded.graph.degree, 32);
+        assert_eq!(loaded.graph.l_build, 64);
+        assert_eq!(loaded.counts, counts);
+    }
+
+    /// Adjacency and the start point's edges both have to survive a round trip,
+    /// or a restored graph is not the graph that was saved.
+    #[test]
+    fn graph_round_trips() {
+        let snapshot = GraphSnapshot {
+            adjacency: vec![vec![1, 2], vec![], vec![0, 1, u32::MAX]],
+            start: vec![2, 0],
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph.bin");
+        write_graph(&path, &snapshot).unwrap();
+
+        assert_eq!(read_graph(&path).unwrap(), snapshot);
+    }
+
+    /// A truncated or corrupt adjacency length must be rejected rather than
+    /// turned into a huge allocation.
+    #[test]
+    fn graph_rejects_oversized_adjacency() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph_bad.bin");
+
+        let mut raw = Vec::new();
+        raw.write_u32::<LittleEndian>(GRAPH_MAGIC).unwrap();
+        raw.write_u32::<LittleEndian>(GRAPH_VERSION).unwrap();
+        raw.write_u64::<LittleEndian>(2).unwrap(); // two centroids
+        raw.write_u32::<LittleEndian>(9999).unwrap(); // start point degree
+        fs::write(&path, &raw).unwrap();
+
+        assert!(read_graph(&path).is_err());
     }
 
     #[test]

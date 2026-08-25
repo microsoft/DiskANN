@@ -86,7 +86,9 @@ only sets how the *loaded* index scores at search time:
 | `inner_product` | inner product (MIPS) |
 | `cosine` | cosine — **static builds only**; an online build writes rows verbatim and so cannot normalize them |
 
-The graph-navigation column describes a flushed index rebuilt by `load`. Live
+The graph-navigation column describes how `load` navigates the centroid graph.
+The graph itself is always built in L2 and replayed from disk as saved, so the
+`distance` field changes how it is walked, not how it is shaped. Live
 `OnlineSearcher` queries always navigate the mutable centroid graph with L2,
 while scoring candidates with the configured metric.
 
@@ -260,9 +262,10 @@ either one.
 
 | File | Contents |
 | --- | --- |
-| `<prefix>.graphivf_centroids.fbin` | centroid matrix (`f32`), reloaded to rebuild the graph |
+| `<prefix>.graphivf_centroids.fbin` | centroid matrix (`f32`); the graph is rebuilt from it when the saved one cannot be reused |
 | `<prefix>.graphivf_lists` | contiguous per-cluster inverted lists (`T` = the `data_type` element type) |
-| `<prefix>.graphivf_meta` | layout: counts, offsets, dim, metric, element size, graph params |
+| `<prefix>.graphivf_meta` | layout: counts, offsets, dim, metric, element size, graph params, whether a centroid graph was persisted |
+| `<prefix>.graphivf_graph` | the centroid graph's adjacency, replayed on load instead of rebuilding it. Absent for an exact-routed build, which has no graph |
 | `<telemetry_csv>` | plain online and online runbook — per-split telemetry timeline |
 | `<stem>_merges.<ext>` | online runbook only — per-dissolve telemetry timeline derived from `telemetry_csv` |
 

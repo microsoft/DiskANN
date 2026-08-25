@@ -61,7 +61,7 @@ use tokio::runtime::Runtime;
 use crate::{
     centroids::{self, AdjacencyCensus},
     cluster::{self, sq_l2},
-    index::{with_suffix, CENTROIDS_SUFFIX, LISTS_SUFFIX, META_SUFFIX},
+    index::{with_suffix, CENTROIDS_SUFFIX, GRAPH_SUFFIX, LISTS_SUFFIX, META_SUFFIX},
     params::{EmptyClusterPolicy, OnlineCentroidRouting, OnlineParams},
     storage::{self, Layout},
     GraphIvfError, Result,
@@ -1222,8 +1222,15 @@ impl OnlineClusterer {
     }
 
     /// Serialize the in-memory IVF mapping to `prefix` in the batch on-disk
-    /// format (`.graphivf_centroids.fbin`, `.graphivf_lists`, `.graphivf_meta`),
-    /// densely remapping live centroid ids to `0..num_clusters`.
+    /// format (`.graphivf_centroids.fbin`, `.graphivf_lists`, `.graphivf_meta`,
+    /// `.graphivf_graph`), densely remapping live centroid ids to
+    /// `0..num_clusters`.
+    ///
+    /// The live centroid graph is written out under that same remapping, so a
+    /// load replays it instead of rebuilding. Edges into centroids retired by
+    /// earlier deletions name nothing that is being written and are dropped, so
+    /// a heavily churned graph is saved sparser than it ran; a clusterer routing
+    /// exactly has no graph and writes none.
     ///
     /// Clustering runs on `f32`, but the inverted lists are written from
     /// `stored` — the corpus in its on-disk element type `T` (e.g.
@@ -1275,6 +1282,18 @@ impl OnlineClusterer {
         let centroids_path = with_suffix(prefix, CENTROIDS_SUFFIX);
         storage::write_centroids(&centroids_path, centroids_mat.as_view())?;
 
+        // Persist the live centroid graph under the same dense numbering, so a
+        // load replays it instead of rebuilding.
+        let snapshot = if k > 0 {
+            self.centroids
+                .snapshot_graph(&self.runtime, centroids_mat.row(0))?
+        } else {
+            None
+        };
+        if let Some(snapshot) = &snapshot {
+            storage::write_graph(&with_suffix(prefix, GRAPH_SUFFIX), snapshot)?;
+        }
+
         // Write inverted lists from the stored representation and the metadata.
         let stored_dim = stored.ncols();
         let lists_path = with_suffix(prefix, LISTS_SUFFIX);
@@ -1285,6 +1304,7 @@ impl OnlineClusterer {
             element_size: std::mem::size_of::<T>(),
             num_points: live_points,
             graph: self.params.routing.stored_graph_params(),
+            has_graph: snapshot.is_some(),
             counts,
             offsets,
         };

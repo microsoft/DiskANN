@@ -219,6 +219,86 @@ fn load_round_trip() {
     assert_eq!(from_built, from_loaded);
 }
 
+/// The on-disk name of the persisted centroid graph. Spelled out rather than
+/// imported so the test pins the format's public surface.
+const GRAPH_FILE: &str = "idx.graphivf_graph";
+
+/// A graph-routed build must persist its centroid graph; an exact-routed build
+/// has none to persist and must say so rather than leaving a stale file behind.
+#[test]
+fn build_persists_the_centroid_graph_only_when_there_is_one() {
+    let mut rng = StdRng::seed_from_u64(41);
+    let data = make_corpus(&mut rng);
+    let matrix = Matrix::try_from(data.into_boxed_slice(), NUM_POINTS, DIM).expect("matrix shape");
+
+    let graph_dir = tempfile::tempdir().expect("tempdir");
+    GraphIvfIndex::<f32>::build(
+        matrix.as_view(),
+        &build_params(Metric::L2),
+        &graph_dir.path().join("idx"),
+    )
+    .expect("build");
+    assert!(graph_dir.path().join(GRAPH_FILE).exists());
+
+    let exact_dir = tempfile::tempdir().expect("tempdir");
+    let params = BuildParams {
+        routing: CentroidRouting::Exact,
+        ..build_params(Metric::L2)
+    };
+    GraphIvfIndex::<f32>::build(matrix.as_view(), &params, &exact_dir.path().join("idx"))
+        .expect("build exact");
+    assert!(!exact_dir.path().join(GRAPH_FILE).exists());
+    // ... and such an index still opens in graph mode, by building a graph over
+    // the persisted centroids.
+    assert!(
+        GraphIvfIndex::<f32>::load(&exact_dir.path().join("idx"), 2, CentroidSearch::Graph).is_ok()
+    );
+}
+
+/// If the metadata records a persisted graph, a missing graph file is a broken
+/// index. Falling back to a rebuild would hide the damage.
+#[test]
+fn load_rejects_a_missing_persisted_graph() {
+    let mut rng = StdRng::seed_from_u64(43);
+    let data = make_corpus(&mut rng);
+    let matrix = Matrix::try_from(data.into_boxed_slice(), NUM_POINTS, DIM).expect("matrix shape");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prefix = dir.path().join("idx");
+    GraphIvfIndex::<f32>::build(matrix.as_view(), &build_params(Metric::L2), &prefix)
+        .expect("build");
+
+    std::fs::remove_file(dir.path().join(GRAPH_FILE)).expect("remove graph");
+    assert!(GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).is_err());
+    // Exact routing never consults the graph, so it is unaffected.
+    assert!(GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Exact).is_ok());
+}
+
+/// The persisted graph is the index's graph regardless of what distance the
+/// index searches by: an inner-product index replays the same saved edges and
+/// navigates them by inner product, rather than rebuilding a different graph.
+#[test]
+fn inner_product_load_reuses_the_persisted_graph() {
+    let mut rng = StdRng::seed_from_u64(47);
+    let data = make_corpus(&mut rng);
+    let matrix = Matrix::try_from(data.into_boxed_slice(), NUM_POINTS, DIM).expect("matrix shape");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prefix = dir.path().join("idx");
+    GraphIvfIndex::<f32>::build(
+        matrix.as_view(),
+        &build_params(Metric::InnerProduct),
+        &prefix,
+    )
+    .expect("build");
+
+    assert!(GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).is_ok());
+    // Removing the graph breaks the load, which is only possible if it was
+    // being read rather than rebuilt around.
+    std::fs::remove_file(dir.path().join(GRAPH_FILE)).expect("remove graph");
+    assert!(GraphIvfIndex::<f32>::load(&prefix, 2, CentroidSearch::Graph).is_err());
+}
+
 #[test]
 fn load_rejects_format_mismatch() {
     let mut rng = StdRng::seed_from_u64(13);

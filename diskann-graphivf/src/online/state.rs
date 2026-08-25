@@ -7,7 +7,7 @@ use diskann_utils::views::Matrix;
 use tokio::runtime::Runtime;
 
 use crate::{
-    centroids::{self, AdjacencyCensus, CentroidGraph, DenseCentroids, ExactMetric},
+    centroids::{self, AdjacencyCensus, CentroidGraph, DenseCentroids, ExactMetric, GraphSnapshot},
     GraphIvfError, Result,
 };
 
@@ -158,6 +158,29 @@ impl CentroidRegistry {
         let mat = Matrix::try_from(cbuf.into_boxed_slice(), self.live_count(), dim)
             .map_err(|_| GraphIvfError::invalid("centroid matrix shape mismatch"))?;
         Ok((remap, mat))
+    }
+
+    /// Capture the centroid graph's adjacency, renumbered into the same dense
+    /// order [`densify`](Self::densify) produces, so the saved graph and the
+    /// saved centroid matrix agree on every id.
+    ///
+    /// Returns `None` when navigating exactly: there is no graph to capture.
+    ///
+    /// Edges into centroids retired by earlier deletions are dropped, since they
+    /// name nothing that is being written. A graph that has seen heavy churn
+    /// therefore saves sparser than it ran.
+    pub(super) fn snapshot_graph(
+        &self,
+        runtime: &Runtime,
+        probe: &[f32],
+    ) -> Result<Option<GraphSnapshot>> {
+        match &self.graph {
+            None => Ok(None),
+            Some(graph) => {
+                let ids: Vec<u32> = self.live_ids().collect();
+                centroids::snapshot(graph, runtime, &ids, probe).map(Some)
+            }
+        }
     }
 
     /// The `ids.len()` nearest live centroids to `query`, ascending by

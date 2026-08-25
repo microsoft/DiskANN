@@ -11,8 +11,10 @@
 //! online counterpart pick between the two so that no caller has to.
 
 mod exact;
+mod persist;
 
 pub(crate) use exact::{DenseCentroids, ExactMetric};
+pub(crate) use persist::{restore, snapshot, GraphSnapshot};
 
 use std::{num::NonZeroUsize, sync::Arc};
 
@@ -279,6 +281,55 @@ impl CentroidSource {
                 centroids: Arc::new(DenseCentroids::from_matrix(&centroids)),
                 metric: ExactMetric::for_navigation(metric)?,
             }),
+        }
+    }
+
+    /// Prepare `centroids` for lookup under `routing`, reusing `persisted` when
+    /// one was saved with the index.
+    ///
+    /// This is the load-time counterpart to [`new`](Self::new). Passing `None`
+    /// makes it identical to `new`; passing a snapshot replaces graph
+    /// construction with a replay of the saved adjacency. An exact source never
+    /// looks at `persisted` — it builds no graph at all.
+    ///
+    /// `metric` is the distance the restored graph is navigated by, whatever it
+    /// was built under: the saved edges are the index's graph, and loading is
+    /// not the place to substitute a different one.
+    pub(crate) fn load(
+        routing: CentroidRouting,
+        centroids: Matrix<f32>,
+        num_threads: usize,
+        metric: VectorMetric,
+        persisted: Option<&GraphSnapshot>,
+    ) -> Result<Self> {
+        match (routing, persisted) {
+            (CentroidRouting::Graph { graph, assign_l }, Some(snapshot)) => Ok(Self::Graph {
+                index: restore(centroids, &graph, num_threads, metric, snapshot)?,
+                assign_l,
+            }),
+            (routing, _) => Self::new(routing, centroids, num_threads, metric),
+        }
+    }
+
+    /// Capture the centroid graph's adjacency so a later load can skip building
+    /// it, or `None` when there is no graph to capture.
+    ///
+    /// `num_centroids` is the number of centroids the source was built over, and
+    /// `probe` any vector of their dimension (see [`snapshot`]).
+    pub(crate) fn snapshot_graph(
+        &self,
+        num_centroids: usize,
+        probe: &[f32],
+    ) -> Result<Option<GraphSnapshot>> {
+        match self {
+            // An exact source builds no graph, so a load of this index rebuilds
+            // one if it is opened in graph mode.
+            Self::Exact { .. } => Ok(None),
+            Self::Graph { index, .. } => {
+                let runtime = persist::current_thread_runtime()?;
+                let ids: Vec<u32> = (0..num_centroids as u32).collect();
+                snapshot(index, &runtime, &ids, probe).map(Some)
+            }
         }
     }
 

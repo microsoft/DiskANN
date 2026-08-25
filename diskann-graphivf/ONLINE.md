@@ -156,7 +156,8 @@ Written next to a path prefix by `flush` (see [`storage`](src/storage.rs)):
 | --- | --- |
 | `<prefix>.graphivf_centroids.fbin` | The `k × logical_dim` centroid matrix, always `f32`. |
 | `<prefix>.graphivf_lists` | Per cluster, in ascending id order: `[ids: u32 × count][vectors: T × stored_width × count]`, packed back-to-back. Each record start is 4-byte aligned; the file is zero-padded to a 512-byte multiple. |
-| `<prefix>.graphivf_meta` | Fixed header — `magic`, `version`, `metric`, `element_size`, `dim` (the stored row width; `u32` each), `num_points`, `num_clusters` (`u64`), graph params (`degree`, `l_build`, `slack`, `alpha`) — followed by per-cluster counts. List offsets are recomputed from the counts on load. |
+| `<prefix>.graphivf_meta` | Fixed header — `magic`, `version`, `metric`, `element_size`, `dim` (the stored row width; `u32` each), `num_points`, `num_clusters` (`u64`), graph params (`degree`, `l_build`, `slack`, `alpha`), and whether a centroid graph was persisted (`u32` flag) — followed by per-cluster counts. List offsets are recomputed from the counts on load. |
+| `<prefix>.graphivf_graph` | The centroid graph's adjacency in centroid-id space: node count, then the frozen start point's out-edges followed by each centroid's, every list a `u32` length and that many `u32` ids. Written under the same dense renumbering as the centroid matrix, so a load replays the graph rather than rebuilding it. Absent when routing exactly. |
 
 Lists are variable length with no per-list disk padding. A read for cluster `c`
 fetches the smallest 512-aligned window that fully contains its list and indexes
@@ -516,8 +517,9 @@ flowchart TD
    better".
 2. **Centroid KNN.** Search the centroid graph for the query's nearest `nlist`
    centroids, using search-list size `effective_l = max(128,
-   ceil(centroid_search_alpha * nlist))`. A loaded `InnerProduct` index navigates
-   this rebuilt graph by inner product; `L2` and `Cosine` use squared-L2. These
+   ceil(centroid_search_alpha * nlist))`. The graph is the one saved with the
+   index, whatever metric shaped it; a loaded `InnerProduct` index navigates it
+   by inner product, `L2` and `Cosine` by squared-L2. These
    are the lists to probe.
 3. **Plan I/O.** For each non-empty probed cluster, compute the smallest
    512-aligned byte window that fully contains its list, and carve each a
@@ -552,7 +554,7 @@ Online build ([`OnlineParams`](src/params.rs)):
 | `reassign_neighbors` | Neighbor clusters pooled with split children, and maximum survivor landing sites per dissolve (`≥ 1`); a candidate count, so it applies under either routing mode. |
 | `two_means_iters` | Lloyd iterations for split k-means (two children per admitted parent; internally at least one). |
 | `routing` | How the clusterer finds nearest centroids. `Graph { graph, assign_l, reassign_l }` navigates the centroid graph: `assign_l` routes inserts; `reassign_l` sizes split-neighbor and dissolve-survivor search, raised internally to fit candidates and exclusions; `graph` is the build recipe (`degree` R, `slack`, `l_build`, `alpha`). `Exact` scans every live centroid and carries none of these. |
-| `metric` | Candidate-scoring metric for live and flushed search. Clustering and live mutable-graph navigation remain L2; a loaded index rebuilds its immutable centroid graph with this search metric. |
+| `metric` | Candidate-scoring metric for live and flushed search. Clustering and centroid-graph construction remain L2; a loaded index navigates that same saved graph with this search metric. |
 | `normalize_centroids` | L2-normalize warmup and child centroids (unit-sphere corpora). |
 | `num_threads`, `seed` | Worker pool for warmup/split k-means, routing, and graph build; RNG seed. |
 
