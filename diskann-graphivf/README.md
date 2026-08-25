@@ -129,7 +129,7 @@ an `OnlineRunbook` job replays insert, delete, and live-search stages.
 | `split_threshold` | *(required)* | split a cluster once it holds **more** than this many points (dominant granularity knob) |
 | `merge_threshold` | 0 | dissolve a cluster once deletes leave it below this size; `0` disables dissolves and `2 · merge_threshold ≤ split_threshold` is required |
 | `min_clusters` | 1 | live-cluster floor enforced when admitting dissolves |
-| `batch_size` | *(required)* | points routed and planned together per insert batch; larger batches enable parallel routing and joint split k-means |
+| `batch_size` | *(required)* | points routed and planned together per insert batch; larger batches enable parallel routing |
 | `warmup_centroids` | 100 | initial centroids from a light k-means over a corpus prefix |
 | `warmup_points` | 10000 | leading corpus points used for the warmup |
 | `warmup_iters` | 15 | Lloyd iterations for that warmup |

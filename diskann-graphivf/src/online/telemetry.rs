@@ -9,9 +9,8 @@ use std::path::Path;
 
 /// One cluster-split event recorded during an online build.
 ///
-/// A batched insert splits every overflowing cluster together, so it emits one
-/// event per split parent. Events from one batch share `insert_index` and
-/// `live_after`, and divide the joint k-means time between them.
+/// A batched insert splits every overflowing cluster, so it emits one event per
+/// split parent. Events from one batch share `insert_index` and `live_after`.
 #[derive(Debug, Clone, Copy)]
 pub struct SplitEvent {
     /// Number of inserts completed when this split fired.
@@ -24,15 +23,15 @@ pub struct SplitEvent {
     pub num_neighbors: usize,
     /// Points that actually changed cluster during reassignment.
     pub num_reassigned: usize,
-    /// Live centroid count immediately after the joint split.
+    /// Live centroid count immediately after the batch's splits.
     pub live_after: usize,
-    /// This parent's member-weighted share of joint k-means time, microseconds.
+    /// Wall-clock of this parent's 2-means, microseconds.
     pub two_means_us: u64,
     /// Wall-clock of this parent's reassignment pass, microseconds.
     pub reassign_us: u64,
     /// Attributed algorithm time (`two_means_us + reassign_us`). This excludes
     /// neighborhood search and graph publication, which are shared by the
-    /// joint split; [`BuildTelemetry::split_us`] measures the complete pass.
+    /// batch; [`BuildTelemetry::split_us`] measures the complete pass.
     pub total_us: u64,
 }
 
@@ -53,7 +52,7 @@ pub struct MergeEvent {
     pub num_neighbors: usize,
     /// Points that actually changed cluster.
     pub num_reassigned: usize,
-    /// Live centroid count immediately after the joint retirement.
+    /// Live centroid count immediately after the batch's retirements.
     pub live_after: usize,
     /// Wall-clock of the landing-site search, microseconds.
     pub search_us: u64,

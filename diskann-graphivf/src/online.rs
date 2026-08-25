@@ -155,14 +155,13 @@ struct SplitParentPlan {
     id: u32,
     members: Vec<u32>,
     neighbors: Vec<u32>,
+    children: [Box<[f32]>; 2],
+    two_means_us: u64,
 }
 
 struct SplitPlan {
     parents: Vec<SplitParentPlan>,
-    children: Vec<Box<[f32]>>,
     rng_after: StdRng,
-    kmeans_us: u64,
-    total_members: usize,
     started: Instant,
 }
 
@@ -420,12 +419,11 @@ impl OnlineClusterer {
     /// 1. **Route.** Splits are deferred to the end of the batch, so routing is
     ///    read-only with respect to the centroid graph and a batch large enough
     ///    to be worth the dispatch runs across the whole thread pool.
-    /// 2. **Split jointly.** Every routed-to cluster that now overflows is
-    ///    collected; their inverted lists are unioned and re-clustered in a
-    ///    *single* k-means into twice as many centroids (two per overflowing
-    ///    parent). With one parent this is exactly a local 2-means; with several
-    ///    it lets clusters that overflowed together — which are usually adjacent
-    ///    — resolve their shared boundaries jointly instead of greedily.
+    /// 2. **Split each overflow.** Every routed-to cluster that now overflows is
+    ///    bisected on its own by a local 2-means over its members, including the
+    ///    points this batch routed to it. Parents are independent of one
+    ///    another, so a cluster splits identically however many others
+    ///    overflowed in the same batch.
     /// 3. **Reassign per split region.** Each split parent's neighborhood is
     ///    then reassigned in turn, as a GEMM.
     ///
@@ -784,15 +782,13 @@ impl OnlineClusterer {
             })
     }
 
-    /// Prepare a joint split without changing centroid or partition state.
+    /// Prepare every parent's split without changing centroid or partition
+    /// state.
     ///
-    /// The members of all `l` parents are unioned and re-clustered by a *single*
-    /// k-means into `2l` children, rather than by `l` independent 2-means. The
-    /// union is seeded with two members drawn from each parent, so the run starts
-    /// from the same configuration `l` separate 2-means would, but the parents'
-    /// boundaries are then free to move against one another — clusters that
-    /// overflow together in one batch are usually adjacent, and the joint pass
-    /// resolves them jointly instead of greedily.
+    /// Each parent is bisected on its own by a local 2-means over its members,
+    /// exactly as a batch of one would be. Parents that overflow in the same
+    /// batch do not see one another, so a split is planned identically however
+    /// many others fired alongside it.
     ///
     /// `parents` must be sorted, live, hold at least two members each, and fit
     /// the id budget and cluster cap — [`insert_batch`](Self::insert_batch)
@@ -803,8 +799,6 @@ impl OnlineClusterer {
         incoming: &std::collections::HashMap<u32, Vec<u32>>,
     ) -> Result<SplitPlan> {
         let started = Instant::now();
-        let dim = self.dim;
-        let l = parents.len();
 
         // The `reassign_neighbors` live centroids nearest each parent, found by
         // searching the parent's own centroid vector. The searches run before the
@@ -813,55 +807,56 @@ impl OnlineClusterer {
         // own two children join the candidate set once they exist. `k = s + 1`
         // reserves the slot the parent takes.
         let s = self.params.reassign_neighbors;
-        let mut parent_plans = Vec::with_capacity(l);
+        let mut rng_after = self.rng.clone();
+        let mut parent_plans = Vec::with_capacity(parents.len());
         for &c in parents {
             let mut members = self.partition.members(c).to_vec();
             if let Some(inserted) = incoming.get(&c) {
                 members.extend_from_slice(inserted);
             }
+            let neighbors = self.region_neighbors(c, s)?;
+
+            let kmeans_start = Instant::now();
+            let children = self.two_means(&members, &mut rng_after)?;
             parent_plans.push(SplitParentPlan {
                 id: c,
                 members,
-                neighbors: self.region_neighbors(c, s)?,
+                neighbors,
+                children,
+                two_means_us: kmeans_start.elapsed().as_micros() as u64,
             });
         }
 
-        // Union every parent's members; `spans[i]` is parent i's range in `x`.
-        // The lists are only copied here. They remain attached until commit.
-        let mut x: Vec<u32> = Vec::new();
-        let mut spans: Vec<(usize, usize)> = Vec::with_capacity(l);
-        for parent in &parent_plans {
-            let start = x.len();
-            x.extend_from_slice(&parent.members);
-            spans.push((start, x.len()));
-        }
-        let m = x.len();
+        Ok(SplitPlan {
+            parents: parent_plans,
+            rng_after,
+            started,
+        })
+    }
 
-        // 1. One k-means over the union into `2l` children.
-        let kmeans_start = Instant::now();
+    /// Bisect `members` into two centroids, seeded with two distinct members
+    /// drawn from `rng`.
+    fn two_means(&self, members: &[u32], rng: &mut StdRng) -> Result<[Box<[f32]>; 2]> {
+        let dim = self.dim;
+        let m = members.len();
+        debug_assert!(m >= 2);
+
         let mut buf = vec![0.0f32; m * dim];
-        for (i, &pid) in x.iter().enumerate() {
+        for (i, &pid) in members.iter().enumerate() {
             buf[i * dim..(i + 1) * dim].copy_from_slice(self.points.row(pid as usize));
         }
         let data = Matrix::try_from(buf.into_boxed_slice(), m, dim)
             .map_err(|_| GraphIvfError::invalid("split sub-matrix shape mismatch"))?;
 
-        // Seed each parent's two children with two distinct members of that
-        // parent, matching how a single split seeds its local 2-means.
-        let mut rng_after = self.rng.clone();
-        let mut seed = vec![0.0f32; 2 * l * dim];
-        for (i, &(lo, hi)) in spans.iter().enumerate() {
-            let span = hi - lo;
-            debug_assert!(span >= 2);
-            let a = rng_after.random_range(0..span);
-            let mut b = rng_after.random_range(0..span);
-            if b == a {
-                b = (a + 1) % span;
-            }
-            seed[2 * i * dim..(2 * i + 1) * dim].copy_from_slice(data.row(lo + a));
-            seed[(2 * i + 1) * dim..(2 * i + 2) * dim].copy_from_slice(data.row(lo + b));
+        let a = rng.random_range(0..m);
+        let mut b = rng.random_range(0..m);
+        if b == a {
+            b = (a + 1) % m;
         }
-        let mut children = Matrix::try_from(seed.into_boxed_slice(), 2 * l, dim)
+        let mut seed = vec![0.0f32; 2 * dim];
+        seed[..dim].copy_from_slice(data.row(a));
+        seed[dim..].copy_from_slice(data.row(b));
+        let mut children = Matrix::try_from(seed.into_boxed_slice(), 2, dim)
             .map_err(|_| GraphIvfError::invalid("split seed shape mismatch"))?;
 
         let mut assigner = cluster::ExactAssigner::default();
@@ -874,19 +869,11 @@ impl OnlineClusterer {
             self.params.normalize_centroids,
             &self.pool,
         )?;
-        let kmeans_us = kmeans_start.elapsed().as_micros() as u64;
 
-        let children = (0..2 * l)
-            .map(|i| children.row(i).to_vec().into_boxed_slice())
-            .collect();
-        Ok(SplitPlan {
-            parents: parent_plans,
-            children,
-            rng_after,
-            kmeans_us,
-            total_members: m,
-            started,
-        })
+        Ok([
+            children.row(0).to_vec().into_boxed_slice(),
+            children.row(1).to_vec().into_boxed_slice(),
+        ])
     }
 
     /// Publish a prepared split and reassign each affected region.
@@ -896,18 +883,23 @@ impl OnlineClusterer {
     /// publication and GEMM assignment remain fallible and irreversible.
     fn commit_split(&mut self, plan: SplitPlan) -> Result<()> {
         let parent_ids: Vec<u32> = plan.parents.iter().map(|parent| parent.id).collect();
+        let children: Vec<Box<[f32]>> = plan
+            .parents
+            .iter()
+            .flat_map(|parent| parent.children.clone())
+            .collect();
         let child_ids = self
             .centroids
-            .apply_split(&self.runtime, &parent_ids, plan.children)?;
+            .apply_split(&self.runtime, &parent_ids, children)?;
         let live_after = self.centroids.live_count();
         let mut events = Vec::with_capacity(plan.parents.len());
         let mut total_reassigned = 0u64;
 
         // Reassign each split region in turn. The candidates are the parent's
-        //    own two children plus the neighbors picked before the mutation, less
-        //    any neighbor that was itself a parent of this batch and has since
-        //    been retired — that region is covered by its own turn.
-        for (i, parent) in plan.parents.iter().enumerate() {
+        // own two children plus the neighbors picked before the mutation, less
+        // any neighbor that was itself a parent of this batch and has since
+        // been retired — that region is covered by its own turn.
+        for (parent, born) in plan.parents.iter().zip(child_ids.chunks_exact(2)) {
             let cluster_size = parent.members.len();
 
             self.scratch.candidates.clear();
@@ -919,8 +911,7 @@ impl OnlineClusterer {
                     .filter(|&c| self.centroids.is_live(c)),
             );
             let num_neighbors = self.scratch.candidates.len();
-            self.scratch.candidates.push(child_ids[2 * i]);
-            self.scratch.candidates.push(child_ids[2 * i + 1]);
+            self.scratch.candidates.extend_from_slice(born);
 
             // Candidate points: the parent's own members plus everything its
             // surviving neighbors hold. The children's lists are still empty —
@@ -953,13 +944,6 @@ impl OnlineClusterer {
             };
             let reassign_us = reassign_start.elapsed().as_micros() as u64;
 
-            // The joint k-means covered every parent at once; charge each parent
-            // the share of it proportional to the points it contributed.
-            let two_means_us = if plan.total_members == 0 {
-                0
-            } else {
-                plan.kmeans_us * cluster_size as u64 / plan.total_members as u64
-            };
             total_reassigned += num_reassigned as u64;
             events.push(SplitEvent {
                 insert_index: self.telemetry.total_inserts,
@@ -968,9 +952,9 @@ impl OnlineClusterer {
                 num_neighbors,
                 num_reassigned,
                 live_after,
-                two_means_us,
+                two_means_us: parent.two_means_us,
                 reassign_us,
-                total_us: two_means_us + reassign_us,
+                total_us: parent.two_means_us + reassign_us,
             });
         }
 
@@ -991,7 +975,7 @@ impl OnlineClusterer {
     /// cannot change a surviving point's nearest-among-survivors — so the
     /// neighbors' members are provably already where they belong, and only the
     /// victim's own points are re-placed. That is the whole operator: no
-    /// k-means, no new centroid, and no region union.
+    /// k-means and no new centroid.
     ///
     /// Because nothing is fitted, a merge consumes no centroid id. Deletes are
     /// therefore free against the

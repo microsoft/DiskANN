@@ -307,15 +307,14 @@ lifecycle:
    large enough to fill more than one work unit is spread across the thread
    pool (per-worker current-thread runtimes). A batch too small to be worth the
    dispatch runs on the clusterer's own runtime.
-2. **Project and prepare jointly.** Compute post-insert sizes without appending
-   anything. Every admitted overflow is a parent `c₁ … c_l`; its snapshot
-   includes both current and incoming members. The snapshots are unioned into
-   `X = X₁ ∪ … ∪ X_l` and re-clustered by **one** k-means into `2l` children —
-   two seeds drawn per parent, `two_means_iters` Lloyd iterations, and centroid
-   normalization when requested. Neighbor searches also run here against the
-   old graph. With `l = 1` this is the local 2-means above. With more, adjacent
-   overflows can settle their shared boundaries jointly rather than bisecting
-   greedily.
+2. **Project and prepare each parent.** Compute post-insert sizes without
+   appending anything. Every admitted overflow is a parent `c₁ … c_l`; its
+   snapshot includes both current and incoming members. Each snapshot `Xᵢ` is
+   bisected by its **own** 2-means — two seeds drawn from `Xᵢ`,
+   `two_means_iters` Lloyd iterations, and centroid normalization when
+   requested — exactly as in the serial path above. Neighbor searches also run
+   here against the old graph. Parents never see one another, so a cluster
+   splits identically however many others overflowed alongside it.
 3. **Publish.** Attach all routed points, insert all `2l` child graph vertices,
    and retire the `l` parent vertices. The centroid table changes only after the
    graph operations succeed.
@@ -330,34 +329,16 @@ Admission control still applies per batch: a split costs two ids and adds one
 live cluster, so when a batch would breach `max_clusters` or the id budget the
 most overfull clusters split first and the rest wait for a later batch.
 
-At `l = 1` every phase reduces to the serial description above, so `batch_size:
-1` is the reference semantics and larger batches differ only where the joint
-k-means and the deferred routing actually bite: points routed against the
-pre-batch partition (phase 4 re-examines exactly the regions that moved), and
-overflowing clusters bisected together rather than one at a time. Telemetry
-coarsens to match — one `SplitEvent` per split parent still, but every event from
-one batch shares that batch's `insert_index` and `live_after`, and
-`two_means_us` is the parent's share of the joint k-means prorated by member
-count.
+Every phase reduces to the serial description above, so `batch_size: 1` is the
+reference semantics and larger batches differ only where the deferred routing
+actually bites: points are routed against the pre-batch partition, and phase 4
+re-examines exactly the regions that moved. The split itself is unchanged — a
+parent is bisected and its region reassigned exactly as it would be on its own.
+Telemetry coarsens to match — one `SplitEvent` per split parent still, but every
+event from one batch shares that batch's `insert_index` and `live_after`.
 
-Measured on enron-1M (1,087,932 × 384 minmax8, `split_threshold` 759,
-`reassign_neighbors` 32, 16 threads), `batch_size: 4096` against the same build
-at `batch_size: 1`:
-
-| | `batch_size: 1` | `batch_size: 4096` |
-| --- | --- | --- |
-| build | 138.0 s | **84.7 s** (1.6×) |
-| routing | 52.5 s | 7.5 s |
-| split | 84.5 s | 77.1 s |
-| live clusters | 2012 | 2055 |
-| points reassigned | 1,873,198 | 1,933,702 |
-| residual | 6.345e5 | 6.347e5 |
-| recall@50, `nlist` 307 | 92.49 | 91.90 |
-
-Nearly all of it is routing: that phase is embarrassingly parallel once the
-graph is frozen and drops 7×, while splitting stays serial per parent and gains
-only what the joint k-means saves. Recall tracks the serial build to within a
-point, at the same residual.
+The speedup is almost entirely routing: that phase is embarrassingly parallel
+once the graph is frozen, while splitting stays serial per parent.
 
 ### 3c. Delete a point (remove, maybe dissolve)
 

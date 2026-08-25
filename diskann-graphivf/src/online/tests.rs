@@ -414,8 +414,8 @@ fn batched_inserts_preserve_invariants_and_split() {
     );
     assert_eq!(c.telemetry().total_inserts, nn as u64);
 
-    // A batch's splits are re-clustered jointly, so several events share one
-    // timestamp, but the timeline is still ordered.
+    // Every split in a batch is stamped with that batch's insert count, so
+    // several events share one timestamp, but the timeline is still ordered.
     let mut prev = 0u64;
     for e in &c.telemetry().splits {
         assert!(e.insert_index >= prev);
