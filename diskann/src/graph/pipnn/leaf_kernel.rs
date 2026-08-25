@@ -1036,6 +1036,11 @@ mod tests {
             #[case] point_count: usize,
             #[case] requested_k: usize,
         ) {
+            // Miri covers the pointer boundaries in the smaller lane cases.
+            if cfg!(miri) && point_count > 64 {
+                return;
+            }
+
             // Given
             let dots = lane_boundary_gram_from_point_vectors(metric, point_count);
             let expected_neighbors = reference_neighbors(metric, &dots, point_count, requested_k);

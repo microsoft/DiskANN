@@ -282,8 +282,8 @@ mod tests {
             ];
             let leaders = MatrixView::try_from(&leader_values[..], 2, 2).unwrap();
             let expected_row_squared_norms = [
-                first_leader[0].powi(2) + first_leader[1].powi(2),
-                second_leader[0].powi(2) + second_leader[1].powi(2),
+                first_leader[0] * first_leader[0] + first_leader[1] * first_leader[1],
+                second_leader[0] * second_leader[0] + second_leader[1] * second_leader[1],
             ];
             let mut actual_norms = Vec::new();
 
@@ -307,8 +307,8 @@ mod tests {
             ];
             let leaders = MatrixView::try_from(&leader_values[..], 2, 2).unwrap();
             let expected_row_norms = [
-                (first_leader[0].powi(2) + first_leader[1].powi(2)).sqrt(),
-                (second_leader[0].powi(2) + second_leader[1].powi(2)).sqrt(),
+                (first_leader[0] * first_leader[0] + first_leader[1] * first_leader[1]).sqrt(),
+                (second_leader[0] * second_leader[0] + second_leader[1] * second_leader[1]).sqrt(),
             ];
             let mut actual_norms = Vec::new();
 
@@ -333,8 +333,8 @@ mod tests {
         ];
         let points = MatrixView::try_from(&point_values[..], 2, 2).unwrap();
         let expected_row_norms = [
-            (first_point[0].powi(2) + first_point[1].powi(2)).sqrt(),
-            (second_point[0].powi(2) + second_point[1].powi(2)).sqrt(),
+            (first_point[0] * first_point[0] + first_point[1] * first_point[1]).sqrt(),
+            (second_point[0] * second_point[0] + second_point[1] * second_point[1]).sqrt(),
         ];
         let mut actual_norms = Vec::new();
 
