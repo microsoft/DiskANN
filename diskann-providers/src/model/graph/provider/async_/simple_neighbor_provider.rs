@@ -300,12 +300,13 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
 ///
 /// Key differences between the formats:
 /// 1. The disk format does not support the virtual start point used by the in-memory index.
-/// 2. Disk format expects additional_points = 0, while async index uses additional_points = 1.
+/// 2. The in-memory index stores one virtual start point as an additional point, while the
+///    serialized disk graph omits it after remapping it to the actual medoid.
 ///
 /// This adaptor handles these differences by:
 /// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
 /// - Excluding the virtual point from the total count (subtracting 1 from length)
-/// - Setting additional_points to 0 as required by the disk format specification
+/// - Setting additional_points to 0 because the virtual point is omitted from the serialized graph
 ///
 /// Used with [`storage::bin::save_graph`] to persist an async index in standard DiskANN format.
 struct DiskAdaptor<'a> {
