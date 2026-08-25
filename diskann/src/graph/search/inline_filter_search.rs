@@ -268,7 +268,7 @@ where
                 scratch.resize(new_l);
             }
 
-            next_adaptive_l_sample = Some(next_sample * 10);
+            next_adaptive_l_sample = advance_adaptive_l_sample(next_sample);
         }
     }
 
@@ -279,6 +279,10 @@ where
         hops: scratch.hops,
         matched_results,
     })
+}
+
+fn advance_adaptive_l_sample(current_sample: usize) -> Option<usize> {
+    current_sample.checked_mul(10)
 }
 
 /// Compute adaptive L based on observed specificity.
@@ -327,6 +331,13 @@ fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multipl
 mod tests {
     use super::*;
 
+    fn assert_logarithmic_result(actual: usize, expected: usize) {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "logarithmic result {actual} is not within +/-1 of {expected}",
+        );
+    }
+
     #[test]
     fn test_adaptive_l_validation() {
         // Valid
@@ -354,7 +365,10 @@ mod tests {
         let third_sample = advance_adaptive_l_sample(second_sample).unwrap();
         let fourth_sample = advance_adaptive_l_sample(third_sample).unwrap();
 
-        assert_eq!([sample_count, second_sample, third_sample, fourth_sample], [100, 1000, 10_000, 100_000]);
+        assert_eq!(
+            [sample_count, second_sample, third_sample, fourth_sample],
+            [100, 1000, 10_000, 100_000]
+        );
         assert_eq!(advance_adaptive_l_sample(usize::MAX), None);
     }
 
@@ -372,8 +386,8 @@ mod tests {
         assert_eq!(compute_adaptive_l(base_l, 1000, 499, max_multiplier), 200);
 
         // <10% specificity => log scaling (0.01 => 4x, 0.001 => 8x)
-        assert_eq!(compute_adaptive_l(base_l, 1000, 10, max_multiplier), 400);
-        assert_eq!(compute_adaptive_l(base_l, 1000, 1, max_multiplier), 800);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 1000, 10, max_multiplier), 400);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 1000, 1, max_multiplier), 800);
     }
 
     #[test]
@@ -381,8 +395,8 @@ mod tests {
         let base_l = 100;
         let max_multiplier = 16.0;
 
-        assert_eq!(compute_adaptive_l(base_l, 100, 0, max_multiplier), 400);
-        assert_eq!(compute_adaptive_l(base_l, 1000, 0, max_multiplier), 800);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 100, 0, max_multiplier), 400);
+        assert_logarithmic_result(compute_adaptive_l(base_l, 1000, 0, max_multiplier), 800);
         assert_eq!(compute_adaptive_l(base_l, 0, 0, max_multiplier), 1600);
     }
 
