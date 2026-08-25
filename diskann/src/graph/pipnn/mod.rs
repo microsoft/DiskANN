@@ -10,8 +10,8 @@
 //! ranked leaders and reuses its allocation for each point.
 //!
 //! [`leaf_kernel`] reads a lower-triangular Gram matrix. It evaluates each point
-//! pair once and updates both points. Each point retains at most three local
-//! neighbors.
+//! pair one time. It updates both points. Each point keeps the requested number
+//! of neighbors. This number cannot exceed the number of other points in the leaf.
 //!
 //! `kernel_metric` defines metric markers and shared math. Separate leaf and
 //! partition traits define norm preparation and ranking formulas.
