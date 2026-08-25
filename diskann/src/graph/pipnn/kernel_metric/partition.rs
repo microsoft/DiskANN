@@ -199,7 +199,7 @@ impl PartitionMetric for InnerProduct {
     where
         A: PiPNNSIMDSchema,
     {
-        A::Vector::default(arch) - dot_products
+        A::Vector::splat(arch, -1.0) * dot_products
     }
 
     #[inline(always)]
@@ -451,6 +451,20 @@ mod tests {
             let actual_rankings =
                 run_rankings_simd::<InnerProduct>(&[], &[], 0, [dot_product; 16], 0);
             assert_eq!(actual_rankings, [expected_ranking; 16]);
+        }
+
+        #[test]
+        fn signed_zero_bits_match_scalar_negation_with_inner_product() {
+            let dot_products: [f32; 16] = [
+                0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0,
+                -0.0,
+            ];
+            let expected_bits = dot_products.map(|dot| (-dot).to_bits());
+
+            let actual_bits =
+                run_rankings_simd::<InnerProduct>(&[], &[], 0, dot_products, 0).map(f32::to_bits);
+
+            assert_eq!(actual_bits, expected_bits);
         }
 
         #[test]
