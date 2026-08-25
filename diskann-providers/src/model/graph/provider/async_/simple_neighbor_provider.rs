@@ -299,10 +299,8 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync {
 /// and the on-disk index format during serialization.
 ///
 /// Key differences between the formats:
-/// 1. Disk format requires a valid vector ID as start point, while async index uses a
-///    virtual ID (max_points + 1) that exceeds the valid dataset range
-/// 2. In-memory adjacency lists may contain the virtual start point ID
-/// 3. Disk format expects additional_points = 0, while async index uses additional_points = 1
+/// 1. The disk format does not support the virtual start point used by the in-memory index.
+/// 2. Disk format expects additional_points = 0, while async index uses additional_points = 1.
 ///
 /// This adaptor handles these differences by:
 /// - Substituting the virtual start point ID with an actual dataset ID when found in adjacency lists
@@ -328,14 +326,14 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
         self.provider.get_neighbors_sync(i, &mut list)?;
 
         let mut list: Vec<_> = list.into();
-        let node_id = u32::try_from(i).ok();
+        let node_id = u32::try_from(i)?;
         let mut seen_actual_start_point = false;
         list.retain_mut(|neighbor| {
             if *neighbor == self.inmem_start_point {
                 *neighbor = self.actual_start_point;
             }
 
-            if Some(*neighbor) == node_id {
+            if *neighbor == node_id {
                 return false;
             }
 
