@@ -5,8 +5,8 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann_benchmark_core::recall::GroundTruthMode;
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
+use diskann_benchmark_core::{recall::GroundTruthMode, search::graph::KnnParams};
 
 use crate::{index::result::SearchResults, inputs::graph_index::GraphSearch};
 
@@ -15,6 +15,7 @@ pub(crate) struct SearchSteps<'a> {
     pub reps: NonZeroUsize,
     pub num_tasks: &'a [NonZeroUsize],
     pub runs: &'a [GraphSearch],
+    pub groundtruth_mode: GroundTruthMode,
 }
 
 impl<'a> SearchSteps<'a> {
@@ -22,11 +23,13 @@ impl<'a> SearchSteps<'a> {
         reps: NonZeroUsize,
         num_tasks: &'a [NonZeroUsize],
         runs: &'a [GraphSearch],
+        groundtruth_mode: GroundTruthMode,
     ) -> Self {
         Self {
             reps,
             num_tasks,
             runs,
+            groundtruth_mode,
         }
     }
 }
@@ -50,21 +53,26 @@ pub(crate) fn run<I>(
                 .search_l
                 .iter()
                 .map(|search_l| {
-                    let search_params =
-                        diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
+                    let search_params = KnnParams::new(run.search_n, *search_l).unwrap();
 
                     core_search::Run::new(search_params, setup.clone())
                 })
                 .collect();
 
-            all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
+            all.extend(runner.search_all(
+                parameters,
+                groundtruth,
+                run.recall_k,
+                run.search_n,
+                steps.groundtruth_mode,
+            )?);
         }
     }
 
     Ok(all)
 }
 
-type Run = core_search::Run<diskann::graph::search::Knn>;
+type Run = core_search::Run<KnnParams>;
 pub(crate) trait Knn<I> {
     fn search_all(
         &self,
@@ -72,6 +80,7 @@ pub(crate) trait Knn<I> {
         groundtruth: &dyn benchmark_core::recall::Rows<I>,
         recall_k: usize,
         recall_n: usize,
+        groundtruth_mode: GroundTruthMode,
     ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
@@ -84,25 +93,26 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::KNN<DP, T, S, PP>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::search::Knn,
+        Parameters = KnnParams,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
+        parameters: Vec<core_search::Run<KnnParams>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
+        groundtruth_mode: GroundTruthMode,
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::knn::Aggregator::new(
                 groundtruth,
                 recall_k,
                 recall_n,
-                GroundTruthMode::Fixed,
+                groundtruth_mode,
             ),
         )?;
 
@@ -115,25 +125,26 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::MultiHop<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::search::Knn,
+        Parameters = KnnParams,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
+        parameters: Vec<core_search::Run<KnnParams>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
+        groundtruth_mode: GroundTruthMode,
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::knn::Aggregator::new(
                 groundtruth,
                 recall_k,
                 recall_n,
-                GroundTruthMode::Flexible,
+                groundtruth_mode,
             ),
         )?;
 
@@ -146,25 +157,26 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::InlineFilterSearch<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::search::Knn,
+        Parameters = KnnParams,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
+        parameters: Vec<core_search::Run<KnnParams>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
+        groundtruth_mode: GroundTruthMode,
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
-            parameters.into_iter(),
+            parameters,
             core_search::graph::knn::Aggregator::new(
                 groundtruth,
                 recall_k,
                 recall_n,
-                GroundTruthMode::Flexible,
+                groundtruth_mode,
             ),
         )?;
 

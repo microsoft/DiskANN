@@ -5,22 +5,22 @@
 
 use std::{marker::PhantomData, time::Instant};
 
-use diskann::{utils::VectorRepr, ANNError};
+use diskann::utils::VectorRepr;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{
-        pq::{accum_row_inplace, generate_pq_pivots},
-        GeneratePivotArguments,
-    },
+    model::{pq::generate_pq_pivots, GeneratePivotArguments},
     storage::PQStorage,
-    utils::{BridgeErr, RayonThreadPoolRef},
+    utils::RayonThreadPoolRef,
 };
-use diskann_quantization::{product::TransposedTable, CompressInto};
+use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
-use crate::storage::quant::compressor::{CompressionStage, QuantCompressor};
+use crate::{
+    error::{diskann_error, ErrorKind},
+    storage::quant::compressor::QuantCompressor,
+};
 
 pub struct PQGenerationContext<'a, Storage>
 where
@@ -56,13 +56,11 @@ where
 {
     type CompressorContext = PQGenerationContext<'a, Storage>;
 
-    fn new_at_stage(
-        stage: CompressionStage,
-        context: &Self::CompressorContext,
-    ) -> diskann::ANNResult<Self> {
+    fn new(context: &Self::CompressorContext) -> diskann::ANNResult<Self> {
         // validate that the number of chunks is correct.
         if context.num_chunks > context.dim {
-            return Err(ANNError::log_pq_error(
+            return Err(diskann_error!(
+                ErrorKind::PQError,
                 "Error: number of chunks more than dimension.",
             ));
         }
@@ -74,13 +72,6 @@ where
         let pool = context.pool;
 
         if !pivots_exists {
-            if stage == CompressionStage::Resume {
-                //checks for error case when stage is Resume and pivot data doesn't exist.
-                return Err(ANNError::log_pq_error(
-                    "Error: Pivot data does not exist when start_vertex_id is not 0.",
-                ));
-            }
-
             let timer = Instant::now();
 
             let rng =
@@ -119,32 +110,28 @@ where
             .pq_storage
             .read_existing_pivot_metadata(context.storage_provider)?;
 
-        //Load the pivots
         let num_chunks = context.num_chunks;
-        let (mut full_pivot_data, centroid, chunk_offsets) =
-            context.pq_storage.load_existing_pivot_data(
-                &num_chunks,
-                &context.num_centers,
-                &full_dim,
-                context.storage_provider,
-            )?;
+        let table = context.pq_storage.load_pivots(context.storage_provider)?;
 
-        let mut full_pivot_data_mat = diskann_utils::views::MutMatrixView::try_from(
-            full_pivot_data.as_mut_slice(),
-            context.num_centers,
-            full_dim,
-        )
-        .bridge_err()?;
+        if table.nchunks() != num_chunks
+            || table.ncenters() != context.num_centers
+            || table.dim() != full_dim
+        {
+            return Err(diskann_error!(
+                ErrorKind::PQError,
+                "PQ pivot table mismatch: file has {} chunks, {} centers in {} dimensions but expected {} chunks, {} centers in {} dimensions.",
+                table.nchunks(),
+                table.ncenters(),
+                table.dim(),
+                num_chunks,
+                context.num_centers,
+                full_dim
+            ));
+        }
 
-        accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
-
-        let table = TransposedTable::from_parts(
-            full_pivot_data_mat.as_view(),
-            diskann_quantization::views::ChunkOffsetsView::new(&chunk_offsets)
-                .bridge_err()?
-                .to_owned(),
-        )
-        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
+        let table =
+            TransposedTable::from_parts(table.view_pivots(), table.view_offsets().to_owned())
+                .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))?;
 
         Ok(Self {
             table,
@@ -161,7 +148,7 @@ where
     ) -> Result<(), diskann::ANNError> {
         self.table
             .compress_into(vector, output)
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))
+            .map_err(|err| diskann_error!(ErrorKind::PQError, "{}", Format(err)))
     }
 
     fn compressed_bytes(&self) -> usize {
@@ -191,7 +178,7 @@ mod pq_generation_tests {
     use rstest::rstest;
     use vfs::FileSystem;
 
-    use super::{CompressionStage, PQGeneration, PQGenerationContext};
+    use super::{PQGeneration, PQGenerationContext};
     use crate::storage::quant::compressor::QuantCompressor;
 
     const TEST_PQ_DATA_PATH: &str = "/sift/siftsmall_learn.bin";
@@ -206,7 +193,6 @@ mod pq_generation_tests {
     ];
     #[allow(clippy::too_many_arguments)]
     fn create_new_compressor<'a, F: vfs::FileSystem>(
-        stage: CompressionStage,
         provider: &'a VirtualStorageProvider<F>,
         dim: usize,
         num_chunks: usize,
@@ -231,7 +217,7 @@ mod pq_generation_tests {
             metric: Metric::L2,
             dim,
         };
-        PQGeneration::<_, _>::new_at_stage(stage, &context)
+        PQGeneration::<_, _>::new(&context)
     }
 
     #[rstest]
@@ -272,7 +258,6 @@ mod pq_generation_tests {
         .unwrap();
 
         let compressor = create_new_compressor(
-            CompressionStage::Start,
             &storage_provider,
             dim,
             num_chunks,
@@ -308,44 +293,6 @@ mod pq_generation_tests {
     }
 
     #[rstest]
-    fn throw_error_for_resume_and_no_existing_file() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-        storage_provider
-            .filesystem()
-            .create_dir("/pq_generation_tests")
-            .expect("Could not create test directory");
-
-        let pivot_file_name = "/pq_generation_tests/generate_pq_pivots_test.bin";
-        let compressed_file_name = "/pq_generation_tests/compressed_not_used.bin";
-        let data_path = "/pq_generation_tests/data_path.bin";
-
-        let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
-
-        write_bin(
-            MatrixView::try_from(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
-            &mut storage_provider.create_for_write(data_path).unwrap(),
-        )
-        .unwrap();
-        let pool = create_thread_pool_for_test();
-
-        let compressor = create_new_compressor(
-            CompressionStage::Resume,
-            &storage_provider,
-            dim,
-            num_chunks,
-            max_k_means_reps,
-            num_centers,
-            1.0,
-            pool.as_ref(),
-            pivot_file_name.to_string(),
-            compressed_file_name.to_string(),
-            Some(data_path),
-        );
-
-        assert!(compressor.is_err());
-    }
-
-    #[rstest]
     fn test_pq_end_to_end_with_codebook() {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
@@ -355,7 +302,6 @@ mod pq_generation_tests {
         let max_k_means_reps = 10;
 
         let compressor = create_new_compressor(
-            CompressionStage::Resume,
             &storage_provider,
             dim,
             num_chunks,
@@ -407,7 +353,6 @@ mod pq_generation_tests {
         let pool = create_thread_pool_for_test();
         let max_k_means_reps = 10;
         let compressor = create_new_compressor(
-            CompressionStage::Start,
             &storage_provider,
             dim,
             num_chunks,

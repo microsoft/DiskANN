@@ -39,7 +39,7 @@ use super::{
 };
 
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult},
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
@@ -493,13 +493,10 @@ where
     {
         async move {
             if batch.len() != ids.len() {
-                return Err(ANNError::new(
-                    ANNErrorKind::IndexError,
-                    BatchIdMismatch {
-                        batch_len: batch.len(),
-                        ids_len: ids.len(),
-                    },
-                ));
+                return Err(ANNError::new(BatchIdMismatch {
+                    batch_len: batch.len(),
+                    ids_len: ids.len(),
+                }));
             }
 
             let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
@@ -526,9 +523,7 @@ where
             let mut guards = Vec::with_capacity(batch.len());
 
             for h in handles {
-                let processed = h
-                    .await
-                    .map_err(|err| ANNError::new(ANNErrorKind::IndexError, err))??;
+                let processed = h.await.map_err(ANNError::new)??;
                 for guard in processed {
                     guards.push(guard);
                 }
@@ -764,11 +759,11 @@ where
     ///
     /// Multi-insert specific configuration includes:
     ///
-    /// 1. [`diskann::index::Config::max_minibatch_par()`]: Control the maximum number
+    /// 1. [`crate::graph::Config::max_minibatch_par`]: Control the maximum number
     ///    of concurrent task spawns used by the implementation. This puts an upper bound
     ///    on the extracted parallelism of this function.
     ///
-    /// 2. [`diskann::index::Config::intra_batch_candidates()`]: Controls the maximum
+    /// 2. [`crate::graph::Config::intra_batch_candidates`]: Controls the maximum
     ///    number of candidates from within the batch that are considered as neighbors.
     ///
     ///    When the batch size is very high or the inserted data has high self similarity,
@@ -802,7 +797,7 @@ where
     /// ## Candidate Generation
     ///
     /// This is made up of a graph search followed by a prune on the resulting candidate
-    /// list. If [`diskann::index::Config::intra_batch_candidates()`] is non-zero, then
+    /// list. If [`crate::graph::Config::intra_batch_candidates`] is non-zero, then
     /// candidates from within the batch are added at this step prior to prune.
     ///
     /// ### Bootstrap
@@ -1218,7 +1213,7 @@ where
             let mut undeleted_ids: Vec<_> = output
                 .iter()
                 .take(num_results)
-                .map(|neighbor| neighbor.id)
+                .map(|neighbor| *neighbor.id())
                 .collect();
 
             // Collect IDs whose adjacency lists need to be updated.
@@ -1401,7 +1396,7 @@ where
                         #[error("Spawning a task failed in inplace-delete: {0}")]
                         struct LocalError(tokio::task::JoinError);
 
-                        ANNError::log_async_error(LocalError(err))
+                        ANNError::new(LocalError(err))
                     });
                     edge_collection.push(res);
                 }
@@ -1458,7 +1453,7 @@ where
                         loop {
                             let result = {
                                 let mut guard = edges_clone.lock().map_err(|_| {
-                                    ANNError::log_async_error("Poisoned mutex during construction")
+                                    ANNError::message("Poisoned mutex during construction")
                                 })?;
                                 guard.next()
                             };
@@ -1526,7 +1521,7 @@ where
 
     /// This method deletes a vertex without needing to loop over the entire graph to find
     /// its out-neighbors. It is meant to be called in conjunction with
-    /// [`drop_deleted_neighbors`] run occasionally as a background process.
+    /// [`Self::drop_deleted_neighbors`] run occasionally as a background process.
     ///
     /// See `https://arxiv.org/abs/2502.13826` for full description and experiments
     pub fn inplace_delete<S>(
@@ -1710,8 +1705,8 @@ where
                     ));
                 }
 
-                pool.sort_unstable();
-                let best = pool.iter().take(num_to_replace).map(|x| x.id).collect();
+                pool.sort_unstable_by(neighbor::ord::fast_distance);
+                let best = pool.iter().take(num_to_replace).map(|x| *x.id()).collect();
                 edges_to_add.insert(*neighbor, best);
             }
 
@@ -1740,10 +1735,10 @@ where
                     ));
                 }
 
-                pool.sort_unstable();
+                pool.sort_unstable_by(neighbor::ord::fast_distance);
                 pool.iter().take(num_to_replace).for_each(|n| {
                     edges_to_add
-                        .entry(n.id)
+                        .entry(*n.id())
                         .or_insert_with(Vec::new)
                         .push(neighbor);
                 });
@@ -1972,7 +1967,7 @@ where
                     && let Some(closest_node) = scratch.best.closest_notvisited()
                 {
                     search_record.record(closest_node, scratch.hops, scratch.cmps);
-                    scratch.beam_nodes.push(closest_node.id);
+                    scratch.beam_nodes.push(*closest_node.id());
                 }
 
                 neighbors.clear();
@@ -2007,16 +2002,16 @@ where
     /// Execute a search using the unified search interface.
     ///
     /// This method provides a single entry point for all search types. The `search_params` argument
-    /// implements [`search::Search`], which defines the complete search behavior including
+    /// implements [`crate::graph::search::Search`], which defines the complete search behavior including
     /// algorithm selection and post-processing.
     ///
     /// # Supported Search Types
     ///
-    /// - [`search::Knn`]: Standard k-NN graph-based search
-    /// - [`search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
-    /// - [`search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
-    /// - [`search::Range`]: Range-based search within a distance radius
-    /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
+    /// - [`crate::graph::search::Knn`]: Standard k-NN graph-based search
+    /// - [`crate::graph::search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`crate::graph::search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
+    /// - [`crate::graph::search::Range`]: Range-based search within a distance radius
+    /// - [`crate::graph::search::Diverse`]: Diversity-aware search (feature-gated)
     ///
     /// # Example
     ///
@@ -2368,7 +2363,7 @@ where
             }
 
             let (view, computer) = accessor
-                .fill(context.pool.iter().map(|n| n.id))
+                .fill(context.pool.iter().map(|n| *n.id()))
                 .send()
                 .await?;
 
@@ -2601,165 +2596,38 @@ where
         states.clear();
         states.resize(pool.len(), prune::State::default());
 
-        let mut current_alpha = 1.0f32;
-        let increment_factor = alpha.min(1.2);
-
         // To avoid many hash lookups, we pull out just the candidates we're going to prune
         // into an auxiliary vector which can be accessed linearly.
         //
-        // During the pruning phase, we store results by their relative position in the
-        // cache, and only resolve to their `local_id` at the end.
-        let cache: Vec<(f32, Option<_>)> = pool
+        // Iteration preserves the pool's nearest-first order. Pruning stores results
+        // by cache position and resolves each position to `local_id` afterward.
+        let sorted_cache: Vec<(f32, Option<_>)> = pool
             .iter()
             .map(|neighbor| {
                 // Filter out self loops.
-                let id = &neighbor.id;
+                let id = neighbor.id();
                 if exclude(*id) {
-                    (neighbor.distance, None)
+                    (*neighbor.distance(), None)
                 } else {
-                    (neighbor.distance, map.get(*id))
+                    (*neighbor.distance(), map.get(*id))
                 }
             })
             .collect();
 
-        // For an alpha value `A`, a candidate `i` is promoted to a neighbor if for all
-        // ```
-        // max{j < i | j is a neighbor}(occlude_factor(i, j))
-        // ```
-        // This process happens with multiple values of `A`.
-        //
-        // We can compute this efficiently using the following rules:
-        //
-        // 1. For a candidate `i`, start scanning `j < i`, computing occlude factors.
-        // 2. If we find an occlude factor greater than `A`, record that `i` has visited
-        //    `j`, stop computing occlude factors, and move on to `i + 1`.
-        // 3. If we reach `j == i - 1` with the maximum occlude factor less than `A`, then
-        //    `i` gets promoted to a neighbor.
-        //
-        // On the implementation side, we use `states` in the following way:
-        //
-        // * `states[n].neighbor` is the **index** in `pool` of the `n`th **neighbor**.
-        //   Note that a "neighbor" is a candidate that passes pruning.
-        //
-        //   Very important: to get the index `j` in the above description, we need to
-        //   check `pool[states[n].neighbor]`.
-        //
-        //   This indexing naturally skips candidates `j` that have not been promoted to
-        //   neighbors.
-        //
-        // * `states[i].occlude_factor` is the maximum occlude factor found for a candidate
-        //   `i`. This gets set to `f32::MAX` when `i` is promoted to a neighbor which
-        //   excludes it from future consideration.
-        //
-        // * `states[i].last_checked` is the highest value of `n` against which the
-        //   occlude factor for `j = pool[states[n].neighbor]` has been checked.
-        //
-        //   The maximum value this should reach is `i`.
-        //
-        // Note that we use `states` for both "candidate" and "neighbor" tracking.
-        let mut found = 0;
-        while found < degree {
-            for (i, (neighbor_distance, neighbor)) in cache.iter().enumerate() {
-                if found >= degree {
-                    break;
-                }
-
-                // The tracking states for candidate `i`.
-                let prune::State {
-                    mut occlude_factor,
-                    mut last_checked,
-                    ..
-                } = states[i];
-
-                // If the occlusion factor for this neighbor is too high, skip it.
-                if occlude_factor > current_alpha {
-                    continue;
-                }
-
-                // Retrieval from the cache might not be perfect.
-                //
-                // This neighbor did not end up in the cache, then just skip it.
-                let neighbor = match neighbor {
-                    Some(n) => n,
-                    None => {
-                        debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
-                        // SAFETY: We've already checked `states[i]`.
-                        unsafe { states.get_unchecked_mut(i) }.occlude_factor = f32::MAX;
-                        continue;
-                    }
-                };
-
-                // Increment `position` until we've compared with all current entries in
-                // `result`.
-                //
-                // When the list is empty, the loop is skipped allowing the first undeleted
-                // element to be added.
-                while last_checked as usize != found {
-                    let result_position = states[last_checked as usize].neighbor.into_usize();
-                    last_checked += 1;
-
-                    // If the position of this result in `pool` is greater than or equal
-                    // the current working position, then skip this candidate.
-                    if result_position >= i {
-                        debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
-                        // SAFETY: We've already checked `states[i]`.
-                        unsafe { states.get_unchecked_mut(i) }.last_checked = last_checked;
-                        continue;
-                    }
-
-                    // Otherwise, compute the distance between the result and this neighbor
-                    // and update the occlude factor.
-                    let distance = match &cache[result_position] {
-                        (_, Some(v)) => {
-                            computer.evaluate_similarity((*neighbor).reborrow(), v.reborrow())
-                        }
-                        (_, None) => f32::MAX,
-                    };
-
-                    // Update occlude factor
-                    occlude_factor = self.config.prune_kind().update_occlude_factor(
-                        *neighbor_distance,
-                        distance,
-                        occlude_factor,
-                        current_alpha,
-                    );
-
-                    // Check if the most recent update to the occlusion factor removes this
-                    // neighbor from consideration.
-                    if occlude_factor > current_alpha {
-                        break;
-                    }
-                }
-
-                debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
-                // SAFETY: We've already checked `states[i]`.
-                let state = unsafe { states.get_unchecked_mut(i) };
-
-                state.last_checked = last_checked;
-                if occlude_factor > current_alpha {
-                    state.occlude_factor = occlude_factor;
-                    continue;
-                }
-
-                // This neighbor has passed all the requirements of being a candidate.
-                state.occlude_factor = f32::MAX;
-
-                // This conversion should always succeed.
-                states[found].neighbor = i as u16;
-                found += 1;
-            }
-
-            // Exit if we completed the final iteration.
-            if current_alpha == alpha {
-                break;
-            }
-            // Update current alpha for the next iteration.
-            current_alpha = (current_alpha * increment_factor).min(alpha);
-        }
+        let found = prune::robust_prune(
+            &sorted_cache,
+            states,
+            degree,
+            alpha,
+            self.config.prune_kind(),
+            |neighbor, result| {
+                computer.evaluate_similarity((*neighbor).reborrow(), result.reborrow())
+            },
+        );
 
         let mut guard = neighbors.resize(found);
         std::iter::zip(guard.iter_mut(), states.iter()).for_each(|(d, s)| {
-            *d = pool[s.neighbor.into_usize()].id;
+            *d = *pool[s.neighbor.into_usize()].id();
         });
         guard.finish(found);
 
@@ -2772,10 +2640,10 @@ where
                     break;
                 }
 
-                if !exclude(neighbor.id) {
+                if !exclude(*neighbor.id()) {
                     // `AdjacencyList` filters out duplicates. No need to explicitly
                     // check.
-                    neighbors.push(neighbor.id);
+                    neighbors.push(*neighbor.id());
                 }
             }
         }

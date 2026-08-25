@@ -1,0 +1,29 @@
+[
+  {
+    "input": {
+      "content": {
+        "value": 42
+      },
+      "type": "phantom-input"
+    },
+    "results": 42
+  },
+  {
+    "input": {
+      "content": {
+        "dim": 42
+      },
+      "type": "test-input-dim"
+    },
+    "results": 0
+  },
+  {
+    "input": {
+      "content": {
+        "value": "hello"
+      },
+      "type": "sample-input"
+    },
+    "results": "hello"
+  }
+]

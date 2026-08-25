@@ -3339,7 +3339,7 @@ mod tests {
             }
             name.push_str(".json");
             PathBuf::from(manifest_dir)
-                .join("test")
+                .join("tests")
                 .join("generated")
                 .join("spherical")
                 .join(name)

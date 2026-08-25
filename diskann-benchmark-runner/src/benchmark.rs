@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Checkpoint, Input, Output};
+use crate::{internal::visibility::Visibility, Checkpoint, Input, Output};
 
 ///////////////
 // Benchmark //
@@ -254,17 +254,26 @@ impl Score {
         }
     }
 
-    pub(crate) fn as_raw(&self) -> RawScore {
-        match self.inner {
-            ScoreInner::Success(s) => RawScore::Success(s),
-            ScoreInner::Failure(s, _) => RawScore::Failure(s),
-        }
-    }
-
     pub(crate) fn reason(&self) -> Reason<'_> {
         match &self.inner {
             ScoreInner::Success(_) => Reason::none(),
             ScoreInner::Failure(_, reasons) => Reason::new(reasons.as_deref()),
+        }
+    }
+
+    /// Allow `Scores` to be ordered in the following manner:
+    ///
+    /// * Successes are ordered before failures.
+    /// * Successes with lower scores are ordered before those with higher scores.
+    /// * Failures with lower scores are ordered before those with higher scores.
+    pub(crate) fn order(this: &Self, other: &Self) -> std::cmp::Ordering {
+        use ScoreInner::{Failure, Success};
+
+        match (&this.inner, &other.inner) {
+            (Success(this), Success(other)) => this.cmp(other),
+            (Success(_), Failure(..)) => std::cmp::Ordering::Less,
+            (Failure(..), Success(_)) => std::cmp::Ordering::Greater,
+            (Failure(this, _), Failure(other, _)) => this.cmp(other),
         }
     }
 }
@@ -306,24 +315,6 @@ impl std::fmt::Display for Reason<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum RawScore {
-    Success(SuccessScore),
-    Failure(FailureScore),
-}
-
-impl RawScore {
-    #[cfg(test)]
-    fn success(score: u32) -> Self {
-        Self::Success(SuccessScore(score))
-    }
-
-    #[cfg(test)]
-    fn failure(score: u32) -> Self {
-        Self::Failure(FailureScore(score))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SuccessScore(pub(crate) u32);
 
@@ -337,14 +328,34 @@ pub(crate) struct FailureScore(pub(crate) u32);
 pub(crate) mod internal {
     use super::*;
 
-    use crate::input::internal::Any;
+    use crate::{input::internal::Any, Features};
 
     use anyhow::Context;
     use thiserror::Error;
 
+    #[derive(Debug)]
+    pub(crate) enum AnnotatedMatch<'a> {
+        /// User matching indicated success.
+        User(Score),
+        /// We missed because the input type was incorrect.
+        WrongTag,
+        /// We missed because the input type matches, but the benchmark is feature-gated.
+        Gated(&'a Features),
+    }
+
+    impl AnnotatedMatch<'_> {
+        pub(crate) fn try_into_score(self) -> Option<Score> {
+            if let Self::User(score) = self {
+                Some(score)
+            } else {
+                None
+            }
+        }
+    }
+
     /// Object-safe trait for type-erased benchmarks stored in the registry.
     pub(crate) trait Benchmark {
-        fn try_match(&self, input: &Any, context: &MatchContext) -> Score;
+        fn try_match(&self, input: &Any, context: &MatchContext) -> AnnotatedMatch<'_>;
 
         fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
 
@@ -354,6 +365,8 @@ pub(crate) mod internal {
             checkpoint: Checkpoint<'_>,
             output: &mut dyn Output,
         ) -> anyhow::Result<serde_json::Value>;
+
+        fn visibility(&self) -> Visibility<'_>;
 
         /// If supported, return an object capable of running regression checks on this benchmark.
         fn as_regression(&self) -> Option<&dyn Regression>;
@@ -499,37 +512,16 @@ pub(crate) mod internal {
         }
     }
 
-    const MATCH_FAIL: u32 = 10_000;
-
     impl<T, R> Benchmark for Wrapper<T, R>
     where
         T: super::Benchmark,
         R: AsRegression<T>,
     {
-        fn try_match(&self, input: &Any, context: &MatchContext) -> Score {
+        fn try_match(&self, input: &Any, context: &MatchContext) -> AnnotatedMatch<'_> {
             if let Some(cast) = input.downcast_ref::<T::Input>() {
-                self.benchmark.try_match(cast, context)
+                AnnotatedMatch::User(self.benchmark.try_match(cast, context))
             } else {
-                struct TagMismatch<T>(&'static str, std::marker::PhantomData<T>);
-
-                impl<T> std::fmt::Display for TagMismatch<T>
-                where
-                    T: super::Benchmark,
-                {
-                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(
-                            f,
-                            "expected tag \"{}\" - instead got \"{}\"",
-                            T::Input::tag(),
-                            self.0,
-                        )
-                    }
-                }
-
-                context.fail(
-                    MATCH_FAIL,
-                    &TagMismatch::<T>(input.tag(), std::marker::PhantomData),
-                )
+                AnnotatedMatch::WrongTag
             }
         }
 
@@ -551,6 +543,10 @@ pub(crate) mod internal {
                 }
                 None => Err(BadDownCast::new(T::Input::tag(), input.tag()).into()),
             }
+        }
+
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Available
         }
 
         // Extensions
@@ -612,6 +608,125 @@ pub(crate) mod internal {
             write!(f, "{}", as_str)
         }
     }
+
+    // Gated Benchmarks
+    //
+    // We support two flavors:
+    //
+    // 1. Benchmarks that have inputs that are valid and registered.
+    // 2. Benchmarks that have inputs that are *also* feature gated.
+
+    /// A benchmark that is gated behind `features`, but whose input *is* compiled into the
+    /// application. These benchmarks allow their inputs to be inspected and parsed, but
+    /// fail matching.
+    ///
+    /// This custom type allows us to return more precise error messages when benchmark
+    /// matching fails.
+    pub(crate) struct PartiallyGated<I> {
+        features: Features,
+        description: String,
+        _input: std::marker::PhantomData<I>,
+    }
+
+    impl<I> PartiallyGated<I> {
+        pub(crate) fn new(features: Features, description: String) -> Self {
+            Self {
+                features,
+                description,
+                _input: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<I> Benchmark for PartiallyGated<I>
+    where
+        I: Input,
+    {
+        fn try_match(&self, input: &Any, _context: &MatchContext) -> AnnotatedMatch<'_> {
+            if input.is::<I>() {
+                AnnotatedMatch::Gated(&self.features)
+            } else {
+                AnnotatedMatch::WrongTag
+            }
+        }
+
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "tag \"{}\"", I::tag())?;
+            f.write_str(&self.description)
+        }
+
+        fn run(
+            &self,
+            _input: &Any,
+            _checkpoint: Checkpoint<'_>,
+            _output: &mut dyn Output,
+        ) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!("tried to run a gated benchmark - this should be unreachable")
+        }
+
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Gated {
+                features: &self.features,
+            }
+        }
+
+        fn as_regression(&self) -> Option<&dyn Regression> {
+            None
+        }
+    }
+
+    /// A benchmark that is gated behind `features` along with its input.
+    ///
+    /// These benchmarks are completely unreachable as the front-end has no way to parse
+    /// inputs associated with `tag`.
+    ///
+    /// However, they are included to provide a bread-crumb for users that additional
+    /// benchmarks *do* exist behind the associated features.
+    pub(crate) struct FullyGated {
+        tag: &'static str,
+        features: Features,
+        description: String,
+    }
+
+    impl FullyGated {
+        pub(crate) fn new(tag: &'static str, features: Features, description: String) -> Self {
+            Self {
+                tag,
+                features,
+                description,
+            }
+        }
+    }
+
+    impl Benchmark for FullyGated {
+        fn try_match(&self, _input: &Any, _context: &MatchContext) -> AnnotatedMatch<'_> {
+            AnnotatedMatch::WrongTag
+        }
+
+        fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            writeln!(f, "tag \"{}\"", self.tag)?;
+            f.write_str(&self.description)
+        }
+
+        fn run(
+            &self,
+            _input: &Any,
+            _checkpoint: Checkpoint<'_>,
+            _output: &mut dyn Output,
+        ) -> anyhow::Result<serde_json::Value> {
+            anyhow::bail!("tried to run a gated benchmark - this should be unreachable")
+        }
+
+        fn visibility(&self) -> Visibility<'_> {
+            Visibility::Gated {
+                features: &self.features,
+            }
+        }
+
+        fn as_regression(&self) -> Option<&dyn Regression> {
+            None
+        }
+    }
 }
 
 ///////////
@@ -622,39 +737,64 @@ pub(crate) mod internal {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(crate) enum RawScore {
+        Success(SuccessScore),
+        Failure(FailureScore),
+    }
+
+    fn as_raw(score: &Score) -> RawScore {
+        match &score.inner {
+            ScoreInner::Success(s) => RawScore::Success(*s),
+            ScoreInner::Failure(s, _) => RawScore::Failure(*s),
+        }
+    }
+
+    impl RawScore {
+        #[cfg(test)]
+        fn success(score: u32) -> Self {
+            Self::Success(SuccessScore(score))
+        }
+
+        #[cfg(test)]
+        fn failure(score: u32) -> Self {
+            Self::Failure(FailureScore(score))
+        }
+    }
+
     #[test]
     fn test_score_no_reasons() {
         let context = MatchContext::new();
         let mut score = context.success(0);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(0));
+        assert_eq!(as_raw(&score), RawScore::success(0));
 
         score.penalize(10);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(10));
+        assert_eq!(as_raw(&score), RawScore::success(10));
 
         score.penalize(10);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(20));
+        assert_eq!(as_raw(&score), RawScore::success(20));
 
         // Ensure that we saturate properly.
         score.penalize(u32::MAX);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(u32::MAX));
+        assert_eq!(as_raw(&score), RawScore::success(u32::MAX));
 
         // Switch to failure
         score.fail(5, &"some reason that is not evaluated");
         assert!(!score.is_success());
-        assert_eq!(score.as_raw(), RawScore::failure(5));
+        assert_eq!(as_raw(&score), RawScore::failure(5));
 
         score.fail(10, &"another reason that is not evaluated");
         assert!(!score.is_success());
-        assert_eq!(score.as_raw(), RawScore::failure(15));
+        assert_eq!(as_raw(&score), RawScore::failure(15));
 
         // Calling `penalize` should have no effect.
         score.penalize(5);
         assert!(!score.is_success());
-        assert_eq!(score.as_raw(), RawScore::failure(15));
+        assert_eq!(as_raw(&score), RawScore::failure(15));
 
         // Since we aren't recording reasons - nothing should be returned.
         assert_eq!(score.reason().to_string(), "<missing>");
@@ -665,35 +805,35 @@ mod tests {
         let context = MatchContext::with_reasons();
         let mut score = context.success(0);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(0));
+        assert_eq!(as_raw(&score), RawScore::success(0));
 
         score.penalize(10);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(10));
+        assert_eq!(as_raw(&score), RawScore::success(10));
 
         score.penalize(10);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(20));
+        assert_eq!(as_raw(&score), RawScore::success(20));
         assert_eq!(score.reason().to_string(), "<missing>");
 
         // Ensure that we saturate properly.
         score.penalize(u32::MAX);
         assert!(score.is_success());
-        assert_eq!(score.as_raw(), RawScore::success(u32::MAX));
+        assert_eq!(as_raw(&score), RawScore::success(u32::MAX));
 
         // Switch to failure
         score.fail(5, &"some reason that is evaluated");
         assert!(!score.is_success());
-        assert_eq!(score.as_raw(), RawScore::failure(5));
+        assert_eq!(as_raw(&score), RawScore::failure(5));
 
         score.fail(10, &"another reason that is evaluated");
         assert!(!score.is_success());
-        assert_eq!(score.as_raw(), RawScore::failure(15));
+        assert_eq!(as_raw(&score), RawScore::failure(15));
 
         // Calling `penalize` should have no effect.
         score.penalize(5);
         assert!(!score.is_success());
-        assert_eq!(score.as_raw(), RawScore::failure(15));
+        assert_eq!(as_raw(&score), RawScore::failure(15));
 
         // Reasons are recorded, so both failure reasons should be returned.
         let expected = "- some reason that is evaluated\n\

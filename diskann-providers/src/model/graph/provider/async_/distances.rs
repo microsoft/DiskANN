@@ -64,13 +64,11 @@ pub mod pq {
     //! vector or a PQ-compressed code. The [`Hybrid`] enum captures this duality, and the
     //! remaining types adapt it to the [`workingset`](diskann::graph::workingset) framework.
 
-    use std::sync::Arc;
-
     use diskann::utils::VectorRepr;
     use diskann_utils::Reborrow;
     use diskann_vector::DistanceFunction;
 
-    use crate::model::pq::{self, FixedChunkPQTable};
+    use crate::model::pq;
 
     /// An element that is either a full-precision vector or a PQ-compressed code.
     ///
@@ -117,28 +115,25 @@ pub mod pq {
     /// When both operands are full-precision, the native distance function is used. When
     /// at least one is quantized, the PQ distance table is used instead. Mixed pairs
     /// (full vs quant) convert the full-precision side to `f32` for the PQ lookup.
-    pub struct HybridComputer<T>
+    pub struct HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
-        quant: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
+        quant: pq::distance::DistanceComputer<'a>,
         full: T::Distance,
     }
 
-    impl<T> HybridComputer<T>
+    impl<'a, T> HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
-        pub fn new(
-            quant: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
-            full: T::Distance,
-        ) -> Self {
+        pub fn new(quant: pq::distance::DistanceComputer<'a>, full: T::Distance) -> Self {
             Self { quant, full }
         }
     }
 
     /// The implementation of `DistanceFunction` for the hybrid computer.
-    impl<T> DistanceFunction<Hybrid<&[T], &[u8]>, Hybrid<&[T], &[u8]>, f32> for HybridComputer<T>
+    impl<T> DistanceFunction<Hybrid<&[T], &[u8]>, Hybrid<&[T], &[u8]>, f32> for HybridComputer<'_, T>
     where
         T: VectorRepr,
     {

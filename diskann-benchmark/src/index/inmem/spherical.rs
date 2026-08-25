@@ -5,12 +5,6 @@
 
 use diskann_benchmark_runner::Registry;
 
-// Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!(
-    "spherical-quantization",
-    inputs::graph_index::SphericalQuantBuild
-);
-
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     const NAME: &str = "graph-index-spherical-quantization";
 
@@ -26,6 +20,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<1>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -36,6 +31,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<2>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
@@ -46,15 +42,19 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
+                .search(plugins::FilteredRange)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter)
                 .search(plugins::TopkInlineFilter),
         )?;
     }
 
-    // Stub implementation
     #[cfg(not(feature = "spherical-quantization"))]
-    imp::register(NAME, registry)?;
+    registry.register_partially_gated::<crate::inputs::graph_index::SphericalQuantBuild>(
+        NAME,
+        diskann_benchmark_runner::Features::new("spherical-quantization"),
+        "Spherical quantized (RabitQ) graph build and search",
+    )?;
 
     Ok(())
 }
@@ -67,6 +67,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 mod imp {
     use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
+    use diskann_benchmark_core::recall::GroundTruthMode;
     use diskann_benchmark_runner::{
         benchmark::{MatchContext, Score},
         utils::{datatype::AsDataType, MicroSeconds},
@@ -365,7 +366,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
-            let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+            let steps = search::knn::SearchSteps::new(
+                topk.reps,
+                &topk.num_threads,
+                &topk.runs,
+                GroundTruthMode::Fixed,
+            );
 
             let knn = benchmark_core::search::graph::KNN::new(
                 index.clone(),
@@ -423,6 +429,63 @@ mod imp {
     }
 
     impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+        for search::plugins::FilteredRange
+    {
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            search::plugins::FilteredRange::is_match(phase)
+        }
+
+        fn kind(&self) -> &'static str {
+            SearchPhaseKind::FilteredRange.as_str()
+        }
+
+        fn run(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let filtered_range = phase.as_filtered_range()?;
+
+            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &filtered_range.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
+
+            let steps = search::range::RangeSearchSteps::new(
+                filtered_range.reps,
+                &filtered_range.num_threads,
+                &filtered_range.runs,
+            );
+
+            let bit_maps = generate_bitmaps(
+                &filtered_range.query_predicates,
+                &filtered_range.data_labels,
+            )?;
+
+            let labels: Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect();
+
+            let filtered_range = benchmark_core::search::graph::filtered_range::FilteredRange::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+                labels,
+            )?;
+
+            let result = search::range::run_filtered(&filtered_range, &groundtruth, steps)?;
+
+            Ok(AggregatedSearchResults::Range(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
         for search::plugins::TopkBetaFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
@@ -452,6 +515,7 @@ mod imp {
                 betafilter.reps,
                 &betafilter.num_threads,
                 &betafilter.runs,
+                GroundTruthMode::Flexible,
             );
 
             let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
@@ -502,8 +566,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+            let steps = search::knn::SearchSteps::new(
+                multihop.reps,
+                &multihop.num_threads,
+                &multihop.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
 
@@ -552,8 +620,12 @@ mod imp {
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-            let steps =
-                search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+            let steps = search::knn::SearchSteps::new(
+                inline.reps,
+                &inline.num_threads,
+                &inline.runs,
+                GroundTruthMode::Flexible,
+            );
 
             let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 

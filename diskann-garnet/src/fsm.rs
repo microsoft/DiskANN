@@ -143,7 +143,7 @@ impl FreeSpaceMap {
         let block_key = Self::block_key(0);
         if this
             .callbacks
-            .exists_wid(&ctx.term(Term::Metadata), block_key)
+            .exists_wid(&ctx.term(Term::Metadata), block_key, BLOCK_SIZE_BYTES)
         {
             this.load_state(ctx)?;
         } else {
@@ -159,10 +159,11 @@ impl FreeSpaceMap {
     /// Load all state from Garnet by scanning the FSM blocks.
     fn load_state(&mut self, ctx: &Context) -> Result<(), FsmError> {
         let mut max_block_id = 0;
-        while self
-            .callbacks
-            .exists_wid(&ctx.term(Term::Metadata), Self::block_key(max_block_id))
-        {
+        while self.callbacks.exists_wid(
+            &ctx.term(Term::Metadata),
+            Self::block_key(max_block_id),
+            BLOCK_SIZE_BYTES,
+        ) {
             max_block_id += 1;
         }
 
@@ -589,7 +590,7 @@ mod tests {
 
     #[test]
     fn create_fresh() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         // A fresh FSM should result in full block of all zeroes.
@@ -602,7 +603,7 @@ mod tests {
 
     #[test]
     fn basic_next_id() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -617,7 +618,7 @@ mod tests {
 
     #[test]
     fn basic_delete() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -662,7 +663,7 @@ mod tests {
 
     #[test]
     fn basic_id_reuse() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -685,7 +686,7 @@ mod tests {
 
     #[test]
     fn basic_recovery() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
@@ -707,7 +708,7 @@ mod tests {
 
     #[test]
     fn dynamic_expansion() {
-        let store = Store;
+        let store = Store::new();
         let ctx = Context::new(0);
 
         let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();

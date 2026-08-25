@@ -1,0 +1,14 @@
+Could not find a match for the following input:
+
+{
+  "value": "hello world"
+}
+
+No active benchmarks are registered for tag "sample-input"
+
+Found 2 gated benchmarks matching this input:
+
+    * "something-else" (requires the feature "gated-feature-3")
+    * "something-else-v3" (requires the feature "gated-feature-3")
+
+could not find a benchmark for all inputs

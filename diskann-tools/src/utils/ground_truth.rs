@@ -340,7 +340,7 @@ where
                     if allowed_by_bitmap {
                         let distance = distance_comparer.evaluate_similarity(data, query);
                         if distance <= radius {
-                            query_results.push(Neighbor { id: idx, distance });
+                            query_results.push(Neighbor::new(idx, distance));
                         }
                     }
                 }
@@ -502,7 +502,7 @@ fn write_range_search_ground_truth<StorageProvider: StorageReadProvider + Storag
     // Write the neighbor IDs array.
     for query_neighbors in ground_truth {
         for neighbor in query_neighbors.iter() {
-            neighbor_ids.push(neighbor.id);
+            neighbor_ids.push(*neighbor.id());
         }
     }
 
@@ -520,7 +520,7 @@ fn write_range_search_ground_truth<StorageProvider: StorageReadProvider + Storag
 /// Writes out a ground truth file.  ground_truth is a vector of NeighborPriorityQueue objects
 /// where the order of queue objects corresponds to the order of queries used to compute this
 /// ground truth.
-fn write_ground_truth<A: Serialize + Copy>(
+pub fn write_ground_truth<A: Serialize + Copy>(
     storage_provider: &impl StorageWriteProvider,
     ground_truth_file: &str,
     number_of_queries: usize,
@@ -538,8 +538,8 @@ fn write_ground_truth<A: Serialize + Copy>(
     // In the file, we write the neighbor IDs array first, then write the distances array.
     for mut query_neighbors in ground_truth {
         while let Some(closest_node) = query_neighbors.closest_notvisited() {
-            gt_ids.push(closest_node.id);
-            gt_distances.push(closest_node.distance);
+            gt_ids.push(*closest_node.id());
+            gt_distances.push(*closest_node.distance());
         }
     }
 
@@ -654,7 +654,7 @@ where
 
                         if allowed_by_bitmap {
                             let distance = distance_comparer.evaluate_similarity(data, query);
-                            neighbor_queue.insert(Neighbor { id: idx, distance });
+                            neighbor_queue.insert(Neighbor::new(idx, distance));
                         }
                     }
                 },
@@ -683,7 +683,7 @@ where
 
                 if allowed_by_bitmap {
                     let distance = distance_comparer.evaluate_similarity(&data_vector, query);
-                    neighbor_queue.insert(Neighbor { id: idx, distance })
+                    neighbor_queue.insert(Neighbor::new(idx, distance))
                 }
             }
         }
@@ -777,7 +777,7 @@ where
                         };
                         // insert into neighbor queue
                         let idx = idx_base as u32;
-                        neighbor_queue.insert(Neighbor { id: idx, distance });
+                        neighbor_queue.insert(Neighbor::new(idx, distance));
                     }
                 }
             },

@@ -7,21 +7,22 @@ use std::sync::{Arc, Mutex};
 
 use arc_swap::{ArcSwap, Guard};
 use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::VectorRepr};
+use diskann_quantization::CompressInto;
+use diskann_utils::lazy_format;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
-use crate::model::{
-    FixedChunkPQTable,
-    pq::{distance::multi, generate_pq_data_from_pivots_from_membuf},
+use crate::{
+    model::{FixedChunkPQTable, pq::distance::multi},
+    utils::BridgeErr,
 };
 
 /// The discriminant type for PQ vector versions.
 type VersionId = u8;
 type VersionedPQVector = multi::VersionedPQVector<VersionId>;
-type TableType = Arc<FixedChunkPQTable>;
-type MultiTable = multi::MultiTable<TableType, VersionId>;
-type QueryComputer = multi::MultiQueryComputer<TableType, VersionId>;
-type DistanceComputer = multi::MultiDistanceComputer<TableType, VersionId>;
+type MultiTable<'a> = multi::MultiTable<'a, VersionId>;
+type QueryComputer<'a> = multi::MultiQueryComputer<'a, VersionId>;
+type DistanceComputer<'a> = multi::MultiDistanceComputer<'a, VersionId>;
 
 /// A provider that has two PQ schemas.
 pub struct TestMultiPQProviderAsync {
@@ -68,19 +69,23 @@ impl TestMultiPQProviderAsync {
         self.table_new.get_num_chunks()
     }
 
-    pub fn multi_table(&self) -> Result<MultiTable, multi::EqualVersionsError> {
+    pub fn multi_table(&self) -> Result<MultiTable<'_>, multi::EqualVersionsError> {
         match &self.table_old {
-            None => Ok(MultiTable::one(self.table_new.clone(), 1)),
-            Some(table_old) => MultiTable::two(self.table_new.clone(), table_old.clone(), 2, 1),
+            None => Ok(MultiTable::one(&self.table_new, 1)),
+            Some(table_old) => MultiTable::two(&self.table_new, table_old, 2, 1),
         }
     }
 
-    pub fn get_query_computer<T>(&self, query: &[T]) -> ANNResult<NoneToInfinity<QueryComputer>>
+    pub fn get_query_computer<T>(&self, query: &[T]) -> ANNResult<NoneToInfinity<QueryComputer<'_>>>
     where
         T: VectorRepr,
     {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
+            ANNError::message(lazy_format!(
+                move,
+                "Table construction failed with: {}",
+                err
+            ))
         })?;
         Ok(NoneToInfinity(QueryComputer::new(
             table,
@@ -89,9 +94,13 @@ impl TestMultiPQProviderAsync {
         )?))
     }
 
-    pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer>> {
+    pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer<'_>>> {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
+            ANNError::message(lazy_format!(
+                move,
+                "Table construction failed with: {}",
+                err
+            ))
         })?;
         Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)))
     }
@@ -99,7 +108,7 @@ impl TestMultiPQProviderAsync {
     pub fn get_vector(&self, id: usize) -> ANNResult<Guard<Arc<VersionedPQVector>>> {
         match self.quant_vectors.get(id) {
             Some(vector) => Ok(vector.load()),
-            None => Err(ANNError::log_index_error(
+            None => Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             )),
         }
@@ -110,12 +119,12 @@ impl TestMultiPQProviderAsync {
         T: Copy + Into<f32>,
     {
         if id >= self.max_vectors + self.num_start_points {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
         if v.len() != self.table_new.get_dim() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
@@ -132,9 +141,10 @@ impl TestMultiPQProviderAsync {
             None => (&self.table_new, 1),
             Some(table_old) => {
                 let v: f64 = {
-                    let mut guard = self.rng.lock().map_err(|_| {
-                        ANNError::log_lock_poison_error("in multi provider".to_string())
-                    })?;
+                    let mut guard = self
+                        .rng
+                        .lock()
+                        .map_err(|_| ANNError::message("in multi provider"))?;
                     guard.random()
                 };
                 if v <= self.split {
@@ -146,17 +156,9 @@ impl TestMultiPQProviderAsync {
         };
 
         let mut quant_vector: Vec<u8> = vec![0; table.get_num_chunks()];
-        if generate_pq_data_from_pivots_from_membuf(
-            &vector_f32,
-            table.get_pq_table(),
-            table.get_num_centers(),
-            table.get_chunk_offsets(),
-            &mut quant_vector,
-        )
-        .is_err()
-        {
-            return Err(ANNError::log_index_error("Error in generating PQ data."));
-        }
+        table
+            .compress_into(vector_f32.as_slice(), &mut quant_vector)
+            .bridge_err()?;
 
         let new = Arc::new(VersionedPQVector::new(quant_vector, version));
         self.quant_vectors[id].swap(new);

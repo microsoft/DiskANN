@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 
 use diskann::default_post_processor;
 use diskann::{
@@ -50,7 +50,14 @@ impl CreateVectorStore for FixedChunkPQTable {
         metric: Metric,
         _prefetch_lookahead: Option<usize>,
     ) -> Self::Target {
-        DefaultQuant::new(metric, max_points, self)
+        // `pq::distance::QueryComputer::new` evaluates `CosineNormalized` queries with
+        // squared L2. Use L2 here too so both distances compared during pruning share a scale.
+        let pq_metric = match metric {
+            Metric::CosineNormalized => Metric::L2,
+            metric => metric,
+        };
+
+        DefaultQuant::new(pq_metric, max_points, self)
     }
 }
 
@@ -85,7 +92,7 @@ where
 pub struct PruneAccessor<'a> {
     provider: &'a FastMemoryQuantVectorProviderAsync,
     neighbors: &'a SimpleNeighborProviderAsync,
-    distance: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
+    distance: pq::distance::DistanceComputer<'a>,
 }
 
 impl HasId for PruneAccessor<'_> {
@@ -101,7 +108,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Self: 'a;
 
     type Distance<'a>
-        = &'a pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>
+        = &'a pq::distance::DistanceComputer<'a>
     where
         Self: 'a;
 
@@ -148,7 +155,7 @@ where
     full: &'a FastMemoryVectorProviderAsync<T>,
     quant: &'a FastMemoryQuantVectorProviderAsync,
     neighbors: &'a SimpleNeighborProviderAsync,
-    distance: distances::pq::HybridComputer<T>,
+    distance: distances::pq::HybridComputer<'a, T>,
 
     // During pruning, we make the first `max_fp_vecs_per_prune` are full-precision with
     // the rest being quantized. This hash set records which IDs should be full-precision.
@@ -173,7 +180,7 @@ where
     where
         Self: 'a;
     type Distance<'a>
-        = &'a distances::pq::HybridComputer<T>
+        = &'a distances::pq::HybridComputer<'a, T>
     where
         Self: 'a;
     type Neighbors<'a>
@@ -232,7 +239,7 @@ where
 /// * [`BuildQueryComputer`].
 pub struct QuantAccessor<'a, V, D, Ctx> {
     provider: &'a DefaultProvider<V, DefaultQuant, D, Ctx>,
-    computer: pq::distance::QueryComputer<Arc<FixedChunkPQTable>>,
+    computer: pq::distance::QueryComputer<'a>,
 }
 
 impl<'a, V, D, Ctx> QuantAccessor<'a, V, D, Ctx>
@@ -645,5 +652,55 @@ where
     ) -> ANNResult<PruneAccessor<'a>> {
         self.prune_accessor(provider, context, capacity)
             .into_ann_result()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diskann::utils::VectorRepr;
+    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+
+    use crate::model::{
+        graph::provider::async_::{
+            common::CreateVectorStore,
+            distances::pq::{Hybrid, HybridComputer},
+        },
+        pq::FixedChunkPQTable,
+    };
+
+    fn test_table() -> FixedChunkPQTable {
+        FixedChunkPQTable::new(
+            4,
+            vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0].into(),
+            vec![0, 2, 4].into(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn normalized_cosine_query_and_hybrid_pruning_use_squared_l2() {
+        let quant = test_table().create(2, Metric::CosineNormalized, None);
+        let full0 = [1u8, 0, 0, 2];
+        let full1 = [2u8, 0, 0, 1];
+        let code0 = [0u8, 1];
+        let code1 = [1u8, 0];
+
+        assert_eq!(quant.metric(), Metric::L2);
+
+        let query = quant.query_computer(&full0).unwrap();
+        assert_eq!(query.evaluate_similarity(&code1), 2.0);
+
+        let computer = HybridComputer::<u8>::new(
+            quant.distance_computer(),
+            u8::distance(quant.metric(), Some(4)),
+        );
+        for (left, right) in [
+            (Hybrid::Full(&full0[..]), Hybrid::Full(&full1[..])),
+            (Hybrid::Full(&full0[..]), Hybrid::Quant(&code1[..])),
+            (Hybrid::Quant(&code0[..]), Hybrid::Full(&full1[..])),
+            (Hybrid::Quant(&code0[..]), Hybrid::Quant(&code1[..])),
+        ] {
+            assert_eq!(computer.evaluate_similarity(left, right), 2.0);
+        }
     }
 }

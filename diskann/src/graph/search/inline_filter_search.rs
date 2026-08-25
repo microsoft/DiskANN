@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
         glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
@@ -18,7 +18,7 @@ use crate::{
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::DataProvider,
     utils::VectorId,
 };
@@ -31,12 +31,7 @@ pub enum AdaptiveLSearchError {
     SampleCountZero,
 }
 
-impl From<AdaptiveLSearchError> for ANNError {
-    #[track_caller]
-    fn from(err: AdaptiveLSearchError) -> Self {
-        Self::new(ANNErrorKind::IndexError, err)
-    }
-}
+convert_error!(AdaptiveLSearchError);
 
 /// Adaptive L for inline filtered search.
 #[derive(Debug, Clone)]
@@ -159,16 +154,16 @@ where
 }
 
 #[derive(Debug)]
-struct Ret<I>
+pub(crate) struct Ret<I>
 where
     I: Eq,
 {
-    cmps: u32,
-    hops: u32,
-    matched_results: Vec<Neighbor<I>>,
+    pub(crate) cmps: u32,
+    pub(crate) hops: u32,
+    pub(crate) matched_results: Vec<Neighbor<I>>,
 }
 
-async fn inline_filter_search_internal<I, A, SR>(
+pub(crate) async fn inline_filter_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
@@ -223,7 +218,7 @@ where
                 break;
             };
             search_record.record(closest_node, scratch.hops, scratch.cmps);
-            scratch.beam_nodes.push(closest_node.id);
+            scratch.beam_nodes.push(*closest_node.id());
         }
 
         // Exit if no nodes to process
@@ -276,11 +271,7 @@ where
         }
     }
 
-    matched_results.sort_unstable_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    matched_results.sort_unstable_by(neighbor::ord::fast_distance);
 
     Ok(Ret {
         cmps: scratch.cmps,

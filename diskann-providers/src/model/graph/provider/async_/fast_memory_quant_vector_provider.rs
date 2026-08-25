@@ -55,8 +55,8 @@ pub struct FastMemoryQuantVectorProviderAsync {
     vec_pool: Arc<ObjectPool<Vec<f32>>>,
 }
 
-type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
-type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
+type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
+type QueryComputer<'a> = pq::distance::QueryComputer<'a>;
 
 impl FastMemoryQuantVectorProviderAsync {
     pub fn new(dist_metric: Metric, max_vectors: usize, pq_chunk_table: FixedChunkPQTable) -> Self {
@@ -82,7 +82,7 @@ impl FastMemoryQuantVectorProviderAsync {
     pub(crate) fn metric(&self) -> Metric {
         self.metric
     }
-    /// Return the total number of points (including frozen points) included in `self.
+    /// Return the total number of points (including frozen points) included in `self`.
     #[inline(always)]
     pub fn total(&self) -> usize {
         self.max_vectors
@@ -99,12 +99,12 @@ impl FastMemoryQuantVectorProviderAsync {
     }
 
     /// Create a query computer for the provided query vector.
-    pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer>
+    pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer<'_>>
     where
         T: VectorRepr,
     {
         QueryComputer::new(
-            self.pq_chunk_table.clone(),
+            &self.pq_chunk_table,
             self.metric,
             &T::as_f32(query).into_ann_result()?,
             Some(self.vec_pool.clone()),
@@ -112,8 +112,8 @@ impl FastMemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(&self) -> DistanceComputer {
-        DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
+    pub fn distance_computer(&self) -> DistanceComputer<'_> {
+        DistanceComputer::new(&self.pq_chunk_table, self.metric)
     }
 
     /// Return an "immutable" slice over the PQ data at index `i`.
@@ -161,7 +161,7 @@ impl FastMemoryQuantVectorProviderAsync {
         T: VectorRepr,
     {
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
@@ -169,7 +169,7 @@ impl FastMemoryQuantVectorProviderAsync {
         let vf32: &[f32] = &T::as_f32(v).into_ann_result()?;
 
         if vf32.len() != self.full_dim() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector f32 dimension is not equal to the expected dimension.",
             ));
         }
@@ -208,12 +208,12 @@ impl FastMemoryQuantVectorProviderAsync {
     /// 2. Be okay with racey data.
     pub(crate) unsafe fn set_quant_vector(&self, i: usize, v: &[u8]) -> ANNResult<()> {
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
         if v.len() != self.pq_chunks() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
@@ -229,11 +229,8 @@ impl FastMemoryQuantVectorProviderAsync {
 
     /// Load `self` from a pivots file and data file.
     ///
-    /// The pivots file follows the format in [`storage::PQStorage::load_pq_pivots_bin`] and
+    /// The pivots file follows the format in [`storage::PQStorage::load_pivots`] and
     /// the compressed code is saved in a canonical `.bin` format.
-    ///
-    /// See also: [`storage::bin::load_from_bin`].
-    ///
     /// Because the number of start points and distance metric are not saved as part of the
     /// `.bin` file format, they must be provided externally.
     pub fn load_direct<P>(provider: &P, pivots: &str, data: &str, metric: Metric) -> ANNResult<Self>
@@ -245,8 +242,15 @@ impl FastMemoryQuantVectorProviderAsync {
             // We can use that information to load the pivots, then finish the rest
             // of initialization.
             let pq_storage = storage::PQStorage::new(pivots, data, None);
-            let table = pq_storage.load_pq_pivots_bin(pivots, pq_bytes, provider)?;
-            Ok(Self::new(metric, num_points, table))
+            let table = pq_storage.load_pivots(provider)?;
+            if table.nchunks() != pq_bytes {
+                return Err(ANNError::message(format!(
+                    "PQ pivot table mismatch: file has {} chunks but expected {} chunks.",
+                    table.nchunks(),
+                    pq_bytes
+                )));
+            }
+            Ok(Self::new(metric, num_points, table.try_into()?))
         })
     }
 
@@ -272,9 +276,7 @@ impl FastMemoryQuantVectorProviderAsync {
     /// Save `self` to disk with the pivot table stored at path `pivots` and the compressed
     /// data store in `.bin` form to file path `data`.
     ///
-    /// See also:
-    /// * [`storage::PQStorage::write_pivot_data`]
-    /// * [`storage::bin::save_to_bin`]
+    /// See also: [`storage::PQStorage::write_pivot_data`].
     pub fn save_direct<P>(&self, provider: &P, pivots: &str, data: &str) -> ANNResult<usize>
     where
         P: StorageWriteProvider,
@@ -327,7 +329,7 @@ impl SaveWith<AsyncIndexMetadata> for FastMemoryQuantVectorProviderAsync {
 impl LoadWith<AsyncQuantLoadContext> for FastMemoryQuantVectorProviderAsync {
     type Error = ANNError;
 
-    /// Load the quant vector provider using the `prefix` in `ctx~ as a prefix to
+    /// Load the quant vector provider using the `prefix` in `ctx` as a prefix to
     /// [`PQPathNames`] along with the number of PQ bytes.
     async fn load_with<P>(provider: &P, ctx: &AsyncQuantLoadContext) -> ANNResult<Self>
     where
@@ -379,7 +381,7 @@ impl storage::bin::GetData for FastMemoryQuantVectorProviderAsync {
 #[cfg(test)]
 mod tests {
     use crate::storage::VirtualStorageProvider;
-    use diskann::{ANNErrorKind, utils::ONE};
+    use diskann::utils::ONE;
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
     use super::*;
@@ -397,16 +399,28 @@ mod tests {
         // try to set an out of bounds vector
         // SAFETY: We have exclusive ownership of `provider`.
         let result = unsafe { provider.set_quant_vector(20, &[]) }.unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let msg = result.to_string();
+        assert!(
+            msg.contains("Vector id is out of boundary in the dataset."),
+            "{msg}",
+        );
 
         // SAFETY: We have exclusive ownership of `provider`.
         let result = unsafe { provider.set_vector_sync::<f32>(20, &[]) }.unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let msg = result.to_string();
+        assert!(
+            msg.contains("Vector id is out of boundary in the dataset."),
+            "{msg}",
+        );
 
         // try to set a vector with the wrong dimension
         // SAFETY: We have exclusive ownership of `provider`.
         let result = unsafe { provider.set_quant_vector(0, &[]) }.unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let msg = result.to_string();
+        assert!(
+            msg.contains("Vector dimension is not equal to the expected dimension.",),
+            "{msg}",
+        );
     }
 
     fn create_test_provider() -> FastMemoryQuantVectorProviderAsync {

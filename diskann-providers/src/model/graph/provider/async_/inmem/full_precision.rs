@@ -17,7 +17,7 @@ use diskann::{
         },
         workingset,
     },
-    neighbor::Neighbor,
+    neighbor::{self, Neighbor},
     provider::{DefaultContext, ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
@@ -178,11 +178,8 @@ where
 
 /// An accessor for retrieving full-precision vectors from the `DefaultProvider`.
 ///
-/// This type implements the following traits:
-///
-/// * [`Accessor`] for the [`DefaultProvider`].
-/// * [`ComputerAccessor`] for comparing full-precision distances.
-/// * [`BuildQueryComputer`].
+/// This type implements [`glue::SearchAccessor`] for the [`DefaultProvider`], retrieving
+/// vectors and computing full-precision distances.
 pub struct FullAccessor<'a, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -379,15 +376,15 @@ where
         let f = full.distance();
 
         // Filter before computing the full precision distances.
-        let mut reranked: Vec<(u32, f32)> = candidates
+        let mut reranked: Vec<_> = candidates
             .filter_map(|n| {
-                if checker.deletion_check(n.id) {
+                if checker.deletion_check(*n.id()) {
                     None
                 } else {
-                    Some((
-                        n.id,
+                    Some(Neighbor::new(
+                        *n.id(),
                         f.evaluate_similarity(query, unsafe {
-                            full.get_vector_sync(n.id.into_usize())
+                            full.get_vector_sync(n.id().into_usize())
                         }),
                     ))
                 }
@@ -395,15 +392,14 @@ where
             .collect();
 
         // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(neighbor::ord::fast_distance);
 
         // Store the reranked results.
         std::future::ready(Ok(output.extend(reranked)))
     }
 }
 
-/// A [`SearchPostProcess`]or that reranks a full-precision candidate stream using the
+/// A [`glue::SearchPostProcess`] implementation that reranks a full-precision candidate stream using the
 /// Determinant-Diversity algorithm, reordering results to promote geometric diversity
 /// while preserving relevance to the query.
 #[derive(Debug, Clone, Copy)]
@@ -445,9 +441,9 @@ where
         for (i, candidate) in candidates.into_iter().enumerate() {
             // SAFETY: We accept potential unsynchronized concurrent mutation, matching the
             // pattern used by `Rerank` above.
-            let vector = unsafe { store.get_vector_sync(candidate.id.into_usize()) };
-            ids.push(candidate.id);
-            distances.push(candidate.distance);
+            let vector = unsafe { store.get_vector_sync(candidate.id().into_usize()) };
+            ids.push(*candidate.id());
+            distances.push(*candidate.distance());
             vectors.row_mut(i).copy_from_slice(vector);
         }
 
@@ -462,7 +458,9 @@ where
             Err(error) => return std::future::ready(Err(error.into())),
         };
 
-        let reranked = indices.into_iter().map(|idx| (ids[idx], distances[idx]));
+        let reranked = indices
+            .into_iter()
+            .map(|idx| Neighbor::new(ids[idx], distances[idx]));
 
         std::future::ready(Ok(output.extend(reranked)))
     }

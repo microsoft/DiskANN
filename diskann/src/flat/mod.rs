@@ -6,7 +6,7 @@
 //! Sequential ("flat") search.
 //!
 //! This module is the streaming counterpart to the random-access
-//! [`crate::provider::Accessor`] family. It is designed for backends whose natural access
+//! [`crate::graph::glue::SearchAccessor`] family. It is designed for backends whose natural access
 //! pattern is a one-pass scan over their data -- for example append-only buffered stores or
 //! on-disk shards streamed via I/O.
 //!

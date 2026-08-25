@@ -5,8 +5,10 @@
 
 use std::marker::PhantomData;
 
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_quantization::num::PowerOfTwo;
+
+use crate::error::{diskann_error, ErrorKind};
 
 /// Type-level memory-alignment witness for [`AlignedRead`]. Each implementor is
 /// a unit type carrying a single `PowerOfTwo` value.
@@ -69,9 +71,10 @@ impl<'a, T, A: Alignment> AlignedRead<'a, T, A> {
         if val.is_multiple_of(align) {
             Ok(())
         } else {
-            Err(ANNError::log_disk_io_request_alignment_error(format!(
+            Err(diskann_error!(
+                ErrorKind::DiskIOAlignmentError,
                 "{kind} {val} not aligned to {align}",
-            )))
+            ))
         }
     }
 
@@ -91,8 +94,9 @@ impl<'a, T, A: Alignment> AlignedRead<'a, T, A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diskann::ANNErrorKind;
     use diskann_quantization::alloc::{AlignedAllocator, Poly};
+
+    use crate::error::{error_kind, ErrorKind};
 
     fn aligned_512(len: usize) -> Poly<[u8], AlignedAllocator> {
         Poly::broadcast(0u8, len, AlignedAllocator::A512).unwrap()
@@ -133,7 +137,7 @@ mod tests {
         let slice = &mut buf[1..513]; // ptr offset by 1; length 512 ✓; offset 0 ✓
         let err = AlignedRead::<u8, A512>::new(0, slice)
             .expect_err("misaligned buffer pointer should be rejected");
-        assert_eq!(err.kind(), ANNErrorKind::DiskIOAlignmentError);
+        assert_eq!(error_kind(&err), ErrorKind::DiskIOAlignmentError);
     }
 
     #[test]
@@ -142,7 +146,7 @@ mod tests {
         let slice = &mut buf[..100]; // ptr ✓; length 100 ✗; offset 0 ✓
         let err = AlignedRead::<u8, A512>::new(0, slice)
             .expect_err("buffer length 100 (not a multiple of 512) should be rejected");
-        assert_eq!(err.kind(), ANNErrorKind::DiskIOAlignmentError);
+        assert_eq!(error_kind(&err), ErrorKind::DiskIOAlignmentError);
     }
 
     #[test]
@@ -151,6 +155,6 @@ mod tests {
         let slice = &mut buf[..512]; // ptr ✓; length 512 ✓; offset 1 ✗
         let err = AlignedRead::<u8, A512>::new(1, slice)
             .expect_err("offset 1 (not a multiple of 512) should be rejected");
-        assert_eq!(err.kind(), ANNErrorKind::DiskIOAlignmentError);
+        assert_eq!(error_kind(&err), ErrorKind::DiskIOAlignmentError);
     }
 }

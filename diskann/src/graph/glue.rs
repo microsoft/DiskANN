@@ -71,7 +71,7 @@
 //!   a [`Pipeline`].
 //!
 //! * [`InsertStrategy`]: Graph insertion consists of accepting the value to insert,
-//!   invoking [`crate::model::graph::traits::data_provider::SetElement`] on that value,
+//!   invoking [`provider::SetElement`] on that value,
 //!   then performing a graph search.
 //!
 //!   Following graph search, candidates are passed to a pruning phase.
@@ -90,7 +90,7 @@
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
 //!   strategies. One difference for inplace-deletion is that we use an element accessed
 //!   from the [`DataProvider`] itself for search. Therefore, methods like
-//!   [`crate::index::diskann_async::DiskANNIndex::inplace_delete`] also require the
+//!   [`crate::graph::DiskANNIndex::inplace_delete`] also require the
 //!   [`InplaceDeleteStrategy`] to implement an appropriate [`SearchStrategy`].
 //!
 //!   Like insertion, this trait delegates pruning to a dedicated `PruneStrategy`.
@@ -588,8 +588,7 @@ where
 /// Opt-in trait for strategies that have a default post-processor.
 ///
 /// Strategies implementing this trait can be used with index-level search APIs such as
-/// [`crate::index::diskann_async::DiskANNIndex::search`] and
-/// [`crate::index::diskann_async::DiskANNIndex::search_with`] when no explicit
+/// [`crate::graph::DiskANNIndex::search`] when no explicit
 /// post-processor is specified. The search infrastructure will call
 /// `default_post_processor()` to obtain the processor and invoke its
 /// [`SearchPostProcess::post_process`] method.
@@ -688,7 +687,7 @@ where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
-        let count = output.extend(candidates.map(|n| (n.id, n.distance)));
+        let count = output.extend(candidates);
         std::future::ready(Ok(count))
     }
 }
@@ -758,12 +757,17 @@ where
         Next: SearchPostProcess<A, T, O> + Sync,
     {
         let filter = accessor.is_not_start_point().await?;
-        next.post_process(accessor, query, candidates.filter(|n| filter(n.id)), output)
-            .await
-            .map_err(|err| {
-                let err = err.into();
-                err.context("after filtering start points")
-            })
+        next.post_process(
+            accessor,
+            query,
+            candidates.filter(|n| filter(*n.id())),
+            output,
+        )
+        .await
+        .map_err(|err| {
+            let err = err.into();
+            err.context("after filtering start points")
+        })
     }
 }
 
@@ -856,11 +860,11 @@ pub trait PruneAccessor: HasId + Send + Sync {
 
     /// Return a delegate for performing graph manipulation.
     ///
-    /// If `Self` implements [`NeighborAccessorMut`], then [`provider::Neighbors`] can be
+    /// If `Self` implements [`provider::NeighborAccessorMut`], then [`provider::Neighbors`] can be
     /// used to wrap `&mut self`.
     fn neighbors(&mut self) -> Self::Neighbors<'_>;
 
-    /// Make the data elements for items in `itr` available in the returned [`View`] and
+    /// Make the data elements for items in `itr` available in the returned [`Self::View`] and
     /// provide a means of computing distance between elements in the view.
     ///
     /// The input `itr` is `Clone` and is expected that the implementation of `Clone` is cheap
@@ -921,7 +925,7 @@ where
     /// This API is invoked during inserts to create the associated `SearchAccessor`.
     ///
     /// The provided implementation uses
-    /// [`<Self as SearchStrategy<Provider, T>>::search_accessor`], but implementors of
+    /// [`SearchStrategy::search_accessor`], but implementors of
     /// [`InsertStrategy`] can customize the implementation if the behavior of the search
     /// accessor needs to be slightly different between searches for build and regular
     /// searches.
@@ -965,7 +969,7 @@ where
 /// Multi-insert bulk-inserts a batch of vectors and provides this batch to
 /// [`MultiInsertStrategy::finish`] to create a seed. This seed is then provided to
 /// multiple calls to [`MultiInsertStrategy::seeded_prune_accessor`] to construct the various
-/// [`PruneAccessors`] needed during build.
+/// [`PruneAccessor`] instances needed during build.
 ///
 /// This architecture allows implementations to use overlays like
 /// [`Overlay`](crate::graph::workingset::map::Overlay) so accesses to batch elements can
