@@ -34,6 +34,7 @@ use diskann_wide::{
     arch::{self, Dispatched1, FTarget1, Target},
     lifetime::As,
 };
+#[cfg(not(miri))]
 use rayon::prelude::*;
 
 /// Owned zero-initialized slab from `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`.
@@ -853,30 +854,42 @@ impl HashPrune {
         let distance_rows = distance_rows.into_inner();
         let neighbor_rows = neighbor_rows.into_inner();
         drop(hash_rows);
-        (0..states.len())
-            .into_par_iter()
-            .map_init(Vec::new, |scratch, i| {
-                let off = i * row_stride;
-                // SAFETY: indexing proves that `i` names a live slot. This method
-                // consumes `self`, so no writer can overlap this state reference.
-                let state = unsafe { &*states[i].state_ptr() };
-                // SAFETY: construction allocated `npoints * row_stride` entries;
-                // this loop keeps `i < npoints`, and insertion maintains
-                // `state.len <= l_max <= row_stride` initialized entries.
-                let ids = unsafe {
-                    collect_nearest_ids(
-                        state,
-                        distance_rows.as_ptr().wrapping_add(off),
-                        neighbor_rows.as_ptr().wrapping_add(off),
-                        max_degree,
-                        scratch,
-                    )
-                };
-                // A neighbor always has the same relative hash for this source;
-                // insertion replaces an existing hash slot instead of appending.
-                AdjacencyList::from_vec_trusted(ids)
-            })
-            .collect()
+        let extract = |scratch: &mut Vec<(u32, u16)>, i: usize| {
+            let off = i * row_stride;
+            // SAFETY: indexing proves that `i` names a live slot. This method
+            // consumes `self`, so no writer can overlap this state reference.
+            let state = unsafe { &*states[i].state_ptr() };
+            // SAFETY: construction allocated `npoints * row_stride` entries;
+            // this loop keeps `i < npoints`, and insertion maintains
+            // `state.len <= l_max <= row_stride` initialized entries.
+            let ids = unsafe {
+                collect_nearest_ids(
+                    state,
+                    distance_rows.as_ptr().wrapping_add(off),
+                    neighbor_rows.as_ptr().wrapping_add(off),
+                    max_degree,
+                    scratch,
+                )
+            };
+            // A neighbor always has the same relative hash for this source;
+            // insertion replaces an existing hash slot instead of appending.
+            AdjacencyList::from_vec_trusted(ids)
+        };
+
+        #[cfg(miri)]
+        {
+            let mut scratch = Vec::new();
+            (0..states.len())
+                .map(|i| extract(&mut scratch, i))
+                .collect()
+        }
+        #[cfg(not(miri))]
+        {
+            (0..states.len())
+                .into_par_iter()
+                .map_init(Vec::new, extract)
+                .collect()
+        }
     }
 
     /// Consume the reservoirs and return all retained IDs without sorting them.
@@ -899,22 +912,28 @@ impl HashPrune {
         // before the code creates the output lists.
         drop(hash_rows);
         drop(distance_rows);
-        (0..states.len())
-            .into_par_iter()
-            .map(|i| {
-                let neighbors = neighbor_rows.as_ptr().wrapping_add(i * row_stride);
-                // SAFETY: indexing proves that `i` names a live slot. This method
-                // consumes `self`, so no writer can overlap this state reference.
-                let state = unsafe { &*states[i].state_ptr() };
-                // SAFETY: construction allocated `npoints * row_stride` entries;
-                // this loop keeps `i < npoints`, and insertion maintains
-                // `state.len <= l_max <= row_stride` initialized entries.
-                let ids = unsafe { collect_neighbor_ids(state, neighbors, cap) };
-                // Reservoir slots have unique hashes, and one neighbor cannot
-                // produce two hashes for the same source.
-                AdjacencyList::from_vec_trusted(ids)
-            })
-            .collect()
+        let extract = |i: usize| {
+            let neighbors = neighbor_rows.as_ptr().wrapping_add(i * row_stride);
+            // SAFETY: indexing proves that `i` names a live slot. This method
+            // consumes `self`, so no writer can overlap this state reference.
+            let state = unsafe { &*states[i].state_ptr() };
+            // SAFETY: construction allocated `npoints * row_stride` entries;
+            // this loop keeps `i < npoints`, and insertion maintains
+            // `state.len <= l_max <= row_stride` initialized entries.
+            let ids = unsafe { collect_neighbor_ids(state, neighbors, cap) };
+            // Reservoir slots have unique hashes, and one neighbor cannot
+            // produce two hashes for the same source.
+            AdjacencyList::from_vec_trusted(ids)
+        };
+
+        #[cfg(miri)]
+        {
+            (0..states.len()).map(extract).collect()
+        }
+        #[cfg(not(miri))]
+        {
+            (0..states.len()).into_par_iter().map(extract).collect()
+        }
     }
 }
 
@@ -1062,12 +1081,20 @@ mod tests {
     ) where
         T: VectorRepr + Send + Sync,
     {
+        #[cfg(not(miri))]
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(2)
             .build()
             .unwrap();
         let points = 5;
-        for dimensions in [1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+        // Miri keeps conversion and boundary coverage but omits duplicate sizes.
+        let dimensions: &[usize] = if cfg!(miri) {
+            &[1, 15, 16, 17, 33]
+        } else {
+            &[1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33]
+        };
+        let plane_counts: &[usize] = if cfg!(miri) { &[1, 16] } else { &[1, 8, 16] };
+        for &dimensions in dimensions {
             let raw: Vec<u8> = (0..points * dimensions)
                 .map(|index| {
                     let point = index / dimensions;
@@ -1077,8 +1104,8 @@ mod tests {
                 .collect();
             let converted: Vec<T> = raw.iter().copied().map(&convert).collect();
             let f32_data: Vec<f32> = raw.iter().copied().map(&reference).collect();
-            for planes in [1, 8, 16] {
-                let (actual, expected) = pool.install(|| {
+            for &planes in plane_counts {
+                let build = || {
                     (
                         LshSketches::try_new(
                             MatrixView::try_from(converted.as_slice(), points, dimensions).unwrap(),
@@ -1093,7 +1120,11 @@ mod tests {
                         )
                         .unwrap(),
                     )
-                });
+                };
+                #[cfg(miri)]
+                let (actual, expected) = build();
+                #[cfg(not(miri))]
+                let (actual, expected) = pool.install(build);
                 assert_eq!(
                     actual.sketches(),
                     expected.sketches(),
@@ -1109,7 +1140,7 @@ mod tests {
     fn f16_sketch_conversion_matches_f32_across_dimensions_and_planes() {
         assert_sketch_source_type_matches_f32(
             "f16",
-            |value| half::f16::from_f32(value as f32),
+            |value| half::f16::from_f32_const(value as f32),
             |value| value as f32,
         );
     }
@@ -1418,17 +1449,21 @@ mod tests {
     // Concurrency and consuming extraction.
 
     #[test]
-    #[allow(clippy::disallowed_methods)]
     fn parallel_insertion_matches_serial_neighbor_lists() {
-        use rayon::prelude::*;
-
         let data = vec![0.0f32; 100 * 4];
         let parallel = build_hash_prune(&data, 100, 4, 4, 10).unwrap();
         let serial = build_hash_prune(&data, 100, 4, 4, 10).unwrap();
 
-        (0..50).into_par_iter().for_each(|source| {
-            add_edge(&parallel, source, source + 1, 1.0);
-            add_edge(&parallel, source + 1, source, 1.0);
+        std::thread::scope(|scope| {
+            for sources in [0..25, 25..50] {
+                let parallel = &parallel;
+                scope.spawn(move || {
+                    for source in sources {
+                        add_edge(parallel, source, source + 1, 1.0);
+                        add_edge(parallel, source + 1, source, 1.0);
+                    }
+                });
+            }
         });
         for source in 0..50 {
             add_edge(&serial, source, source + 1, 1.0);

@@ -291,5 +291,4 @@ mod dataset_test {
         let chunks = NumPQChunks::new_with(64, 128).unwrap();
         assert_eq!(chunks.get(), 64);
     }
-
 }

@@ -148,3 +148,12 @@ jobs:
             graph::pipnn::leaf_kernel::tests::rank_leaf_distances_tests
           cargo +nightly miri test --locked -p diskann --features pipnn --lib \
             graph::pipnn::partition_kernel::tests::rank_leader_distances_tests
+
+      - name: PiPNN HashPrune pointer boundaries
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+        run: |
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::lsh::tests
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::hash_prune::tests

@@ -18,6 +18,7 @@ use crate::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_utils::views::MatrixView;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
+#[cfg(not(miri))]
 use rayon::prelude::*;
 
 /// Maximum number of hyperplanes (the hash output is `u16`).
@@ -61,29 +62,25 @@ impl LshSketches {
 
         let mut sketches = vec![0.0f32; sketch_len];
 
-        #[allow(clippy::disallowed_methods)] // caller installs the complete build in its pool.
-        sketches
-            .par_chunks_mut(num_planes)
-            .enumerate()
-            .try_for_each_init(Vec::new, |buffer, (point, sketch_row)| {
-                buffer.resize(ndims, 0.0);
-                T::as_f32_into(data.row(point), &mut buffer[..ndims])
-                    .map_err(Into::<ANNError>::into)
-                    .map_err(|error| error.context(format!("converting LSH point {point}")))?;
-                for (plane_index, destination) in sketch_row.iter_mut().enumerate() {
-                    let plane = &hyperplanes[plane_index * ndims..(plane_index + 1) * ndims];
-                    let mut dot = 0.0f32;
-                    for dimension in 0..ndims {
-                        // SAFETY: both slices have exactly `ndims` elements.
-                        unsafe {
-                            dot +=
-                                *buffer.get_unchecked(dimension) * *plane.get_unchecked(dimension);
-                        }
-                    }
-                    *destination = dot;
-                }
-                Ok::<(), ANNError>(())
-            })?;
+        #[cfg(miri)]
+        {
+            // Miri cannot execute Rayon's crossbeam dependency with strict provenance.
+            let mut buffer = Vec::new();
+            for (point, sketch_row) in sketches.chunks_mut(num_planes).enumerate() {
+                fill_sketch_row(data, point, &hyperplanes, &mut buffer, sketch_row)?;
+            }
+        }
+
+        #[cfg(not(miri))]
+        {
+            #[allow(clippy::disallowed_methods)] // caller installs the complete build in its pool.
+            sketches
+                .par_chunks_mut(num_planes)
+                .enumerate()
+                .try_for_each_init(Vec::new, |buffer, (point, sketch_row)| {
+                    fill_sketch_row(data, point, &hyperplanes, buffer, sketch_row)
+                })?;
+        }
 
         Ok(Self {
             num_planes,
@@ -104,16 +101,51 @@ impl LshSketches {
     }
 }
 
+fn fill_sketch_row<T: VectorRepr>(
+    data: MatrixView<'_, T>,
+    point: usize,
+    hyperplanes: &[f32],
+    buffer: &mut Vec<f32>,
+    sketch_row: &mut [f32],
+) -> ANNResult<()> {
+    let dimensions = data.ncols();
+    buffer.resize(dimensions, 0.0);
+    T::as_f32_into(data.row(point), &mut buffer[..dimensions])
+        .map_err(Into::<ANNError>::into)
+        .map_err(|error| error.context(format!("converting LSH point {point}")))?;
+    for (plane_index, destination) in sketch_row.iter_mut().enumerate() {
+        let plane = &hyperplanes[plane_index * dimensions..(plane_index + 1) * dimensions];
+        let mut dot = 0.0f32;
+        for dimension in 0..dimensions {
+            // SAFETY: both slices have exactly `dimensions` elements.
+            unsafe {
+                dot += *buffer.get_unchecked(dimension) * *plane.get_unchecked(dimension);
+            }
+        }
+        *destination = dot;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
 
-    fn thread_pool(threads: usize) -> rayon::ThreadPool {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .unwrap()
+    fn run_with_threads<R: Send>(threads: usize, operation: impl FnOnce() -> R + Send) -> R {
+        #[cfg(miri)]
+        {
+            let _ = threads;
+            operation()
+        }
+        #[cfg(not(miri))]
+        {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(operation)
+        }
     }
 
     fn matrix_view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
@@ -131,11 +163,10 @@ mod tests {
         let data: Vec<_> = point_vectors.into_iter().flatten().collect();
 
         // When
-        let sketches = thread_pool(2)
-            .install(|| {
-                LshSketches::try_new(matrix_view(&data, point_count, dimensions), plane_count, 42)
-            })
-            .unwrap();
+        let sketches = run_with_threads(2, || {
+            LshSketches::try_new(matrix_view(&data, point_count, dimensions), plane_count, 42)
+        })
+        .unwrap();
 
         // Then
         assert_eq!(sketches.num_planes(), plane_count);
@@ -170,9 +201,10 @@ mod tests {
             .collect();
 
         // When
-        let actual_sketches = thread_pool(2)
-            .install(|| LshSketches::try_new(matrix_view(&data, npoints, ndims), planes, seed))
-            .unwrap();
+        let actual_sketches = run_with_threads(2, || {
+            LshSketches::try_new(matrix_view(&data, npoints, ndims), planes, seed)
+        })
+        .unwrap();
 
         // Then
         assert_eq!(actual_sketches.sketches(), expected_serial_sketch_values);
@@ -186,15 +218,14 @@ mod tests {
         let plane_count = 4;
 
         // When
-        let sketches = thread_pool(2)
-            .install(|| {
-                LshSketches::try_new(
-                    matrix_view(&[] as &[f32], zero_point_count, dimensions),
-                    plane_count,
-                    42,
-                )
-            })
-            .unwrap();
+        let sketches = run_with_threads(2, || {
+            LshSketches::try_new(
+                matrix_view(&[] as &[f32], zero_point_count, dimensions),
+                plane_count,
+                42,
+            )
+        })
+        .unwrap();
 
         // Then
         assert_eq!(sketches.num_planes(), plane_count);
@@ -210,15 +241,14 @@ mod tests {
         let expected_zero_dot_products = vec![0.0; point_count * plane_count];
 
         // When
-        let sketches = thread_pool(2)
-            .install(|| {
-                LshSketches::try_new(
-                    matrix_view(&[] as &[f32], point_count, zero_dimensions),
-                    plane_count,
-                    42,
-                )
-            })
-            .unwrap();
+        let sketches = run_with_threads(2, || {
+            LshSketches::try_new(
+                matrix_view(&[] as &[f32], point_count, zero_dimensions),
+                plane_count,
+                42,
+            )
+        })
+        .unwrap();
 
         // Then
         assert_eq!(sketches.sketches(), expected_zero_dot_products);
