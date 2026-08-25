@@ -235,7 +235,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D rustdoc::all
       - name: "diskann-inmem private docs"
-        run: cargo doc --locked --workspace --no-deps --all-features --document-private-items
+        run: cargo doc --locked --package diskann-inmem --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D rustdoc::all
 
