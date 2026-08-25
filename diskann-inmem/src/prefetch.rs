@@ -38,7 +38,6 @@ where
     }
 
     /// Check if `self` can prefetch slices of length `len`.
-    #[cfg(debug_assertions)]
     pub(crate) fn check(self, len: Bytes) -> Result<(), InvalidPrefetch> {
         self.0.check(len)
     }
