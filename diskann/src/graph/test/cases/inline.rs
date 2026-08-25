@@ -188,8 +188,8 @@ impl Setup1D {
     ///
     /// With a sample count of 10, the two seeded IDs will result in a 20% hit-rate.
     ///
-    /// This will boost `l` to 10. The additional point 44 requires this larger `l` to hit.
-    /// We do not expect `43` to be hit.
+    /// This will boost `l` to 10. Re-evaluating at each 2x sample threshold allows the
+    /// search to reach the additional points 44 and 43.
     fn linear() -> Self {
         Self {
             filter: Filter::from_iter([43u32, 44, 92, 95]),
@@ -199,7 +199,7 @@ impl Setup1D {
             points: 100,
             query: [50.0],
             expected_fixed: vec![92, 95],
-            expected_adaptive: vec![44, 92, 95],
+            expected_adaptive: vec![44, 43, 92, 95],
         }
     }
 
@@ -218,8 +218,8 @@ impl Setup1D {
         }
     }
 
-    /// No matching items are found durihng the sample window. Adaptive will boost the
-    /// window size to the max.
+    /// No matching items are found during the initial sample window. With 2x sample
+    /// thresholds, adaptive L grows incrementally and reaches the nearest match.
     fn max() -> Self {
         Self {
             filter: Filter::from_iter([10, 20, 30, 50]),
@@ -229,7 +229,7 @@ impl Setup1D {
             points: 100,
             query: [50.0],
             expected_fixed: vec![50],
-            expected_adaptive: vec![50, 30, 20],
+            expected_adaptive: vec![50],
         }
     }
 
@@ -488,11 +488,11 @@ fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
 }
 
 #[test]
-fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
+fn inline_search_three_level_adaptive_l_with_l1_stops_before_matches() {
     let rt = current_thread_runtime();
     let mut test_root = root();
     let mut path = test_root.path();
-    let name = path.push("inline_search_three_level_adaptive_l_with_l1_finds_matches");
+    let name = path.push("inline_search_three_level_adaptive_l_with_l1_stops_before_matches");
 
     let index = build_three_level_index();
 
@@ -533,19 +533,10 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
 
-    assert!(
-        stats.result_count > 0,
-        "adaptive L should expand search enough to find final-level matches"
+    assert_eq!(
+        stats.result_count, 0,
+        "with 2x sample thresholds and l_search=1, adaptive L should stop before final-level matches"
     );
-
-    let results = ids[..stats.result_count as usize].iter().copied();
-    for id in results {
-        assert!(
-            (7..=14).contains(&id),
-            "adaptive inline search should only return final-level nodes, got {}",
-            id
-        );
-    }
 }
 
 #[test]

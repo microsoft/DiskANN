@@ -203,9 +203,6 @@ where
     let mut sample_matched: usize = 0;
     let mut next_adaptive_l_sample = adaptive_l.as_ref().map(|value| value.sample_count);
 
-    let mut resize_count = 0;
-    let mut l_values = vec![original_l_search];
-
     loop {
         // Check termination conditions
         if accessor.terminate_early() {
@@ -256,7 +253,7 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Adaptive L: estimate specificity at N samples, then at 10N, 100N, and so on.
+        // Adaptive L: estimate specificity at N samples, then at 2N, 4N, and so on.
         if let Some(adaptive_l) = adaptive_l.as_ref()
             && let Some(next_sample) = next_adaptive_l_sample
             && sample_visited >= next_sample
@@ -269,8 +266,6 @@ where
             );
             if new_l > scratch.best.capacity() {
                 scratch.resize(new_l);
-                l_values.push(new_l);
-                resize_count += 1;
             }
 
             next_adaptive_l_sample = advance_adaptive_l_sample(next_sample);
@@ -278,8 +273,6 @@ where
     }
 
     matched_results.sort_unstable_by(neighbor::ord::fast_distance);
-
-    // println!("Scratch was resized {resize_count} times and its historical values are {l_values:?}.");
 
     Ok(Ret {
         cmps: scratch.cmps,
@@ -365,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_l_sample_thresholds_grow_by_ten() {
+    fn test_adaptive_l_sample_thresholds_double() {
         let sample_count = 100;
 
         let second_sample = advance_adaptive_l_sample(sample_count).unwrap();
@@ -374,7 +367,7 @@ mod tests {
 
         assert_eq!(
             [sample_count, second_sample, third_sample, fourth_sample],
-            [100, 1000, 10_000, 100_000]
+            [100, 200, 400, 800]
         );
         assert_eq!(advance_adaptive_l_sample(usize::MAX), None);
     }
