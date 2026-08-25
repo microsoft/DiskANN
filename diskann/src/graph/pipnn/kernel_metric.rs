@@ -97,14 +97,14 @@ mod tests {
         use super::cosine_distance_single;
 
         #[test]
-        fn zero_source_norm_produces_unit_distance() {
+        fn zero_source_norm_takes_precedence_over_nan_dot_product() {
             // Given
             let source_norm = 0.0;
             let zero_norm_similarity = 0.0;
             let expected_one_minus_zero_similarity = 1.0 - zero_norm_similarity;
 
             // When
-            let actual_distance = cosine_distance_single(0.0, source_norm, 2.0);
+            let actual_distance = cosine_distance_single(f32::NAN, source_norm, 2.0);
 
             // Then
             assert_eq!(actual_distance, expected_one_minus_zero_similarity);
@@ -122,6 +122,21 @@ mod tests {
 
             // Then
             assert_eq!(actual_distance, expected_one_minus_zero_similarity);
+        }
+
+        #[test]
+        fn minimum_normal_norm_uses_normalized_similarity() {
+            // Given
+            let source_norm = f32::MIN_POSITIVE.sqrt();
+            let target_norm = 1.0;
+            let dot_product = source_norm / 2.0;
+            let expected_distance = 1.0 - dot_product / (source_norm * target_norm);
+
+            // When
+            let actual_distance = cosine_distance_single(dot_product, source_norm, target_norm);
+
+            // Then
+            assert_eq!(actual_distance, expected_distance);
         }
 
         #[test]
@@ -159,14 +174,26 @@ mod tests {
             let actual_distance = cosine_distance_single(f32::NAN, 1.0, 1.0);
             assert!(actual_distance.is_nan());
         }
+
+        #[test]
+        fn nan_source_norm_produces_nan_distance() {
+            let actual_distance = cosine_distance_single(0.0, f32::NAN, 1.0);
+            assert!(actual_distance.is_nan());
+        }
+
+        #[test]
+        fn nan_target_norm_produces_nan_distance() {
+            let actual_distance = cosine_distance_single(0.0, 1.0, f32::NAN);
+            assert!(actual_distance.is_nan());
+        }
     }
 
     mod cosine_distance_simd_tests {
         use super::test_support::run_cosine_distance_simd;
 
         #[test]
-        fn zero_source_norm_produces_unit_distance_in_every_lane() {
-            let actual_distances = run_cosine_distance_simd([0.0; 16], [0.0; 16], [2.0; 16]);
+        fn zero_source_norm_takes_precedence_over_nan_dot_product_in_every_lane() {
+            let actual_distances = run_cosine_distance_simd([f32::NAN; 16], [0.0; 16], [2.0; 16]);
             assert_eq!(actual_distances, [1.0; 16]);
         }
 
@@ -185,10 +212,24 @@ mod tests {
         }
 
         #[test]
-        fn roundoff_past_similarity_bounds_is_clamped_in_every_lane() {
+        fn minimum_normal_norm_uses_normalized_similarity_in_every_lane() {
+            let source_norm = f32::MIN_POSITIVE.sqrt();
+            let target_norm = 1.0;
+            let dot_product = source_norm / 2.0;
+            let expected_distance = 1.0 - dot_product / (source_norm * target_norm);
+
+            let actual_distances =
+                run_cosine_distance_simd([dot_product; 16], [source_norm; 16], [target_norm; 16]);
+
+            assert_eq!(actual_distances, [expected_distance; 16]);
+        }
+
+        #[test]
+        fn similarity_outside_bounds_is_clamped_in_every_lane() {
             let dot_above_norm_product = 4.000_001;
             let dot_below_negative_norm_product = -4.000_001;
             let dot_products = [
+                f32::INFINITY,
                 dot_above_norm_product,
                 dot_above_norm_product,
                 dot_above_norm_product,
@@ -196,8 +237,7 @@ mod tests {
                 dot_above_norm_product,
                 dot_above_norm_product,
                 dot_above_norm_product,
-                dot_above_norm_product,
-                dot_below_negative_norm_product,
+                f32::NEG_INFINITY,
                 dot_below_negative_norm_product,
                 dot_below_negative_norm_product,
                 dot_below_negative_norm_product,
@@ -218,6 +258,18 @@ mod tests {
         #[test]
         fn nan_similarity_remains_nan_in_every_lane() {
             let actual_distances = run_cosine_distance_simd([f32::NAN; 16], [1.0; 16], [1.0; 16]);
+            assert!(actual_distances.into_iter().all(f32::is_nan));
+        }
+
+        #[test]
+        fn nan_source_norm_produces_nan_distance_in_every_lane() {
+            let actual_distances = run_cosine_distance_simd([0.0; 16], [f32::NAN; 16], [1.0; 16]);
+            assert!(actual_distances.into_iter().all(f32::is_nan));
+        }
+
+        #[test]
+        fn nan_target_norm_produces_nan_distance_in_every_lane() {
+            let actual_distances = run_cosine_distance_simd([0.0; 16], [1.0; 16], [f32::NAN; 16]);
             assert!(actual_distances.into_iter().all(f32::is_nan));
         }
     }
