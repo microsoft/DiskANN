@@ -163,6 +163,14 @@ impl<T> Config<T> {
     pub fn dim(&self) -> usize {
         self.start_points.ncols()
     }
+
+    /// Construct a [`Full`] from the [`Config`].
+    pub fn build(self) -> ANNResult<Full<T>>
+    where
+        T: FullPrecision,
+    {
+        Full::new(self)
+    }
 }
 
 /// Errors that can arise when constructing [`Config`].
@@ -187,7 +195,7 @@ where
     type Layer = Full<T>;
 
     fn build(self) -> ANNResult<Full<T>> {
-        Full::new(self)
+        <Config<T>>::build(self)
     }
 }
 
@@ -826,12 +834,8 @@ macro_rules! expand_beam {
 }
 
 macro_rules! prune {
-    ($self:ty, $reader:ident, $f:ident) => {{
-        Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed()
-    }};
-    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{
-        Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed()
-    }};
+    ($self:ty, $reader:ident, $f:ident) => {{ Prune::<$self, _>::new($reader, Pure::<$f>::new()).boxed() }};
+    ($self:ty, $reader:ident, { $N:literal, $f:ident }) => {{ Prune::<$self, _>::new($reader, Pure::<Specialize<$N, $f>>::new()).boxed() }};
 }
 
 impl FullPrecisionImpl for f32 {

@@ -23,10 +23,10 @@
 //! prevents the slot from transitioning from "retiring" back to "available" and being
 //! reused while the guard remains active.
 //!
-//! The transitions [`Slot::publish`] and [`Slot::freeze`] use release stores. Since these
-//! are terminal slot operations, their release stores occur after all payload writes. The
-//! acquire load in [`Reader::read`] makes those writes visible before creating a shared
-//! slice.
+//! The transitions [`plugin::Slot::publish`] and [`plugin::Slot::freeze`] use release stores.
+//! Since these are terminal slot operations, their release stores occur after all payload
+//! writes. The acquire load in [`Reader::read`] makes those writes visible before creating
+//! a shared slice.
 //!
 //! ## Safety
 //!

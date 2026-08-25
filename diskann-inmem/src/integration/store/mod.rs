@@ -5,13 +5,12 @@
 
 //! This module exposes "public" integration-test wrappers for the various internal store
 //! mechanisms to drive larger concurrency tests.
-//!
-//! These implementationa have a similar structure. A [`boilerplate`] macro is used to ensure
-//! the capabilities exposed are mostly the same.
 
 pub mod checked;
 pub mod invasive;
 
+/// These implementationa have a similar structure. A [`boilerplate`] macro is used to ensure
+/// the capabilities exposed are mostly the same.
 macro_rules! boilerplate {
     (
         $plugin:ty => $store:ident,

@@ -637,19 +637,6 @@ where
             ncols: self.ncols,
         }
     }
-
-    pub fn as_bytes(&self) -> MatrixView<'_, u8>
-    where
-        T::Elem: bytemuck::Pod,
-    {
-        let data = bytemuck::must_cast_slice::<T::Elem, u8>(self.as_slice());
-
-        MatrixView {
-            data,
-            nrows: self.nrows(),
-            ncols: self.ncols() * std::mem::size_of::<T::Elem>(),
-        }
-    }
 }
 
 /// Represents an owning, 2-dimensional view of a contiguous block of memory,

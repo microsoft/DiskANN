@@ -3,53 +3,65 @@
  * Licensed under the MIT license.
  */
 
-//! A concurrent in-memory data store for driving [`plugin::Plugin`]s.
-//!
-//! This supports concurrent data access, deletes, and inserts through a safe interface.
-//! Data is stored internally in slots indexed from `[0..N)` with `K` points reserved at the
-//! end at positions `[N..N+K)`.
-//!
-//! ## Reading
-//!
-//! A [`Store`] provides no direct way of reading data. Instead, the [`plugin::Plugin`] is
-//! responsible for exposing an appropriate reader (e.g., [`invasive::Invasive::reader`]) in
-//! accordance with its lifecycle implementation. [`Store::guard`] can be used for
-//! this purpose by acquiring an [`epoch::Guard`] for a [`Store`].
-//!
-//! ## Writing
-//!
-//! [`Store::acquire`] is used to find and claim an unused internal [`Slot`]. A [`Slot`]
-//! provides write access to its corresponding [`Slot::data`]. Either [`Slot::publish`] or
-//! [`Slot::freeze`] can be used to make data readable.
-//!
-//! If a [`Slot`] is dropped, its corresponding slot is returned to the [`Store`] without
-//! publishing its contents.
-//!
-//! The index of the slot chosen may be obtained via [`Slot::slot`].
-//!
-//! ## Deleting
-//!
-//! Data is deleted via [`Store::retire`]. This immediately marks the corresponding slot as
-//! unavailable for future readers. However, the retired slot will not be reused until the
-//! [`Store`] can guarantee that no readers that could be using the data are active.
-//!
-//! Slots are automatically reclaimed as part of slot acquisition in the "writing" phase.
-//!
-//! ## Neighbor Access
-//!
-//! The [`Store`] also contains a [`Neighbors`] instance to store adjacency lists. Since
-//! neighbors are generally accessed less frequently than data with a higher volume of write
-//! traffic, fine-grained locks are used for this data structure.
-//!
-//! # Details
-//!
-//! This uses an implementation of the epoch-based reclamation (EBR) provided by [`Registry`].
-//! Plugins follow the lifecycle process defined in the [plugin module docs](plugin).
-//!
-//! The EBR scheme allows readers to safely access data while only generating read traffic to
-//! the CPU caches. The cost is that there is a delay between when slots are retired and when
-//! they can be reused, with a long lived reader blocking this reclamation. As such, users of
-//! this data structure should ensure that readers are reasonably short lived.
+//! Concurrency configuration.
+
+mod internal_docs {
+    //! A concurrent in-memory data store for driving [`plugin::Plugin`]s.
+    //!
+    //! This supports concurrent data access, deletes, and inserts through a safe interface.
+    //! Data is stored internally in slots indexed from `[0..N)` with `K` points reserved at the
+    //! end at positions `[N..N+K)`.
+    //!
+    //! ## Reading
+    //!
+    //! A [`Store`] provides no direct way of reading data. Instead, the [`plugin::Plugin`] is
+    //! responsible for exposing an appropriate reader (e.g., [`invasive::Invasive::reader`]) in
+    //! accordance with its lifecycle implementation. [`Store::guard`] can be used for
+    //! this purpose by acquiring an [`epoch::Guard`] for a [`Store`].
+    //!
+    //! ## Writing
+    //!
+    //! [`Store::acquire`] is used to find and claim an unused internal [`Slot`]. A [`Slot`]
+    //! provides write access to its corresponding [`Slot::data`]. Either [`Slot::publish`]
+    //! or [`Slot::freeze`] can be used to make data readable.
+    //!
+    //! If a [`Slot`] is dropped, its corresponding slot is returned to the [`Store`] without
+    //! publishing its contents.
+    //!
+    //! The index of the slot chosen may be obtained via [`Slot::slot`].
+    //!
+    //! ## Deleting
+    //!
+    //! Data is deleted via [`Store::retire`]. This immediately marks the corresponding slot
+    //! as unavailable for future readers. However, the retired slot will not be reused until
+    //! the [`Store`] can guarantee that no readers that could be using the data are active.
+    //!
+    //! Slots are automatically reclaimed as part of slot acquisition in the "writing" phase.
+    //!
+    //! ## Neighbor Access
+    //!
+    //! The [`Store`] also contains a [`Neighbors`] instance to store adjacency lists. Since
+    //! neighbors are generally accessed less frequently than data with a higher volume of
+    //! write traffic, fine-grained locks are used for this data structure.
+    //!
+    //! # Details
+    //!
+    //! This uses an implementation of the epoch-based reclamation (EBR) provided by
+    //! [`Registry`]. Plugins follow the lifecycle process defined in the
+    //! [plugin module docs](plugin).
+    //!
+    //! The EBR scheme allows readers to safely access data while only generating read traffic
+    //! to the CPU caches. The cost is that there is a delay between when slots are retired
+    //! and when they can be reused, with a long lived reader blocking this reclamation. As
+    //! such, users of this data structure should ensure that readers are reasonably short
+    //! lived.
+
+    #[expect(
+        unused_imports,
+        reason = "this keeps cross-references nicer for internal docs"
+    )]
+    use super::*;
+}
 
 use std::{
     iter::repeat_n,

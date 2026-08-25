@@ -50,7 +50,8 @@
 //!
 //! * [`Slot`]: Slots are a little spooky. Plugins can assume that a [`Slot`] for an index
 //!   `i` is exclusive for its duration. This means that [`Slot`] implementations can lend
-//!   out mutable references to its contents (for example, [`invasive::Slot::as_mut_slice`]).
+//!   out mutable references to its contents (for example,
+//!   [`super::invasive::Slot::as_mut_slice`]).
 //!
 //!   Code in [`super`] is very careful to maintain this invariant and all users of [`Slot`]
 //!   must carefully maintain this as well.

@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Integration test runner for [`diskann_inmem`].
+
 mod index;
 mod store;
 mod support;

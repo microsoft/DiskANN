@@ -193,9 +193,9 @@ macro_rules! typed_int {
 // TODO: Provide a linkable reference for "immutable" points.
 
 typed_int!(
-    /// The number of distinct slots a [`crate::Provider`] or [`crate::Layer`] has capacity
-    /// for. This is logically distinct from [`MaximumId`], which may be greater due too
-    /// immutable points within a storage container.
+    /// The number of distinct slots a [`crate::Provider`] or [`crate::layers::Layer`] has
+    /// capacity for. This is logically distinct from [`IdLimit`], which may be greater due
+    /// too immutable points within a storage container.
     pub Capacity,
     usize,
 );
@@ -207,8 +207,8 @@ typed_int!(
 );
 
 typed_int!(
-    /// One larger than the maximum ID that a [`crate::Provider`], [`crate::Layer`], or
-    /// other such store in this crate can access in-bounds.
+    /// One larger than the maximum ID that a [`crate::Provider`], [`crate::layers::Layer`],
+    /// or other such store in this crate can access in-bounds.
     ///
     /// This implies that access to ids `[0..self)` are in-bounds.
     ///
