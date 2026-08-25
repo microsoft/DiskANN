@@ -792,6 +792,60 @@ original hybrid, it is 1.98x faster at AVG, 3.05x faster at P99, and 2.98x faste
 The first dense-only repetition incurred graph page faults, so the comparison combines querywise
 latencies from warm repetitions 2 and 3. Sparse-routed recall is 100%; dense-only recall is 33.75%.
 
+## 8.13 Correctness check and selectivity-routing backlog
+
+The 50.04% recall result was rechecked because language-only recall was previously 78.20%. The
+same 1,619 ANN-routed queries were run with language-only and conjunction predicates:
+
+| Predicate on the same dense-routed queries | Recall@150 |
+|---|---:|
+| Language only | **79.15%** |
+| Language AND provider | **33.75%** |
+| Provider AND language | **33.75%** |
+
+The reversed conjunction produces identical recall, ruling out terminal-order or expression
+preprocessing errors. This workload also contains one AND clause per query, so each request routes
+wholly to ANN or BruteForceKNN; the global top-K merger is not used. The combined recall is exactly:
+
+```text
+(528 * 100% + 1,619 * 33.749%) / 2,147 = 50.042%
+```
+
+The remaining gap is the routing criterion. Individual language and provider labels can both be
+dense while their intersection remains sparse. Among the 1,619 ANN-routed queries:
+
+| Combined language-provider pass rate | Queries | Share |
+|---|---:|---:|
+| `< 1%` | 1,230 | 76.0% |
+| `< 0.1%` | 695 | 42.9% |
+| `< 0.01%` | 38 | 2.3% |
+
+The median language density is 16.14%, the median provider density is 0.319%, but the median
+intersection density is only 0.201%. Multi-hop ANN therefore still performs label-blind traversal
+for many selective conjunctions.
+
+### Backlog: adaptive clause-selectivity routing
+
+For a two-label dense clause, first SIMD-AND the two 100M-bit rows and popcount the result. An
+AVX2 microbenchmark on an AMD EPYC 7763 measured approximately:
+
+| Two-row AND + popcount | Latency |
+|---|---:|
+| Cache-hot | 0.63 ms |
+| After cache eviction / DRAM-resident | 1.05 ms |
+
+Each clause reads 25 MB. The next prototype will use the resulting valid-node count:
+
+1. If valid count is at least 1% of the index (1,000,000 nodes), use multi-hop ANN.
+2. If valid count is below 1%, enumerate valid IDs and exact-scan their embeddings.
+3. Merge exact results through the existing global top-K path.
+4. Cache counts by normalized `(language, provider)` pair where useful.
+
+The 1% threshold is an initial experiment, not a final constant. Exact scanning 1M UINT8-128
+embeddings reads roughly 128 MB, so the end-to-end benchmark must include bitmap materialization,
+ID enumeration, embedding access, distance computation, and top-K maintenance. Thresholds of 0.1%
+and 0.01% should also be measured.
+
 ## 10. Artifacts
 
 ### 10.1 Original PMax benchmark (`Q:\test6\filtered_test2\bench\full\`)
@@ -834,5 +888,8 @@ latencies from warm repetitions 2 and 3. Sparse-routed recall is 100%; dense-onl
 - Indexed sidecar comparison:
   `bfknn_indexed_threshold10000_comparison.json` and
   `bfknn_indexed_threshold10000_report.md`
+- Indexed sidecar correctness check:
+  `bfknn_indexed_threshold10000_correctness.md` and
+  `hybrid_threshold10000_dense_correctness.results.json`
 
 _Note: an earlier version of this report used a single-valued `geo` string field; it is superseded by the set-membership results above._
