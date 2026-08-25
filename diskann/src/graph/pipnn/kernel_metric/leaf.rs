@@ -318,6 +318,21 @@ mod tests {
         }
 
         #[test]
+        fn nan_dot_product_produces_nan_distance_with_l2() {
+            // Given
+            let source_squared_norm = 1.0;
+            let target_squared_norm = 1.0;
+            let squared_norms = [source_squared_norm, target_squared_norm];
+
+            // When
+            let actual_distance =
+                L2::distance_single(&squared_norms, source_squared_norm, f32::NAN, 1);
+
+            // Then
+            assert!(actual_distance.is_nan());
+        }
+
+        #[test]
         fn distance_equals_one_minus_dot_over_norm_product_with_cosine() {
             // Given
             let source_norm = 2.0;
@@ -331,6 +346,18 @@ mod tests {
 
             // Then
             assert_eq!(actual_distance, expected_one_minus_normalized_dot);
+        }
+
+        #[test]
+        fn nan_dot_product_produces_nan_distance_with_cosine() {
+            // Given
+            let norms = [1.0, 1.0];
+
+            // When
+            let actual_distance = Cosine::distance_single(&norms, 1.0, f32::NAN, 1);
+
+            // Then
+            assert!(actual_distance.is_nan());
         }
 
         #[test]
@@ -380,6 +407,17 @@ mod tests {
         }
 
         #[test]
+        fn negative_roundoff_is_clamped_to_zero_in_every_lane_with_l2() {
+            let squared_norms = [1.0; 17];
+            let dot_product_above_exact_norm = 1.000_001;
+
+            let actual_distances =
+                run_distances_simd::<L2>(&squared_norms, 0, [dot_product_above_exact_norm; 16], 1);
+
+            assert_eq!(actual_distances, [0.0; 16]);
+        }
+
+        #[test]
         fn nan_dot_products_remain_nan_in_every_lane_with_l2() {
             let squared_norms = [1.0; 17];
 
@@ -400,6 +438,15 @@ mod tests {
             let actual_distances = run_distances_simd::<Cosine>(&norms, 0, [dot_product; 16], 1);
 
             assert_eq!(actual_distances, [expected_distance; 16]);
+        }
+
+        #[test]
+        fn nan_dot_products_remain_nan_in_every_lane_with_cosine() {
+            let norms = [1.0; 17];
+
+            let actual_distances = run_distances_simd::<Cosine>(&norms, 0, [f32::NAN; 16], 1);
+
+            assert!(actual_distances.into_iter().all(f32::is_nan));
         }
 
         #[test]

@@ -1511,7 +1511,43 @@ mod tests {
             assert_eq!(actual_neighbors, expected_unassigned_neighbors);
         }
 
+        #[test]
+        fn complete_simd_group_without_eligible_distances_leaves_source_unassigned_with_l2() {
+            // Given
+            let point_count = 17;
+            let source = 16;
+            let requested_k = 1;
+            let mut gram = gram_with_uniform_self_dots(point_count, 1.0);
+            gram[source * point_count..source * point_count + source].fill(f32::NEG_INFINITY);
+            let expected_unassigned_neighbor = LeafNeighbor::default();
+
+            // When
+            let actual_neighbors = with_rank_leaf_dots_fixture::<L2, _>(
+                &gram,
+                point_count,
+                requested_k,
+                |input, norms, output, farthest_distances| {
+                    rank_leaf_dots::<_, L2>(
+                        diskann_wide::ARCH,
+                        input,
+                        norms,
+                        output,
+                        farthest_distances,
+                    )
+                },
+            )
+            .unwrap();
+
+            // Then
+            assert_eq!(
+                actual_neighbors[source * requested_k],
+                expected_unassigned_neighbor
+            );
+        }
+
         #[rstest]
+        #[case::l2(Metric::L2, 2.0)]
+        #[case::cosine(Metric::Cosine, 1.0)]
         #[case::normalized_cosine(Metric::CosineNormalized, 1.0)]
         #[case::inner_product(Metric::InnerProduct, -0.0)]
         fn simd_nan_distance_cannot_replace_a_finite_neighbor(

@@ -723,7 +723,7 @@ mod tests {
         }
 
         #[test]
-        fn nan_leader_does_not_displace_finite_leaders() {
+        fn nan_leader_does_not_displace_finite_leaders_with_inner_product() {
             // Given
             let point_count = 1;
             let leader_count = 3;
@@ -749,6 +749,66 @@ mod tests {
 
             // Then
             assert_eq!(actual_assignments, expected_finite_leaders);
+        }
+
+        #[test]
+        fn nan_leader_does_not_displace_finite_leaders_with_cosine() {
+            // Given
+            let point_count = 1;
+            let leader_count = 3;
+            let nearest_leader_count = 2;
+            let dots = [f32::NAN, 0.75, 0.5];
+            let point_norms = [1.0];
+            let leader_norms = [1.0; 3];
+            let expected_finite_leaders = [1, 2];
+
+            let input = partition_input(
+                &dots,
+                point_count,
+                leader_count,
+                &point_norms,
+                &leader_norms,
+            );
+
+            // When
+            let actual_assignments = with_rank_leader_dots_fixture(
+                input,
+                nearest_leader_count,
+                |input, output, ranked_leaders| {
+                    rank_leader_dots::<_, Cosine>(
+                        diskann_wide::ARCH,
+                        input,
+                        output,
+                        ranked_leaders,
+                    );
+                },
+            );
+
+            // Then
+            assert_eq!(actual_assignments, expected_finite_leaders);
+        }
+
+        #[test]
+        fn zero_output_width_leaves_ranked_leaders_unchanged() {
+            // Given
+            let dot_products = [0.0];
+            let leader_squared_norms = [1.0];
+            let input = partition_input(&dot_products, 1, 1, &[], &leader_squared_norms);
+            let mut no_assignments = [];
+            let output = MutMatrixView::try_from(&mut no_assignments[..], 1, 0).unwrap();
+            let expected_ranked_leaders = vec![(7, 0.25)];
+            let mut actual_ranked_leaders = expected_ranked_leaders.clone();
+
+            // When
+            rank_leader_dots::<_, L2>(
+                diskann_wide::ARCH,
+                input,
+                output,
+                &mut actual_ranked_leaders,
+            );
+
+            // Then
+            assert_eq!(actual_ranked_leaders, expected_ranked_leaders);
         }
 
         #[test]
