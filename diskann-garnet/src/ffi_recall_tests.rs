@@ -10,8 +10,8 @@ mod tests {
     use diskann_vector::distance::{Cosine, Metric, SquaredL2};
 
     use crate::{
-        VectorQuantType, create_index, drop_index, garnet::Context, insert, search_vector,
-        test_utils::Store,
+        Continuation, VectorQuantType, create_index, drop_index, garnet::Context, insert,
+        search_vector, test_utils::Store,
     };
 
     /// Helper to insert a vector with a string external ID and FP32 data.
@@ -197,13 +197,13 @@ mod tests {
         let delta = 2.0_f32;
         let search_exploration_factor = 200_u32;
         let max_filtering_effort = 0_usize;
-        let continuation = ptr::null_mut();
 
         for vec in vectors {
             let query_bytes: &[u8] = bytemuck::cast_slice(vec);
             let max_id_size = mem::size_of::<u32>() + max_id_len;
             let mut output_id_buffer = vec![0u8; k * max_id_size];
             let mut output_dists = vec![0f32; k];
+            let mut continuation = ptr::null_mut();
 
             let count = unsafe {
                 search_vector(
@@ -221,7 +221,7 @@ mod tests {
                     output_dists.as_mut_ptr(),
                     output_dists.len(),
                     1,
-                    continuation,
+                    &mut continuation,
                 )
             };
             assert!(count >= 0, "search failed");
@@ -238,6 +238,10 @@ mod tests {
             );
             total_matches += matches;
             total_expected += expected_ids.len();
+
+            if !continuation.is_null() {
+                unsafe { drop(Continuation::from_ptr(continuation)) };
+            }
         }
 
         unsafe { drop_index(ctx.get(), index_ptr) };

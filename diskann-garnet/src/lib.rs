@@ -117,27 +117,42 @@ pub enum VectorQuantType {
 
 /// Helper struct to manage the FFI buffers for handling search results
 ///
-/// NOTE: The ids will be 4-byte length prefixed, and external IDs are arbitrary length
-/// byte strings.
+/// If the supplied buffers from Garnet aren't large enough, `overflow_ids` and
+/// `overflow_dists` will allocate enough space to store the remainining entries
+/// so they can be fetched by Garnet later.
+///
+/// Having overflow allocations means we don't allocate extra until actually
+/// needed. Short result sets can happen without allocation.
+///
+/// NOTE: The ids will be 4-byte length prefixed, and external IDs are arbitrary
+/// length byte strings.
 struct SearchResults<'a> {
+    k: usize,
     ids: &'a mut [u8],
     dists: &'a mut [f32],
     index: usize,
     id_index: usize,
+    overflow_ids: Vec<u8>,
+    overflow_dists: Vec<f32>,
 }
 
 impl SearchResults<'_> {
     /// Construct from the raw pointers
-    fn new(ids: *mut u8, ids_len: usize, dists: *mut f32, dists_len: usize) -> Self {
+    fn new(k: usize, ids: *mut u8, ids_len: usize, dists: *mut f32, dists_len: usize) -> Self {
         let ids = unsafe { slice::from_raw_parts_mut(ids, ids_len) };
         let dists = unsafe { slice::from_raw_parts_mut(dists, dists_len) };
         let index = 0;
         let id_index = 0;
+        let overflow_ids = Vec::new();
+        let overflow_dists = Vec::new();
         Self {
+            k,
             ids,
             dists,
             index,
             id_index,
+            overflow_ids,
+            overflow_dists,
         }
     }
 
@@ -146,20 +161,43 @@ impl SearchResults<'_> {
     fn push_id(&mut self, id: GarnetId) -> diskann::graph::BufferState {
         self.push(Neighbor::new(id, 0.0))
     }
+
+    fn overflowing(&self) -> bool {
+        !self.overflow_ids.is_empty()
+    }
+
+    fn into_overflows(self) -> (Vec<u8>, Vec<f32>) {
+        (self.overflow_ids, self.overflow_dists)
+    }
+
+    fn is_full(&self) -> bool {
+        self.index + self.overflow_dists.len() >= self.k
+    }
 }
 
 impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
     fn size_hint(&self) -> Option<usize> {
-        Some(self.dists.len() - self.index)
+        Some(self.k - self.index - self.overflow_dists.len())
     }
 
     fn push(&mut self, neighbor: Neighbor<GarnetId>) -> diskann::graph::BufferState {
         let (id, distance) = neighbor.as_tuple();
 
-        if self.index >= self.dists.len()
+        if self.is_full() {
+            return diskann::graph::BufferState::Full;
+        } else if self.overflowing()
+            || self.index >= self.dists.len()
             || self.id_index + mem::size_of::<u32>() + id.len() > self.ids.len()
         {
-            return diskann::graph::BufferState::Full;
+            self.overflow_ids
+                .extend_from_slice(id.as_prefixed_key_bytes());
+            self.overflow_dists.push(distance);
+
+            if self.is_full() {
+                return diskann::graph::BufferState::Full;
+            } else {
+                return diskann::graph::BufferState::Available;
+            }
         }
 
         let id_len = id.len() as u32;
@@ -172,7 +210,7 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
         self.index += 1;
         self.id_index += id.len();
 
-        if self.index >= self.dists.len() || self.id_index >= self.ids.len() {
+        if self.is_full() {
             diskann::graph::BufferState::Full
         } else {
             diskann::graph::BufferState::Available
@@ -674,7 +712,117 @@ pub unsafe extern "C" fn set_attribute(
     true
 }
 
+/// Search continuation container.
+///
+/// This will be boxed and a pointer given to Garnet in order to signal that more results than
+/// fit in the provided buffer are available. Garnet will hand this back along with new
+/// results buffers to access more results. `drain()` is used to fill those buffers and
+/// update the continuation.
+pub struct Continuation {
+    index: usize,
+    id_index: usize,
+    id_buffer: Vec<u8>,
+    dist_buffer: Vec<f32>,
+}
+
+impl Continuation {
+    /// Construct a new `Box<Continuation>` from the overflow buffers
+    pub fn new(id_buffer: Vec<u8>, dist_buffer: Vec<f32>) -> Box<Self> {
+        let index = 0;
+        let id_index = 0;
+        Box::new(Self {
+            index,
+            id_index,
+            id_buffer,
+            dist_buffer,
+        })
+    }
+
+    /// Turn a raw pointer back into `Box<Continuation>`
+    ///
+    /// # SAFETY
+    ///
+    /// This must only be called once on the pointer.
+    pub unsafe fn from_ptr(ptr: *mut c_void) -> Box<Self> {
+        unsafe { Box::from_raw(ptr as *mut Continuation) }
+    }
+
+    /// Turn a `Box<Continuation>` into a raw pointer, leaking the memory.
+    ///
+    /// To free the memory, `from_ptr()` must be used to turn it back into a Box which can then
+    /// be dropped normally.
+    pub fn into_ptr(self: Box<Self>) -> *mut c_void {
+        Box::into_raw(self) as *mut c_void
+    }
+
+    /// Drains the continuation buffers into the provided `ids` and `dists` buffers.
+    ///
+    /// Returns the amount drained.
+    pub fn drain(&mut self, ids: &mut [u8], dists: &mut [f32]) -> usize {
+        let mut index = 0;
+        let mut id_index = 0;
+
+        // Scan `id_buffer` until we reach the first id that doesn't fit because one of the
+        // buffers is full.
+        let mut count = 0;
+        let prefix_len = mem::size_of::<u32>();
+        while index < dists.len()
+            && id_index < ids.len()
+            && self.index < self.dist_buffer.len()
+            && self.id_index < self.id_buffer.len()
+        {
+            // Read length prefix
+            if id_index + prefix_len > ids.len() {
+                break;
+            }
+            let mut len = 0u32;
+            bytemuck::bytes_of_mut(&mut len)
+                .copy_from_slice(&self.id_buffer[self.id_index..self.id_index + prefix_len]);
+
+            // We check there is room before advancing the indices
+            if id_index + prefix_len + len as usize > ids.len() {
+                break;
+            }
+
+            // Copy length prefix
+            ids[id_index..id_index + prefix_len]
+                .copy_from_slice(&self.id_buffer[self.id_index..self.id_index + prefix_len]);
+
+            id_index += prefix_len;
+            self.id_index += prefix_len;
+
+            // Copy ID
+
+            ids[id_index..id_index + len as usize]
+                .copy_from_slice(&self.id_buffer[self.id_index..self.id_index + len as usize]);
+
+            id_index += len as usize;
+            self.id_index += len as usize;
+
+            // Copy the distance
+            dists[index] = self.dist_buffer[self.index];
+            index += 1;
+            self.index += 1;
+
+            count += 1;
+        }
+
+        count
+    }
+
+    /// Determines whether the continuation is finished
+    pub fn is_empty(&self) -> bool {
+        self.index >= self.dist_buffer.len()
+    }
+}
+
 /// Search the closest vectors to the given query vector.
+///
+/// The k value for the search is implied by `output_distances_len`. The output
+/// distances buffer will be correctly sized for k, but because IDs are variable
+/// length, the output_ids buffer may be too small. If that happens, a continuation
+/// will be returned so that Garnet can use `continue_search` to fetch the
+/// remaining results.
 ///
 /// # Safety
 ///
@@ -695,7 +843,7 @@ pub unsafe extern "C" fn search_vector(
     output_distances: *mut f32,
     output_distances_len: usize,
     beam_width: u32,
-    _continuation: *mut c_void,
+    continuation: *mut *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
 
@@ -708,6 +856,7 @@ pub unsafe extern "C" fn search_vector(
     let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
+        output_distances_len,
         output_ids,
         output_ids_len,
         output_distances,
@@ -743,7 +892,22 @@ pub unsafe extern "C" fn search_vector(
         if stats.result_count > i32::MAX as u32 {
             -1
         } else {
-            stats.result_count as i32
+            let count = output.current_len();
+
+            if continuation.is_null() {
+                index.inner.log(&ctx, "continuation argument was null");
+                return -1;
+            }
+
+            if output.overflowing() {
+                let (id_buffer, dist_buffer) = output.into_overflows();
+                let cont = Continuation::new(id_buffer, dist_buffer);
+                unsafe { continuation.write(cont.into_ptr()) };
+            } else {
+                unsafe { continuation.write(ptr::null_mut()) };
+            }
+
+            count as i32
         }
     } else {
         -1
@@ -751,6 +915,8 @@ pub unsafe extern "C" fn search_vector(
 }
 
 /// Search the closest vectors to the given existing vector in the index.
+///
+/// This is a thin wrapper around `search_vector`, so see its documentation for more details.
 ///
 /// # Safety
 ///
@@ -771,7 +937,7 @@ pub unsafe extern "C" fn search_element(
     output_distances: *mut f32,
     output_distances_len: usize,
     beam_width: u32,
-    _continuation: *mut c_void,
+    continuation: *mut *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
@@ -779,6 +945,7 @@ pub unsafe extern "C" fn search_element(
     let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
+        output_distances_len,
         output_ids,
         output_ids_len,
         output_distances,
@@ -817,7 +984,22 @@ pub unsafe extern "C" fn search_element(
         if stats.result_count > i32::MAX as u32 {
             -1
         } else {
-            stats.result_count as i32
+            let count = output.current_len();
+
+            if continuation.is_null() {
+                index.inner.log(&ctx, "continuation argument was null");
+                return -1;
+            }
+
+            if output.overflowing() {
+                let (id_buffer, dist_buffer) = output.into_overflows();
+                let cont = Continuation::new(id_buffer, dist_buffer);
+                unsafe { continuation.write(cont.into_ptr()) };
+            } else {
+                unsafe { continuation.write(ptr::null_mut()) };
+            }
+
+            count as i32
         }
     } else {
         -1
@@ -826,25 +1008,53 @@ pub unsafe extern "C" fn search_element(
 
 /// Continue getting results for a previously executed search.
 ///
-/// NOTE: This is currently unimplemented.
-///
 /// Positive return values are the count of vectors returned. `-1` will be returned on errors.
+/// If further continuation is needed, `new_continuation` will be set to a new continuation
+/// pointer.
 ///
 /// # Safety
 ///
 /// FFI
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn continue_search(
-    _context: u64,
-    _index_ptr: *const c_void,
-    _continuation: *mut c_void,
-    _output_ids: *mut u8,
-    _output_ids_len: usize,
-    _output_distances: *mut f32,
-    _output_distances_len: usize,
-    _new_continuation: *mut c_void,
+    ctx: u64,
+    index_ptr: *const c_void,
+    continuation: *mut c_void,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+    output_distances: *mut f32,
+    output_distances_len: usize,
+    new_continuation: *mut *mut c_void,
 ) -> i32 {
-    -1
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    if continuation.is_null() {
+        index.inner.log(&ctx, "continuation argument was null");
+        if !new_continuation.is_null() {
+            unsafe { new_continuation.write(ptr::null_mut()) };
+        }
+        return -1;
+    }
+
+    if new_continuation.is_null() {
+        index.inner.log(&ctx, "new_continuation argument was null");
+        return -1;
+    }
+
+    let output_ids = unsafe { slice::from_raw_parts_mut(output_ids, output_ids_len) };
+    let output_distances =
+        unsafe { slice::from_raw_parts_mut(output_distances, output_distances_len) };
+    let mut continuation = unsafe { Continuation::from_ptr(continuation) };
+    let count = continuation.drain(output_ids, output_distances);
+
+    if !continuation.is_empty() {
+        unsafe { new_continuation.write(continuation.into_ptr()) };
+    } else {
+        unsafe { new_continuation.write(ptr::null_mut()) };
+    }
+
+    count as i32
 }
 
 /// Remove a vector from the index.
@@ -957,6 +1167,7 @@ pub unsafe extern "C" fn random_members(
     // Dummy buffer for distances
     let mut output_distances = vec![0f32; output_ids_len / 5];
     let mut output = SearchResults::new(
+        count as usize,
         output_ids,
         output_ids_len,
         output_distances.as_mut_ptr(),
@@ -986,7 +1197,7 @@ pub unsafe extern "C" fn search_neighbors(
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
-    _continuation: *mut c_void,
+    continuation: *mut *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(ctx);
@@ -994,6 +1205,7 @@ pub unsafe extern "C" fn search_neighbors(
     let id = GarnetId::from(id_bytes);
 
     let mut output = SearchResults::new(
+        index.inner.max_degree(),
         output_ids,
         output_ids_len,
         output_distances,
@@ -1006,7 +1218,21 @@ pub unsafe extern "C" fn search_neighbors(
 
     output.extend(neighbors);
 
-    output.current_len() as i32
+    if continuation.is_null() {
+        index.inner.log(&ctx, "continuation argument was null");
+        return -1;
+    }
+
+    let count = output.current_len();
+    if output.overflowing() {
+        let (id_buffer, dist_buffer) = output.into_overflows();
+        let cont = Continuation::new(id_buffer, dist_buffer);
+        unsafe { continuation.write(cont.into_ptr()) };
+    } else {
+        unsafe { continuation.write(ptr::null_mut()) };
+    }
+
+    count as i32
 }
 
 #[cfg(test)]
@@ -1042,7 +1268,7 @@ mod tests {
         let dists_buffer = dists.as_mut_ptr();
         let dists_len = dists.len();
 
-        let mut sr = SearchResults::new(ids_buffer, ids_len, dists_buffer, dists_len);
+        let mut sr = SearchResults::new(5, ids_buffer, ids_len, dists_buffer, dists_len);
 
         assert_eq!(sr.size_hint(), Some(5));
 
@@ -1084,6 +1310,69 @@ mod tests {
             )),
             BufferState::Full
         );
+    }
+
+    #[test]
+    fn continue_search() {
+        let first_id = b"first";
+        let second_id = b"second";
+        let mut continuation_ids = Vec::new();
+        continuation_ids.extend_from_slice(bytemuck::bytes_of(&(first_id.len() as u32)));
+        continuation_ids.extend_from_slice(first_id);
+        continuation_ids.extend_from_slice(bytemuck::bytes_of(&(second_id.len() as u32)));
+        continuation_ids.extend_from_slice(second_id);
+
+        let continuation = super::Continuation::new(continuation_ids, vec![1.25, 2.5]).into_ptr();
+        let mut next_continuation = ptr::null_mut();
+        let mut output_ids = vec![0u8; mem::size_of::<u32>() + first_id.len()];
+        let mut output_distances = [0.0f32; 1];
+
+        let count = unsafe {
+            super::continue_search(
+                0,
+                ptr::null(),
+                continuation,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                &mut next_continuation,
+            )
+        };
+
+        assert_eq!(count, 1);
+        assert_eq!(
+            output_ids[..mem::size_of::<u32>()],
+            (first_id.len() as u32).to_le_bytes()
+        );
+        assert_eq!(&output_ids[mem::size_of::<u32>()..], first_id);
+        assert_eq!(output_distances, [1.25]);
+        assert!(!next_continuation.is_null());
+
+        let mut final_continuation = ptr::null_mut();
+        let mut output_ids = vec![0u8; mem::size_of::<u32>() + second_id.len()];
+        let mut output_distances = [0.0f32; 1];
+        let count = unsafe {
+            super::continue_search(
+                0,
+                ptr::null(),
+                next_continuation,
+                output_ids.as_mut_ptr(),
+                output_ids.len(),
+                output_distances.as_mut_ptr(),
+                output_distances.len(),
+                &mut final_continuation,
+            )
+        };
+
+        assert_eq!(count, 1);
+        assert_eq!(
+            output_ids[..mem::size_of::<u32>()],
+            (second_id.len() as u32).to_le_bytes()
+        );
+        assert_eq!(&output_ids[mem::size_of::<u32>()..], second_id);
+        assert_eq!(output_distances, [2.5]);
+        assert!(final_continuation.is_null());
     }
 
     fn check_create_index(quant_type: VectorQuantType) {
@@ -1497,6 +1786,7 @@ mod tests {
         let bad_id = GarnetId::from(bytemuck::bytes_of(&250u32));
 
         // check the good case
+        let mut continuation = ptr::null_mut();
         let count = unsafe {
             super::search_neighbors(
                 ctx.get(),
@@ -1507,11 +1797,12 @@ mod tests {
                 output_ids.len() * mem::size_of::<u32>(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                &mut continuation,
             )
         };
 
         assert!(count > 0 && count <= 8, "count = {count}");
+        assert!(continuation.is_null());
 
         for i in 0..count as usize {
             assert_eq!(output_ids[i * 2], 4);
@@ -1519,6 +1810,7 @@ mod tests {
             assert!(output_dists[i] < f32::MAX);
         }
 
+        let mut continuation = ptr::null_mut();
         let count = unsafe {
             super::search_neighbors(
                 ctx.get(),
@@ -1529,10 +1821,11 @@ mod tests {
                 output_ids.len() * mem::size_of::<u32>(),
                 output_dists.as_mut_ptr(),
                 output_dists.len(),
-                ptr::null_mut(),
+                &mut continuation,
             )
         };
 
         assert!(count < 0);
+        assert!(continuation.is_null());
     }
 }
