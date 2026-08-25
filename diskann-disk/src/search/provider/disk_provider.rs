@@ -46,6 +46,45 @@ use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
 use tracing::debug;
 
+#[cfg(feature = "mimir-benchmark-tracing")]
+macro_rules! benchmark_trace_span {
+    ($($fields:tt)*) => {
+        tracing::trace_span!($($fields)*)
+    };
+}
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+macro_rules! benchmark_trace_span {
+    ($($fields:tt)*) => {
+        BenchmarkSpan
+    };
+}
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+struct BenchmarkSpan;
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+struct BenchmarkSpanGuard;
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+impl BenchmarkSpan {
+    fn enter(&self) -> BenchmarkSpanGuard {
+        BenchmarkSpanGuard
+    }
+
+    fn record<T>(&self, _field: &str, _value: T) {}
+}
+
+#[cfg(feature = "mimir-benchmark-tracing")]
+fn benchmark_tracing_enabled() -> bool {
+    tracing::enabled!(tracing::Level::TRACE)
+}
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+fn benchmark_tracing_enabled() -> bool {
+    false
+}
+
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
     search::{
@@ -252,10 +291,111 @@ where
 
 // Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
 // There should be minimal to no overhead compared to using a raw reference.
+#[cfg(feature = "mimir-benchmark-tracing")]
+#[derive(Default)]
+struct BenchmarkSearchMetrics {
+    expand_time_us: AtomicU64,
+    pq_time_us: AtomicU64,
+    read_time_us: AtomicU64,
+    materialize_time_us: AtomicU64,
+    beam_count: AtomicUsize,
+    neighbor_count: AtomicUsize,
+}
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[derive(Default)]
+struct BenchmarkSearchMetrics;
+
+#[cfg(feature = "mimir-benchmark-tracing")]
+impl BenchmarkSearchMetrics {
+    fn record_expand(&self, expand_time_us: u64, neighbor_count: usize) {
+        IOTracker::add_time(&self.expand_time_us, expand_time_us);
+        self.beam_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.neighbor_count
+            .fetch_add(neighbor_count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn record_pq_time(&self, pq_time_us: u64) {
+        IOTracker::add_time(&self.pq_time_us, pq_time_us);
+    }
+
+    fn record_vertex_load(&self, timings: VertexLoadTimings) {
+        IOTracker::add_time(&self.read_time_us, timings.read_us);
+        IOTracker::add_time(&self.materialize_time_us, timings.materialize_us);
+    }
+
+    fn time(category: &AtomicU64) -> u64 {
+        category.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn count(category: &AtomicUsize) -> usize {
+        category.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn beam_count(&self) -> usize {
+        Self::count(&self.beam_count)
+    }
+
+    fn neighbor_count(&self) -> usize {
+        Self::count(&self.neighbor_count)
+    }
+
+    fn expand_time_us(&self) -> u64 {
+        Self::time(&self.expand_time_us)
+    }
+
+    fn pq_time_us(&self) -> u64 {
+        Self::time(&self.pq_time_us)
+    }
+
+    fn read_time_us(&self) -> u64 {
+        Self::time(&self.read_time_us)
+    }
+
+    fn materialize_time_us(&self) -> u64 {
+        Self::time(&self.materialize_time_us)
+    }
+}
+
+#[cfg(not(feature = "mimir-benchmark-tracing"))]
+impl BenchmarkSearchMetrics {
+    fn record_expand(&self, _expand_time_us: u64, _neighbor_count: usize) {}
+
+    fn record_pq_time(&self, _pq_time_us: u64) {}
+
+    fn record_vertex_load(&self, _timings: VertexLoadTimings) {}
+
+    fn beam_count(&self) -> usize {
+        0
+    }
+
+    fn neighbor_count(&self) -> usize {
+        0
+    }
+
+    fn expand_time_us(&self) -> u64 {
+        0
+    }
+
+    fn pq_time_us(&self) -> u64 {
+        0
+    }
+
+    fn read_time_us(&self) -> u64 {
+        0
+    }
+
+    fn materialize_time_us(&self) -> u64 {
+        0
+    }
+}
+
 struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
     io_count: AtomicUsize,
+    benchmark: BenchmarkSearchMetrics,
 }
 
 impl Default for IOTracker {
@@ -264,6 +404,7 @@ impl Default for IOTracker {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
             io_count: AtomicUsize::new(0),
+            benchmark: BenchmarkSearchMetrics::default(),
         }
     }
 }
@@ -346,11 +487,26 @@ where
             + Send
             + ?Sized,
     {
+        let trace_enabled = benchmark_tracing_enabled();
+        let rerank_span = benchmark_trace_span!(
+            "diskann_rerank",
+            candidates = tracing::field::Empty,
+            uncached_candidates = tracing::field::Empty,
+            result_count = tracing::field::Empty,
+            vertex_read_time_us = tracing::field::Empty,
+            vertex_materialize_time_us = tracing::field::Empty,
+        );
+        let _rerank_guard = rerank_span.enter();
         let provider = accessor.provider;
 
+        let mut candidate_count = 0usize;
         let mut uncached_ids = Vec::new();
+        let mut rerank_load_timings = VertexLoadTimings::default();
         let mut reranked = {
             let mut process = |n: u32| {
+                if trace_enabled {
+                    candidate_count += 1;
+                }
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
                     Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
                 } else {
@@ -371,7 +527,8 @@ where
             }
         };
         if !uncached_ids.is_empty() {
-            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            rerank_load_timings =
+                ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
             for n in &uncached_ids {
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
                 let d = provider.distance_comparer.evaluate_similarity(query, v);
@@ -384,7 +541,18 @@ where
         reranked
             .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
-        Ok(output.extend(reranked))
+        let result_count = output.extend(reranked);
+        if trace_enabled {
+            rerank_span.record("candidates", candidate_count as u64);
+            rerank_span.record("uncached_candidates", uncached_ids.len() as u64);
+            rerank_span.record("result_count", result_count as u64);
+            rerank_span.record("vertex_read_time_us", rerank_load_timings.read_us);
+            rerank_span.record(
+                "vertex_materialize_time_us",
+                rerank_load_timings.materialize_us,
+            );
+        }
+        Ok(result_count)
     }
 }
 
@@ -635,6 +803,7 @@ where
         F: FnMut(f32, u32),
     {
         let pq_scratch = &mut self.scratch.pq_scratch;
+        let pq_timer = benchmark_tracing_enabled().then(Instant::now);
         compute_pq_distance(
             ids,
             self.provider.pq_data.get_num_chunks(),
@@ -643,6 +812,11 @@ where
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;
+        if let Some(pq_timer) = pq_timer {
+            self.io_tracker
+                .benchmark
+                .record_pq_time(pq_timer.elapsed().as_micros() as u64);
+        }
 
         for (i, id) in ids.iter().enumerate() {
             let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
@@ -693,9 +867,12 @@ where
         let result = (|| {
             let io_limit = self.provider.search_io_limit - self.io_tracker.io_count();
             let load_ids: Box<[_]> = ids.take(io_limit).collect();
+            let trace_enabled = benchmark_tracing_enabled();
+            let expand_timer = trace_enabled.then(Instant::now);
 
             self.ensure_loaded(&load_ids)?;
             let mut ids = Vec::new();
+            let mut neighbor_count = 0usize;
             for i in load_ids {
                 ids.clear();
                 ids.extend(
@@ -707,7 +884,14 @@ where
                         .filter(|id| pred.eval_mut(id)),
                 );
 
+                neighbor_count += ids.len();
                 self.pq_distances(&ids, &mut |dist, id| f(id, dist))?;
+            }
+            if trace_enabled {
+                self.io_tracker.benchmark.record_expand(
+                    expand_timer.map_or(0, |timer| timer.elapsed().as_micros() as u64),
+                    neighbor_count,
+                );
             }
 
             Ok(())
@@ -736,6 +920,14 @@ where
     where
         VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
     {
+        let trace_enabled = benchmark_tracing_enabled();
+        let prepare_span = benchmark_trace_span!(
+            "diskann_prepare_query",
+            query_dimensions = query.len() as u64,
+            pq_chunks = provider.pq_data.get_num_chunks() as u64,
+            preprocess_us = tracing::field::Empty,
+        );
+        let _prepare_guard = prepare_span.enter();
         let mut scratch = PoolOption::try_pooled(
             scratch_pool,
             &DiskSearchScratchArgs {
@@ -760,10 +952,11 @@ where
             provider.metric,
             &[start_vertex_id],
         )?;
-        IOTracker::add_time(
-            &io_tracker.preprocess_time_us,
-            timer.elapsed().as_micros() as u64,
-        );
+        let preprocess_us = timer.elapsed().as_micros() as u64;
+        IOTracker::add_time(&io_tracker.preprocess_time_us, preprocess_us);
+        if trace_enabled {
+            prepare_span.record("preprocess_us", preprocess_us);
+        }
 
         Ok(Self {
             provider,
@@ -777,14 +970,10 @@ where
         if ids.is_empty() {
             return Ok(());
         }
-        let scratch = &mut self.scratch;
         let timer = Instant::now();
-        ensure_vertex_loaded(&mut scratch.vertex_provider, ids)?;
-        IOTracker::add_time(
-            &self.io_tracker.io_time_us,
-            timer.elapsed().as_micros() as u64,
-        );
-        self.io_tracker.add_io_count(ids.len());
+        let timings = ensure_vertex_loaded(&mut self.scratch.vertex_provider, ids)?;
+        self.record_vertex_load(ids.len(), timer.elapsed().as_micros() as u64, timings);
+        let scratch = &mut self.scratch;
         for id in ids {
             let distance = self
                 .provider
@@ -796,6 +985,12 @@ where
                 .insert(*id, (distance, associated_data));
         }
         Ok(())
+    }
+
+    fn record_vertex_load(&self, vertex_count: usize, total_us: u64, timings: VertexLoadTimings) {
+        IOTracker::add_time(&self.io_tracker.io_time_us, total_us);
+        self.io_tracker.add_io_count(vertex_count);
+        self.io_tracker.benchmark.record_vertex_load(timings);
     }
 }
 
@@ -1105,108 +1300,185 @@ where
         associated_data: &mut [Data::AssociatedDataType],
         mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
-        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
-            &mut indices[..k_value],
-            &mut distances[..k_value],
-            &mut associated_data[..k_value],
+        let trace_enabled = benchmark_tracing_enabled();
+        let search_span = benchmark_trace_span!(
+            "diskann_search_internal",
+            query_dimensions = query.len() as u64,
+            k = k_value as u64,
+            l = search_list_size as u64,
+            beam_width = beam_width.unwrap_or(1) as u64,
+            io_limit = self.index.provider().search_io_limit as u64,
+            result_count = tracing::field::Empty,
+            comparisons = tracing::field::Empty,
+            hops = tracing::field::Empty,
+            traversal_io_operations = tracing::field::Empty,
+            traversal_vertex_load_time_us = tracing::field::Empty,
+            preprocess_time_us = tracing::field::Empty,
+            traversal_non_vertex_load_wall_time_us = tracing::field::Empty,
+            beam_expansions = tracing::field::Empty,
+            neighbors_considered = tracing::field::Empty,
+            expand_wall_time_us = tracing::field::Empty,
+            pq_time_us = tracing::field::Empty,
+            traversal_vertex_read_time_us = tracing::field::Empty,
+            traversal_vertex_materialize_time_us = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            error_category = tracing::field::Empty,
         );
+        let _search_guard = search_span.enter();
+        let result: ANNResult<SearchResultStats> = (|| {
+            let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
+                &mut indices[..k_value],
+                &mut distances[..k_value],
+                &mut associated_data[..k_value],
+            );
 
-        let timer = Instant::now();
-        let k = k_value;
-        let l = search_list_size as usize;
+            let timer = Instant::now();
+            let k = k_value;
+            let l = search_list_size as usize;
 
-        let io_tracker = IOTracker::default();
+            let io_tracker = IOTracker::default();
 
-        // * `FlatScan`     — `flat_search` filters the scan iterator at
-        //                    construction; non-matching IDs never enter `best`.
-        // * `Graph`        — plain greedy traversal doesn't consult any predicate;
-        //                    if a predicate is set, `RerankAndFilter` filters out
-        //                    non-matching nodes at rerank time.
-        // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept` nodes
-        //                    into `matched_results`; no filtering in post-process.
-        // * `DiverseGraph` — `index.search_with` runs `DeterminantDiversityAndFilter`
-        //                    as the post-processor over the L candidate pool.
-        let stats = match mode {
-            SearchMode::FlatScan { filter } => {
-                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
-                self.runtime.block_on(self.flat_search(
-                    &strategy,
-                    query,
-                    filter.as_deref(),
-                    l,
-                    &mut result_output_buffer,
-                ))?
-            }
-            SearchMode::Graph { filter } => {
-                let strategy = self.search_strategy(
-                    &io_tracker,
-                    filter
+            // * `FlatScan`     — `flat_search` filters the scan iterator at
+            //                    construction; non-matching IDs never enter `best`.
+            // * `Graph`        — plain greedy traversal doesn't consult any predicate;
+            //                    if a predicate is set, `RerankAndFilter` filters out
+            //                    non-matching nodes at rerank time.
+            // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept` nodes
+            //                    into `matched_results`; no filtering in post-process.
+            // * `DiverseGraph` — `index.search_with` runs `DeterminantDiversityAndFilter`
+            //                    as the post-processor over the L candidate pool.
+            let stats = match mode {
+                SearchMode::FlatScan { filter } => {
+                    let strategy =
+                        self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                    self.runtime.block_on(self.flat_search(
+                        &strategy,
+                        query,
+                        filter.as_deref(),
+                        l,
+                        &mut result_output_buffer,
+                    ))?
+                }
+                SearchMode::Graph { filter } => {
+                    let strategy = self.search_strategy(
+                        &io_tracker,
+                        filter
+                            .as_deref()
+                            .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                    );
+                    let knn_search = Knn::new(k, l, beam_width)?;
+                    self.runtime.block_on(self.index.search(
+                        knn_search,
+                        &strategy,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ))?
+                }
+                SearchMode::InlineFilter { filter, adaptive_l } => {
+                    // Strategy is passed by value into `filter_search` so that the
+                    // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
+                    // its counters reachable from this scope.
+                    let strategy =
+                        self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
+                    let knn_search = Knn::new(k, l, beam_width)?;
+                    self.runtime.block_on(self.filter_search(
+                        strategy,
+                        query,
+                        knn_search,
+                        filter.as_ref(),
+                        adaptive_l.clone(),
+                        &mut result_output_buffer,
+                    ))?
+                }
+                SearchMode::DiverseGraph { filter, params } => {
+                    // Strategy installs the filter so `RerankAndFilter` would also
+                    // honor it, but the active post-processor here is the
+                    // diversity selector built from `DiskSearchPostProcessor`.
+                    let postprocess_config = filter
                         .as_deref()
-                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
-                );
-                let knn_search = Knn::new(k, l, beam_width)?;
-                self.runtime.block_on(self.index.search(
-                    knn_search,
-                    &strategy,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
-            }
-            SearchMode::InlineFilter { filter, adaptive_l } => {
-                // Strategy is passed by value into `filter_search` so that the
-                // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
-                // its counters reachable from this scope.
-                let strategy = self.search_strategy(&io_tracker, PostprocessStrategy::AcceptAll);
-                let knn_search = Knn::new(k, l, beam_width)?;
-                self.runtime.block_on(self.filter_search(
-                    strategy,
-                    query,
-                    knn_search,
-                    filter.as_ref(),
-                    adaptive_l.clone(),
-                    &mut result_output_buffer,
-                ))?
-            }
-            SearchMode::DiverseGraph { filter, params } => {
-                // Strategy installs the filter so `RerankAndFilter` would also
-                // honor it, but the active post-processor here is the
-                // diversity selector built from `DiskSearchPostProcessor`.
-                let postprocess_config = filter
-                    .as_deref()
-                    .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
-                let strategy = self.search_strategy(&io_tracker, postprocess_config);
-                let knn_search = Knn::new(k, l, beam_width)?;
-                let processor = DiskSearchPostProcessor::DeterminantDiversity(
-                    DeterminantDiversityAndFilter::new(postprocess_config, *params),
-                );
-                self.runtime.block_on(self.index.search_with(
-                    knn_search,
-                    &strategy,
-                    processor,
-                    &DefaultContext,
-                    query,
-                    &mut result_output_buffer,
-                ))?
-            }
-        };
-        query_stats.total_comparisons = stats.cmps;
-        query_stats.search_hops = stats.hops;
+                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
+                    let strategy = self.search_strategy(&io_tracker, postprocess_config);
+                    let knn_search = Knn::new(k, l, beam_width)?;
+                    let processor = DiskSearchPostProcessor::DeterminantDiversity(
+                        DeterminantDiversityAndFilter::new(postprocess_config, *params),
+                    );
+                    self.runtime.block_on(self.index.search_with(
+                        knn_search,
+                        &strategy,
+                        processor,
+                        &DefaultContext,
+                        query,
+                        &mut result_output_buffer,
+                    ))?
+                }
+            };
+            query_stats.total_comparisons = stats.cmps;
+            query_stats.search_hops = stats.hops;
 
-        query_stats.total_execution_time_us = timer.elapsed().as_micros();
-        query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
-        query_stats.total_io_operations = io_tracker.io_count() as u32;
-        query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
-        query_stats.query_pq_preprocess_time_us =
-            IOTracker::time(&io_tracker.preprocess_time_us) as u128;
-        query_stats.cpu_time_us = query_stats.total_execution_time_us
-            - query_stats.io_time_us
-            - query_stats.query_pq_preprocess_time_us;
-        Ok(SearchResultStats {
-            cmps: query_stats.total_comparisons,
-            result_count: stats.result_count,
-            query_statistics: query_stats.clone(),
-        })
+            query_stats.total_execution_time_us = timer.elapsed().as_micros();
+            query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
+            query_stats.total_io_operations = io_tracker.io_count() as u32;
+            query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
+            query_stats.query_pq_preprocess_time_us =
+                IOTracker::time(&io_tracker.preprocess_time_us) as u128;
+            query_stats.cpu_time_us = query_stats.total_execution_time_us
+                - query_stats.io_time_us
+                - query_stats.query_pq_preprocess_time_us;
+            if trace_enabled {
+                search_span.record("result_count", stats.result_count as u64);
+                search_span.record("comparisons", stats.cmps as u64);
+                search_span.record("hops", stats.hops as u64);
+                search_span.record(
+                    "traversal_io_operations",
+                    query_stats.total_io_operations as u64,
+                );
+                search_span.record(
+                    "traversal_vertex_load_time_us",
+                    query_stats.io_time_us as u64,
+                );
+                search_span.record(
+                    "preprocess_time_us",
+                    query_stats.query_pq_preprocess_time_us as u64,
+                );
+                search_span.record(
+                    "traversal_non_vertex_load_wall_time_us",
+                    query_stats.cpu_time_us as u64,
+                );
+                search_span.record("beam_expansions", io_tracker.benchmark.beam_count() as u64);
+                search_span.record(
+                    "neighbors_considered",
+                    io_tracker.benchmark.neighbor_count() as u64,
+                );
+                search_span.record("expand_wall_time_us", io_tracker.benchmark.expand_time_us());
+                search_span.record("pq_time_us", io_tracker.benchmark.pq_time_us());
+                search_span.record(
+                    "traversal_vertex_read_time_us",
+                    io_tracker.benchmark.read_time_us(),
+                );
+                search_span.record(
+                    "traversal_vertex_materialize_time_us",
+                    io_tracker.benchmark.materialize_time_us(),
+                );
+            }
+            Ok(SearchResultStats {
+                cmps: query_stats.total_comparisons,
+                result_count: stats.result_count,
+                query_statistics: query_stats.clone(),
+            })
+        })();
+        if trace_enabled {
+            match &result {
+                Ok(_) => {
+                    search_span.record("outcome", "success");
+                }
+                Err(error) => {
+                    search_span.record("outcome", "error");
+                    search_span.record("error_category", tracing::field::debug(error.kind()));
+                }
+            }
+        }
+        result
     }
 }
 
@@ -1215,15 +1487,29 @@ where
 /// This is a convenience function that combines `load_vertices` and `process_loaded_node`
 /// for each vertex ID. It first loads all the vertices in batch, then processes each
 /// loaded node.
+#[derive(Default)]
+struct VertexLoadTimings {
+    read_us: u64,
+    materialize_us: u64,
+}
+
 fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
     vertex_provider: &mut V,
     ids: &[Data::VectorIdType],
-) -> ANNResult<()> {
+) -> ANNResult<VertexLoadTimings> {
+    let trace_enabled = benchmark_tracing_enabled();
+    let read_timer = trace_enabled.then(Instant::now);
     vertex_provider.load_vertices(ids)?;
+    let read_us = read_timer.map_or(0, |timer| timer.elapsed().as_micros() as u64);
+    let materialize_timer = trace_enabled.then(Instant::now);
     for (idx, id) in ids.iter().enumerate() {
         vertex_provider.process_loaded_node(id, idx)?;
     }
-    Ok(())
+    let materialize_us = materialize_timer.map_or(0, |timer| timer.elapsed().as_micros() as u64);
+    Ok(VertexLoadTimings {
+        read_us,
+        materialize_us,
+    })
 }
 
 #[cfg(test)]
@@ -1258,6 +1544,26 @@ mod disk_provider_tests {
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search";
     const TEST_INDEX_128DIM: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_disk.index";
+
+    #[cfg(feature = "mimir-benchmark-tracing")]
+    #[test]
+    fn benchmark_search_metrics_aggregate_phase_totals() {
+        let metrics = BenchmarkSearchMetrics::default();
+        metrics.record_expand(11, 17);
+        metrics.record_expand(13, 19);
+        metrics.record_pq_time(7);
+        metrics.record_vertex_load(VertexLoadTimings {
+            read_us: 23,
+            materialize_us: 5,
+        });
+
+        assert_eq!(metrics.beam_count(), 2);
+        assert_eq!(metrics.neighbor_count(), 36);
+        assert_eq!(metrics.expand_time_us(), 24);
+        assert_eq!(metrics.pq_time_us(), 7);
+        assert_eq!(metrics.read_time_us(), 23);
+        assert_eq!(metrics.materialize_time_us(), 5);
+    }
     const TEST_PQ_PIVOT_128DIM: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_pivots.bin";
     const TEST_PQ_COMPRESSED_128DIM: &str =

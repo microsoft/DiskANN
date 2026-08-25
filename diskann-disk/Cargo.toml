@@ -82,6 +82,7 @@ proptest.workspace = true
 [features]
 default = []
 perf_test = ["dep:opentelemetry"]
+mimir-benchmark-tracing = []
 experimental_diversity_search = [
     "diskann/experimental_diversity_search",
     "diskann-providers/experimental_diversity_search",
