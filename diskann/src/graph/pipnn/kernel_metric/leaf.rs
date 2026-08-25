@@ -4,7 +4,7 @@
  */
 
 use diskann_utils::views::MatrixView;
-use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector};
+use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDVector};
 
 use super::super::simd::{PiPNNSIMDSchema, PiPNNSIMDVector};
 use super::{
@@ -94,13 +94,20 @@ impl LeafMetric for L2 {
         A: PiPNNSIMDSchema,
     {
         let target_norms = load_norms_simd::<A::Vector>(arch, norms, first_target);
-        (A::Vector::splat(arch, -2.0).mul_add_simd(dot_products, source_norms) + target_norms)
-            .max_simd(A::Vector::default(arch))
+        let distances =
+            A::Vector::splat(arch, -2.0).mul_add_simd(dot_products, source_norms) + target_norms;
+        let non_negative = distances.max_simd(A::Vector::default(arch));
+        A::Vector::select(distances.ne_simd(distances), distances, non_negative)
     }
 
     #[inline(always)]
     fn distance_single(norms: &[f32], source_norm: f32, dot_product: f32, target: usize) -> f32 {
-        ((-2.0_f32).mul_add(dot_product, source_norm) + norms[target]).max(0.0)
+        let distance = (-2.0_f32).mul_add(dot_product, source_norm) + norms[target];
+        if distance.is_nan() {
+            distance
+        } else {
+            distance.max(0.0)
+        }
     }
 }
 
@@ -138,12 +145,11 @@ impl LeafMetric for Cosine {
     {
         let target_norms = load_norms_simd::<A::Vector>(arch, norms, first_target);
         cosine_distance_simd(arch, dot_products, source_norms, target_norms)
-            .max_simd(A::Vector::default(arch))
     }
 
     #[inline(always)]
     fn distance_single(norms: &[f32], source_norm: f32, dot_product: f32, target: usize) -> f32 {
-        cosine_distance_single(dot_product, source_norm, norms[target]).max(0.0)
+        cosine_distance_single(dot_product, source_norm, norms[target])
     }
 }
 
@@ -180,7 +186,7 @@ impl LeafMetric for InnerProduct {
     where
         A: PiPNNSIMDSchema,
     {
-        A::Vector::default(arch) - dot_products
+        A::Vector::splat(arch, -1.0) * dot_products
     }
 
     #[inline(always)]
@@ -374,13 +380,12 @@ mod tests {
         }
 
         #[test]
-        fn nan_dot_products_clamp_to_zero_in_every_lane_with_l2() {
+        fn nan_dot_products_remain_nan_in_every_lane_with_l2() {
             let squared_norms = [1.0; 17];
-            let expected_non_negative_distance = 0.0;
 
             let actual_distances = run_distances_simd::<L2>(&squared_norms, 0, [f32::NAN; 16], 1);
 
-            assert_eq!(actual_distances, [expected_non_negative_distance; 16]);
+            assert!(actual_distances.into_iter().all(f32::is_nan));
         }
 
         #[test]
@@ -416,6 +421,20 @@ mod tests {
             let actual_distances = run_distances_simd::<InnerProduct>(&[], 0, [dot_product; 16], 0);
 
             assert_eq!(actual_distances, [expected_distance; 16]);
+        }
+
+        #[test]
+        fn signed_zero_bits_match_scalar_negation_with_inner_product() {
+            let dot_products: [f32; 16] = [
+                0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0,
+                -0.0,
+            ];
+            let expected_bits = dot_products.map(|dot| (-dot).to_bits());
+
+            let actual_bits =
+                run_distances_simd::<InnerProduct>(&[], 0, dot_products, 0).map(f32::to_bits);
+
+            assert_eq!(actual_bits, expected_bits);
         }
     }
 }

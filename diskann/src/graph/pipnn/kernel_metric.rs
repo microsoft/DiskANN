@@ -47,7 +47,8 @@ where
         F::select(target_zero, zero, dot / safe_denominator),
     );
     let negative_one = F::splat(arch, -1.0);
-    one - negative_one.max_simd(cosine.min_simd(one))
+    let distance = one - negative_one.max_simd(cosine.min_simd(one));
+    F::select(cosine.ne_simd(cosine), cosine, distance)
 }
 
 /// Compute one cosine distance with the DiskANN zero-norm and NaN rules.
@@ -57,7 +58,7 @@ pub(super) fn cosine_distance_single(dot: f32, source_norm: f32, target_norm: f3
         1.0
     } else {
         let cosine = dot / (source_norm * target_norm);
-        1.0 - (-1.0_f32).max(1.0_f32.min(cosine))
+        1.0 - cosine.clamp(-1.0, 1.0)
     }
 }
 
@@ -154,18 +155,9 @@ mod tests {
         }
 
         #[test]
-        fn nan_similarity_clamps_to_zero_distance() {
-            // Given
-            let nan_dot_product = f32::NAN;
-            // `f32::min` keeps its finite operand when the other operand is NaN.
-            let finite_operand_selected_by_min = 1.0;
-            let expected_one_minus_selected_operand = 1.0 - finite_operand_selected_by_min;
-
-            // When
-            let actual_distance = cosine_distance_single(nan_dot_product, 1.0, 1.0);
-
-            // Then
-            assert_eq!(actual_distance, expected_one_minus_selected_operand);
+        fn nan_similarity_remains_nan() {
+            let actual_distance = cosine_distance_single(f32::NAN, 1.0, 1.0);
+            assert!(actual_distance.is_nan());
         }
     }
 
@@ -224,9 +216,9 @@ mod tests {
         }
 
         #[test]
-        fn nan_similarity_clamps_to_zero_distance_in_every_lane() {
+        fn nan_similarity_remains_nan_in_every_lane() {
             let actual_distances = run_cosine_distance_simd([f32::NAN; 16], [1.0; 16], [1.0; 16]);
-            assert_eq!(actual_distances, [0.0; 16]);
+            assert!(actual_distances.into_iter().all(f32::is_nan));
         }
     }
 }
