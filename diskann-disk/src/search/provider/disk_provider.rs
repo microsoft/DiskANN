@@ -61,6 +61,9 @@ macro_rules! benchmark_trace_span {
     };
 }
 
+#[cfg(feature = "mimir-benchmark-tracing")]
+type BenchmarkSpan = tracing::Span;
+
 #[cfg(not(feature = "mimir-benchmark-tracing"))]
 struct BenchmarkSpan;
 
@@ -1572,168 +1575,20 @@ where
             error_category = tracing::field::Empty,
         );
         let _search_guard = search_span.enter();
-        let result: ANNResult<SearchResultStats> = (|| {
-            let l = search_list_size as usize;
-
-            if l < k_value {
-                return Err(diskann_error!(
-                    ErrorKind::IndexError,
-                    "search list size must be at least as large as the number of results requested",
-                ));
-            }
-
-            let cache_indexed_vectors = indexed_vectors.is_some();
-            let mut result_output_buffer = SearchOutput::new(
-                &mut indices[..k_value],
-                &mut distances[..k_value],
-                &mut associated_data[..k_value],
-                indexed_vectors.map(|vectors| &mut vectors[..k_value]),
-            )?;
-
-            let timer = Instant::now();
-            let io_tracker = IOTracker::default();
-
-            // * `FlatScan`     — `flat_search` filters the scan iterator at
-            //                    construction; non-matching IDs never enter `best`.
-            // * `Graph`        — plain greedy traversal doesn't consult any predicate;
-            //                    if a predicate is set, `RerankAndFilter` filters out
-            //                    non-matching nodes at rerank time.
-            // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept` nodes
-            //                    into `matched_results`; no filtering in post-process.
-            // * `DiverseGraph` — `index.search_with` runs `DeterminantDiversityAndFilter`
-            //                    as the post-processor over the L candidate pool.
-            let stats = match mode {
-                SearchMode::FlatScan { filter } => {
-                    let strategy = self.search_strategy(
-                        &io_tracker,
-                        PostprocessStrategy::AcceptAll,
-                        cache_indexed_vectors,
-                    );
-                    self.runtime.block_on(self.flat_search(
-                        &strategy,
-                        query,
-                        filter.as_deref(),
-                        l,
-                        &mut result_output_buffer,
-                    ))?
-                }
-                SearchMode::Graph { filter } => {
-                    let strategy = self.search_strategy(
-                        &io_tracker,
-                        filter
-                            .as_deref()
-                            .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
-                        cache_indexed_vectors,
-                    );
-                    let knn_search = Knn::new(l, beam_width)
-                        .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
-                    self.runtime.block_on(self.index.search(
-                        knn_search,
-                        &strategy,
-                        &DefaultContext,
-                        query,
-                        &mut result_output_buffer,
-                    ))?
-                }
-                SearchMode::InlineFilter { filter, adaptive_l } => {
-                    // Strategy is passed by value into `filter_search` so that the
-                    // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
-                    // its counters reachable from this scope.
-                    let strategy = self.search_strategy(
-                        &io_tracker,
-                        PostprocessStrategy::AcceptAll,
-                        cache_indexed_vectors,
-                    );
-                    let knn_search = Knn::new(l, beam_width)?;
-                    self.runtime.block_on(self.filter_search(
-                        strategy,
-                        query,
-                        knn_search,
-                        filter.as_ref(),
-                        adaptive_l.clone(),
-                        &mut result_output_buffer,
-                    ))?
-                }
-                SearchMode::DiverseGraph { filter, params } => {
-                    // Strategy installs the filter so `RerankAndFilter` would also
-                    // honor it, but the active post-processor here is the
-                    // diversity selector built from `DiskSearchPostProcessor`.
-                    let postprocess_config = filter
-                        .as_deref()
-                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
-                    let strategy = self.search_strategy(
-                        &io_tracker,
-                        postprocess_config,
-                        cache_indexed_vectors,
-                    );
-                    let knn_search = Knn::new(l, beam_width)?;
-                    let processor = DiskSearchPostProcessor::DeterminantDiversity(
-                        DeterminantDiversityAndFilter::new(postprocess_config, *params),
-                    );
-                    self.runtime.block_on(self.index.search_with(
-                        knn_search,
-                        &strategy,
-                        processor,
-                        &DefaultContext,
-                        query,
-                        &mut result_output_buffer,
-                    ))?
-                }
-            };
-            query_stats.total_comparisons = stats.cmps;
-            query_stats.search_hops = stats.hops;
-
-            query_stats.total_execution_time_us = timer.elapsed().as_micros();
-            query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
-            query_stats.total_io_operations = io_tracker.io_count() as u32;
-            query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
-            query_stats.query_pq_preprocess_time_us =
-                IOTracker::time(&io_tracker.preprocess_time_us) as u128;
-            query_stats.cpu_time_us = query_stats.total_execution_time_us
-                - query_stats.io_time_us
-                - query_stats.query_pq_preprocess_time_us;
-            if trace_enabled {
-                search_span.record("result_count", stats.result_count as u64);
-                search_span.record("comparisons", stats.cmps as u64);
-                search_span.record("hops", stats.hops as u64);
-                search_span.record(
-                    "traversal_io_operations",
-                    query_stats.total_io_operations as u64,
-                );
-                search_span.record(
-                    "traversal_vertex_load_time_us",
-                    query_stats.io_time_us as u64,
-                );
-                search_span.record(
-                    "preprocess_time_us",
-                    query_stats.query_pq_preprocess_time_us as u64,
-                );
-                search_span.record(
-                    "traversal_non_vertex_load_wall_time_us",
-                    query_stats.cpu_time_us as u64,
-                );
-                search_span.record("beam_expansions", io_tracker.benchmark.beam_count() as u64);
-                search_span.record(
-                    "neighbors_considered",
-                    io_tracker.benchmark.neighbor_count() as u64,
-                );
-                search_span.record("expand_wall_time_us", io_tracker.benchmark.expand_time_us());
-                search_span.record("pq_time_us", io_tracker.benchmark.pq_time_us());
-                search_span.record(
-                    "traversal_vertex_read_time_us",
-                    io_tracker.benchmark.read_time_us(),
-                );
-                search_span.record(
-                    "traversal_vertex_materialize_time_us",
-                    io_tracker.benchmark.materialize_time_us(),
-                );
-            }
-            Ok(SearchResultStats {
-                cmps: query_stats.total_comparisons,
-                result_count: stats.result_count,
-                query_statistics: query_stats.clone(),
-            })
-        })();
+        let result = self.search_internal_impl_inner(
+            query,
+            k_value,
+            search_list_size,
+            beam_width,
+            query_stats,
+            indices,
+            distances,
+            associated_data,
+            indexed_vectors,
+            mode,
+            trace_enabled,
+            &search_span,
+        );
         if trace_enabled {
             match &result {
                 Ok(_) => {
@@ -1750,6 +1605,181 @@ where
             }
         }
         result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn search_internal_impl_inner(
+        &self,
+        query: &[Data::VectorDataType],
+        k_value: usize,
+        search_list_size: u32,
+        beam_width: Option<usize>,
+        query_stats: &mut QueryStatistics,
+        indices: &mut [u32],
+        distances: &mut [f32],
+        associated_data: &mut [Data::AssociatedDataType],
+        indexed_vectors: IndexedVectorOutput<'_, Data::VectorDataType>,
+        mode: &SearchMode<'_>,
+        trace_enabled: bool,
+        search_span: &BenchmarkSpan,
+    ) -> ANNResult<SearchResultStats> {
+        let l = search_list_size as usize;
+
+        if l < k_value {
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
+                "search list size must be at least as large as the number of results requested",
+            ));
+        }
+
+        let cache_indexed_vectors = indexed_vectors.is_some();
+        let mut result_output_buffer = SearchOutput::new(
+            &mut indices[..k_value],
+            &mut distances[..k_value],
+            &mut associated_data[..k_value],
+            indexed_vectors.map(|vectors| &mut vectors[..k_value]),
+        )?;
+
+        let timer = Instant::now();
+        let io_tracker = IOTracker::default();
+
+        // * `FlatScan`     — `flat_search` filters the scan iterator at
+        //                    construction; non-matching IDs never enter `best`.
+        // * `Graph`        — plain greedy traversal doesn't consult any predicate;
+        //                    if a predicate is set, `RerankAndFilter` filters out
+        //                    non-matching nodes at rerank time.
+        // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept` nodes
+        //                    into `matched_results`; no filtering in post-process.
+        // * `DiverseGraph` — `index.search_with` runs `DeterminantDiversityAndFilter`
+        //                    as the post-processor over the L candidate pool.
+        let stats = match mode {
+            SearchMode::FlatScan { filter } => {
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    PostprocessStrategy::AcceptAll,
+                    cache_indexed_vectors,
+                );
+                self.runtime.block_on(self.flat_search(
+                    &strategy,
+                    query,
+                    filter.as_deref(),
+                    l,
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::Graph { filter } => {
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    filter
+                        .as_deref()
+                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                    cache_indexed_vectors,
+                );
+                let knn_search = Knn::new(l, beam_width)
+                    .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
+                self.runtime.block_on(self.index.search(
+                    knn_search,
+                    &strategy,
+                    &DefaultContext,
+                    query,
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::InlineFilter { filter, adaptive_l } => {
+                // Strategy is passed by value into `filter_search` so that the
+                // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
+                // its counters reachable from this scope.
+                let strategy = self.search_strategy(
+                    &io_tracker,
+                    PostprocessStrategy::AcceptAll,
+                    cache_indexed_vectors,
+                );
+                let knn_search = Knn::new(l, beam_width)?;
+                self.runtime.block_on(self.filter_search(
+                    strategy,
+                    query,
+                    knn_search,
+                    filter.as_ref(),
+                    adaptive_l.clone(),
+                    &mut result_output_buffer,
+                ))?
+            }
+            SearchMode::DiverseGraph { filter, params } => {
+                // Strategy installs the filter so `RerankAndFilter` would also
+                // honor it, but the active post-processor here is the
+                // diversity selector built from `DiskSearchPostProcessor`.
+                let postprocess_config = filter
+                    .as_deref()
+                    .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply);
+                let strategy =
+                    self.search_strategy(&io_tracker, postprocess_config, cache_indexed_vectors);
+                let knn_search = Knn::new(l, beam_width)?;
+                let processor = DiskSearchPostProcessor::DeterminantDiversity(
+                    DeterminantDiversityAndFilter::new(postprocess_config, *params),
+                );
+                self.runtime.block_on(self.index.search_with(
+                    knn_search,
+                    &strategy,
+                    processor,
+                    &DefaultContext,
+                    query,
+                    &mut result_output_buffer,
+                ))?
+            }
+        };
+        query_stats.total_comparisons = stats.cmps;
+        query_stats.search_hops = stats.hops;
+
+        query_stats.total_execution_time_us = timer.elapsed().as_micros();
+        query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
+        query_stats.query_pq_preprocess_time_us =
+            IOTracker::time(&io_tracker.preprocess_time_us) as u128;
+        query_stats.cpu_time_us = query_stats.total_execution_time_us
+            - query_stats.io_time_us
+            - query_stats.query_pq_preprocess_time_us;
+        if trace_enabled {
+            search_span.record("result_count", stats.result_count as u64);
+            search_span.record("comparisons", stats.cmps as u64);
+            search_span.record("hops", stats.hops as u64);
+            search_span.record(
+                "traversal_io_operations",
+                query_stats.total_io_operations as u64,
+            );
+            search_span.record(
+                "traversal_vertex_load_time_us",
+                query_stats.io_time_us as u64,
+            );
+            search_span.record(
+                "preprocess_time_us",
+                query_stats.query_pq_preprocess_time_us as u64,
+            );
+            search_span.record(
+                "traversal_non_vertex_load_wall_time_us",
+                query_stats.cpu_time_us as u64,
+            );
+            search_span.record("beam_expansions", io_tracker.benchmark.beam_count() as u64);
+            search_span.record(
+                "neighbors_considered",
+                io_tracker.benchmark.neighbor_count() as u64,
+            );
+            search_span.record("expand_wall_time_us", io_tracker.benchmark.expand_time_us());
+            search_span.record("pq_time_us", io_tracker.benchmark.pq_time_us());
+            search_span.record(
+                "traversal_vertex_read_time_us",
+                io_tracker.benchmark.read_time_us(),
+            );
+            search_span.record(
+                "traversal_vertex_materialize_time_us",
+                io_tracker.benchmark.materialize_time_us(),
+            );
+        }
+        Ok(SearchResultStats {
+            cmps: query_stats.total_comparisons,
+            result_count: stats.result_count,
+            query_statistics: query_stats.clone(),
+        })
     }
 }
 
