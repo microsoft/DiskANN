@@ -177,7 +177,7 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-    let l_search = search_params.l_value().get();
+    let original_l_search = search_params.l_value().get();
 
     // Matched results tracked separately — scratch.best contains all nodes
     // for greedy navigation, matched_results contains only filter-matching nodes.
@@ -202,6 +202,9 @@ where
     let mut sample_visited: usize = 0;
     let mut sample_matched: usize = 0;
     let mut next_adaptive_l_sample = adaptive_l.as_ref().map(|value| value.sample_count);
+
+    let mut resize_count = 0;
+    let mut l_values = vec![original_l_search];
 
     loop {
         // Check termination conditions
@@ -259,13 +262,15 @@ where
             && sample_visited >= next_sample
         {
             let new_l = compute_adaptive_l(
-                l_search,
+                original_l_search,
                 sample_visited,
                 sample_matched,
                 adaptive_l.scale_factor,
             );
-            if new_l > l_search {
+            if new_l > scratch.best.capacity() {
                 scratch.resize(new_l);
+                l_values.push(new_l);
+                resize_count += 1;
             }
 
             next_adaptive_l_sample = advance_adaptive_l_sample(next_sample);
@@ -273,6 +278,8 @@ where
     }
 
     matched_results.sort_unstable_by(neighbor::ord::fast_distance);
+
+    // println!("Scratch was resized {resize_count} times and its historical values are {l_values:?}.");
 
     Ok(Ret {
         cmps: scratch.cmps,
@@ -282,7 +289,7 @@ where
 }
 
 fn advance_adaptive_l_sample(current_sample: usize) -> Option<usize> {
-    current_sample.checked_mul(10)
+    current_sample.checked_mul(2)
 }
 
 /// Compute adaptive L based on observed specificity.
