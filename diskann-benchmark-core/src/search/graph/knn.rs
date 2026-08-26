@@ -305,9 +305,6 @@ pub struct Summary {
     /// This contains one entry per repetition in the batch.
     pub mean_latencies: Vec<f64>,
 
-    /// Querywise latencies for each repetition, preserving input query order.
-    pub query_latencies: Vec<Vec<MicroSeconds>>,
-
     /// The 90th percentile latency for individual queries.
     ///
     /// This contains one entry per repetition in the batch.
@@ -399,11 +396,6 @@ where
         let mut p90_latencies = Vec::with_capacity(results.len());
         let mut p99_latencies = Vec::with_capacity(results.len());
         let mut p999_latencies = Vec::with_capacity(results.len());
-        let query_latencies = results
-            .iter()
-            .map(|result| result.latencies().to_vec())
-            .collect();
-
         results.iter_mut().for_each(|r| {
             match percentiles::compute_percentiles(r.latencies_mut()) {
                 Ok(values) => {
@@ -435,7 +427,6 @@ where
             end_to_end_latencies: results.iter().map(|r| r.end_to_end_latency()).collect(),
             recall,
             mean_latencies,
-            query_latencies,
             p90_latencies,
             p99_latencies,
             p999_latencies,

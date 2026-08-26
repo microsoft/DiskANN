@@ -486,7 +486,6 @@ dependencies = [
  "opentelemetry_sdk",
  "rand",
  "rayon",
- "roaring",
  "scopeguard",
  "serde",
  "serde_json",
@@ -671,8 +670,6 @@ dependencies = [
 name = "diskann-label-index"
 version = "0.55.1-pre.1"
 dependencies = [
- "roaring",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
@@ -770,7 +767,6 @@ dependencies = [
  "diskann",
  "diskann-benchmark-core",
  "diskann-label-filter",
- "diskann-label-index",
  "diskann-providers",
  "diskann-quantization",
  "diskann-utils",
@@ -783,7 +779,6 @@ dependencies = [
  "rand",
  "rand_distr",
  "rayon",
- "roaring",
  "rstest",
  "serde",
  "serde_json",

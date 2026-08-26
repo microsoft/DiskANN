@@ -26,10 +26,7 @@ use diskann_label_filter::{
     },
     ASTExpr, CompareOp, DefaultKeyCodec,
 };
-use diskann_label_index::{
-    parse_label_expression_json, EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType,
-    LabelExpression,
-};
+use diskann_label_index::{EncodedLabelIndex, EncodedLabelQuery, FilterExpressionType};
 use diskann_providers::model::graph::provider::layers::BetaFilter;
 
 use diskann_tools::utils::ground_truth::read_labels_and_compute_bitmap;
@@ -41,7 +38,7 @@ use diskann_label_filter::{
     InlineAttributeIndex, InlineAttributeIndexAuto, InlineAttributeIndexBitslice,
     InlineAttributeIndexCsr, InlineAttributeIndexPosting,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 
 pub struct QueryBitmapEvaluator {
     pub ast_expr: ASTExpr,
@@ -102,25 +99,13 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EncodedQueryMode {
-    Dnf,
-    Ast,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ValidatedEncodedQuerySource {
-    Dnf(Box<[String]>),
-    AstJson(String),
-}
+pub(crate) type ValidatedEncodedQuerySource = Box<[String]>;
 
 /// Per-query lazy encoded-label provider used by the encoded multihop benchmarks.
 ///
-/// Outside timed search we only parse query JSONL, convert/validate the predicate shape, and store
-/// either validated DNF clauses or the recursive AST JSON string. The first `is_match` call inside
-/// timed ANN search performs the actual `EncodedLabelIndex::{query, query_ast_json}` compilation
-/// (plus bitmap AST materialization for bitmap-backed indexes); later probes reuse the cached
-/// [`EncodedLabelQuery`] for that one query row only.
+/// Outside timed search we parse query JSONL, validate its DNF shape, and store its flat clauses.
+/// The first `is_match` call inside timed ANN search compiles label IDs; later probes reuse the
+/// cached [`EncodedLabelQuery`] for that one query row only.
 pub(crate) struct LazyEncodedQueryProvider {
     index: Arc<EncodedLabelIndex>,
     source: ValidatedEncodedQuerySource,
@@ -161,7 +146,6 @@ impl LazyEncodedQueryProvider {
 impl fmt::Debug for LazyEncodedQueryProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LazyEncodedQueryProvider")
-            .field("format", &self.index.format())
             .field("source", &self.source)
             .field("compiled", &self.compiled.get().is_some())
             .finish()
@@ -226,23 +210,20 @@ pub(crate) fn load_encoded_label_index(
 
 /// Parse/validate the benchmark predicate JSONL outside timed ANN search.
 ///
-/// Setup still includes JSONL parsing, AST-to-`LabelExpression` conversion, supported-operator
-/// checks, null/unknown-label rejection, DNF-shape validation, and benchmark-local AST JSON
-/// serialization. Timed search begins only when the lazy provider first calls back into
-/// `EncodedLabelIndex::{query, query_ast_json}`.
+/// Setup includes JSONL parsing, supported-operator checks, null/unknown-label rejection, and
+/// DNF-shape validation. Timed search begins when the lazy provider compiles label IDs.
 pub(crate) fn prepare_encoded_query_sources(
     index: &EncodedLabelIndex,
     query_predicates: &InputFile,
-    mode: EncodedQueryMode,
 ) -> anyhow::Result<Vec<ValidatedEncodedQuerySource>> {
     let parsed = read_and_parse_queries(query_predicates.to_str().unwrap())
         .map_err(|e| anyhow::anyhow!("failed to parse query predicates: {e}"))?;
     parsed
         .into_iter()
         .map(|(_query_id, ast)| {
-            let label_expression = ast_to_label_expression(&ast)?;
-            validate_encoded_benchmark_labels(index, &label_expression)?;
-            encoded_query_source_from_expression(&label_expression, mode)
+            let clauses = flatten_dnf_clauses(&ast)?;
+            validate_encoded_benchmark_labels(index, &clauses)?;
+            Ok(clauses.into_boxed_slice())
         })
         .collect()
 }
@@ -262,61 +243,13 @@ pub(crate) fn make_encoded_query_providers(
         .collect()
 }
 
-fn encoded_query_source_from_expression(
-    expression: &LabelExpression,
-    mode: EncodedQueryMode,
-) -> anyhow::Result<ValidatedEncodedQuerySource> {
-    match mode {
-        EncodedQueryMode::Dnf => Ok(ValidatedEncodedQuerySource::Dnf(
-            flatten_dnf_clauses(expression)?.into_boxed_slice(),
-        )),
-        EncodedQueryMode::Ast => {
-            let expression_json = label_expression_to_ast_json(expression)?;
-            parse_label_expression_json(&expression_json)
-                .map_err(|e| anyhow::anyhow!("encoded AST source failed validation: {e}"))?;
-            Ok(ValidatedEncodedQuerySource::AstJson(expression_json))
-        }
-    }
-}
-
 fn compile_encoded_query(
     index: &EncodedLabelIndex,
     source: &ValidatedEncodedQuerySource,
 ) -> anyhow::Result<EncodedLabelQuery<'static>> {
-    match source {
-        ValidatedEncodedQuerySource::Dnf(clauses) => index
-            .query(clauses.as_ref(), FilterExpressionType::DNF)
-            .map_err(|e| anyhow::anyhow!("failed to compile encoded DNF query: {e}")),
-        ValidatedEncodedQuerySource::AstJson(expression_json) => index
-            .query_ast_json(expression_json)
-            .map_err(|e| anyhow::anyhow!("failed to compile encoded AST query: {e}")),
-    }
-}
-
-fn label_expression_to_ast_json(expression: &LabelExpression) -> anyhow::Result<String> {
-    serde_json::to_string(&label_expression_to_ast_value(expression))
-        .map_err(|e| anyhow::anyhow!("failed to serialize encoded AST query: {e}"))
-}
-
-fn label_expression_to_ast_value(expression: &LabelExpression) -> Value {
-    match expression {
-        LabelExpression::Label(label) => Value::String(label.clone()),
-        LabelExpression::And(children) => json!({
-            "and": children
-                .iter()
-                .map(label_expression_to_ast_value)
-                .collect::<Vec<_>>()
-        }),
-        LabelExpression::Or(children) => json!({
-            "or": children
-                .iter()
-                .map(label_expression_to_ast_value)
-                .collect::<Vec<_>>()
-        }),
-        LabelExpression::Not(child) => json!({
-            "not": label_expression_to_ast_value(child)
-        }),
-    }
+    index
+        .query(source.as_ref(), FilterExpressionType::DNF)
+        .map_err(|e| anyhow::anyhow!("failed to compile encoded DNF query: {e}"))
 }
 
 fn checked_doc_id(doc_id: usize) -> anyhow::Result<u32> {
@@ -326,51 +259,23 @@ fn checked_doc_id(doc_id: usize) -> anyhow::Result<u32> {
 
 fn validate_encoded_benchmark_labels(
     index: &EncodedLabelIndex,
-    expression: &LabelExpression,
+    clauses: &[String],
 ) -> anyhow::Result<()> {
-    let mut stack = vec![expression];
-    while let Some(expression) = stack.pop() {
-        match expression {
-            LabelExpression::Label(label) => {
-                if !index.contains_label(label) {
-                    anyhow::bail!(
-                        "encoded benchmark query references label '{label}' absent from the label index"
-                    );
-                }
+    for clause in clauses {
+        for label in clause.split('&') {
+            if !index.contains_label(label) {
+                anyhow::bail!(
+                    "encoded benchmark query references label '{label}' absent from the label index"
+                );
             }
-            LabelExpression::And(children) | LabelExpression::Or(children) => {
-                stack.extend(children);
-            }
-            LabelExpression::Not(child) => stack.push(child),
         }
     }
     Ok(())
 }
 
-fn ast_to_label_expression(ast: &ASTExpr) -> anyhow::Result<LabelExpression> {
-    match ast {
-        ASTExpr::And(exprs) => Ok(LabelExpression::And(
-            exprs
-                .iter()
-                .map(ast_to_label_expression)
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        )),
-        ASTExpr::Or(exprs) => Ok(LabelExpression::Or(
-            exprs
-                .iter()
-                .map(ast_to_label_expression)
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        )),
-        ASTExpr::Not(expr) => Ok(LabelExpression::Not(Box::new(ast_to_label_expression(
-            expr,
-        )?))),
-        ASTExpr::Compare { field, op } => compare_to_label_expression(field, op),
-    }
-}
-
-fn compare_to_label_expression(field: &str, op: &CompareOp) -> anyhow::Result<LabelExpression> {
+fn compare_to_label(field: &str, op: &CompareOp) -> anyhow::Result<String> {
     match op {
-        CompareOp::Eq(value) => eq_value_to_label_expression(field, value),
+        CompareOp::Eq(value) => eq_value_to_label(field, value),
         CompareOp::Ne(_)
         | CompareOp::Lt(_)
         | CompareOp::Lte(_)
@@ -381,11 +286,11 @@ fn compare_to_label_expression(field: &str, op: &CompareOp) -> anyhow::Result<La
     }
 }
 
-fn eq_value_to_label_expression(field: &str, value: &Value) -> anyhow::Result<LabelExpression> {
+fn eq_value_to_label(field: &str, value: &Value) -> anyhow::Result<String> {
     match value {
-        Value::Bool(true) => Ok(LabelExpression::Label(field.to_string())),
+        Value::Bool(true) => Ok(field.to_string()),
         Value::Bool(false) | Value::Number(_) | Value::String(_) => {
-            Ok(LabelExpression::Label(format!("{field}={}", value_repr(value))))
+            Ok(format!("{field}={}", value_repr(value)))
         }
         Value::Null => Err(anyhow::anyhow!(
             "encoded benchmark equality predicates do not support null for field '{field}'"
@@ -406,36 +311,33 @@ fn value_repr(value: &Value) -> String {
         Value::String(value) => value.clone(),
         Value::Null => "null".to_string(),
         Value::Array(_) | Value::Object(_) => {
-            unreachable!("handled by eq_value_to_label_expression")
+            unreachable!("handled by eq_value_to_label")
         }
     }
 }
 
-fn flatten_dnf_clauses(expression: &LabelExpression) -> anyhow::Result<Vec<String>> {
+fn flatten_dnf_clauses(expression: &ASTExpr) -> anyhow::Result<Vec<String>> {
     let mut clauses = Vec::new();
     collect_dnf_clauses(expression, &mut clauses)?;
     Ok(clauses)
 }
 
-fn collect_dnf_clauses(
-    expression: &LabelExpression,
-    clauses: &mut Vec<String>,
-) -> anyhow::Result<()> {
+fn collect_dnf_clauses(expression: &ASTExpr, clauses: &mut Vec<String>) -> anyhow::Result<()> {
     match expression {
-        LabelExpression::Label(label) => clauses.push(label.clone()),
-        LabelExpression::And(children) => {
+        ASTExpr::Compare { field, op } => clauses.push(compare_to_label(field, op)?),
+        ASTExpr::And(children) => {
             let mut terminals = Vec::new();
             for child in children {
                 collect_dnf_conjunction(child, &mut terminals)?;
             }
             clauses.push(terminals.join("&"));
         }
-        LabelExpression::Or(children) => {
+        ASTExpr::Or(children) => {
             for child in children {
                 collect_dnf_clauses(child, clauses)?;
             }
         }
-        LabelExpression::Not(_) => {
+        ASTExpr::Not(_) => {
             anyhow::bail!("encoded DNF queries require an OR-of-AND predicate shape; NOT expressions are unsupported")
         }
     }
@@ -443,20 +345,20 @@ fn collect_dnf_clauses(
 }
 
 fn collect_dnf_conjunction(
-    expression: &LabelExpression,
+    expression: &ASTExpr,
     terminals: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     match expression {
-        LabelExpression::Label(label) => terminals.push(label.clone()),
-        LabelExpression::And(children) => {
+        ASTExpr::Compare { field, op } => terminals.push(compare_to_label(field, op)?),
+        ASTExpr::And(children) => {
             for child in children {
                 collect_dnf_conjunction(child, terminals)?;
             }
         }
-        LabelExpression::Or(_) => {
+        ASTExpr::Or(_) => {
             anyhow::bail!("encoded DNF queries require an OR-of-AND predicate shape; OR expressions cannot appear inside a conjunction")
         }
-        LabelExpression::Not(_) => {
+        ASTExpr::Not(_) => {
             anyhow::bail!("encoded DNF queries require an OR-of-AND predicate shape; NOT expressions are unsupported")
         }
     }
@@ -716,7 +618,7 @@ mod tests {
     use super::*;
     use std::{fs::File, io::Write};
 
-    use diskann_label_index::{encode_label_index_jsonl, LabelIndexFormat};
+    use diskann_label_index::encode_label_index_jsonl;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -742,16 +644,10 @@ mod tests {
             .collect()
     }
 
-    fn encoded_fixture() -> (
-        tempfile::TempDir,
-        Arc<EncodedLabelIndex>,
-        Arc<EncodedLabelIndex>,
-        InputFile,
-    ) {
+    fn encoded_fixture() -> (tempfile::TempDir, Arc<EncodedLabelIndex>, InputFile) {
         let dir = tempdir().unwrap();
         let labels_jsonl = dir.path().join("labels.jsonl");
         let bitslice_index = dir.path().join("labels.bitslice");
-        let bitmap_index = dir.path().join("labels.bitmap");
         let queries_jsonl = dir.path().join("queries.jsonl");
 
         write_lines(
@@ -772,14 +668,11 @@ mod tests {
             ],
         );
 
-        encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
-            .unwrap();
-        encode_label_index_jsonl(&labels_jsonl, &bitmap_index, LabelIndexFormat::Bitmap).unwrap();
+        encode_label_index_jsonl(&labels_jsonl, &bitslice_index).unwrap();
 
         (
             dir,
             load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap(),
-            load_encoded_label_index(&InputFile::new(bitmap_index)).unwrap(),
             InputFile::new(queries_jsonl),
         )
     }
@@ -836,13 +729,8 @@ mod tests {
 
     #[test]
     fn test_lazy_encoded_dnf_provider_matches_eager_query() {
-        let (_dir, bitslice_index, _bitmap_index, query_file) = encoded_fixture();
-        let sources = prepare_encoded_query_sources(
-            bitslice_index.as_ref(),
-            &query_file,
-            EncodedQueryMode::Dnf,
-        )
-        .unwrap();
+        let (_dir, bitslice_index, query_file) = encoded_fixture();
+        let sources = prepare_encoded_query_sources(bitslice_index.as_ref(), &query_file).unwrap();
         let providers = make_encoded_query_providers(bitslice_index.clone(), &sources);
 
         assert_eq!(providers.len(), sources.len());
@@ -852,75 +740,6 @@ mod tests {
                 eager_encoded_matches(bitslice_index.as_ref(), source, 4)
             );
         }
-    }
-
-    #[test]
-    fn test_lazy_encoded_ast_provider_matches_eager_query_for_bitslice_and_bitmap() {
-        let (_dir, bitslice_index, bitmap_index, query_file) = encoded_fixture();
-        let bitslice_sources = prepare_encoded_query_sources(
-            bitslice_index.as_ref(),
-            &query_file,
-            EncodedQueryMode::Ast,
-        )
-        .unwrap();
-        let bitmap_sources = prepare_encoded_query_sources(
-            bitmap_index.as_ref(),
-            &query_file,
-            EncodedQueryMode::Ast,
-        )
-        .unwrap();
-        let bitslice_providers =
-            make_encoded_query_providers(bitslice_index.clone(), &bitslice_sources);
-        let bitmap_providers = make_encoded_query_providers(bitmap_index.clone(), &bitmap_sources);
-
-        assert_eq!(bitslice_providers.len(), bitslice_sources.len());
-        assert_eq!(bitmap_providers.len(), bitmap_sources.len());
-        for ((bitslice_provider, bitslice_source), (bitmap_provider, bitmap_source)) in
-            bitslice_providers
-                .iter()
-                .zip(&bitslice_sources)
-                .zip(bitmap_providers.iter().zip(&bitmap_sources))
-        {
-            assert_eq!(
-                test_query_matches(bitslice_provider, 4),
-                eager_encoded_matches(bitslice_index.as_ref(), bitslice_source, 4)
-            );
-            assert_eq!(
-                test_query_matches(bitmap_provider, 4),
-                eager_encoded_matches(bitmap_index.as_ref(), bitmap_source, 4)
-            );
-        }
-    }
-
-    #[test]
-    fn test_encoded_ast_source_json_shape() {
-        let expression = LabelExpression::Or(vec![
-            LabelExpression::And(vec![
-                LabelExpression::Label("brand=A".into()),
-                LabelExpression::Not(Box::new(LabelExpression::Label("promo".into()))),
-            ]),
-            LabelExpression::Label("color=red".into()),
-        ]);
-        let source =
-            encoded_query_source_from_expression(&expression, EncodedQueryMode::Ast).unwrap();
-        let ValidatedEncodedQuerySource::AstJson(expression_json) = source else {
-            panic!("expected AST JSON source");
-        };
-
-        assert_eq!(
-            serde_json::from_str::<Value>(&expression_json).unwrap(),
-            json!({
-                "or": [
-                    {
-                        "and": [
-                            "brand=A",
-                            { "not": "promo" }
-                        ]
-                    },
-                    "color=red"
-                ]
-            })
-        );
     }
 
     #[test]
@@ -935,10 +754,9 @@ mod tests {
                 r#"{"doc_id":1,"A":false,"B":true}"#,
             ],
         );
-        encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
-            .unwrap();
+        encode_label_index_jsonl(&labels_jsonl, &bitslice_index).unwrap();
         let index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
-        let source = ValidatedEncodedQuerySource::AstJson(r#"{"and":["A","B"]}"#.to_string());
+        let source = vec!["A&B".to_string()].into_boxed_slice();
         let provider_a = Arc::new(LazyEncodedQueryProvider::new(index.clone(), source.clone()));
         let provider_b = Arc::new(LazyEncodedQueryProvider::new(index, source));
 
@@ -957,17 +775,13 @@ mod tests {
 
     #[test]
     fn test_encoded_query_rejects_unsupported_relational_operator() {
-        let error = ast_to_label_expression(&ASTExpr::Compare {
-            field: "score".to_string(),
-            op: CompareOp::Gt(2.0),
-        })
-        .unwrap_err();
+        let error = compare_to_label("score", &CompareOp::Gt(2.0)).unwrap_err();
         assert!(error.to_string().contains("unsupported operator >"));
     }
 
     #[test]
     fn test_encoded_dnf_rejects_non_dnf_shape() {
-        let expression = ast_to_label_expression(&ASTExpr::And(vec![
+        let expression = ASTExpr::And(vec![
             ASTExpr::Compare {
                 field: "brand".to_string(),
                 op: CompareOp::Eq(json!("A")),
@@ -982,8 +796,7 @@ mod tests {
                     op: CompareOp::Eq(json!("blue")),
                 },
             ]),
-        ]))
-        .unwrap();
+        ]);
 
         let error = flatten_dnf_clauses(&expression).unwrap_err();
         assert!(error
@@ -993,21 +806,13 @@ mod tests {
 
     #[test]
     fn test_encoded_dnf_rejects_array_equality_explicitly() {
-        let error = ast_to_label_expression(&ASTExpr::Compare {
-            field: "brand".to_string(),
-            op: CompareOp::Eq(json!(["A", "B"])),
-        })
-        .unwrap_err();
+        let error = compare_to_label("brand", &CompareOp::Eq(json!(["A", "B"]))).unwrap_err();
         assert!(error.to_string().contains("do not support array values"));
     }
 
     #[test]
     fn test_encoded_query_rejects_null_equality() {
-        let error = ast_to_label_expression(&ASTExpr::Compare {
-            field: "missing".to_string(),
-            op: CompareOp::Eq(Value::Null),
-        })
-        .unwrap_err();
+        let error = compare_to_label("missing", &CompareOp::Eq(Value::Null)).unwrap_err();
         assert!(error.to_string().contains("do not support null"));
     }
 
@@ -1017,12 +822,10 @@ mod tests {
         let labels_jsonl = dir.path().join("labels.jsonl");
         let bitslice_index = dir.path().join("labels.bitslice");
         write_lines(&labels_jsonl, &[r#"{"doc_id":0,"A":true}"#]);
-        encode_label_index_jsonl(&labels_jsonl, &bitslice_index, LabelIndexFormat::Bitslice)
-            .unwrap();
+        encode_label_index_jsonl(&labels_jsonl, &bitslice_index).unwrap();
         let index = load_encoded_label_index(&InputFile::new(bitslice_index)).unwrap();
         let error =
-            validate_encoded_benchmark_labels(&index, &LabelExpression::Label("missing".into()))
-                .unwrap_err();
+            validate_encoded_benchmark_labels(&index, &["missing".to_string()]).unwrap_err();
         assert!(error.to_string().contains("absent from the label index"));
     }
 }

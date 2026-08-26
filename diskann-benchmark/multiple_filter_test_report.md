@@ -461,7 +461,12 @@ The latency advantage therefore represents a different recall point, not an algo
 equal quality. Adaptive-L or an L sweep is required to compare recall-versus-latency curves and
 determine whether Inline can match multihop recall efficiently.
 
-### 8.4.8 Encoded-label library: DNF, AST, and precomputed AST
+### 8.4.8 Historical encoded-label comparison: DNF, AST, and precomputed AST
+
+This section records the performance study that selected the reviewable implementation. The
+recursive AST evaluator, Roaring-backed precomputed bitmap format, and their benchmark modes were
+comparison-only prototypes and have been removed. The retained library path is the dense
+Bitslice index with flat DNF/CNF evaluation.
 
 The new `diskann-label-index` crate was benchmarked directly through three multihop modes:
 
@@ -666,7 +671,11 @@ The expected opportunity is complex predicates with weak live short-circuiting a
 nodes to amortize a sequential SIMD pass. Live Bitslice-DNF should remain favored for small
 one-off searches and well-ordered selective predicates.
 
-## 8.9 100M provider/language hybrid-index trial
+## 8.9 Deferred research: 100M provider/language hybrid-index trial
+
+The hybrid implementation and its one-off tools are not part of the first reviewable change. This
+section and sections 8.10-8.13 retain the design and benchmark knowledge needed to revisit sparse
+labels later.
 
 A persisted hybrid format was tested on
 `Q:\test6\filtered_test4\EmbOffer.Global.100M.tsv`, using only provider ID (TSV column 3)
@@ -863,17 +872,20 @@ and 0.01% should also be measured.
 - Adaptive + bit-sliced live code (section 8.3): `InlineAttributeIndexAuto` (search-type `topk-multihop-live-filter-auto`) and `InlineAttributeIndexBitslice` (search-type `topk-multihop-live-filter-bitslice`)
 - Flat DNF Bitslice code (section 8.4): `EncodedDnf`, `BitsliceSingleProvider`, and `BitsliceDnfProvider`; benchmark search-type `topk-multihop-live-filter-bitslice-dnf`; microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
 - Inline Bitslice-DNF comparison (section 8.4.7): benchmark search-type `topk-inline-live-filter-bitslice-dnf`, using the same `InlineAttributeIndexBitslice` and DNF providers with `InlineFilterSearch`
-- Encoded-label library comparison (section 8.4.8): `diskann-label-index`; benchmark search-types `topk-multihop-encoded-bitslice-dnf`, `topk-multihop-encoded-bitslice-ast`, and `topk-multihop-encoded-bitmap-ast`; local encoded files `data_labels_set.bitslice.bin` and `data_labels_set.bitmap.bin`
+- Encoded-label library (section 8.4.8): retained search type
+  `topk-multihop-encoded-bitslice-dnf` and local dense artifact
+  `data_labels_set.bitslice.bin`; the AST/bitmap modes and `data_labels_set.bitmap.bin` were
+  comparison inputs only and are not part of the reviewable implementation
 - Index (reused): `idxsave_full`(+`.data`)
 
-### 10.2 100M provider/language hybrid trial (`Q:\test6\filtered_test4\`)
+### 10.2 Deferred 100M provider/language hybrid trial (`Q:\test6\filtered_test4\`)
 
 - Raw base data: `EmbOffer.Global.100M.tsv`
 - Raw query sample: `EmbQuery.1k.tsv`
 - Persisted hybrid labels: `provider_language.hybrid.bin`
 - Static-10K hybrid labels: `provider_language.hybrid.threshold10000.bin`
-- Encoder: `diskann-tools/src/bin/build_hybrid_label_index.rs`
-- Probe tool: `diskann-tools/src/bin/probe_hybrid_label_index.rs`
+- Prototype encoder and probe tools were removed from the review branch; the persisted artifacts
+  and measurements below are retained for a future sparse-label implementation.
 - UINT8 vectors: `base.provider_language.u8bin`
 - Deduplicated queries: `queries.provider_language.u8bin`
 - Predicates: `query_predicates.provider_language.jsonl`

@@ -383,11 +383,15 @@ Bitmap materialization can remain competitive for a very selective predicate bec
 set is small. Bitslice+DNF provides the stronger overall result and avoids the severe broad-filter
 latency spikes. Across S1-S9, it improves geometric-mean P99 by **1.94x** and P999 by **1.77x**.
 
-## 100M provider/language hybrid-index tuning
+## Deferred research: 100M provider/language hybrid-index tuning
+
+The first reviewable implementation intentionally supports only a dense Bitslice index. The hybrid
+encoder, loader, query provider, benchmark mode, and one-off preparation tools were removed from the
+code change. The results below are retained as design input for a later sparse-label phase.
 
 The 100M-vector provider/language workload contains 64,524 provider IDs and 887 languages, so one
-dense row per label is not practical. The persisted Hybrid format stores frequent labels as
-Bitslice rows and the tail as contiguous sorted `u32` postings.
+dense row per label is not practical. The tested Hybrid format stored frequent labels as Bitslice
+rows and the tail as contiguous sorted `u32` postings.
 
 Two thresholds were built and measured:
 
@@ -412,9 +416,27 @@ The 10K threshold improves the combined filter by **2.42x AVG**, **3.47x P99**, 
 is query-aware promotion under a dense-memory budget: force query-active languages dense, then
 promote provider IDs by query frequency and measured sparse-probe cost.
 
+### Re-entry notes
+
+The removed prototype used one stable label dictionary plus a descriptor per label containing its
+representation, representation-local ordinal, and cardinality. Dense descriptors addressed rows
+in one contiguous Bitslice payload. Sparse descriptors addressed ranges in one monotonic offsets
+array and one contiguous sorted-`u32` vector-ID payload.
+
+The default dense threshold was the raw-memory break-even,
+`ceil(vector_count / 64) * 2`, because a dense row uses one bit per vector while a raw posting uses
+one `u32` per match. Query compilation reordered DNF conjunction terminals to test dense labels
+before sparse labels and then lower-cardinality labels first, improving short-circuit behavior.
+
+A future sparse phase should not restore that threshold unchanged. The measurements show that long
+sparse postings dominate tail latency, while a static 10K threshold consumes too much memory.
+Re-entry should therefore start with a fixed dense-memory budget and query-aware promotion, then
+evaluate clause-selectivity routing between ANN and exact scan. The 100M truth semantics must also
+be confirmed before using recall to tune the representation.
+
 ## Trade-offs and recommendation
 
-| Area | Bitmap+AST | Bitslice+DNF |
+| Area | Prototype Bitmap+AST comparison | Reviewable Bitslice+DNF |
 |---|---|---|
 | Persisted label-index size | 59.0 MiB | 710.2 MiB |
 | Query-time setup | AST set algebra plus result materialization | Label-ID lookup plus compact DNF plan |
@@ -425,15 +447,15 @@ promote provider IDs by query frequency and measured sparse-probe cost.
 For the PMax workload with 596 labels, the recommended implementation is
 `topk-multihop-encoded-bitslice-dnf`. It preserves the proven multihop recall behavior and delivers
 the best overall query-time latency. Bitslice memory grows linearly with
-`label_count * vector_count`, so high-cardinality datasets should retain Bitmap+AST or use an
-adaptive representation rather than allocating a dense slice for every label. For the 100M
-provider/language workload, use the Hybrid format with a query-aware dense budget rather than the
-memory-only threshold or an unrestricted 10K threshold.
+`label_count * vector_count`; the first version therefore supports only bounded-vocabulary dense
+indexes. High-cardinality sparse-label support is deferred. The retained 100M results indicate
+that a later implementation should use a query-aware dense budget rather than the memory-only
+threshold or an unrestricted 10K threshold.
 
 ## Main implementation locations
 
 - `diskann/src/graph/search/multihop_filter_search.rs`: two-hop filtered graph traversal.
-- `diskann-label-index/src/lib.rs`: persisted Bitmap/Bitslice/Hybrid formats and AST/DNF query compilation.
+- `diskann-label-index/src/lib.rs`: persisted dense Bitslice format and flat DNF/CNF query compilation.
 - `diskann-label-filter/src/live_filter.rs`: specialized Bitslice and flat-DNF evaluation.
 - `diskann-benchmark/src/index/benchmarks.rs`: query-inclusive encoded-label benchmark wiring.
-- `diskann-benchmark/src/index/search/plugins.rs`: encoded Bitslice and Hybrid DNF plugins.
+- `diskann-benchmark/src/index/search/plugins.rs`: encoded dense Bitslice-DNF plugin.

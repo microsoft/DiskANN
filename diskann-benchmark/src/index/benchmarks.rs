@@ -88,9 +88,6 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::TopkMultihopLiveFilterBitslice)
             .search(plugins::TopkMultihopLiveFilterBitsliceDnf)
             .search(plugins::TopkMultihopEncodedBitsliceDnf)
-            .search(plugins::TopkMultihopEncodedHybridDnf)
-            .search(plugins::TopkMultihopEncodedBitsliceAst)
-            .search(plugins::TopkMultihopEncodedBitmapAst)
             .search(plugins::TopkInlineLiveFilterBitsliceDnf)
             .search(plugins::TopkInlineFilter)
             .search(plugins::DeterminantDiversity),
@@ -102,9 +99,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
     registry.register(
         "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new()
-            .search(plugins::Topk)
-            .search(plugins::TopkMultihopEncodedHybridDnf),
+        FullPrecision::<u8>::new().search(plugins::Topk),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
@@ -429,8 +424,6 @@ fn run_multihop_encoded<DP, S>(
     index: Arc<DiskANNIndex<DP>>,
     phase: &MultihopFilterSearchPhase,
     strategy: &Strategy<S>,
-    mode: utils::filters::EncodedQueryMode,
-    expected_format: diskann_label_index::LabelIndexFormat,
 ) -> anyhow::Result<AggregatedSearchResults>
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
@@ -454,25 +447,14 @@ where
         GroundTruthMode::Flexible,
     );
 
-    // For encoded-label-index search phases, `data_labels` intentionally points at the persisted
-    // encoded label-index file, not the raw labels JSONL. Loading that index and parsing/validating
-    // the predicate JSONL (including ASTExpr -> LabelExpression conversion plus AST-JSON or DNF
-    // source preparation) stay outside timing. Each timed repetition/search-L rebuilds fresh lazy
-    // providers so the first `is_match` includes `EncodedLabelIndex::{query, query_ast_json}`,
-    // label-id lookup, AST parsing/compilation, and bitmap AST dense materialization.
+    // `data_labels` points at the persisted dense label-index file, not the raw labels JSONL.
+    // Loading the index and parsing/validating DNF predicates stay outside timing. Each timed
+    // repetition/search-L rebuilds fresh lazy providers so the first `is_match` includes label-ID
+    // compilation.
     let label_index = utils::filters::load_encoded_label_index(&phase.data_labels)?;
-    if label_index.format() != expected_format {
-        anyhow::bail!(
-            "encoded search mode expected {:?} label storage, but {} contains {:?}",
-            expected_format,
-            phase.data_labels.display(),
-            label_index.format()
-        );
-    }
     let query_sources = utils::filters::prepare_encoded_query_sources(
         label_index.as_ref(),
         &phase.query_predicates,
-        mode,
     )?;
     let make_multihop = || {
         let providers =
@@ -1195,125 +1177,6 @@ where
             index,
             phase.as_topk_multihop_encoded_bitslice_dnf()?,
             strategy,
-            utils::filters::EncodedQueryMode::Dnf,
-            diskann_label_index::LabelIndexFormat::Bitslice,
-        )
-    }
-}
-
-//------------------------------------//
-// MultihopEncodedFilter (Hybrid DNF) //
-//------------------------------------//
-
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopEncodedHybridDnf
-where
-    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
-            'a,
-            DP,
-            &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
-        > + Clone
-        + AsyncFriendly,
-{
-    fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
-    }
-
-    fn kind(&self) -> &'static str {
-        Self::kind().as_str()
-    }
-
-    fn run(
-        &self,
-        index: Arc<DiskANNIndex<DP>>,
-        phase: &SearchPhase,
-        strategy: &Strategy<S>,
-    ) -> anyhow::Result<AggregatedSearchResults> {
-        run_multihop_encoded(
-            index,
-            phase.as_topk_multihop_encoded_hybrid_dnf()?,
-            strategy,
-            utils::filters::EncodedQueryMode::Dnf,
-            diskann_label_index::LabelIndexFormat::Hybrid,
-        )
-    }
-}
-
-//--------------------------------------//
-// MultihopEncodedFilter (Bitslice AST) //
-//--------------------------------------//
-
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopEncodedBitsliceAst
-where
-    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
-            'a,
-            DP,
-            &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
-        > + Clone
-        + AsyncFriendly,
-{
-    fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
-    }
-
-    fn kind(&self) -> &'static str {
-        Self::kind().as_str()
-    }
-
-    fn run(
-        &self,
-        index: Arc<DiskANNIndex<DP>>,
-        phase: &SearchPhase,
-        strategy: &Strategy<S>,
-    ) -> anyhow::Result<AggregatedSearchResults> {
-        run_multihop_encoded(
-            index,
-            phase.as_topk_multihop_encoded_bitslice_ast()?,
-            strategy,
-            utils::filters::EncodedQueryMode::Ast,
-            diskann_label_index::LabelIndexFormat::Bitslice,
-        )
-    }
-}
-
-//------------------------------------//
-// MultihopEncodedFilter (Bitmap AST) //
-//------------------------------------//
-
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopEncodedBitmapAst
-where
-    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
-            'a,
-            DP,
-            &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
-        > + Clone
-        + AsyncFriendly,
-{
-    fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
-    }
-
-    fn kind(&self) -> &'static str {
-        Self::kind().as_str()
-    }
-
-    fn run(
-        &self,
-        index: Arc<DiskANNIndex<DP>>,
-        phase: &SearchPhase,
-        strategy: &Strategy<S>,
-    ) -> anyhow::Result<AggregatedSearchResults> {
-        run_multihop_encoded(
-            index,
-            phase.as_topk_multihop_encoded_bitmap_ast()?,
-            strategy,
-            utils::filters::EncodedQueryMode::Ast,
-            diskann_label_index::LabelIndexFormat::Bitmap,
         )
     }
 }

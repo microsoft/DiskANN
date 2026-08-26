@@ -12,7 +12,6 @@ anyhow.workspace = true
 bf-tree.workspace = true
 bit-set.workspace = true
 bytemuck.workspace = true
-roaring.workspace = true
 clap = { workspace = true, features = ["derive"] }
 diskann-providers = { workspace = true }
 diskann.workspace = true
