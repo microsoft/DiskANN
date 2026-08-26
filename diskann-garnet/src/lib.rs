@@ -31,7 +31,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
-    garnet::FilterCallback,
+    garnet::{FilterCallback, LogCallback},
     provider::{GarnetProvider, GarnetProviderError},
 };
 use crate::{
@@ -57,10 +57,14 @@ mod test_utils;
 
 const ADAPTIVE_L_SAMPLES: usize = 1000;
 
+/// State of index readiness
 #[derive(Debug, PartialEq)]
 enum IndexState {
+    /// No starting points are present in the graph
     NoStartPoints,
+    /// Some thread is currently in the process of setting start points
     SettingStartPoints,
+    /// Start points set; index ready for normal operation
     Ready,
 }
 impl From<usize> for IndexState {
@@ -75,12 +79,19 @@ impl From<usize> for IndexState {
     }
 }
 
+/// Index wrapper type.
+/// An `&Arc<Index>` is what will be given out over the FFI.
 pub(crate) struct Index {
+    /// The type-erased index
     inner: Box<dyn DynIndex>,
+    /// The quantizer type of the index
     quant_type: VectorQuantType,
+    /// A marker for index readiness; uses `IndexState` as the value
     state: AtomicUsize,
 }
 
+/// Element type of vectors in the index
+/// NOTE: This must match the definition on the C# side.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum VectorValueType {
@@ -89,6 +100,8 @@ pub enum VectorValueType {
     XB8,
 }
 
+/// Quantizer type of the index
+/// NOTE: This must match the definition on the C# side.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum VectorQuantType {
@@ -102,6 +115,10 @@ pub enum VectorQuantType {
     XBinU8,
 }
 
+/// Helper struct to manage the FFI buffers for handling search results
+///
+/// NOTE: The ids will be 4-byte length prefixed, and external IDs are arbitrary length
+/// byte strings.
 struct SearchResults<'a> {
     ids: &'a mut [u8],
     dists: &'a mut [f32],
@@ -110,6 +127,7 @@ struct SearchResults<'a> {
 }
 
 impl SearchResults<'_> {
+    /// Construct from the raw pointers
     fn new(ids: *mut u8, ids_len: usize, dists: *mut f32, dists_len: usize) -> Self {
         let ids = unsafe { slice::from_raw_parts_mut(ids, ids_len) };
         let dists = unsafe { slice::from_raw_parts_mut(dists, dists_len) };
@@ -121,6 +139,12 @@ impl SearchResults<'_> {
             index,
             id_index,
         }
+    }
+
+    /// Push an ID only into the results.
+    /// This is primarily used by `random_members` which does not use distances.
+    fn push_id(&mut self, id: GarnetId) -> diskann::graph::BufferState {
+        self.push(Neighbor::new(id, 0.0))
     }
 }
 
@@ -175,6 +199,8 @@ impl SearchOutputBuffer<GarnetId> for SearchResults<'_> {
     }
 }
 
+/// Helper generic function to create the correct type-erased `Arc<Index>`.
+/// This also returns a bool indicating whether quantization is needed.
 fn create_index_impl<T: VectorRepr>(
     quant_type: VectorQuantType,
     config: config::Config,
@@ -217,6 +243,18 @@ fn create_index_impl<T: VectorRepr>(
     ))
 }
 
+/// Create an index.
+///
+/// Constructs a type-erased DiskANN index object as a `Arc<Index>` and return a pointer
+/// to the leaked Arc. This pointer must be freed with `drop_index()`.
+///
+/// Returns `ptr::null()` if there is an error. Sets the `quantization_needed` outvar if
+/// the index requires quantization callbacks during its lifecycle.
+///
+/// Note that `quantization_needed` can be set to false even when a quantizer is used. The
+/// flag controls whether supplemental control is needed from Garnet to manage quantizers
+/// which require training and backfill.
+///
 /// # Safety
 ///
 /// FFI
@@ -234,6 +272,7 @@ pub unsafe extern "C" fn create_index(
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
     filter_callback: FilterCallback,
+    log_callback: LogCallback,
     quantization_needed: *mut bool,
 ) -> *const c_void {
     unsafe { *quantization_needed = false };
@@ -265,6 +304,7 @@ pub unsafe extern "C" fn create_index(
         delete_callback,
         rmw_callback,
         filter_callback,
+        log_callback,
     );
 
     match quant_type {
@@ -320,6 +360,10 @@ pub unsafe extern "C" fn create_index(
     }
 }
 
+/// Drop an index.
+///
+/// This is the only valid way to free an index pointer created with `create_index()`.
+///
 /// # Safety
 ///
 /// FFI
@@ -329,6 +373,7 @@ pub unsafe extern "C" fn drop_index(_ctx: u64, index_ptr: *const c_void) {
     let _ = unsafe { Arc::from_raw(index_ptr.cast::<Index>()) };
 }
 
+/// `Cow` type for `Poly<[u8], AlignToEight>` types.
 enum PolyCow<'a> {
     Owned(Poly<[u8], AlignToEight>),
     Borrowed(&'a [u8]),
@@ -357,6 +402,11 @@ impl<'a> From<Poly<[u8], AlignToEight>> for PolyCow<'a> {
     }
 }
 
+/// Helper function to interpret the vector pointer and size into a usable Rust
+/// type. This will return either a borrowed or owned vector depending on how
+/// the pointer is aligned. Since Garnet doesn't guarantee the alignment, if it
+/// is not 4-byte aligned, we must allocate an appropriately aligned buffer to
+/// access it as its correct element type.
 fn interpret_vector<'a>(
     quant_type: VectorQuantType,
     vector_data: &'a *const u8,
@@ -401,6 +451,11 @@ fn interpret_vector<'a>(
     Some(v)
 }
 
+/// Return type for `insert()`.
+///
+/// `Fail` and `Success` are obvious. `SuccessStartTraining` is used when enough vectors have
+/// been inserted to start training the quantizer. That return value signals to Garnet that
+/// `build_quant_table` should be called.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InsertResult {
     Fail,
@@ -467,20 +522,21 @@ pub unsafe extern "C" fn insert(
         return InsertResult::Fail.into();
     };
 
-    // Write attributes to garnet
-    let attr_data = if attribute_len > 0 && !attribute_data.is_null() {
-        unsafe { slice::from_raw_parts(attribute_data, attribute_len) }
-    } else {
-        &[]
-    };
-    if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-        return InsertResult::Fail.into();
-    }
-
     let old_ready = ctx.quantizer_ready();
 
     // Insert the vector
     if index.inner.insert(&ctx, &id, &v).is_ok() {
+        // Write attributes to garnet. These are written after insert since
+        // they are keyed on internal id.
+        let attr_data = if attribute_len > 0 && !attribute_data.is_null() {
+            unsafe { slice::from_raw_parts(attribute_data, attribute_len) }
+        } else {
+            &[]
+        };
+        if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
+            return InsertResult::Fail.into();
+        }
+
         let ready = ctx.quantizer_ready();
         if !old_ready && ready {
             InsertResult::SuccessStartTraining.into()
@@ -492,6 +548,7 @@ pub unsafe extern "C" fn insert(
     }
 }
 
+/// Ensures the index is ready to be used, and if not, runs the `init` function.
 fn ensure_index_ready_or_init<F, E>(index: &Index, init: F) -> Option<E>
 where
     F: FnOnce() -> Option<E>,
@@ -538,7 +595,7 @@ where
 /// Once this function returns `true`, Garnet will invoke several `backfill_quant_vectors()`
 /// calls from a thread pool. If it returns false, it may be re-invoked to try again.
 ///
-///  # Safety
+/// # Safety
 ///
 /// FFI
 #[unsafe(no_mangle)]
@@ -553,6 +610,8 @@ pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_voi
 /// times from a thread pool. Each invocation is told its index and the total number of
 /// invocations so that each invocation can correctly pick and size its work.
 ///
+/// Returns true for success and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -562,14 +621,20 @@ pub unsafe extern "C" fn backfill_quant_vectors(
     index_ptr: *const c_void,
     task_index: usize,
     task_count: usize,
-) {
+) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context::new(context);
     index
         .inner
-        .backfill_quant_vectors(&ctx, task_index, task_count);
+        .backfill_quant_vectors(&ctx, task_index, task_count)
 }
 
+/// Set the attributes for a vector.
+///
+/// Setting attributes with `attribute_len == 0` is equivalent to deleting them.
+///
+/// Returns true for success and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -609,6 +674,8 @@ pub unsafe extern "C" fn set_attribute(
     true
 }
 
+/// Search the closest vectors to the given query vector.
+///
 /// # Safety
 ///
 /// FFI
@@ -627,6 +694,7 @@ pub unsafe extern "C" fn search_vector(
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
+    beam_width: u32,
     _continuation: *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
@@ -646,7 +714,10 @@ pub unsafe extern "C" fn search_vector(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
+    let knn_params = match search::Knn::new(
+        search_exploration_factor as usize,
+        Some(beam_width as usize),
+    ) {
         Ok(params) => params,
         Err(_) => return -1,
     };
@@ -679,6 +750,8 @@ pub unsafe extern "C" fn search_vector(
     }
 }
 
+/// Search the closest vectors to the given existing vector in the index.
+///
 /// # Safety
 ///
 /// FFI
@@ -697,6 +770,7 @@ pub unsafe extern "C" fn search_element(
     output_ids_len: usize,
     output_distances: *mut f32,
     output_distances_len: usize,
+    beam_width: u32,
     _continuation: *mut c_void,
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
@@ -711,7 +785,10 @@ pub unsafe extern "C" fn search_element(
         output_distances_len,
     );
 
-    let knn_params = match search::Knn::new(search_exploration_factor as usize, None) {
+    let knn_params = match search::Knn::new(
+        search_exploration_factor as usize,
+        Some(beam_width as usize),
+    ) {
         Ok(knn) => knn,
         Err(_) => return -1,
     };
@@ -747,6 +824,12 @@ pub unsafe extern "C" fn search_element(
     }
 }
 
+/// Continue getting results for a previously executed search.
+///
+/// NOTE: This is currently unimplemented.
+///
+/// Positive return values are the count of vectors returned. `-1` will be returned on errors.
+///
 /// # Safety
 ///
 /// FFI
@@ -764,6 +847,10 @@ pub unsafe extern "C" fn continue_search(
     -1
 }
 
+/// Remove a vector from the index.
+///
+/// Returns true on success and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -786,6 +873,8 @@ pub unsafe extern "C" fn remove(
     index.inner.remove(&ctx, &id).is_ok()
 }
 
+/// Return the approximate count of vectors in the index.
+///
 /// # Safety
 ///
 /// FFI
@@ -796,6 +885,10 @@ pub unsafe extern "C" fn card(_ctx: u64, index_ptr: *const c_void) -> u64 {
     index.inner.approximate_count()
 }
 
+/// Check if a given internal ID is a valid vector.
+///
+/// Returns true if the vector exists, and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -819,6 +912,10 @@ pub unsafe extern "C" fn check_internal_id_valid(
     index.inner.internal_id_exists(&ctx, id)
 }
 
+/// Check if a given external ID is a valid vector.
+///
+/// Returns true if the vector exists, and false otherwise.
+///
 /// # Safety
 ///
 /// FFI
@@ -837,6 +934,81 @@ pub unsafe extern "C" fn check_external_id_valid(
     index.inner.external_id_exists(&ctx, &id)
 }
 
+/// Returns random vectors from the index.
+///
+/// This is primarily a debugging aid.
+///
+/// Returns true on success and false otherwise.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn random_members(
+    ctx: u64,
+    index_ptr: *const c_void,
+    count: u32,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+
+    // Dummy buffer for distances
+    let mut output_distances = vec![0f32; output_ids_len / 5];
+    let mut output = SearchResults::new(
+        output_ids,
+        output_ids_len,
+        output_distances.as_mut_ptr(),
+        output_distances.len(),
+    );
+
+    index.inner.random_members(&ctx, count, &mut output)
+}
+
+/// Return the neighbors for an index vector.
+///
+/// This is primarily a debugging aid. It returns both the neighbors' IDs and their
+/// distance from the given vector.
+///
+/// Returns the number of results or `-1` on error.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn search_neighbors(
+    ctx: u64,
+    index_ptr: *const c_void,
+    id_data: *const u8,
+    id_len: usize,
+    output_ids: *mut u8,
+    output_ids_len: usize,
+    output_distances: *mut f32,
+    output_distances_len: usize,
+    _continuation: *mut c_void,
+) -> i32 {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(ctx);
+    let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
+    let id = GarnetId::from(id_bytes);
+
+    let mut output = SearchResults::new(
+        output_ids,
+        output_ids_len,
+        output_distances,
+        output_distances_len,
+    );
+
+    let Ok(neighbors) = index.inner.neighbors(&ctx, &id) else {
+        return -1;
+    };
+
+    output.extend(neighbors);
+
+    output.current_len() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use std::{mem, ptr};
@@ -846,6 +1018,7 @@ mod tests {
         neighbor::Neighbor,
     };
     use diskann_vector::distance::Metric;
+    use rand::Rng;
 
     use crate::{
         Index, IndexState, PolyCow, SearchResults, VectorQuantType, drop_index,
@@ -930,6 +1103,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -962,6 +1136,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -1021,6 +1196,7 @@ mod tests {
                 store.callbacks().delete_callback(),
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
                 &mut quant_needed,
             )
         };
@@ -1032,8 +1208,6 @@ mod tests {
         let metadata = b"{'foo': 0}";
         let ctx = Context::new(0);
         let v = [0.0f32, 0.0f32];
-
-        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
 
         assert_eq!(
             unsafe {
@@ -1050,8 +1224,9 @@ mod tests {
             },
             1
         );
+        let iid = store.get(ctx.term(Term::IntMap).get(), &eid).unwrap();
         assert_eq!(
-            store.get(ctx.term(Term::Attributes).get(), &eid),
+            store.get(ctx.term(Term::Attributes).get(), &iid),
             Some(metadata.as_slice().to_owned())
         );
 
@@ -1065,10 +1240,299 @@ mod tests {
                 0,
             )
         });
-        assert!(store.get(ctx.term(Term::Attributes).get(), &eid).is_none());
+        assert!(store.get(ctx.term(Term::Attributes).get(), &iid).is_none());
 
         unsafe {
             drop_index(0, index_ptr);
         }
+    }
+
+    #[test]
+    fn random_members() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let ctx = Context::new(0);
+        let mut rng = rand::rng();
+
+        for id in 0..100 {
+            let mut v = vec![0u8; 2];
+            rng.fill(v.as_mut_slice());
+            let v = v.into_iter().map(|i| i as f32).collect::<Vec<f32>>();
+
+            let eid = GarnetId::from(bytemuck::bytes_of(&id));
+            assert_eq!(
+                unsafe {
+                    super::insert(
+                        ctx.get(),
+                        index_ptr,
+                        eid.as_ptr(),
+                        eid.len(),
+                        bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                        v.len(),
+                        ptr::null(),
+                        0,
+                    )
+                },
+                1
+            );
+        }
+
+        // Check basic correctness
+        let mut output_ids = vec![u32::MAX; 20];
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                10,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check undersized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                20,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check oversized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                5,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(output_ids.iter().enumerate().all(|(i, e)| if i < 10 {
+            if i.is_multiple_of(2) {
+                *e == 4
+            } else {
+                *e < 100
+            }
+        } else {
+            *e == u32::MAX
+        }));
+
+        // Delete 50 vectors at random
+        let ids = rand::seq::index::sample(&mut rng, 100, 50);
+        for id in ids {
+            let id = id as u32;
+            let eid = GarnetId::from(bytemuck::bytes_of(&id));
+
+            assert!(unsafe { super::remove(ctx.get(), index_ptr, eid.as_ptr(), eid.len()) });
+        }
+
+        // Check basic correctness
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                10,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check undersized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                20,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(
+            output_ids
+                .iter()
+                .enumerate()
+                .all(|(i, e)| if i.is_multiple_of(2) {
+                    *e == 4
+                } else {
+                    *e < 100
+                })
+        );
+
+        // Check oversized buffer
+        output_ids.fill(u32::MAX);
+        assert!(unsafe {
+            super::random_members(
+                ctx.get(),
+                index_ptr,
+                5,
+                bytemuck::cast_slice_mut::<u32, u8>(output_ids.as_mut_slice()).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+            )
+        });
+        assert!(output_ids.iter().enumerate().all(|(i, e)| if i < 10 {
+            if i.is_multiple_of(2) {
+                *e == 4
+            } else {
+                *e < 100
+            }
+        } else {
+            *e == u32::MAX
+        }));
+    }
+
+    #[test]
+    fn search_neighbors() {
+        let store = Store::new();
+        let mut quant_needed = false;
+
+        let index_ptr = unsafe {
+            super::create_index(
+                0,
+                2,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2.into(),
+                10,
+                8,
+                store.callbacks().read_callback(),
+                store.callbacks().write_callback(),
+                store.callbacks().delete_callback(),
+                store.callbacks().rmw_callback(),
+                store.callbacks().filter_callback(),
+                store.callbacks().log_callback(),
+                &mut quant_needed,
+            )
+        };
+
+        assert!(!index_ptr.is_null());
+
+        let ctx = Context::new(0);
+        let mut rng = rand::rng();
+
+        for id in 0..100 {
+            let mut v = vec![0u8; 2];
+            rng.fill(v.as_mut_slice());
+            let v = v.into_iter().map(|i| i as f32).collect::<Vec<f32>>();
+
+            let eid = GarnetId::from(bytemuck::bytes_of(&id));
+            assert_eq!(
+                unsafe {
+                    super::insert(
+                        ctx.get(),
+                        index_ptr,
+                        eid.as_ptr(),
+                        eid.len(),
+                        bytemuck::cast_slice::<f32, u8>(&v).as_ptr(),
+                        v.len(),
+                        ptr::null(),
+                        0,
+                    )
+                },
+                1
+            );
+        }
+
+        let mut output_ids = vec![u32::MAX; 20];
+        let mut output_dists = vec![f32::MAX; 10];
+        let good_id = GarnetId::from(bytemuck::bytes_of(&25u32));
+        let bad_id = GarnetId::from(bytemuck::bytes_of(&250u32));
+
+        // check the good case
+        let count = unsafe {
+            super::search_neighbors(
+                ctx.get(),
+                index_ptr,
+                good_id.as_ptr(),
+                good_id.len(),
+                bytemuck::cast_slice_mut(&mut output_ids).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+
+        assert!(count > 0 && count <= 8, "count = {count}");
+
+        for i in 0..count as usize {
+            assert_eq!(output_ids[i * 2], 4);
+            assert!(output_ids[i * 2 + 1] < 100);
+            assert!(output_dists[i] < f32::MAX);
+        }
+
+        let count = unsafe {
+            super::search_neighbors(
+                ctx.get(),
+                index_ptr,
+                bad_id.as_ptr(),
+                bad_id.len(),
+                bytemuck::cast_slice_mut(&mut output_ids).as_mut_ptr(),
+                output_ids.len() * mem::size_of::<u32>(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+
+        assert!(count < 0);
     }
 }

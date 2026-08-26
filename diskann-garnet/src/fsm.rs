@@ -143,7 +143,7 @@ impl FreeSpaceMap {
         let block_key = Self::block_key(0);
         if this
             .callbacks
-            .exists_wid(&ctx.term(Term::Metadata), block_key)
+            .exists_wid(&ctx.term(Term::Metadata), block_key, BLOCK_SIZE_BYTES)
         {
             this.load_state(ctx)?;
         } else {
@@ -159,10 +159,11 @@ impl FreeSpaceMap {
     /// Load all state from Garnet by scanning the FSM blocks.
     fn load_state(&mut self, ctx: &Context) -> Result<(), FsmError> {
         let mut max_block_id = 0;
-        while self
-            .callbacks
-            .exists_wid(&ctx.term(Term::Metadata), Self::block_key(max_block_id))
-        {
+        while self.callbacks.exists_wid(
+            &ctx.term(Term::Metadata),
+            Self::block_key(max_block_id),
+            BLOCK_SIZE_BYTES,
+        ) {
             max_block_id += 1;
         }
 
