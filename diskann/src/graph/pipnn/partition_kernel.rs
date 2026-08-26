@@ -212,7 +212,7 @@ where
         return;
     }
 
-    let values = scores.to_array();
+    let values = scores.to_lane_array();
     let values = values.as_ref();
     let mut lanes = F::active_lanes(eligible);
     while lanes != 0 {
