@@ -180,9 +180,18 @@ float32, distance squared_l2, max_degree 64, l_build 100, alpha 1.2, medoid star
 
 ## 8. Live per-node filter vs precomputed bitmap
 
+Sections 8-8.4.7 preserve the historical method comparisons that led to the final design. Their
+live/CSR/bitmap/auto/recursive-Bitslice/inline benchmark modes were removed from the reviewable
+change. The retained benchmark mode is `topk-multihop-encoded-bitslice-dnf`.
+
 Both multihop runs above use a **precomputed whole-corpus bitmap** for the filter: the match set of each query is computed offline (a full-dataset scan) and `is_match(id)` is an O(1) bitmap lookup. That work is **not** included in the reported search latency.
 
-To measure the **real** filter cost, a new search type `topk-multihop-live-filter` evaluates the predicate **live, per visited node**: each vector's labels are stored as a roaring set of integer attribute-ids (built once, like an index), the query predicate is encoded once to integer terminals, and `is_match(id)` reads the node's set (lock-free) and evaluates the AND/OR expression via `contains`. No FFI, no global posting list. Only AND/OR + equality are supported (NOT/relational rejected).
+To measure the **real** filter cost, the historical `topk-multihop-live-filter` prototype evaluated
+the predicate **live, per visited node**: each vector's labels were stored as a roaring set of
+integer attribute-ids (built once, like an index), the query predicate was encoded once to integer
+terminals, and `is_match(id)` read the node's set (lock-free) and evaluated the AND/OR expression
+via `contains`. No FFI or global posting list was used. Only AND/OR + equality were supported
+(NOT/relational rejected).
 
 Results at **L=150, k=150, single thread** (recall is identical because traversal is the same; only how `is_match` is computed differs):
 
@@ -213,9 +222,18 @@ The live cost in section 8 is dominated by the roaring representation. `is_match
 | AND-2 | 298 ns | 20.7 ns (14.4x) | 23.6 ns |
 | (a AND b) OR (c AND d) | 596 ns | 36.0 ns (16.6x) | 74.2 ns |
 
-(microbench: `cargo bench -p diskann-label-filter --bench main -- live_filter`; posting = one doc-id bitmap per attribute, wins only for a single broad term but degrades with term count since each terminal is a separate random bitmap probe.)
+The removed prototype was measured with
+`cargo bench -p diskann-label-filter --bench main -- live_filter`. That command is retained only
+for historical reproducibility and is no longer runnable on this branch. Posting used one doc-ID
+bitmap per attribute; it won only for a single broad term and degraded with term count because each
+terminal required a separate random bitmap probe.
 
-A CSR-backed provider (`InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr`) was added and exposed as the benchmark search type `topk-multihop-live-filter-csr`. It reuses the same `AttributeEncoder`/`EncodedFilterExpr`, so predicate semantics and errors are identical. End-to-end (same index, k=150, L=150, single thread, 1000 queries) it is a drop-in replacement — **identical traversal** (same avg cmps/hops) and **identical recall** — differing only in how `is_match` is computed:
+A CSR-backed provider (`InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr`) was historically
+exposed as `topk-multihop-live-filter-csr`. It reused the same
+`AttributeEncoder`/`EncodedFilterExpr`, so predicate semantics and errors were identical.
+End-to-end (same index, k=150, L=150, single thread, 1000 queries) it was a drop-in replacement —
+**identical traversal** (same avg cmps/hops) and **identical recall** — differing only in how
+`is_match` was computed:
 
 | Case | impl | recall | mean | p90 | p99 | QPS |
 |---|---|---:|---:|---:|---:|---:|
@@ -228,7 +246,14 @@ CSR gives a **3.4x (S1) - 4.4x (S4)** end-to-end latency/QPS improvement at equa
 
 ## 8.2 Posting-list + materialized bitmap, and the selectivity crossover
 
-CSR still evaluates the predicate per visited node. The Lucene/Milvus/FAISS approach instead builds the query's whole match set **once** (roaring `AND`/`OR` over per-attribute posting lists) into a dense bitset, then answers each node with an `O(1)` bit test. `topk-multihop-live-filter-bitmap` (`InlineAttributeIndexPosting` / `MaterializedBitmapProvider`) implements this **live** — the match-set materialization is done lazily on the first `is_match`, so its cost is counted in query latency, not an offline pass. The benchmark reconstructs these lazy providers for every repetition and search-L run, preventing the materialized state from being reused across measurements.
+CSR evaluated the predicate per visited node. The Lucene/Milvus/FAISS approach instead builds the
+query's whole match set **once** (roaring `AND`/`OR` over per-attribute posting lists) into a dense
+bitset, then answers each node with an `O(1)` bit test. The historical
+`topk-multihop-live-filter-bitmap` prototype (`InlineAttributeIndexPosting` /
+`MaterializedBitmapProvider`) implemented this **live**: match-set materialization happened lazily
+on the first `is_match`, so its cost was counted in query latency, not an offline pass. The
+benchmark reconstructed these lazy providers for every repetition and search-L run, preventing
+the materialized state from being reused across measurements.
 
 Three-way live comparison (same index, k=150, L=150, single thread, 1000 queries; recall identical within each case):
 
@@ -319,7 +344,7 @@ dispatch, attribute-array lookup, and vector-id word/mask calculation.
 
 ### 8.4.3 Flat DNF representation
 
-The optimized search type `topk-multihop-live-filter-bitslice-dnf` accepts expressions already in
+The historical `topk-multihop-live-filter-bitslice-dnf` search type accepted expressions already in
 disjunctive normal form: an OR of AND clauses. A terminal is a one-term clause and a plain AND is
 a one-clause expression.
 
@@ -432,7 +457,7 @@ AVG.
 
 ### 8.4.7 Fixed-L InlineFilterSearch versus multihop with Bitslice-DNF
 
-A dedicated `topk-inline-live-filter-bitslice-dnf` benchmark mode was added so InlineFilterSearch
+A dedicated `topk-inline-live-filter-bitslice-dnf` benchmark mode was used so InlineFilterSearch
 and multihop can use the exact same attribute index, encoded DNF providers, queries, and ground
 truth. The initial comparison intentionally disabled Adaptive-L and used the same fixed k=150,
 L=150, one thread, 1,000 queries, full 596-label metadata, canonical `gtset` ground truth, and
@@ -652,14 +677,16 @@ bitsets, but evaluate the complete predicate over all `ceil(N / 64)` words using
 AND the terminal bitsets within each DNF clause, OR the clause results, and write one dense
 query-result bitmap. ANN traversal would then perform one bit lookup per visited node.
 
-This differs from `topk-multihop-live-filter-bitmap`, which currently performs Roaring posting-list
-set algebra and then iterates the matching IDs to densify the result. The SIMD experiment should
-not use a cross-query result cache: construct a fresh result bitmap for each query execution and
-charge all allocation, initialization, Boolean operations, and writes to query latency.
+This differed from the removed historical `topk-multihop-live-filter-bitmap` prototype, which
+performed Roaring posting-list set algebra and then iterated the matching IDs to densify the
+result. The SIMD experiment should not use a cross-query result cache: construct a fresh result
+bitmap for each query execution and charge all allocation, initialization, Boolean operations, and
+writes to query latency.
 
 The comparison should include:
 
-- current Roaring materialization, SIMD dense materialization, and live Bitslice-DNF;
+- retained encoded Bitslice-DNF, SIMD dense materialization, and a reimplemented historical
+  Roaring-materialization baseline if that comparison is still needed;
 - one-, two-, four-, and larger-terminal DNF expressions with controlled short-circuit behavior;
 - total filter evaluations relative to `N / 64`, including all nodes visited during the query;
 - selective and broad results, plus different terminal/clause orderings;
@@ -866,12 +893,9 @@ and 0.01% should also be measured.
 - Runbooks: `runbook_setmin.json` (multihop), `runbook_beta_setmin.json` (beta), `runbook_livefilter.json` (live per-node)
 - Outputs: `out_setmin.json`, `out_beta_setmin.json`, `out_livefilter.json` (+ `out_live_S8.json`, `out_live_S9.json`)
 - Encoders: `gen_setmembership.py` (full), `gen_setmin.py` (minimal)
-- Live-filter code: `diskann-label-filter/src/live_filter.rs` (InlineAttributeIndex / FrozenAttributeIndex + QueryLabelProvider); benchmark search-type `topk-multihop-live-filter`
-- CSR live-filter code (section 8.1): `InlineAttributeIndexCsr` / `FrozenAttributeIndexCsr` in the same module; benchmark search-type `topk-multihop-live-filter-csr`; is_match microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
-- Posting-list + materialized-bitmap live code (section 8.2): `InlineAttributeIndexPosting` / `FrozenAttributeIndexPosting` / `MaterializedBitmapProvider`; benchmark search-type `topk-multihop-live-filter-bitmap`
-- Adaptive + bit-sliced live code (section 8.3): `InlineAttributeIndexAuto` (search-type `topk-multihop-live-filter-auto`) and `InlineAttributeIndexBitslice` (search-type `topk-multihop-live-filter-bitslice`)
-- Flat DNF Bitslice code (section 8.4): `EncodedDnf`, `BitsliceSingleProvider`, and `BitsliceDnfProvider`; benchmark search-type `topk-multihop-live-filter-bitslice-dnf`; microbenchmark `diskann-label-filter/benches/benchmarks/live_filter_bench.rs`
-- Inline Bitslice-DNF comparison (section 8.4.7): benchmark search-type `topk-inline-live-filter-bitslice-dnf`, using the same `InlineAttributeIndexBitslice` and DNF providers with `InlineFilterSearch`
+- Historical live-filter comparisons (sections 8-8.4.7): the live, CSR, posting-list bitmap,
+  adaptive, recursive Bitslice, live Bitslice-DNF, and inline Bitslice-DNF benchmark search types
+  were removed after selecting the final design
 - Encoded-label library (section 8.4.8): retained search type
   `topk-multihop-encoded-bitslice-dnf` and local dense artifact
   `data_labels_set.bitslice.bin`; the AST/bitmap modes and `data_labels_set.bitmap.bin` were

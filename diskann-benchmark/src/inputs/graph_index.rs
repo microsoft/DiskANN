@@ -408,16 +408,9 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultihopFilterSearchPhase),
-    TopkMultihopLiveFilter(MultihopFilterSearchPhase),
-    TopkMultihopLiveFilterCsr(MultihopFilterSearchPhase),
-    TopkMultihopLiveFilterBitmap(MultihopFilterSearchPhase),
-    TopkMultihopLiveFilterAuto(MultihopFilterSearchPhase),
-    TopkMultihopLiveFilterBitslice(MultihopFilterSearchPhase),
-    TopkMultihopLiveFilterBitsliceDnf(MultihopFilterSearchPhase),
     /// For these encoded-label-index modes, `data_labels` points at a pre-encoded
     /// `diskann-label-index` artifact instead of the raw labels JSONL.
     TopkMultihopEncodedBitsliceDnf(MultihopFilterSearchPhase),
-    TopkInlineLiveFilterBitsliceDnf(InlineFilterSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
@@ -446,21 +439,8 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
-            Self::TopkMultihopLiveFilter(_) => SearchPhaseKind::TopkMultihopLiveFilter,
-            Self::TopkMultihopLiveFilterCsr(_) => SearchPhaseKind::TopkMultihopLiveFilterCsr,
-            Self::TopkMultihopLiveFilterBitmap(_) => SearchPhaseKind::TopkMultihopLiveFilterBitmap,
-            Self::TopkMultihopLiveFilterAuto(_) => SearchPhaseKind::TopkMultihopLiveFilterAuto,
-            Self::TopkMultihopLiveFilterBitslice(_) => {
-                SearchPhaseKind::TopkMultihopLiveFilterBitslice
-            }
-            Self::TopkMultihopLiveFilterBitsliceDnf(_) => {
-                SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf
-            }
             Self::TopkMultihopEncodedBitsliceDnf(_) => {
                 SearchPhaseKind::TopkMultihopEncodedBitsliceDnf
-            }
-            Self::TopkInlineLiveFilterBitsliceDnf(_) => {
-                SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf
             }
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
             Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
@@ -509,78 +489,6 @@ impl SearchPhase {
         }
     }
 
-    pub(crate) fn as_topk_multihop_live_filter(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopLiveFilter(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopLiveFilter,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_multihop_live_filter_csr(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopLiveFilterCsr(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopLiveFilterCsr,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_multihop_live_filter_bitmap(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopLiveFilterBitmap(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopLiveFilterBitmap,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_multihop_live_filter_auto(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopLiveFilterAuto(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopLiveFilterAuto,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_multihop_live_filter_bitslice(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopLiveFilterBitslice(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopLiveFilterBitslice,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_multihop_live_filter_bitslice_dnf(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopLiveFilterBitsliceDnf(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopLiveFilterBitsliceDnf,
-                self.kind(),
-            )),
-        }
-    }
-
     pub(crate) fn as_topk_multihop_encoded_bitslice_dnf(
         &self,
     ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
@@ -600,18 +508,6 @@ impl SearchPhase {
             Self::TopkInlineFilter(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(
                 SearchPhaseKind::TopkInlineFilter,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_inline_live_filter_bitslice_dnf(
-        &self,
-    ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkInlineLiveFilterBitsliceDnf(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkInlineLiveFilterBitsliceDnf,
                 self.kind(),
             )),
         }
@@ -637,14 +533,7 @@ impl SearchPhase {
             SearchPhase::Range(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
-            SearchPhase::TopkMultihopLiveFilter(phase) => phase.validate(checker),
-            SearchPhase::TopkMultihopLiveFilterCsr(phase) => phase.validate(checker),
-            SearchPhase::TopkMultihopLiveFilterBitmap(phase) => phase.validate(checker),
-            SearchPhase::TopkMultihopLiveFilterAuto(phase) => phase.validate(checker),
-            SearchPhase::TopkMultihopLiveFilterBitslice(phase) => phase.validate(checker),
-            SearchPhase::TopkMultihopLiveFilterBitsliceDnf(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopEncodedBitsliceDnf(phase) => phase.validate(checker),
-            SearchPhase::TopkInlineLiveFilterBitsliceDnf(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
             SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
@@ -657,14 +546,7 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
-    TopkMultihopLiveFilter,
-    TopkMultihopLiveFilterCsr,
-    TopkMultihopLiveFilterBitmap,
-    TopkMultihopLiveFilterAuto,
-    TopkMultihopLiveFilterBitslice,
-    TopkMultihopLiveFilterBitsliceDnf,
     TopkMultihopEncodedBitsliceDnf,
-    TopkInlineLiveFilterBitsliceDnf,
     TopkInlineFilter,
     TopkDeterminantDiversity,
 }
@@ -676,14 +558,7 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
-            Self::TopkMultihopLiveFilter => "topk-multihop-live-filter",
-            Self::TopkMultihopLiveFilterCsr => "topk-multihop-live-filter-csr",
-            Self::TopkMultihopLiveFilterBitmap => "topk-multihop-live-filter-bitmap",
-            Self::TopkMultihopLiveFilterAuto => "topk-multihop-live-filter-auto",
-            Self::TopkMultihopLiveFilterBitslice => "topk-multihop-live-filter-bitslice",
-            Self::TopkMultihopLiveFilterBitsliceDnf => "topk-multihop-live-filter-bitslice-dnf",
             Self::TopkMultihopEncodedBitsliceDnf => "topk-multihop-encoded-bitslice-dnf",
-            Self::TopkInlineLiveFilterBitsliceDnf => "topk-inline-live-filter-bitslice-dnf",
             Self::TopkInlineFilter => "topk-inline-filter",
             Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }

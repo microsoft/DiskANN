@@ -456,6 +456,5 @@ threshold or an unrestricted 10K threshold.
 
 - `diskann/src/graph/search/multihop_filter_search.rs`: two-hop filtered graph traversal.
 - `diskann-label-index/src/lib.rs`: persisted dense Bitslice format and flat DNF/CNF query compilation.
-- `diskann-label-filter/src/live_filter.rs`: specialized Bitslice and flat-DNF evaluation.
 - `diskann-benchmark/src/index/benchmarks.rs`: query-inclusive encoded-label benchmark wiring.
 - `diskann-benchmark/src/index/search/plugins.rs`: encoded dense Bitslice-DNF plugin.
