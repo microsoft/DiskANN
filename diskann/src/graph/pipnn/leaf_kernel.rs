@@ -263,7 +263,7 @@ fn scan_point_pairs<A, M, I>(
             let target_bits = A::Vector::active_lanes(target_eligible);
 
             if source_bits | target_bits != 0 {
-                let values = distances.to_array();
+                let values = distances.to_lane_array();
                 let values = values.as_ref();
                 let mut source_bits = source_bits;
                 while source_bits != 0 {
