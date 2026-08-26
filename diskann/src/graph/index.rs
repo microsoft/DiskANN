@@ -2604,9 +2604,7 @@ where
         let mut storage = Vec::with_capacity(pool.len());
         let cache = pool.map_in(
             &mut storage,
-            |id| {
-                if exclude(*id) { None } else { map.get(*id) }
-            },
+            |id| if exclude(*id) { None } else { map.get(*id) },
         );
 
         let found = prune::robust_prune(
