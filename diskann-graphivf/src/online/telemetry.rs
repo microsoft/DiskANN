@@ -21,11 +21,17 @@ pub struct SplitEvent {
     pub cluster_size: usize,
     /// Live neighbor clusters drawn into reassignment, excluding the children.
     pub num_neighbors: usize,
+    /// Points in the parent posting plus the nearby postings examined by LIRE.
+    pub region_points: usize,
+    /// Deduplicated points surviving LIRE's two necessary-condition filters and
+    /// sent to the final global NPA check, attributed once within the batch.
+    pub npa_candidates: usize,
     /// Points that actually changed cluster during reassignment.
     pub num_reassigned: usize,
     /// Live centroid count immediately after the batch's splits.
     pub live_after: usize,
-    /// Wall-clock of this parent's 2-means, microseconds.
+    /// Wall-clock of this parent's balanced fit and condition filtering,
+    /// microseconds.
     pub two_means_us: u64,
     /// Wall-clock of this parent's reassignment pass, microseconds.
     pub reassign_us: u64,
@@ -35,20 +41,20 @@ pub struct SplitEvent {
     pub total_us: u64,
 }
 
-/// One cluster-dissolve event recorded during a delete.
+/// One LIRE merge event recorded during a delete.
 ///
-/// A merge retires one underfull centroid and scatters only that centroid's
-/// remaining members onto survivors. A batched delete emits one event per
+/// A merge retires one underfull centroid and globally routes only that
+/// centroid's remaining members. A batched delete emits one event per
 /// retirement; all events from the batch share `op_index` and `live_after`.
 #[derive(Debug, Clone, Copy)]
 pub struct MergeEvent {
     /// Total operations (inserts plus deletes) completed when this merge fired.
     pub op_index: u64,
-    /// The underfull centroid that was dissolved and retired.
+    /// The underfull centroid that was merged and retired.
     pub victim: u32,
-    /// Points the victim still held when it was dissolved.
+    /// Points the victim still held when it was merged.
     pub victim_size: usize,
-    /// Surviving clusters offered as landing sites.
+    /// Landing-site count; LIRE records one capacity-compatible merge target.
     pub num_neighbors: usize,
     /// Points that actually changed cluster.
     pub num_reassigned: usize,
@@ -106,17 +112,19 @@ impl BuildTelemetry {
         use std::fmt::Write as _;
         let mut out = String::with_capacity(64 + self.splits.len() * 48);
         out.push_str(
-            "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
+            "insert_index,cluster,cluster_size,num_neighbors,region_points,npa_candidates,num_reassigned,\
              live_after,two_means_us,reassign_us,total_us\n",
         );
         for event in &self.splits {
             let _ = writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{}",
                 event.insert_index,
                 event.cluster,
                 event.cluster_size,
                 event.num_neighbors,
+                event.region_points,
+                event.npa_candidates,
                 event.num_reassigned,
                 event.live_after,
                 event.two_means_us,

@@ -156,6 +156,49 @@ fn assert_live_invariants(c: &OnlineClusterer, live: &[u32]) {
     }
 }
 
+/// Every live point is assigned to its globally nearest live centroid.
+fn assert_npa(c: &OnlineClusterer, live: &[u32]) {
+    for &pid in live {
+        let assigned = c.partition.assignment(pid);
+        let assigned_distance = sqd(
+            c.points.row(pid as usize),
+            c.centroids
+                .get(assigned)
+                .expect("assigned centroid is live"),
+        );
+        let best = c
+            .centroids
+            .iter_live()
+            .map(|(_, centroid)| sqd(c.points.row(pid as usize), centroid))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            assigned_distance <= best + 1e-5,
+            "point {pid} violates NPA: assigned={assigned_distance} best={best}"
+        );
+    }
+}
+
+#[test]
+fn lire_split_reaches_npa_and_threshold_equilibrium() {
+    let mut rng = StdRng::seed_from_u64(71);
+    let (n, dim) = (400usize, 4usize);
+    let values = (0..n * dim)
+        .map(|_| rng.random_range(-10.0f32..10.0))
+        .collect();
+    let points = mat(values, n, dim);
+    let mut p = params(128, 24);
+    p.max_clusters = None;
+    p.centroid_capacity = 4 * n;
+    p.routing = OnlineCentroidRouting::Exact;
+    let initial = mat(points.row(0).to_vec(), 1, dim);
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
+
+    assert_invariants(&c, n);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 24));
+    assert_npa(&c, &(0..n as u32).collect::<Vec<_>>());
+}
+
 #[test]
 fn no_split_matches_nearest_centroid() {
     // High threshold => no splits; pure online assignment with fixed
@@ -486,7 +529,8 @@ fn telemetry_records_splits_and_reassignments() {
         assert!(e.insert_index >= 1 && e.insert_index <= n as u64);
         prev = e.insert_index;
         assert!(e.cluster_size >= 2);
-        assert!(e.num_reassigned >= e.cluster_size); // all of C always moves
+        assert!(e.npa_candidates <= e.region_points);
+        assert!(e.num_reassigned <= e.region_points);
         reassigned_sum += e.num_reassigned as u64;
     }
     assert_eq!(reassigned_sum, t.total_reassigned);
@@ -740,6 +784,7 @@ fn underflow_retires_the_cluster_and_scatters_it_onto_survivors() {
         e.num_reassigned, 2,
         "only the victim's own members are re-placed"
     );
+    assert_npa(&c, &live);
 }
 
 #[test]
@@ -848,12 +893,17 @@ fn churn_keeps_the_centroid_graph_and_registry_in_sync() {
     c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
     assert_graph_matches_registry(&c);
 
-    // Recycle a sixth of the corpus at a time. Deleting a contiguous id range
-    // starves whole regions at once, which is the case that retires spatially
-    // adjacent centroids together; reinserting the same ids then splits those
-    // regions back apart and reuses the slots just freed.
-    for round in 0..6u32 {
-        let victims: Vec<u32> = (round * 100..round * 100 + 100).collect();
+    // Recycle one whole current posting at a time. Selecting from current
+    // membership guarantees a merge even when a new split policy changes how
+    // contiguous pid ranges are distributed.
+    for _ in 0..6 {
+        let victim = c
+            .centroids
+            .live_ids()
+            .max_by_key(|&cid| c.partition.list_len(cid))
+            .unwrap();
+        let victims = c.partition.members(victim).to_vec();
+        assert!(!victims.is_empty());
         c.delete_batch(&victims).unwrap();
         assert_graph_matches_registry(&c);
         c.insert_batch(&victims).unwrap();

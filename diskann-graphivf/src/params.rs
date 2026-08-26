@@ -135,8 +135,8 @@ pub enum AssignMethod {
 /// How the index finds the centroids nearest to a vector.
 ///
 /// This is a single index-wide choice: it governs every centroid lookup the
-/// index performs — routing points on insert, locating neighbors when a cluster
-/// splits or is dissolved, and selecting the clusters a query probes. Keeping it
+/// index performs — routing points on insert/NPA checks, locating neighbors when
+/// a cluster splits, and selecting the clusters a query probes. Keeping it
 /// to one setting means the clusters a query probes are found the same way the
 /// points in them were routed, so the two can never disagree about what
 /// "nearest" means.
@@ -251,7 +251,7 @@ impl CentroidRouting {
 /// Centroid routing for an online build.
 ///
 /// Distinct from [`CentroidRouting`] because a streaming build also searches
-/// the centroids when a cluster splits or dissolves, which a batch build never
+/// the centroids when a cluster splits or merges, which a batch build never
 /// does, so the `Graph` variant carries one more beam width.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OnlineCentroidRouting {
@@ -261,7 +261,7 @@ pub enum OnlineCentroidRouting {
         graph: GraphParams,
         /// Search-list size used to route each inserted point.
         assign_l: usize,
-        /// Search-list size for split-neighbor and dissolve-survivor selection.
+        /// Search-list size for split-neighbor discovery.
         /// Raised internally to fit the requested candidates and exclusions.
         reassign_l: usize,
     },
@@ -300,7 +300,7 @@ impl OnlineCentroidRouting {
         }
     }
 
-    /// Beam width for split-neighbor and dissolve-survivor selection, floored to
+    /// Beam width for split-neighbor discovery, floored to
     /// return at least `want` candidates. `None` in exact mode.
     pub(crate) fn neighbor_beam(self, want: usize) -> Option<usize> {
         match self {
@@ -438,10 +438,8 @@ pub struct OnlineParams {
     /// A cluster is split once it holds strictly more than this many points.
     /// Must be `>= 2`.
     pub split_threshold: usize,
-    /// Number of nearest centroid clusters (besides the two children) drawn in
-    /// as reassignment candidates when a cluster is split, and the maximum
-    /// survivor landing sites considered when a cluster is dissolved. Must be
-    /// `>= 1`.
+    /// Number of nearby postings scanned by LIRE's necessary-condition filters
+    /// when a cluster splits. Must be `>= 1`.
     ///
     /// A candidate *count*, so it applies whichever routing mode is in use.
     pub reassign_neighbors: usize,
@@ -451,9 +449,9 @@ pub struct OnlineParams {
     /// disables merging entirely: deletes still remove points, but the
     /// partition only ever gains clusters.
     ///
-    /// Retiring dissolves the cluster: it is removed from the centroid graph
-    /// and its members are scattered onto their nearest survivors. No centroid
-    /// is fitted and no id is consumed, so deletes are free against the
+    /// Retiring merges the posting into a capacity-compatible survivor, then
+    /// globally routes its members for final NPA compliance. No centroid is
+    /// fitted and no id is consumed, so merges are free against the
     /// [`centroid_capacity`](Self::centroid_capacity) budget.
     ///
     /// Must leave a hysteresis gap below
