@@ -162,6 +162,7 @@ mod tests {
             );
         }
 
+        // Empty
         {
             let mut neighbors = Vec::<Neighbor<usize>>::new();
             let sorted = SortedNeighbors::new(&mut neighbors, 10);
