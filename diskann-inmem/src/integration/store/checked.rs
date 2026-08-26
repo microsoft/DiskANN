@@ -32,11 +32,7 @@ boilerplate!(
 );
 
 impl Store {
-    /// Construct a store with `config.capacity` writable slots.
-    ///
-    /// A single zeroed frozen point is created internally to satisfy the underlying
-    /// store's requirement of at least one frozen entry; it occupies the highest slot
-    /// index and is always readable.
+    /// Construct a store with `config.capacity` writable slots and no frozen points.
     ///
     /// # Panics
     ///

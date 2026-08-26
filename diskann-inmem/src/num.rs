@@ -69,12 +69,6 @@ impl Bytes {
         Self::new(std::mem::size_of::<T>())
     }
 
-    /// Return the number of bytes occupied by the slice.
-    #[inline]
-    pub const fn of_slice<T>(x: &[T]) -> Self {
-        Self(std::mem::size_of_val::<[T]>(x))
-    }
-
     /// Return `true` if `self` is zero.
     pub const fn is_zero(self) -> bool {
         self.0 == 0
@@ -195,7 +189,7 @@ macro_rules! typed_int {
 typed_int!(
     /// The number of distinct slots a [`crate::Provider`] or [`crate::layers::Layer`] has
     /// capacity for. This is logically distinct from [`IdLimit`], which may be greater due
-    /// too immutable points within a storage container.
+    /// to immutable points within a storage container.
     pub Capacity,
     usize,
 );
@@ -236,12 +230,6 @@ impl IdLimit {
         self.value() as usize
     }
 }
-
-// typed_int!(
-//     /// Temp
-//     pub(crate) CacheLines,
-//     NonZeroUsize,
-// )
 
 ///////////
 // Tests //

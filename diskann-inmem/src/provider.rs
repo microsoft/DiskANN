@@ -205,8 +205,6 @@ where
         _context: &Context,
         id: u32,
     ) -> ANNResult<diskann::provider::ElementStatus> {
-        // Not that this check is approximate. A full check requires materialization of
-        // a `reader`.
         match <L as layers::Layer>::is_readable(&self.layer, id) {
             Some(true) => Ok(diskann::provider::ElementStatus::Valid),
             Some(false) => Ok(diskann::provider::ElementStatus::Deleted),

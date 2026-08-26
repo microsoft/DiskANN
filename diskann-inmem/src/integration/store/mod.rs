@@ -9,7 +9,7 @@
 pub mod checked;
 pub mod invasive;
 
-/// These implementationa have a similar structure. A [`boilerplate`] macro is used to ensure
+/// These implementations have a similar structure. A [`boilerplate`] macro is used to ensure
 /// the capabilities exposed are mostly the same.
 macro_rules! boilerplate {
     (

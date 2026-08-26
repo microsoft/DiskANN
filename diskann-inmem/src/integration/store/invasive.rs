@@ -33,11 +33,7 @@ boilerplate!(
 
 impl Store {
     /// Construct a store with `config.capacity` writable slots, each holding
-    /// `config.entry_bytes` bytes.
-    ///
-    /// A single zeroed frozen point is created internally to satisfy the underlying
-    /// store's requirement of at least one frozen entry; it occupies the highest slot
-    /// index and is always readable.
+    /// `config.entry_bytes` bytes. No frozen points are created.
     ///
     /// # Panics
     ///
@@ -45,7 +41,7 @@ impl Store {
     /// the frozen point exceeds `u32::MAX`) or if other configuration parameters such as
     /// the number of epoch guard slots are invalid (e.g. zero).
     pub fn new(config: Config) -> Self {
-        let store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0), 1);
+        let store_layout = store::Layout::new(Capacity::new(config.capacity), MaxDegree::new(0), 0);
 
         let store_config = store::Config::__exhaustive(
             NonZeroUsize::new(config.epoch_guard_slots)
