@@ -429,6 +429,73 @@ fn batched_inserts_preserve_invariants_and_split() {
 }
 
 #[test]
+fn joint_split_reassigns_against_every_child() {
+    // A joint split is allowed to move a parent's points across the old parent
+    // boundary. Commit must therefore offer all four children to both parents,
+    // not only the two children seeded from that parent's member span.
+    let points = mat(vec![0.0, 0.1, 10.0, 10.1], 4, 1);
+    let initial = mat(vec![0.0, 10.0], 2, 1);
+    let mut p = params(4, 2);
+    p.reassign_neighbors = 1;
+    p.routing = OnlineCentroidRouting::Exact;
+
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 0..4u32 {
+        c.partition.attach_new(pid, pid / 2);
+    }
+
+    // Deliberately cross the lineage pairs: parent 0's members are nearest the
+    // children seeded for parent 1, and vice versa. The old per-parent candidate
+    // set assigned every point to a non-nearest child.
+    let plan = SplitPlan {
+        parents: vec![
+            SplitParentPlan {
+                id: 0,
+                members: vec![0, 1],
+                neighbors: Vec::new(),
+            },
+            SplitParentPlan {
+                id: 1,
+                members: vec![2, 3],
+                neighbors: Vec::new(),
+            },
+        ],
+        children: vec![
+            vec![10.0].into_boxed_slice(),
+            vec![10.1].into_boxed_slice(),
+            vec![0.0].into_boxed_slice(),
+            vec![0.1].into_boxed_slice(),
+        ],
+        rng_after: c.rng.clone(),
+        kmeans_us: 0,
+        total_members: 4,
+        started: Instant::now(),
+    };
+
+    c.begin_commit();
+    let result = c.commit_split(plan);
+    c.finish_commit(&result);
+    result.unwrap();
+
+    assert_live_invariants(&c, &[0, 1, 2, 3]);
+    let expected = [4, 5, 2, 3];
+    for (pid, expected_cid) in expected.into_iter().enumerate() {
+        let assigned = c.partition.assignment(pid as u32);
+        assert_eq!(assigned, expected_cid, "point {pid} chose the wrong child");
+        let assigned_distance = sqd(c.points.row(pid), c.centroids.get(assigned).unwrap());
+        let best_distance = c
+            .centroids
+            .iter_live()
+            .map(|(_, centroid)| sqd(c.points.row(pid), centroid))
+            .fold(f64::INFINITY, f64::min);
+        assert_eq!(
+            assigned_distance, best_distance,
+            "point {pid} missed its nearest child"
+        );
+    }
+}
+
+#[test]
 fn batched_inserts_respect_max_clusters() {
     // Admission control has to hold even when a single batch overflows more
     // clusters than the cap has room for.
@@ -848,12 +915,19 @@ fn churn_keeps_the_centroid_graph_and_registry_in_sync() {
     c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
     assert_graph_matches_registry(&c);
 
-    // Recycle a sixth of the corpus at a time. Deleting a contiguous id range
-    // starves whole regions at once, which is the case that retires spatially
-    // adjacent centroids together; reinserting the same ids then splits those
-    // regions back apart and reuses the slots just freed.
-    for round in 0..6u32 {
-        let victims: Vec<u32> = (round * 100..round * 100 + 100).collect();
+    // Recycle one whole current cluster at a time. Selecting by membership
+    // guarantees a retirement even if assignment changes make contiguous pid
+    // ranges span many balanced clusters. Reinserting the same spatial region
+    // then drives new splits through slots freed by the retirement.
+    let splits_before_recycling = c.telemetry().total_splits;
+    for _ in 0..6 {
+        let victim = c
+            .centroids
+            .live_ids()
+            .max_by_key(|&cid| c.partition.list_len(cid))
+            .unwrap();
+        let victims = c.partition.members(victim).to_vec();
+        assert!(!victims.is_empty());
         c.delete_batch(&victims).unwrap();
         assert_graph_matches_registry(&c);
         c.insert_batch(&victims).unwrap();
@@ -862,7 +936,10 @@ fn churn_keeps_the_centroid_graph_and_registry_in_sync() {
 
     assert_invariants(&c, n);
     assert!(c.telemetry().total_merges > 0, "no cluster ever retired");
-    assert!(c.telemetry().total_splits > 0, "no cluster ever split");
+    assert!(
+        c.telemetry().total_splits > splits_before_recycling,
+        "no cluster split after a retirement freed its slot"
+    );
 }
 
 #[test]

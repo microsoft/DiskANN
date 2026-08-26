@@ -319,12 +319,15 @@ lifecycle:
 3. **Publish.** Attach all routed points, insert all `2l` child graph vertices,
    and retire the `l` parent vertices. The centroid table changes only after the
    graph operations succeed.
-4. **Reassign per region.** Each parent's region is then reassigned in turn,
-   exactly as in step 3.5: the candidates are the parent's own two children plus
-   the `reassign_neighbors` nearest live centroids selected *before* the
-   mutation, and the candidate points are the parent's members plus everything
-   those neighbors hold. A neighbor that was itself a parent of this batch has
-   been retired and drops out — its region is covered by its own turn.
+4. **Reassign per region.** Each parent's region is then reassigned in turn. The
+   candidates are all `2l` children produced by the joint fit plus the
+   `reassign_neighbors` nearest live centroids selected for that parent
+   *before* the mutation. The candidate points are the parent's members plus
+   everything those neighbors hold. A neighbor that was itself a parent of this
+   batch has been retired and drops out — its region is covered by its own turn.
+   Offering every child is required because joint Lloyd allows points to cross
+   the parents' original boundaries; the seed-parent pair is initialization
+   lineage, not an assignment constraint.
 
 Admission control still applies per batch: a split costs two ids and adds one
 live cluster, so when a batch would breach `max_clusters` or the id budget the

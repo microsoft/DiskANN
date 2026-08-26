@@ -809,9 +809,9 @@ impl OnlineClusterer {
         // The `reassign_neighbors` live centroids nearest each parent, found by
         // searching the parent's own centroid vector. The searches run before the
         // parents are retired and the children inserted, so they see the
-        // pre-split centroids; the parent itself (distance 0) is dropped, and its
-        // own two children join the candidate set once they exist. `k = s + 1`
-        // reserves the slot the parent takes.
+        // pre-split centroids; the parent itself (distance 0) is dropped, and all
+        // children from the batch join the candidate set once they exist.
+        // `k = s + 1` reserves the slot the parent takes.
         let s = self.params.reassign_neighbors;
         let mut parent_plans = Vec::with_capacity(l);
         for &c in parents {
@@ -903,11 +903,13 @@ impl OnlineClusterer {
         let mut events = Vec::with_capacity(plan.parents.len());
         let mut total_reassigned = 0u64;
 
-        // Reassign each split region in turn. The candidates are the parent's
-        //    own two children plus the neighbors picked before the mutation, less
-        //    any neighbor that was itself a parent of this batch and has since
-        //    been retired — that region is covered by its own turn.
-        for (i, parent) in plan.parents.iter().enumerate() {
+        // Reassign each split region in turn. The candidates are every child from
+        // the joint k-means plus the neighbors picked before the mutation, less
+        // any neighbor that was itself a parent of this batch and has since been
+        // retired — that region is covered by its own turn. Every parent must see
+        // every child because the joint fit permits points to cross the parents'
+        // original boundaries.
+        for parent in &plan.parents {
             let cluster_size = parent.members.len();
 
             self.scratch.candidates.clear();
@@ -919,14 +921,13 @@ impl OnlineClusterer {
                     .filter(|&c| self.centroids.is_live(c)),
             );
             let num_neighbors = self.scratch.candidates.len();
-            self.scratch.candidates.push(child_ids[2 * i]);
-            self.scratch.candidates.push(child_ids[2 * i + 1]);
+            self.scratch.candidates.extend_from_slice(&child_ids);
 
             // Candidate points: the parent's own members plus everything its
-            // surviving neighbors hold. The children's lists are still empty —
-            // no other region can have placed a point on them — so the k-means
-            // assignment is not applied separately; reassignment places every
-            // member against the neighbors too, which strictly refines it.
+            // surviving neighbors hold. Child lists are destinations, not part
+            // of the detached region; points committed by an earlier parent turn
+            // stay attached while this turn assigns its region against the same
+            // complete child set.
             self.scratch.points.clear();
             self.partition
                 .detach_members_into(parent.id, &mut self.scratch.points);
