@@ -5,7 +5,7 @@
 
 //! Baseline-cached regression sweep for [`crate::flat::knn_search`].
 //!
-//! Bbuilds a fresh index per parameter combination, runs `knn_search` through the
+//! Builds a fresh provider per parameter combination, runs `knn_search` through the
 //! [`crate::flat::test::harness`], snapshots the result + statistics into
 //! [`FlatKnnBaseline`], and compares the entire batch against the JSON committed under
 //! `diskann/test/generated/flat/test/cases/flat_knn_search/`.
@@ -85,7 +85,7 @@ verbose_eq!(FlatKnnBaseline {
     metrics,
 });
 
-/// Run `knn_search` + brute-force oracle against a *shared* `index`, assert the
+/// Run `knn_search` + brute-force oracle against a *shared* provider, assert the
 /// cross-row invariants, and produce the baseline row. The per-row provider metrics
 /// captured into the baseline are the *delta* observed during this row, which keeps
 /// the snapshot independent of how many rows preceded it.
