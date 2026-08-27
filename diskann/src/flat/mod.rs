@@ -17,16 +17,15 @@
 //! | Graph (random access)                       | Flat (sequential)                          |  Shared?  |
 //! | :------------------------------------       | :----------------------------------------- |:--------- |
 //! | [`crate::provider::DataProvider`]           | [`crate::provider::DataProvider`]          | Yes       |
-//! | [`crate::graph::DiskANNIndex`]              | [`FlatIndex`]                              | No        |
 //! | [`crate::graph::glue::SearchAccessor`]      | [`DistancesUnordered`]                     | No        |
 //! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
-//! | [`crate::graph::Search`]                    | [`FlatIndex::knn_search`]                  | No        |
+//! | [`crate::graph::Search`]                    | [`knn_search`]                             | No        |
 //! | [`crate::graph::glue::SearchPostProcess`]   | [`crate::graph::glue::SearchPostProcess`]  | Yes       |
 //!
 pub mod index;
 pub mod strategy;
 
-pub use index::{FlatIndex, SearchStats};
+pub use index::{SearchStats, knn_search};
 pub use strategy::{DistancesUnordered, SearchStrategy};
 
 #[cfg(test)]

@@ -8,96 +8,58 @@
 use std::fmt::Debug;
 
 use diskann_utils::future::SendFuture;
-use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{
     error::{StandardError, ToRanked},
     provider::{DataProvider, HasId},
 };
 
-/// Fused iterate-and-score primitive over the elements of a flat index.
+/// Per-query accessor that drives a complete flat scan.
 ///
-/// Implementations drive an entire scan over the underlying data, scoring each element
-/// with the supplied computer `C` and invoking `f` with the resulting `(id, distance)`
-/// pair. The associated [`Self::ElementRef`] is the reference shape on which `C` must
-/// be able to compute distances.
-pub trait DistancesUnordered<C>: HasId + Send + Sync
-where
-    C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
-{
-    /// Lifetime is intentionally unconstrained so it can appear under HRTB without
-    /// inducing a `'static` bound on `Self`.
-    type ElementRef<'a>;
-
+/// The accessor owns the query-specific computation state so implementations can fuse
+/// query preprocessing, data access, batching, filtering, and distance computation.
+pub trait DistancesUnordered: HasId + Send + Sync {
     /// The error type for [`Self::distances_unordered`].
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    /// Drive the entire scan, scoring each element with `computer` and invoking `f`
-    /// with the resulting `(id, distance)` pair.
-    fn distances_unordered<F>(
-        &mut self,
-        computer: &C,
-        f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    /// Drive the entire scan, invoking `f` with each `(id, distance)` pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot complete the scan.
+    fn distances_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32);
 }
 
-/// Per-call configuration that knows how to construct a per-query
-/// [`DistancesUnordered`] visitor for a provider, and the [`Self::QueryComputer`] used
-/// to score each element during the scan.
-pub trait SearchStrategy<P, T>: Send + Sync
+/// Per-call configuration that constructs a query-aware [`DistancesUnordered`] visitor.
+pub trait SearchStrategy<'a, P, T>: Send + Sync
 where
     P: DataProvider,
 {
-    /// The reference element shape on which [`Self::QueryComputer`] computes
-    /// distances.
-    type ElementRef<'a>;
+    /// The query-aware visitor used to execute the scan.
+    type Visitor: DistancesUnordered<Id = P::InternalId>;
 
-    /// The concrete query-computer type.
-    type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
-        + Send
-        + Sync
-        + 'static;
-
-    /// The error type for [`Self::build_query_computer`].
-    type QueryComputerError: StandardError;
-
-    /// The visitor type produced by [`Self::create_visitor`].
-    type Visitor<'a>: for<'b> DistancesUnordered<
-            Self::QueryComputer,
-            ElementRef<'b> = Self::ElementRef<'b>,
-            Id = P::InternalId,
-        >
-    where
-        Self: 'a,
-        P: 'a;
-
-    /// The error type for [`Self::create_visitor`].
+    /// An error that can occur while constructing [`Self::Visitor`].
     type Error: StandardError;
 
-    /// Construct a fresh visitor over `provider` for the given request `context`.
-    fn create_visitor<'a>(
+    /// Construct a fresh visitor for `query`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when query preprocessing or visitor initialization fails.
+    fn create_visitor(
         &'a self,
         provider: &'a P,
         context: &'a P::Context,
-    ) -> Result<Self::Visitor<'a>, Self::Error>;
-
-    /// Construct the per-query computer.
-    fn build_query_computer(
-        &self,
         query: T,
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
+    ) -> Result<Self::Visitor, Self::Error>;
 }
 
 #[cfg(test)]
 mod tests {
-    //! Direct [`DistancesUnordered`] impls over a few in-memory fixtures: a
-    //! happy-path scanner over `&[f32]` elements, a scanner whose `ElementRef<'a>`
-    //! is a lifetime-carrying non-reference type, and a scanner that fails
-    //! mid-stream.
-
-    use std::marker::PhantomData;
+    //! Direct [`DistancesUnordered`] impls over in-memory fixtures, including a
+    //! happy-path scanner and one that fails mid-stream.
 
     use diskann_utils::future::SendFuture;
     use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
@@ -121,27 +83,23 @@ mod tests {
     /// Scans `items` in order, scoring each with the supplied computer.
     struct Scanner {
         items: Vec<(u32, Vec<f32>)>,
+        computer: <f32 as VectorRepr>::QueryDistance,
     }
 
     impl HasId for Scanner {
         type Id = u32;
     }
 
-    impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Scanner {
-        type ElementRef<'a> = &'a [f32];
+    impl DistancesUnordered for Scanner {
         type Error = Infallible;
 
-        fn distances_unordered<F>(
-            &mut self,
-            computer: &<f32 as VectorRepr>::QueryDistance,
-            mut f: F,
-        ) -> impl SendFuture<Result<(), Self::Error>>
+        fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
         where
             F: Send + FnMut(Self::Id, f32),
         {
             async move {
                 for (id, v) in &self.items {
-                    let dist = computer.evaluate_similarity(v.as_slice());
+                    let dist = self.computer.evaluate_similarity(v.as_slice());
                     f(*id, dist);
                 }
                 Ok(())
@@ -153,23 +111,67 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn distances_unordered_scanner() {
         let query = vec![0.5_f32, 0.9];
-        let computer = f32::query_distance(&query, Metric::L2);
+        let expected_computer = f32::query_distance(&query, Metric::L2);
 
         let expected: Vec<(u32, f32)> = sample_items()
             .into_iter()
-            .map(|(id, v)| (id, computer.evaluate_similarity(v.as_slice())))
+            .map(|(id, v)| (id, expected_computer.evaluate_similarity(v.as_slice())))
             .collect();
 
         let mut scanner = Scanner {
             items: sample_items(),
+            computer: f32::query_distance(&query, Metric::L2),
         };
 
         let mut seen: Vec<(u32, f32)> = Vec::new();
         scanner
-            .distances_unordered(&computer, |id, d| seen.push((id, d)))
+            .distances_unordered(|id, d| seen.push((id, d)))
             .await
             .unwrap();
         assert_eq!(seen, expected);
+    }
+
+    struct BorrowingScanner<'a> {
+        items: &'a [(u32, f32)],
+        query: &'a f32,
+    }
+
+    impl HasId for BorrowingScanner<'_> {
+        type Id = u32;
+    }
+
+    impl DistancesUnordered for BorrowingScanner<'_> {
+        type Error = Infallible;
+
+        fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
+        where
+            F: Send + FnMut(Self::Id, f32),
+        {
+            async move {
+                for (id, value) in self.items {
+                    f(*id, (*value - *self.query).abs());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn accessor_can_borrow_query_state() {
+        let items = [(10, 1.0), (11, 4.0)];
+        let query = 2.0;
+        let mut scanner = BorrowingScanner {
+            items: &items,
+            query: &query,
+        };
+        let mut seen = Vec::new();
+
+        scanner
+            .distances_unordered(|id, distance| seen.push((id, distance)))
+            .await
+            .unwrap();
+
+        assert_eq!(seen, [(10, 1.0), (11, 2.0)]);
     }
 
     ///////////////////////////
@@ -189,21 +191,17 @@ mod tests {
     struct Failing {
         items: Vec<(u32, Vec<f32>)>,
         fail_after: usize,
+        computer: <f32 as VectorRepr>::QueryDistance,
     }
 
     impl HasId for Failing {
         type Id = u32;
     }
 
-    impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Failing {
-        type ElementRef<'a> = &'a [f32];
+    impl DistancesUnordered for Failing {
         type Error = Boom;
 
-        fn distances_unordered<F>(
-            &mut self,
-            computer: &<f32 as VectorRepr>::QueryDistance,
-            mut f: F,
-        ) -> impl SendFuture<Result<(), Self::Error>>
+        fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
         where
             F: Send + FnMut(Self::Id, f32),
         {
@@ -212,7 +210,7 @@ mod tests {
                     if i == self.fail_after {
                         return Err(Boom(*id));
                     }
-                    let dist = computer.evaluate_similarity(v.as_slice());
+                    let dist = self.computer.evaluate_similarity(v.as_slice());
                     f(*id, dist);
                 }
                 Ok(())
@@ -227,14 +225,12 @@ mod tests {
         let mut scanner = Failing {
             items: sample_items(),
             fail_after: 1, // Yield item 0 successfully, fail on item 1.
+            computer: f32::query_distance(&[0.0, 0.0], Metric::L2),
         };
-
-        let query = vec![0.0_f32, 0.0];
-        let computer = f32::query_distance(&query, Metric::L2);
 
         let mut seen: Vec<u32> = Vec::new();
         let err = scanner
-            .distances_unordered(&computer, |id, _d| seen.push(id))
+            .distances_unordered(|id, _d| seen.push(id))
             .await
             .expect_err("Failing scanner must surface its error");
 
@@ -244,107 +240,5 @@ mod tests {
             vec![10],
             "the closure must only see items yielded before the failure",
         );
-    }
-
-    /////////////////////////////////////////////
-    // Lifetime-carrying concrete `ElementRef` //
-    /////////////////////////////////////////////
-
-    struct View<'a> {
-        ptr: *const f32,
-        len: usize,
-        _phantom: PhantomData<&'a [f32]>,
-    }
-
-    // SAFETY: `View<'a>` semantically carries a `&'a [f32]`, which is `Send + Sync`.
-    unsafe impl Send for View<'_> {}
-    unsafe impl Sync for View<'_> {}
-
-    /// Computer that reconstructs a `&[f32]` from a [`View`]'s ptr+len and
-    /// computes inner product against a stored query.
-    struct ViewComputer {
-        query: Vec<f32>,
-    }
-
-    impl<'a> PreprocessedDistanceFunction<View<'a>, f32> for ViewComputer {
-        fn evaluate_similarity(&self, v: View<'a>) -> f32 {
-            // SAFETY: `v.ptr` / `v.len` were produced from a `&'a [f32]` held by the
-            // scanner that owns the backing `Vec`; the phantom lifetime ties this view
-            // to that borrow, so the slice is valid for the duration of this call.
-            let s = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-            s.iter().zip(&self.query).map(|(a, b)| a * b).sum()
-        }
-    }
-
-    /// Scans `rows`, yielding a [`View`] tied (via its phantom lifetime) to the
-    /// borrow of the underlying `Vec<f32>`.
-    struct ViewScanner {
-        rows: Vec<(u32, Vec<f32>)>,
-    }
-
-    impl ViewScanner {
-        fn iter<'a>(&self) -> impl Iterator<Item = (u32, View<'a>)> {
-            self.rows.iter().map(|(x, y)| {
-                (
-                    *x,
-                    View {
-                        ptr: y.as_ptr(),
-                        len: y.len(),
-                        _phantom: PhantomData,
-                    },
-                )
-            })
-        }
-    }
-
-    impl HasId for ViewScanner {
-        type Id = u32;
-    }
-
-    impl DistancesUnordered<ViewComputer> for ViewScanner {
-        type ElementRef<'a> = View<'a>;
-        type Error = Infallible;
-
-        fn distances_unordered<F>(
-            &mut self,
-            computer: &ViewComputer,
-            mut f: F,
-        ) -> impl SendFuture<Result<(), Self::Error>>
-        where
-            F: Send + FnMut(Self::Id, f32),
-        {
-            async move {
-                for (id, v) in self.iter() {
-                    f(id, computer.evaluate_similarity(v));
-                }
-                Ok(())
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn distances_unordered_lifetime_carrying_element_ref() {
-        let mut scanner = ViewScanner {
-            rows: vec![
-                (10, vec![1.0, 0.0]),
-                (11, vec![0.5, 0.5]),
-                (12, vec![0.0, 2.0]),
-            ],
-        };
-        let computer = ViewComputer {
-            query: vec![1.0, 3.0],
-        };
-        let expected: Vec<(u32, f32)> = vec![
-            (10, 1.0 * 1.0 + 0.0 * 3.0),
-            (11, 0.5 * 1.0 + 0.5 * 3.0),
-            (12, 0.0 * 1.0 + 2.0 * 3.0),
-        ];
-
-        let mut seen: Vec<(u32, f32)> = Vec::new();
-        scanner
-            .distances_unordered(&computer, |id, d| seen.push((id, d)))
-            .await
-            .unwrap();
-        assert_eq!(seen, expected);
     }
 }

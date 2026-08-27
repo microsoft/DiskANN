@@ -283,25 +283,32 @@ pub struct Visitor<'a> {
     provider: &'a Provider,
     transient_ids: Option<Cow<'a, HashSet<u32>>>,
     get_element: LocalCounter<'a>,
+    computer: <f32 as VectorRepr>::QueryDistance,
 }
 
 impl<'a> Visitor<'a> {
     /// Construct a visitor with no fault injection.
-    pub fn new(provider: &'a Provider) -> Self {
+    pub fn new(provider: &'a Provider, computer: <f32 as VectorRepr>::QueryDistance) -> Self {
         Self {
             provider,
             transient_ids: None,
             get_element: provider.get_element.local(),
+            computer,
         }
     }
 
     /// Construct a visitor that returns a [`TransientGetError`] for any id in
     /// `transient_ids`. Other ids behave normally.
-    pub fn flaky(provider: &'a Provider, transient_ids: Cow<'a, HashSet<u32>>) -> Self {
+    pub fn flaky(
+        provider: &'a Provider,
+        transient_ids: Cow<'a, HashSet<u32>>,
+        computer: <f32 as VectorRepr>::QueryDistance,
+    ) -> Self {
         Self {
             provider,
             transient_ids: Some(transient_ids),
             get_element: provider.get_element.local(),
+            computer,
         }
     }
 }
@@ -319,15 +326,10 @@ impl HasId for Visitor<'_> {
     type Id = u32;
 }
 
-impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
-    type ElementRef<'a> = &'a [f32];
+impl DistancesUnordered for Visitor<'_> {
     type Error = AccessError;
 
-    fn distances_unordered<F>(
-        &mut self,
-        computer: &<f32 as VectorRepr>::QueryDistance,
-        mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32),
     {
@@ -340,7 +342,7 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
                     return Err(AccessError::Transient(TransientGetError::new(id)));
                 }
                 self.get_element.increment();
-                let dist = computer.evaluate_similarity(vector);
+                let dist = self.computer.evaluate_similarity(vector);
                 f(id, dist);
             }
             Ok(())
@@ -352,8 +354,7 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
 // Strategy //
 //////////////
 
-/// Error from [`Strategy::create_visitor`] or [`Strategy::build_query_computer`]
-/// when dimensions don't match.
+/// Error from [`Strategy::create_visitor`] when dimensions don't match.
 #[derive(Debug, Clone, Error)]
 #[error("dimension mismatch: strategy expects {expected}, got {actual}")]
 pub struct StrategyError {
@@ -390,18 +391,16 @@ impl Strategy {
     }
 }
 
-impl SearchStrategy<Provider, &[f32]> for Strategy {
-    type ElementRef<'a> = &'a [f32];
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type QueryComputerError = StrategyError;
-    type Visitor<'a> = Visitor<'a>;
+impl<'a> SearchStrategy<'a, Provider, &'a [f32]> for Strategy {
+    type Visitor = Visitor<'a>;
     type Error = StrategyError;
 
-    fn create_visitor<'a>(
+    fn create_visitor(
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
-    ) -> Result<Self::Visitor<'a>, Self::Error> {
+        query: &'a [f32],
+    ) -> Result<Self::Visitor, Self::Error> {
         let actual = provider.dim();
         if actual != self.dim {
             return Err(StrategyError {
@@ -409,23 +408,16 @@ impl SearchStrategy<Provider, &[f32]> for Strategy {
                 actual,
             });
         }
-        let visitor = match &self.transient_ids {
-            Some(ids) => Visitor::flaky(provider, Cow::Borrowed(ids)),
-            None => Visitor::new(provider),
-        };
-        Ok(visitor)
-    }
-
-    fn build_query_computer(
-        &self,
-        from: &[f32],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        if from.len() != self.dim {
+        if query.len() != self.dim {
             return Err(StrategyError {
                 expected: self.dim,
-                actual: from.len(),
+                actual: query.len(),
             });
         }
-        Ok(f32::query_distance(from, Metric::L2))
+        let computer = f32::query_distance(query, Metric::L2);
+        Ok(match &self.transient_ids {
+            Some(ids) => Visitor::flaky(provider, Cow::Borrowed(ids), computer),
+            None => Visitor::new(provider, computer),
+        })
     }
 }

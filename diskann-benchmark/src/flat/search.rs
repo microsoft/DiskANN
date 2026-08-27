@@ -5,13 +5,13 @@
 
 //! Backend for flat-index (brute-force kNN) benchmarks.
 //!
-//! This exercises [`diskann::flat::FlatIndex::knn_search`] over an in-memory
+//! This exercises [`diskann::flat::knn_search`] over an in-memory
 //! provider, measuring recall and latency.
 
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    flat::{DistancesUnordered, FlatIndex, SearchStrategy},
+    flat::{knn_search, DistancesUnordered, SearchStrategy},
     graph::{glue::CopyIds, SearchOutputBuffer},
     provider::{DataProvider, DefaultContext, HasId, NoopGuard},
     utils::VectorRepr,
@@ -132,10 +132,9 @@ where
         );
         writeln!(output, "  Loaded {} vectors of dimension {}", nrows, ncols)?;
 
-        // Build the provider and wrap in FlatIndex
+        // Build the provider.
         let data = Arc::new(data);
         let provider = InMemProvider { data: data.clone() };
-        let index = FlatIndex::new(provider);
 
         // Load queries and groundtruth
         let queries: Matrix<T> =
@@ -172,7 +171,7 @@ where
         let mut results = Vec::new();
 
         let searcher = Arc::new(Searcher {
-            index,
+            provider,
             queries,
             strategy: Strategy::new(metric),
         });
@@ -223,29 +222,25 @@ impl<T: VectorRepr> Strategy<T> {
 }
 
 /// The visitor that iterates over all vectors in the provider.
-struct Visitor<'a, T> {
+struct Visitor<'a, T: VectorRepr> {
     data: &'a Matrix<T>,
+    computer: T::QueryDistance,
 }
 
 impl<T: VectorRepr> HasId for Visitor<'_, T> {
     type Id = u32;
 }
 
-impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for Visitor<'_, T> {
-    type ElementRef<'a> = &'a [T];
+impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
     type Error = diskann::error::Infallible;
 
-    fn distances_unordered<F>(
-        &mut self,
-        computer: &T::QueryDistance,
-        mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32),
     {
         async move {
             for (i, vector) in self.data.row_iter().enumerate() {
-                let dist = computer.evaluate_similarity(vector);
+                let dist = self.computer.evaluate_similarity(vector);
                 f(i as u32, dist);
             }
             Ok(())
@@ -253,32 +248,20 @@ impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for Visitor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
-    type ElementRef<'a> = &'a [T];
-    type QueryComputer = T::QueryDistance;
-    type QueryComputerError = diskann::error::Infallible;
-    type Visitor<'a>
-        = Visitor<'a, T>
-    where
-        Self: 'a,
-        InMemProvider<T>: 'a;
+impl<'a, T: VectorRepr> SearchStrategy<'a, InMemProvider<T>, &'a [T]> for Strategy<T> {
+    type Visitor = Visitor<'a, T>;
     type Error = diskann::error::Infallible;
 
-    fn create_visitor<'a>(
+    fn create_visitor(
         &'a self,
         provider: &'a InMemProvider<T>,
         _context: &'a DefaultContext,
-    ) -> Result<Self::Visitor<'a>, Self::Error> {
+        query: &'a [T],
+    ) -> Result<Self::Visitor, Self::Error> {
         Ok(Visitor {
             data: &provider.data,
+            computer: T::query_distance(query, self.metric),
         })
-    }
-
-    fn build_query_computer(
-        &self,
-        query: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(query, self.metric))
     }
 }
 
@@ -286,9 +269,9 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
 // benchmark_core::search::Search impl  //
 //////////////////////////////////////////
 
-/// Wraps a [`FlatIndex`] and queries to implement [`search::Search`].
+/// Wraps a flat-search provider and queries to implement [`search::Search`].
 struct Searcher<T: VectorRepr> {
-    index: FlatIndex<InMemProvider<T>>,
+    provider: InMemProvider<T>,
     queries: Matrix<T>,
     strategy: Strategy<T>,
 }
@@ -334,17 +317,16 @@ where
         let context = DefaultContext;
         let query = self.queries.row(index);
 
-        let stats = self
-            .index
-            .knn_search(
-                parameters.k,
-                &self.strategy,
-                CopyIds,
-                &context,
-                query,
-                buffer,
-            )
-            .await?;
+        let stats = knn_search(
+            &self.provider,
+            parameters.k,
+            &self.strategy,
+            CopyIds,
+            &context,
+            query,
+            buffer,
+        )
+        .await?;
 
         Ok(Metrics {
             comparisons: stats.cmps,

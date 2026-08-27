@@ -3,8 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! [`FlatIndex`] — the index wrapper for a [`DataProvider`]
-//! over which we do flat search.
+//! Brute-force k-nearest-neighbor search over a [`DataProvider`].
 use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
@@ -28,74 +27,57 @@ pub struct SearchStats {
     pub result_count: u32,
 }
 
-/// A thin wrapper around a [`DataProvider`] used for flat search.
-#[derive(Debug)]
-pub struct FlatIndex<P: DataProvider> {
-    /// The backing provider.
-    provider: P,
-}
+/// Brute-force k-nearest-neighbor search over a borrowed provider.
+///
+/// Streams every distance produced by the strategy's query-aware visitor, keeps the best `k`
+/// candidates in a [`NeighborPriorityQueue`], then runs `processor` over the survivors
+/// to populate `output`.
+///
+/// # Errors
+///
+/// Returns an error if visitor construction, distance scanning, or result
+/// post-processing fails. Distance-scan errors are escalated because a
+/// partial flat scan cannot produce correct k-nearest-neighbor results.
+pub fn knn_search<'a, P, S, T, O, PP, OB>(
+    provider: &'a P,
+    k: NonZeroUsize,
+    strategy: &'a S,
+    processor: PP,
+    context: &'a P::Context,
+    query: T,
+    output: &mut OB,
+) -> impl SendFuture<ANNResult<SearchStats>>
+where
+    P: DataProvider,
+    S: SearchStrategy<'a, P, T>,
+    T: Copy + Send + Sync,
+    O: Send,
+    PP: SearchPostProcess<S::Visitor, T, O> + Send + Sync,
+    OB: SearchOutputBuffer<O> + Send + ?Sized,
+{
+    async move {
+        let mut visitor = strategy
+            .create_visitor(provider, context, query)
+            .into_ann_result()?;
 
-impl<P: DataProvider> FlatIndex<P> {
-    /// Construct a new [`FlatIndex`] around `provider`.
-    pub fn new(provider: P) -> Self {
-        Self { provider }
-    }
+        let k = k.get();
+        let mut queue = NeighborPriorityQueue::new(k);
+        let mut cmps: u32 = 0;
 
-    /// Borrow the underlying provider.
-    pub fn provider(&self) -> &P {
-        &self.provider
-    }
+        visitor
+            .distances_unordered(|id, dist| {
+                cmps += 1;
+                queue.insert(Neighbor::new(id, dist));
+            })
+            .await
+            .escalate("flat scan must complete to produce correct k-NN results")?;
 
-    /// Brute-force k-nearest-neighbor flat search.
-    ///
-    /// Streams every element produced by the strategy's visitor through the query
-    /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], then runs
-    /// `processor` over the survivors to populate `output`.
-    ///
-    /// The post-processor [`SearchPostProcess::post_process`] outputs the number
-    /// of results that survive, which is returned as `SearchStats::result_count`.
-    pub fn knn_search<S, T, O, PP, OB>(
-        &self,
-        k: NonZeroUsize,
-        strategy: &S,
-        processor: PP,
-        context: &P::Context,
-        query: T,
-        output: &mut OB,
-    ) -> impl SendFuture<ANNResult<SearchStats>>
-    where
-        S: SearchStrategy<P, T>,
-        T: Copy + Send + Sync,
-        O: Send,
-        PP: for<'a> SearchPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
-        OB: SearchOutputBuffer<O> + Send + ?Sized,
-    {
-        async move {
-            let mut visitor = strategy
-                .create_visitor(&self.provider, context)
-                .into_ann_result()?;
+        let result_count = processor
+            .post_process(&mut visitor, query, queue.iter().take(k), output)
+            .await
+            .into_ann_result()? as u32;
 
-            let computer = strategy.build_query_computer(query).into_ann_result()?;
-
-            let k = k.get();
-            let mut queue = NeighborPriorityQueue::new(k);
-            let mut cmps: u32 = 0;
-
-            visitor
-                .distances_unordered(&computer, |id, dist| {
-                    cmps += 1;
-                    queue.insert(Neighbor::new(id, dist));
-                })
-                .await
-                .escalate("flat scan must complete to produce correct k-NN results")?;
-
-            let result_count = processor
-                .post_process(&mut visitor, query, queue.iter().take(k), output)
-                .await
-                .into_ann_result()? as u32;
-
-            Ok(SearchStats { cmps, result_count })
-        }
+        Ok(SearchStats { cmps, result_count })
     }
 }
 
@@ -105,30 +87,27 @@ impl<P: DataProvider> FlatIndex<P> {
 
 #[cfg(test)]
 mod tests {
-    use crate::flat::{
-        FlatIndex,
-        test::{
-            harness::{CopyIdsOracle, EvenIdsOnlyOracle, KnnOracleRun, OracleProcessor},
-            provider::{self as flat_provider},
-        },
+    use crate::flat::test::{
+        harness::{CopyIdsOracle, EvenIdsOnlyOracle, KnnOracleRun, OracleProcessor},
+        provider::{self as flat_provider},
     };
     use crate::graph::test::synthetic::Grid;
 
-    fn fixture(grid: Grid, size: usize) -> (FlatIndex<flat_provider::Provider>, usize) {
+    fn fixture(grid: Grid, size: usize) -> (flat_provider::Provider, usize) {
         let provider = flat_provider::Provider::grid(grid, size).unwrap();
         let len = provider.len();
-        (FlatIndex::new(provider), len)
+        (provider, len)
     }
 
-    /// `knn_search` returns a `Send` future, and a shared `&FlatIndex` can serve
+    /// `knn_search` returns a `Send` future, and a shared provider can serve
     /// many concurrent searches on a multi-threaded runtime, each producing the
     /// correct output independently.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn multithreaded_knn_search() {
         use std::sync::Arc;
 
-        let (index, len) = fixture(Grid::Two, 4);
-        let index = Arc::new(index);
+        let (provider, len) = fixture(Grid::Two, 4);
+        let provider = Arc::new(provider);
 
         // Mix of corner, axis-aligned, and off-grid queries; k spans 1..=len.
         let cases: &[(&[f32], usize)] = &[
@@ -145,20 +124,20 @@ mod tests {
         /// Spawn every `(query, k)` case under `oracle` onto `set`.
         fn spawn_cases<O>(
             set: &mut tokio::task::JoinSet<(Vec<f32>, usize, KnnOracleRun)>,
-            index: &Arc<FlatIndex<flat_provider::Provider>>,
+            provider: &Arc<flat_provider::Provider>,
             oracle: O,
             cases: &[(&[f32], usize)],
         ) where
             O: OracleProcessor + Copy + Send + Sync + 'static,
         {
             for (query, k) in cases {
-                let index = Arc::clone(index);
+                let provider = Arc::clone(provider);
                 let query: Vec<f32> = query.to_vec();
                 let k = *k;
                 set.spawn(async move {
                     let outcome = KnnOracleRun::run(
-                        &index,
-                        &flat_provider::Strategy::new(index.provider().dim()),
+                        &provider,
+                        &flat_provider::Strategy::new(provider.dim()),
                         &oracle,
                         &query,
                         k,
@@ -171,8 +150,8 @@ mod tests {
         }
 
         let mut set = tokio::task::JoinSet::new();
-        spawn_cases(&mut set, &index, CopyIdsOracle, cases);
-        spawn_cases(&mut set, &index, EvenIdsOnlyOracle, cases);
+        spawn_cases(&mut set, &provider, CopyIdsOracle, cases);
+        spawn_cases(&mut set, &provider, EvenIdsOnlyOracle, cases);
 
         while let Some(joined) = set.join_next().await {
             let (query, k, outcome) = joined.expect("task panicked");
@@ -199,8 +178,8 @@ mod tests {
         for transient_ids in [&[0u32][..], &[3][..], &[1, 2, 5][..]] {
             let strategy =
                 flat_provider::Strategy::with_transient(2, transient_ids.iter().copied());
-            let (index, _) = fixture(Grid::Two, 3);
-            let err = KnnOracleRun::run_sync(&index, &strategy, &CopyIdsOracle, &[1.0, 0.0], 4)
+            let (provider, _) = fixture(Grid::Two, 3);
+            let err = KnnOracleRun::run_sync(&provider, &strategy, &CopyIdsOracle, &[1.0, 0.0], 4)
                 .expect_err("transient error during full scan must escalate");
 
             let msg = format!("{err}");
@@ -217,8 +196,8 @@ mod tests {
     /// Run `knn_search` via the harness, assert it fails, and check the error
     /// message contains `expected_msg`.
     fn assert_search_error(strategy: &flat_provider::Strategy, query: &[f32], expected_msg: &str) {
-        let (index, _) = fixture(Grid::Two, 3);
-        let err = KnnOracleRun::run_sync(&index, strategy, &CopyIdsOracle, query, 4)
+        let (provider, _) = fixture(Grid::Two, 3);
+        let err = KnnOracleRun::run_sync(&provider, strategy, &CopyIdsOracle, query, 4)
             .expect_err("expected knn_search to fail");
 
         let msg = format!("{err}");
