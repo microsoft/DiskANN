@@ -39,8 +39,8 @@ runs:
     - name: Install system dependencies
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y openssl libssl-dev pkg-config
+        sudo apt-get -o DPkg::Lock::Timeout=300 update
+        sudo apt-get -o DPkg::Lock::Timeout=300 install -y openssl libssl-dev pkg-config
 
     - name: Download ${{ inputs.dataset }} dataset
       shell: bash
