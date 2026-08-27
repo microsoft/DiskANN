@@ -9,7 +9,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::views::{self, DenseData, MutDenseData};
+use crate::views::{DenseData, MutDenseData, rowmajor::{self, Matrix}};
 
 /// A row-major strided matrix.
 ///
@@ -75,7 +75,7 @@ pub struct TryFromErrorLight {
      data.as_slice().len(),
      linear_length(self.nrows, self.ncols, self.cstride)
 )]
-pub struct TryFromError<T: views::DenseData> {
+pub struct TryFromError<T: DenseData> {
     data: T,
     nrows: usize,
     ncols: usize,
@@ -94,7 +94,7 @@ impl<T: DenseData> fmt::Debug for TryFromError<T> {
     }
 }
 
-impl<T: views::DenseData> TryFromError<T> {
+impl<T: DenseData> TryFromError<T> {
     /// Consume the error and return the base data.
     pub fn into_inner(self) -> T {
         self.data
@@ -497,17 +497,12 @@ where
     }
 }
 
-impl<T, U> From<views::MatrixBase<T>> for StridedBase<U>
-where
-    T: DenseData,
-    U: DenseData,
-    T: Into<U>,
-{
-    fn from(matrix: views::MatrixBase<T>) -> Self {
+impl<'a, T> From<rowmajor::Ref<'a, T>> for StridedBase<&'a [T]> {
+    fn from(matrix: rowmajor::Ref<'a, T>) -> Self {
         let nrows = matrix.nrows();
         let ncols = matrix.ncols();
         Self {
-            data: matrix.into_inner().into(),
+            data: matrix.into_slice(),
             nrows,
             ncols,
             cstride: ncols,

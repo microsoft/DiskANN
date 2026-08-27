@@ -3,34 +3,36 @@
  * Licensed under the MIT license.
  */
 
-use crate::views::{Matrix, MatrixView};
+use crate::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 /// Return multiple rows sampled using Latin Hypercube Sampling in `data` that aproximetely uniformly distributed.
 /// This makes the assumtion that the data is uniformly distributed.
 pub trait SampleLatinHyperCube: Sized + Copy + Default {
     fn sample_latin_hypercube(
-        data: MatrixView<Self>,
+        data: rowmajor::Ref<'_, Self>,
         num_samples: usize,
         seed: Option<u64>,
-    ) -> Matrix<Self>;
+    ) -> rowmajor::Owned<Self>;
 }
 
 impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
     fn sample_latin_hypercube(
-        data: MatrixView<Self>,
+        data: rowmajor::Ref<'_, Self>,
         num_samples: usize,
         seed: Option<u64>,
-    ) -> Matrix<Self> {
+    ) -> rowmajor::Owned<Self> {
         let nrows = data.nrows();
         let ncols = data.ncols();
-        if ncols == 0 || nrows == 0 {
-            return Matrix::new(T::default(), num_samples, ncols);
+        if ncols == 0 {
+            return rowmajor::Owned::defaulted_layout(rowmajor::Layout::row_vector(num_samples));
+        } else if nrows == 0 {
+            return rowmajor::Owned::defaulted_layout(rowmajor::Layout::column_vector(ncols));
         }
 
         let seed = seed.unwrap_or(0xaf2f5fa0b5161acf);
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut result: Matrix<Self> = Matrix::new(T::default(), num_samples, ncols);
+        let mut result = rowmajor::Owned::defaulted(num_samples, ncols).unwrap();
 
         // sample a random partitions down the diagonal
         for (s, res) in result.row_iter_mut().enumerate() {
@@ -41,6 +43,7 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
                     .unwrap()
                     .get(idx)
                     .unwrap();
+
                 *val = *value;
             }
         }
@@ -49,9 +52,9 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
         for start_idx in 0..num_samples {
             for dim_idx in 0..ncols {
                 let swap_idx = rng.random_range(0..num_samples);
-                let swap = result[(start_idx, dim_idx)];
-                result[(start_idx, dim_idx)] = result[(swap_idx, dim_idx)];
-                result[(swap_idx, dim_idx)] = swap;
+                let swap = *result.element(start_idx, dim_idx);
+                *result.element_mut(start_idx, dim_idx) = *result.element(swap_idx, dim_idx);
+                *result.element_mut(swap_idx, dim_idx) = swap;
             }
         }
 

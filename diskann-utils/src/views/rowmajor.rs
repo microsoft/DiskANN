@@ -595,7 +595,7 @@ impl<T> Owned<T> {
         Ok(Self::from_fn_layout(layout, f))
     }
 
-    fn from_fn_layout<F>(layout: Layout, f: F) -> Self
+    pub fn from_fn_layout<F>(layout: Layout, f: F) -> Self
     where
         F: FnMut() -> T,
     {
@@ -611,9 +611,15 @@ impl<T> Owned<T> {
         T: Clone,
     {
         let layout = Layout::new_for::<T>(nrows, ncols)?;
-        let b: Box<[T]> = std::iter::repeat_n(element, layout.num_elements()).collect();
+        Ok(Self::cloned_layout(element, layout))
+    }
 
-        Ok(unsafe { Self::from_data_unchecked(b, layout) })
+    pub fn cloned_layout(element: T, layout: Layout) -> Self
+    where
+        T: Clone,
+    {
+        let b: Box<[T]> = std::iter::repeat_n(element, layout.num_elements()).collect();
+        unsafe { Self::from_data_unchecked(b, layout) }
     }
 
     pub fn copied(element: T, nrows: usize, ncols: usize) -> Result<Self, LayoutError>
@@ -623,11 +629,25 @@ impl<T> Owned<T> {
         Self::cloned(element, nrows, ncols)
     }
 
+    pub fn copied_layout(element: T, layout: Layout) -> Self
+    where
+        T: Copy,
+    {
+        Self::cloned_layout(element, layout)
+    }
+
     pub fn defaulted(nrows: usize, ncols: usize) -> Result<Self, LayoutError>
     where
         T: Default,
     {
         Self::from_fn(nrows, ncols, Default::default)
+    }
+
+    pub fn defaulted_layout(layout: Layout) -> Self
+    where
+        T: Default,
+    {
+        Self::from_fn_layout(layout, Default::default)
     }
 
     unsafe fn from_data_unchecked(b: Box<[T]>, layout: Layout) -> Self {
@@ -708,6 +728,10 @@ impl<'a, T> Ref<'a, T> {
             layout,
             _lifetime: PhantomData,
         }
+    }
+
+    pub fn into_slice(self) -> &'a [T] {
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.layout().num_elements()) }
     }
 }
 

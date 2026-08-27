@@ -3,17 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use crate::views::MatrixView;
+use crate::views::rowmajor::{self, Matrix};
 use diskann_vector::{conversion::CastFromSlice, distance::SquaredL2, PureDistanceFunction};
 use half::f16;
 
 /// Return the row in `data` that is closest to the medoid of all rows.
 pub trait ComputeMedoid: Sized {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self>;
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self>;
 }
 
 impl ComputeMedoid for f32 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
@@ -48,7 +48,7 @@ impl ComputeMedoid for f32 {
 }
 
 impl ComputeMedoid for f16 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
@@ -84,7 +84,7 @@ impl ComputeMedoid for f16 {
 }
 
 impl ComputeMedoid for u8 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }
@@ -120,7 +120,7 @@ impl ComputeMedoid for u8 {
 }
 
 impl ComputeMedoid for i8 {
-    fn compute_medoid(data: MatrixView<Self>) -> Vec<Self> {
+    fn compute_medoid(data: rowmajor::Ref<'_, Self>) -> Vec<Self> {
         if data.ncols() == 0 {
             return vec![];
         }

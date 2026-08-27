@@ -16,12 +16,12 @@ use std::io::{Read, Seek, Write};
 use diskann_wide::{LoHi, SplitJoin};
 use thiserror::Error;
 
-use crate::views::{Matrix, MatrixView};
+use crate::views::rowmajor::{self, MatrixMut, Matrix};
 
 /// Read a matrix of `T` from the DiskANN binary format (see [module docs](self)).
 ///
 /// Validates that the reader contains enough data before allocating.
-pub fn read_bin<T>(reader: &mut (impl Read + Seek)) -> Result<Matrix<T>, ReadBinError>
+pub fn read_bin<T>(reader: &mut (impl Read + Seek)) -> Result<rowmajor::Owned<T>, ReadBinError>
 where
     T: bytemuck::Pod,
 {
@@ -29,15 +29,16 @@ where
     let (npoints, ndims) = (metadata.npoints(), metadata.ndims());
     let type_size = std::mem::size_of::<T>();
 
-    let expected_bytes = npoints
-        .checked_mul(ndims)
-        .and_then(|n| n.checked_mul(type_size))
-        .ok_or(ReadBinError::Overflow {
+    let layout = match rowmajor::Layout::new_for::<T>(npoints, ndims) {
+        Ok(layout) => layout,
+        Err(_) => return Err(ReadBinError::Overflow {
             npoints: metadata.npoints_u32(),
             ndims: metadata.ndims_u32(),
             type_size,
-        })?;
+        }),
+    };
 
+    let expected_bytes = layout.num_elements() * std::mem::size_of::<T>();
     let data_start = reader.stream_position()?;
     let end = reader.seek(std::io::SeekFrom::End(0))?;
     let available = end - data_start;
@@ -53,7 +54,7 @@ where
         });
     }
 
-    let mut data = Matrix::new(<T as bytemuck::Zeroable>::zeroed(), npoints, ndims);
+    let mut data = rowmajor::Owned::copied_layout(<T as bytemuck::Zeroable>::zeroed(), layout);
 
     reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(data.as_mut_slice()))?;
     Ok(data)
@@ -62,7 +63,7 @@ where
 /// Write a matrix of `T` in the DiskANN binary format (see [module docs](self)).
 ///
 /// Returns the total number of bytes written.
-pub fn write_bin<T>(data: MatrixView<'_, T>, writer: &mut impl Write) -> Result<usize, SaveBinError>
+pub fn write_bin<T>(data: rowmajor::Ref<'_, T>, writer: &mut impl Write) -> Result<usize, SaveBinError>
 where
     T: bytemuck::Pod,
 {
@@ -209,22 +210,20 @@ pub enum SaveBinError {
 mod tests {
     use std::io::Cursor;
 
-    use crate::views::Init;
-
     use super::*;
 
     #[test]
     fn round_trip_f32() {
         let mut counter = 1.0f32;
-        let matrix = Matrix::<f32>::new(
-            Init(|| {
+        let matrix = rowmajor::Owned::<f32>::from_fn(
+            3,
+            4,
+            || {
                 let v = counter;
                 counter += 1.0;
                 v
-            }),
-            3,
-            4,
-        );
+            },
+        ).unwrap();
 
         assert_eq!(
             matrix.as_slice(),
