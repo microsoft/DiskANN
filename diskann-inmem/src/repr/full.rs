@@ -11,14 +11,14 @@
 //! The [`FullPrecision`] generic bound can be used to constrain these data types.
 
 mod internal_docs {
-    //! Internally, the [`super::layers::Search`] and [`super::layers::Insert`] traits
+    //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
     //!
     //! * [`super::ExpandBeam`]: For index search.
     //! * [`super::Prune`]: For index construction.
     //!
     //! These two structs are modular with respect to their exact distance function and
-    //! prefetcher. Since [`super::layers::ExpandBeam`] and [`super::layers::Prune`] are
+    //! prefetcher. Since [`super::repr::ExpandBeam`] and [`super::repr::Prune`] are
     //! used as trait objects, this allows the implementation structs in this module to be
     //! highly specialized, including:
     //!
@@ -55,9 +55,10 @@ use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
-    epoch, layers,
+    epoch,
     num::{Bytes, Capacity, IdLimit, MaxDegree},
     prefetch::{self, Prefetch},
+    repr,
     store::{
         self, Store,
         invasive::{self, Invasive},
@@ -67,12 +68,12 @@ use crate::{
 
 /// A useful trait bound for types compatible with [`Full`].
 ///
-/// This encompasses *everything* required for `Full: layers::Insert` and can be used as
+/// This encompasses *everything* required for `Full: repr::Insert` and can be used as
 /// a single bound.
 pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     #[doc(hidden)]
     fn __search_accessor<'a>(
-        layer: &'a Full<Self>,
+        representation: &'a Full<Self>,
         query: &'a [Self],
         provider: &'a (dyn std::any::Any + Send + Sync),
         counters: LocalCounters<'a>,
@@ -80,7 +81,7 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
 
     #[doc(hidden)]
     fn __prune_accessor<'a>(
-        layer: &'a Full<Self>,
+        representation: &'a Full<Self>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
 }
@@ -188,11 +189,11 @@ pub enum ConfigError {
 
 diskann::convert_error!(ConfigError);
 
-impl<T> layers::LayerConfig for Config<T>
+impl<T> repr::RepresentationConfig for Config<T>
 where
     T: FullPrecision,
 {
-    type Layer = Full<T>;
+    type Representation = Full<T>;
 
     fn build(self) -> ANNResult<Full<T>> {
         <Config<T>>::build(self)
@@ -204,13 +205,13 @@ trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     fn make_expand_beam<'a>(
         full: &'a Full<Self>,
         query: &'a [Self],
-    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>>;
+    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>>;
 
     #[doc(hidden)]
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>>;
+    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>>;
 }
 
-/// Full-precision data layer.
+/// Full-precision data representation.
 #[derive(Debug)]
 pub struct Full<T>
 where
@@ -226,7 +227,7 @@ impl<T> Full<T>
 where
     T: 'static,
 {
-    /// Initialize a [`Config`] for this layer.
+    /// Initialize a [`Config`] for this representation.
     ///
     /// See also: [`Config::new`].
     ///
@@ -242,7 +243,7 @@ where
         Config::new(capacity, max_degree, metric, start_points)
     }
 
-    /// Create a new full-precision layer from `config`.
+    /// Create a new full-precision representation from `config`.
     ///
     /// See: [`Config::build`].
     fn new(config: Config<T>) -> ANNResult<Self>
@@ -285,7 +286,7 @@ where
         })
     }
 
-    /// Return the logical dimension of the data handled by this [`layers::Layer`].
+    /// Return the logical dimension of the data handled by this [`repr::Representation`].
     pub fn dim(&self) -> usize {
         self.bytes().value() / std::mem::size_of::<T>()
     }
@@ -300,7 +301,7 @@ where
         self.store.slots().bytes_plus_tag()
     }
 
-    /// Return the [`Metric`] for this layer.
+    /// Return the [`Metric`] for this representation.
     pub fn metric(&self) -> Metric {
         self.metric
     }
@@ -340,7 +341,7 @@ where
     }
 }
 
-impl<T> layers::Layer for Full<T>
+impl<T> repr::Representation for Full<T>
 where
     T: FullPrecision,
 {
@@ -365,7 +366,7 @@ where
     }
 }
 
-impl<T> layers::Set<&[T]> for Full<T>
+impl<T> repr::Set<&[T]> for Full<T>
 where
     T: FullPrecision,
 {
@@ -392,7 +393,7 @@ where
     }
 }
 
-/// A [`layers::Guard`] for [`Full`].
+/// A [`repr::Guard`] for [`Full`].
 #[derive(Debug)]
 pub struct Guard<'a> {
     slot: store::Slot<'a, invasive::Slot<'a>>,
@@ -404,7 +405,7 @@ impl<'a> Guard<'a> {
     }
 }
 
-impl layers::Guard for Guard<'_> {
+impl repr::Guard for Guard<'_> {
     fn publish(self) {
         self.slot.publish();
     }
@@ -415,7 +416,7 @@ impl layers::Guard for Guard<'_> {
 
 #[derive(Debug, Error)]
 #[error(
-    "data of dimension {} does not match full precision layer's dimension {}",
+    "data of dimension {} does not match full precision representation's dimension {}",
     self.got,
     self.expected
 )]
@@ -426,7 +427,7 @@ struct SetError {
 
 diskann::convert_error!(SetError);
 
-impl<T> layers::Search for Full<T>
+impl<T> repr::Search for Full<T>
 where
     T: FullPrecision,
 {
@@ -442,7 +443,7 @@ where
     }
 }
 
-impl<T> layers::Insert for Full<T>
+impl<T> repr::Insert for Full<T>
 where
     T: FullPrecision,
 {
@@ -548,7 +549,7 @@ where
 struct ExpandBeam<'a, P, T, U, D> {
     // The original query.
     query: Calf<'a, T>,
-    // A reader into a layer's store.
+    // A reader into a representation's store.
     reader: store::invasive::Reader<'a>,
     // The prefetch lookahead.
     lookahead: Option<NonZeroUsize>,
@@ -617,10 +618,10 @@ impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
     }
 }
 
-// SAFETY: Our implementation of `layers::ExpandBeam::id_limit` is consistent with our
-// `layers::ExpandBeam::expand_beam` implementation. They are both dependent on
+// SAFETY: Our implementation of `repr::ExpandBeam::id_limit` is consistent with our
+// `repr::ExpandBeam::expand_beam` implementation. They are both dependent on
 // `invasive::Reader`'s internal bounds.
-unsafe impl<P, T, U, D> layers::ExpandBeam for ExpandBeam<'_, P, T, U, D>
+unsafe impl<P, T, U, D> repr::ExpandBeam for ExpandBeam<'_, P, T, U, D>
 where
     P: Prefetch,
     T: Send + Sync + 'static + Debug,
@@ -731,7 +732,7 @@ diskann::convert_error!(ExpandBeamError);
 struct Prune<'a, T, D> {
     // Buffered data to prune over.
     buffer: Vec<UnalignedSlice<'a, T>>,
-    // A reader into a layer's store.
+    // A reader into a representation's store.
     reader: store::invasive::Reader<'a>,
     // The distance implementation used for pruning.
     distance: D,
@@ -760,16 +761,16 @@ impl<'a, T, D> Prune<'a, T, D> {
     }
 }
 
-impl<T, D> layers::Prune for Prune<'_, T, D>
+impl<T, D> repr::Prune for Prune<'_, T, D>
 where
     T: Debug + Send + Sync + 'static,
     D: Distance<T, T>,
 {
     fn prepare(
         &mut self,
-        items: hashbrown::hash_map::IterMut<'_, u32, Option<layers::PruneKey>>,
+        items: hashbrown::hash_map::IterMut<'_, u32, Option<repr::PruneKey>>,
     ) -> ANNResult<usize> {
-        let mut counter = layers::PruneKey::counter();
+        let mut counter = repr::PruneKey::counter();
         self.buffer.clear();
         self.buffer.reserve(items.len());
 
@@ -802,7 +803,7 @@ where
         Ok(counter.index())
     }
 
-    fn evaluate(&self, a: layers::PruneKey, b: layers::PruneKey) -> f32 {
+    fn evaluate(&self, a: repr::PruneKey, b: repr::PruneKey) -> f32 {
         self.distance
             .eval(self.buffer[a.index()], self.buffer[b.index()])
     }
@@ -842,10 +843,10 @@ impl FullPrecisionImpl for f32 {
     fn make_expand_beam<'a>(
         full: &'a Full<f32>,
         query: &'a [f32],
-    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let output: Box<dyn layers::ExpandBeam> = match full.metric {
+        let output: Box<dyn repr::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 100 {
                     expand_beam!(into, { f32, 100, SquaredL2 })
@@ -861,10 +862,10 @@ impl FullPrecisionImpl for f32 {
         Ok(output)
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
+    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
-        let output: Box<dyn layers::Prune> = match full.metric {
+        let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
             Metric::InnerProduct => prune!(Self, reader, InnerProduct),
             Metric::Cosine => prune!(Self, reader, Cosine),
@@ -879,14 +880,14 @@ impl FullPrecisionImpl for f16 {
     fn make_expand_beam<'a>(
         full: &'a Full<f16>,
         query: &'a [f16],
-    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
         let into = IntoExpandBeam::new(full, query)?;
 
-        let output: Box<dyn layers::ExpandBeam> = match full.metric {
+        let output: Box<dyn repr::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 100 {
                     expand_beam!(into, { f16, 100, SquaredL2 })
@@ -902,10 +903,10 @@ impl FullPrecisionImpl for f16 {
         Ok(output)
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
+    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
-        let output: Box<dyn layers::Prune> = match full.metric {
+        let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
             Metric::InnerProduct => prune!(Self, reader, InnerProduct),
             Metric::Cosine => prune!(Self, reader, Cosine),
@@ -920,10 +921,10 @@ impl FullPrecisionImpl for u8 {
     fn make_expand_beam<'a>(
         full: &'a Full<u8>,
         query: &'a [u8],
-    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
-        let output: Box<dyn layers::ExpandBeam> = match full.metric {
+        let output: Box<dyn repr::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 128 {
                     expand_beam!(into, { u8, 128, SquaredL2 })
@@ -938,10 +939,10 @@ impl FullPrecisionImpl for u8 {
         Ok(output)
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
+    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
-        let output: Box<dyn layers::Prune> = match full.metric {
+        let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
             Metric::InnerProduct => prune!(Self, reader, InnerProduct),
             Metric::Cosine => prune!(Self, reader, Cosine),
@@ -956,25 +957,25 @@ impl FullPrecisionImpl for i8 {
     fn make_expand_beam<'a>(
         full: &'a Full<i8>,
         query: &'a [i8],
-    ) -> ANNResult<Box<dyn layers::ExpandBeam + 'a>> {
+    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query))?;
 
         let distance =
             <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn layers::ExpandBeam + 'a> =
+        let output: Box<dyn repr::ExpandBeam + 'a> =
             ExpandBeam::new(into, prefetch::Loop::new(), distance).boxed();
 
         Ok(output)
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn layers::Prune + 'a>> {
+    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
         let reader = full.reader()?;
 
         let distance =
             <Self as DistanceProvider<Self>>::distance_comparer(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn layers::Prune> = Prune::<Self, _>::new(reader, distance).boxed();
+        let output: Box<dyn repr::Prune> = Prune::<Self, _>::new(reader, distance).boxed();
         Ok(output)
     }
 }
@@ -986,29 +987,29 @@ macro_rules! impl_full_precision {
     ($T:ty) => {
         impl FullPrecision for $T {
             fn __search_accessor<'a>(
-                layer: &'a Full<Self>,
+                representation: &'a Full<Self>,
                 query: &'a [Self],
                 provider: &'a (dyn std::any::Any + Send + Sync),
                 counters: LocalCounters<'a>,
             ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-                let expand_beam = <$T>::make_expand_beam(layer, query)?;
+                let expand_beam = <$T>::make_expand_beam(representation, query)?;
                 Ok(crate::provider::SearchAccessor::new(
-                    layer.store.neighbors(),
+                    representation.store.neighbors(),
                     expand_beam,
                     provider,
-                    layer.store.frozen(),
+                    representation.store.frozen(),
                     counters,
                 ))
             }
 
             fn __prune_accessor<'a>(
-                layer: &'a Full<Self>,
+                representation: &'a Full<Self>,
                 counters: LocalCounters<'a>,
             ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
-                let prune = <$T>::make_prune(layer)?;
+                let prune = <$T>::make_prune(representation)?;
                 Ok(crate::provider::PruneAccessor::new(
                     prune,
-                    layer.store.neighbors(),
+                    representation.store.neighbors(),
                     counters,
                 ))
             }
@@ -1035,7 +1036,7 @@ mod tests {
     use hashbrown::{HashMap, HashSet};
     use rand::{Rng, SeedableRng, rngs::StdRng};
 
-    /// Generate random elements of a layer's data type from a seeded RNG.
+    /// Generate random elements of a representation's data type from a seeded RNG.
     trait Sample: bytemuck::Pod {
         fn sample<R: Rng>(rng: &mut R) -> Self;
     }
@@ -1083,7 +1084,7 @@ mod tests {
     fn test_full(capacity: Capacity) -> (Full<f32>, HashMap<u32, f32>) {
         let start_points = [capacity.value() as f32, (capacity.value() + 1) as f32];
 
-        let full = <_ as layers::LayerConfig>::build(
+        let full = <_ as repr::RepresentationConfig>::build(
             Full::<f32>::config(
                 capacity,
                 MaxDegree::new(0),
@@ -1104,10 +1105,10 @@ mod tests {
         );
         assert_eq!(full.metric(), Metric::L2);
         assert_eq!(
-            <_ as layers::Layer>::id_limit(&full),
+            <_ as repr::Representation>::id_limit(&full),
             IdLimit::new(capacity.value() as u32 + 2)
         );
-        assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
+        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
 
         let points: HashMap<u32, f32> = {
             let reader = full.reader().unwrap();
@@ -1162,16 +1163,16 @@ mod tests {
 
         let (mut full, mut points) = test_full(capacity);
 
-        assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
-        assert_eq!(<_ as layers::Layer>::id_limit(&full), id_limit);
+        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
+        assert_eq!(<_ as repr::Representation>::id_limit(&full), id_limit);
 
         let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
 
         // Insert the values 0 to 10.
         for i in 0u32..10 {
-            let guard = <_ as layers::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
+            let guard = <_ as repr::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
 
-            let id = <_ as layers::Guard>::id(&guard);
+            let id = <_ as repr::Guard>::id(&guard);
 
             assert!(
                 available.remove(&id),
@@ -1183,7 +1184,7 @@ mod tests {
                 "insertion should not repeat",
             );
 
-            <_ as layers::Guard>::publish(guard);
+            <_ as repr::Guard>::publish(guard);
         }
 
         // Lookaheads to try.
@@ -1208,21 +1209,21 @@ mod tests {
         for lookahead in lookaheads {
             full.lookahead = *lookahead;
 
-            let g0 = <_ as layers::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
-            let g1 = <_ as layers::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
-            let g2 = <_ as layers::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
-            let g3 = <_ as layers::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
+            let g0 = <_ as repr::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
+            let g1 = <_ as repr::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
+            let g2 = <_ as repr::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
+            let g3 = <_ as repr::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
 
             {
-                let g0_id = <_ as layers::Guard>::id(&g0);
-                <_ as layers::Guard>::publish(g0);
-                <_ as layers::Layer>::retire(&full, g0_id).unwrap();
+                let g0_id = <_ as repr::Guard>::id(&g0);
+                <_ as repr::Guard>::publish(g0);
+                <_ as repr::Representation>::retire(&full, g0_id).unwrap();
             }
 
             {
-                let g1_id = <_ as layers::Guard>::id(&g1);
-                <_ as layers::Guard>::publish(g1);
-                <_ as layers::Layer>::retire(&full, g1_id).unwrap();
+                let g1_id = <_ as repr::Guard>::id(&g1);
+                <_ as repr::Guard>::publish(g1);
+                <_ as repr::Representation>::retire(&full, g1_id).unwrap();
             }
 
             let query = -1.0f32;
@@ -1232,7 +1233,7 @@ mod tests {
 
             let expand = ExpandBeam::new(into, prefetch::Loop::new(), TestDistance);
 
-            assert_eq!(<_ as layers::ExpandBeam>::id_limit(&expand), id_limit);
+            assert_eq!(<_ as repr::ExpandBeam>::id_limit(&expand), id_limit);
 
             let mut buf = Vec::<(u32, f32)>::new();
             let mut list = Vec::<u32>::new();
@@ -1254,7 +1255,7 @@ mod tests {
                 //
                 // Also by construction `buf` is at least as long as `list`.
                 let read =
-                    unsafe { <_ as layers::ExpandBeam>::expand_beam(&expand, &list, &mut buf) }
+                    unsafe { <_ as repr::ExpandBeam>::expand_beam(&expand, &list, &mut buf) }
                         .unwrap();
 
                 let expected: Vec<(u32, f32)> = list
@@ -1265,12 +1266,12 @@ mod tests {
                             let expected = point + query;
 
                             assert!(
-                                <_ as layers::Layer>::is_readable(&full, id).unwrap(),
+                                <_ as repr::Representation>::is_readable(&full, id).unwrap(),
                                 "point should be readable"
                             );
 
                             assert_eq!(
-                                <_ as layers::ExpandBeam>::evaluate(&expand, id).unwrap(),
+                                <_ as repr::ExpandBeam>::evaluate(&expand, id).unwrap(),
                                 Some(expected),
                                 "readable points should return valid distances",
                             );
@@ -1279,12 +1280,12 @@ mod tests {
                         }
                         None => {
                             assert!(
-                                !<_ as layers::Layer>::is_readable(&full, id).unwrap(),
+                                !<_ as repr::Representation>::is_readable(&full, id).unwrap(),
                                 "points not yielded by ExpandBeam should be unreadable"
                             );
 
                             assert!(
-                                <_ as layers::ExpandBeam>::evaluate(&expand, id)
+                                <_ as repr::ExpandBeam>::evaluate(&expand, id)
                                     .unwrap()
                                     .is_none(),
                                 "unreadable points should return `None` for their distance",
@@ -1299,7 +1300,7 @@ mod tests {
             }
 
             assert!(
-                <_ as layers::ExpandBeam>::evaluate(&expand, id_limit.value()).is_err(),
+                <_ as repr::ExpandBeam>::evaluate(&expand, id_limit.value()).is_err(),
                 "`ExpandBeam::evaluate` should catch out-of-bounds errors",
             );
 
@@ -1314,10 +1315,10 @@ mod tests {
         prune: &mut Prune<f32, TestDistance>,
         ids: &[u32],
     ) {
-        let mut items: HashMap<u32, Option<layers::PruneKey>> =
+        let mut items: HashMap<u32, Option<repr::PruneKey>> =
             ids.iter().map(|id| (*id, None)).collect();
 
-        let processed = <_ as layers::Prune>::prepare(prune, items.iter_mut()).unwrap();
+        let processed = <_ as repr::Prune>::prepare(prune, items.iter_mut()).unwrap();
         assert_eq!(processed, items.values().filter(|i| i.is_some()).count());
 
         // Ensure that `prepare` agrees with `points`.
@@ -1328,7 +1329,7 @@ mod tests {
             }
         }
 
-        fn filter((k, v): (&u32, &Option<layers::PruneKey>)) -> Option<(u32, layers::PruneKey)> {
+        fn filter((k, v): (&u32, &Option<repr::PruneKey>)) -> Option<(u32, repr::PruneKey)> {
             v.map(|v| (*k, v))
         }
 
@@ -1337,7 +1338,7 @@ mod tests {
             for (k1, v1) in items.iter().filter_map(filter) {
                 // Manually implement `TestDistance`.
                 let expected = points[&k0] + points[&k1];
-                let got = <_ as layers::Prune>::evaluate(prune, v0, v1);
+                let got = <_ as repr::Prune>::evaluate(prune, v0, v1);
                 assert_eq!(expected, got);
             }
         }
@@ -1351,16 +1352,16 @@ mod tests {
 
         let (full, mut points) = test_full(capacity);
 
-        assert_eq!(<_ as layers::Layer>::capacity(&full), capacity);
-        assert_eq!(<_ as layers::Layer>::id_limit(&full), id_limit);
+        assert_eq!(<_ as repr::Representation>::capacity(&full), capacity);
+        assert_eq!(<_ as repr::Representation>::id_limit(&full), id_limit);
 
         let mut available: HashSet<u32> = (0..capacity.value()).map(|i| i as u32).collect();
 
         // Insert the values 0 to 10.
         for i in 0u32..10 {
-            let guard = <_ as layers::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
+            let guard = <_ as repr::Set<&[f32]>>::set(&full, &[i as f32]).unwrap();
 
-            let id = <_ as layers::Guard>::id(&guard);
+            let id = <_ as repr::Guard>::id(&guard);
 
             assert!(
                 available.remove(&id),
@@ -1372,7 +1373,7 @@ mod tests {
                 "insertion should not repeat",
             );
 
-            <_ as layers::Guard>::publish(guard);
+            <_ as repr::Guard>::publish(guard);
         }
 
         // We do several things.
@@ -1382,21 +1383,21 @@ mod tests {
         //
         // 2. We publish two new points and immediately retire them.
         //    This tests that we correctly make these points unreadable.
-        let g0 = <_ as layers::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
-        let g1 = <_ as layers::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
-        let g2 = <_ as layers::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
-        let g3 = <_ as layers::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
+        let g0 = <_ as repr::Set<&[f32]>>::set(&full, &[1000.0]).unwrap();
+        let g1 = <_ as repr::Set<&[f32]>>::set(&full, &[2000.0]).unwrap();
+        let g2 = <_ as repr::Set<&[f32]>>::set(&full, &[3000.0]).unwrap();
+        let g3 = <_ as repr::Set<&[f32]>>::set(&full, &[4000.0]).unwrap();
 
         {
-            let g0_id = <_ as layers::Guard>::id(&g0);
-            <_ as layers::Guard>::publish(g0);
-            <_ as layers::Layer>::retire(&full, g0_id).unwrap();
+            let g0_id = <_ as repr::Guard>::id(&g0);
+            <_ as repr::Guard>::publish(g0);
+            <_ as repr::Representation>::retire(&full, g0_id).unwrap();
         }
 
         {
-            let g1_id = <_ as layers::Guard>::id(&g1);
-            <_ as layers::Guard>::publish(g1);
-            <_ as layers::Layer>::retire(&full, g1_id).unwrap();
+            let g1_id = <_ as repr::Guard>::id(&g1);
+            <_ as repr::Guard>::publish(g1);
+            <_ as repr::Representation>::retire(&full, g1_id).unwrap();
         }
 
         let mut prune = Prune::new(full.reader().unwrap(), TestDistance);
@@ -1432,7 +1433,7 @@ mod tests {
         let start_point = gen_vec::<T>(dim, &mut rng);
         let query = gen_vec::<T>(dim, &mut rng);
 
-        let full = <_ as layers::LayerConfig>::build(
+        let full = <_ as repr::RepresentationConfig>::build(
             Full::<T>::config(
                 Capacity::new(1),
                 MaxDegree::new(0),
@@ -1446,9 +1447,9 @@ mod tests {
         let start_id: u32 = 1;
 
         let internal_query = {
-            let guard = <_ as layers::Set<&[T]>>::set(&full, &query).unwrap();
-            let id = <_ as layers::Guard>::id(&guard);
-            <_ as layers::Guard>::publish(guard);
+            let guard = <_ as repr::Set<&[T]>>::set(&full, &query).unwrap();
+            let id = <_ as repr::Guard>::id(&guard);
+            <_ as repr::Guard>::publish(guard);
             id
         };
 
@@ -1469,7 +1470,7 @@ mod tests {
         // Prune
         {
             let mut prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
-            let mut points: HashMap<u32, Option<layers::PruneKey>> =
+            let mut points: HashMap<u32, Option<repr::PruneKey>> =
                 [(internal_query, None), (start_id, None)]
                     .into_iter()
                     .collect();

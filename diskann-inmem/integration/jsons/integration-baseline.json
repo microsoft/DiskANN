@@ -16,7 +16,7 @@
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "f32"
           }
@@ -137,7 +137,7 @@
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "f16"
           }
@@ -258,7 +258,7 @@
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "u8"
           }
@@ -382,7 +382,7 @@
           ],
           "queries": "/yfcc/yfcc_query_100.fbin"
         },
-        "layer": {
+        "representation": {
           "FullPrecision": {
             "data_type": "i8"
           }

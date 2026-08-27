@@ -29,8 +29,8 @@ use diskann_benchmark_runner::{
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_inmem::{
-    layers::{Full, FullPrecision},
     num::{Capacity, MaxDegree},
+    repr::{Full, FullPrecision},
     Provider, Strategy,
 };
 use diskann_utils::views::{Matrix, MatrixView};
@@ -423,7 +423,7 @@ impl<T> Build<T> {
 
 impl<T> Benchmark for Build<T>
 where
-    T: diskann_inmem::layers::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
+    T: diskann_inmem::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = StaticBuild;
     type Output = ();

@@ -46,9 +46,9 @@ use diskann::{
 use crate::{
     counters::{Counters, LocalCounters},
     ids::IdMap,
-    layers,
     neighbors::Neighbors,
     num::{IdLimit, MaxDegree},
+    repr,
 };
 
 /// Aggregate trait for the external ID type of [`Provider`].
@@ -58,16 +58,16 @@ impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
 
 /// An in-memory data-provider for DiskANN's graph indexing algorithms.
 ///
-/// The first type parameter `L` is a [`layers::Layer`] for describing the kind of data
+/// The first type parameter `R` is a [`repr::Representation`] for describing the kind of data
 /// stored within the provider. The second parameter `M` is the associated data for items
 /// inserted into the provider.
 #[derive(Debug)]
-pub struct Provider<L, M = u32>
+pub struct Provider<R, M = u32>
 where
     M: Id,
 {
     // Data representation and storage.
-    layer: L,
+    representation: R,
     // ID translation.
     mapping: IdMap<M>,
     // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
@@ -75,7 +75,7 @@ where
     counters: Counters,
 }
 
-impl<L, M> Provider<L, M>
+impl<R, M> Provider<R, M>
 where
     M: Id,
 {
@@ -91,23 +91,21 @@ where
     }
 }
 
-impl<L, M> Provider<L, M>
+impl<R, M> Provider<R, M>
 where
-    L: layers::Layer,
+    R: repr::Representation,
     M: Id,
 {
     /// Construct a new [`Provider`].
-    ///
-    /// The list of `start_points` must be must be compatible with `layer`.
     pub fn new<C>(config: C) -> ANNResult<Self>
     where
-        C: layers::LayerConfig<Layer = L>,
+        C: repr::RepresentationConfig<Representation = R>,
     {
-        let layer = <_ as layers::LayerConfig>::build(config)?;
-        let mapping = IdMap::new(layer.capacity());
+        let representation = <_ as repr::RepresentationConfig>::build(config)?;
+        let mapping = IdMap::new(representation.capacity());
 
         Ok(Self {
-            layer,
+            representation,
             mapping,
             counters: Counters::new(),
         })
@@ -115,7 +113,7 @@ where
 
     /// Return the maximum number of neighbors that can be stored in the provider's graph.
     pub fn max_degree(&self) -> MaxDegree {
-        self.layer.max_degree()
+        self.representation.max_degree()
     }
 }
 
@@ -169,9 +167,9 @@ where
 //
 // `diskann` has plans to move deletion checks behind an accessor trait, which will help
 // with this situation.
-impl<L, M> diskann::provider::Delete for Provider<L, M>
+impl<R, M> diskann::provider::Delete for Provider<R, M>
 where
-    L: layers::Layer,
+    R: repr::Representation,
     M: Id,
 {
     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
@@ -188,7 +186,7 @@ where
 
         // An early return here will cause `entry` to be dropped, which will *not* cause
         // the delete to commit.
-        <L as layers::Layer>::retire(&self.layer, entry.internal())?;
+        <R as repr::Representation>::retire(&self.representation, entry.internal())?;
 
         // Successfully retired the internal slot. We can safely release the ID mapping.
         entry.delete();
@@ -205,7 +203,7 @@ where
         _context: &Context,
         id: u32,
     ) -> ANNResult<diskann::provider::ElementStatus> {
-        match <L as layers::Layer>::is_readable(&self.layer, id) {
+        match <R as repr::Representation>::is_readable(&self.representation, id) {
             Some(true) => Ok(diskann::provider::ElementStatus::Valid),
             Some(false) => Ok(diskann::provider::ElementStatus::Deleted),
             None => Err(ANNError::message("accessed invalid internal ID")),
@@ -232,9 +230,9 @@ where
     std::future::ready(f())
 }
 
-impl<T, L, M> diskann::provider::SetElement<T> for Provider<L, M>
+impl<T, R, M> diskann::provider::SetElement<T> for Provider<R, M>
 where
-    L: layers::Set<T>,
+    R: repr::Set<T>,
     M: Id,
 {
     type SetError = ANNError;
@@ -251,13 +249,13 @@ where
             //
             // The internal `Guard` is sufficient for local rollback, but not after
             // `set_element` returns.
-            let guard = <L as layers::Set<T>>::set(&self.layer, element)?;
-            let internal = <_ as layers::Guard>::id(&guard);
+            let guard = <R as repr::Set<T>>::set(&self.representation, element)?;
+            let internal = <_ as repr::Guard>::id(&guard);
             self.mapping.insert(id.clone(), internal)?;
 
             // Now that insert has succeeded - publish the slot. This method cannot fail, so
             // we do not need to worry about potentially unwinding the ID mapping.
-            <_ as layers::Guard>::publish(guard);
+            <_ as repr::Guard>::publish(guard);
 
             // This is a rather expensive update.
             //
@@ -285,7 +283,7 @@ where
 pub struct SearchAccessor<'a> {
     neighbors: &'a Neighbors,
     ids: AdjacencyList<u32>,
-    expand_beam: Box<dyn layers::ExpandBeam + 'a>,
+    expand_beam: Box<dyn repr::ExpandBeam + 'a>,
     id_limit: IdLimit,
     buffer: Vec<(u32, f32)>,
 
@@ -298,7 +296,7 @@ pub struct SearchAccessor<'a> {
 impl<'a> SearchAccessor<'a> {
     pub(crate) fn new(
         neighbors: &'a Neighbors,
-        expand_beam: Box<dyn layers::ExpandBeam + 'a>,
+        expand_beam: Box<dyn repr::ExpandBeam + 'a>,
         provider: &'a (dyn std::any::Any + Send + Sync),
         start_points: std::ops::Range<u32>,
         counters: LocalCounters<'a>,
@@ -413,15 +411,15 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 /// This type implements zero-copy access to the data within its parent provider during prunes.
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
-    prune: Box<dyn layers::Prune + 'a>,
-    keys: hashbrown::HashMap<u32, Option<layers::PruneKey>>,
+    prune: Box<dyn repr::Prune + 'a>,
+    keys: hashbrown::HashMap<u32, Option<repr::PruneKey>>,
     neighbors: &'a Neighbors,
     counters: LocalCounters<'a>,
 }
 
 impl<'a> PruneAccessor<'a> {
     pub(crate) fn new(
-        prune: Box<dyn layers::Prune + 'a>,
+        prune: Box<dyn repr::Prune + 'a>,
         neighbors: &'a Neighbors,
         counters: LocalCounters<'a>,
     ) -> Self {
@@ -437,12 +435,12 @@ impl<'a> PruneAccessor<'a> {
 /// The distance computer for [`PruneAccessor`].
 #[derive(Debug)]
 pub struct Distance<'a> {
-    prune: &'a dyn layers::Prune,
+    prune: &'a dyn repr::Prune,
     counters: LocalCounters<'a>,
 }
 
 impl<'a> Distance<'a> {
-    fn new(prune: &'a dyn layers::Prune, counters: LocalCounters<'a>) -> Self {
+    fn new(prune: &'a dyn repr::Prune, counters: LocalCounters<'a>) -> Self {
         Self { prune, counters }
     }
 }
@@ -450,7 +448,7 @@ impl<'a> Distance<'a> {
 /// An opaque element-ref for [`PruneAccessor`].
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct ElementRef(layers::PruneKey);
+pub struct ElementRef(repr::PruneKey);
 
 impl<'a> diskann_utils::Reborrow<'a> for ElementRef {
     type Target = ElementRef;
@@ -585,9 +583,9 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct Strategy;
 
-impl<'a, L, M> glue::SearchStrategy<'a, Provider<L, M>, L::Query<'a>> for Strategy
+impl<'a, R, M> glue::SearchStrategy<'a, Provider<R, M>, R::Query<'a>> for Strategy
 where
-    L: layers::Search,
+    R: repr::Search,
     M: Id,
 {
     type SearchAccessor = SearchAccessor<'a>;
@@ -595,12 +593,12 @@ where
 
     fn search_accessor(
         &'a self,
-        provider: &'a Provider<L, M>,
+        provider: &'a Provider<R, M>,
         _context: &'a Context,
-        query: L::Query<'a>,
+        query: R::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
-        <L as layers::Search>::search_accessor(
-            &provider.layer,
+        <R as repr::Search>::search_accessor(
+            &provider.representation,
             query,
             provider,
             provider.local_counters(),
@@ -611,7 +609,7 @@ where
 // This is a utility for helping inspect the generated code for `ExpandBeam`.
 //
 pub fn test_function<'a>(
-    x: &'a Provider<layers::Full<u8>>,
+    x: &'a Provider<repr::Full<u8>>,
     strategy: &'a Strategy,
     context: &'a Context,
     query: &'a [u8],
@@ -621,17 +619,17 @@ pub fn test_function<'a>(
 
 /// Perform ID translation during post-processing.
 #[derive(Debug, Clone, Copy)]
-pub struct Translate<L, M>(std::marker::PhantomData<(L, M)>);
+pub struct Translate<R, M>(std::marker::PhantomData<(R, M)>);
 
-impl<L, M> Default for Translate<L, M> {
+impl<R, M> Default for Translate<R, M> {
     fn default() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
-impl<'a, L, M> glue::SearchPostProcess<SearchAccessor<'a>, L::Query<'a>, M> for Translate<L, M>
+impl<'a, R, M> glue::SearchPostProcess<SearchAccessor<'a>, R::Query<'a>, M> for Translate<R, M>
 where
-    L: layers::Search,
+    R: repr::Search,
     M: Id,
 {
     type Error = ANNError;
@@ -639,7 +637,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut SearchAccessor<'_>,
-        _query: L::Query<'a>,
+        _query: R::Query<'a>,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -649,7 +647,7 @@ where
     {
         let work = move || {
             // By construction - the downcast should succeed. Otherwise, this is a program bug.
-            let provider = match accessor.provider.downcast_ref::<Provider<L, M>>() {
+            let provider = match accessor.provider.downcast_ref::<Provider<R, M>>() {
                 Some(provider) => provider,
                 None => return Err(ANNError::message("bad any cast")),
             };
@@ -674,17 +672,17 @@ where
     }
 }
 
-impl<'a, L, M> glue::DefaultPostProcessor<'a, Provider<L, M>, L::Query<'a>, M> for Strategy
+impl<'a, R, M> glue::DefaultPostProcessor<'a, Provider<R, M>, R::Query<'a>, M> for Strategy
 where
-    L: layers::Search,
+    R: repr::Search,
     M: Id,
 {
-    diskann::default_post_processor!(Translate<L, M>);
+    diskann::default_post_processor!(Translate<R, M>);
 }
 
-impl<L, M> glue::PruneStrategy<Provider<L, M>> for Strategy
+impl<R, M> glue::PruneStrategy<Provider<R, M>> for Strategy
 where
-    L: layers::Insert,
+    R: repr::Insert,
     M: Id,
 {
     type PruneAccessor<'a> = PruneAccessor<'a>;
@@ -692,17 +690,17 @@ where
 
     fn prune_accessor<'a>(
         &self,
-        provider: &'a Provider<L, M>,
+        provider: &'a Provider<R, M>,
         _context: &'a Context,
         _capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
-        <L as layers::Insert>::prune_accessor(&provider.layer, provider.local_counters())
+        <R as repr::Insert>::prune_accessor(&provider.representation, provider.local_counters())
     }
 }
 
-impl<'a, L, M> glue::InsertStrategy<'a, Provider<L, M>, L::Query<'a>> for Strategy
+impl<'a, R, M> glue::InsertStrategy<'a, Provider<R, M>, R::Query<'a>> for Strategy
 where
-    L: layers::Insert,
+    R: repr::Insert,
     M: Id,
 {
     type PruneStrategy = Self;
@@ -711,10 +709,10 @@ where
     }
 }
 
-impl<T, M> glue::InplaceDeleteStrategy<Provider<layers::Full<T>, M>> for Strategy
+impl<T, M> glue::InplaceDeleteStrategy<Provider<repr::Full<T>, M>> for Strategy
 where
     M: Id,
-    T: layers::FullPrecision,
+    T: repr::FullPrecision,
 {
     type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
@@ -739,12 +737,12 @@ where
 
     fn get_delete_element<'a>(
         &'a self,
-        provider: &'a Provider<layers::Full<T>, M>,
+        provider: &'a Provider<repr::Full<T>, M>,
         _context: &'a Context,
         id: u32,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
-        let work = move || provider.layer.get(id);
+        let work = move || provider.representation.get(id);
         ready(work)
     }
 }
@@ -793,7 +791,7 @@ mod tests {
         let start = grid.start_point(size);
         let degree = 6;
 
-        let config = layers::full::Config::new(
+        let config = repr::full::Config::new(
             Capacity::new(grid.num_points(size)),
             MaxDegree::new(degree),
             Metric::L2,

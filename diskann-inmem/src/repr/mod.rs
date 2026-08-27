@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! # Layering
+//! # Data Representation
 //!
 //! A simplified interface for [`crate::Provider`] to use for building a graph index.
 
@@ -20,30 +20,30 @@ use crate::{
 pub mod full;
 pub use full::{Full, FullPrecision};
 
-/// Deferred creation of [`Layer`]s.
+/// Deferred creation of [`Representation`]s.
 ///
 /// This is used in APIs like [`crate::Provider::new`] to defer allocation of large
 /// in-memory data structures.
-pub trait LayerConfig {
-    /// The type of the resulting [`Layer`].
-    type Layer: Layer;
+pub trait RepresentationConfig {
+    /// The type of the resulting [`Representation`].
+    type Representation: Representation;
 
-    /// Build the target [`Layer`].
-    fn build(self) -> ANNResult<Self::Layer>;
+    /// Build the target [`Representation`].
+    fn build(self) -> ANNResult<Self::Representation>;
 }
 
-/// Configurable data layer for [`crate::Provider`].
+/// Configurable data representation for [`crate::Provider`].
 ///
-/// Layers consist of the adjacency list and data for a concurrent in-memory graph index.
-/// These are expected to be indexed using `u32` IDs from `0..self.id_limit()`, with
-/// internal IDs in `0..self.capacity()` available for writing.
+/// A representation owns the adjacency lists and vector data for a concurrent in-memory graph
+/// index. Representations are expected to be indexed using `u32` IDs from
+/// `0..self.id_limit()`, with internal IDs in `0..self.capacity()` available for writing.
 ///
 /// See also:
 ///
 /// - [`Set`]: For assigning into the store.
 /// - [`Search`]: Search compatibility with [`crate::Provider`].
 /// - [`Insert`]: Insert compatibility with [`crate::Provider`].
-pub trait Layer: Send + Sync + 'static {
+pub trait Representation: Send + Sync + 'static {
     /// Return the [`MaxDegree`] of the internal graph.
     fn max_degree(&self) -> MaxDegree;
 
@@ -61,16 +61,16 @@ pub trait Layer: Send + Sync + 'static {
     fn is_readable(&self, i: u32) -> Option<bool>;
 }
 
-/// Attempt to write data into a [`Layer`].
+/// Attempt to write data into a [`Representation`].
 ///
 /// This will attempt to find an available internal ID to which `element` can be assigned,
 /// failing if no such ID can be found. The write is not eagerly committed. Instead, a
 /// [`Guard`] is returned, allowing writes to be aborted if necessary.
-pub trait Set<T>: Layer {
+pub trait Set<T>: Representation {
     /// The type of the [`Guard`] used to defer commitment of the write.
     type Guard<'a>: Guard;
 
-    /// Attempt to write the data in `element` into the [`Layer`].
+    /// Attempt to write the data in `element` into the [`Representation`].
     ///
     /// Returns [`Self::Guard`] to retrieve the allocated internal ID for `element` and to
     /// defer commitment of the write until external code is ready.
@@ -93,7 +93,7 @@ pub trait Guard {
     fn publish(self);
 }
 
-/// Enable search over vectors defined by a [`Layer`].
+/// Enable search over vectors defined by a [`Representation`].
 pub trait Search: Send + Sync + 'static {
     /// The type of the query. This should be equivalent to the generic parameter in
     /// [`Set`], but needs to be replicated here due to limitations in the current trait

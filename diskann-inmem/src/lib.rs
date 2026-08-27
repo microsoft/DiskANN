@@ -18,8 +18,8 @@ mod neighbors;
 mod prefetch;
 mod tag;
 
-pub mod layers;
 pub mod provider;
+pub mod repr;
 pub mod store;
 
 pub use provider::{Context, Provider, Strategy};
