@@ -67,7 +67,7 @@
 //! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
 //! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Yes       | Fallback  |
 //! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
-//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Optimized |
 //! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<6>`   | `USlice<6>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
@@ -113,6 +113,9 @@ use diskann_wide::{ARCH, Architecture, arch::Target2};
 use diskann_wide::{
     SIMDCast, SIMDDotProduct, SIMDMulAdd, SIMDReinterpret, SIMDSumTree, SIMDVector,
 };
+
+#[cfg(target_arch = "aarch64")]
+use diskann_wide::{SIMDDotProduct, SIMDSumTree, SIMDVector};
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
 use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2, check_lengths};
@@ -1565,6 +1568,103 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl
+    Target2<
+        diskann_wide::arch::aarch64::Neon,
+        MathematicalResult<u32>,
+        USlice<'_, 4>,
+        USlice<'_, 4>,
+    > for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: USlice<'_, 4>,
+        y: USlice<'_, 4>,
+    ) -> MathematicalResult<u32> {
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(u8s = <diskann_wide::arch::aarch64::Neon>::u8x16);
+        diskann_wide::alias!(u32s = <diskann_wide::arch::aarch64::Neon>::u32x4);
+
+        let px_u8: *const u8 = x.as_ptr().cast();
+        let py_u8: *const u8 = y.as_ptr().cast();
+
+        let mut i = 0;
+        let mut s: u32 = 0;
+
+        // number of bytes over the underlying slice
+        let bytes = len / 2;
+        if i < bytes {
+            let mut s0 = u32s::default(arch);
+            let mut s1 = u32s::default(arch);
+            let mask = u8s::splat(arch, 0x0f);
+            while i + 16 <= bytes {
+                // SAFETY: load simd loads 16 bytes from offset `i`
+                // we have already verified that i + 16 <= bytes
+                let x_vec = unsafe { u8s::load_simd(arch, px_u8.add(i)) };
+                // SAFETY: same logic applies for y and same conditions hold
+                // since the lengths are element sizes of x and y are equal.
+                let y_vec = unsafe { u8s::load_simd(arch, py_u8.add(i)) };
+
+                // compute dot product for lower 4 bits
+                // each set of 4 results is reduced to one lane
+                let first_x: u8s = x_vec & mask;
+                let first_y: u8s = y_vec & mask;
+                s0 = s0.dot_simd(first_x, first_y);
+
+                // repeat for upper 4 bits
+                let second_x: u8s = (x_vec >> 4) & mask;
+                let second_y: u8s = (y_vec >> 4) & mask;
+                s1 = s1.dot_simd(second_x, second_y);
+                // repeat for next block
+                i += 16;
+            }
+
+            let remaining_bytes = len / 2 - i;
+
+            if remaining_bytes > 0 {
+                let remaining_vec1 = remaining_bytes.min(16);
+                // SAFETY: up to `remaining_bytes` can be loaded from the offset `i`
+                // since the floor division ensures that we only read bytes that are fully
+                // packed with elements from the slice.
+                let x_vec = unsafe { u8s::load_simd_first(arch, px_u8.add(i), remaining_vec1) };
+                // SAFETY: same logic applies for y and same conditions hold
+                // since the lengths are element sizes of x and y are equal.
+                let y_vec = unsafe { u8s::load_simd_first(arch, py_u8.add(i), remaining_vec1) };
+
+                let first_x: u8s = x_vec & mask;
+                let first_y: u8s = y_vec & mask;
+                s0 = s0.dot_simd(first_x, first_y);
+
+                // compute dot product for upper 4 bits, result is stored as 32x4
+                let second_x: u8s = (x_vec >> 4) & mask;
+                let second_y: u8s = (y_vec >> 4) & mask;
+                s1 = s1.dot_simd(second_x, second_y);
+                i += remaining_bytes;
+            }
+            s = (s0 + s1).sum_tree();
+        }
+        // Convert bytes to nibble indexes.
+        i *= 2;
+
+        // Deal with the remainder the slow way (at most 1 element).
+        debug_assert!(len - i <= 1);
+
+        if i != len {
+            // SAFETY: `i` is guaranteed to be less than `x.len()`.
+            let ix = unsafe { x.get_unchecked(i) } as i32;
+            // SAFETY: `i` is guaranteed to be less than `y.len()`.
+            let iy = unsafe { y.get_unchecked(i) } as i32;
+            s += (ix * iy) as u32;
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
 /// Compute the inner product between bitvectors `x` and `y`.
 ///
 /// Returns an error if the arguments have different lengths.
@@ -2108,7 +2208,6 @@ retarget!(
     7,
     6,
     5,
-    4,
     3,
     2,
     (8, 4),
@@ -2943,7 +3042,7 @@ mod tests {
             // Need a higher miri-amount due to the larget block size
             (Key::new(4, X86_64_V3), Bounds::new(256, 150)),
             (Key::new(4, X86_64_V4), Bounds::new(512, 300)),
-            (Key::new(4, Neon), Bounds::new(64, 64)),
+            (Key::new(4, Neon), Bounds::new(128, 128)),
             (Key::new(5, Scalar), Bounds::new(64, 64)),
             (Key::new(5, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(5, X86_64_V4), Bounds::new(256, 96)),
