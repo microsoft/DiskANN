@@ -50,9 +50,9 @@ This crate has been populated with the core disk index functionality from the ma
 
 ## Features
 
-- `mimir-benchmark-tracing`: Adds coarse, opt-in search spans and aggregate traversal fields used
-  by Mimir's `t0_t1_t2_concurrent_large` benchmark. The feature is disabled by default and is not
-  intended for production search builds.
+- `benchmark-search-tracing`: Adds coarse, opt-in search spans and aggregate traversal fields for
+  diagnostic benchmarks. The feature is disabled by default and is not intended for production
+  search builds.
 
 ## Dependencies
 

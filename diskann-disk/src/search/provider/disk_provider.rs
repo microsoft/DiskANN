@@ -47,30 +47,30 @@ use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
 use tracing::debug;
 
-#[cfg(feature = "mimir-benchmark-tracing")]
+#[cfg(feature = "benchmark-search-tracing")]
 macro_rules! benchmark_trace_span {
     ($($fields:tt)*) => {
         tracing::trace_span!($($fields)*)
     };
 }
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 macro_rules! benchmark_trace_span {
     ($($fields:tt)*) => {
         BenchmarkSpan
     };
 }
 
-#[cfg(feature = "mimir-benchmark-tracing")]
+#[cfg(feature = "benchmark-search-tracing")]
 type BenchmarkSpan = tracing::Span;
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 struct BenchmarkSpan;
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 struct BenchmarkSpanGuard;
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 impl BenchmarkSpan {
     fn enter(&self) -> BenchmarkSpanGuard {
         BenchmarkSpanGuard
@@ -79,12 +79,12 @@ impl BenchmarkSpan {
     fn record<T>(&self, _field: &str, _value: T) {}
 }
 
-#[cfg(feature = "mimir-benchmark-tracing")]
+#[cfg(feature = "benchmark-search-tracing")]
 fn benchmark_tracing_enabled() -> bool {
     tracing::enabled!(tracing::Level::TRACE)
 }
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 fn benchmark_tracing_enabled() -> bool {
     false
 }
@@ -296,7 +296,7 @@ where
 
 // Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
 // There should be minimal to no overhead compared to using a raw reference.
-#[cfg(feature = "mimir-benchmark-tracing")]
+#[cfg(feature = "benchmark-search-tracing")]
 #[derive(Default)]
 struct BenchmarkSearchMetrics {
     expand_time_us: AtomicU64,
@@ -307,11 +307,11 @@ struct BenchmarkSearchMetrics {
     neighbor_count: AtomicUsize,
 }
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 #[derive(Default)]
 struct BenchmarkSearchMetrics;
 
-#[cfg(feature = "mimir-benchmark-tracing")]
+#[cfg(feature = "benchmark-search-tracing")]
 impl BenchmarkSearchMetrics {
     fn record_expand(&self, expand_time_us: u64, neighbor_count: usize) {
         IOTracker::add_time(&self.expand_time_us, expand_time_us);
@@ -363,7 +363,7 @@ impl BenchmarkSearchMetrics {
     }
 }
 
-#[cfg(not(feature = "mimir-benchmark-tracing"))]
+#[cfg(not(feature = "benchmark-search-tracing"))]
 impl BenchmarkSearchMetrics {
     fn record_expand(&self, _expand_time_us: u64, _neighbor_count: usize) {}
 
@@ -1843,7 +1843,7 @@ mod disk_provider_tests {
     const TEST_INDEX_128DIM: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_disk.index";
 
-    #[cfg(feature = "mimir-benchmark-tracing")]
+    #[cfg(feature = "benchmark-search-tracing")]
     #[test]
     fn benchmark_search_metrics_aggregate_phase_totals() {
         let metrics = BenchmarkSearchMetrics::default();
