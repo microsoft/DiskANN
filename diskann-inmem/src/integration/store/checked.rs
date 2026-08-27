@@ -54,8 +54,8 @@ impl Store {
             .expect("`freelist_recycle_capacity` must be non-zero"),
         );
 
-        let plugin_config = checked::Checked::config();
-        let store = store::Store::new(store_layout, store_config, plugin_config)
+        let slots_config = checked::Checked::config();
+        let store = store::Store::new(store_layout, store_config, slots_config)
             .expect("failed to construct store");
 
         Self { store }

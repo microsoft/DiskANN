@@ -8,7 +8,7 @@
 //! Please read this section carefully - the protocol is not difficult, but it *is* subtle.
 //!
 //! The transitions are a simplified version of the protocol described in [`crate::tag`]
-//! that storage plugins need to implement to be compatible. A state diagram is shown below:
+//! that storage slots need to implement to be compatible. A state diagram is shown below:
 //!
 //! ```text
 //!         +--------------- `reclaim` ----------------+
@@ -48,7 +48,7 @@
 //!
 //! ## Writable States
 //!
-//! * [`Slot`]: Slots are a little spooky. Plugins can assume that a [`Slot`] for an index
+//! * [`Slot`]: Slots are a little spooky. Slots can assume that a [`Slot`] for an index
 //!   `i` is exclusive for its duration. This means that [`Slot`] implementations can lend
 //!   out mutable references to its contents (for example,
 //!   [`super::invasive::Slot::as_mut_slice`]).
@@ -56,17 +56,17 @@
 //!   Code in [`super`] is very careful to maintain this invariant and all users of [`Slot`]
 //!   must carefully maintain this as well.
 //!
-//! * `reclaim`: On a call to [`Plugin::reclaim`], it can be assumed that the plugin has
-//!   exclusive access to the indicated slot for the duration of the function call.
+//! * `reclaim`: On a call to [`Slots::reclaim`], implementations may assume exclusive access
+//!   to the indicated slot for the duration of the function call.
 //!
 //! ## Contracts
 //!
-//! Users of [`Plugin`] must ensure that the lifecycle shown above is strictly observed.
+//! Users of [`Slots`] must ensure that the lifecycle shown above is strictly observed.
 //! Furthermore, for [`Slot`]s, exactly one of the terminal methods **must** be called.
 //!
 //! State transitions are driven by the authoritative [`super::Store`]. Before invoking a
-//! plugin transition, the store ensures the slot is not externally available in its previous
-//! state. Further, the store commits the destination state only after the plugin API call
+//! transition, the store ensures the slot is not externally available in its previous
+//! state. Further, the store commits the destination state only after the lifecycle API call
 //! completes.
 
 use std::fmt::Debug;
@@ -75,23 +75,23 @@ use crate::num::IdLimit;
 
 use super::Lifecycle;
 
-/// A configuration for a [`Plugin`].
-pub(crate) trait PluginConfig: Debug {
-    /// The type of the resulting [`Plugin`].
-    type Plugin: Plugin;
+/// A configuration for a [`Slots`].
+pub(crate) trait SlotsConfig: Debug {
+    /// The type of the resulting [`Slots`].
+    type Slots: Slots;
 
     /// Construction errors.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Build the associated [`Plugin`] from self with the [`IdLimit`].
-    fn build(self, id_limit: IdLimit) -> Result<Self::Plugin, Self::Error>;
+    /// Build the associated [`Slots`] from self with the [`IdLimit`].
+    fn build(self, id_limit: IdLimit) -> Result<Self::Slots, Self::Error>;
 }
 
 /// A lifecycle backend for [`super::Store`]'s EBR scheme.
 ///
 /// See the [module level documentation](self) for details.
-pub(crate) trait Plugin: Debug + 'static {
-    /// The writable [`Slot`] for this plugin.
+pub(crate) trait Slots: Debug + 'static {
+    /// The writable [`Slot`].
     type Slot<'a>: Slot;
 
     /// Return the exclusive upper bound for indices provided to this API.
@@ -108,7 +108,7 @@ pub(crate) trait Plugin: Debug + 'static {
     ///
     /// Callers must ensure **all** of the following:
     ///
-    /// 1. The plugin is in the implicit "available" state according to the [module docs](self).
+    /// 1. The slot is in the implicit "available" state according to the [module docs](self).
     ///
     /// 2. Access to slot `i` is exclusive before invoking this method and that exclusivity
     ///    is maintained until the returned [`Slot`] is consumed by a terminal method.
@@ -124,7 +124,7 @@ pub(crate) trait Plugin: Debug + 'static {
     ///
     /// # Safety
     ///
-    /// The plugin is in the implicit "published" state.
+    /// The slot is in the implicit "published" state.
     unsafe fn retire(&self, i: u32, _: Lifecycle);
 
     /// Transition slot `i` from the "retiring" state to the "available" state.
@@ -136,17 +136,17 @@ pub(crate) trait Plugin: Debug + 'static {
     ///
     /// Callers must ensure **all** of the following:
     ///
-    /// 1. The plugin is in the implicit "retiring" state.
+    /// 1. The slot is in the implicit "retiring" state.
     ///
-    /// 2. All [`crate::epoch::Guard`]s for this [`Plugin`] that could have obtained a
+    /// 2. All [`crate::epoch::Guard`]s for this [`Slots`] that could have obtained a
     ///    reference while this slot was in the "published" state have been dropped.
     unsafe fn reclaim(&self, i: u32, _: Lifecycle);
 }
 
-/// A writable slot for [`Plugin`].
+/// A writable slot for [`Slots`].
 ///
-/// [`Slot`]s may assume that they have exclusive ownership of their plugin slots for their
-/// duration in accordance with [`Plugin::acquire`].
+/// [`Slot`]s may assume that they have exclusive ownership of their slots for their duration
+/// in accordance with [`Slots::acquire`].
 pub(crate) trait Slot: Debug {
     /// Mark this slot as readable, transition it to the "published" state.
     fn publish(self, _: Lifecycle);

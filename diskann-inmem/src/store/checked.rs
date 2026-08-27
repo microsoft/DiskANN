@@ -3,9 +3,9 @@
  * Licensed under the MIT license.
  */
 
-//! # A [`Store`] plugin for pedantically testing the EBR protocol
+//! # Pedantically testing the EBR protocol
 //!
-//! The goal here is to detect violations of the state machine outlined in [`plugin`].
+//! The goal here is to detect violations of the state machine outlined in [`slots`].
 //! This is accomplished by using a [`RwLock`] to protect internal [`State`] with guards
 //! **only** acquired via [`RwLock::try_read`] and [`RwLock::try_write`]. A correct EBR
 //! protocol should ensure that:
@@ -31,12 +31,12 @@
 //!
 //! ## Lifecycle Details
 //!
-//! The plugin lifecycle is carefully designed to allow readers of the plugin to avoid any
+//! Lifecycle transitions are carefully designed to allow readers of the slots to avoid any
 //! accesses to the authoritative [`Store`] for read-only operations. The [`Checked`] test
 //! code follows this pattern, but this does introduce a subtle detail that is worth
 //! highlighting. [`Reader::read`] needs to be able to check a slot for readability
 //! **without** trying to acquire a [`RwLockReadGuard`] for that slot. Doing so even briefly
-//! will cause a [`RwLock::try_write`] on an otherwise correct [`plugin::Plugin`] state
+//! will cause a [`RwLock::try_write`] on an otherwise correct [`slots::Slots`] state
 //! transition to fail.
 //!
 //! To circumvent this, an additional [`AtomicBool`] is bundled with [`Entry`] to broadcast
@@ -82,7 +82,7 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{epoch, num::IdLimit, store::Store};
 
-use super::{Lifecycle, plugin};
+use super::{Lifecycle, slots};
 
 /// The state of a slot.
 #[derive(Debug, Default)]
@@ -99,7 +99,7 @@ enum State {
 
 /// A slot entry. See the [module level docs](self) for a discussion on the contents of this
 /// struct. The table below describes how the combination of fields in this struct maps to
-/// the plugin lifecycle states.
+/// the lifecycle states.
 /// ```text
 /// +-----------------+----------+-----------+------------------------+
 /// | Lifecycle state | readable | State     | Lock Expectation       |
@@ -285,7 +285,7 @@ impl WriteEntry<'_> {
     }
 }
 
-/// A [`plugin::PluginConfig`] for [`Checked`].
+/// A [`slots::SlotsConfig`] for [`Checked`].
 #[derive(Debug)]
 pub(crate) struct Config(());
 
@@ -295,8 +295,8 @@ impl Config {
     }
 }
 
-impl plugin::PluginConfig for Config {
-    type Plugin = Checked;
+impl slots::SlotsConfig for Config {
+    type Slots = Checked;
     type Error = diskann::error::Infallible;
 
     fn build(self, id_limit: IdLimit) -> Result<Checked, diskann::error::Infallible> {
@@ -304,7 +304,7 @@ impl plugin::PluginConfig for Config {
     }
 }
 
-/// A correctness checking [`plugin::Plugin`]. See the [module level docs](self) for details.
+/// A correctness checking [`slots::Slots`]. See the [module level docs](self) for details.
 #[derive(Debug)]
 pub(crate) struct Checked {
     entries: Vec<Entry>,
@@ -320,7 +320,7 @@ impl Checked {
         }
     }
 
-    /// Return the [`plugin::PluginConfig`] for [`Self`].
+    /// Return the [`slots::SlotsConfig`] for [`Self`].
     pub(crate) fn config() -> Config {
         Config::new()
     }
@@ -381,7 +381,7 @@ impl Reader<'_> {
     }
 }
 
-impl plugin::Plugin for Checked {
+impl slots::Slots for Checked {
     type Slot<'a> = Slot<'a>;
 
     fn id_limit(&self) -> IdLimit {
@@ -401,7 +401,7 @@ impl plugin::Plugin for Checked {
     }
 }
 
-/// A writable [`plugin::Slot`] for [`Checked`].
+/// A writable [`slots::Slot`] for [`Checked`].
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
     entry: WriteEntry<'a>,
@@ -419,7 +419,7 @@ impl<'a> Slot<'a> {
     }
 }
 
-impl plugin::Slot for Slot<'_> {
+impl slots::Slot for Slot<'_> {
     fn publish(self, _: Lifecycle) {
         let value = self.value.expect("`value` was not set");
         self.entry.publish(value);

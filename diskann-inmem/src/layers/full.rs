@@ -292,12 +292,12 @@ where
 
     /// Return the number of payload bytes in each stored vector.
     pub fn bytes(&self) -> Bytes {
-        self.store.plugin().bytes()
+        self.store.slots().bytes()
     }
 
     #[cfg(test)]
     fn bytes_plus_tag(&self) -> Bytes {
-        self.store.plugin().bytes_plus_tag()
+        self.store.slots().bytes_plus_tag()
     }
 
     /// Return the [`Metric`] for this layer.

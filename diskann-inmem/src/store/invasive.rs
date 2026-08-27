@@ -3,15 +3,15 @@
  * Licensed under the MIT license.
  */
 
-//! A store [`plugin::Plugin`] that maintains an invasive slot state where the data in each
-//! slot is a contiguous slice of memory.
+//! A [`slots::Slots`] that maintains an invasive slot state where the data in each slot is
+//! a contiguous slice of memory.
 //!
 //! Slot state is stored as an [`AtomicTag`] immediately after the slot data.
 //!
 //! ## Lifecycle Details
 //!
-//! The plugin lifecycle details are relatively straightforward. The invasive [`AtomicTag`]
-//! mostly follows the transitions made by the [`Store`]. A [`Reader`] checks the tag for
+//! Lifecycle details are relatively straightforward. The invasive [`AtomicTag`] mostly
+//! follows the transitions made by the [`Store`]. A [`Reader`] checks the tag for
 //! readability before creating a shared reference to the data payload.
 //!
 //! The problematic transition from "published" to "retiring" is made safe because
@@ -23,7 +23,7 @@
 //! prevents the slot from transitioning from "retiring" back to "available" and being
 //! reused while the guard remains active.
 //!
-//! The transitions [`plugin::Slot::publish`] and [`plugin::Slot::freeze`] use release stores.
+//! The transitions [`slots::Slot::publish`] and [`slots::Slot::freeze`] use release stores.
 //! Since these are terminal slot operations, their release stores occur after all payload
 //! writes. The acquire load in [`Reader::read`] makes those writes visible before creating
 //! a shared slice.
@@ -31,8 +31,8 @@
 //! ## Safety
 //!
 //! The safety of this module depends on [`Invasive`] being embedded in a [`Store`] that
-//! observes the plugin lifecycle. Every lifecycle operation requires a [`Lifecycle`] token,
-//! which is constructible only by the parent store module. The unsafe [`plugin::Plugin`]
+//! observes the slot lifecycle. Every lifecycle operation requires a [`Lifecycle`] token,
+//! which is constructible only by the parent store module. The unsafe [`slots::Slots`]
 //! methods additionally rely on [`Store`] to satisfy their documented state and exclusivity
 //! preconditions.
 
@@ -45,11 +45,11 @@ use crate::{
     buffer::{Buffer, BufferError, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
-    store::{Lifecycle, Store, plugin},
+    store::{Lifecycle, Store, slots},
     tag::{AtomicTag, Tag},
 };
 
-/// A [`plugin::PluginConfig`] for [`Invasive`].
+/// A [`slots::SlotsConfig`] for [`Invasive`].
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
     /// The number of bytes held in each slot.
@@ -69,8 +69,8 @@ impl Config {
     }
 }
 
-impl plugin::PluginConfig for Config {
-    type Plugin = Invasive;
+impl slots::SlotsConfig for Config {
+    type Slots = Invasive;
     type Error = InvasiveError;
     fn build(self, id_limit: IdLimit) -> Result<Invasive, InvasiveError> {
         <Config>::build(self, id_limit)
@@ -194,7 +194,7 @@ enum InvasiveErrorInner {
     BufferError(BufferError),
 }
 
-impl plugin::Plugin for Invasive {
+impl slots::Slots for Invasive {
     type Slot<'a> = Slot<'a>;
 
     fn id_limit(&self) -> IdLimit {
@@ -208,7 +208,7 @@ impl plugin::Plugin for Invasive {
         };
 
         // This is a pessimistic check to ensure that the caller is correctly using the
-        // `plugin` API.
+        // `slots` API.
         debug_assert_eq!(
             tag.load(Ordering::Relaxed),
             Tag::AVAILABLE,
@@ -381,7 +381,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// A [`plugin::Slot`] for [`Invasive`].
+/// A [`slots::Slot`] for [`Invasive`].
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
     // NOTE: `tag` and `data` must belong to the same slot.
@@ -395,15 +395,15 @@ impl<'a> Slot<'a> {
     /// The length of this slice is guaranteed to be the number of bytes passed to
     /// [`Invasive::new`] or [`Config::new`].
     pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
-        // SAFETY: Users of the `plugin::Slot` are obligated to ensure exclusivity.
+        // SAFETY: Users of the `slots::Slot` are obligated to ensure exclusivity.
         //
-        // Since `Reader` obeys the plugin life-cycle requirements, a concurrent reader
+        // Since `Reader` obeys the slots life-cycle requirements, a concurrent reader
         // of this data should not be possible.
         unsafe { self.data.as_mut_slice() }
     }
 }
 
-impl plugin::Slot for Slot<'_> {
+impl slots::Slot for Slot<'_> {
     fn publish(self, _: Lifecycle) {
         self.tag.store(Tag::PUBLISHED, Ordering::Release);
     }

@@ -55,8 +55,8 @@ impl Store {
             .expect("`freelist_recycle_capacity` must be non-zero"),
         );
 
-        let plugin_config = store::invasive::Invasive::config(Bytes::new(config.entry_bytes));
-        let store = store::Store::new(store_layout, store_config, plugin_config)
+        let slots_config = store::invasive::Invasive::config(Bytes::new(config.entry_bytes));
+        let store = store::Store::new(store_layout, store_config, slots_config)
             .expect("failed to construct store");
 
         Self { store }

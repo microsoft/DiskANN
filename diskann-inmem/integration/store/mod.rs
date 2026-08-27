@@ -12,7 +12,7 @@
 //! 2. A readable value is stable for the lifetime of a single reader guard.
 //! 3. A slot never resurrects (`readable -> unreadable -> readable`) within one guard.
 //!
-//! This module exposes shared functionality that is instantiated by different plugins.
+//! This module exposes shared functionality that is instantiated by different implementations.
 
 #![expect(
     clippy::unwrap_used,
@@ -30,8 +30,6 @@ use std::{
 use diskann_benchmark_runner::{Registry, RegistryError, utils::fmt::KeyValue};
 use rand::{Rng, SeedableRng, distr::Uniform, rngs::StdRng};
 use serde::{Deserialize, Serialize};
-
-// use diskann_inmem::integration::store::invasive::{self, Config, Store};
 
 /// Number of slots a reader inspects per guard. Kept small so guards are short-lived,
 /// allowing the epoch to advance and reclamation to make progress.

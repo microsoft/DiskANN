@@ -13,14 +13,14 @@ pub mod invasive;
 /// the capabilities exposed are mostly the same.
 macro_rules! boilerplate {
     (
-        $plugin:ty => $store:ident,
+        $slots:ty => $store:ident,
         for<$read_lt:lifetime> $read:ty => $reader:ident,
         for<$slot_lt:lifetime> $slot:ty => $writer:ident,
     ) => {
         /// A test store wraper.
         #[derive(Debug)]
         pub struct $store {
-            store: $crate::store::Store<$plugin>,
+            store: $crate::store::Store<$slots>,
         }
 
         impl $store {
@@ -55,7 +55,7 @@ macro_rules! boilerplate {
             /// Attain a reader into the store. Returns `None` if all epoch guard slots
             /// are used.
             pub fn reader(&self) -> Option<$reader<'_>> {
-                match <$plugin>::reader(&self.store) {
+                match <$slots>::reader(&self.store) {
                     Ok(reader) => Some($reader::new(reader)),
                     Err($crate::epoch::Unavailable) => None,
                 }
