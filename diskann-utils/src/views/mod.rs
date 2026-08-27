@@ -12,6 +12,8 @@ use std::{
 use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSlice, ParallelSliceMut};
 use thiserror::Error;
 
+pub mod rowmajor;
+
 /// Various view types (types such as [`MatrixView`] that add semantic meaning to blobs
 /// of data) need both immutable and mutable variants.
 ///
