@@ -10,4 +10,6 @@ mod num;
 mod ptr;
 mod util;
 
+// mod tile;
+
 use bounds::{Check, Length};

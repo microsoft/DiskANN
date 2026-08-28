@@ -27,6 +27,82 @@ impl IntoLength for Length {
     }
 }
 
+macro_rules! check_eq {
+    ($lhs:expr, $rhs:expr $(,)?) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(eq, $lhs, $rhs);
+    };
+    ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(eq, $lhs, $rhs, $($arg)+);
+    };
+}
+
+macro_rules! check_lt {
+    ($lhs:expr, $rhs:expr $(,)?) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs);
+    };
+    ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs, $($arg)+);
+    };
+}
+
+macro_rules! check_le {
+    ($lhs:expr, $rhs:expr $(,)?) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs);
+    };
+    ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs, $($arg)+);
+    };
+}
+
+macro_rules! check_gt {
+    ($lhs:expr, $rhs:expr $(,)?) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs);
+    };
+    ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs, $($arg)+);
+    };
+}
+
+macro_rules! check_ge {
+    ($lhs:expr, $rhs:expr $(,)?) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(ge, $lhs, $rhs);
+    };
+    ($lhs:expr, $rhs:expr, $($arg:tt)*) => {
+        $crate::multi_vector::distance_v2::bounds::__assert!(ge, $lhs, $rhs, $($arg)*);
+    };
+}
+
+#[cfg(test)]
+macro_rules! __assert {
+    ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {
+        ($lhs).check(
+            $crate::multi_vector::distance_v2::Check::$op(),
+            $rhs,
+            None,
+        )
+    };
+    ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {
+        ($lhs).check(
+            $crate::multi_vector::distance_v2::Check::$op(),
+            $rhs,
+            Some(&::diskann_utils::lazy_format!($($arg)+)),
+        )
+    };
+}
+
+#[cfg(not(test))]
+macro_rules! __assert {
+    ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {};
+    ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {};
+}
+
+pub(super) use check_eq;
+pub(super) use check_ge;
+pub(super) use check_gt;
+pub(super) use check_le;
+pub(super) use check_lt;
+pub(super) use __assert;
+
 #[cfg(test)]
 mod length {
     use super::IntoLength;
@@ -74,7 +150,7 @@ mod length {
             }
         }
 
-        fn check(self, lhs: usize, rhs: usize) {
+        fn check(self, lhs: usize, rhs: usize, message: Option<&dyn std::fmt::Display>) {
             let passed = match self.0 {
                 Inner::Eq => lhs == rhs,
                 Inner::Lt => lhs < rhs,
@@ -84,7 +160,17 @@ mod length {
             };
 
             if !passed {
-                panic!("expected {} to be {} {}", lhs, self.as_str(), rhs)
+                if let Some(message) = message {
+                    panic!(
+                        "expected {} to be {} {} -- {}",
+                        lhs,
+                        self.as_str(),
+                        rhs,
+                        message
+                    );
+                } else {
+                    panic!("expected {} to be {} {}", lhs, self.as_str(), rhs);
+                }
             }
         }
     }
@@ -93,25 +179,40 @@ mod length {
     pub(in crate::multi_vector::distance_v2) struct Length(usize);
 
     impl Length {
+        pub(in crate::multi_vector::distance_v2) fn from_fn<F>(f: F) -> Self
+        where
+            F: FnOnce() -> usize,
+        {
+            Self::new(f())
+        }
+
         pub(in crate::multi_vector::distance_v2) const fn new(length: usize) -> Self {
             Self(length)
         }
 
         #[track_caller]
-        pub(in crate::multi_vector::distance_v2) fn check<T>(self, check: Check, expected: T)
-        where
+        pub(in crate::multi_vector::distance_v2) fn check<T>(
+            self,
+            check: Check,
+            expected: T,
+            message: Option<&dyn std::fmt::Display>,
+        ) where
             T: IntoLength,
         {
-            check.check(self.0, expected.into_length().0)
+            check.check(self.0, expected.into_length().0, message)
         }
 
         #[track_caller]
-        pub(in crate::multi_vector::distance_v2) fn check_with<F, T>(self, check: Check, f: F)
-        where
+        pub(in crate::multi_vector::distance_v2) fn check_with<F, T>(
+            self,
+            check: Check,
+            f: F,
+            message: Option<&dyn std::fmt::Display>,
+        ) where
             F: FnOnce() -> T,
             T: IntoLength,
         {
-            self.check(check, f())
+            self.check(check, f(), message)
         }
 
         pub(in crate::multi_vector::distance_v2) fn with<F>(self, f: F)
@@ -180,18 +281,33 @@ mod length {
     pub(in crate::multi_vector::distance_v2) struct Length(());
 
     impl Length {
+        pub(in crate::multi_vector::distance_v2) fn from_fn<F>(_f: F) -> Self
+        where
+            F: FnOnce() -> usize,
+        {
+            Self(())
+        }
+
         pub(in crate::multi_vector::distance_v2) const fn new(_length: usize) -> Self {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance_v2) fn check<T>(self, _check: Check, _expected: T)
-        where
+        pub(in crate::multi_vector::distance_v2) fn check<T>(
+            self,
+            _check: Check,
+            _expected: T,
+            _msg: Option<&dyn std::fmt::Display>,
+        ) where
             T: IntoLength,
         {
         }
 
-        pub(in crate::multi_vector::distance_v2) fn check_with<F, T>(self, _check: Check, _f: F)
-        where
+        pub(in crate::multi_vector::distance_v2) fn check_with<F, T>(
+            self,
+            _check: Check,
+            _f: F,
+            _message: Option<&dyn std::fmt::Display>,
+        ) where
             F: FnOnce() -> T,
             T: IntoLength,
         {

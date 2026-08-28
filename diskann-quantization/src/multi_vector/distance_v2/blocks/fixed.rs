@@ -3,15 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use crate::multi_vector::distance_v2::{Check, Length, num::Elements, ptr::Slice};
+use crate::multi_vector::distance_v2::{Check, Length, bounds, num::Elements, ptr::Slice};
 
 //----------//
 // RowMajor //
 //----------//
 
 /// A block of `ROWS` rows of a matrix with element type `T`.
-///
-/// The prefix `Full` means the
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FullRowMajor<'a, T, const ROWS: usize> {
     ptr: Slice<'a, T>,
@@ -20,8 +18,7 @@ pub(crate) struct FullRowMajor<'a, T, const ROWS: usize> {
 
 impl<'a, T, const ROWS: usize> FullRowMajor<'a, T, ROWS> {
     pub(crate) fn new(ptr: Slice<'a, T>, cols: Length) -> Self {
-        ptr.length()
-            .check_with(Check::eq(), || cols * Length::new(ROWS));
+        bounds::check_eq!(ptr.length(), cols * Length::new(ROWS));
 
         Self { ptr, cols }
     }
@@ -39,7 +36,7 @@ impl<'a, T, const ROWS: usize> FullRowMajor<'a, T, ROWS> {
     }
 
     pub(crate) fn stride(&self, cols: usize) -> Elements<T> {
-        self.cols.check(Check::eq(), cols);
+        bounds::check_eq!(self.cols, cols);
         Elements::new(cols)
     }
 }
@@ -58,7 +55,7 @@ impl<'a, T, const GROUP: usize, const PACK: usize> FullBlockTranspose<'a, T, GRO
     pub(crate) fn new(ptr: Slice<'a, T>, cols: Length) -> Self {
         cols.with(|cols| {
             let expected = cols.next_multiple_of(PACK);
-            ptr.length().check(Check::eq(), expected);
+            bounds::check_eq!(ptr.length(), expected);
         });
 
         Self { ptr, cols }
@@ -81,7 +78,7 @@ impl<'a, T, const GROUP: usize, const PACK: usize> FullBlockTranspose<'a, T, GRO
     }
 
     pub(crate) fn stride(&self, cols: usize) -> Elements<T> {
-        self.cols.check(Check::eq(), cols);
+        bounds::check_eq!(self.cols, cols);
         Elements::new(GROUP * PACK)
     }
 }

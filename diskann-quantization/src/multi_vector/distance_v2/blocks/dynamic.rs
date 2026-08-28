@@ -7,6 +7,7 @@ use crate::multi_vector::distance_v2::{
     Check, Length,
     num::{AllColumns, Elements},
     ptr::Slice,
+    bounds,
 };
 
 use super::fixed;
@@ -16,69 +17,68 @@ use super::fixed;
 //----------//
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct RowMajor<'a, T> {
+pub(crate) struct RowMajor<'a, T> {
     ptr: Slice<'a, T>,
-    rows: Length,
+    rows: usize,
     cols: Length,
 }
 
 impl<'a, T> RowMajor<'a, T> {
-    pub(super) fn new(ptr: Slice<'a, T>, rows: Length, cols: Length) -> Self {
-        ptr.length().check_with(Check::eq(), || rows * cols);
+    pub(crate) fn new(ptr: Slice<'a, T>, rows: usize, cols: Length) -> Self {
+        bounds::check_eq!(ptr.length(), Length::new(rows) * cols);
 
         Self { ptr, rows, cols }
     }
 
-    pub(super) const fn as_ptr(&self) -> Slice<'_, T> {
+    pub(crate) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
     }
 
-    pub(super) const fn nrows(&self) -> Length {
+    pub(crate) const fn nrows(&self) -> usize {
         self.rows
     }
 
-    pub(super) const fn ncols(&self) -> Length {
+    pub(crate) const fn ncols(&self) -> Length {
         self.cols
     }
-}
 
-#[derive(Debug)]
-pub(super) struct FullRowMajorIter<'a, T, const ROWS: usize> {
-    ptr: Slice<'a, T>,
-    rows_remaining: usize,
-    cols: Length,
-}
+    pub(crate) unsafe fn subslice(
+        &self,
+        cols: AllColumns,
+        row: usize,
+        rows: usize,
+    ) -> RowMajor<'a, T> {
+        debug_assert!(row <= self.nrows());
 
-impl<'a, T, const ROWS: usize> FullRowMajorIter<'a, T, ROWS> {
-    fn stride(&self, k: AllColumns) -> Elements<T> {
-        self.cols.check(Check::eq(), k.value());
+        let stride = self.stride(cols);
+
+        Self::new(
+            self.ptr.add(stride * row).truncate(stride * rows),
+            rows,
+            self.cols,
+        )
+    }
+
+    pub(crate) fn stride(&self, k: AllColumns) -> Elements<T> {
+        bounds::check_eq!(self.cols, k.value());
         Elements::new(k.value())
     }
 
-    unsafe fn next(&mut self, k: AllColumns) -> Option<fixed::FullRowMajor<'a, T, ROWS>> {
-        self.cols.check(Check::eq(), k.value());
+    pub(crate) fn block<const ROWS: usize>(
+        &self,
+        k: AllColumns,
+        row: usize,
+    ) -> fixed::FullRowMajor<'a, T, ROWS> {
+        let stride = self.stride(k);
 
-        if self.rows_remaining < ROWS {
-            None
-        } else {
-            let stride = self.stride(k);
-
-            let ptr = self.ptr;
-            self.ptr = unsafe { self.ptr.add(stride) };
-            self.rows_remaining -= ROWS;
-            Some(fixed::FullRowMajor::new(
-                ptr.truncate(stride * ROWS),
-                self.cols,
-            ))
-        }
-    }
-
-    fn try_cast<const FEWER: usize>(&self) -> Option<fixed::FullRowMajor<'a, T, FEWER>> {
-        if self.rows_remaining == FEWER {
-            Some(fixed::FullRowMajor::new(self.ptr, self.cols))
-        } else {
-            None
-        }
+        fixed::FullRowMajor::new(
+            unsafe {
+                self.ptr
+                    .add(stride * row)
+                    .truncate(Elements::new(ROWS) * k.value())
+            },
+            self.cols,
+        )
     }
 }
 
@@ -87,43 +87,46 @@ impl<'a, T, const ROWS: usize> FullRowMajorIter<'a, T, ROWS> {
 //----------------//
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct BlockTransposed<'a, T, const GROUP: usize> {
+pub(crate) struct BlockTransposed<'a, T, const GROUP: usize> {
     ptr: Slice<'a, T>,
-    blocks: Length,
+    blocks: usize,
     cols: Length,
 }
 
 impl<'a, T, const GROUP: usize> BlockTransposed<'a, T, GROUP> {
-    pub(super) fn new(ptr: Slice<'a, T>, blocks: Length, cols: Length) -> Self {
-        ptr.length()
-            .check_with(Check::eq(), || blocks * Length::new(GROUP) * cols);
+    pub(crate) fn new(ptr: Slice<'a, T>, blocks: usize, cols: Length) -> Self {
+        bounds::check_eq!(
+            ptr.length(),
+            Length::new(blocks) * Length::new(GROUP) * cols,
+            "invalid block-transposed access",
+        );
 
         Self { ptr, blocks, cols }
     }
 
-    pub(super) const fn as_ptr(&self) -> Slice<'_, T> {
+    pub(crate) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
     }
 
-    pub(super) const fn blocks(&self) -> Length {
+    pub(crate) const fn blocks(&self) -> usize {
         self.blocks
     }
 
-    pub(super) const fn ncols(&self) -> Length {
+    pub(crate) const fn ncols(&self) -> Length {
         self.cols
     }
 
     fn block_stride(&self, k: AllColumns) -> Elements<T> {
-        self.cols.check(Check::eq(), k.value());
+        bounds::check_eq!(self.cols, k.value());
         Elements::new(GROUP * k.value())
     }
 
-    pub(super) fn block(
+    pub(crate) fn block(
         &self,
         k: AllColumns,
         block: usize,
     ) -> fixed::FullBlockTranspose<'a, T, GROUP> {
-        self.blocks.check(Check::gt(), block);
+        debug_assert!(block < self.blocks);
         let block_stride = self.block_stride(k);
 
         fixed::FullBlockTranspose::new(
