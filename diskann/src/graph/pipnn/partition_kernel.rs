@@ -150,13 +150,17 @@ fn rank_leader_dots<A, M>(
     }
 
     ranked_leaders.resize(fanout, (UNASSIGNED_LEADER, f32::INFINITY));
-    select_point_leaders::<A, M>(arch, input.dots, input.norms, output, ranked_leaders);
+    // Rayon outlines stripe workers. Reapply target features before ranking leaders.
+    arch.run(move || {
+        select_point_leaders::<A, M>(arch, input.dots, input.norms, output, ranked_leaders);
+    });
 }
 
 /// Rank sampled partition centers for each assigned point.
 ///
 /// The function keeps nearest-first order for every point. Full SIMD groups use
 /// metric-specific formulas. Remaining leaders use the matching single formula.
+#[inline(always)]
 fn select_point_leaders<A, M>(
     arch: A,
     dots: MatrixView<'_, f32>,

@@ -198,8 +198,11 @@ fn scan_fixed_width<A, M, const N: usize>(
     [LeafNeighbor; N]: SortedInsert<LeafNeighbor>,
 {
     let (rows, _) = output.as_chunks_mut::<N>();
-    scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
-        insert_eligible_neighbor(&mut rows[source], target, distance)
+    // Rayon outlines leaf workers. Reapply target features before the SIMD scan.
+    arch.run(move || {
+        scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
+            insert_eligible_neighbor(&mut rows[source], target, distance)
+        });
     });
 }
 
@@ -215,9 +218,12 @@ fn scan_runtime_width<A, M>(
     A: PiPNNSIMDSchema,
     M: LeafMetric,
 {
-    scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
-        let first = source * width;
-        insert_eligible_neighbor(&mut output[first..first + width], target, distance)
+    // Rayon outlines leaf workers. Reapply target features before the SIMD scan.
+    arch.run(move || {
+        scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
+            let first = source * width;
+            insert_eligible_neighbor(&mut output[first..first + width], target, distance)
+        });
     });
 }
 
@@ -225,7 +231,7 @@ fn scan_runtime_width<A, M>(
 ///
 /// The function reads the strict lower triangle once. It offers each distance to
 /// both endpoint lists. SIMD groups and single values preserve pair scan order.
-#[inline(never)]
+#[inline(always)]
 fn scan_point_pairs<A, M, I>(
     arch: A,
     input: MatrixView<'_, f32>,
