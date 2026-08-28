@@ -14,10 +14,10 @@ use crate::{
     provider::{DataProvider, HasId},
 };
 
-/// Per-query accessor that drives a complete flat scan.
+/// Fused sequential scan-and-score primitive.
 ///
-/// The accessor owns the query-specific computation state so implementations can fuse
-/// query preprocessing, data access, batching, filtering, and distance computation.
+/// Implementations drive an entire scan over the underlying data, scoring each element
+/// and invoking `f` with the resulting `(id, distance)` pair.
 pub trait DistancesUnordered: HasId + Send + Sync {
     /// The error type for [`Self::distances_unordered`].
     type Error: ToRanked + Debug + Send + Sync + 'static;
@@ -26,7 +26,7 @@ pub trait DistancesUnordered: HasId + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error when the backend cannot complete the scan.
+    /// Returns an implementation-defined error if the complete scan cannot be produced.
     fn distances_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32);
@@ -40,10 +40,10 @@ where
     /// The query-aware visitor used to execute the scan.
     type Visitor: DistancesUnordered<Id = P::InternalId>;
 
-    /// An error that can occur while constructing [`Self::Visitor`].
+    /// The error type for [`Self::create_visitor`].
     type Error: StandardError;
 
-    /// Construct a fresh visitor for `query`.
+    /// Construct a fresh visitor over `provider` for the given request `context` and `query`.
     ///
     /// # Errors
     ///
