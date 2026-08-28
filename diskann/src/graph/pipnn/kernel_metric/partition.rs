@@ -73,6 +73,14 @@ where
     unsafe { F::load_simd(arch, norm_group.as_ptr()) }
 }
 
+/// Prepare cosine norms with one reduction order for points and leaders.
+fn prepare_cosine_norms(vectors: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
+    norms.resize(vectors.nrows(), 0.0);
+    for (norm, vector) in norms.iter_mut().zip(vectors.row_iter()) {
+        *norm = FastL2NormSquared.evaluate(vector).sqrt();
+    }
+}
+
 impl PartitionMetric for L2 {
     fn prepare_leader_norms(leaders: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
         norms.resize(leaders.nrows(), 0.0);
@@ -109,17 +117,11 @@ impl PartitionMetric for L2 {
 
 impl PartitionMetric for Cosine {
     fn prepare_point_norms(points: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
-        norms.resize(points.nrows(), 0.0);
-        for (norm, point) in norms.iter_mut().zip(points.row_iter()) {
-            *norm = FastL2NormSquared.evaluate(point).sqrt();
-        }
+        prepare_cosine_norms(points, norms);
     }
 
     fn prepare_leader_norms(leaders: MatrixView<'_, f32>, norms: &mut Vec<f32>) {
-        norms.resize(leaders.nrows(), 0.0);
-        for (norm, leader) in norms.iter_mut().zip(leaders.row_iter()) {
-            *norm = leader.iter().map(|value| value * value).sum::<f32>().sqrt();
-        }
+        prepare_cosine_norms(leaders, norms);
     }
 
     #[inline(always)]
@@ -343,6 +345,25 @@ mod tests {
 
         // Then
         assert_eq!(actual_norms, expected_row_norms);
+    }
+
+    #[test]
+    fn same_vector_has_identical_point_and_leader_norm_bits_with_cosine() {
+        // Given
+        const REASSOCIATION_BOUNDARY_DIMENSIONS: usize = 129;
+        let mut vector = [1.0_f32; REASSOCIATION_BOUNDARY_DIMENSIONS];
+        vector[0] = 4096.0;
+        let vectors =
+            MatrixView::try_from(&vector[..], 1, REASSOCIATION_BOUNDARY_DIMENSIONS).unwrap();
+        let mut point_norms = Vec::new();
+        let mut leader_norms = Vec::new();
+
+        // When
+        Cosine::prepare_point_norms(vectors, &mut point_norms);
+        Cosine::prepare_leader_norms(vectors, &mut leader_norms);
+
+        // Then
+        assert_eq!(point_norms[0].to_bits(), leader_norms[0].to_bits());
     }
 
     mod ranking_single_tests {
