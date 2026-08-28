@@ -14,40 +14,52 @@ use crate::{
     provider::{DataProvider, HasId},
 };
 
-/// Fused sequential scan-and-score primitive.
+/// A complete, unordered scan of a candidate set.
 ///
-/// Implementations drive an entire scan over the underlying data, scoring each element
-/// and invoking `f` with the resulting `(id, distance)` pair.
+/// Implementations drive the scan rather than exposing elements for the caller to fetch.
+/// For each candidate in the scan, the implementation computes its distance and invokes
+/// the supplied callback with the candidate's `(id, distance)` pair. No ordering of those
+/// callbacks is guaranteed.
+///
+/// A visitor represents one initialized scan. It may retain any state needed while
+/// scanning, and remains available to the search post-processor after the scan completes.
 pub trait DistancesUnordered: HasId + Send + Sync {
-    /// The error type for [`Self::distances_unordered`].
+    /// The error type returned when the visitor cannot complete its scan.
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    /// Drive the entire scan, invoking `f` with each `(id, distance)` pair.
+    /// Scan all candidates represented by this visitor and invoke `f` for each result.
     ///
-    /// # Errors
-    ///
-    /// Returns an implementation-defined error if the complete scan cannot be produced.
+    /// The callback may have been invoked before an error is returned. In that case,
+    /// those results form an incomplete scan and must not be treated as exhaustive.
     fn distances_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32);
 }
 
-/// Per-call configuration that constructs a query-aware [`DistancesUnordered`] visitor.
+/// Constructs a [`DistancesUnordered`] visitor for one query.
+///
+/// A strategy contains configuration that can be reused across searches. Each call to
+/// [`Self::create_visitor`] combines that configuration with a provider, request context,
+/// and query to initialize an independent visitor. The returned visitor must report
+/// distances for that query when it is scanned.
+///
+/// The lifetime `'a` allows the visitor to borrow any of those inputs for the duration of
+/// the search instead of requiring it to own or copy their data.
 pub trait SearchStrategy<'a, P, T>: Send + Sync
 where
     P: DataProvider,
 {
-    /// The query-aware visitor used to execute the scan.
+    /// The visitor initialized for this search.
     type Visitor: DistancesUnordered<Id = P::InternalId>;
 
     /// The error type for [`Self::create_visitor`].
     type Error: StandardError;
 
-    /// Construct a fresh visitor over `provider` for the given request `context` and `query`.
+    /// Initialize a visitor over `provider` for the given request `context` and `query`.
     ///
     /// # Errors
     ///
-    /// Returns an error when query preprocessing or visitor initialization fails.
+    /// Returns an error if the inputs cannot be used to initialize a visitor.
     fn create_visitor(
         &'a self,
         provider: &'a P,

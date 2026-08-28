@@ -33,6 +33,10 @@ pub struct SearchStats {
 /// candidates in a [`NeighborPriorityQueue`], then runs `processor` over the survivors
 /// to populate `output`.
 ///
+/// The provider, strategy, and context are borrowed for the shared lifetime used to
+/// construct the visitor. This permits the visitor to retain references to their search
+/// state until scanning and post-processing are complete.
+///
 /// # Errors
 ///
 /// Returns an error if visitor construction, distance scanning, or result
