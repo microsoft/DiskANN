@@ -1434,12 +1434,12 @@ cfg_if::cfg_if! {
         dispatch_map!(8, AsFull, Neon, downcast);
 
         dispatch_map!(1, AsData<1>, Neon, downcast);
-        dispatch_map!(2, AsData<2>, Neon, downcast);
+        dispatch_map!(2, AsData<2>, Neon);
         dispatch_map!(4, AsData<4>, Neon);
         dispatch_map!(8, AsData<8>, Neon, downcast);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Neon, downcast);
-        dispatch_map!(2, AsQuery<2>, Neon, downcast);
+        dispatch_map!(2, AsQuery<2>, Neon);
         dispatch_map!(4, AsQuery<4>, Neon);
         dispatch_map!(8, AsQuery<8>, Neon, downcast);
     }
