@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, marker::PhantomData};
+use std::{marker::PhantomData, num::NonZeroUsize};
 
 /// A offset for pointers `*const T` in terms of numbers of `T`.
 #[derive(Debug)]

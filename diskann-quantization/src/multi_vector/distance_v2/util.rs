@@ -67,6 +67,28 @@ impl Fold<4> for Folder {
     }
 }
 
+impl Fold<5> for Folder {
+    #[inline]
+    fn __fold<T, F>(self, x: [T; 5], f: F) -> T
+    where
+        F: Fn(T, T) -> T,
+    {
+        let [a0, a1, a2, a3, a4] = x;
+        self.__fold([f(a0, a1), f(a2, a3), a4], f)
+    }
+}
+
+impl Fold<6> for Folder {
+    #[inline]
+    fn __fold<T, F>(self, x: [T; 6], f: F) -> T
+    where
+        F: Fn(T, T) -> T,
+    {
+        let [a0, a1, a2, a3, a4, a5] = x;
+        self.__fold([f(a0, a1), f(a2, a3), f(a4, a5)], f)
+    }
+}
+
 ///////////
 // Tests //
 ///////////

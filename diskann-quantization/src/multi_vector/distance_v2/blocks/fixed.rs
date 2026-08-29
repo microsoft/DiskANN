@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::multi_vector::distance_v2::{bounds, num::Elements, ptr::Slice, Check, Length};
+use crate::multi_vector::distance_v2::{bounds::{self, Bound}, num::Elements, ptr::Slice};
 
 //----------//
 // RowMajor //
@@ -13,12 +13,12 @@ use crate::multi_vector::distance_v2::{bounds, num::Elements, ptr::Slice, Check,
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FullRowMajor<'a, T, const ROWS: usize> {
     ptr: Slice<'a, T>,
-    cols: Length,
+    cols: Bound,
 }
 
 impl<'a, T, const ROWS: usize> FullRowMajor<'a, T, ROWS> {
-    pub(crate) fn new(ptr: Slice<'a, T>, cols: Length) -> Self {
-        bounds::check_eq!(ptr.length(), cols * Length::new(ROWS));
+    pub(crate) fn new(ptr: Slice<'a, T>, cols: Bound) -> Self {
+        bounds::check_eq!(ptr.len(), cols * Bound::new(ROWS));
 
         Self { ptr, cols }
     }
@@ -31,7 +31,7 @@ impl<'a, T, const ROWS: usize> FullRowMajor<'a, T, ROWS> {
         ROWS
     }
 
-    pub(crate) const fn ncols(&self) -> Length {
+    pub(crate) const fn ncols(&self) -> Bound {
         self.cols
     }
 
@@ -48,14 +48,14 @@ impl<'a, T, const ROWS: usize> FullRowMajor<'a, T, ROWS> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FullBlockTranspose<'a, T, const GROUP: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
-    cols: Length,
+    cols: Bound,
 }
 
 impl<'a, T, const GROUP: usize, const PACK: usize> FullBlockTranspose<'a, T, GROUP, PACK> {
-    pub(crate) fn new(ptr: Slice<'a, T>, cols: Length) -> Self {
+    pub(crate) fn new(ptr: Slice<'a, T>, cols: Bound) -> Self {
         cols.with(|cols| {
             let expected = GROUP * cols.next_multiple_of(PACK);
-            bounds::check_eq!(ptr.length(), expected);
+            bounds::check_eq!(ptr.len(), expected);
         });
 
         Self { ptr, cols }
@@ -73,7 +73,7 @@ impl<'a, T, const GROUP: usize, const PACK: usize> FullBlockTranspose<'a, T, GRO
         PACK
     }
 
-    pub(crate) const fn ncols(&self) -> Length {
+    pub(crate) const fn ncols(&self) -> Bound {
         self.cols
     }
 

@@ -3,26 +3,26 @@
  * Licensed under the MIT license.
  */
 
-pub(super) use length::{Check, Length};
+pub(super) use inner::{Check, Bound};
 
-pub(super) trait IntoLength {
-    fn into_length(self) -> Length;
+pub(super) trait IntoBound {
+    fn into_bound(self) -> Bound;
 }
 
-impl IntoLength for usize {
-    fn into_length(self) -> Length {
-        Length::new(self)
+impl IntoBound for usize {
+    fn into_bound(self) -> Bound {
+        Bound::new(self)
     }
 }
 
-impl IntoLength for std::num::NonZeroUsize {
-    fn into_length(self) -> Length {
-        Length::new(self.get())
+impl IntoBound for std::num::NonZeroUsize {
+    fn into_bound(self) -> Bound {
+        Bound::new(self.get())
     }
 }
 
-impl IntoLength for Length {
-    fn into_length(self) -> Length {
+impl IntoBound for Bound {
+    fn into_bound(self) -> Bound {
         self
     }
 }
@@ -36,6 +36,7 @@ macro_rules! check_eq {
     };
 }
 
+#[expect(unused, reason = "this completes the API")]
 macro_rules! check_lt {
     ($lhs:expr, $rhs:expr $(,)?) => {
         $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs);
@@ -45,6 +46,7 @@ macro_rules! check_lt {
     };
 }
 
+#[expect(unused, reason = "this completes the API")]
 macro_rules! check_le {
     ($lhs:expr, $rhs:expr $(,)?) => {
         $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs);
@@ -72,40 +74,41 @@ macro_rules! check_ge {
     };
 }
 
-#[cfg(test)]
 macro_rules! __assert {
     ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {
-        ($lhs).check(
-            $crate::multi_vector::distance_v2::Check::$op(),
-            $rhs,
-            None,
-        )
+        if cfg!(debug_assertions) {
+            ($lhs).check(
+                $crate::multi_vector::distance_v2::bounds::Check::$op(),
+                $rhs,
+                None,
+            )
+        }
     };
     ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        ($lhs).check(
-            $crate::multi_vector::distance_v2::Check::$op(),
-            $rhs,
-            Some(&::diskann_utils::lazy_format!($($arg)+)),
-        )
+        if cfg!(debug_assertions) {
+            ($lhs).check(
+                $crate::multi_vector::distance_v2::bounds::Check::$op(),
+                $rhs,
+                Some(&::diskann_utils::lazy_format!($($arg)+)),
+            )
+        }
     };
 }
 
-#[cfg(not(test))]
-macro_rules! __assert {
-    ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {};
-    ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {};
-}
-
+pub(super) use __assert;
 pub(super) use check_eq;
 pub(super) use check_ge;
 pub(super) use check_gt;
-pub(super) use check_le;
-pub(super) use check_lt;
-pub(super) use __assert;
 
-#[cfg(test)]
-mod length {
-    use super::IntoLength;
+#[expect(unused, reason = "this completes the API")]
+pub(super) use check_le;
+
+#[expect(unused, reason = "this completes the API")]
+pub(super) use check_lt;
+
+#[cfg(debug_assertions)]
+mod inner {
+    use super::IntoBound;
 
     #[derive(Debug, Clone, Copy)]
     pub(in crate::multi_vector::distance_v2) struct Check(Inner);
@@ -176,9 +179,9 @@ mod length {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-    pub(in crate::multi_vector::distance_v2) struct Length(usize);
+    pub(in crate::multi_vector::distance_v2) struct Bound(usize);
 
-    impl Length {
+    impl Bound {
         pub(in crate::multi_vector::distance_v2) fn from_fn<F>(f: F) -> Self
         where
             F: FnOnce() -> usize,
@@ -197,9 +200,9 @@ mod length {
             expected: T,
             message: Option<&dyn std::fmt::Display>,
         ) where
-            T: IntoLength,
+            T: IntoBound,
         {
-            check.check(self.0, expected.into_length().0, message)
+            check.check(self.0, expected.into_bound().0, message)
         }
 
         #[track_caller]
@@ -210,7 +213,7 @@ mod length {
             message: Option<&dyn std::fmt::Display>,
         ) where
             F: FnOnce() -> T,
-            T: IntoLength,
+            T: IntoBound,
         {
             self.check(check, f(), message)
         }
@@ -223,7 +226,7 @@ mod length {
         }
     }
 
-    impl std::ops::Mul for Length {
+    impl std::ops::Mul for Bound {
         type Output = Self;
 
         fn mul(self, rhs: Self) -> Self {
@@ -231,7 +234,7 @@ mod length {
         }
     }
 
-    impl std::ops::Add for Length {
+    impl std::ops::Add for Bound {
         type Output = Self;
 
         fn add(self, rhs: Self) -> Self {
@@ -239,7 +242,7 @@ mod length {
         }
     }
 
-    impl std::ops::Sub for Length {
+    impl std::ops::Sub for Bound {
         type Output = Self;
 
         fn sub(self, rhs: Self) -> Self {
@@ -248,9 +251,9 @@ mod length {
     }
 }
 
-#[cfg(not(test))]
-mod length {
-    use super::IntoLength;
+#[cfg(not(debug_assertions))]
+mod inner {
+    use super::IntoBound;
 
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
     pub(in crate::multi_vector::distance_v2) struct Check(());
@@ -278,9 +281,9 @@ mod length {
     }
 
     #[derive(Debug, Clone, Copy)]
-    pub(in crate::multi_vector::distance_v2) struct Length(());
+    pub(in crate::multi_vector::distance_v2) struct Bound(());
 
-    impl Length {
+    impl Bound {
         pub(in crate::multi_vector::distance_v2) fn from_fn<F>(_f: F) -> Self
         where
             F: FnOnce() -> usize,
@@ -298,7 +301,7 @@ mod length {
             _expected: T,
             _msg: Option<&dyn std::fmt::Display>,
         ) where
-            T: IntoLength,
+            T: IntoBound,
         {
         }
 
@@ -309,7 +312,7 @@ mod length {
             _message: Option<&dyn std::fmt::Display>,
         ) where
             F: FnOnce() -> T,
-            T: IntoLength,
+            T: IntoBound,
         {
         }
 
@@ -320,7 +323,7 @@ mod length {
         }
     }
 
-    impl std::ops::Mul for Length {
+    impl std::ops::Mul for Bound {
         type Output = Self;
 
         fn mul(self, rhs: Self) -> Self {
@@ -328,7 +331,7 @@ mod length {
         }
     }
 
-    impl std::ops::Add for Length {
+    impl std::ops::Add for Bound {
         type Output = Self;
 
         fn add(self, rhs: Self) -> Self {
@@ -336,7 +339,7 @@ mod length {
         }
     }
 
-    impl std::ops::Sub for Length {
+    impl std::ops::Sub for Bound {
         type Output = Self;
 
         fn sub(self, rhs: Self) -> Self {

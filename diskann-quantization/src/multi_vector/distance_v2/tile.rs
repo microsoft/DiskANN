@@ -6,10 +6,10 @@
 use std::num::NonZeroUsize;
 
 use crate::multi_vector::distance_v2::{
+    bounds::{Bound},
     blocks, kernel,
     num::AllColumns,
     ptr::{MutSlice, Slice},
-    Length,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -32,13 +32,13 @@ pub fn example_maxsim_f32(
     let a = blocks::dynamic::BlockTransposed::<f32, 16>::new(
         Slice::new(a.as_slice()),
         a.num_blocks(),
-        Length::new(cols.get()),
+        Bound::new(cols.get()),
     );
 
     let b = blocks::dynamic::RowMajor::<f32>::new(
         Slice::new(b.as_slice()),
         b.nrows(),
-        Length::new(b.ncols()),
+        Bound::new(b.ncols()),
     );
 
     c.fill(f32::NEG_INFINITY);
@@ -58,7 +58,7 @@ fn example_maxsim_f32_inner<A>(
     budget: Budget,
 ) where
     A: diskann_wide::Architecture,
-    for<'a> kernel::panel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 4>: kernel::panel::Kernel,
+    for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 6>: kernel::Kernel,
 {
     let mut ablock = 0;
     while ablock != a.blocks() {
@@ -72,17 +72,17 @@ fn example_maxsim_f32_inner<A>(
             for ablock_offset in 0..these_a_blocks {
                 let suba = a.block(cols, ablock + ablock_offset);
 
-                let subc = c.subslice(16 * (ablock + ablock_offset), Length::new(16));
+                let mut subc = c.subslice(16 * (ablock + ablock_offset), Bound::new(16));
 
-                let mut kernel = kernel::panel::maxsim::f32::BlockWithRowMajor {
-                    kernel: kernel::micro::MaxSim::new(arch),
+                let mut kernel = kernel::maxsim::f32::BlockWithRowMajor {
+                    kernel: kernel::maxsim::MaxSim::new(arch),
                     a: suba,
                     b: subb,
-                    c: subc,
+                    c: unsafe { subc.materialize::<16>() },
                     cols,
                 };
 
-                <_ as kernel::panel::Kernel>::run(&mut kernel);
+                <_ as kernel::Kernel>::run(&mut kernel);
             }
 
             brow += these_b_rows;

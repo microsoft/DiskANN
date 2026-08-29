@@ -12,4 +12,3 @@ mod util;
 
 pub mod tile;
 
-use bounds::{Check, Length};

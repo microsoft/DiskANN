@@ -4,10 +4,9 @@
  */
 
 use crate::multi_vector::distance_v2::{
-    Check, Length,
+    bounds::{self, Bound},
     num::{AllColumns, Elements},
     ptr::Slice,
-    bounds,
 };
 
 use super::fixed;
@@ -20,12 +19,12 @@ use super::fixed;
 pub(crate) struct RowMajor<'a, T> {
     ptr: Slice<'a, T>,
     rows: usize,
-    cols: Length,
+    cols: Bound,
 }
 
 impl<'a, T> RowMajor<'a, T> {
-    pub(crate) fn new(ptr: Slice<'a, T>, rows: usize, cols: Length) -> Self {
-        bounds::check_eq!(ptr.length(), Length::new(rows) * cols);
+    pub(crate) fn new(ptr: Slice<'a, T>, rows: usize, cols: Bound) -> Self {
+        bounds::check_eq!(ptr.len(), Bound::new(rows) * cols);
 
         Self { ptr, rows, cols }
     }
@@ -38,7 +37,7 @@ impl<'a, T> RowMajor<'a, T> {
         self.rows
     }
 
-    pub(crate) const fn ncols(&self) -> Length {
+    pub(crate) const fn ncols(&self) -> Bound {
         self.cols
     }
 
@@ -90,14 +89,14 @@ impl<'a, T> RowMajor<'a, T> {
 pub(crate) struct BlockTransposed<'a, T, const GROUP: usize> {
     ptr: Slice<'a, T>,
     blocks: usize,
-    cols: Length,
+    cols: Bound,
 }
 
 impl<'a, T, const GROUP: usize> BlockTransposed<'a, T, GROUP> {
-    pub(crate) fn new(ptr: Slice<'a, T>, blocks: usize, cols: Length) -> Self {
+    pub(crate) fn new(ptr: Slice<'a, T>, blocks: usize, cols: Bound) -> Self {
         bounds::check_eq!(
-            ptr.length(),
-            Length::new(blocks) * Length::new(GROUP) * cols,
+            ptr.len(),
+            Bound::new(blocks) * Bound::new(GROUP) * cols,
             "invalid block-transposed access",
         );
 
@@ -112,7 +111,7 @@ impl<'a, T, const GROUP: usize> BlockTransposed<'a, T, GROUP> {
         self.blocks
     }
 
-    pub(crate) const fn ncols(&self) -> Length {
+    pub(crate) const fn ncols(&self) -> Bound {
         self.cols
     }
 
