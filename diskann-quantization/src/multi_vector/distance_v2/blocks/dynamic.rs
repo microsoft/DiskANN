@@ -61,7 +61,7 @@ impl<'a, T> RowMajor<'a, T> {
 
     pub(crate) fn stride(&self, k: AllColumns) -> Elements<T> {
         bounds::check_eq!(self.cols, k.value());
-        Elements::new(k.value())
+        Elements::new(k.value().get())
     }
 
     pub(crate) fn block<const ROWS: usize>(
@@ -75,7 +75,7 @@ impl<'a, T> RowMajor<'a, T> {
             unsafe {
                 self.ptr
                     .add(stride * row)
-                    .truncate(Elements::new(ROWS) * k.value())
+                    .truncate(Elements::new(ROWS) * k.value().get())
             },
             self.cols,
         )
@@ -118,7 +118,7 @@ impl<'a, T, const GROUP: usize> BlockTransposed<'a, T, GROUP> {
 
     fn block_stride(&self, k: AllColumns) -> Elements<T> {
         bounds::check_eq!(self.cols, k.value());
-        Elements::new(GROUP * k.value())
+        Elements::new(GROUP * k.value().get())
     }
 
     pub(crate) fn block(

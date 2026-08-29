@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::marker::PhantomData;
+use std::{num::NonZeroUsize, marker::PhantomData};
 
 /// A offset for pointers `*const T` in terms of numbers of `T`.
 #[derive(Debug)]
@@ -60,14 +60,14 @@ impl<T> std::ops::Add for Elements<T> {
 //--------------//
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct AllColumns(usize);
+pub(super) struct AllColumns(NonZeroUsize);
 
 impl AllColumns {
-    pub(super) const fn new(value: usize) -> Self {
+    pub(super) const fn new(value: NonZeroUsize) -> Self {
         Self(value)
     }
 
-    pub(super) const fn value(self) -> usize {
+    pub(super) const fn value(self) -> NonZeroUsize {
         self.0
     }
 }

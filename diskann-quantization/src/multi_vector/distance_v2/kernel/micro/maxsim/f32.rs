@@ -61,7 +61,7 @@ trait ExtraWide<const ELEMENTS: usize>: Copy {
     fn splat(self, value: f32) -> Self::Splat;
     fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide;
     fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide;
-    fn max_into(max: Self::Wide, into: MutSlice<'_, f32>);
+    fn max_into(self, max: Self::Wide, into: MutSlice<'_, f32>);
 }
 
 impl ExtraWide<8> for MaxSim<Scalar> {
@@ -95,11 +95,15 @@ impl ExtraWide<8> for MaxSim<Scalar> {
         core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
     }
 
-    fn max_into(lhs: Self::Wide, into: MutSlice<'_, f32>) {
+    fn max_into(self, lhs: Self::Wide, into: MutSlice<'_, f32>) {
         bounds::check_eq!(into.length(), 8);
+
+        let previous = unsafe { self.load(into.as_slice()) };
+        let max = Self::max(lhs, previous);
+
         unsafe {
-            lhs[0].store_simd(into.as_mut_ptr());
-            lhs[1].store_simd(into.as_mut_ptr().add(4));
+            max[0].store_simd(into.as_mut_ptr());
+            max[1].store_simd(into.as_mut_ptr().add(4));
         }
     }
 }
@@ -135,11 +139,15 @@ impl ExtraWide<16> for MaxSim<V3> {
         core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
     }
 
-    fn max_into(lhs: Self::Wide, into: MutSlice<'_, f32>) {
+    fn max_into(self, lhs: Self::Wide, into: MutSlice<'_, f32>) {
         bounds::check_eq!(into.length(), 16);
+
+        let previous = unsafe { self.load(into.as_slice()) };
+        let max = Self::max(lhs, previous);
+
         unsafe {
-            lhs[0].store_simd(into.as_mut_ptr());
-            lhs[1].store_simd(into.as_mut_ptr().add(8));
+            max[0].store_simd(into.as_mut_ptr());
+            max[1].store_simd(into.as_mut_ptr().add(8));
         }
     }
 }
@@ -170,10 +178,14 @@ impl ExtraWide<16> for MaxSim<V4> {
         lhs.max_simd(rhs)
     }
 
-    fn max_into(lhs: Self::Wide, into: MutSlice<'_, f32>) {
+    fn max_into(self, lhs: Self::Wide, into: MutSlice<'_, f32>) {
         bounds::check_eq!(into.length(), 16);
+
+        let previous = unsafe { self.load(into.as_slice()) };
+        let max = Self::max(lhs, previous);
+
         unsafe {
-            lhs.store_simd(into.as_mut_ptr());
+            max.store_simd(into.as_mut_ptr());
         }
     }
 }
@@ -213,5 +225,5 @@ unsafe fn block_transposed_x_row_major<W, const NA: usize, const NB: usize>(
         }
     }
 
-    W::max_into(Folder::fold(acc, W::max), c);
+    wide.max_into(Folder::fold(acc, W::max), c);
 }

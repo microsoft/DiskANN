@@ -3,5 +3,5 @@
  * Licensed under the MIT license.
  */
 
-mod micro;
-mod panel;
+pub(crate) mod micro;
+pub(crate) mod panel;

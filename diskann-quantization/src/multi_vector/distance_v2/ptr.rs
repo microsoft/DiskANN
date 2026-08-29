@@ -106,6 +106,10 @@ impl<'a, T> MutSlice<'a, T> {
         unsafe { Self::from_raw(mut_slice_to_nonnull(slice), Length::new(slice.len())) }
     }
 
+    pub(super) const fn as_slice(&self) -> Slice<'_, T> {
+        unsafe { Slice::from_raw(self.ptr, self.length) }
+    }
+
     pub(super) const fn as_ptr(&self) -> *const T {
         self.as_mut_ptr().cast_const()
     }

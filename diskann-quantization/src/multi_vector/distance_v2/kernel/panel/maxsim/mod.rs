@@ -3,4 +3,4 @@
  * Licensed under the MIT license.
  */
 
-mod f32;
+pub(crate) mod f32;

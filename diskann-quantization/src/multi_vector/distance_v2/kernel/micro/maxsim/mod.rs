@@ -9,7 +9,7 @@ pub(crate) mod f32;
 pub(crate) struct MaxSim<A>(A);
 
 impl<A> MaxSim<A> {
-    fn new(arch: A) -> Self {
+    pub(crate) fn new(arch: A) -> Self {
         Self(arch)
     }
 }

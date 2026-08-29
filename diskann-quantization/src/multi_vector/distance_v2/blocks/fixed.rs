@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::multi_vector::distance_v2::{Check, Length, bounds, num::Elements, ptr::Slice};
+use crate::multi_vector::distance_v2::{bounds, num::Elements, ptr::Slice, Check, Length};
 
 //----------//
 // RowMajor //
@@ -54,7 +54,7 @@ pub(crate) struct FullBlockTranspose<'a, T, const GROUP: usize, const PACK: usiz
 impl<'a, T, const GROUP: usize, const PACK: usize> FullBlockTranspose<'a, T, GROUP, PACK> {
     pub(crate) fn new(ptr: Slice<'a, T>, cols: Length) -> Self {
         cols.with(|cols| {
-            let expected = cols.next_multiple_of(PACK);
+            let expected = GROUP * cols.next_multiple_of(PACK);
             bounds::check_eq!(ptr.length(), expected);
         });
 
