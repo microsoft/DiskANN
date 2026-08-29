@@ -8,8 +8,8 @@
 
 pub(crate) mod maxsim;
 
-pub(crate) trait Kernel {
-    fn run(&mut self);
+pub(crate) trait PanelKernel {
+    fn panel_kernel(&mut self);
 }
 
 pub(crate) trait MicroKernel<A, B, C> {

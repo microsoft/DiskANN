@@ -6,8 +6,9 @@
 use std::num::NonZeroUsize;
 
 use crate::multi_vector::distance_v2::{
-    bounds::{Bound},
-    blocks, kernel,
+    blocks,
+    bounds::Bound,
+    kernel,
     num::AllColumns,
     ptr::{MutSlice, Slice},
 };
@@ -35,11 +36,13 @@ pub fn example_maxsim_f32(
         Bound::new(cols.get()),
     );
 
-    let b = blocks::dynamic::RowMajor::<f32>::new(
-        Slice::new(b.as_slice()),
-        b.nrows(),
-        Bound::new(b.ncols()),
-    );
+    let b = unsafe {
+        blocks::dynamic::RowMajor::<f32>::new(
+            Slice::new(b.as_slice()),
+            b.nrows(),
+            Bound::new(b.ncols()),
+        )
+    };
 
     c.fill(f32::NEG_INFINITY);
 
@@ -58,7 +61,7 @@ fn example_maxsim_f32_inner<A>(
     budget: Budget,
 ) where
     A: diskann_wide::Architecture,
-    for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 6>: kernel::Kernel,
+    for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 6>: kernel::PanelKernel,
 {
     let mut ablock = 0;
     while ablock != a.blocks() {
@@ -72,17 +75,19 @@ fn example_maxsim_f32_inner<A>(
             for ablock_offset in 0..these_a_blocks {
                 let suba = a.block(cols, ablock + ablock_offset);
 
-                let mut subc = c.subslice(16 * (ablock + ablock_offset), Bound::new(16));
+                let mut subc = unsafe { c.subslice(16 * (ablock + ablock_offset), Bound::new(16)) };
 
-                let mut kernel = kernel::maxsim::f32::BlockWithRowMajor {
-                    kernel: kernel::maxsim::MaxSim::new(arch),
-                    a: suba,
-                    b: subb,
-                    c: unsafe { subc.materialize::<16>() },
-                    cols,
+                let mut kernel = unsafe {
+                    kernel::maxsim::f32::BlockWithRowMajor::new(
+                        kernel::maxsim::MaxSim::new(arch),
+                        suba,
+                        subb,
+                        unsafe { subc.materialize::<16>() },
+                        cols,
+                    )
                 };
 
-                <_ as kernel::Kernel>::run(&mut kernel);
+                <_ as kernel::PanelKernel>::panel_kernel(&mut kernel);
             }
 
             brow += these_b_rows;

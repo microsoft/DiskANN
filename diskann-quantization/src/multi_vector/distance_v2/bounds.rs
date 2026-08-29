@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-pub(super) use inner::{Check, Bound};
+pub(super) use inner::{Bound, Check};
 
 pub(super) trait IntoBound {
     fn into_bound(self) -> Bound;
@@ -18,6 +18,12 @@ impl IntoBound for usize {
 impl IntoBound for std::num::NonZeroUsize {
     fn into_bound(self) -> Bound {
         Bound::new(self.get())
+    }
+}
+
+impl IntoBound for super::num::AllColumns {
+    fn into_bound(self) -> Bound {
+        Bound::new(self.value().get())
     }
 }
 
@@ -56,6 +62,7 @@ macro_rules! check_le {
     };
 }
 
+#[expect(unused, reason = "this completes the API")]
 macro_rules! check_gt {
     ($lhs:expr, $rhs:expr $(,)?) => {
         $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs);
@@ -89,7 +96,7 @@ macro_rules! __assert {
             ($lhs).check(
                 $crate::multi_vector::distance_v2::bounds::Check::$op(),
                 $rhs,
-                Some(&::diskann_utils::lazy_format!($($arg)+)),
+                Some(format_args!($($arg)+)),
             )
         }
     };
@@ -98,6 +105,8 @@ macro_rules! __assert {
 pub(super) use __assert;
 pub(super) use check_eq;
 pub(super) use check_ge;
+
+#[expect(unused, reason = "this completes the API")]
 pub(super) use check_gt;
 
 #[expect(unused, reason = "this completes the API")]
@@ -153,7 +162,7 @@ mod inner {
             }
         }
 
-        fn check(self, lhs: usize, rhs: usize, message: Option<&dyn std::fmt::Display>) {
+        fn check(self, lhs: usize, rhs: usize, message: Option<std::fmt::Arguments<'_>>) {
             let passed = match self.0 {
                 Inner::Eq => lhs == rhs,
                 Inner::Lt => lhs < rhs,
@@ -198,7 +207,7 @@ mod inner {
             self,
             check: Check,
             expected: T,
-            message: Option<&dyn std::fmt::Display>,
+            message: Option<std::fmt::Arguments<'_>>,
         ) where
             T: IntoBound,
         {
@@ -210,7 +219,7 @@ mod inner {
             self,
             check: Check,
             f: F,
-            message: Option<&dyn std::fmt::Display>,
+            message: Option<std::fmt::Arguments<'_>>,
         ) where
             F: FnOnce() -> T,
             T: IntoBound,
@@ -299,7 +308,7 @@ mod inner {
             self,
             _check: Check,
             _expected: T,
-            _msg: Option<&dyn std::fmt::Display>,
+            _msg: Option<std::fmt::Arguments<'_>>,
         ) where
             T: IntoBound,
         {
@@ -309,7 +318,7 @@ mod inner {
             self,
             _check: Check,
             _f: F,
-            _message: Option<&dyn std::fmt::Display>,
+            _message: Option<std::fmt::Arguments<'_>>,
         ) where
             F: FnOnce() -> T,
             T: IntoBound,

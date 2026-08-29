@@ -5,15 +5,10 @@
 
 use std::{marker::PhantomData, ptr::NonNull};
 
-use super::{bounds::{self, Bound}, num::Elements};
-
-const fn slice_to_nonnull<T>(x: &[T]) -> NonNull<T> {
-    unsafe { NonNull::new_unchecked(x.as_ptr().cast::<T>().cast_mut()) }
-}
-
-const fn mut_slice_to_nonnull<T>(x: &mut [T]) -> NonNull<T> {
-    unsafe { NonNull::new_unchecked(x.as_mut_ptr().cast::<T>()) }
-}
+use super::{
+    bounds::{self, Bound},
+    num::Elements,
+};
 
 //-------//
 // Slice //
@@ -97,11 +92,7 @@ impl<'a, T> Slice<'a, T> {
     /// `length` must be less than or equal to the length provenance of self.
     pub(super) unsafe fn truncate(self, length: Elements<T>) -> Slice<'a, T> {
         let length = length.value();
-        bounds::check_ge!(
-            self.len,
-            length,
-            "truncation would make the slice longer"
-        );
+        bounds::check_ge!(self.len, length, "truncation would make the slice longer");
 
         unsafe { Self::from_raw(self.ptr, Bound::new(length)) }
     }
@@ -171,27 +162,59 @@ impl<'a, T> MutSlice<'a, T> {
         self.ptr
     }
 
-    pub(super) fn subslice(&mut self, start: usize, length: Bound) -> MutSlice<'_, T> {
-        bounds::check_gt!(self.len, start, "start is out-of-bounds");
-        bounds::check_ge!(
-            self.len,
-            Bound::new(start) + length,
-            "end is out-of-bounds"
-        );
+    /// Borrow the region of memory in `[start, start + length)`.
+    ///
+    /// # Safety
+    ///
+    /// The entire region `[start, start + length)` must be within `self`. In debug builds,
+    /// out-of-bounds accesses will panic.
+    pub(super) unsafe fn subslice(&mut self, start: usize, length: Bound) -> MutSlice<'_, T> {
+        bounds::check_ge!(self.len, start, "start is out-of-bounds");
+        bounds::check_ge!(self.len, Bound::new(start) + length, "end is out-of-bounds");
 
         unsafe { Self::from_raw(self.ptr.add(start), length) }
     }
 
+    /// Borrow `self` as a fixed-size slice.
+    ///
+    /// # Safety
+    ///
+    /// The length of `self` must be exactly `N`. This is checked in debug builds.
     pub(super) unsafe fn materialize<const N: usize>(&mut self) -> &mut [T; N] {
         bounds::check_eq!(self.len, N, "invalid materialization of size {N}");
         unsafe { &mut *self.as_mut_ptr().cast::<[T; N]>() }
     }
 
+    /// Reborrow `self` with a potentially shorter lifetime.
     pub(super) fn reborrow(&mut self) -> MutSlice<'_, T> {
         unsafe { Self::from_raw(self.ptr, self.len) }
     }
 
+    /// Return the [`Bound`] representin the slice's length.
     pub(super) fn len(&self) -> Bound {
         self.len
     }
 }
+
+const fn slice_to_nonnull<T>(x: &[T]) -> NonNull<T> {
+    // SAFETY: Slices always have non-null base pointers.
+    unsafe { NonNull::new_unchecked(x.as_ptr().cast::<T>().cast_mut()) }
+}
+
+const fn mut_slice_to_nonnull<T>(x: &mut [T]) -> NonNull<T> {
+    // SAFETY: Slices always have non-null base pointers.
+    unsafe { NonNull::new_unchecked(x.as_mut_ptr().cast::<T>()) }
+}
+
+// Verify that length-tracking disappears in release builds.
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    std::mem::size_of::<Slice<'static, f32>>() == std::mem::size_of::<NonNull<f32>>(),
+    "non-debug `Slice` does not have the expected size"
+);
+
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    std::mem::size_of::<MutSlice<'static, f32>>() == std::mem::size_of::<NonNull<f32>>(),
+    "non-debug `MutSlice` does not have the expected size"
+);

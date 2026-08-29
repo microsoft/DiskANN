@@ -11,21 +11,46 @@ use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 use diskann_wide::arch::x86_64::{V3, V4};
 
 use crate::multi_vector::distance_v2::{
-    bounds,
-    blocks,
-    kernel::{Kernel, MicroKernel, maxsim::MaxSim},
+    blocks, bounds,
+    kernel::{MicroKernel, PanelKernel, maxsim::MaxSim},
     num::{AllColumns, Elements},
-    ptr::{Slice},
+    ptr::Slice,
     util::{Fold, Folder},
 };
 
 #[derive(Debug)]
 pub(crate) struct BlockWithRowMajor<'a, A, const NA: usize, const NB: usize> {
-    pub(crate) kernel: MaxSim<A>,
-    pub(crate) a: blocks::fixed::FullBlockTranspose<'a, f32, NA>,
-    pub(crate) b: blocks::dynamic::RowMajor<'a, f32>,
-    pub(crate) c: &'a mut [f32; NA],
-    pub(crate) cols: AllColumns,
+    kernel: MaxSim<A>,
+    a: blocks::fixed::FullBlockTranspose<'a, f32, NA>,
+    b: blocks::dynamic::RowMajor<'a, f32>,
+    c: &'a mut [f32; NA],
+    cols: AllColumns,
+}
+
+impl<'a, A, const NA: usize, const NB: usize> BlockWithRowMajor<'a, A, NA, NB> {
+    /// Construct a new kernel.
+    ///
+    /// # Safety
+    ///
+    /// Callers asserts that the number of columns in `a` and `b` are equal to `cols`.
+    pub(crate) unsafe fn new(
+        kernel: MaxSim<A>,
+        a: blocks::fixed::FullBlockTranspose<'a, f32, NA>,
+        b: blocks::dynamic::RowMajor<'a, f32>,
+        c: &'a mut [f32; NA],
+        cols: AllColumns,
+    ) -> Self {
+        bounds::check_eq!(a.ncols(), cols);
+        bounds::check_eq!(b.ncols(), cols);
+
+        Self {
+            kernel,
+            a,
+            b,
+            c,
+            cols,
+        }
+    }
 }
 
 trait TailDispatch {
@@ -34,25 +59,39 @@ trait TailDispatch {
 
 macro_rules! tail_dispatch {
     ($arch:ty, $na:literal, $nb: literal, [ $($ns:literal),+ $(,)? ]) => {
-        impl TailDispatch for BlockWithRowMajor<'_, $arch, $na, $nb> {
+        impl PanelKernel for BlockWithRowMajor<'_, $arch, $na, $nb> {
             #[inline]
-            fn tail_dispatch(&mut self) {
-                let last = $nb * (self.b.nrows() / $nb);
-                let remainder = self.b.nrows() - last;
-
-                // Repeitition Pattern.
-                $(
-                    const { assert!($ns < $nb) };
-                    if remainder == $ns {
+            fn panel_kernel(&mut self) {
+                let b_tail = unsafe { self.b.visit_all_rows_fixed::<$nb>(
+                    self.cols,
+                    |b| {
                         MicroKernel::kernel(
                             &self.kernel,
                             self.a,
-                            self.b.block::<$ns>(self.cols, last),
+                            b,
                             self.cols.value(),
                             self.c
                         );
                     }
-                )+
+                ) };
+
+                if let Some(b_tail) = b_tail {
+                    let nrows = b_tail.nrows();
+
+                    // Repeitition Pattern.
+                    $(
+                        const { assert!($ns < $nb) };
+                        if nrows == $ns {
+                            MicroKernel::kernel(
+                                &self.kernel,
+                                self.a,
+                                unsafe { b_tail.materialize::<$ns>() },
+                                self.cols.value(),
+                                self.c
+                            );
+                        }
+                    )+
+                }
             }
         }
     }
@@ -63,33 +102,6 @@ tail_dispatch!(V3, 16, 4, [1, 2, 3]);
 tail_dispatch!(V3, 16, 6, [1, 2, 3, 4, 5]);
 
 tail_dispatch!(V4, 16, 4, [1, 2, 3]);
-
-impl<Arch, const NA: usize, const NB: usize> Kernel
-    for BlockWithRowMajor<'_, Arch, NA, NB>
-where
-    for<'a> MaxSim<Arch>: MicroKernel<
-            blocks::fixed::FullBlockTranspose<'a, f32, NA>,
-            blocks::fixed::FullRowMajor<'a, f32, NB>,
-            &'a mut [f32; NA],
-        >,
-    Self: TailDispatch,
-{
-    fn run(&mut self) {
-        let blocks = self.b.nrows() / NB;
-
-        for i in 0..blocks {
-            MicroKernel::kernel(
-                &self.kernel,
-                self.a,
-                self.b.block::<NB>(self.cols, NB * i),
-                self.cols.value(),
-                self.c,
-            );
-        }
-
-        self.tail_dispatch();
-    }
-}
 
 //--------------//
 // Micro Kernel //
@@ -295,4 +307,3 @@ impl ExtraWide<16> for MaxSim<V4> {
         }
     }
 }
-

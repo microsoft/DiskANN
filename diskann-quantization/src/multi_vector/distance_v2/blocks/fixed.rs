@@ -3,7 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use crate::multi_vector::distance_v2::{bounds::{self, Bound}, num::Elements, ptr::Slice};
+use crate::multi_vector::distance_v2::{
+    bounds::{self, Bound},
+    num::Elements,
+    ptr::Slice,
+};
 
 //----------//
 // RowMajor //
