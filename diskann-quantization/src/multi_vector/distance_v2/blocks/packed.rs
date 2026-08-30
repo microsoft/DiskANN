@@ -14,15 +14,15 @@ use crate::multi_vector::distance_v2::{
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct View<'a, T, const EXTENT: usize> {
     ptr: Slice<'a, T>,
-    blocks: usize,
+    blocks: NonZeroUsize,
     k: Bound,
 }
 
 impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
-    pub(crate) fn new(ptr: Slice<'a, T>, blocks: usize, k: Bound) -> Self {
+    pub(crate) fn new(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: Bound) -> Self {
         bounds::check_eq!(
             ptr.len(),
-            Bound::new(blocks) * Bound::new(EXTENT) * k,
+            Bound::new(blocks.get()) * Bound::new(EXTENT) * k,
             "invalid block-transposed access",
         );
 
@@ -33,7 +33,7 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
         self.ptr
     }
 
-    pub(crate) const fn blocks(&self) -> usize {
+    pub(crate) const fn blocks(&self) -> NonZeroUsize {
         self.blocks
     }
 
@@ -47,7 +47,7 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
     }
 
     pub(crate) fn block(&self, k: DimK, block: usize) -> Panel<'a, T, EXTENT> {
-        debug_assert!(block < self.blocks);
+        debug_assert!(block < self.blocks.get());
         let block_stride = self.block_stride(k);
 
         Panel::new(
@@ -66,14 +66,14 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
 
         // The loop bound is a bit funky because it is setup to give us a `NonZeroUsize` for
         // free. Once it returns `None`, we know `i == self.extent()` and we're done.
-        while let Some(remaining) = NonZeroUsize::new(self.blocks() - i) {
+        while let Some(remaining) = NonZeroUsize::new(self.blocks().get() - i) {
             let this_blocks = remaining.min(sub_blocks);
 
             let sub = Self::new(
                 self.ptr
                     .add(stride * i)
                     .truncate(stride * this_blocks.get()),
-                this_blocks.get(),
+                this_blocks,
                 self.k(),
             );
 
@@ -88,7 +88,7 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
         F: FnMut(Panel<'_, T, EXTENT>, usize),
     {
         let stride = self.block_stride(k);
-        for b in 0..self.blocks() {
+        for b in 0..self.blocks().get() {
             let panel = Panel::new(unsafe { self.ptr.add(stride * b).truncate(stride) }, self.k);
             f(panel, b);
         }

@@ -30,9 +30,11 @@ pub fn example_maxsim_f32(
 
     let cols = NonZeroUsize::new(a.ncols()).unwrap();
 
+    let ablocks = NonZeroUsize::new(a.num_blocks()).unwrap();
+
     let a = blocks::packed::View::<f32, 16>::new(
         Slice::new(a.as_slice()),
-        a.num_blocks(),
+        ablocks,
         Bound::new(cols.get()),
     );
 
@@ -59,7 +61,7 @@ fn example_maxsim_f32_inner<A>(
     budget: Budget,
 ) where
     A: diskann_wide::Architecture,
-    for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 6>: kernel::PanelKernel,
+    for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 4>: kernel::PanelKernel,
 {
     unsafe {
         a.visit_sub_views(budget.ablocks, k, |suba, a_block_base| {
