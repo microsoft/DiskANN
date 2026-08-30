@@ -29,6 +29,11 @@ impl<'a, T> View<'a, T> {
         self.ptr
     }
 
+    pub(crate) unsafe fn as_std_slice(&self, k: DimK) -> &[T] {
+        let len = self.stride(k) * self.extent().get();
+        unsafe { self.ptr.as_std_slice(len.value()) }
+    }
+
     pub(crate) const fn extent(&self) -> NonZeroUsize {
         self.extent
     }

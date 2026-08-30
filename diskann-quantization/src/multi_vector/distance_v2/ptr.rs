@@ -51,6 +51,11 @@ impl<'a, T> Slice<'a, T> {
         self.ptr
     }
 
+    pub(super) unsafe fn as_std_slice(&self, len: usize) -> &[T] {
+        bounds::check_eq!(self.len, len);
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
+    }
+
     /// Read a value from `self` without moving it.
     ///
     /// # Safety

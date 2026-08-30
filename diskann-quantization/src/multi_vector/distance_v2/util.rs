@@ -3,6 +3,44 @@
  * Licensed under the MIT license.
  */
 
+use half::f16;
+
+/////////////
+// Convert //
+/////////////
+
+pub(super) trait Convert<To, From> {
+    fn convert(self, to: &mut [To], from: &[From]);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Converter<A>(A);
+
+impl<A> Converter<A> {
+    pub(super) const fn new(arch: A) -> Self {
+        Self(arch)
+    }
+}
+
+impl<A> Convert<f32, f16> for Converter<A>
+where
+    A: diskann_wide::Architecture,
+    diskann_vector::conversion::SliceCast<f32, f16>:
+        for<'a, 'b> diskann_wide::arch::Target2<A, (), &'a mut [f32], &'a [f16]>,
+{
+    fn convert(self, to: &mut [f32], from: &[f16]) {
+        self.0.run2(
+            diskann_vector::conversion::SliceCast::<f32, f16>::new(),
+            to,
+            from,
+        )
+    }
+}
+
+//////////
+// Fold //
+//////////
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Folder;
 

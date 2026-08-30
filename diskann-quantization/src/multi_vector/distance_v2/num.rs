@@ -31,6 +31,10 @@ impl<T> Elements<T> {
     pub(super) const fn value(self) -> usize {
         self.elements
     }
+
+    pub(super) const fn bytes(self) -> usize {
+        self.elements * std::mem::size_of::<T>()
+    }
 }
 
 impl<T, U> PartialEq<Elements<U>> for Elements<T> {
@@ -53,6 +57,11 @@ impl<T> std::ops::Add for Elements<T> {
     fn add(self, by: Elements<T>) -> Self {
         Self::new(self.value() + by.value())
     }
+}
+
+// Return `x` as a `NonZeroUsize` or `NonZeroUsize::MIN` if `x` is zero.
+pub(super) fn value_or_one(x: usize) -> NonZeroUsize {
+    NonZeroUsize::new(x).unwrap_or(NonZeroUsize::MIN)
 }
 
 //--------------//

@@ -12,17 +12,17 @@ use crate::multi_vector::distance_v2::{
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct View<'a, T, const EXTENT: usize> {
+pub(crate) struct View<'a, T, const SZ: usize> {
     ptr: Slice<'a, T>,
     blocks: NonZeroUsize,
     k: Bound,
 }
 
-impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
+impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     pub(crate) fn new(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: Bound) -> Self {
         bounds::check_eq!(
             ptr.len(),
-            Bound::new(blocks.get()) * Bound::new(EXTENT) * k,
+            Bound::new(blocks.get()) * Bound::new(SZ) * k,
             "invalid block-transposed access",
         );
 
@@ -41,12 +41,21 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
         self.k
     }
 
-    fn block_stride(&self, k: DimK) -> Elements<T> {
-        bounds::check_eq!(self.k, k.value());
-        Elements::new(EXTENT * k.value().get())
+    pub(crate) fn packing(&self) -> usize {
+        SZ
     }
 
-    pub(crate) fn block(&self, k: DimK, block: usize) -> Panel<'a, T, EXTENT> {
+    pub(crate) fn block_stride(&self, k: DimK) -> Elements<T> {
+        bounds::check_eq!(self.k, k.value());
+        Elements::new(SZ * k.value().get())
+    }
+
+    pub(crate) fn extent(&self) -> NonZeroUsize {
+        const { assert!(SZ != 0) };
+        self.blocks.saturating_mul(NonZeroUsize::new(SZ).unwrap())
+    }
+
+    pub(crate) fn block(&self, k: DimK, block: usize) -> Panel<'a, T, SZ> {
         debug_assert!(block < self.blocks.get());
         let block_stride = self.block_stride(k);
 
@@ -58,7 +67,7 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
 
     pub(crate) unsafe fn visit_sub_views<F>(&self, sub_blocks: NonZeroUsize, k: DimK, mut f: F)
     where
-        F: FnMut(View<'_, T, EXTENT>, usize),
+        F: FnMut(View<'_, T, SZ>, usize),
     {
         let stride = self.block_stride(k);
 
@@ -85,7 +94,7 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
 
     pub(crate) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
-        F: FnMut(Panel<'_, T, EXTENT>, usize),
+        F: FnMut(Panel<'_, T, SZ>, usize),
     {
         let stride = self.block_stride(k);
         for b in 0..self.blocks().get() {
@@ -100,15 +109,15 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
 //-------//
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Panel<'a, T, const EXTENT: usize, const SUB_EXTENT: usize = 1> {
+pub(crate) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
     k: Bound,
 }
 
-impl<'a, T, const EXTENT: usize, const SUB_EXTENT: usize> Panel<'a, T, EXTENT, SUB_EXTENT> {
+impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
     pub(crate) fn new(ptr: Slice<'a, T>, k: Bound) -> Self {
         k.with(|k| {
-            let expected = EXTENT * k.next_multiple_of(SUB_EXTENT);
+            let expected = SZ * k.next_multiple_of(PACK);
             bounds::check_eq!(ptr.len(), expected);
         });
 
@@ -120,11 +129,11 @@ impl<'a, T, const EXTENT: usize, const SUB_EXTENT: usize> Panel<'a, T, EXTENT, S
     }
 
     pub(crate) const fn group(&self) -> usize {
-        EXTENT
+        SZ
     }
 
     pub(crate) const fn pack(&self) -> usize {
-        SUB_EXTENT
+        PACK
     }
 
     pub(crate) const fn k(&self) -> Bound {
@@ -133,6 +142,6 @@ impl<'a, T, const EXTENT: usize, const SUB_EXTENT: usize> Panel<'a, T, EXTENT, S
 
     pub(crate) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k);
-        Elements::new(EXTENT * SUB_EXTENT)
+        Elements::new(SZ * PACK)
     }
 }
