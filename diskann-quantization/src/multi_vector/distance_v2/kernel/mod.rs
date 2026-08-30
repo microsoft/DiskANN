@@ -3,8 +3,7 @@
  * Licensed under the MIT license.
  */
 
-// pub(crate) mod micro;
-// pub(crate) mod panel;
+use crate::multi_vector::distance_v2::num::DimK;
 
 pub(crate) mod maxsim;
 
@@ -13,5 +12,5 @@ pub(crate) trait PanelKernel {
 }
 
 pub(crate) trait MicroKernel<A, B, C> {
-    fn kernel(&self, a: A, b: B, cols: std::num::NonZeroUsize, c: C);
+    fn kernel(&self, a: A, b: B, k: DimK, c: C);
 }

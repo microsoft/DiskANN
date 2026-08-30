@@ -9,7 +9,7 @@ use crate::multi_vector::distance_v2::{
     blocks,
     bounds::Bound,
     kernel,
-    num::AllColumns,
+    num::DimK,
     ptr::{MutSlice, Slice},
 };
 
@@ -30,16 +30,18 @@ pub fn example_maxsim_f32(
 
     let cols = NonZeroUsize::new(a.ncols()).unwrap();
 
-    let a = blocks::dynamic::BlockTransposed::<f32, 16>::new(
+    let a = blocks::packed::View::<f32, 16>::new(
         Slice::new(a.as_slice()),
         a.num_blocks(),
         Bound::new(cols.get()),
     );
 
+    let brows = NonZeroUsize::new(b.nrows()).unwrap();
+
     let b = unsafe {
-        blocks::dynamic::RowMajor::<f32>::new(
+        blocks::unpacked::View::<f32>::new(
             Slice::new(b.as_slice()),
-            b.nrows(),
+            brows,
             Bound::new(b.ncols()),
         )
     };
@@ -48,28 +50,29 @@ pub fn example_maxsim_f32(
 
     let c = MutSlice::new(c);
 
-    example_maxsim_f32_inner(diskann_wide::ARCH, a, b, c, AllColumns::new(cols), budget);
+    example_maxsim_f32_inner(diskann_wide::ARCH, a, b, c, DimK::new(cols), budget);
 }
 
 #[inline(never)]
 fn example_maxsim_f32_inner<A>(
     arch: A,
-    a: blocks::dynamic::BlockTransposed<'_, f32, 16>,
-    b: blocks::dynamic::RowMajor<'_, f32>,
+    a: blocks::packed::View<'_, f32, 16>,
+    b: blocks::unpacked::View<'_, f32>,
     mut c: MutSlice<'_, f32>,
-    cols: AllColumns,
+    cols: DimK,
     budget: Budget,
 ) where
     A: diskann_wide::Architecture,
     for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 6>: kernel::PanelKernel,
 {
+    let brows = b.extent().get();
     let mut ablock = 0;
     while ablock != a.blocks() {
         let these_a_blocks = (a.blocks() - ablock).min(budget.ablocks);
 
         let mut brow = 0;
-        while brow != b.nrows() {
-            let these_b_rows = (b.nrows() - brow).min(budget.brows);
+        while brow != brows {
+            let these_b_rows = NonZeroUsize::new((brows - brow).min(budget.brows)).unwrap();
             let subb = unsafe { b.subslice(cols, brow, these_b_rows) };
 
             for ablock_offset in 0..these_a_blocks {
@@ -90,7 +93,7 @@ fn example_maxsim_f32_inner<A>(
                 <_ as kernel::PanelKernel>::panel_kernel(&mut kernel);
             }
 
-            brow += these_b_rows;
+            brow += these_b_rows.get();
         }
 
         ablock += these_a_blocks;

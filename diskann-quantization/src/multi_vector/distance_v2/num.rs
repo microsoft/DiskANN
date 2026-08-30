@@ -59,15 +59,27 @@ impl<T> std::ops::Add for Elements<T> {
 // Full Columns //
 //--------------//
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct AllColumns(NonZeroUsize);
+macro_rules! newtype {
+    ($(#[$doc:meta])* $vis:vis $name:ident) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[repr(transparent)]
+        $vis struct $name(NonZeroUsize);
 
-impl AllColumns {
-    pub(super) const fn new(value: NonZeroUsize) -> Self {
-        Self(value)
-    }
+        impl $name {
+            pub(super) const fn new(value: NonZeroUsize) -> Self {
+                Self(value)
+            }
 
-    pub(super) const fn value(self) -> NonZeroUsize {
-        self.0
+            pub(super) const fn value(self) -> NonZeroUsize {
+                self.0
+            }
+        }
     }
 }
+
+newtype! {
+    /// A strongly typed dimension for the `K` value when multiplying `MxK` by `KxN` matrics.
+    pub(super) DimK
+}
+

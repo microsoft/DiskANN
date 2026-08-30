@@ -21,7 +21,7 @@ impl IntoBound for std::num::NonZeroUsize {
     }
 }
 
-impl IntoBound for super::num::AllColumns {
+impl IntoBound for super::num::DimK {
     fn into_bound(self) -> Bound {
         Bound::new(self.value().get())
     }

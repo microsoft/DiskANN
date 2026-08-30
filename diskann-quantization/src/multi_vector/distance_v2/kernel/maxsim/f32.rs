@@ -11,44 +11,40 @@ use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 use diskann_wide::arch::x86_64::{V3, V4};
 
 use crate::multi_vector::distance_v2::{
-    blocks, bounds,
+    blocks::{packed, unpacked}, bounds,
     kernel::{MicroKernel, PanelKernel, maxsim::MaxSim},
-    num::{AllColumns, Elements},
+    num::{DimK, Elements},
     ptr::Slice,
     util::{Fold, Folder},
 };
 
 #[derive(Debug)]
-pub(crate) struct BlockWithRowMajor<'a, A, const NA: usize, const NB: usize> {
+pub(crate) struct BlockWithRowMajor<'a, A, const MR: usize, const NR: usize> {
     kernel: MaxSim<A>,
-    a: blocks::fixed::FullBlockTranspose<'a, f32, NA>,
-    b: blocks::dynamic::RowMajor<'a, f32>,
-    c: &'a mut [f32; NA],
-    cols: AllColumns,
+    a: packed::Panel<'a, f32, MR>,
+    b: unpacked::View<'a, f32>,
+    c: &'a mut [f32; MR],
+    k: DimK,
 }
 
-impl<'a, A, const NA: usize, const NB: usize> BlockWithRowMajor<'a, A, NA, NB> {
+impl<'a, A, const MR: usize, const NR: usize> BlockWithRowMajor<'a, A, MR, NR> {
     /// Construct a new kernel.
-    ///
-    /// # Safety
-    ///
-    /// Callers asserts that the number of columns in `a` and `b` are equal to `cols`.
     pub(crate) unsafe fn new(
         kernel: MaxSim<A>,
-        a: blocks::fixed::FullBlockTranspose<'a, f32, NA>,
-        b: blocks::dynamic::RowMajor<'a, f32>,
-        c: &'a mut [f32; NA],
-        cols: AllColumns,
+        a: packed::Panel<'a, f32, MR>,
+        b: unpacked::View<'a, f32>,
+        c: &'a mut [f32; MR],
+        k: DimK,
     ) -> Self {
-        bounds::check_eq!(a.ncols(), cols);
-        bounds::check_eq!(b.ncols(), cols);
+        bounds::check_eq!(a.k(), k);
+        bounds::check_eq!(b.k(), k);
 
         Self {
             kernel,
             a,
             b,
             c,
-            cols,
+            k,
         }
     }
 }
@@ -62,31 +58,31 @@ macro_rules! tail_dispatch {
         impl PanelKernel for BlockWithRowMajor<'_, $arch, $na, $nb> {
             #[inline]
             fn panel_kernel(&mut self) {
-                let b_tail = unsafe { self.b.visit_all_rows_fixed::<$nb>(
-                    self.cols,
+                let b_tail = unsafe { self.b.visit_panels::<$nb>(
+                    self.k,
                     |b| {
                         MicroKernel::kernel(
                             &self.kernel,
                             self.a,
                             b,
-                            self.cols.value(),
+                            self.k,
                             self.c
                         );
                     }
                 ) };
 
                 if let Some(b_tail) = b_tail {
-                    let nrows = b_tail.nrows();
+                    let ncols = b_tail.extent().get();
 
                     // Repeitition Pattern.
                     $(
                         const { assert!($ns < $nb) };
-                        if nrows == $ns {
+                        if ncols == $ns {
                             MicroKernel::kernel(
                                 &self.kernel,
                                 self.a,
                                 unsafe { b_tail.materialize::<$ns>() },
-                                self.cols.value(),
+                                self.k,
                                 self.c
                             );
                         }
@@ -108,34 +104,32 @@ tail_dispatch!(V4, 16, 4, [1, 2, 3]);
 //--------------//
 
 #[inline(always)]
-unsafe fn micro_kernel<W, const NA: usize, const NB: usize>(
+unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
     wide: W,
-    a: blocks::fixed::FullBlockTranspose<'_, f32, NA, 1>,
-    b: blocks::fixed::FullRowMajor<'_, f32, NB>,
-    k: NonZeroUsize,
-    c: &mut [f32; NA],
+    a: packed::Panel<'_, f32, MR>,
+    b: unpacked::Panel<'_, f32, NR>,
+    k: DimK,
+    c: &mut [f32; MR],
 ) where
-    W: ExtraWide<NA>,
-    Folder: Fold<NB>,
+    W: ExtraWide<MR>,
+    Folder: Fold<NR>,
 {
-    let k = k.get();
-
     // Check that everyone agrees.
-    bounds::check_eq!(a.ncols(), k);
-    bounds::check_eq!(b.ncols(), k);
+    bounds::check_eq!(a.k(), k);
+    bounds::check_eq!(b.k(), k);
 
     let ap = a.as_ptr();
     let bp = b.as_ptr();
 
-    let mut acc = [wide.default(); NB];
+    let mut acc = [wide.default(); NR];
 
     let astride = a.stride(k);
     let bstride = b.stride(k);
 
-    for i in 0..k {
-        let ai = unsafe { wide.load(ap.add(astride * i).truncate(Elements::new(NA))) };
+    for i in 0..k.value().get() {
+        let ai = unsafe { wide.load(ap.add(astride * i).truncate(Elements::new(MR))) };
 
-        for j in 0..NB {
+        for j in 0..NR {
             let bj = wide.splat(unsafe { bp.add(bstride * j + Elements::new(i)).read() });
             acc[j] = W::mul_add_splat(ai, bj, acc[j]);
         }
@@ -151,19 +145,19 @@ diskann_wide::alias!(f32x16<A> = f32x16);
 macro_rules! stamp {
     ($arch:ty, $na:literal, $nb:literal) => {
         impl MicroKernel<
-            blocks::fixed::FullBlockTranspose<'_, f32, $na, 1>,
-            blocks::fixed::FullRowMajor<'_, f32, $nb>,
+            packed::Panel<'_, f32, $na>,
+            unpacked::Panel<'_, f32, $nb>,
             &mut [f32; $na],
         > for MaxSim<$arch> {
             #[inline(always)]
             fn kernel(
                 &self,
-                a: blocks::fixed::FullBlockTranspose<'_, f32, $na, 1>,
-                b: blocks::fixed::FullRowMajor<'_, f32, $nb>,
-                cols: NonZeroUsize,
+                a: packed::Panel<'_, f32, $na>,
+                b: unpacked::Panel<'_, f32, $nb>,
+                k: DimK,
                 c: &mut [f32; $na],
             ) {
-                unsafe { micro_kernel(*self, a, b, cols, c) }
+                unsafe { micro_kernel(*self, a, b, k, c) }
             }
         }
     };
