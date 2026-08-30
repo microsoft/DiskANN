@@ -15,8 +15,8 @@ use crate::multi_vector::distance_v2::{
 
 #[derive(Debug, Clone, Copy)]
 struct Budget {
-    ablocks: usize,
-    brows: usize,
+    ablocks: NonZeroUsize,
+    brows: NonZeroUsize,
 }
 
 pub fn example_maxsim_f32(
@@ -39,11 +39,7 @@ pub fn example_maxsim_f32(
     let brows = NonZeroUsize::new(b.nrows()).unwrap();
 
     let b = unsafe {
-        blocks::unpacked::View::<f32>::new(
-            Slice::new(b.as_slice()),
-            brows,
-            Bound::new(b.ncols()),
-        )
+        blocks::unpacked::View::<f32>::new(Slice::new(b.as_slice()), brows, Bound::new(b.ncols()))
     };
 
     c.fill(f32::NEG_INFINITY);
@@ -59,44 +55,33 @@ fn example_maxsim_f32_inner<A>(
     a: blocks::packed::View<'_, f32, 16>,
     b: blocks::unpacked::View<'_, f32>,
     mut c: MutSlice<'_, f32>,
-    cols: DimK,
+    k: DimK,
     budget: Budget,
 ) where
     A: diskann_wide::Architecture,
     for<'a> kernel::maxsim::f32::BlockWithRowMajor<'a, A, 16, 6>: kernel::PanelKernel,
 {
-    let brows = b.extent().get();
-    let mut ablock = 0;
-    while ablock != a.blocks() {
-        let these_a_blocks = (a.blocks() - ablock).min(budget.ablocks);
+    unsafe {
+        a.visit_sub_views(budget.ablocks, k, |suba, a_block_base| {
+            b.visit_sub_views(budget.brows, k, |subb| {
+                suba.visit_panels(k, |apanel, a_block_offset| {
+                    let mut subc =
+                        unsafe { c.subslice(16 * (a_block_base + a_block_offset), Bound::new(16)) };
 
-        let mut brow = 0;
-        while brow != brows {
-            let these_b_rows = NonZeroUsize::new((brows - brow).min(budget.brows)).unwrap();
-            let subb = unsafe { b.subslice(cols, brow, these_b_rows) };
+                    let mut kernel = unsafe {
+                        kernel::maxsim::f32::BlockWithRowMajor::new(
+                            kernel::maxsim::MaxSim::new(arch),
+                            apanel,
+                            subb,
+                            unsafe { subc.materialize::<16>() },
+                            k,
+                        )
+                    };
 
-            for ablock_offset in 0..these_a_blocks {
-                let suba = a.block(cols, ablock + ablock_offset);
-
-                let mut subc = unsafe { c.subslice(16 * (ablock + ablock_offset), Bound::new(16)) };
-
-                let mut kernel = unsafe {
-                    kernel::maxsim::f32::BlockWithRowMajor::new(
-                        kernel::maxsim::MaxSim::new(arch),
-                        suba,
-                        subb,
-                        unsafe { subc.materialize::<16>() },
-                        cols,
-                    )
-                };
-
-                <_ as kernel::PanelKernel>::panel_kernel(&mut kernel);
-            }
-
-            brow += these_b_rows.get();
-        }
-
-        ablock += these_a_blocks;
+                    <_ as kernel::PanelKernel>::panel_kernel(&mut kernel);
+                })
+            })
+        });
     }
 }
 
@@ -164,8 +149,8 @@ mod tests {
             bview,
             &mut actual,
             Budget {
-                ablocks: 1,
-                brows: 1,
+                ablocks: NonZeroUsize::new(1).unwrap(),
+                brows: NonZeroUsize::new(1).unwrap(),
             },
         );
 
@@ -180,8 +165,8 @@ mod tests {
                 nbrows,
                 7,
                 Budget {
-                    ablocks: 1,
-                    brows: nbrows,
+                    ablocks: NonZeroUsize::new(1).unwrap(),
+                    brows: NonZeroUsize::new(nbrows).unwrap(),
                 },
             );
         }
@@ -194,8 +179,8 @@ mod tests {
             11,
             9,
             Budget {
-                ablocks: 1,
-                brows: 5,
+                ablocks: NonZeroUsize::new(1).unwrap(),
+                brows: NonZeroUsize::new(5).unwrap(),
             },
         );
     }

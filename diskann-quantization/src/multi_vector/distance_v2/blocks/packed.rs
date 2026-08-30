@@ -46,11 +46,7 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
         Elements::new(EXTENT * k.value().get())
     }
 
-    pub(crate) fn block(
-        &self,
-        k: DimK,
-        block: usize,
-    ) -> Panel<'a, T, EXTENT> {
+    pub(crate) fn block(&self, k: DimK, block: usize) -> Panel<'a, T, EXTENT> {
         debug_assert!(block < self.blocks);
         let block_stride = self.block_stride(k);
 
@@ -59,12 +55,49 @@ impl<'a, T, const EXTENT: usize> View<'a, T, EXTENT> {
             self.k,
         )
     }
+
+    pub(crate) unsafe fn visit_sub_views<F>(&self, sub_blocks: NonZeroUsize, k: DimK, mut f: F)
+    where
+        F: FnMut(View<'_, T, EXTENT>, usize),
+    {
+        let stride = self.block_stride(k);
+
+        let mut i = 0;
+
+        // The loop bound is a bit funky because it is setup to give us a `NonZeroUsize` for
+        // free. Once it returns `None`, we know `i == self.extent()` and we're done.
+        while let Some(remaining) = NonZeroUsize::new(self.blocks() - i) {
+            let this_blocks = remaining.min(sub_blocks);
+
+            let sub = Self::new(
+                self.ptr
+                    .add(stride * i)
+                    .truncate(stride * this_blocks.get()),
+                this_blocks.get(),
+                self.k(),
+            );
+
+            f(sub, i);
+
+            i += this_blocks.get();
+        }
+    }
+
+    pub(crate) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
+    where
+        F: FnMut(Panel<'_, T, EXTENT>, usize),
+    {
+        let stride = self.block_stride(k);
+        for b in 0..self.blocks() {
+            let panel = Panel::new(unsafe { self.ptr.add(stride * b).truncate(stride) }, self.k);
+            f(panel, b);
+        }
+    }
 }
 
 //-------//
 // Panel //
 //-------//
-
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Panel<'a, T, const EXTENT: usize, const SUB_EXTENT: usize = 1> {

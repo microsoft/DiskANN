@@ -11,7 +11,8 @@ use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 use diskann_wide::arch::x86_64::{V3, V4};
 
 use crate::multi_vector::distance_v2::{
-    blocks::{packed, unpacked}, bounds,
+    blocks::{packed, unpacked},
+    bounds,
     kernel::{MicroKernel, PanelKernel, maxsim::MaxSim},
     num::{DimK, Elements},
     ptr::Slice,
@@ -39,21 +40,11 @@ impl<'a, A, const MR: usize, const NR: usize> BlockWithRowMajor<'a, A, MR, NR> {
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), k);
 
-        Self {
-            kernel,
-            a,
-            b,
-            c,
-            k,
-        }
+        Self { kernel, a, b, c, k }
     }
 }
 
-trait TailDispatch {
-    fn tail_dispatch(&mut self);
-}
-
-macro_rules! tail_dispatch {
+macro_rules! stamp {
     ($arch:ty, $na:literal, $nb: literal, [ $($ns:literal),+ $(,)? ]) => {
         impl PanelKernel for BlockWithRowMajor<'_, $arch, $na, $nb> {
             #[inline]
@@ -93,11 +84,11 @@ macro_rules! tail_dispatch {
     }
 }
 
-tail_dispatch!(Scalar, 8, 2, [1]);
-tail_dispatch!(V3, 16, 4, [1, 2, 3]);
-tail_dispatch!(V3, 16, 6, [1, 2, 3, 4, 5]);
+stamp!(Scalar, 8, 2, [1]);
+stamp!(V3, 16, 4, [1, 2, 3]);
+stamp!(V3, 16, 6, [1, 2, 3, 4, 5]);
 
-tail_dispatch!(V4, 16, 4, [1, 2, 3]);
+stamp!(V4, 16, 4, [1, 2, 3]);
 
 //--------------//
 // Micro Kernel //

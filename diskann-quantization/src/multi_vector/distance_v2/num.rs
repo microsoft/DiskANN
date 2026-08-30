@@ -82,4 +82,3 @@ newtype! {
     /// A strongly typed dimension for the `K` value when multiplying `MxK` by `KxN` matrics.
     pub(super) DimK
 }
-

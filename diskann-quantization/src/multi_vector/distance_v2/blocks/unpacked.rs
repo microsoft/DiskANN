@@ -64,11 +64,7 @@ impl<'a, T> View<'a, T> {
         Elements::new(k.value().get())
     }
 
-    pub(crate) fn block<const EXTENT: usize>(
-        &self,
-        k: DimK,
-        row: usize,
-    ) -> Panel<'a, T, EXTENT> {
+    pub(crate) fn block<const EXTENT: usize>(&self, k: DimK, row: usize) -> Panel<'a, T, EXTENT> {
         let stride = self.stride(k);
 
         Panel::new(
@@ -97,11 +93,13 @@ impl<'a, T> View<'a, T> {
 
         // The loop bound is a bit funky because it is setup to give us a `NonZeroUsize` for
         // free. Once it returns `None`, we know `i == self.extent()` and we're done.
-        while let Some(max) = NonZeroUsize::new(self.extent().get() - i) {
-            let this_extent = max.min(sub_extent);
+        while let Some(remaining) = NonZeroUsize::new(self.extent().get() - i) {
+            let this_extent = remaining.min(sub_extent);
 
             let sub = Self::new(
-                self.ptr.add(stride * i).truncate(stride * this_extent.get()),
+                self.ptr
+                    .add(stride * i)
+                    .truncate(stride * this_extent.get()),
                 this_extent,
                 self.k(),
             );
