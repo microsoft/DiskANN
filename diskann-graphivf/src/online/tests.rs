@@ -422,6 +422,26 @@ fn batched_inserts_preserve_invariants_and_split() {
         prev = e.insert_index;
     }
 
+    // `clusters_updated` is one number per batch, deduplicated across its
+    // regions: at least as large as the widest single region, never larger
+    // than their sum, and never larger than the live cluster count.
+    let t = c.telemetry();
+    let mut multi_region_batches = 0;
+    for batch in t.splits.chunk_by(|a, b| a.insert_index == b.insert_index) {
+        let updated = batch[0].clusters_updated;
+        let widths = batch.iter().map(|e| e.num_neighbors + 2);
+        let sum: usize = widths.clone().sum();
+        assert!(batch.iter().all(|e| e.clusters_updated == updated));
+        assert!(updated >= widths.max().unwrap() && updated <= sum);
+        assert!(updated <= batch[0].live_after);
+        if batch.len() == 1 {
+            assert_eq!(updated, sum, "one region has nothing to deduplicate");
+        } else {
+            multi_region_batches += 1;
+        }
+    }
+    assert!(multi_region_batches > 0, "expected batches to co-split");
+
     // Local assignment can only be worse than the optimal one for the
     // centroid set it produced.
     let opt = optimal_residual(&points, &live_centroids(&c));

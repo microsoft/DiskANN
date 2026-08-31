@@ -25,6 +25,11 @@ pub struct SplitEvent {
     pub num_reassigned: usize,
     /// Live centroid count immediately after the batch's splits.
     pub live_after: usize,
+    /// Distinct clusters the batch's reassignment passes rewrote: every split's
+    /// two children plus its surviving neighbors, deduplicated across the
+    /// batch. Retired parents are excluded. Shared by all events from one
+    /// batch, so summing it over a batch's rows over-counts.
+    pub clusters_updated: usize,
     /// Wall-clock of this parent's 2-means, microseconds.
     pub two_means_us: u64,
     /// Wall-clock of this parent's reassignment pass, microseconds.
@@ -107,12 +112,12 @@ impl BuildTelemetry {
         let mut out = String::with_capacity(64 + self.splits.len() * 48);
         out.push_str(
             "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
-             live_after,two_means_us,reassign_us,total_us\n",
+             live_after,two_means_us,reassign_us,total_us,clusters_updated\n",
         );
         for event in &self.splits {
             let _ = writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{}",
                 event.insert_index,
                 event.cluster,
                 event.cluster_size,
@@ -122,6 +127,7 @@ impl BuildTelemetry {
                 event.two_means_us,
                 event.reassign_us,
                 event.total_us,
+                event.clusters_updated,
             );
         }
         std::fs::write(path, out)

@@ -895,6 +895,23 @@ impl OnlineClusterer {
         let mut events = Vec::with_capacity(plan.parents.len());
         let mut total_reassigned = 0u64;
 
+        // Liveness no longer moves — `apply_split` retired every parent and
+        // created every child — so the batch's whole working set is known
+        // before the first region runs, and regions that share a neighbor
+        // collapse onto one entry.
+        let mut updated = std::collections::HashSet::new();
+        for (parent, born) in plan.parents.iter().zip(child_ids.chunks_exact(2)) {
+            updated.extend(
+                parent
+                    .neighbors
+                    .iter()
+                    .copied()
+                    .filter(|&c| self.centroids.is_live(c)),
+            );
+            updated.extend(born.iter().copied());
+        }
+        let clusters_updated = updated.len();
+
         // Reassign each split region in turn. The candidates are the parent's
         // own two children plus the neighbors picked before the mutation, less
         // any neighbor that was itself a parent of this batch and has since
@@ -952,6 +969,7 @@ impl OnlineClusterer {
                 num_neighbors,
                 num_reassigned,
                 live_after,
+                clusters_updated,
                 two_means_us: parent.two_means_us,
                 reassign_us,
                 total_us: parent.two_means_us + reassign_us,
