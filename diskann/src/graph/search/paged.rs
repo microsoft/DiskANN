@@ -44,7 +44,7 @@ where
 {
     /// Return the contained [`SearchAccessor`].
     ///
-    /// This method is mainly intended to allow per-page metric reporting from the accessor.
+    /// This method is intended to enable per-page metric reporting from the accessor.
     pub fn accessor(&mut self) -> &mut A {
         &mut self.accessor
     }
