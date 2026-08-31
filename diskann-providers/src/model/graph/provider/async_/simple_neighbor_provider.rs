@@ -18,6 +18,12 @@ use crate::storage::{
     self, AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith,
 };
 
+#[cfg(feature = "parquet")]
+pub use super::simple_neighbor_parquet::{
+    GRAPH_ARTIFACT_TYPE, GRAPH_ENCODING_VERSION, GraphParquetError, GraphParquetLayout,
+    GraphParquetWriteSummary,
+};
+
 pub struct SimpleNeighborProviderAsync {
     // Each adjacency list is stored in a fixed size slice of size max_degree * graph_slack_factor + 1.
     // The length of the list is stored in the extra element at the end as a u32.
@@ -48,6 +54,21 @@ impl SimpleNeighborProviderAsync {
             num_start_points,
             num_get_calls: TestCallCount::default(),
         }
+    }
+
+    /// Returns the total allocated point count, including frozen start points.
+    pub fn total_points(&self) -> usize {
+        self.locks.len()
+    }
+
+    /// Returns the number of frozen start points.
+    pub fn num_start_points(&self) -> usize {
+        self.num_start_points
+    }
+
+    /// Returns the allocated adjacency width.
+    pub fn max_degree(&self) -> usize {
+        self.graph.dim() - 1
     }
 
     /// Return the neighbor list for `index` as a slice.

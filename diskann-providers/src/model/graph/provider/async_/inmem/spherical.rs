@@ -46,6 +46,12 @@ use crate::{
     utils::{Bridge, BridgeErr},
 };
 
+#[cfg(feature = "parquet")]
+pub use super::spherical_parquet::{
+    CODES_ARTIFACT_TYPE, CODES_ENCODING_VERSION, CodeParquetError, CodeParquetLayout,
+    CodeParquetWriteSummary,
+};
+
 /////////////////////
 // Error Promotion //
 /////////////////////
@@ -222,6 +228,26 @@ impl SphericalStore {
     /// Serializes the spherical quantizer plan using its canonical FlatBuffer encoding.
     pub fn export_quantizer(&self) -> Result<Vec<u8>, AllocatorError> {
         Ok(self.plan.serialize(GlobalAllocator)?.to_vec())
+    }
+
+    /// Streams the spherical quantizer plan to a logical Parquet table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the plan cannot be represented by the current Parquet schema or the
+    /// writer fails.
+    #[cfg(feature = "parquet")]
+    pub async fn write_quantizer_parquet<W>(
+        &self,
+        writer: W,
+    ) -> Result<
+        diskann_quantization::spherical::parquet::WriteSummary,
+        diskann_quantization::spherical::parquet::Error,
+    >
+    where
+        W: parquet::arrow::async_writer::AsyncFileWriter + Send + 'static,
+    {
+        diskann_quantization::spherical::parquet::write(self.plan.as_ref(), writer).await
     }
 
     /// Returns the canonical compressed code for one allocated vector slot.

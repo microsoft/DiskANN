@@ -17,6 +17,8 @@ pub use memory_quant_vector_provider::MemoryQuantVectorProviderAsync;
 
 pub mod simple_neighbor_provider;
 pub use simple_neighbor_provider::SimpleNeighborProviderAsync;
+#[cfg(feature = "parquet")]
+mod simple_neighbor_parquet;
 
 pub mod table_delete_provider;
 pub use table_delete_provider::TableDeleteProviderAsync;

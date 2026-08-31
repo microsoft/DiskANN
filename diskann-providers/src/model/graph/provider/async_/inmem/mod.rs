@@ -17,6 +17,8 @@ mod product;
 pub use product::DefaultQuant;
 
 pub mod spherical;
+#[cfg(feature = "parquet")]
+mod spherical_parquet;
 
 mod full_precision;
 pub(super) use full_precision::Rerank;

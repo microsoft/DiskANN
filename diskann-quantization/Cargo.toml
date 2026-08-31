@@ -8,17 +8,22 @@ license.workspace = true
 edition = "2024"
 
 [dependencies]
+arrow-array = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
 bytemuck = { workspace = true, features = ["derive"] }
 cfg-if = { workspace = true }
+crc32fast = { workspace = true, optional = true }
 rand = { workspace = true }
 thiserror = { workspace = true }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
+futures-util = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 flatbuffers = { version = "25.2.10", optional = true }
 half = { version = "2.6.0", features = ["bytemuck"] }
 diskann-utils = { workspace = true }
+parquet = { workspace = true, optional = true }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"
@@ -33,6 +38,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 trybuild = "1.0.101"
 rand_distr = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt"] }
 
 [features]
 default = ["rayon"]
@@ -42,6 +49,16 @@ linalg = ["dep:diskann-linalg"]
 
 # Compile support for serializing and deserializing to flatbuffers.
 flatbuffers = ["dep:flatbuffers"]
+
+# Compile support for streaming spherical quantizer plans through Parquet.
+parquet = [
+	"dep:arrow-array",
+	"dep:arrow-schema",
+	"dep:crc32fast",
+	"dep:futures-util",
+	"dep:parquet",
+	"flatbuffers",
+]
 
 # Enable Rayon-based Parallelism for tagged kernels.
 rayon = ["dep:rayon", "diskann-utils/rayon"]
@@ -68,5 +85,5 @@ codegen = []
 #    --no-deps
 # ```
 [package.metadata.docs.rs]
-features = ["rayon", "linalg", "flatbuffers"]
+features = ["rayon", "linalg", "flatbuffers", "parquet"]
 rustdoc-args = ["--cfg", "docsrs"]

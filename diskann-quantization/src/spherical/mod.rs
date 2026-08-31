@@ -4,6 +4,8 @@
  */
 
 pub mod iface;
+#[cfg(feature = "parquet")]
+pub mod parquet;
 pub(crate) mod quantizer;
 mod vectors;
 

@@ -11,9 +11,12 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+arrow-array = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
 bincode.workspace = true
 bytemuck = { workspace = true, features = ["must_cast"]}
 byteorder.workspace = true
+crc32fast = { workspace = true, optional = true }
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
 hashbrown.workspace = true
 num-traits.workspace = true
@@ -34,6 +37,7 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 prost = "0.14.1"
 futures-util = { workspace = true, features = ["async-await"] }
+parquet = { workspace = true, optional = true }
 vfs = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -57,6 +61,13 @@ targets = [
 
 [features]
 default = []
+parquet = [
+    "dep:arrow-array",
+    "dep:arrow-schema",
+    "dep:crc32fast",
+    "dep:parquet",
+    "diskann-quantization/parquet",
+]
 testing = ["dep:tempfile"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 virtual_storage = ["dep:vfs"]

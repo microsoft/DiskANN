@@ -375,6 +375,66 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
         }
         Ok(())
     }
+
+    /// Streams the in-memory graph to a logical Parquet adjacency table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied layout is incompatible with this provider, an adjacency
+    /// list cannot be read, or the writer fails.
+    #[cfg(feature = "parquet")]
+    pub async fn write_graph_parquet<W>(
+        &self,
+        writer: W,
+        layout: &crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetLayout,
+    ) -> Result<
+        crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetWriteSummary,
+        crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetError,
+    >
+    where
+        W: parquet::arrow::async_writer::AsyncFileWriter + Send + 'static,
+    {
+        if layout.start_point_ids != self.start_points.range().collect::<Vec<_>>() {
+            return Err(
+                crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetError::Invalid(
+                    "layout start-point IDs do not match graph provider",
+                ),
+            );
+        }
+        self.neighbor_provider
+            .write_graph_parquet(writer, layout)
+            .await
+    }
+
+    /// Imports a logical Parquet adjacency table into this preallocated provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an incompatible schema or layout, malformed adjacency rows,
+    /// checksum failure, or reader failure.
+    #[cfg(feature = "parquet")]
+    pub async fn read_graph_parquet<R>(
+        &self,
+        reader: R,
+        expected: &crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetLayout,
+    ) -> Result<
+        (),
+        crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetError,
+    >
+    where
+        R: parquet::arrow::async_reader::AsyncFileReader + Unpin + Send + 'static,
+    {
+        if expected.start_point_ids != self.start_points.range().collect::<Vec<_>>() {
+            return Err(
+                crate::model::graph::provider::async_::simple_neighbor_provider::GraphParquetError::Invalid(
+                    "layout start-point IDs do not match graph provider",
+                ),
+            );
+        }
+        self.neighbor_provider
+            .read_graph_parquet(reader, expected)
+            .await
+    }
 }
 
 #[derive(Clone, Default)]
