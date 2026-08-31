@@ -209,7 +209,7 @@ impl Range {
 /// set lower than `starting_l`.
 ///
 /// `starting_l`: the L_search parameter for the initial search phase. Must be greater than zero.
-/// See also [`Knn::search_l`]
+/// See also [`Knn::l_value`]
 ///
 /// `beam_width`: the beam width for parallel graph exploration. If not specified, defaults
 ///  to 1. Must be greater than zero if specified.
@@ -223,7 +223,7 @@ impl Range {
 /// Note that since inner product values are negated to convert to distances, the radius and
 /// inner radius values may be negative. The `inner_radius < outer_radius` constraint still
 /// applies.
-/// 
+///
 /// `initial_slack`: after the initial knn search phase, a decision is made on whether to continue
 ///  to the second round of search. This decision is based on whether the number of points found
 /// within the outer radius is greater than `starting_l * initial_slack`, so lower values of
