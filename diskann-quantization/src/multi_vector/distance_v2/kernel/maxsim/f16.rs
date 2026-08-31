@@ -80,7 +80,7 @@ where
     #[inline(never)]
     fn drive(&mut self) {
         let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
-            let on_b_panels = |b_panels: unpacked::View<'_, f16>| {
+            let on_b_panels = |b_panels: unpacked::View<'_, f16>, _| {
                 // Convert `f16` to `f32`.
                 let b_flat = unsafe { b_panels.as_std_slice(self.k) };
                 let b_converted = &mut self.b_converted[..b_flat.len()];

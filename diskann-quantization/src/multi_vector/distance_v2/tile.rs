@@ -30,7 +30,7 @@ pub fn example_maxsim_f32(
     assert_eq!(a.ncols(), b.ncols());
     assert_eq!(c.len(), a.padded_nrows());
 
-    let cols = NonZeroUsize::new(a.ncols()).unwrap();
+    let k = DimK::new(NonZeroUsize::new(a.ncols()).unwrap());
 
     let ablocks = NonZeroUsize::new(a.num_blocks()).unwrap();
     let brows = NonZeroUsize::new(b.nrows()).unwrap();
@@ -40,14 +40,10 @@ pub fn example_maxsim_f32(
     let mut driver = unsafe {
         kernel::maxsim::f16::PackedXUnpacked::<_, 16, 6>::new(
             diskann_wide::ARCH,
-            blocks::packed::View::<f32, 16>::new(
-                Slice::new(a.as_slice()),
-                ablocks,
-                Bound::new(cols.get()),
-            ),
-            blocks::unpacked::View::<f16>::new(Slice::new(b.as_slice()), brows, DimK::new(cols)),
+            blocks::packed::View::<f32, 16>::new(Slice::new(a.as_slice()), ablocks, k),
+            blocks::unpacked::View::<f16>::new(Slice::new(b.as_slice()), brows, k),
             MutSlice::new(c),
-            DimK::new(cols),
+            k,
             budget,
         )
     };

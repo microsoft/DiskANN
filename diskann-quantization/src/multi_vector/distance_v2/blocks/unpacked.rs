@@ -82,7 +82,7 @@ impl<'a, T> View<'a, T> {
     /// Self must have `k` columns.
     pub(crate) unsafe fn visit_sub_views<F>(&self, sub_extent: NonZeroUsize, k: DimK, mut f: F)
     where
-        F: FnMut(View<'_, T>),
+        F: FnMut(View<'_, T>, usize),
     {
         let stride = self.stride(k);
 
@@ -103,7 +103,7 @@ impl<'a, T> View<'a, T> {
                 )
             };
 
-            f(sub);
+            f(sub, i);
 
             i += this_extent.get();
         }
@@ -149,22 +149,29 @@ impl<'a, T> View<'a, T> {
             None
         }
     }
+}
 
-    // NOTE: This function is not safe outside of a `cfg(test)` context.
-    #[cfg(test)]
-    fn get(&self, band: usize, offset: usize) -> &T {
-        assert!(self.extent().get() > band);
-        bounds::check_gt!(self.k(), offset);
+#[cfg(test)]
+impl<'a, T> View<'a, T> {
+    fn checked_as_std_slice(&self) -> &[T] {
+        let k = DimK::from_bound(self.k());
+        unsafe { self.as_std_slice(k) }
+    }
 
-        let stride = self.stride(DimK::new(NonZeroUsize::new(self.k().value()).unwrap()));
+    fn checked_visit_sub_views<F>(&self, sub_extent: NonZeroUsize, f: F)
+    where
+        F: FnMut(View<'_, T>, usize),
+    {
+        let k = DimK::from_bound(self.k());
+        unsafe { self.visit_sub_views(sub_extent, k, f) }
+    }
 
-        // SAFETY: All operations are safe under `cfg(test)`.
-        unsafe {
-            self.ptr
-                .add(stride * band + Elements::new(offset))
-                .truncate(Elements::new(1))
-                .as_ref()
-        }
+    fn checked_visit_panels<const EXTENT: usize>(
+        &self,
+        f: impl FnMut(Panel<'_, T, EXTENT>, usize),
+    ) -> Option<Remainder<'_, T, EXTENT>> {
+        let k = DimK::from_bound(self.k());
+        unsafe { self.visit_panels(k, f) }
     }
 }
 
@@ -198,6 +205,14 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
     pub(crate) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k(), k);
         Elements::new(k.value().get())
+    }
+}
+
+#[cfg(test)]
+impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
+    fn checked_as_std_slice(self) -> &'a [T] {
+        let k = DimK::from_bound(self.k());
+        unsafe { self.as_std_slice(k) }
     }
 }
 
@@ -248,44 +263,44 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use diskann_utils::views::{Init, Matrix};
 
-    use diskann_utils::views::Matrix;
-    use rand::{SeedableRng, rngs::StdRng};
-
-    use crate::multi_vector::distance_v2::test_util;
+    use crate::multi_vector::distance_v2::test_util::{assert_contains, panic_message_for};
 
     #[test]
-    fn test_view() {
-        let mut rng = StdRng::seed_from_u64(0x32a99c1210);
+    fn test_visit_panels() {
         for nrows in (1..100).step_by(7) {
             for ncols in (1..20).step_by(3) {
-                test_view_inner(
+                test_visit_panels_inner(
                     NonZeroUsize::new(nrows).unwrap(),
                     NonZeroUsize::new(ncols).unwrap(),
-                    &mut rng,
                     format_args!("ncols = {ncols}, nrows = {nrows}"),
                 )
             }
         }
     }
 
-    fn test_view_inner(
+    fn test_visit_panels_inner(
         nrows: NonZeroUsize,
         ncols: NonZeroUsize,
-        rng: &mut impl rand::Rng,
         ctx: std::fmt::Arguments<'_>,
     ) {
-        let k = DimK::new(ncols);
-
-        let mut mat = Matrix::new(0.0f32, nrows.get(), ncols.get());
-        test_util::TestDistr::fill(mat.as_mut_slice(), rng);
+        let mat = {
+            let mut i = 0.0;
+            let init = Init(|| {
+                let v = i;
+                i += 1.0;
+                v
+            });
+            Matrix::new(init, nrows.get(), ncols.get())
+        };
 
         let view = View::from_view(mat.as_view()).unwrap();
         assert_eq!(view.extent().get(), mat.nrows());
         assert_eq!(view.k().value(), mat.ncols());
 
         assert_eq!(
-            unsafe { view.as_std_slice(k) },
+            view.checked_as_std_slice(),
             mat.as_slice(),
             "underlying slices must be unchanged -- {ctx}",
         );
@@ -302,28 +317,23 @@ mod test {
         reference: MatrixView<'_, f32>,
         ctx: std::fmt::Arguments<'_>,
     ) {
-        let dimk = DimK::new(NonZeroUsize::new(dut.k().value()).unwrap());
         let mut count = 0;
         let ncols = reference.ncols();
 
         let visitor = |panel: Panel<'_, f32, N>, start| {
             assert_eq!(start, count, "{ctx}");
-            let s = unsafe { panel.as_std_slice(dimk) };
+            let s = panel.checked_as_std_slice();
             assert_eq!(s, &reference.as_slice()[ncols * start..ncols * (start + N)],);
 
             count += N;
         };
 
-        let remainder = unsafe { dut.visit_panels::<N>(dimk, visitor) };
+        let remainder = dut.checked_visit_panels::<N>(visitor);
 
         match remainder {
             None => assert!(dut.extent().get().is_multiple_of(N), "{ctx}"),
             Some(remainder) => {
-                assert_eq!(
-                    remainder.extent().get(),
-                    dut.extent().get() % N,
-                    "{ctx}"
-                );
+                assert_eq!(remainder.extent().get(), dut.extent().get() % N, "{ctx}");
 
                 let start = remainder.start();
                 assert_eq!(start, count, "{ctx}");
@@ -337,7 +347,7 @@ mod test {
                     ($N:literal) => {
                         if let Some(panel) = remainder.try_as_panel::<$N>() {
                             assert_eq!(
-                                unsafe { panel.as_std_slice(dimk) },
+                                panel.checked_as_std_slice(),
                                 expected,
                                 "-- N = {}, {ctx}",
                                 $N,
@@ -345,7 +355,7 @@ mod test {
                             assert!(!passed, "-- N = {}, {ctx}", $N);
                             passed = true;
                         }
-                    }
+                    };
                 }
 
                 check!(1);
@@ -358,5 +368,149 @@ mod test {
                 assert!(passed, "{ctx}");
             }
         }
+    }
+
+    #[test]
+    fn test_visit_sub_views() {
+        for nrows in (1..100).step_by(7) {
+            for ncols in (1..20).step_by(3) {
+                test_sub_views_inner(
+                    NonZeroUsize::new(nrows).unwrap(),
+                    NonZeroUsize::new(ncols).unwrap(),
+                    format_args!("ncols = {ncols}, nrows = {nrows}"),
+                )
+            }
+        }
+    }
+
+    fn test_sub_views_inner(
+        nrows: NonZeroUsize,
+        ncols: NonZeroUsize,
+        ctx: std::fmt::Arguments<'_>,
+    ) {
+        let mat = {
+            let mut i = 0.0;
+            let init = Init(|| {
+                let v = i;
+                i += 1.0;
+                v
+            });
+            Matrix::new(init, nrows.get(), ncols.get())
+        };
+
+        let view = View::from_view(mat.as_view()).unwrap();
+        assert_eq!(view.extent().get(), mat.nrows());
+        assert_eq!(view.k().value(), mat.ncols());
+
+        assert_eq!(
+            view.checked_as_std_slice(),
+            mat.as_slice(),
+            "underlying slices must be unchanged -- {ctx}",
+        );
+
+        let sub_extents: Vec<NonZeroUsize> = [
+            1,
+            nrows.get().div_ceil(10) + 1,
+            nrows.get() / 2,
+            nrows.get() - 1,
+            nrows.get(),
+            nrows.get() + 1,
+        ]
+        .map(NonZeroUsize::new)
+        .into_iter()
+        .flatten()
+        .collect();
+
+        for sub_extent in sub_extents.into_iter() {
+            let mut count = 0;
+            let nc = ncols.get();
+
+            view.checked_visit_sub_views(sub_extent, |v, start| {
+                assert_eq!(start, count, "{ctx}");
+                assert!(v.extent() <= sub_extent, "{ctx}");
+                assert_eq!(
+                    v.checked_as_std_slice(),
+                    &mat.as_slice()[start * nc..(start + v.extent().get()) * nc],
+                );
+
+                count += v.extent().get();
+            });
+
+            assert_eq!(count, nrows.get());
+        }
+    }
+
+    #[test]
+    fn test_rejects_inconsistent_lengths() {
+        let data = [0u8; 7];
+        let extent = NonZeroUsize::new(2).unwrap();
+        let k = DimK::new(NonZeroUsize::new(3).unwrap());
+
+        for len in [5, 7] {
+            let message = panic_message_for(|| {
+                // SAFETY: The deliberate length mismatch is caught while bounds are retained.
+                let _ = unsafe { View::new(Slice::new(&data[..len]), extent, k) };
+            });
+            assert_contains!(message, "equal to 6");
+
+            let message = panic_message_for(|| {
+                // SAFETY: The deliberate length mismatch is caught while bounds are retained.
+                let _ =
+                    unsafe { Panel::<_, 2>::new_inner(Slice::new(&data[..len]), Bound::new(3)) };
+            });
+            assert_contains!(message, "equal to 6");
+
+            let message = panic_message_for(|| {
+                // SAFETY: The deliberate length mismatch is caught while bounds are retained.
+                let _ = unsafe {
+                    Remainder::<_, 3>::new_inner(Slice::new(&data[..len]), 0, extent, Bound::new(3))
+                };
+            });
+            assert_contains!(message, "equal to 6");
+        }
+    }
+
+    #[test]
+    fn test_rejects_inconsistent_k() {
+        let data = [0u8; 6];
+        let actual_k = DimK::new(NonZeroUsize::new(3).unwrap());
+        let wrong_k = DimK::new(NonZeroUsize::new(2).unwrap());
+
+        // SAFETY: `data` contains two bands of three elements.
+        let view = unsafe { View::new(Slice::new(&data), NonZeroUsize::new(2).unwrap(), actual_k) };
+
+        assert_k_mismatch(|| {
+            let _ = view.stride(wrong_k);
+        });
+        assert_k_mismatch(|| {
+            // SAFETY: The deliberate K mismatch is caught before materialization.
+            let _ = unsafe { view.as_std_slice(wrong_k) };
+        });
+        assert_k_mismatch(|| {
+            // SAFETY: The deliberate K mismatch is caught before pointer arithmetic.
+            unsafe {
+                view.visit_sub_views(NonZeroUsize::new(1).unwrap(), wrong_k, |_, _| {});
+            }
+        });
+        assert_k_mismatch(|| {
+            // SAFETY: The deliberate K mismatch is caught before pointer arithmetic.
+            let _ = unsafe { view.visit_panels::<2>(wrong_k, |_, _| {}) };
+        });
+
+        // SAFETY: `data` contains exactly two bands of three elements.
+        let panel = unsafe { Panel::<_, 2>::new_inner(Slice::new(&data), Bound::new(3)) };
+
+        assert_k_mismatch(|| {
+            let _ = panel.stride(wrong_k);
+        });
+        assert_k_mismatch(|| {
+            // SAFETY: The deliberate K mismatch is caught before materialization.
+            let _ = unsafe { panel.as_std_slice(wrong_k) };
+        });
+    }
+
+    fn assert_k_mismatch(f: impl FnOnce() + std::panic::UnwindSafe) {
+        let message = panic_message_for(f);
+        assert_contains!(message, "equal to 2");
     }
 }

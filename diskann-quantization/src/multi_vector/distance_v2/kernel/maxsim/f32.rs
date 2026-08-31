@@ -92,7 +92,7 @@ where
     #[inline(never)]
     fn drive(&mut self) {
         let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
-            let on_b_panels = |b_panels: unpacked::View<'_, f32>| {
+            let on_b_panels = |b_panels: unpacked::View<'_, f32>, _| {
                 let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
                     let mut c = unsafe {
                         self.c
@@ -230,11 +230,8 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
         let ai = unsafe { wide.load(ap.add(astride * i).truncate(Elements::new(MR))) };
 
         for j in 0..NR {
-            let bj = wide.splat(*unsafe {
-                bp.add(bstride * j + Elements::new(i))
-                    .truncate(Elements::new(1))
-                    .as_ref()
-            });
+            let bj =
+                wide.splat(*unsafe { bp.add(bstride * j + Elements::new(i)).as_unit().as_ref() });
 
             acc[j] = W::mul_add_splat(ai, bj, acc[j]);
         }

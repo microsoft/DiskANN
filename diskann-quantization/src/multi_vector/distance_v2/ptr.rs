@@ -123,29 +123,29 @@ impl<T> Clone for Slice<'_, T> {
 
 impl<T> Copy for Slice<'_, T> {}
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(test)]
 impl<'a, T> Slice<'a, T> {
-    pub(crate) fn checked_as_std_slice(self, len: usize) -> &'a [T] {
+    fn checked_as_std_slice(self, len: usize) -> &'a [T] {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.as_std_slice(len) }
     }
 
-    pub(crate) fn checked_as_ref(self) -> &'a T {
+    fn checked_as_ref(self) -> &'a T {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.as_ref() }
     }
 
-    pub(crate) fn checked_add(self, offset: Elements<T>) -> Slice<'a, T> {
+    fn checked_add(self, offset: Elements<T>) -> Slice<'a, T> {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.add(offset) }
     }
 
-    pub(crate) fn checked_truncate(self, length: Elements<T>) -> Slice<'a, T> {
+    fn checked_truncate(self, length: Elements<T>) -> Slice<'a, T> {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.truncate(length) }
     }
 
-    pub(crate) fn checked_as_unit(self) -> Slice<'a, T> {
+    fn checked_as_unit(self) -> Slice<'a, T> {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.as_unit() }
     }
@@ -156,7 +156,7 @@ impl<'a, T> Slice<'a, T> {
 //----------//
 
 /// An mutable slice with length tracking when debug-assertions are enabled.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(super) struct MutSlice<'a, T> {
     ptr: NonNull<T>,
     len: Bound,
@@ -188,7 +188,7 @@ impl<'a, T> MutSlice<'a, T> {
     ///
     /// This function has the same requirements as [`std::slice::from_raw_parts_mut`] with
     /// the addition that `len` **must** be the true length of `self`.
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(test)]
     unsafe fn as_std_mut_slice(&mut self, len: usize) -> &mut [T] {
         bounds::check_eq!(self.len(), len);
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), len) }
@@ -229,19 +229,19 @@ impl<'a, T> MutSlice<'a, T> {
     }
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(test)]
 impl<'a, T> MutSlice<'a, T> {
-    pub(crate) fn checked_as_std_mut_slice(&mut self, len: usize) -> &mut [T] {
+    fn checked_as_std_mut_slice(&mut self, len: usize) -> &mut [T] {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.as_std_mut_slice(len) }
     }
 
-    pub(crate) fn checked_subslice(&mut self, start: usize, length: Bound) -> MutSlice<'_, T> {
+    fn checked_subslice(&mut self, start: usize, length: Bound) -> MutSlice<'_, T> {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.subslice(start, length) }
     }
 
-    pub(crate) fn checked_as_array<const N: usize>(&mut self) -> &mut [T; N] {
+    fn checked_as_array<const N: usize>(&mut self) -> &mut [T; N] {
         // SAFETY: This operation is check under `test/debug_assertions`.
         unsafe { self.as_array::<N>() }
     }
@@ -295,17 +295,32 @@ mod tests {
             let reconstructed = s.checked_as_std_slice(base.len());
             assert_eq!(reconstructed, base);
 
-            if base.len() == 0 {
+            for invalid_len in [base.len().checked_sub(1), base.len().checked_add(1)]
+                .into_iter()
+                .flatten()
+            {
+                let _ = panic_message_for(|| {
+                    let _ = s.checked_as_std_slice(invalid_len);
+                });
+            }
+
+            if base.len() != 1 {
                 let message = panic_message_for(|| {
-                    // SAFETY: This is not safe when `len == 0`, but in debug builds we
-                    // expect the check to fire.
-                    let _ = unsafe { s.as_ref() };
+                    let _ = s.checked_as_ref();
                 });
 
                 assert_contains!(message, "slice must have a length of exactly one");
+            }
+
+            if base.is_empty() {
+                let message = panic_message_for(|| {
+                    let _ = s.checked_as_unit();
+                });
+
+                assert_contains!(message, "truncation would make the slice longer");
             } else {
                 for i in 0..base.len() {
-                    let offset =  s.checked_add(Elements::new(i));
+                    let offset = s.checked_add(Elements::new(i));
                     assert_eq!(offset.len().value(), base.len() - i);
                     let v = *offset.checked_as_unit().checked_as_ref();
                     assert_eq!(v, base[i]);
@@ -330,7 +345,7 @@ mod tests {
             }
 
             // Truncate
-            for i in 0..base.len() {
+            for i in 0..=base.len() {
                 let truncated = s.checked_truncate(Elements::new(i));
 
                 assert_eq!(truncated.len().value(), i);
@@ -423,13 +438,62 @@ mod tests {
         let v = s.checked_as_array::<2>();
         assert_eq!(*v, [1, 2]);
 
+        let mut mutated = [1, 2];
+        let mut s = MutSlice::new(&mut mutated);
+        s.checked_as_array::<2>()[1] = 3;
+        assert_eq!(mutated, [1, 3]);
+
         let message = panic_message_for(|| {
             let mut copy = parent;
             let mut s = MutSlice::new(&mut copy);
-            // SAFETY: This is checked under tests.
-            let _ = unsafe { s.as_array::<4>() };
+            let _ = s.checked_as_array::<1>();
+        });
+
+        assert_contains!(message, "invalid materialization of size 1");
+
+        let message = panic_message_for(|| {
+            let mut copy = parent;
+            let mut s = MutSlice::new(&mut copy);
+            let _ = s.checked_as_array::<4>();
         });
 
         assert_contains!(message, "invalid materialization of size 4");
+    }
+
+    #[test]
+    fn test_mut_slice_as_std_mut_slice_rejects_invalid_lengths() {
+        for invalid_len in [1, 3] {
+            let _ = panic_message_for(|| {
+                let mut base = [1, 2];
+                let mut s = MutSlice::new(&mut base);
+                let _ = s.checked_as_std_mut_slice(invalid_len);
+            });
+        }
+    }
+
+    #[test]
+    fn test_zero_sized_elements() {
+        let base = [(); 4];
+        let ptr = base.as_ptr();
+        let s = Slice::new(&base);
+
+        for offset in 0..=base.len() {
+            let remaining = s.checked_add(Elements::new(offset));
+            assert_eq!(remaining.as_ptr(), ptr);
+            assert_eq!(remaining.len().value(), base.len() - offset);
+            assert_eq!(
+                remaining.checked_as_std_slice(base.len() - offset).len(),
+                base.len() - offset
+            );
+        }
+
+        let mut base = [(); 4];
+        let ptr = base.as_mut_ptr();
+        let mut s = MutSlice::new(&mut base);
+        let mut sub = s.checked_subslice(2, Bound::new(2));
+
+        assert_eq!(sub.as_mut_ptr(), ptr);
+        assert_eq!(sub.len().value(), 2);
+        let _ = sub.checked_as_array::<2>();
     }
 }
