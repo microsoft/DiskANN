@@ -21,71 +21,11 @@ use crate::{
             Knn, Search, filtered_range_search::FilteredRange, record::NoopSearchRecord,
             scratch::SearchScratch,
         },
-        search_output_buffer::{BufferState, SearchOutputBuffer},
+        search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::DataProvider,
 };
-
-/// Limits the number of additional results written to an output buffer.
-pub(super) struct LimitedOutputBuffer<'a, B: ?Sized> {
-    inner: &'a mut B,
-    remaining: usize,
-}
-
-impl<'a, B: ?Sized> LimitedOutputBuffer<'a, B> {
-    pub(super) fn new(inner: &'a mut B, limit: usize) -> Self {
-        Self {
-            inner,
-            remaining: limit,
-        }
-    }
-}
-
-impl<I, D, B> SearchOutputBuffer<I, D> for LimitedOutputBuffer<'_, B>
-where
-    B: SearchOutputBuffer<I, D> + ?Sized,
-{
-    fn size_hint(&self) -> Option<usize> {
-        Some(
-            self.inner
-                .size_hint()
-                .map_or(self.remaining, |inner| inner.min(self.remaining)),
-        )
-    }
-
-    fn push(&mut self, neighbor: Neighbor<I, D>) -> BufferState {
-        if self.remaining == 0 {
-            return BufferState::Full;
-        }
-
-        let previous_len = self.inner.current_len();
-        let state = self.inner.push(neighbor);
-        if self.inner.current_len() > previous_len {
-            self.remaining -= 1;
-        }
-
-        if self.remaining == 0 {
-            BufferState::Full
-        } else {
-            state
-        }
-    }
-
-    fn current_len(&self) -> usize {
-        self.inner.current_len()
-    }
-
-    fn extend<Itr>(&mut self, itr: Itr) -> usize
-    where
-        Itr: IntoIterator<Item = Neighbor<I, D>>,
-    {
-        let count = self.inner.extend(itr.into_iter().take(self.remaining));
-        debug_assert!(count <= self.remaining);
-        self.remaining = self.remaining.saturating_sub(count);
-        count
-    }
-}
 
 /// Error type for [`Range`] parameter validation.
 #[derive(Debug, Error)]
@@ -94,11 +34,13 @@ pub enum RangeSearchError {
     BeamWidthZero,
     #[error("l_value cannot be zero")]
     LZero,
-    #[error("initial_search_slack must be between 0 and 1.0")]
+    #[error("initial_search_slack must be finite and between 0 and 1.0")]
     StartingListSlackValueError,
-    #[error("range_search_slack must be greater than or equal to 1.0")]
+    #[error("range_search_slack must be finite and greater than or equal to 1.0")]
     RangeSearchSlackValueError,
-    #[error("inner_radius must be less than or equal to radius")]
+    #[error("radius must be finite")]
+    RadiusValueError,
+    #[error("inner_radius must be finite and less than or equal to radius")]
     InnerRadiusValueError,
     #[error("max_returned must be greater than or equal to starting_l")]
     MaxReturnedLessThanInitialL,
@@ -171,14 +113,17 @@ impl Range {
         {
             return Err(RangeSearchError::MaxReturnedLessThanInitialL);
         }
-        if !(0.0..=1.0).contains(&initial_slack) {
+        if !radius.is_finite() {
+            return Err(RangeSearchError::RadiusValueError);
+        }
+        if !initial_slack.is_finite() || !(0.0..=1.0).contains(&initial_slack) {
             return Err(RangeSearchError::StartingListSlackValueError);
         }
-        if range_slack < 1.0 {
+        if !range_slack.is_finite() || range_slack < 1.0 {
             return Err(RangeSearchError::RangeSearchSlackValueError);
         }
         if let Some(inner) = inner_radius
-            && inner > radius
+            && (!inner.is_finite() || inner > radius)
         {
             return Err(RangeSearchError::InnerRadiusValueError);
         }
@@ -259,11 +204,12 @@ impl Range {
 ///
 /// `max_returned`: If specified, the search will stop and return results once this number
 /// of points has been found within both the inner and outer radii. Extra candidate slack is
-/// reserved for start points, then the post-processed output is capped at this value after
-/// start points are removed. Since the initial search phase does not respect `max_returned`,
-/// this parameter may not be set lower than `starting_l`.
+/// reserved for start points, so slightly more than this number of points may be returned.
+/// Since the initial search phase does not respect `max_returned`, this parameter may not be
+/// set lower than `starting_l`.
 ///
 /// `starting_l`: the L_search parameter for the initial search phase. Must be greater than zero.
+/// See also [`Knn::search_l`]
 ///
 /// `beam_width`: the beam width for parallel graph exploration. If not specified, defaults
 ///  to 1. Must be greater than zero if specified.
@@ -274,6 +220,10 @@ impl Range {
 /// `inner_radius`: the inner radius for the range search. Points closer than this distance from the
 /// query are excluded from the results. Must be less than or equal to `radius` if specified.
 ///
+/// Note that since inner product values are negated to convert to distances, the radius and
+/// inner radius values may be negative. The `inner_radius < outer_radius` constraint still
+/// applies.
+/// 
 /// `initial_slack`: after the initial knn search phase, a decision is made on whether to continue
 ///  to the second round of search. This decision is based on whether the number of points found
 /// within the outer radius is greater than `starting_l * initial_slack`, so lower values of
@@ -283,6 +233,8 @@ impl Range {
 /// `range_slack`: during the second round of search, points that are within `radius * range_slack`
 /// are expanded to search for candidates within the range, so greater values of `range_slack` will
 /// mean more expansions. Must be greater than or equal to 1.0.
+///
+/// All float values must be finite.
 #[derive(Debug, Clone, Copy)]
 pub struct RangeBuilder {
     max_returned: Option<usize>,
@@ -433,10 +385,8 @@ where
                 initial_stats
             };
 
-            let mut limited_output =
-                LimitedOutputBuffer::new(output, self.max_returned().unwrap_or(usize::MAX));
             let result_count = processor
-                .post_process(&mut accessor, query, in_range.iter(), &mut limited_output)
+                .post_process(&mut accessor, query, in_range.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -565,8 +515,8 @@ where
     while !range_frontier.is_empty() && !in_range.is_full() {
         scratch.beam_nodes.clear();
 
-        // In this loop we are going to find the beam_width number of remaining nodes within the radius
-        // Each of these nodes will be a frontier node.
+        // Find up to beam_width remaining nodes within the radius. Each becomes a
+        // frontier node.
         while !range_frontier.is_empty() && scratch.beam_nodes.len() < beam_width {
             let next = range_frontier.pop_front();
             if let Some(next_node) = next {
@@ -612,99 +562,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::IdDistance;
 
     fn neighbor(id: u32, distance: f32) -> Neighbor<u32> {
         Neighbor::new(id, distance)
-    }
-
-    #[test]
-    fn limited_output_buffer_applies_limit_after_filtering() {
-        let candidates = [
-            neighbor(0, 0.0),
-            neighbor(1, 0.1),
-            neighbor(2, 0.2),
-            neighbor(3, 0.3),
-        ];
-        let mut output = Vec::new();
-        let mut limited = LimitedOutputBuffer::new(&mut output, 2);
-
-        let written = limited.extend(
-            candidates
-                .into_iter()
-                .filter(|candidate| *candidate.id() != 0),
-        );
-
-        assert_eq!(written, 2);
-        assert_eq!(limited.current_len(), 2);
-        assert_eq!(limited.size_hint(), Some(0));
-        assert_eq!(
-            output
-                .into_iter()
-                .map(Neighbor::as_tuple)
-                .collect::<Vec<_>>(),
-            [(1, 0.1), (2, 0.2)]
-        );
-    }
-
-    #[test]
-    fn limited_output_buffer_push_reports_full_at_limit() {
-        let mut output = Vec::new();
-        let mut limited = LimitedOutputBuffer::new(&mut output, 2);
-
-        assert!(limited.push(neighbor(1, 0.1)).is_available());
-        assert!(limited.push(neighbor(2, 0.2)).is_full());
-        assert!(limited.push(neighbor(3, 0.3)).is_full());
-        assert_eq!(limited.size_hint(), Some(0));
-        assert_eq!(
-            output
-                .into_iter()
-                .map(Neighbor::as_tuple)
-                .collect::<Vec<_>>(),
-            [(1, 0.1), (2, 0.2)]
-        );
-    }
-
-    #[test]
-    fn limited_output_buffer_zero_limit_writes_nothing() {
-        let mut output = Vec::new();
-        let mut limited = LimitedOutputBuffer::new(&mut output, 0);
-
-        assert!(limited.push(neighbor(1, 0.1)).is_full());
-        assert_eq!(limited.extend([neighbor(2, 0.2)]), 0);
-        assert_eq!(limited.size_hint(), Some(0));
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn limited_output_buffer_respects_smaller_inner_capacity() {
-        let mut ids = [0; 1];
-        let mut distances = [0.0; 1];
-        let mut output = IdDistance::new(&mut ids, &mut distances);
-        let mut limited = LimitedOutputBuffer::new(&mut output, 3);
-
-        assert!(limited.push(neighbor(1, 0.1)).is_full());
-        assert!(limited.push(neighbor(2, 0.2)).is_full());
-        assert_eq!(limited.current_len(), 1);
-        assert_eq!(limited.size_hint(), Some(0));
-        assert_eq!(ids, [1]);
-        assert_eq!(distances, [0.1]);
-    }
-
-    #[test]
-    fn limited_output_buffer_limit_counts_only_additional_results() {
-        let mut output = vec![neighbor(0, 0.0)];
-        let mut limited = LimitedOutputBuffer::new(&mut output, 2);
-
-        assert_eq!(limited.extend([neighbor(1, 0.1), neighbor(2, 0.2)]), 2);
-        assert_eq!(limited.current_len(), 3);
-        assert_eq!(
-            output
-                .into_iter()
-                .map(Neighbor::as_tuple)
-                .collect::<Vec<_>>(),
-            [(0, 0.0), (1, 0.1), (2, 0.2)]
-        );
     }
 
     #[test]
@@ -823,6 +683,28 @@ mod tests {
             .build()
             .unwrap_err();
         assert!(matches!(err, RangeSearchError::BeamWidthZero));
+    }
+
+    #[test]
+    fn range_builder_rejects_non_finite_float_values() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                Range::builder(100, value).build(),
+                Err(RangeSearchError::RadiusValueError)
+            ));
+            assert!(matches!(
+                Range::builder(100, 0.5).inner_radius(Some(value)).build(),
+                Err(RangeSearchError::InnerRadiusValueError)
+            ));
+            assert!(matches!(
+                Range::builder(100, 0.5).initial_slack(value).build(),
+                Err(RangeSearchError::StartingListSlackValueError)
+            ));
+            assert!(matches!(
+                Range::builder(100, 0.5).range_slack(value).build(),
+                Err(RangeSearchError::RangeSearchSlackValueError)
+            ));
+        }
     }
 
     #[test]

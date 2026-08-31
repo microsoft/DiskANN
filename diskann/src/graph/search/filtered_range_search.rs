@@ -18,7 +18,7 @@ use crate::{
         search::inline_filter_search::{Ret, inline_filter_search_internal},
         search::{
             Range, RangeSearchError, Search,
-            range_search::{InRange, LimitedOutputBuffer, RangeBuilder},
+            range_search::{InRange, RangeBuilder},
             record::NoopSearchRecord,
             scratch::SearchScratch,
         },
@@ -231,15 +231,8 @@ where
                 }
             };
 
-            let mut limited_output =
-                LimitedOutputBuffer::new(output, self.max_returned().unwrap_or(usize::MAX));
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    matched_in_outer_range.iter(),
-                    &mut limited_output,
-                )
+                .post_process(&mut accessor, query, matched_in_outer_range.iter(), output)
                 .await
                 .into_ann_result()?;
 
