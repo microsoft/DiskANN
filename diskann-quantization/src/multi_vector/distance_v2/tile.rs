@@ -38,18 +38,14 @@ pub fn example_maxsim_f32(
     c.fill(f32::NEG_INFINITY);
 
     let mut driver = unsafe {
-        kernel::maxsim::f16::PackedXUnpacked::<_, 16, 4>::new(
+        kernel::maxsim::f16::PackedXUnpacked::<_, 16, 6>::new(
             diskann_wide::ARCH,
             blocks::packed::View::<f32, 16>::new(
                 Slice::new(a.as_slice()),
                 ablocks,
                 Bound::new(cols.get()),
             ),
-            blocks::unpacked::View::<f16>::new(
-                Slice::new(b.as_slice()),
-                brows,
-                Bound::new(b.ncols()),
-            ),
+            blocks::unpacked::View::<f16>::new(Slice::new(b.as_slice()), brows, DimK::new(cols)),
             MutSlice::new(c),
             DimK::new(cols),
             budget,

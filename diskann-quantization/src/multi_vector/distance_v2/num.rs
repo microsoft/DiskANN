@@ -21,6 +21,7 @@ impl<T> Clone for Elements<T> {
 impl<T> Copy for Elements<T> {}
 
 impl<T> Elements<T> {
+    /// Construct a new [`Elements`].
     pub(super) const fn new(elements: usize) -> Self {
         Self {
             elements,
@@ -28,10 +29,12 @@ impl<T> Elements<T> {
         }
     }
 
+    /// Return the value of `self`.
     pub(super) const fn value(self) -> usize {
         self.elements
     }
 
+    /// Return the number of bytes a slice containing `self` elements would occupy.
     pub(super) const fn bytes(self) -> usize {
         self.elements * std::mem::size_of::<T>()
     }
@@ -64,10 +67,6 @@ pub(super) fn value_or_one(x: usize) -> NonZeroUsize {
     NonZeroUsize::new(x).unwrap_or(NonZeroUsize::MIN)
 }
 
-//--------------//
-// Full Columns //
-//--------------//
-
 macro_rules! newtype {
     ($(#[$doc:meta])* $vis:vis $name:ident) => {
         $(#[$doc])*
@@ -90,4 +89,11 @@ macro_rules! newtype {
 newtype! {
     /// A strongly typed dimension for the `K` value when multiplying `MxK` by `KxN` matrics.
     pub(super) DimK
+}
+
+#[cfg(any(test, debug_assertions))]
+impl DimK {
+    pub(super) fn from_bound(bound: super::bounds::Bound) -> Self {
+        Self::new(NonZeroUsize::new(bound.value()).unwrap())
+    }
 }

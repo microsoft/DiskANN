@@ -29,20 +29,12 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         Self { ptr, blocks, k }
     }
 
-    pub(crate) const fn as_ptr(&self) -> Slice<'_, T> {
-        self.ptr
-    }
-
     pub(crate) const fn blocks(&self) -> NonZeroUsize {
         self.blocks
     }
 
     pub(crate) const fn k(&self) -> Bound {
         self.k
-    }
-
-    pub(crate) fn packing(&self) -> usize {
-        SZ
     }
 
     pub(crate) fn block_stride(&self, k: DimK) -> Elements<T> {
@@ -53,16 +45,6 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     pub(crate) fn extent(&self) -> NonZeroUsize {
         const { assert!(SZ != 0) };
         self.blocks.saturating_mul(NonZeroUsize::new(SZ).unwrap())
-    }
-
-    pub(crate) fn block(&self, k: DimK, block: usize) -> Panel<'a, T, SZ> {
-        debug_assert!(block < self.blocks.get());
-        let block_stride = self.block_stride(k);
-
-        Panel::new(
-            unsafe { self.ptr.add(block_stride * block).truncate(block_stride) },
-            self.k,
-        )
     }
 
     pub(crate) unsafe fn visit_sub_views<F>(&self, sub_blocks: NonZeroUsize, k: DimK, mut f: F)
@@ -79,9 +61,11 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
             let this_blocks = remaining.min(sub_blocks);
 
             let sub = Self::new(
-                self.ptr
-                    .add(stride * i)
-                    .truncate(stride * this_blocks.get()),
+                unsafe {
+                    self.ptr
+                        .add(stride * i)
+                        .truncate(stride * this_blocks.get())
+                },
                 this_blocks,
                 self.k(),
             );
@@ -126,14 +110,6 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
 
     pub(crate) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
-    }
-
-    pub(crate) const fn group(&self) -> usize {
-        SZ
-    }
-
-    pub(crate) const fn pack(&self) -> usize {
-        PACK
     }
 
     pub(crate) const fn k(&self) -> Bound {

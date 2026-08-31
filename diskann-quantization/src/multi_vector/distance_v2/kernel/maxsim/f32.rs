@@ -99,14 +99,10 @@ where
                             .subslice(MR * (a_block_base + a_block_offset), bounds::Bound::new(MR))
                     };
 
+                    let c = unsafe { c.as_array::<MR>() };
+
                     let mut kernel = unsafe {
-                        BlockWithRowMajor::new(
-                            self.kernel,
-                            a_panel,
-                            b_panels,
-                            unsafe { c.materialize::<MR>() },
-                            self.k,
-                        )
+                        BlockWithRowMajor::new(self.kernel, a_panel, b_panels, c, self.k)
                     };
 
                     kernel.panel_kernel();
@@ -166,7 +162,7 @@ macro_rules! stamp {
             fn panel_kernel(&mut self) {
                 let b_tail = unsafe { self.b.visit_panels::<$nb>(
                     self.k,
-                    |b| {
+                    |b, _| {
                         MicroKernel::kernel(
                             &self.kernel,
                             self.a,
@@ -178,16 +174,14 @@ macro_rules! stamp {
                 ) };
 
                 if let Some(b_tail) = b_tail {
-                    let ncols = b_tail.extent().get();
-
                     // Repeitition Pattern.
                     $(
                         const { assert!($ns < $nb) };
-                        if ncols == $ns {
+                        if let Some(b_panel) = b_tail.try_as_panel::<$ns>() {
                             MicroKernel::kernel(
                                 &self.kernel,
                                 self.a,
-                                unsafe { b_tail.materialize::<$ns>() },
+                                b_panel,
                                 self.k,
                                 self.c
                             );
@@ -236,7 +230,12 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
         let ai = unsafe { wide.load(ap.add(astride * i).truncate(Elements::new(MR))) };
 
         for j in 0..NR {
-            let bj = wide.splat(unsafe { bp.add(bstride * j + Elements::new(i)).read() });
+            let bj = wide.splat(*unsafe {
+                bp.add(bstride * j + Elements::new(i))
+                    .truncate(Elements::new(1))
+                    .as_ref()
+            });
+
             acc[j] = W::mul_add_splat(ai, bj, acc[j]);
         }
     }

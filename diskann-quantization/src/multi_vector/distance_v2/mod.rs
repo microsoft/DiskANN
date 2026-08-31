@@ -14,6 +14,9 @@ mod util;
 
 pub mod tile;
 
+#[cfg(test)]
+mod test_util;
+
 #[derive(Debug, Clone, Copy)]
 struct Cache {
     l1: NonZeroUsize,

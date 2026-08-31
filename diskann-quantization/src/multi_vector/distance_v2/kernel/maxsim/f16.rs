@@ -3,22 +3,16 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroUsize;
-
-use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 use half::f16;
-
-#[cfg(target_arch = "x86_64")]
-use diskann_wide::arch::x86_64::{V3, V4};
 
 use crate::multi_vector::distance_v2::{
     Cache,
     blocks::{packed, unpacked},
     bounds,
-    kernel::{Drive, MicroKernel, PanelKernel, maxsim::MaxSim},
-    num::{DimK, Elements, value_or_one},
+    kernel::{Drive, PanelKernel, maxsim::MaxSim},
+    num::{DimK, value_or_one},
     ptr::{MutSlice, Slice},
-    util::{Convert, Converter, Fold, Folder},
+    util::{Convert, Converter},
 };
 
 use super::f32::{BlockWithRowMajor, Params};
@@ -83,6 +77,7 @@ where
     Converter<A>: Convert<f32, f16>,
     for<'a> BlockWithRowMajor<'a, A, MR, NR>: PanelKernel,
 {
+    #[inline(never)]
     fn drive(&mut self) {
         let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
             let on_b_panels = |b_panels: unpacked::View<'_, f16>| {
@@ -92,11 +87,7 @@ where
                 Converter::new(self.kernel.arch()).convert(b_converted, b_flat);
 
                 let b_panels_converted = unsafe {
-                    unpacked::View::new(
-                        Slice::new(b_converted),
-                        b_panels.extent(),
-                        bounds::Bound::new(self.k.value().get()),
-                    )
+                    unpacked::View::new(Slice::new(b_converted), b_panels.extent(), self.k)
                 };
 
                 let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
@@ -105,14 +96,10 @@ where
                             .subslice(MR * (a_block_base + a_block_offset), bounds::Bound::new(MR))
                     };
 
+                    let c = unsafe { c.as_array::<MR>() };
+
                     let mut kernel = unsafe {
-                        BlockWithRowMajor::new(
-                            self.kernel,
-                            a_panel,
-                            b_panels_converted,
-                            unsafe { c.materialize::<MR>() },
-                            self.k,
-                        )
+                        BlockWithRowMajor::new(self.kernel, a_panel, b_panels_converted, c, self.k)
                     };
 
                     kernel.panel_kernel();

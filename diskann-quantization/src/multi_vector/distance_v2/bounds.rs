@@ -5,6 +5,27 @@
 
 pub(super) use inner::{Bound, Check};
 
+// /// A `usize` wrapper that only exists when debug-assertions are enabled.
+// ///
+// /// This is used to track internal dimensions that should be invariants when writing BLAS
+// /// style kernels when developing algorithms without paying for the storage or CPU cycles
+// /// in release builds.
+// #[derive(Debug, Clone, Copy)]
+// pub(super) struct Bound(inner::Bound);
+//
+// impl Bound {
+//     pub(super) const fn new(value: usize) -> Self {
+//         Self(inner::Bound::new(value))
+//     }
+//
+//     pub(super) fn from_fn<F>(f: F) -> Self
+//     where
+//         F: FnOnce() -> Self
+//     {
+//         Self(inner::Bound::from_fn(f))
+//     }
+// }
+
 pub(super) trait IntoBound {
     fn into_bound(self) -> Bound;
 }
@@ -83,7 +104,7 @@ macro_rules! check_ge {
 
 macro_rules! __assert {
     ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {
-        if cfg!(debug_assertions) {
+        if cfg!(any(test, debug_assertions)) {
             ($lhs).check(
                 $crate::multi_vector::distance_v2::bounds::Check::$op(),
                 $rhs,
@@ -92,7 +113,7 @@ macro_rules! __assert {
         }
     };
     ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        if cfg!(debug_assertions) {
+        if cfg!(any(test, debug_assertions)) {
             ($lhs).check(
                 $crate::multi_vector::distance_v2::bounds::Check::$op(),
                 $rhs,
@@ -115,7 +136,7 @@ pub(super) use check_le;
 #[expect(unused, reason = "this completes the API")]
 pub(super) use check_lt;
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions))]
 mod inner {
     use super::IntoBound;
 
@@ -233,6 +254,11 @@ mod inner {
         {
             f(self.0)
         }
+
+        #[cfg(any(test, debug_assertions))]
+        pub(in crate::multi_vector::distance_v2) fn value(self) -> usize {
+            self.0
+        }
     }
 
     impl std::ops::Mul for Bound {
@@ -260,7 +286,7 @@ mod inner {
     }
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(test, debug_assertions)))]
 mod inner {
     use super::IntoBound;
 
