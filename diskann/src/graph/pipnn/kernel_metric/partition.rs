@@ -25,9 +25,9 @@ pub(in super::super) trait PartitionMetric: Send + Sync + 'static {
         norms.clear();
     }
 
-    /// Prepare one point norm for reuse across SIMD leader groups.
+    /// Load point norms for one complete SIMD point group.
     #[inline(always)]
-    fn point_simd<A>(arch: A, _norms: PartitionNorms<'_>, _point: usize) -> A::Vector
+    fn point_group_simd<A>(arch: A, _norms: PartitionNorms<'_>, _first_point: usize) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
@@ -40,13 +40,13 @@ pub(in super::super) trait PartitionMetric: Send + Sync + 'static {
         0.0
     }
 
-    /// Compute rankings for one complete SIMD group.
-    fn rankings_simd<A>(
+    /// Compute rankings for one SIMD point group and one leader.
+    fn rankings_transposed_simd<A>(
         arch: A,
         norms: PartitionNorms<'_>,
         point_norms: A::Vector,
         dot_products: A::Vector,
-        first_leader: usize,
+        leader: usize,
     ) -> A::Vector
     where
         A: PiPNNSIMDSchema;
@@ -90,18 +90,20 @@ impl PartitionMetric for L2 {
     }
 
     #[inline(always)]
-    fn rankings_simd<A>(
+    fn rankings_transposed_simd<A>(
         arch: A,
         norms: PartitionNorms<'_>,
         _point_norms: A::Vector,
         dot_products: A::Vector,
-        first_leader: usize,
+        leader: usize,
     ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        let leader_norms = load_norms_simd::<A::Vector>(arch, norms.leader_norms, first_leader);
-        A::Vector::splat(arch, -2.0).mul_add_simd(dot_products, leader_norms)
+        A::Vector::splat(arch, -2.0).mul_add_simd(
+            dot_products,
+            A::Vector::splat(arch, norms.leader_norms[leader]),
+        )
     }
 
     #[inline(always)]
@@ -125,11 +127,11 @@ impl PartitionMetric for Cosine {
     }
 
     #[inline(always)]
-    fn point_simd<A>(arch: A, norms: PartitionNorms<'_>, point: usize) -> A::Vector
+    fn point_group_simd<A>(arch: A, norms: PartitionNorms<'_>, first_point: usize) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        A::Vector::splat(arch, norms.point_norms[point])
+        load_norms_simd::<A::Vector>(arch, norms.point_norms, first_point)
     }
 
     #[inline(always)]
@@ -138,18 +140,22 @@ impl PartitionMetric for Cosine {
     }
 
     #[inline(always)]
-    fn rankings_simd<A>(
+    fn rankings_transposed_simd<A>(
         arch: A,
         norms: PartitionNorms<'_>,
         point_norms: A::Vector,
         dot_products: A::Vector,
-        first_leader: usize,
+        leader: usize,
     ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
     {
-        let leader_norms = load_norms_simd::<A::Vector>(arch, norms.leader_norms, first_leader);
-        cosine_distance_simd(arch, dot_products, point_norms, leader_norms)
+        cosine_distance_simd(
+            arch,
+            dot_products,
+            point_norms,
+            A::Vector::splat(arch, norms.leader_norms[leader]),
+        )
     }
 
     #[inline(always)]
@@ -165,12 +171,12 @@ impl PartitionMetric for Cosine {
 
 impl PartitionMetric for CosineNormalized {
     #[inline(always)]
-    fn rankings_simd<A>(
+    fn rankings_transposed_simd<A>(
         arch: A,
         _norms: PartitionNorms<'_>,
         _point_norms: A::Vector,
         dot_products: A::Vector,
-        _first_leader: usize,
+        _leader: usize,
     ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
@@ -191,12 +197,12 @@ impl PartitionMetric for CosineNormalized {
 
 impl PartitionMetric for InnerProduct {
     #[inline(always)]
-    fn rankings_simd<A>(
+    fn rankings_transposed_simd<A>(
         arch: A,
         _norms: PartitionNorms<'_>,
         _point_norms: A::Vector,
         dot_products: A::Vector,
-        _first_leader: usize,
+        _leader: usize,
     ) -> A::Vector
     where
         A: PiPNNSIMDSchema,
@@ -240,13 +246,13 @@ mod tests {
                 point_norms,
                 leader_norms,
             };
-            let point_norm = M::point_simd(ARCH, norms, point);
             let mut output = [0.0; 16];
             for first in (0..16).step_by(TestVector::LANES) {
+                let point_norm = M::point_group_simd(ARCH, norms, point + first);
                 // SAFETY: each offset starts one complete SIMD group in both arrays.
                 unsafe {
                     let dots = TestVector::load_simd(ARCH, dot_products.as_ptr().add(first));
-                    M::rankings_simd(ARCH, norms, point_norm, dots, first_leader + first)
+                    M::rankings_transposed_simd(ARCH, norms, point_norm, dots, first_leader)
                         .store_simd(output.as_mut_ptr().add(first));
                 }
             }
@@ -447,7 +453,7 @@ mod tests {
             let dot_product = 4.0;
             let expected_ranking = 1.0 - dot_product / (point_norm * leader_norm);
             let actual_rankings = run_rankings_simd::<Cosine>(
-                &[point_norm],
+                &[point_norm; 16],
                 &[leader_norm; 16],
                 0,
                 [dot_product; 16],
