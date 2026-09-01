@@ -3,5 +3,5 @@
  * Licensed under the MIT license.
  */
 
-pub(super) mod packed;
-pub(super) mod unpacked;
+pub(crate) mod packed;
+pub(crate) mod unpacked;

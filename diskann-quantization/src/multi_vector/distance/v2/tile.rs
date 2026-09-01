@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 
 use half::f16;
 
-use crate::multi_vector::distance_v2::{
+use crate::multi_vector::distance::v2::{
     Cache, blocks,
     bounds::Bound,
     kernel,

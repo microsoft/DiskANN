@@ -10,7 +10,7 @@ use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
 
-use crate::multi_vector::distance_v2::{
+use crate::multi_vector::distance::v2::{
     Cache,
     blocks::{packed, unpacked},
     bounds,
@@ -41,7 +41,7 @@ impl Params {
         // Pick the number of B-panels to process to the `B` working set plus a single
         // panel of `A` fits in the L1 cache.
         let b_budget = cache.l1().get().saturating_sub(a_panel.value());
-        let b_cols_in_l1 = value_or_one(nr * (b_budget / (nr * b_col.value())));
+        let b_cols_in_l1 = value_or_one(nr * (b_budget.div_ceil(nr * b_col.value())));
 
         Self {
             a_panels_in_l2,
@@ -124,7 +124,6 @@ where
     A: Copy,
     for<'a> PanelKernel<'a, A, MR, NR>: kernel::PanelKernel,
 {
-    #[inline(never)]
     fn drive(&mut self) {
         // SAFETY: Class invariant - the length of `self.c` must be equal to `self.a.extent()`
         unsafe { self.c.as_std_mut_slice(self.a.extent().get()) }.fill(f32::NEG_INFINITY);
@@ -242,11 +241,14 @@ macro_rules! panel_kernel {
 }
 
 panel_kernel!(Scalar, 8, 2, [1]);
+panel_kernel!(Scalar, 8, 4, [1, 2, 3]);
+panel_kernel!(Scalar, 8, 6, [1, 2, 3, 4, 5]);
 
 panel_kernel!(V3, 16, 4, [1, 2, 3]);
 panel_kernel!(V3, 16, 6, [1, 2, 3, 4, 5]);
 
 panel_kernel!(V4, 16, 4, [1, 2, 3]);
+panel_kernel!(V4, 16, 6, [1, 2, 3, 4, 5]);
 
 //--------------//
 // Micro Kernel //
@@ -336,9 +338,9 @@ macro_rules! micro_kernel {
     }
 }
 
-micro_kernel!(Scalar, 8, { 2, 1 });
+micro_kernel!(Scalar, 8, { 6, 5, 4, 3, 2, 1 });
 micro_kernel!(V3, 16, { 6, 5, 4, 3, 2, 1 });
-micro_kernel!(V4, 16, { 4, 3, 2, 1 });
+micro_kernel!(V4, 16, { 6, 5, 4, 3, 2, 1 });
 
 trait ExtraWide<const ELEMENTS: usize>: Copy {
     type Wide: Copy;
@@ -356,10 +358,12 @@ impl ExtraWide<8> for MaxSim<Scalar> {
     type Wide = [f32x4<Scalar>; 2];
     type Splat = f32x4<Scalar>;
 
+    #[inline(always)]
     fn default(self) -> Self::Wide {
         [SIMDVector::default(self.0), SIMDVector::default(self.0)]
     }
 
+    #[inline(always)]
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 8);
 
@@ -371,18 +375,22 @@ impl ExtraWide<8> for MaxSim<Scalar> {
         }
     }
 
+    #[inline(always)]
     fn splat(self, value: f32) -> Self::Splat {
         SIMDVector::splat(self.0, value)
     }
 
+    #[inline(always)]
     fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
         core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
     }
 
+    #[inline(always)]
     fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
         core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
     }
 
+    #[inline(always)]
     fn max_into(self, lhs: Self::Wide, into: &mut [f32; 8]) {
         let previous = unsafe { self.load(Slice::new(into)) };
         let max = Self::max(lhs, previous);
@@ -399,10 +407,12 @@ impl ExtraWide<16> for MaxSim<V3> {
     type Wide = [f32x8<V3>; 2];
     type Splat = f32x8<V3>;
 
+    #[inline(always)]
     fn default(self) -> Self::Wide {
         [SIMDVector::default(self.0), SIMDVector::default(self.0)]
     }
 
+    #[inline(always)]
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 16);
         unsafe {
@@ -413,18 +423,22 @@ impl ExtraWide<16> for MaxSim<V3> {
         }
     }
 
+    #[inline(always)]
     fn splat(self, value: f32) -> Self::Splat {
         SIMDVector::splat(self.0, value)
     }
 
+    #[inline(always)]
     fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
         core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
     }
 
+    #[inline(always)]
     fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
         core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
     }
 
+    #[inline(always)]
     fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
         let previous = unsafe { self.load(Slice::new(into)) };
         let max = Self::max(lhs, previous);
@@ -441,28 +455,34 @@ impl ExtraWide<16> for MaxSim<V4> {
     type Wide = f32x16<V4>;
     type Splat = f32x16<V4>;
 
+    #[inline(always)]
     fn default(self) -> Self::Wide {
         SIMDVector::default(self.0)
     }
 
+    #[inline(always)]
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 16);
 
         unsafe { SIMDVector::load_simd(self.0, slice.as_ptr()) }
     }
 
+    #[inline(always)]
     fn splat(self, value: f32) -> Self::Splat {
         SIMDVector::splat(self.0, value)
     }
 
+    #[inline(always)]
     fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
         a.mul_add_simd(b, acc)
     }
 
+    #[inline(always)]
     fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
         lhs.max_simd(rhs)
     }
 
+    #[inline(always)]
     fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
         let previous = unsafe { self.load(Slice::new(into)) };
         let max = Self::max(lhs, previous);
@@ -483,7 +503,7 @@ mod tests {
 
     use rand::{SeedableRng, rngs::StdRng};
 
-    use crate::multi_vector::{BlockTransposed, distance_v2::kernel::maxsim};
+    use crate::multi_vector::{BlockTransposed, distance::v2::kernel::maxsim};
 
     /////////////////
     // MicroKernel //

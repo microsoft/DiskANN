@@ -5,7 +5,7 @@
 
 use half::f16;
 
-use crate::multi_vector::distance_v2::{
+use crate::multi_vector::distance::v2::{
     Cache,
     blocks::{packed, unpacked},
     bounds,
@@ -153,7 +153,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     use diskann_wide::arch::x86_64::{V3, V4};
 
-    use crate::multi_vector::{BlockTransposed, distance_v2::kernel::maxsim};
+    use crate::multi_vector::{BlockTransposed, distance::v2::kernel::maxsim};
 
     fn test_driver<A, const MR: usize, const NR: usize>(arch: A, rng: &mut impl rand::Rng)
     where

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::multi_vector::distance_v2::num::DimK;
+use crate::multi_vector::distance::v2::num::DimK;
 
 pub(crate) mod maxsim;
 

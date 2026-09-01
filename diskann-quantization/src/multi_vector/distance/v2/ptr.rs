@@ -16,7 +16,7 @@ use super::{
 
 /// An immutable slice with length tracking when debug-assertions are enabled.
 #[derive(Debug)]
-pub(super) struct Slice<'a, T> {
+pub(crate) struct Slice<'a, T> {
     ptr: NonNull<T>,
     len: Bound,
     _lifetime: PhantomData<&'a T>,
@@ -24,7 +24,7 @@ pub(super) struct Slice<'a, T> {
 
 impl<'a, T> Slice<'a, T> {
     /// Construct a new [`Slice`] with the same length and base pointer as `slice`.
-    pub(super) const fn new(slice: &'a [T]) -> Self {
+    pub(crate) const fn new(slice: &'a [T]) -> Self {
         unsafe { Self::from_raw(slice_to_nonnull(slice), Bound::new(slice.len())) }
     }
 
@@ -33,7 +33,7 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// This function has the same requirements as [`std::slice::from_raw_parts`].
-    pub(super) const unsafe fn from_raw(ptr: NonNull<T>, len: Bound) -> Self {
+    pub(crate) const unsafe fn from_raw(ptr: NonNull<T>, len: Bound) -> Self {
         Self {
             ptr,
             len,
@@ -42,16 +42,16 @@ impl<'a, T> Slice<'a, T> {
     }
 
     /// Return the base pointer for `self`.
-    pub(super) const fn as_ptr(&self) -> *const T {
+    pub(crate) const fn as_ptr(&self) -> *const T {
         self.as_nonnull().as_ptr().cast_const()
     }
 
     /// Return the base pointer for `self`.
-    pub(super) const fn as_nonnull(&self) -> NonNull<T> {
+    pub(crate) const fn as_nonnull(&self) -> NonNull<T> {
         self.ptr
     }
 
-    pub(super) unsafe fn as_std_slice(self, len: usize) -> &'a [T] {
+    pub(crate) unsafe fn as_std_slice(self, len: usize) -> &'a [T] {
         bounds::check_eq!(self.len, len);
         unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
     }
@@ -63,7 +63,7 @@ impl<'a, T> Slice<'a, T> {
     /// This function has the same safety reqauirements as [`std::ptr::as_ref_unchecked`].
     /// Additionally, this function will panic if the true length of `self` is not equal
     /// to 1.
-    pub(super) unsafe fn as_ref(self) -> &'a T {
+    pub(crate) unsafe fn as_ref(self) -> &'a T {
         bounds::check_eq!(self.len, 1, "slice must have a length of exactly one",);
 
         unsafe { self.ptr.as_ref() }
@@ -76,7 +76,7 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// This function has the same safety requirements as [`std::ptr::add`].
-    pub(super) unsafe fn add(self, offset: Elements<T>) -> Slice<'a, T> {
+    pub(crate) unsafe fn add(self, offset: Elements<T>) -> Slice<'a, T> {
         let offset = offset.value();
 
         // Debug check that there is room.
@@ -93,7 +93,7 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// `length` must be less than or equal to the length provenance of self.
-    pub(super) unsafe fn truncate(self, length: Elements<T>) -> Slice<'a, T> {
+    pub(crate) unsafe fn truncate(self, length: Elements<T>) -> Slice<'a, T> {
         let length = length.value();
         bounds::check_ge!(self.len, length, "truncation would make the slice longer");
 
@@ -110,7 +110,7 @@ impl<'a, T> Slice<'a, T> {
     }
 
     /// Return the tracked [`Bound`].
-    pub(super) fn len(&self) -> Bound {
+    pub(crate) fn len(&self) -> Bound {
         self.len
     }
 }
@@ -157,7 +157,7 @@ impl<'a, T> Slice<'a, T> {
 
 /// An mutable slice with length tracking when debug-assertions are enabled.
 #[derive(Debug)]
-pub(super) struct MutSlice<'a, T> {
+pub(crate) struct MutSlice<'a, T> {
     ptr: NonNull<T>,
     len: Bound,
     _lifetime: PhantomData<&'a mut T>,
@@ -165,7 +165,7 @@ pub(super) struct MutSlice<'a, T> {
 
 impl<'a, T> MutSlice<'a, T> {
     /// Construct a new [`MutSlice`] with the same length and base pointer as `slice`.
-    pub(super) const fn new(slice: &'a mut [T]) -> Self {
+    pub(crate) const fn new(slice: &'a mut [T]) -> Self {
         unsafe { Self::from_raw(mut_slice_to_nonnull(slice), Bound::new(slice.len())) }
     }
 
@@ -277,7 +277,7 @@ const _: () = assert!(
 mod tests {
     use super::*;
 
-    use crate::multi_vector::distance_v2::test_util::{assert_contains, panic_message_for};
+    use crate::multi_vector::distance::v2::test_util::{assert_contains, panic_message_for};
 
     #[test]
     fn test_slice() {
