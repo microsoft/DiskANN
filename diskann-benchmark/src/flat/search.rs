@@ -11,9 +11,9 @@
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    flat::{knn_search, DistancesUnordered, SearchStrategy},
+    flat::{knn_search, DistancesUnordered},
     graph::{glue::CopyIds, SearchOutputBuffer},
-    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
+    provider::HasId,
     utils::VectorRepr,
     ANNResult,
 };
@@ -53,27 +53,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 /////////////////
 
 /// A minimal in-memory provider for flat search benchmarks.
-///
-/// Wraps a loaded [`Matrix<T>`] and implements [`DataProvider`] with identity
-/// ID mapping.
 struct InMemProvider<T> {
     data: Arc<Matrix<T>>,
-}
-
-impl<T: VectorRepr> DataProvider for InMemProvider<T> {
-    type Context = DefaultContext;
-    type InternalId = u32;
-    type ExternalId = u32;
-    type Error = diskann::ANNError;
-    type Guard = NoopGuard<u32>;
-
-    fn to_internal_id(&self, _ctx: &DefaultContext, gid: &u32) -> Result<u32, Self::Error> {
-        Ok(*gid)
-    }
-
-    fn to_external_id(&self, _ctx: &DefaultContext, id: u32) -> Result<u32, Self::Error> {
-        Ok(id)
-    }
 }
 
 struct Flat<T> {
@@ -173,7 +154,7 @@ where
         let searcher = Arc::new(Searcher {
             provider,
             queries,
-            strategy: Strategy::new(metric),
+            metric,
         });
 
         for &threads in &input.search.num_threads {
@@ -201,30 +182,19 @@ where
     }
 }
 
-///////////////////////
-// Flat SearchStrategy //
-///////////////////////
-
-/// A [`SearchStrategy`] implementation for [`InMemProvider`] that drives
-/// a full sequential scan over all vectors.
-struct Strategy<T: VectorRepr> {
-    metric: Metric,
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T: VectorRepr> Strategy<T> {
-    fn new(metric: Metric) -> Self {
-        Self {
-            metric,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
 /// The visitor that iterates over all vectors in the provider.
 struct Visitor<'a, T: VectorRepr> {
     data: &'a Matrix<T>,
     computer: T::QueryDistance,
+}
+
+impl<'a, T: VectorRepr> Visitor<'a, T> {
+    fn new(provider: &'a InMemProvider<T>, query: &[T], metric: Metric) -> Self {
+        Self {
+            data: &provider.data,
+            computer: T::query_distance(query, metric),
+        }
+    }
 }
 
 impl<T: VectorRepr> HasId for Visitor<'_, T> {
@@ -248,23 +218,6 @@ impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
     }
 }
 
-impl<'a, T: VectorRepr> SearchStrategy<'a, InMemProvider<T>, &'a [T]> for Strategy<T> {
-    type Visitor = Visitor<'a, T>;
-    type Error = diskann::error::Infallible;
-
-    fn create_visitor(
-        &'a self,
-        provider: &'a InMemProvider<T>,
-        _context: &'a DefaultContext,
-        query: &'a [T],
-    ) -> Result<Self::Visitor, Self::Error> {
-        Ok(Visitor {
-            data: &provider.data,
-            computer: T::query_distance(query, self.metric),
-        })
-    }
-}
-
 //////////////////////////////////////////
 // benchmark_core::search::Search impl  //
 //////////////////////////////////////////
@@ -273,7 +226,7 @@ impl<'a, T: VectorRepr> SearchStrategy<'a, InMemProvider<T>, &'a [T]> for Strate
 struct Searcher<T: VectorRepr> {
     provider: InMemProvider<T>,
     queries: Matrix<T>,
-    strategy: Strategy<T>,
+    metric: Metric,
 }
 
 /// Search parameters for flat-index benchmarks.
@@ -314,19 +267,10 @@ where
     where
         O: SearchOutputBuffer<u32> + Send,
     {
-        let context = DefaultContext;
         let query = self.queries.row(index);
+        let mut visitor = Visitor::new(&self.provider, query, self.metric);
 
-        let stats = knn_search(
-            &self.provider,
-            parameters.k,
-            &self.strategy,
-            CopyIds,
-            &context,
-            query,
-            buffer,
-        )
-        .await?;
+        let stats = knn_search(&mut visitor, parameters.k, CopyIds, query, buffer).await?;
 
         Ok(Metrics {
             comparisons: stats.cmps,

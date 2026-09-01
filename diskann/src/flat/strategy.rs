@@ -3,16 +3,13 @@
  * Licensed under the MIT license.
  */
 
-//! Core flat-search traits: [`DistancesUnordered`] and [`SearchStrategy`].
+//! Core flat-search trait: [`DistancesUnordered`].
 
 use std::fmt::Debug;
 
 use diskann_utils::future::SendFuture;
 
-use crate::{
-    error::{StandardError, ToRanked},
-    provider::{DataProvider, HasId},
-};
+use crate::{error::ToRanked, provider::HasId};
 
 /// A complete, unordered scan of a candidate set.
 ///
@@ -34,38 +31,6 @@ pub trait DistancesUnordered: HasId + Send + Sync {
     fn distances_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32);
-}
-
-/// Constructs a [`DistancesUnordered`] visitor for one query.
-///
-/// A strategy contains configuration that can be reused across searches. Each call to
-/// [`Self::create_visitor`] combines that configuration with a provider, request context,
-/// and query to initialize an independent visitor. The returned visitor must report
-/// distances for that query when it is scanned.
-///
-/// The lifetime `'a` allows the visitor to borrow any of those inputs for the duration of
-/// the search instead of requiring it to own or copy their data.
-pub trait SearchStrategy<'a, P, T>: Send + Sync
-where
-    P: DataProvider,
-{
-    /// The visitor initialized for this search.
-    type Visitor: DistancesUnordered<Id = P::InternalId>;
-
-    /// The error type for [`Self::create_visitor`].
-    type Error: StandardError;
-
-    /// Initialize a visitor over `provider` for the given request `context` and `query`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the inputs cannot be used to initialize a visitor.
-    fn create_visitor(
-        &'a self,
-        provider: &'a P,
-        context: &'a P::Context,
-        query: T,
-    ) -> Result<Self::Visitor, Self::Error>;
 }
 
 #[cfg(test)]

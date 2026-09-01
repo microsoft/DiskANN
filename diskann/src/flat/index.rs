@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Brute-force k-nearest-neighbor search over a [`DataProvider`].
+//! Brute-force k-nearest-neighbor search over a [`DistancesUnordered`] visitor.
 use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
@@ -11,10 +11,9 @@ use diskann_utils::future::SendFuture;
 use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
-    flat::{DistancesUnordered, SearchStrategy},
+    flat::DistancesUnordered,
     graph::{SearchOutputBuffer, glue::SearchPostProcess},
     neighbor::{Neighbor, NeighborPriorityQueue},
-    provider::DataProvider,
 };
 
 /// Statistics collected during a flat search.
@@ -27,43 +26,35 @@ pub struct SearchStats {
     pub result_count: u32,
 }
 
-/// Brute-force k-nearest-neighbor search over a borrowed provider.
+/// Brute-force k-nearest-neighbor search over an initialized visitor.
 ///
-/// Streams every distance produced by the strategy's query-aware visitor, keeps the best `k`
-/// candidates in a [`NeighborPriorityQueue`], then runs `processor` over the survivors
-/// to populate `output`.
+/// Borrows `visitor` for the duration of the search, streams every distance it produces,
+/// keeps the best `k` candidates in a [`NeighborPriorityQueue`], then runs `processor`
+/// over the same visitor and the surviving candidates to populate `output`.
 ///
-/// The provider, strategy, and context are borrowed for the shared lifetime used to
-/// construct the visitor. This permits the visitor to retain references to their search
-/// state until scanning and post-processing are complete.
+/// The visitor remains owned by the caller and becomes available again after the returned
+/// future completes. Whether it supports another scan is determined by its implementation.
 ///
 /// # Errors
 ///
-/// Returns an error if visitor construction, distance scanning, or result
-/// post-processing fails. Distance-scan errors are escalated because a
-/// partial flat scan cannot produce correct k-nearest-neighbor results.
-pub fn knn_search<'a, P, S, T, O, PP, OB>(
-    provider: &'a P,
+/// Returns an error if distance scanning or result post-processing fails. Distance-scan
+/// errors are escalated because a partial flat scan cannot produce correct k-nearest-neighbor
+/// results.
+pub fn knn_search<V, T, O, PP, OB>(
+    visitor: &mut V,
     k: NonZeroUsize,
-    strategy: &'a S,
     processor: PP,
-    context: &'a P::Context,
     query: T,
     output: &mut OB,
 ) -> impl SendFuture<ANNResult<SearchStats>>
 where
-    P: DataProvider,
-    S: SearchStrategy<'a, P, T>,
+    V: DistancesUnordered,
     T: Copy + Send + Sync,
     O: Send,
-    PP: SearchPostProcess<S::Visitor, T, O> + Send + Sync,
+    PP: SearchPostProcess<V, T, O> + Send + Sync,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
 {
     async move {
-        let mut visitor = strategy
-            .create_visitor(provider, context, query)
-            .into_ann_result()?;
-
         let k = k.get();
         let mut queue = NeighborPriorityQueue::new(k);
         let mut cmps: u32 = 0;
@@ -77,7 +68,7 @@ where
             .escalate("flat scan must complete to produce correct k-NN results")?;
 
         let result_count = processor
-            .post_process(&mut visitor, query, queue.iter().take(k), output)
+            .post_process(visitor, query, queue.iter().take(k), output)
             .await
             .into_ann_result()? as u32;
 
@@ -139,15 +130,9 @@ mod tests {
                 let query: Vec<f32> = query.to_vec();
                 let k = *k;
                 set.spawn(async move {
-                    let outcome = KnnOracleRun::run(
-                        &provider,
-                        &flat_provider::Strategy::new(provider.dim()),
-                        &oracle,
-                        &query,
-                        k,
-                    )
-                    .await
-                    .expect("knn_search failed");
+                    let outcome = KnnOracleRun::run(&provider, &oracle, &query, k)
+                        .await
+                        .expect("knn_search failed");
                     (query, k, outcome)
                 });
             }
@@ -180,11 +165,14 @@ mod tests {
     fn transient_scan_error() {
         // The flat scan touches every id, so any transient id is guaranteed to be hit.
         for transient_ids in [&[0u32][..], &[3][..], &[1, 2, 5][..]] {
-            let strategy =
-                flat_provider::Strategy::with_transient(2, transient_ids.iter().copied());
             let (provider, _) = fixture(Grid::Two, 3);
-            let err = KnnOracleRun::run_sync(&provider, &strategy, &CopyIdsOracle, &[1.0, 0.0], 4)
-                .expect_err("transient error during full scan must escalate");
+            let query = &[1.0, 0.0];
+            let visitor =
+                flat_provider::Visitor::flaky(&provider, query, transient_ids.iter().copied())
+                    .unwrap();
+            let err =
+                KnnOracleRun::run_sync_with_visitor(&provider, visitor, &CopyIdsOracle, query, 4)
+                    .expect_err("transient error during full scan must escalate");
 
             let msg = format!("{err}");
             assert!(
@@ -199,10 +187,10 @@ mod tests {
 
     /// Run `knn_search` via the harness, assert it fails, and check the error
     /// message contains `expected_msg`.
-    fn assert_search_error(strategy: &flat_provider::Strategy, query: &[f32], expected_msg: &str) {
+    fn assert_visitor_error(query: &[f32], expected_msg: &str) {
         let (provider, _) = fixture(Grid::Two, 3);
-        let err = KnnOracleRun::run_sync(&provider, strategy, &CopyIdsOracle, query, 4)
-            .expect_err("expected knn_search to fail");
+        let err = flat_provider::Visitor::new(&provider, query)
+            .expect_err("expected visitor construction to fail");
 
         let msg = format!("{err}");
         assert!(
@@ -212,19 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn strategy_constructor_errors() {
-        // Strategy/provider expect dim=2, query has dim=3.
-        assert_search_error(
-            &flat_provider::Strategy::new(2),
-            &[0.0, 0.0, 0.0],
-            "dimension mismatch",
-        );
-
-        // Strategy expects dim=5, provider has dim=2.
-        assert_search_error(
-            &flat_provider::Strategy::new(5),
-            &[0.0, 0.0],
-            "dimension mismatch",
-        );
+    fn visitor_constructor_errors() {
+        assert_visitor_error(&[0.0, 0.0, 0.0], "dimension mismatch");
     }
 }

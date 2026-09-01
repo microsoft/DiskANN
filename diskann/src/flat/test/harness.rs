@@ -14,9 +14,10 @@ use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
 use crate::{
     ANNResult,
+    error::IntoANNResult,
     flat::{
         SearchStats, knn_search,
-        test::provider::{Provider, Strategy, Visitor},
+        test::provider::{Provider, Visitor},
     },
     graph::{
         SearchOutputBuffer,
@@ -50,12 +51,28 @@ impl KnnOracleRun {
     /// single-threaded runtime, and pair the result with the oracle's expected output.
     pub fn run_sync<O: OracleProcessor>(
         provider: &Provider,
-        strategy: &Strategy,
         oracle: &O,
         query: &[f32],
         k: usize,
     ) -> ANNResult<Self> {
-        current_thread_runtime().block_on(Self::run(provider, strategy, oracle, query, k))
+        current_thread_runtime().block_on(Self::run(provider, oracle, query, k))
+    }
+
+    /// Run [`knn_search`] with an already initialized visitor.
+    pub fn run_sync_with_visitor<O: OracleProcessor>(
+        provider: &Provider,
+        mut visitor: Visitor<'_>,
+        oracle: &O,
+        query: &[f32],
+        k: usize,
+    ) -> ANNResult<Self> {
+        current_thread_runtime().block_on(Self::run_with_visitor(
+            provider,
+            &mut visitor,
+            oracle,
+            query,
+            k,
+        ))
     }
 
     /// Async variant of [`KnnOracleRun::run_sync`]. Use this from tests that already
@@ -63,20 +80,27 @@ impl KnnOracleRun {
     /// `knn_search` concurrently across tasks.
     pub async fn run<O: OracleProcessor>(
         provider: &Provider,
-        strategy: &Strategy,
         oracle: &O,
         query: &[f32],
         k: usize,
     ) -> ANNResult<Self> {
-        let context = crate::flat::test::provider::Context::new();
+        let mut visitor = Visitor::new(provider, query).into_ann_result()?;
+        Self::run_with_visitor(provider, &mut visitor, oracle, query, k).await
+    }
+
+    async fn run_with_visitor<O: OracleProcessor>(
+        provider: &Provider,
+        visitor: &mut Visitor<'_>,
+        oracle: &O,
+        query: &[f32],
+        k: usize,
+    ) -> ANNResult<Self> {
         let mut buf = vec![Neighbor::<u32>::default(); k];
 
         let stats = knn_search(
-            provider,
+            visitor,
             NonZeroUsize::new(k).expect("flat::test::harness requires k > 0"),
-            strategy,
             oracle.processor(),
-            &context,
             query,
             &mut BackInserter::new(buf.as_mut_slice()),
         )

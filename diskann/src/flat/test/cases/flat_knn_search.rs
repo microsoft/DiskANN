@@ -13,7 +13,7 @@
 use crate::{
     flat::test::{
         harness,
-        provider::{self as flat_provider, ElementCounter, Strategy},
+        provider::{self as flat_provider, ElementCounter},
     },
     graph::test::synthetic::Grid,
     test::{
@@ -100,14 +100,8 @@ fn run_row(
     let len = provider.len();
     let metrics_before = provider.metrics();
 
-    let outcome = harness::KnnOracleRun::run_sync(
-        provider,
-        &Strategy::new(provider.dim()),
-        &harness::CopyIdsOracle,
-        query,
-        k,
-    )
-    .unwrap();
+    let outcome =
+        harness::KnnOracleRun::run_sync(provider, &harness::CopyIdsOracle, query, k).unwrap();
     let stats = outcome.stats;
 
     assert_eq!(
