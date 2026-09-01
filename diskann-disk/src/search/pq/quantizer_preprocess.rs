@@ -11,46 +11,63 @@ use diskann_providers::utils::BridgeErr;
 
 use super::{PQData, PQScratch};
 
-/// Preprocesses the query vector for PQ distance calculations.
-/// This function rotates the query vector and prepares the PQ table distances
-/// for efficient computation during search operations.
+impl PQScratch {
+    pub(crate) fn prepare_query(
+        &mut self,
+        pq_data: &PQData,
+        metric: Metric,
+        query: &[f32],
+    ) -> ANNResult<()> {
+        self.set(query)?;
+        self.preprocess_query(pq_data, metric)
+    }
+
+    fn preprocess_query(&mut self, pq_data: &PQData, metric: Metric) -> ANNResult<()> {
+        let table = pq_data.pq_table();
+        let expected_len = table.ncenters() * table.nchunks();
+        let dst = diskann_utils::views::MutMatrixView::try_from(
+            &mut self.aligned_pqtable_dist_scratch[..expected_len],
+            table.nchunks(),
+            table.ncenters(),
+        )
+        .bridge_err()?;
+
+        match metric {
+            // Prior to the introduction of the `quantizer_preprocess` method, the
+            // disk index was hard-coded to use L2 distance for comparisons.
+            //
+            // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
+            // as L2 until a more thorough evaluation can be made.
+            Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
+                table.process_into::<diskann_quantization::distances::SquaredL2>(
+                    &self.query_scratch,
+                    dst,
+                );
+            }
+            Metric::InnerProduct => {
+                table.process_into::<diskann_quantization::distances::InnerProduct>(
+                    &self.query_scratch,
+                    dst,
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Preprocesses the query stored in `pq_scratch` and computes PQ distances
+/// for `id_to_calculate_pq_distance`.
+///
+/// The resulting distances are written to `pq_scratch.aligned_dist_scratch`.
 pub fn quantizer_preprocess(
     pq_scratch: &mut PQScratch,
     pq_data: &PQData,
     metric: Metric,
     id_to_calculate_pq_distance: &[u32],
 ) -> ANNResult<()> {
-    let table = pq_data.pq_table();
-    let expected_len = table.ncenters() * table.nchunks();
-    let dst = diskann_utils::views::MutMatrixView::try_from(
-        &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
-        table.nchunks(),
-        table.ncenters(),
-    )
-    .bridge_err()?;
+    pq_scratch.preprocess_query(pq_data, metric)?;
 
-    match metric {
-        // Prior to the introduction of the `quantizer_preprocess` method, the
-        // disk index was hard-coded to use L2 distance for comparisons.
-        //
-        // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
-        // as L2 until a more thorough evaluation can be made.
-        Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
-            table.process_into::<diskann_quantization::distances::SquaredL2>(
-                &pq_scratch.query_scratch,
-                dst,
-            );
-        }
-        Metric::InnerProduct => {
-            table.process_into::<diskann_quantization::distances::InnerProduct>(
-                &pq_scratch.query_scratch,
-                dst,
-            );
-        }
-    }
-
-    // Compute the pq distance between query vector to all the vertex in the pq
-    // calculation id scratch.
     compute_pq_distance(
         id_to_calculate_pq_distance,
         pq_data.get_num_chunks(),
