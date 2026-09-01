@@ -5,7 +5,7 @@
 
 use std::num::NonZeroUsize;
 
-use crate::multi_vector::distance::v2::{
+use crate::matrix_kernels::{
     bounds::{self, Bound},
     num::{DimK, Elements},
     ptr::Slice,
@@ -186,7 +186,7 @@ mod tests {
 
     use diskann_utils::views::{Init, Matrix, MatrixView};
 
-    use crate::multi_vector::distance::v2::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
 
     #[test]
     fn test_visit_panels() {

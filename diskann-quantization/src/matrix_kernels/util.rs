@@ -3,7 +3,11 @@
  * Licensed under the MIT license.
  */
 
+use diskann_wide::arch::Scalar;
 use half::f16;
+
+#[cfg(target_arch = "x86_64")]
+use diskann_wide::arch::x86_64::{V3, V4};
 
 /////////////
 // Convert //
@@ -36,6 +40,60 @@ where
         )
     }
 }
+
+//////////
+// Load //
+//////////
+
+pub(super) trait LoadStore<T, const N: usize>
+where
+    T: Copy,
+{
+    fn load(self, src: &[T]) -> [T; N];
+    fn store(self, v: [T; N], dst: &mut [T]);
+}
+
+impl<T, const N: usize> LoadStore<T, N> for Scalar
+where
+    T: Copy + Default,
+{
+    fn load(self, src: &[T]) -> [T; N] {
+        core::array::from_fn(|i| src.get(i).copied().unwrap_or(T::default()))
+    }
+
+    fn store(self, v: [T; N], dst: &mut [T]) {
+        dst.copy_from_slice(&v[..dst.len()])
+    }
+}
+
+macro_rules! impl_loadstore {
+    ($T:ty, $N:literal, $wide:ident, $arch:ty) => {
+        impl LoadStore<$T, $N> for $arch {
+            #[inline(always)]
+            fn load(self, src: &[$T]) -> [$T; $N] {
+                use diskann_wide::SIMDVector;
+                diskann_wide::alias!(wide = <$arch>::$wide);
+
+                unsafe { wide::load_simd_first(self, src.as_ptr(), src.len()) }.to_array()
+            }
+
+            #[inline(always)]
+            fn store(self, v: [$T; $N], dst: &mut [$T]) {
+                use diskann_wide::SIMDVector;
+                diskann_wide::alias!(wide = <$arch>::$wide);
+
+                let w = wide::from_array(self, v);
+                unsafe { wide::store_simd_first(w, dst.as_mut_ptr(), dst.len()) }
+            }
+        }
+    };
+}
+
+impl_loadstore!(f32, 8, f32x8, V3);
+impl_loadstore!(f32, 16, f32x16, V3);
+
+impl_loadstore!(f32, 8, f32x8, V4);
+impl_loadstore!(f32, 16, f32x16, V4);
 
 //////////
 // Fold //

@@ -10,14 +10,15 @@ use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
 
-use crate::multi_vector::distance::v2::{
+use crate::matrix_kernels::{
+    driver,
     Cache,
     blocks::{packed, unpacked},
     bounds,
-    kernel::{self, maxsim::MaxSim},
+    maxsim::MaxSim,
     num::{Bytes, DimK, Elements, value_or_one},
     ptr::{MutSlice, Slice},
-    util::{Fold, Folder},
+    util::{Fold, Folder, LoadStore},
 };
 
 //--------//
@@ -54,7 +55,7 @@ pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
     kernel: MaxSim<A>,
     a: packed::View<'a, f32, MR>,
     b: unpacked::View<'a, f32>,
-    c: MutSlice<'a, f32>,
+    c: &'a mut [f32],
     k: DimK,
     params: Params,
 }
@@ -68,16 +69,16 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         arch: A,
         a: packed::View<'a, f32, MR>,
         b: unpacked::View<'a, f32>,
-        c: MutSlice<'a, f32>,
+        c: &'a mut [f32],
         k: DimK,
         cache: Cache,
     ) -> Self {
         bounds::check_eq!(a.k(), k, "constraction dimensions to not agree");
         bounds::check_eq!(b.k(), k, "constraction dimensions to not agree");
         bounds::check_eq!(
-            c.len(),
-            a.extent(),
-            "output slice must have one entry for every row in `a`",
+            bounds::Bound::new(a.blocks().get()),
+            c.len().div_ceil(MR),
+            "output length must occupiy exactly the packed A blocks",
         );
 
         unsafe {
@@ -96,16 +97,16 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         arch: A,
         a: packed::View<'a, f32, MR>,
         b: unpacked::View<'a, f32>,
-        c: MutSlice<'a, f32>,
+        c: &'a mut [f32],
         k: DimK,
         params: Params,
     ) -> Self {
         bounds::check_eq!(a.k(), k, "constraction dimensions to not agree");
         bounds::check_eq!(b.k(), k, "constraction dimensions to not agree");
         bounds::check_eq!(
-            c.len(),
-            a.extent(),
-            "output slice must have one entry for every row in `a`",
+            bounds::Bound::new(a.blocks().get()),
+            c.len().div_ceil(MR),
+            "output length must occupiy exactly the packed A blocks",
         );
 
         Self {
@@ -119,29 +120,55 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
     }
 }
 
-impl<A, const MR: usize, const NR: usize> kernel::Drive for Driver<'_, A, MR, NR>
+impl<A, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, MR, NR>
 where
-    A: Copy,
-    for<'a> PanelKernel<'a, A, MR, NR>: kernel::PanelKernel,
+    A: LoadStore<f32, MR> + Copy,
+    for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
 {
     fn drive(&mut self) {
-        // SAFETY: Class invariant - the length of `self.c` must be equal to `self.a.extent()`
-        unsafe { self.c.as_std_mut_slice(self.a.extent().get()) }.fill(f32::NEG_INFINITY);
+        self.c.fill(f32::NEG_INFINITY);
 
+        let remainder = self.c.len() % MR;
+        let last_a_block = self.a.blocks().get() - 1;
+
+        let mut c = MutSlice::new(&mut self.c);
         let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
             let on_b_panels = |b_panels: unpacked::View<'_, f32>, _| {
                 let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
-                    let mut c = unsafe {
-                        self.c
-                            .subslice(MR * (a_block_base + a_block_offset), bounds::Bound::new(MR))
+                    // If we are in the very last block and we need to sub-fill, do that.
+                    // Otherwise, reference the output in place.
+                    let a_block = a_block_base + a_block_offset;
+                    let handling_tail = a_block == last_a_block && remainder != 0;
+
+                    let bound = bounds::Bound::from_fn(|| {
+                        if handling_tail { remainder } else { MR }
+                    });
+
+                    let mut region = unsafe { c.subslice(MR * a_block, bound) };
+                    let c = if handling_tail {
+                        unsafe { self.kernel.arch().load(region.as_std_slice(remainder)) }
+                    } else {
+                        unsafe { *region.as_array::<MR>() }
                     };
 
-                    let c = unsafe { c.as_array::<MR>() };
+                    // run the kernel
+                    let mut kernel = unsafe {
+                        PanelKernel::new(self.kernel, a_panel, b_panels, c, self.k)
+                    };
 
-                    let mut kernel =
-                        unsafe { PanelKernel::new(self.kernel, a_panel, b_panels, c, self.k) };
+                    driver::PanelKernel::panel_kernel(&mut kernel);
 
-                    kernel::PanelKernel::panel_kernel(&mut kernel);
+                    let c_final = kernel.take();
+
+                    // Put back `C`.
+                    if handling_tail {
+                        self.kernel.arch().store(
+                            c_final,
+                            unsafe { region.as_std_mut_slice(remainder) },
+                        );
+                    } else {
+                        unsafe { *region.as_array::<MR>() = c_final };
+                    }
                 };
 
                 unsafe {
@@ -171,7 +198,7 @@ pub(crate) struct PanelKernel<'a, A, const MR: usize, const NR: usize> {
     kernel: MaxSim<A>,
     a: packed::Panel<'a, f32, MR>,
     b: unpacked::View<'a, f32>,
-    c: &'a mut [f32; MR],
+    c: [f32; MR],
     k: DimK,
 }
 
@@ -185,7 +212,7 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
         kernel: MaxSim<A>,
         a: packed::Panel<'a, f32, MR>,
         b: unpacked::View<'a, f32>,
-        c: &'a mut [f32; MR],
+        c: [f32; MR],
         k: DimK,
     ) -> Self {
         bounds::check_eq!(a.k(), k);
@@ -193,11 +220,15 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
 
         Self { kernel, a, b, c, k }
     }
+
+    pub(crate) fn take(self) -> [f32; MR] {
+        self.c
+    }
 }
 
 macro_rules! panel_kernel {
     ($arch:ty, $mr:literal, $nr: literal, [ $($ns:literal),+ $(,)? ]) => {
-        impl kernel::PanelKernel for PanelKernel<'_, $arch, $mr, $nr> {
+        impl driver::PanelKernel for PanelKernel<'_, $arch, $mr, $nr> {
             #[inline]
             fn panel_kernel(&mut self) {
                 let on_b_panels = |b: unpacked::Panel<'_, f32, $nr>, _| {
@@ -206,12 +237,12 @@ macro_rules! panel_kernel {
                             self.kernel,
                             self.a,
                             b,
-                            self.c,
+                            &mut self.c,
                             self.k,
                         )
                     };
 
-                    kernel::MicroKernel::micro_kernel(&mut micro);
+                    driver::MicroKernel::micro_kernel(&mut micro);
                 };
 
                 let b_tail = unsafe { self.b.visit_panels::<$nr>(self.k, on_b_panels) };
@@ -226,12 +257,12 @@ macro_rules! panel_kernel {
                                     self.kernel,
                                     self.a,
                                     b_panel,
-                                    self.c,
+                                    &mut self.c,
                                     self.k,
                                 )
                             };
 
-                            kernel::MicroKernel::micro_kernel(&mut micro);
+                            driver::MicroKernel::micro_kernel(&mut micro);
                         }
                     )+
                 }
@@ -241,8 +272,6 @@ macro_rules! panel_kernel {
 }
 
 panel_kernel!(Scalar, 8, 2, [1]);
-panel_kernel!(Scalar, 8, 4, [1, 2, 3]);
-panel_kernel!(Scalar, 8, 6, [1, 2, 3, 4, 5]);
 
 panel_kernel!(V3, 16, 4, [1, 2, 3]);
 panel_kernel!(V3, 16, 6, [1, 2, 3, 4, 5]);
@@ -326,7 +355,7 @@ diskann_wide::alias!(f32x16<A> = f32x16);
 
 macro_rules! micro_kernel {
     ($arch:ty, $mr:literal, $nr:literal) => {
-        impl kernel::MicroKernel for MicroKernel<'_, $arch, $mr, $nr> {
+        impl driver::MicroKernel for MicroKernel<'_, $arch, $mr, $nr> {
             #[inline(always)]
             fn micro_kernel(&mut self) {
                 unsafe { micro_kernel(self.kernel, self.a, self.b, self.c, self.k) }
@@ -338,7 +367,7 @@ macro_rules! micro_kernel {
     }
 }
 
-micro_kernel!(Scalar, 8, { 6, 5, 4, 3, 2, 1 });
+micro_kernel!(Scalar, 8, { 2, 1 });
 micro_kernel!(V3, 16, { 6, 5, 4, 3, 2, 1 });
 micro_kernel!(V4, 16, { 6, 5, 4, 3, 2, 1 });
 
@@ -503,7 +532,10 @@ mod tests {
 
     use rand::{SeedableRng, rngs::StdRng};
 
-    use crate::multi_vector::{BlockTransposed, distance::v2::kernel::maxsim};
+    use crate::{
+        matrix_kernels::maxsim,
+        multi_vector::{BlockTransposed}
+    };
 
     /////////////////
     // MicroKernel //
@@ -515,7 +547,7 @@ mod tests {
         rng: &mut impl rand::Rng,
         ctx: std::fmt::Arguments<'_>,
     ) where
-        for<'a> MicroKernel<'a, A, MR, NR>: kernel::MicroKernel,
+        for<'a> MicroKernel<'a, A, MR, NR>: driver::MicroKernel,
     {
         let (ref_a, ref_b, ref_c) = maxsim::test::generate(MR, k.value().get(), NR, rng);
 
@@ -537,7 +569,7 @@ mod tests {
             )
         };
 
-        kernel::MicroKernel::micro_kernel(&mut kernel);
+        driver::MicroKernel::micro_kernel(&mut kernel);
         assert_eq!(&*ref_c, kernel.c, "{ctx}");
 
         // Try again - but this time use a value that is much bigger than the what should
@@ -547,7 +579,7 @@ mod tests {
         let new_c = kernel.c.map(|i| i + 1.0);
         *kernel.c = new_c;
 
-        kernel::MicroKernel::micro_kernel(&mut kernel);
+        driver::MicroKernel::micro_kernel(&mut kernel);
         assert_eq!(new_c, *kernel.c, "{ctx}");
     }
 
@@ -602,7 +634,7 @@ mod tests {
         test_micro_kernel_v4,
         V4::new_checked_miri(),
         0xca13f736977f96fe,
-        16 => { 4, 3, 2, 1},
+        16 => { 6, 5, 4, 3, 2, 1},
     );
 
     /////////////////
@@ -623,7 +655,7 @@ mod tests {
         ctx: std::fmt::Arguments<'_>,
     ) where
         A: Copy,
-        for<'a> PanelKernel<'a, A, MR, NR>: kernel::PanelKernel,
+        for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
     {
         for blocks in 0..4 {
             for remainder in 0..NR {
@@ -648,12 +680,12 @@ mod tests {
                         MaxSim::new(arch),
                         packed::Panel::new(Slice::new(ref_a.as_slice()), k),
                         unpacked::View::new(Slice::new(ref_b.as_slice()), extent, k),
-                        &mut c,
+                        c,
                         k,
                     )
                 };
 
-                kernel::PanelKernel::panel_kernel(&mut kernel);
+                driver::PanelKernel::panel_kernel(&mut kernel);
                 assert_eq!(&*ref_c, kernel.c, "{ctx}");
 
                 // Try again - but this time use a value that is much bigger than the what
@@ -661,10 +693,10 @@ mod tests {
                 //
                 // This checks that we don't just overwite existing contents.
                 let new_c = kernel.c.map(|i| i + 1.0);
-                *kernel.c = new_c;
+                kernel.c = new_c;
 
-                kernel::PanelKernel::panel_kernel(&mut kernel);
-                assert_eq!(new_c, *kernel.c, "{ctx}");
+                driver::PanelKernel::panel_kernel(&mut kernel);
+                assert_eq!(new_c, kernel.c, "{ctx}");
             }
         }
     }
@@ -722,6 +754,7 @@ mod tests {
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
         (16, 4),
+        (16, 6),
     );
 
     ////////////
@@ -731,14 +764,19 @@ mod tests {
     fn test_driver<A, const MR: usize, const NR: usize>(arch: A, rng: &mut impl rand::Rng)
     where
         A: Copy,
-        for<'a> Driver<'a, A, MR, NR>: kernel::Drive,
+        for<'a> Driver<'a, A, MR, NR>: driver::Drive,
     {
         // (a-panels-per-tile, a-rows, b-cols-per-tile, b-cols, k)
         let cases = [
-            (1, MR * 1, 1, 1, 1),           // Smallest valid setup
-            (1, MR * 3, 1, 3, 1),           // Unit advancement, no reuse.
-            (2, MR * 2, 2 * NR, 2 * NR, 3), // Values a direct multiple of the blocking.
-            (2, MR * 3, 2 * NR, NR, 3),     //
+            (1, 1, 1, 1, 1),                        // Smallest logical output
+            (1, MR / 2, 1, 1, 1),                   // Partial first panel
+            (1, MR - 1, 2 * NR, NR, 3),             // Nearly full first panel
+            (2, MR + 1, 2 * NR, NR, 3),             // Partial second panel
+            (2, 2 * MR - 1, 2 * NR, 2 * NR + 1, 5), // Partial panel and split B
+            (2, 2 * MR + 1, 2 * NR, 2 * NR + 1, 5), // Split A and B with a partial panel
+            (1, MR * 3, 1, 3, 1),                   // Unit advancement, no reuse.
+            (2, MR * 2, 2 * NR, 2 * NR, 3),         // Values a direct multiple of the blocking.
+            (2, MR * 3, 2 * NR, NR, 3),
             (2, MR * 1, 2 * NR, 2 * NR + 1, 3),
             (2, MR * 3, 2 * NR, 2 * NR + 1, 5),
             (2, MR * 5, 2 * NR, 4 * NR + 1, 1),
@@ -756,14 +794,14 @@ mod tests {
             let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());
             let b = ref_b.transpose();
 
-            let mut c = vec![f32::NAN; a_bt.padded_nrows()];
+            let mut c = vec![f32::NAN; a_bt.nrows()];
 
             let mut driver = unsafe {
                 Driver::new_inner(
                     arch,
                     packed::View::from_block_transposed(a_bt.as_view()),
                     unpacked::View::from_matrix_view(b.as_view()),
-                    MutSlice::new(&mut c),
+                    &mut c,
                     k,
                     Params {
                         a_panels_in_l2: NonZeroUsize::new(a_panels_per_tile).unwrap(),
@@ -772,7 +810,7 @@ mod tests {
                 )
             };
 
-            kernel::Drive::drive(&mut driver);
+            driver::Drive::drive(&mut driver);
 
             assert_eq!(
                 ref_c, c,

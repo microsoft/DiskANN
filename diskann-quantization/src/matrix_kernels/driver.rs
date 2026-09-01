@@ -3,18 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use crate::multi_vector::distance::v2::num::DimK;
-
-pub(crate) mod maxsim;
-
 pub(crate) trait Drive {
     fn drive(&mut self);
 }
 
-pub(crate) trait PanelKernel {
+pub(super) trait PanelKernel {
     fn panel_kernel(&mut self);
 }
 
-pub(crate) trait MicroKernel {
+pub(super) trait MicroKernel {
     fn micro_kernel(&mut self);
 }
+

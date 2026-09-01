@@ -45,11 +45,8 @@ mod factory;
 mod fallback;
 mod isa;
 mod kernel;
-mod kernels;
 mod max_sim;
 mod projected_eigen;
-
-mod v2;
 
 pub use factory::{MaxSimElement, build_max_sim};
 pub use fallback::QueryMatRef;

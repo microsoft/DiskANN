@@ -35,49 +35,49 @@ impl IntoBound for Bound {
 
 macro_rules! check_eq {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(eq, $lhs, $rhs)
+        $crate::matrix_kernels::bounds::__assert!(eq, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(eq, $lhs, $rhs, $($arg)+)
+        $crate::matrix_kernels::bounds::__assert!(eq, $lhs, $rhs, $($arg)+)
     };
 }
 
 #[expect(unused, reason = "this completes the API")]
 macro_rules! check_lt {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(lt, $lhs, $rhs)
+        $crate::matrix_kernels::bounds::__assert!(lt, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(lt, $lhs, $rhs, $($arg)+)
+        $crate::matrix_kernels::bounds::__assert!(lt, $lhs, $rhs, $($arg)+)
     };
 }
 
 #[expect(unused, reason = "this completes the API")]
 macro_rules! check_le {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(le, $lhs, $rhs)
+        $crate::matrix_kernels::bounds::__assert!(le, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(le, $lhs, $rhs, $($arg)+)
+        $crate::matrix_kernels::bounds::__assert!(le, $lhs, $rhs, $($arg)+)
     };
 }
 
 #[expect(unused, reason = "this completes the API")]
 macro_rules! check_gt {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(gt, $lhs, $rhs)
+        $crate::matrix_kernels::bounds::__assert!(gt, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(gt, $lhs, $rhs, $($arg)+)
+        $crate::matrix_kernels::bounds::__assert!(gt, $lhs, $rhs, $($arg)+)
     };
 }
 
 macro_rules! check_ge {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(ge, $lhs, $rhs)
+        $crate::matrix_kernels::bounds::__assert!(ge, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)*) => {
-        $crate::multi_vector::distance::v2::bounds::__assert!(ge, $lhs, $rhs, $($arg)*)
+        $crate::matrix_kernels::bounds::__assert!(ge, $lhs, $rhs, $($arg)*)
     };
 }
 
@@ -85,7 +85,7 @@ macro_rules! __assert {
     ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {
         if cfg!(any(test, debug_assertions)) {
             ($lhs).check_with(
-                $crate::multi_vector::distance::v2::bounds::Check::$op(),
+                $crate::matrix_kernels::bounds::Check::$op(),
                 || $rhs,
                 None,
             )
@@ -94,7 +94,7 @@ macro_rules! __assert {
     ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {
         if cfg!(any(test, debug_assertions)) {
             ($lhs).check_with(
-                $crate::multi_vector::distance::v2::bounds::Check::$op(),
+                $crate::matrix_kernels::bounds::Check::$op(),
                 || $rhs,
                 Some(format_args!($($arg)+)),
             )
@@ -120,7 +120,7 @@ mod inner {
     use super::IntoBound;
 
     #[derive(Debug, Clone, Copy)]
-    pub(in crate::multi_vector::distance::v2) struct Check(Inner);
+    pub(in crate::matrix_kernels) struct Check(Inner);
 
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
     enum Inner {
@@ -132,23 +132,23 @@ mod inner {
     }
 
     impl Check {
-        pub(in crate::multi_vector::distance::v2) const fn eq() -> Self {
+        pub(in crate::matrix_kernels) const fn eq() -> Self {
             Self(Inner::Eq)
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn lt() -> Self {
+        pub(in crate::matrix_kernels) const fn lt() -> Self {
             Self(Inner::Lt)
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn le() -> Self {
+        pub(in crate::matrix_kernels) const fn le() -> Self {
             Self(Inner::Le)
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn gt() -> Self {
+        pub(in crate::matrix_kernels) const fn gt() -> Self {
             Self(Inner::Gt)
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn ge() -> Self {
+        pub(in crate::matrix_kernels) const fn ge() -> Self {
             Self(Inner::Ge)
         }
 
@@ -188,22 +188,22 @@ mod inner {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-    pub(in crate::multi_vector::distance::v2) struct Bound(usize);
+    pub(in crate::matrix_kernels) struct Bound(usize);
 
     impl Bound {
-        pub(in crate::multi_vector::distance::v2) fn from_fn<F>(f: F) -> Self
+        pub(in crate::matrix_kernels) fn from_fn<F>(f: F) -> Self
         where
             F: FnOnce() -> usize,
         {
             Self::new(f())
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn new(length: usize) -> Self {
+        pub(in crate::matrix_kernels) const fn new(length: usize) -> Self {
             Self(length)
         }
 
         #[track_caller]
-        pub(in crate::multi_vector::distance::v2) fn check<T>(
+        pub(in crate::matrix_kernels) fn check<T>(
             self,
             check: Check,
             expected: T,
@@ -215,7 +215,7 @@ mod inner {
         }
 
         #[track_caller]
-        pub(in crate::multi_vector::distance::v2) fn check_with<F, T>(
+        pub(in crate::matrix_kernels) fn check_with<F, T>(
             self,
             check: Check,
             f: F,
@@ -227,7 +227,7 @@ mod inner {
             self.check(check, f(), message)
         }
 
-        pub(in crate::multi_vector::distance::v2) fn with<F>(self, f: F)
+        pub(in crate::matrix_kernels) fn with<F>(self, f: F)
         where
             F: FnOnce(usize),
         {
@@ -235,7 +235,7 @@ mod inner {
         }
 
         #[cfg(any(test, debug_assertions))]
-        pub(in crate::multi_vector::distance::v2) fn value(self) -> usize {
+        pub(in crate::matrix_kernels) fn value(self) -> usize {
             self.0
         }
     }
@@ -270,46 +270,46 @@ mod inner {
     use super::IntoBound;
 
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-    pub(in crate::multi_vector::distance::v2) struct Check(());
+    pub(in crate::matrix_kernels) struct Check(());
 
     impl Check {
-        pub(in crate::multi_vector::distance::v2) const fn eq() -> Self {
+        pub(in crate::matrix_kernels) const fn eq() -> Self {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn lt() -> Self {
+        pub(in crate::matrix_kernels) const fn lt() -> Self {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn le() -> Self {
+        pub(in crate::matrix_kernels) const fn le() -> Self {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn gt() -> Self {
+        pub(in crate::matrix_kernels) const fn gt() -> Self {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn ge() -> Self {
+        pub(in crate::matrix_kernels) const fn ge() -> Self {
             Self(())
         }
     }
 
     #[derive(Debug, Clone, Copy)]
-    pub(in crate::multi_vector::distance::v2) struct Bound(());
+    pub(in crate::matrix_kernels) struct Bound(());
 
     impl Bound {
-        pub(in crate::multi_vector::distance::v2) fn from_fn<F>(_f: F) -> Self
+        pub(in crate::matrix_kernels) fn from_fn<F>(_f: F) -> Self
         where
             F: FnOnce() -> usize,
         {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance::v2) const fn new(_length: usize) -> Self {
+        pub(in crate::matrix_kernels) const fn new(_length: usize) -> Self {
             Self(())
         }
 
-        pub(in crate::multi_vector::distance::v2) fn check<T>(
+        pub(in crate::matrix_kernels) fn check<T>(
             self,
             _check: Check,
             _expected: T,
@@ -319,7 +319,7 @@ mod inner {
         {
         }
 
-        pub(in crate::multi_vector::distance::v2) fn check_with<F, T>(
+        pub(in crate::matrix_kernels) fn check_with<F, T>(
             self,
             _check: Check,
             _f: F,
@@ -330,7 +330,7 @@ mod inner {
         {
         }
 
-        pub(in crate::multi_vector::distance::v2) fn with<F>(self, _f: F)
+        pub(in crate::matrix_kernels) fn with<F>(self, _f: F)
         where
             F: FnOnce(usize),
         {

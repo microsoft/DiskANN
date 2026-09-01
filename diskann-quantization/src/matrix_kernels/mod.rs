@@ -5,12 +5,18 @@
 
 use std::num::NonZeroUsize;
 
+// Kernels
+pub(crate) mod maxsim;
+
 pub(crate) mod blocks;
 pub(crate) mod bounds;
-pub(crate) mod kernel;
 pub(crate) mod num;
 pub(crate) mod ptr;
 pub(crate) mod util;
+
+
+mod driver;
+pub(crate) use driver::Drive;
 
 #[cfg(test)]
 mod test_util;

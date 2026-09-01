@@ -8,6 +8,7 @@ use std::{marker::PhantomData, ptr::NonNull};
 use super::{
     bounds::{self, Bound},
     num::Elements,
+    util::LoadStore,
 };
 
 //-------//
@@ -182,6 +183,17 @@ impl<'a, T> MutSlice<'a, T> {
         }
     }
 
+    /// Materialize `self` as a slice.
+    ///
+    /// # Safety
+    ///
+    /// This function has the same requirements as [`std::slice::from_raw_parts`] with
+    /// the addition that `len` **must** be the true length of `self`.
+    pub(super) unsafe fn as_std_slice(&self, len: usize) -> &[T] {
+        bounds::check_eq!(self.len(), len);
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
+    }
+
     /// Materialize `self` as a mutable slice.
     ///
     /// # Safety
@@ -194,7 +206,12 @@ impl<'a, T> MutSlice<'a, T> {
     }
 
     /// Return the base pointer for `self`.
-    pub(super) const fn as_mut_ptr(&self) -> *mut T {
+    pub(super) const fn as_ptr(&self) -> *const T {
+        self.ptr.as_ptr().cast_const()
+    }
+
+    /// Return the base pointer for `self`.
+    pub(super) const fn as_mut_ptr(&mut self) -> *mut T {
         self.ptr.as_ptr()
     }
 
@@ -277,7 +294,7 @@ const _: () = assert!(
 mod tests {
     use super::*;
 
-    use crate::multi_vector::distance::v2::test_util::{assert_contains, panic_message_for};
+    use crate::matrix_kernels::test_util::{assert_contains, panic_message_for};
 
     #[test]
     fn test_slice() {

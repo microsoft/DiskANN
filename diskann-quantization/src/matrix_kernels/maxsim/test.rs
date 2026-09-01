@@ -5,7 +5,7 @@
 
 use diskann_utils::views::Matrix;
 
-use crate::multi_vector::distance::v2::test_util::TestDistr;
+use crate::matrix_kernels::test_util::TestDistr;
 
 /// Generate a test MaxSim problem `[M x K] . [K x N]` where both matrices are row-major.
 pub(super) fn generate(
