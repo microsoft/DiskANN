@@ -670,16 +670,7 @@ where
         _context: &DefaultContext,
         query: &'this [Data::VectorDataType],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        DiskAccessor::new(
-            provider,
-            self.io_tracker,
-            query,
-            self.vertex_provider_factory,
-            self.scratch_pool,
-            self.cache_indexed_vectors,
-            // Graph filtering is handled by post-processing or `FilteredAccessor`.
-            None,
-        )
+        DiskAccessor::new(provider, query, self)
     }
 }
 
@@ -968,17 +959,13 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    fn new<VPF>(
+    fn new<ProviderFactory>(
         provider: &'a DiskProvider<Data>,
-        io_tracker: &'a IOTracker,
         query: &'a [Data::VectorDataType],
-        vertex_provider_factory: &'a VPF,
-        scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, VP>>>,
-        cache_indexed_vectors: bool,
-        flat_scan_filter: Option<PostprocessFilter<'a>>,
+        strategy: &'a DiskSearchStrategy<'a, Data, ProviderFactory>,
     ) -> ANNResult<Self>
     where
-        VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
+        ProviderFactory: VertexProviderFactory<Data, VertexProviderType = VP>,
     {
         let pq_points = provider.pq_data.pq_compressed_data().nrows();
         if pq_points != provider.num_points {
@@ -990,21 +977,26 @@ where
         }
 
         let scratch = DiskSearchScratch::pooled_for_query(
-            scratch_pool,
+            strategy.scratch_pool,
             provider,
-            io_tracker,
+            strategy.io_tracker,
             query,
-            vertex_provider_factory,
+            strategy.vertex_provider_factory,
         )?;
 
         Ok(Self {
             provider,
-            io_tracker,
+            io_tracker: strategy.io_tracker,
             scratch,
             query,
-            cache_indexed_vectors,
-            flat_scan_filter,
+            cache_indexed_vectors: strategy.cache_indexed_vectors,
+            flat_scan_filter: None,
         })
+    }
+
+    fn with_flat_scan_filter(mut self, filter: Option<PostprocessFilter<'a>>) -> Self {
+        self.flat_scan_filter = filter;
+        self
     }
 
     fn ensure_loaded(&mut self, ids: &[u32]) -> Result<(), ANNError> {
@@ -1225,15 +1217,8 @@ where
             PostprocessStrategy::AcceptAll => None,
             PostprocessStrategy::Apply(filter) => Some(filter),
         };
-        let mut visitor = DiskAccessor::new(
-            self.index.provider(),
-            strategy.io_tracker,
-            query,
-            strategy.vertex_provider_factory,
-            strategy.scratch_pool,
-            strategy.cache_indexed_vectors,
-            flat_scan_filter,
-        )?;
+        let mut visitor = DiskAccessor::new(self.index.provider(), query, strategy)?
+            .with_flat_scan_filter(flat_scan_filter);
         let FlatSearchStats { cmps, result_count } = flat_knn_search(
             &mut visitor,
             k,
