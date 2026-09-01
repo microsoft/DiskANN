@@ -221,6 +221,18 @@ impl CentroidRegistry {
         self.dense.search(ExactMetric::SqL2, query, ids, distances)
     }
 
+    /// The nearest packed live centroid accepted by `keep`.
+    ///
+    /// Used only after bounded graph candidates fail, or as the primary path
+    /// when exact routing is configured.
+    pub(super) fn closest_live_where(
+        &self,
+        query: &[f32],
+        keep: impl FnMut(u32) -> bool,
+    ) -> Option<u32> {
+        self.dense.closest_where(query, keep)
+    }
+
     /// Out-edge health of the centroid graph, or `None` when no graph is
     /// maintained.
     pub(super) fn adjacency_census(&self, runtime: &Runtime) -> Result<Option<AdjacencyCensus>> {

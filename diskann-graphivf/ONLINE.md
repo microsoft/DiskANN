@@ -353,10 +353,14 @@ balanced fits run per parent and LIRE globally routes only filtered vectors.
    `merge_threshold` are considered emptiest-first, subject to the
    `min_clusters` floor. `merge_threshold = 0` (the default) disables merges.
 3. **Prepare LIRE merges.** Snapshot each admitted victim's remaining members.
-   Select the nearest surviving posting whose current plus already-planned merge
-   load remains at or below `split_threshold`; skip a victim when no compatible
-   target exists. Neighbor posting vectors require no check: deleting a centroid
-   cannot invalidate a vector already assigned to another live centroid.
+   In graph mode, search a bounded, progressively widened set of surviving
+   centroids, exactly rerank that set, and select the nearest posting whose
+   current plus already-planned merge load remains at or below
+   `split_threshold`. If the bounded candidates have no compatible target, use
+   one packed exact pass without a full sort; exact routing starts with that
+   pass. Skip a victim when no compatible target exists. Neighbor posting
+   vectors require no check: deleting a centroid cannot invalidate a vector
+   already assigned to another live centroid.
 4. **Commit removal and merges.** Filter each touched list once, resetting the
    deleted points to `UNASSIGNED`. Then retire the whole victim batch from the
    centroid graph and table. Detach each victim's remaining members and route

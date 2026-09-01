@@ -788,6 +788,157 @@ fn underflow_retires_the_cluster_and_scatters_it_onto_survivors() {
 }
 
 #[test]
+fn graph_merge_target_excludes_batch_victims() {
+    let (points, initial) = four_groups(5);
+    let mut c = OnlineClusterer::new(points, initial, merge_params(8, 10_000, 3)).unwrap();
+    c.insert_batch(&(0..20u32).collect::<Vec<_>>()).unwrap();
+
+    let victims = std::collections::HashSet::from([0, 1]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            2,
+            &std::collections::HashMap::new(),
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert!(!victims.contains(&target.id));
+    assert_eq!(target.source, MergeTargetSource::Graph);
+}
+
+#[test]
+fn graph_merge_target_widens_to_a_farther_capacity_safe_survivor() {
+    let points = mat(vec![0.0; 20], 20, 1);
+    let initial = mat(vec![0.0, 1.0, 2.0, 100.0], 4, 1);
+    let mut p = merge_params(8, 5, 2);
+    p.reassign_neighbors = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    for pid in 0..5 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 5..10 {
+        c.partition.attach_new(pid, 2);
+    }
+    c.partition.attach_new(10, 3);
+
+    let victims = std::collections::HashSet::from([0]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            1,
+            &std::collections::HashMap::new(),
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(target.id, 3, "the only posting with projected capacity");
+    assert_eq!(target.source, MergeTargetSource::Graph);
+}
+
+#[test]
+fn graph_merge_target_uses_exact_fallback_after_the_bounded_search() {
+    let points = mat(vec![0.0; 20], 20, 1);
+    let initial = mat(vec![0.0, 1.0, 2.0, 100.0], 4, 1);
+    let mut p = merge_params(8, 5, 2);
+    p.reassign_neighbors = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    for pid in 0..5 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 5..10 {
+        c.partition.attach_new(pid, 2);
+    }
+    c.partition.attach_new(10, 3);
+
+    let victims = std::collections::HashSet::from([0]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            1,
+            &std::collections::HashMap::new(),
+            2,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(target.id, 3, "the only posting with projected capacity");
+    assert_eq!(target.source, MergeTargetSource::ExactFallback);
+}
+
+#[test]
+fn exact_merge_target_uses_the_nearest_capacity_safe_survivor() {
+    let (points, initial) = four_groups(5);
+    let mut p = merge_params(8, 6, 3);
+    p.routing = OnlineCentroidRouting::Exact;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 5..10 {
+        c.partition.attach_new(pid, 1);
+    }
+
+    let victims = std::collections::HashSet::from([0]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            2,
+            &std::collections::HashMap::new(),
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(target.id, 2, "cluster 1 lacks capacity, so cluster 2 wins");
+    assert_eq!(target.source, MergeTargetSource::ExactFallback);
+}
+
+#[test]
+fn merge_target_respects_capacity_reserved_by_earlier_victims() {
+    let (points, initial) = four_groups(5);
+    let mut p = merge_params(8, 6, 3);
+    p.routing = OnlineCentroidRouting::Exact;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 5..8 {
+        c.partition.attach_new(pid, 1);
+    }
+
+    let victims = std::collections::HashSet::from([0]);
+    let planned_targets = std::collections::HashMap::from([(1, 2)]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            2,
+            &planned_targets,
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        target.id, 2,
+        "the nearer target is full after the earlier reservation"
+    );
+}
+
+#[test]
 fn retiring_adjacent_clusters_never_lands_a_point_on_a_retired_cell() {
     // Groups 0 and 1 are each other's nearest neighbors and both starve in
     // the same batch. Retiring the whole batch before placing any point is

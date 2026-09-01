@@ -86,6 +86,33 @@ const UNASSIGNED: u32 = storage::NOT_INDEXED;
 /// Points routed per parallel work unit in [`OnlineClusterer::insert_batch`].
 const ROUTE_CHUNK: usize = 256;
 
+/// Most non-victim candidates requested from the graph-first merge planner.
+///
+/// The result window includes victims that will be excluded. If it finds no
+/// capacity-compatible survivor, one packed exact pass preserves progress
+/// without restoring the old full candidate sort.
+const MERGE_GRAPH_MAX_SURVIVORS: usize = 1024;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeTargetSource {
+    Graph,
+    ExactFallback,
+}
+
+struct MergeTarget {
+    id: u32,
+    #[cfg(test)]
+    source: MergeTargetSource,
+}
+
+#[derive(Default)]
+struct MergeSearchScratch {
+    ids: Vec<u32>,
+    distances: Vec<f32>,
+    candidates: Vec<(u32, f32)>,
+}
+
 /// Route one point to its nearest live centroid via the centroid graph.
 ///
 /// The centroid graph is mutated in place as clusters split and merge:
@@ -1044,6 +1071,7 @@ impl OnlineClusterer {
         let started = Instant::now();
         let victim_set: std::collections::HashSet<u32> = victims.iter().copied().collect();
         let mut planned_targets = std::collections::HashMap::<u32, usize>::new();
+        let mut search_scratch = MergeSearchScratch::default();
         let mut plans = Vec::new();
         for &id in victims {
             let anchor = self
@@ -1058,30 +1086,22 @@ impl OnlineClusterer {
                 .filter(|pid| !deleted.contains(pid))
                 .collect();
             let search_start = Instant::now();
-            let mut candidates: Vec<(u32, f32)> = self
-                .centroids
-                .iter_live()
-                .filter(|(candidate, _)| !victim_set.contains(candidate))
-                .map(|(candidate, vector)| (candidate, sq_l2(anchor, vector)))
-                .collect();
-            candidates.sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
-            let target = candidates
-                .into_iter()
-                .map(|(candidate, _)| candidate)
-                .find(|candidate| {
-                    self.partition.list_len(*candidate)
-                        + planned_targets.get(candidate).copied().unwrap_or(0)
-                        + members.len()
-                        <= self.params.split_threshold
-                });
+            let target = self.find_merge_target(
+                anchor,
+                &victim_set,
+                members.len(),
+                &planned_targets,
+                MERGE_GRAPH_MAX_SURVIVORS,
+                &mut search_scratch,
+            )?;
             let Some(target) = target else {
                 continue;
             };
-            *planned_targets.entry(target).or_default() += members.len();
+            *planned_targets.entry(target.id).or_default() += members.len();
             plans.push(MergeVictimPlan {
                 id,
                 members,
-                target,
+                target: target.id,
                 search_us: search_start.elapsed().as_micros() as u64,
             });
         }
@@ -1089,6 +1109,110 @@ impl OnlineClusterer {
             victims: plans,
             started,
         })
+    }
+
+    /// Find a capacity-compatible survivor near `anchor`.
+    ///
+    /// Graph routing searches a bounded candidate set first. The survivor
+    /// budget doubles when the nearest candidates are victims or lack projected
+    /// capacity, and each returned set is exactly reranked. Exact routing, or a
+    /// graph search that exhausts the bounded budget, falls back to one packed
+    /// scan that keeps only the nearest feasible centroid.
+    fn find_merge_target(
+        &self,
+        anchor: &[f32],
+        victim_set: &std::collections::HashSet<u32>,
+        incoming: usize,
+        planned_targets: &std::collections::HashMap<u32, usize>,
+        max_graph_survivors: usize,
+        scratch: &mut MergeSearchScratch,
+    ) -> Result<Option<MergeTarget>> {
+        let survivor_count = self.centroids.live_count().saturating_sub(victim_set.len());
+        if survivor_count == 0 {
+            return Ok(None);
+        }
+
+        if self.params.routing.neighbor_beam(1).is_some() {
+            let survivor_cap = survivor_count.min(max_graph_survivors.max(1));
+            let mut survivor_budget = self.params.reassign_neighbors.min(survivor_cap).max(1);
+            loop {
+                let victim_allowance = victim_set.len().min(MERGE_GRAPH_MAX_SURVIVORS);
+                let search_k = victim_allowance
+                    .saturating_add(survivor_budget)
+                    .min(self.centroids.live_count());
+                let search_l = self
+                    .params
+                    .routing
+                    .neighbor_beam(search_k)
+                    .expect("graph routing has a merge search beam");
+                scratch.ids.clear();
+                scratch.ids.resize(search_k, 0);
+                scratch.distances.clear();
+                scratch.distances.resize(search_k, 0.0);
+                let found = self.centroids.search(
+                    &self.runtime,
+                    anchor,
+                    search_l,
+                    &mut scratch.ids,
+                    &mut scratch.distances,
+                )?;
+                scratch.ids.truncate(found);
+
+                scratch.candidates.clear();
+                for &candidate in &scratch.ids {
+                    if victim_set.contains(&candidate) || !self.centroids.is_live(candidate) {
+                        continue;
+                    }
+                    let vector = self
+                        .centroids
+                        .get(candidate)
+                        .expect("graph candidate is a live centroid");
+                    scratch.candidates.push((candidate, sq_l2(anchor, vector)));
+                }
+                scratch
+                    .candidates
+                    .sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+                if let Some(&(target, _)) = scratch.candidates.iter().find(|(candidate, _)| {
+                    self.merge_target_has_capacity(*candidate, incoming, planned_targets)
+                }) {
+                    return Ok(Some(MergeTarget {
+                        id: target,
+                        #[cfg(test)]
+                        source: MergeTargetSource::Graph,
+                    }));
+                }
+
+                if survivor_budget == survivor_cap {
+                    break;
+                }
+                survivor_budget = survivor_budget.saturating_mul(2).min(survivor_cap);
+            }
+        }
+
+        Ok(self
+            .centroids
+            .closest_live_where(anchor, |candidate| {
+                !victim_set.contains(&candidate)
+                    && self.merge_target_has_capacity(candidate, incoming, planned_targets)
+            })
+            .map(|id| MergeTarget {
+                id,
+                #[cfg(test)]
+                source: MergeTargetSource::ExactFallback,
+            }))
+    }
+
+    fn merge_target_has_capacity(
+        &self,
+        candidate: u32,
+        incoming: usize,
+        planned_targets: &std::collections::HashMap<u32, usize>,
+    ) -> bool {
+        self.partition
+            .list_len(candidate)
+            .saturating_add(planned_targets.get(&candidate).copied().unwrap_or(0))
+            .saturating_add(incoming)
+            <= self.params.split_threshold
     }
 
     /// Retire and globally reroute a prepared LIRE merge batch.
