@@ -33,7 +33,7 @@ use crate::inputs::graph_index::IndexBuild;
 // Start Point Configuration //
 ///////////////////////////////
 
-pub(crate) fn set_start_points<DP, T>(
+pub(super) fn set_start_points<DP, T>(
     provider: &DP,
     data: MatrixView<'_, T>,
     start_strategy: StartPointStrategy,
@@ -50,7 +50,7 @@ where
 // Build //
 ///////////
 
-pub(crate) fn single_or_multi_insert<DP, T, S>(
+pub(super) fn single_or_multi_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
     data: Arc<Matrix<T>>,
@@ -106,7 +106,7 @@ where
 }
 
 #[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]
-pub(crate) fn only_single_insert<DP, T, S>(
+pub(super) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
     data: Arc<Matrix<T>>,
@@ -150,7 +150,7 @@ where
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename = "kebab-case")]
-pub(crate) enum BuildKind {
+pub(super) enum BuildKind {
     SingleInsert,
     MultiInsert,
 }
@@ -165,11 +165,11 @@ impl std::fmt::Display for BuildKind {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct BuildStats {
-    pub(crate) kind: BuildKind,
-    pub(crate) total_time: MicroSeconds,
-    pub(crate) vectors_inserted: usize,
-    pub(crate) insert_latencies: percentiles::Percentiles<MicroSeconds>,
+pub(super) struct BuildStats {
+    pub(super) kind: BuildKind,
+    pub(super) total_time: MicroSeconds,
+    pub(super) vectors_inserted: usize,
+    pub(super) insert_latencies: percentiles::Percentiles<MicroSeconds>,
 }
 
 impl BuildStats {
@@ -248,7 +248,7 @@ impl build_core::Progress for Meter {
 // Save and Load API ///
 ////////////////////////
 
-pub(crate) async fn save_index<DP, T>(
+pub(super) async fn save_index<DP, T>(
     index: Arc<DiskANNIndex<DP>>,
     save_path: &str,
 ) -> anyhow::Result<()>
@@ -268,7 +268,7 @@ where
 }
 
 // for now, this only works with full-precision indices
-pub(crate) async fn load_index<'a, DP>(
+pub(super) async fn load_index<'a, DP>(
     load_path: &'a str,
     index_config: &IndexConfiguration,
 ) -> anyhow::Result<DiskANNIndex<DP>>

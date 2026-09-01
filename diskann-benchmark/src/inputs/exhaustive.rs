@@ -152,7 +152,7 @@ impl From<TargetDim> for diskann_quantization::algorithms::transforms::TargetDim
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TransformKind {
     PaddingHadamard(TargetDim),
