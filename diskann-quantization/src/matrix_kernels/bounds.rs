@@ -129,11 +129,8 @@ mod inner {
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
     enum Inner {
         Eq,
-        #[expect(unused, reason = "this completes the API")]
         Lt,
-        #[expect(unused, reason = "this completes the API")]
         Le,
-        #[expect(unused, reason = "this completes the API")]
         Gt,
         Ge,
     }

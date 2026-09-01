@@ -18,7 +18,7 @@ use diskann_wide::arch::x86_64::{V3, V4};
 use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
 use super::max_sim::{MaxSim, MaxSimError};
-use crate::matrix_kernels;
+use crate::matrix_kernels as mk;
 use crate::multi_vector::distance::QueryMatRef;
 use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
 
@@ -40,8 +40,7 @@ impl<A, const GROUP: usize, const NR: usize> MaxSimKernel<f32>
     for Prepared<A, BlockTransposed<f32, GROUP>, NR>
 where
     A: Architecture,
-    for<'a> matrix_kernels::maxsim::packed_f32_x_unpacked_f32::Driver<'a, A, GROUP, NR>:
-        matrix_kernels::Drive,
+    for<'a> mk::maxsim::packed_f32_x_unpacked_f32::Driver<'a, A, GROUP, NR>: mk::Drive,
 {
     fn nrows(&self) -> usize {
         self.prepared.nrows()
@@ -64,28 +63,28 @@ where
             return Ok(());
         }
 
-        let k = matrix_kernels::num::DimK::new(NonZeroUsize::new(self.prepared.ncols()).unwrap());
+        let k = mk::DimK::new(NonZeroUsize::new(self.prepared.ncols()).unwrap());
 
         let mut driver = unsafe {
-            matrix_kernels::maxsim::packed_f32_x_unpacked_f32::Driver::new(
+            mk::maxsim::packed_f32_x_unpacked_f32::Driver::new(
                 self.arch,
-                matrix_kernels::blocks::packed::View::<f32, GROUP>::new(
-                    matrix_kernels::Slice::new(self.prepared.as_slice()),
+                mk::blocks::packed::View::<f32, GROUP>::new(
+                    mk::Slice::new(self.prepared.as_slice()),
                     NonZeroUsize::new(self.prepared.num_blocks()).unwrap(),
                     k,
                 ),
-                matrix_kernels::blocks::unpacked::View::new(
-                    matrix_kernels::Slice::new(doc.as_slice()),
+                mk::blocks::unpacked::View::new(
+                    mk::Slice::new(doc.as_slice()),
                     NonZeroUsize::new(doc.num_vectors()).unwrap(),
                     k,
                 ),
                 scores,
                 k,
-                matrix_kernels::Cache::default(),
+                mk::Cache::default(),
             )
         };
 
-        matrix_kernels::Drive::drive(&mut driver);
+        mk::Drive::drive(&mut driver);
 
         scores.iter_mut().for_each(|s| *s = -*s);
 
@@ -97,8 +96,7 @@ impl<A, const GROUP: usize, const NR: usize> MaxSimKernel<half::f16>
     for Prepared<A, BlockTransposed<f32, GROUP>, NR>
 where
     A: Architecture,
-    for<'a> matrix_kernels::maxsim::packed_f32_x_unpacked_f16::Driver<'a, A, GROUP, NR>:
-        matrix_kernels::Drive,
+    for<'a> mk::maxsim::packed_f32_x_unpacked_f16::Driver<'a, A, GROUP, NR>: mk::Drive,
 {
     fn nrows(&self) -> usize {
         self.prepared.nrows()
@@ -122,28 +120,28 @@ where
             return Ok(());
         }
 
-        let k = matrix_kernels::num::DimK::new(NonZeroUsize::new(self.prepared.ncols()).unwrap());
+        let k = mk::DimK::new(NonZeroUsize::new(self.prepared.ncols()).unwrap());
 
         let mut driver = unsafe {
-            matrix_kernels::maxsim::packed_f32_x_unpacked_f16::Driver::new(
+            mk::maxsim::packed_f32_x_unpacked_f16::Driver::new(
                 self.arch,
-                matrix_kernels::blocks::packed::View::<f32, GROUP>::new(
-                    matrix_kernels::Slice::new(self.prepared.as_slice()),
+                mk::blocks::packed::View::<f32, GROUP>::new(
+                    mk::Slice::new(self.prepared.as_slice()),
                     NonZeroUsize::new(self.prepared.num_blocks()).unwrap(),
                     k,
                 ),
-                matrix_kernels::blocks::unpacked::View::new(
-                    matrix_kernels::Slice::new(doc.as_slice()),
+                mk::blocks::unpacked::View::new(
+                    mk::Slice::new(doc.as_slice()),
                     NonZeroUsize::new(doc.num_vectors()).unwrap(),
                     k,
                 ),
                 scores,
                 k,
-                matrix_kernels::Cache::default(),
+                mk::Cache::default(),
             )
         };
 
-        matrix_kernels::Drive::drive(&mut driver);
+        mk::Drive::drive(&mut driver);
 
         scores.iter_mut().for_each(|s| *s = -*s);
 

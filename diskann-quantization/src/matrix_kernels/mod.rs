@@ -8,17 +8,19 @@ use std::num::NonZeroUsize;
 // Kernels
 pub(crate) mod maxsim;
 
+// Arguments
 pub(crate) mod blocks;
-pub(crate) mod bounds;
-pub(crate) mod num;
 
 // private
+mod bounds;
 mod driver;
+mod num;
 mod ptr;
 mod util;
 
 // re-export
 pub(crate) use driver::Drive;
+pub(crate) use num::DimK;
 pub(crate) use ptr::Slice;
 
 #[derive(Debug, Clone, Copy)]
