@@ -71,15 +71,23 @@ struct WorkItem {
     seed: u64,
 }
 
-#[derive(Default)]
-struct StripeBuffers {
+struct StripeBuffers<A>
+where
+    A: PiPNNSIMDSchema,
+{
     point_values: Vec<f32>,
-    kernel_workspace: PartitionKernelWorkspace,
+    kernel_workspace: PartitionKernelWorkspace<A>,
 }
 
-impl AsPooled<()> for StripeBuffers {
+impl<A> AsPooled<()> for StripeBuffers<A>
+where
+    A: PiPNNSIMDSchema,
+{
     fn create(_: ()) -> Self {
-        Self::default()
+        Self {
+            point_values: Vec::new(),
+            kernel_workspace: PartitionKernelWorkspace::default(),
+        }
     }
 
     fn modify(&mut self, _: ()) {
@@ -92,7 +100,7 @@ impl AsPooled<()> for StripeBuffers {
 ///
 /// `ObjectPool` locks only when it gives or receives a lease. Numerical work
 /// holds the lease, not the pool lock.
-type StripeBufferPool = ObjectPool<StripeBuffers>;
+type StripeBufferPool<A> = ObjectPool<StripeBuffers<A>>;
 
 /// Build overlapping bounded leaves for all configured replicas.
 ///
@@ -111,7 +119,7 @@ where
     T: VectorRepr + Send + Sync,
 {
     let mut leaves = Vec::new();
-    let stripe_buffers = StripeBufferPool::new((), 0, None);
+    let stripe_buffers = StripeBufferPool::<A>::new((), 0, None);
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves =
@@ -130,7 +138,7 @@ fn partition_replica<A, M, T>(
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
     seed: u64,
-    stripe_buffers: &StripeBufferPool,
+    stripe_buffers: &StripeBufferPool<A>,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     A: PiPNNSIMDSchema,
@@ -188,7 +196,7 @@ fn partition_work_item<A, M, T>(
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
     item: WorkItem,
-    stripe_buffers: &StripeBufferPool,
+    stripe_buffers: &StripeBufferPool<A>,
 ) -> ANNResult<(Vec<WorkItem>, Vec<Vec<u32>>)>
 where
     A: PiPNNSIMDSchema,
@@ -265,7 +273,7 @@ fn assign_to_leaders<A, M, T>(
     point_ids: &[u32],
     leader_ids: &[u32],
     fanout: usize,
-    stripe_buffers: &StripeBufferPool,
+    stripe_buffers: &StripeBufferPool<A>,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     A: PiPNNSIMDSchema,
@@ -335,7 +343,7 @@ fn assign_point_stripe<A, M, T>(
     point_ids: &[u32],
     leaders: &PreparedLeaders<'_, M>,
     fanout: usize,
-    buffers: &mut StripeBuffers,
+    buffers: &mut StripeBuffers<A>,
     assignments: &mut [u32],
 ) -> ANNResult<()>
 where

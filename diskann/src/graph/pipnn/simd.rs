@@ -14,6 +14,29 @@ use diskann_wide::{
 /// This alias is the single build-time width selection.
 type DefaultVector<A> = <A as Architecture>::f32x16;
 
+type DefaultIdVector<A> = <<DefaultVector<A> as SIMDVector>::ConstLanes as IdVectorFor<A>>::Vector;
+
+pub(super) trait IdVectorFor<A>
+where
+    A: Architecture,
+{
+    type Vector;
+}
+
+impl<A> IdVectorFor<A> for Const<8>
+where
+    A: Architecture,
+{
+    type Vector = A::u32x8;
+}
+
+impl<A> IdVectorFor<A> for Const<16>
+where
+    A: Architecture,
+{
+    type Vector = A::u32x16;
+}
+
 /// Operations required by PiPNN SIMD vectors.
 pub(super) trait PiPNNSIMDVector:
     SIMDVector<Scalar = f32> + SIMDFloat + std::ops::Div<Output = Self>
@@ -54,14 +77,40 @@ where
 
 /// PiPNN SIMD representation for one architecture.
 pub(super) trait PiPNNSIMDSchema: Architecture {
-    /// SIMD vector used by every numerical stage.
-    type Vector: PiPNNSIMDVector<Arch = Self>;
+    /// SIMD score vector used by every numerical stage.
+    type Vector: PiPNNSIMDVector<Arch = Self> + Send;
+    /// SIMD ID vector paired lane-for-lane with [`Self::Vector`].
+    type IdVector: SIMDVector<Arch = Self, Scalar = u32> + Send;
+
+    /// Select exact leader IDs with a score comparison mask.
+    fn select_ids(
+        mask: <Self::Vector as SIMDVector>::Mask,
+        if_true: Self::IdVector,
+        if_false: Self::IdVector,
+    ) -> Self::IdVector;
 }
 
 impl<A> PiPNNSIMDSchema for A
 where
     A: Architecture,
-    DefaultVector<A>: PiPNNSIMDVector<Arch = A>,
+    DefaultVector<A>: PiPNNSIMDVector<Arch = A> + Send,
+    DefaultIdVector<A>: SIMDVector<
+            Arch = A,
+            Scalar = u32,
+            ConstLanes = <DefaultVector<A> as SIMDVector>::ConstLanes,
+        > + Send,
+    <DefaultIdVector<A> as SIMDVector>::Mask: SIMDSelect<DefaultIdVector<A>>
+        + From<<<DefaultVector<A> as SIMDVector>::Mask as SIMDMask>::BitMask>,
 {
     type Vector = DefaultVector<A>;
+    type IdVector = DefaultIdVector<A>;
+
+    #[inline(always)]
+    fn select_ids(
+        mask: <Self::Vector as SIMDVector>::Mask,
+        if_true: Self::IdVector,
+        if_false: Self::IdVector,
+    ) -> Self::IdVector {
+        <Self::IdVector as SIMDVector>::Mask::from(mask.bitmask()).select(if_true, if_false)
+    }
 }
