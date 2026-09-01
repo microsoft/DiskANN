@@ -1,0 +1,47 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float32",
+        "isa": "reference",
+        "runs": [
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 16,  "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 64,  "loops_per_measurement": 100, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 128, "loops_per_measurement": 50,  "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 256, "loops_per_measurement": 25,  "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 512, "loops_per_measurement": 12,  "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float32",
+        "isa": "x86-64-v3",
+        "runs": [
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 16,  "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 64,  "loops_per_measurement": 100, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 128, "loops_per_measurement": 50,  "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 256, "loops_per_measurement": 25,  "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 512, "loops_per_measurement": 12,  "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float32",
+        "isa": "x86-64-v3-staged",
+        "runs": [
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 16,  "loops_per_measurement": 200, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 64,  "loops_per_measurement": 100, "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 128, "loops_per_measurement": 50,  "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 256, "loops_per_measurement": 25,  "num_measurements": 50 },
+          { "num_query_vectors": 32, "num_doc_vectors": 256, "dim": 512, "loops_per_measurement": 12,  "num_measurements": 50 }
+        ]
+      }
+    }
+  ]
+}

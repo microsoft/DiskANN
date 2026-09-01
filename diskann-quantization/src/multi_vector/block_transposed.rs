@@ -856,6 +856,58 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
         }
     }
 
+    /// Return the backing elements of `block` — exactly `GROUP * padded_ncols()` of
+    /// them — or `None` if `block >= num_blocks()`.
+    ///
+    /// Unlike [`block()`](Self::block) this accepts the zero-padded remainder block,
+    /// so a kernel can walk `0..num_blocks()` uniformly instead of special-casing the
+    /// tail. The padding rows are part of the slice; use [`remainder()`](Self::remainder)
+    /// to find how many of the last block's rows are logical.
+    #[inline]
+    pub fn block_slice(&self, block: usize) -> Option<&'a [T]> {
+        if block >= self.num_blocks() {
+            return None;
+        }
+        // SAFETY: `block < num_blocks()` checked above, and `block_ptr_unchecked`
+        // guarantees `GROUP * padded_ncols()` valid elements even for the remainder.
+        unsafe {
+            Some(std::slice::from_raw_parts(
+                self.block_ptr_unchecked(block),
+                self.data.repr().block_stride(),
+            ))
+        }
+    }
+
+    /// A view over `count` consecutive blocks starting at `start` — a cache-sized
+    /// tile that is a block-transposed matrix in its own right.
+    ///
+    /// `count` is clipped to the blocks available, so a walk can request a fixed tile
+    /// size and get a short final tile. Returns `None` once `start` reaches
+    /// [`num_blocks()`](Self::num_blocks), which ends such a walk.
+    ///
+    /// The sub-view reports its own *logical* row count, so a tile containing the
+    /// parent's partial block reports that block as its remainder rather than
+    /// claiming the padding rows are real.
+    #[inline]
+    #[allow(clippy::expect_used)]
+    pub fn block_range(&self, start: usize, count: usize) -> Option<Self> {
+        let count = count.min(self.num_blocks().checked_sub(start)?);
+        if count == 0 {
+            return None;
+        }
+        let nrows = (self.nrows() - start * GROUP).min(count * GROUP);
+        let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, self.ncols())
+            .expect("sub-view of a valid matrix cannot overflow");
+        // SAFETY: `start + count <= num_blocks()`, so the range lies inside the
+        // backing allocation; `repr.storage_len()` is exactly `count` block strides.
+        let data: &[T] = unsafe {
+            std::slice::from_raw_parts(self.block_ptr_unchecked(start), repr.storage_len())
+        };
+        Some(Self {
+            data: MatRef::new(repr, data).expect("slice matches repr"),
+        })
+    }
+
     /// Retrieve the value at the logical `(row, col)`.
     ///
     /// # Panics
@@ -912,6 +964,8 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(pub fn block_slice(&self, block: usize) -> Option<&[T]>);
+    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block_range(&self, start: usize, count: usize) -> Option<BlockTransposedRef<'_, T, GROUP, PACK>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
@@ -1054,6 +1108,8 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(pub fn block_slice(&self, block: usize) -> Option<&[T]>);
+    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block_range(&self, start: usize, count: usize) -> Option<BlockTransposedRef<'_, T, GROUP, PACK>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
@@ -1969,6 +2025,101 @@ mod tests {
                 test_block_layout_pack1::<f32, 8>(nrows, ncols, gen_f32);
             }
         }
+    }
+
+    /// `block_range` partitions the blocks exactly: every tiling reproduces the
+    /// parent's blocks in order, and each tile reports honest logical rows.
+    fn test_block_range<T: Copy + Default + PartialEq + std::fmt::Debug, const GROUP: usize>(
+        nrows: usize,
+        ncols: usize,
+        gen_element: fn(usize) -> T,
+    ) {
+        let mut data = Matrix::new(T::default(), nrows, ncols);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| *d = gen_element(i));
+        let bt = BlockTransposed::<T, GROUP, 1>::from_strided(data.as_view().into());
+        let v = bt.as_view();
+
+        let all: Vec<&[T]> = (0..v.num_blocks())
+            .map(|b| v.block_slice(b).unwrap())
+            .collect();
+        for s in &all {
+            assert_eq!(s.len(), GROUP * v.padded_ncols());
+        }
+        assert!(v.block_slice(v.num_blocks()).is_none());
+
+        for tile in 1..v.num_blocks() + 3 {
+            let mut cur = 0;
+            while let Some(t) = v.block_range(cur, tile) {
+                assert!(t.num_blocks() <= tile);
+                assert_eq!(t.padded_ncols(), v.padded_ncols());
+                assert_eq!(
+                    t.nrows(),
+                    (v.nrows() - cur * GROUP).min(t.num_blocks() * GROUP),
+                    "tile must report its own logical rows, not the padding"
+                );
+                for b in 0..t.num_blocks() {
+                    assert_eq!(
+                        t.block_slice(b).unwrap(),
+                        all[cur + b],
+                        "tile {cur} block {b}"
+                    );
+                }
+                cur += t.num_blocks();
+            }
+            assert_eq!(
+                cur,
+                v.num_blocks(),
+                "tile size {tile} must cover every block (nrows={nrows}, ncols={ncols})"
+            );
+        }
+        assert!(v.block_range(v.num_blocks(), 1).is_none());
+        assert!(v.block_range(v.num_blocks() + 1, 1).is_none());
+        assert!(v.block_range(0, 0).is_none());
+    }
+
+    #[test]
+    fn test_block_range_group16() {
+        for nrows in [0, 1, 15, 16, 17, 31, 32, 33, 64] {
+            for ncols in [1, 2, 5] {
+                test_block_range::<f32, 16>(nrows, ncols, gen_f32);
+            }
+        }
+    }
+
+    #[test]
+    fn test_block_range_group8_pack_agnostic() {
+        for nrows in [0, 1, 7, 8, 9, 17] {
+            for ncols in [1, 3, 4] {
+                test_block_range::<i32, 8>(nrows, ncols, gen_i32);
+            }
+        }
+    }
+
+    /// The sub-views must outlive the temporary the delegate creates, so this is a
+    /// lifetime test as much as a behavioural one.
+    #[test]
+    fn test_block_sub_views_delegate_to_owning_types() {
+        let mut data = Matrix::new(0.0f32, 33, 5);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| *d = gen_f32(i));
+        let mut bt = BlockTransposed::<f32, 16, 1>::from_strided(data.as_view().into());
+        let expected = bt.as_view().block_slice(1).unwrap().to_vec();
+
+        assert_eq!(bt.block_slice(1).unwrap(), expected);
+        assert!(bt.block_slice(bt.num_blocks()).is_none());
+        let tile = bt.block_range(1, 2).unwrap();
+        assert_eq!((tile.num_blocks(), tile.nrows()), (2, 17));
+        assert_eq!(tile.block_slice(0).unwrap(), expected);
+        assert!(bt.block_range(bt.num_blocks(), 1).is_none());
+
+        let m = bt.as_view_mut();
+        assert_eq!(m.block_slice(1).unwrap(), expected);
+        assert_eq!(m.block_range(1, 2).unwrap().nrows(), 17);
     }
 
     // ════════════════════════════════════════════════════════════════

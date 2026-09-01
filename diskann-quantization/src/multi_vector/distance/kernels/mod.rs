@@ -16,7 +16,30 @@ pub(super) mod f16;
 pub(super) mod f32;
 mod layouts;
 mod reduce;
+// The staged kernel is V3 (x86_64) only; gate the whole module so its support
+// code isn't dead on other architectures.
+#[cfg(target_arch = "x86_64")]
+pub(super) mod staged;
+// Coarse Tiler/Tile rebuild — panels selected by type, kernel pinned on the pair (V3 only).
 mod tiled_reduce;
+#[cfg(target_arch = "x86_64")]
+pub(super) mod tiler;
+
+// Paneled rebuild — views own their panel decomposition, one `Drain` seam (V3 only).
+#[cfg(target_arch = "x86_64")]
+pub(super) mod paneled;
+
+// Re-export the quantized staged kernel's public POC entry (x86_64 only).
+#[cfg(target_arch = "x86_64")]
+pub use staged::{QuantStagedDocs, QuantStagedQuery};
+
+// Re-export the coarse Tiler-based quantized POC entry (x86_64 only).
+#[cfg(target_arch = "x86_64")]
+pub use tiler::{QuantTiledDocs, QuantTiledF16Docs, QuantTiledF16Query, QuantTiledQuery};
+
+// Re-export the paneled POC entries (x86_64 only).
+#[cfg(target_arch = "x86_64")]
+pub use paneled::{PaneledF32Docs, PaneledF32Query, PaneledQuantDocs, PaneledQuantQuery};
 
 // ── Tile budget ──────────────────────────────────────────────────
 
