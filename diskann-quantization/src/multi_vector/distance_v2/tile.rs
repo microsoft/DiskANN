@@ -23,7 +23,7 @@ use crate::multi_vector::distance_v2::{
 
 pub fn example_maxsim_f32(
     a: crate::multi_vector::BlockTransposedRef<'_, f32, 16>,
-    b: diskann_utils::views::MatrixView<'_, f16>,
+    b: diskann_utils::views::MatrixView<'_, f32>,
     c: &mut [f32],
     budget: Cache,
 ) {
@@ -38,10 +38,10 @@ pub fn example_maxsim_f32(
     c.fill(f32::NEG_INFINITY);
 
     let mut driver = unsafe {
-        kernel::maxsim::packed_f32_x_unpacked_f16::Driver::<_, 16, 6>::new(
+        kernel::maxsim::packed_f32_x_unpacked_f32::Driver::<_, 16, 4>::new(
             diskann_wide::ARCH,
             blocks::packed::View::<f32, 16>::new(Slice::new(a.as_slice()), ablocks, k),
-            blocks::unpacked::View::<f16>::new(Slice::new(b.as_slice()), brows, k),
+            blocks::unpacked::View::<f32>::new(Slice::new(b.as_slice()), brows, k),
             MutSlice::new(c),
             k,
             budget,
