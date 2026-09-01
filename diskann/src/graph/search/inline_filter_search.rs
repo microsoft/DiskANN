@@ -63,7 +63,9 @@ impl AdaptiveL {
 /// An additional option for better performance on low specificity scenarios
 /// is the use of the adaptive L algorithm. After visiting a set number of nodes,
 /// and estimating the specificity of the filter from that sample, `l_search` is
-/// scaled up in the following manner:
+/// scaled up in the following manner. If the sample contains no matching nodes,
+/// the sample size is doubled and adaptive L is recomputed. Once a sample contains
+/// a match, adaptive L is not recomputed again.
 ///   specificity ≥ 50%    → 1× L (no change, most nodes match)
 ///   10% ≤ specificity < 50% → 2× L
 ///   specificity < 10%    → log-scale: 2^(-log10(specificity))
@@ -253,7 +255,8 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Adaptive L: estimate specificity at N samples, then at 2N, 4N, and so on.
+        // Estimate specificity at N samples. If none match, retry at 2N, 4N,
+        // and so on; otherwise, keep the current adaptive L for the search.
         if let Some(adaptive_l) = adaptive_l.as_ref()
             && let Some(next_sample) = next_adaptive_l_sample
             && sample_visited >= next_sample
@@ -268,7 +271,7 @@ where
                 scratch.resize(new_l);
             }
 
-            next_adaptive_l_sample = advance_adaptive_l_sample(next_sample);
+            next_adaptive_l_sample = next_adaptive_l_sample_threshold(next_sample, sample_matched);
         }
     }
 
@@ -281,8 +284,12 @@ where
     })
 }
 
-fn advance_adaptive_l_sample(current_sample: usize) -> Option<usize> {
-    current_sample.checked_mul(2)
+fn next_adaptive_l_sample_threshold(current_sample: usize, matched: usize) -> Option<usize> {
+    if matched == 0 {
+        current_sample.checked_mul(2)
+    } else {
+        None
+    }
 }
 
 /// Compute adaptive L based on observed specificity.
@@ -358,18 +365,19 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_l_sample_thresholds_double() {
+    fn test_adaptive_l_sample_thresholds_double_only_without_matches() {
         let sample_count = 100;
 
-        let second_sample = advance_adaptive_l_sample(sample_count).unwrap();
-        let third_sample = advance_adaptive_l_sample(second_sample).unwrap();
-        let fourth_sample = advance_adaptive_l_sample(third_sample).unwrap();
+        let second_sample = next_adaptive_l_sample_threshold(sample_count, 0).unwrap();
+        let third_sample = next_adaptive_l_sample_threshold(second_sample, 0).unwrap();
+        let fourth_sample = next_adaptive_l_sample_threshold(third_sample, 0).unwrap();
 
         assert_eq!(
             [sample_count, second_sample, third_sample, fourth_sample],
             [100, 200, 400, 800]
         );
-        assert_eq!(advance_adaptive_l_sample(usize::MAX), None);
+        assert_eq!(next_adaptive_l_sample_threshold(sample_count, 1), None);
+        assert_eq!(next_adaptive_l_sample_threshold(usize::MAX, 0), None);
     }
 
     #[test]

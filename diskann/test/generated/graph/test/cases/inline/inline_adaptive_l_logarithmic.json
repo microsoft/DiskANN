@@ -2,9 +2,9 @@
   "file": "diskann/src/graph/test/cases/inline.rs",
   "test": "graph/test/cases/inline/inline_adaptive_l_logarithmic",
   "payload": {
-    "comparisons": 58,
+    "comparisons": 57,
     "grid_size": 100,
-    "hops": 58,
+    "hops": 57,
     "k": 5,
     "l": 5,
     "matching_points": 2,

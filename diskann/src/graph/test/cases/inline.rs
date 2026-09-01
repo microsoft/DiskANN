@@ -188,8 +188,8 @@ impl Setup1D {
     ///
     /// With a sample count of 10, the two seeded IDs will result in a 20% hit-rate.
     ///
-    /// This will boost `l` to 10. Re-evaluating at each 2x sample threshold allows the
-    /// search to reach the additional points 44 and 43.
+    /// This boosts `l` to 10. Since the sample contains matches, adaptive L is not
+    /// recomputed at subsequent sample thresholds.
     fn linear() -> Self {
         Self {
             filter: Filter::from_iter([43u32, 44, 92, 95]),
@@ -199,7 +199,7 @@ impl Setup1D {
             points: 100,
             query: [50.0],
             expected_fixed: vec![92, 95],
-            expected_adaptive: vec![44, 43, 92, 95],
+            expected_adaptive: vec![44, 92, 95],
         }
     }
 
