@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
-pub(crate) mod f16;
-pub(crate) mod f32;
+pub(crate) mod packed_f32_x_unpacked_f16;
+pub(crate) mod packed_f32_x_unpacked_f32;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MaxSim<A>(A);

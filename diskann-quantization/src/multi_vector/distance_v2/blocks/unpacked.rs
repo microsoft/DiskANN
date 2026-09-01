@@ -183,6 +183,12 @@ pub(crate) struct Panel<'a, T, const EXTENT: usize> {
 }
 
 impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
+    pub(crate) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
+        let k: usize = k.value().get();
+        bounds::check_eq!(ptr.len(), k * EXTENT);
+        unsafe { Self::new_inner(ptr, Bound::new(k)) }
+    }
+
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
         bounds::check_eq!(ptr.len(), k * Bound::new(EXTENT));
         Self { ptr, k }

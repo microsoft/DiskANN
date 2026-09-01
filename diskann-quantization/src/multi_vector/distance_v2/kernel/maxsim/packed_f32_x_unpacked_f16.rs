@@ -9,15 +9,15 @@ use crate::multi_vector::distance_v2::{
     Cache,
     blocks::{packed, unpacked},
     bounds,
-    kernel::{Drive, PanelKernel, maxsim::MaxSim},
+    kernel::{self, maxsim::MaxSim},
     num::{DimK, value_or_one},
     ptr::{MutSlice, Slice},
     util::{Convert, Converter},
 };
 
-use super::f32::{BlockWithRowMajor, Params};
+use super::packed_f32_x_unpacked_f32::{PanelKernel, Params};
 
-pub(crate) struct PackedXUnpacked<'a, A, const MR: usize, const NR: usize> {
+pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
     kernel: MaxSim<A>,
     a: packed::View<'a, f32, MR>,
     b: unpacked::View<'a, f16>,
@@ -27,7 +27,7 @@ pub(crate) struct PackedXUnpacked<'a, A, const MR: usize, const NR: usize> {
     params: Params,
 }
 
-impl<'a, A, const MR: usize, const NR: usize> PackedXUnpacked<'a, A, MR, NR> {
+impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
     pub(crate) unsafe fn new(
         arch: A,
         a: packed::View<'a, f32, MR>,
@@ -71,11 +71,11 @@ impl<'a, A, const MR: usize, const NR: usize> PackedXUnpacked<'a, A, MR, NR> {
     }
 }
 
-impl<A, const MR: usize, const NR: usize> Drive for PackedXUnpacked<'_, A, MR, NR>
+impl<A, const MR: usize, const NR: usize> kernel::Drive for Driver<'_, A, MR, NR>
 where
     A: Copy,
     Converter<A>: Convert<f32, f16>,
-    for<'a> BlockWithRowMajor<'a, A, MR, NR>: PanelKernel,
+    for<'a> PanelKernel<'a, A, MR, NR>: kernel::PanelKernel,
 {
     #[inline(never)]
     fn drive(&mut self) {
@@ -99,10 +99,10 @@ where
                     let c = unsafe { c.as_array::<MR>() };
 
                     let mut kernel = unsafe {
-                        BlockWithRowMajor::new(self.kernel, a_panel, b_panels_converted, c, self.k)
+                        PanelKernel::new(self.kernel, a_panel, b_panels_converted, c, self.k)
                     };
 
-                    kernel.panel_kernel();
+                    kernel::PanelKernel::panel_kernel(&mut kernel);
                 };
 
                 unsafe {

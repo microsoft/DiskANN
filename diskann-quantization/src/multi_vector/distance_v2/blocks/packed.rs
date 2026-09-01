@@ -129,17 +129,13 @@ pub(crate) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
 }
 
 impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
-    unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
+    pub(crate) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         bounds::check_eq!(ptr.len(), SZ * k.value().get().next_multiple_of(PACK));
         unsafe { Self::new_inner(ptr, Bound::new(k.value().get())) }
     }
 
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
-        k.with(|k| {
-            let expected = SZ * k.next_multiple_of(PACK);
-            bounds::check_eq!(ptr.len(), expected);
-        });
-
+        k.with(|k| bounds::check_eq!(ptr.len(), SZ * k.next_multiple_of(PACK)));
         Self { ptr, k }
     }
 
@@ -375,9 +371,7 @@ mod tests {
             }
         });
 
-        let panel = unsafe {
-            Panel::<_, 4>::new(Slice::new(&data[..12]), actual_k)
-        };
+        let panel = unsafe { Panel::<_, 4>::new(Slice::new(&data[..12]), actual_k) };
         assert_k_mismatch(|| {
             let _ = panel.stride(wrong_k);
         });

@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+use diskann_utils::views::{Init, Matrix};
 use half::f16;
 use rand::{Rng, distr::Distribution};
 
@@ -49,11 +50,11 @@ pub(super) use assert_contains;
 pub(super) struct TestDistr;
 
 impl TestDistr {
-    pub(super) fn fill<T>(data: &mut [T], rng: &mut impl rand::Rng)
+    pub(super) fn matrix<T>(nrows: usize, ncols: usize, rng: &mut impl rand::Rng) -> Matrix<T>
     where
         Self: Distribution<T>,
     {
-        data.iter_mut().for_each(|d| *d = (Self).sample(rng));
+        Matrix::new(Init(|| (Self).sample(rng)), nrows, ncols)
     }
 }
 

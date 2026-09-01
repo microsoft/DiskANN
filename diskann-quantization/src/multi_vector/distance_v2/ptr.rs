@@ -258,13 +258,13 @@ const fn mut_slice_to_nonnull<T>(x: &mut [T]) -> NonNull<T> {
 }
 
 // Verify that length-tracking disappears in release builds.
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(test, debug_assertions)))]
 const _: () = assert!(
     std::mem::size_of::<Slice<'static, f32>>() == std::mem::size_of::<NonNull<f32>>(),
     "non-debug `Slice` does not have the expected size"
 );
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(test, debug_assertions)))]
 const _: () = assert!(
     std::mem::size_of::<MutSlice<'static, f32>>() == std::mem::size_of::<NonNull<f32>>(),
     "non-debug `MutSlice` does not have the expected size"

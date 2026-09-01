@@ -5,27 +5,6 @@
 
 pub(super) use inner::{Bound, Check};
 
-// /// A `usize` wrapper that only exists when debug-assertions are enabled.
-// ///
-// /// This is used to track internal dimensions that should be invariants when writing BLAS
-// /// style kernels when developing algorithms without paying for the storage or CPU cycles
-// /// in release builds.
-// #[derive(Debug, Clone, Copy)]
-// pub(super) struct Bound(inner::Bound);
-//
-// impl Bound {
-//     pub(super) const fn new(value: usize) -> Self {
-//         Self(inner::Bound::new(value))
-//     }
-//
-//     pub(super) fn from_fn<F>(f: F) -> Self
-//     where
-//         F: FnOnce() -> Self
-//     {
-//         Self(inner::Bound::from_fn(f))
-//     }
-// }
-
 pub(super) trait IntoBound {
     fn into_bound(self) -> Bound;
 }
@@ -56,67 +35,67 @@ impl IntoBound for Bound {
 
 macro_rules! check_eq {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(eq, $lhs, $rhs);
+        $crate::multi_vector::distance_v2::bounds::__assert!(eq, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(eq, $lhs, $rhs, $($arg)+);
+        $crate::multi_vector::distance_v2::bounds::__assert!(eq, $lhs, $rhs, $($arg)+)
     };
 }
 
 #[expect(unused, reason = "this completes the API")]
 macro_rules! check_lt {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs);
+        $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs, $($arg)+);
+        $crate::multi_vector::distance_v2::bounds::__assert!(lt, $lhs, $rhs, $($arg)+)
     };
 }
 
 #[expect(unused, reason = "this completes the API")]
 macro_rules! check_le {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs);
+        $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs, $($arg)+);
+        $crate::multi_vector::distance_v2::bounds::__assert!(le, $lhs, $rhs, $($arg)+)
     };
 }
 
 #[expect(unused, reason = "this completes the API")]
 macro_rules! check_gt {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs);
+        $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)+) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs, $($arg)+);
+        $crate::multi_vector::distance_v2::bounds::__assert!(gt, $lhs, $rhs, $($arg)+)
     };
 }
 
 macro_rules! check_ge {
     ($lhs:expr, $rhs:expr $(,)?) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(ge, $lhs, $rhs);
+        $crate::multi_vector::distance_v2::bounds::__assert!(ge, $lhs, $rhs)
     };
     ($lhs:expr, $rhs:expr, $($arg:tt)*) => {
-        $crate::multi_vector::distance_v2::bounds::__assert!(ge, $lhs, $rhs, $($arg)*);
+        $crate::multi_vector::distance_v2::bounds::__assert!(ge, $lhs, $rhs, $($arg)*)
     };
 }
 
 macro_rules! __assert {
     ($op:ident, $lhs:expr, $rhs:expr $(,)?) => {
         if cfg!(any(test, debug_assertions)) {
-            ($lhs).check(
+            ($lhs).check_with(
                 $crate::multi_vector::distance_v2::bounds::Check::$op(),
-                $rhs,
+                || $rhs,
                 None,
             )
         }
     };
     ($op:ident, $lhs:expr, $rhs:expr, $($arg:tt)+) => {
         if cfg!(any(test, debug_assertions)) {
-            ($lhs).check(
+            ($lhs).check_with(
                 $crate::multi_vector::distance_v2::bounds::Check::$op(),
-                $rhs,
+                || $rhs,
                 Some(format_args!($($arg)+)),
             )
         }
