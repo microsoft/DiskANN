@@ -3,10 +3,9 @@
  * Licensed under the MIT license.
  */
 
-//! f32 MaxSim: the accumulator is already the score, so the drain is a bare reduction.
+//! f32 MaxSim: each completed panel is folded directly into the running row maxima.
 
 use core::num::NonZeroUsize;
-use core::ops::Range;
 
 use diskann_wide::arch::Scalar;
 #[cfg(target_arch = "x86_64")]
@@ -18,30 +17,17 @@ use super::leaves::scalar::{A_PANEL as SC_A, B_PANEL as SC_B};
 use super::leaves::v3 as v3_leaf;
 #[cfg(target_arch = "x86_64")]
 use super::leaves::v3::{A_PANEL as V3_A, B_PANEL as V3_B};
-use super::strip::{Slot, Strip};
 use super::tiles::{
     BlockTransposedPanel, BlockTransposedTile, BlockTransposedWalk, RowMajorPanel, RowMajorTile,
     RowMajorWalk,
 };
-use super::{Accumulate, Drain, Plan, TileAt, TileBudget, TileWalk, drive};
+use super::{PanelOp, Plan, TileAt, TileBudget, TileWalk, drive};
 use crate::bits::{Dynamic, Static};
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
-/// Selects the f32 leaf for whichever architecture is in play.
-pub(super) struct Kernel;
-
-/// Reduces a strip into the running per-A-row maxima, one entry per A row.
-///
-/// This is the module's single [`Drain`], which makes it the one place the accumulator's
-/// axes acquire meaning. A strip column holds one B row's inner products against every A
-/// row. A B row therefore arrives as a *row* of the input and lands as a *column* of the
-/// accumulator.
-///
-/// Carries `nd` because a strip's trailing columns belong to B rows past the end of the
-/// matrix, and nothing else here knows where that end is.
-pub(super) struct RawMax<'o> {
+/// Selects the f32 leaf for the active architecture and owns the running maxima.
+pub(super) struct MaxOp<'o> {
     out: &'o mut [f32],
-    nd: usize,
 }
 
 ////////
@@ -49,68 +35,45 @@ pub(super) struct RawMax<'o> {
 ////////
 
 #[cfg(target_arch = "x86_64")]
-impl<'a, 'b, 's>
-    Accumulate<
-        V3,
-        BlockTransposedPanel<'a, f32, V3_A>,
-        RowMajorPanel<'b, f32, V3_B, Static<V3_B>>,
-        Slot<'s, f32, V3_A, V3_B>,
-    > for Kernel
+impl<'a, 'b>
+    PanelOp<V3, BlockTransposedPanel<'a, f32, V3_A>, RowMajorPanel<'b, f32, V3_B, Static<V3_B>>>
+    for MaxOp<'_>
 {
     #[inline(always)]
-    fn accumulate(
-        &self,
+    fn process(
+        &mut self,
         arch: V3,
         a: BlockTransposedPanel<'a, f32, V3_A>,
         b: RowMajorPanel<'b, f32, V3_B, Static<V3_B>>,
-        out: Slot<'s, f32, V3_A, V3_B>,
+        a_panel: usize,
+        _: usize,
     ) {
-        v3_leaf::f32_store_microkernel::<V3_B, _>(arch, a, b, out);
+        let rows = &mut self.out.as_chunks_mut::<V3_A>().0[a_panel];
+        v3_leaf::f32_max_microkernel::<V3_B, _>(arch, a, b, rows);
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<'a, 'b, 's>
-    Accumulate<
-        V3,
-        BlockTransposedPanel<'a, f32, V3_A>,
-        RowMajorPanel<'b, f32, V3_B, Dynamic>,
-        Slot<'s, f32, V3_A, V3_B>,
-    > for Kernel
+impl<'a, 'b> PanelOp<V3, BlockTransposedPanel<'a, f32, V3_A>, RowMajorPanel<'b, f32, V3_B, Dynamic>>
+    for MaxOp<'_>
 {
     #[inline(always)]
-    fn accumulate(
-        &self,
+    fn process(
+        &mut self,
         arch: V3,
         a: BlockTransposedPanel<'a, f32, V3_A>,
         b: RowMajorPanel<'b, f32, V3_B, Dynamic>,
-        out: Slot<'s, f32, V3_A, V3_B>,
+        a_panel: usize,
+        _: usize,
     ) {
+        let rows = &mut self.out.as_chunks_mut::<V3_A>().0[a_panel];
         // Dispatch the runtime width onto a const the leaf can unroll for.
         match b.rows() {
-            3 => v3_leaf::f32_store_microkernel::<3, _>(arch, a, b, out),
-            2 => v3_leaf::f32_store_microkernel::<2, _>(arch, a, b, out),
-            1 => v3_leaf::f32_store_microkernel::<1, _>(arch, a, b, out),
+            3 => v3_leaf::f32_max_microkernel::<3, _>(arch, a, b, rows),
+            2 => v3_leaf::f32_max_microkernel::<2, _>(arch, a, b, rows),
+            1 => v3_leaf::f32_max_microkernel::<1, _>(arch, a, b, rows),
             other => unreachable!("tail width {other} outside 1..{V3_B}"),
         }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl Drain<V3, Strip<'_, f32, V3_A, V3_B>> for RawMax<'_> {
-    #[inline(always)]
-    fn drain(
-        &mut self,
-        arch: V3,
-        scratch: &Strip<'_, f32, V3_A, V3_B>,
-        a_panel: usize,
-        b_panels: Range<usize>,
-    ) {
-        // A is padded to whole panels and its output cut never clamps. B is not, so the
-        // live width does.
-        let live = (b_panels.end * V3_B).min(self.nd) - b_panels.start * V3_B;
-        let rows = &mut self.out.as_chunks_mut::<V3_A>().0[a_panel];
-        v3_leaf::max_into_rows(arch, scratch.columns(live), rows);
     }
 }
 
@@ -118,61 +81,42 @@ impl Drain<V3, Strip<'_, f32, V3_A, V3_B>> for RawMax<'_> {
 // Emulated //
 //////////////
 
-impl<'a, 'b, 's>
-    Accumulate<
-        Scalar,
-        BlockTransposedPanel<'a, f32, SC_A>,
-        RowMajorPanel<'b, f32, SC_B, Static<SC_B>>,
-        Slot<'s, f32, SC_A, SC_B>,
-    > for Kernel
+impl<'a, 'b>
+    PanelOp<Scalar, BlockTransposedPanel<'a, f32, SC_A>, RowMajorPanel<'b, f32, SC_B, Static<SC_B>>>
+    for MaxOp<'_>
 {
     #[inline(always)]
-    fn accumulate(
-        &self,
+    fn process(
+        &mut self,
         arch: Scalar,
         a: BlockTransposedPanel<'a, f32, SC_A>,
         b: RowMajorPanel<'b, f32, SC_B, Static<SC_B>>,
-        out: Slot<'s, f32, SC_A, SC_B>,
+        a_panel: usize,
+        _: usize,
     ) {
-        scalar_leaf::f32_store_microkernel::<SC_B, _>(arch, a, b, out);
+        let rows = &mut self.out.as_chunks_mut::<SC_A>().0[a_panel];
+        scalar_leaf::f32_max_microkernel::<SC_B, _>(arch, a, b, rows);
     }
 }
 
-impl<'a, 'b, 's>
-    Accumulate<
-        Scalar,
-        BlockTransposedPanel<'a, f32, SC_A>,
-        RowMajorPanel<'b, f32, SC_B, Dynamic>,
-        Slot<'s, f32, SC_A, SC_B>,
-    > for Kernel
+impl<'a, 'b>
+    PanelOp<Scalar, BlockTransposedPanel<'a, f32, SC_A>, RowMajorPanel<'b, f32, SC_B, Dynamic>>
+    for MaxOp<'_>
 {
     #[inline(always)]
-    fn accumulate(
-        &self,
+    fn process(
+        &mut self,
         arch: Scalar,
         a: BlockTransposedPanel<'a, f32, SC_A>,
         b: RowMajorPanel<'b, f32, SC_B, Dynamic>,
-        out: Slot<'s, f32, SC_A, SC_B>,
+        a_panel: usize,
+        _: usize,
     ) {
+        let rows = &mut self.out.as_chunks_mut::<SC_A>().0[a_panel];
         match b.rows() {
-            1 => scalar_leaf::f32_store_microkernel::<1, _>(arch, a, b, out),
+            1 => scalar_leaf::f32_max_microkernel::<1, _>(arch, a, b, rows),
             other => unreachable!("tail width {other} outside 1..{SC_B}"),
         }
-    }
-}
-
-impl Drain<Scalar, Strip<'_, f32, SC_A, SC_B>> for RawMax<'_> {
-    #[inline(always)]
-    fn drain(
-        &mut self,
-        arch: Scalar,
-        scratch: &Strip<'_, f32, SC_A, SC_B>,
-        a_panel: usize,
-        b_panels: Range<usize>,
-    ) {
-        let live = (b_panels.end * SC_B).min(self.nd) - b_panels.start * SC_B;
-        let rows = &mut self.out.as_chunks_mut::<SC_A>().0[a_panel];
-        scalar_leaf::max_into_rows(arch, scratch.columns(live), rows);
     }
 }
 
@@ -180,7 +124,7 @@ impl Drain<Scalar, Strip<'_, f32, SC_A, SC_B>> for RawMax<'_> {
 // Entry //
 ///////////
 
-/// Plan, allocate the strip, and drive.
+/// Plan and drive the streaming reduction.
 ///
 /// `k` is the *physical* row length both walks stride by, so it must be A's padded column
 /// count, not its logical one.
@@ -195,7 +139,7 @@ impl Drain<Scalar, Strip<'_, f32, SC_A, SC_B>> for RawMax<'_> {
 ///
 /// # Panics
 ///
-/// Panics if `state` is shorter than A's padded row count: the drain indexes it one
+/// Panics if `state` is shorter than A's padded row count: the operation indexes it one
 /// A-panel at a time.
 pub(super) fn run<Arch, AW, BW, const AR: usize, const BR: usize>(
     arch: Arch,
@@ -208,18 +152,8 @@ pub(super) fn run<Arch, AW, BW, const AR: usize, const BR: usize>(
     Arch: Copy,
     AW: TileWalk + for<'a> TileAt<'a, Tile = BlockTransposedTile<'a, f32, AR>>,
     BW: TileWalk + for<'b> TileAt<'b, Tile = RowMajorTile<'b, f32, BR>>,
-    Kernel: for<'a, 'b, 's> Accumulate<
-            Arch,
-            BlockTransposedPanel<'a, f32, AR>,
-            RowMajorPanel<'b, f32, BR, Static<BR>>,
-            Slot<'s, f32, AR, BR>,
-        > + for<'a, 'b, 's> Accumulate<
-            Arch,
-            BlockTransposedPanel<'a, f32, AR>,
-            RowMajorPanel<'b, f32, BR, Dynamic>,
-            Slot<'s, f32, AR, BR>,
-        >,
-    for<'o, 'x> RawMax<'o>: Drain<Arch, Strip<'x, f32, AR, BR>>,
+    for<'o, 'a, 'b> MaxOp<'o>: PanelOp<Arch, BlockTransposedPanel<'a, f32, AR>, RowMajorPanel<'b, f32, BR, Static<BR>>>
+        + PanelOp<Arch, BlockTransposedPanel<'a, f32, AR>, RowMajorPanel<'b, f32, BR, Dynamic>>,
 {
     // The identity for max.
     state.fill(f32::MIN);
@@ -235,18 +169,9 @@ pub(super) fn run<Arch, AW, BW, const AR: usize, const BR: usize>(
     // Both sides are f32 rows of `k`: whatever the source element type, the leaves
     // consume f32. The clamp is an unreachable backstop, as in `tile_stride`.
     let row_bytes = NonZeroUsize::new(k.get() * size_of::<f32>()).unwrap_or(NonZeroUsize::MIN);
-    let plan = Plan::<AR, BR>::new(row_bytes, row_bytes, nd, size_of::<f32>(), budget);
+    let plan = Plan::<AR, BR>::new(row_bytes, row_bytes, nd, 0, budget);
     let (a_walk, b_walk) = walks(plan);
-    let mut buf = vec![0.0f32; plan.strip_len()];
-
-    drive(
-        arch,
-        a_walk,
-        b_walk,
-        &mut Strip::new(&mut buf),
-        &Kernel,
-        &mut RawMax { out: state, nd },
-    );
+    drive(arch, a_walk, b_walk, &mut MaxOp { out: state });
 }
 
 /// The f32 MaxSim entry, and with [`MaxIpF16`](super::MaxIpF16) one of the two places that
@@ -358,18 +283,8 @@ mod tests {
         budget: TileBudget,
     ) where
         Arch: Copy,
-        Kernel: for<'a, 'b, 's> Accumulate<
-                Arch,
-                BlockTransposedPanel<'a, f32, AR>,
-                RowMajorPanel<'b, f32, BR, Static<BR>>,
-                Slot<'s, f32, AR, BR>,
-            > + for<'a, 'b, 's> Accumulate<
-                Arch,
-                BlockTransposedPanel<'a, f32, AR>,
-                RowMajorPanel<'b, f32, BR, Dynamic>,
-                Slot<'s, f32, AR, BR>,
-            >,
-        for<'o, 'x> RawMax<'o>: Drain<Arch, Strip<'x, f32, AR, BR>>,
+        for<'o, 'a, 'b> MaxOp<'o>: PanelOp<Arch, BlockTransposedPanel<'a, f32, AR>, RowMajorPanel<'b, f32, BR, Static<BR>>>
+            + PanelOp<Arch, BlockTransposedPanel<'a, f32, AR>, RowMajorPanel<'b, f32, BR, Dynamic>>,
     {
         let a = sample(nq * k, 0);
         let b = sample(nd * k, 5);
@@ -455,6 +370,37 @@ mod tests {
         for &case in CASES {
             check::<_, V3_A, V3_B>(arch, "x86-64-v3/tiny", case, budget);
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn v3_panel_reduction_ignores_nan_when_a_finite_maximum_exists() {
+        let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() else {
+            return;
+        };
+
+        let a = [1.0];
+        let b = [0.0, 0.0, 1.0, f32::NAN, 0.0, 0.0, 0.0, 0.0];
+        let query = MatRef::new(Standard::new(1, 1).unwrap(), &a).unwrap();
+        let docs = MatRef::new(Standard::new(b.len(), 1).unwrap(), &b).unwrap();
+        let bt = BlockTransposed::<f32, V3_A>::from_matrix_view(query.as_matrix_view());
+        let mut state = vec![f32::MAX; bt.padded_nrows()];
+
+        run(
+            arch,
+            docs.num_vectors(),
+            1,
+            TileBudget::default(),
+            &mut state,
+            |plan: Plan<V3_A, V3_B>| {
+                (
+                    BlockTransposedWalk::new(bt.as_view(), plan.a_panels),
+                    RowMajorWalk::new(docs, plan.b_panels),
+                )
+            },
+        );
+
+        assert_eq!(state[0], 1.0);
     }
 
     /// A zero-length contraction makes every inner product the empty sum, which the entry
