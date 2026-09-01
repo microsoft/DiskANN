@@ -6,6 +6,10 @@
 pub(super) use inner::{Bound, Check};
 
 pub(super) trait IntoBound {
+    #[cfg_attr(
+        not(any(test, debug_assertions)),
+        expect(dead_code, reason = "this is only used in debug builds")
+    )]
     fn into_bound(self) -> Bound;
 }
 
@@ -125,8 +129,11 @@ mod inner {
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
     enum Inner {
         Eq,
+        #[expect(unused, reason = "this completes the API")]
         Lt,
+        #[expect(unused, reason = "this completes the API")]
         Le,
+        #[expect(unused, reason = "this completes the API")]
         Gt,
         Ge,
     }
@@ -136,14 +143,17 @@ mod inner {
             Self(Inner::Eq)
         }
 
+        #[expect(unused, reason = "this completes the API")]
         pub(in crate::matrix_kernels) const fn lt() -> Self {
             Self(Inner::Lt)
         }
 
+        #[expect(unused, reason = "this completes the API")]
         pub(in crate::matrix_kernels) const fn le() -> Self {
             Self(Inner::Le)
         }
 
+        #[expect(unused, reason = "this completes the API")]
         pub(in crate::matrix_kernels) const fn gt() -> Self {
             Self(Inner::Gt)
         }
@@ -234,7 +244,7 @@ mod inner {
             f(self.0)
         }
 
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(test)]
         pub(in crate::matrix_kernels) fn value(self) -> usize {
             self.0
         }
@@ -277,14 +287,17 @@ mod inner {
             Self(())
         }
 
+        #[expect(unused, reason = "this completes the API")]
         pub(in crate::matrix_kernels) const fn lt() -> Self {
             Self(())
         }
 
+        #[expect(unused, reason = "this completes the API")]
         pub(in crate::matrix_kernels) const fn le() -> Self {
             Self(())
         }
 
+        #[expect(unused, reason = "this completes the API")]
         pub(in crate::matrix_kernels) const fn gt() -> Self {
             Self(())
         }
@@ -309,6 +322,7 @@ mod inner {
             Self(())
         }
 
+        #[expect(unused, reason = "this should not be called in release builds")]
         pub(in crate::matrix_kernels) fn check<T>(
             self,
             _check: Check,
@@ -340,7 +354,7 @@ mod inner {
     impl std::ops::Mul for Bound {
         type Output = Self;
 
-        fn mul(self, rhs: Self) -> Self {
+        fn mul(self, _rhs: Self) -> Self {
             Self(())
         }
     }
@@ -348,7 +362,7 @@ mod inner {
     impl std::ops::Add for Bound {
         type Output = Self;
 
-        fn add(self, rhs: Self) -> Self {
+        fn add(self, _rhs: Self) -> Self {
             Self(())
         }
     }
@@ -356,7 +370,7 @@ mod inner {
     impl std::ops::Sub for Bound {
         type Output = Self;
 
-        fn sub(self, rhs: Self) -> Self {
+        fn sub(self, _rhs: Self) -> Self {
             Self(())
         }
     }

@@ -45,7 +45,7 @@ impl<'a, T> View<'a, T> {
 
     /// Construct a [`View`] from a [`MatrixView`].
     #[cfg(test)]
-    pub(crate) fn from_matrix_view(v: MatrixView<'a, T>) -> Self {
+    pub(in crate::matrix_kernels) fn from_matrix_view(v: MatrixView<'a, T>) -> Self {
         let extent = NonZeroUsize::new(v.nrows()).unwrap();
         let k = DimK::new(NonZeroUsize::new(v.ncols()).unwrap());
         unsafe { Self::new(Slice::new(v.into_inner()), extent, k) }
@@ -56,20 +56,20 @@ impl<'a, T> View<'a, T> {
         Self { ptr, extent, k }
     }
 
-    pub(crate) unsafe fn as_std_slice(&self, k: DimK) -> &[T] {
+    pub(in crate::matrix_kernels) unsafe fn as_std_slice(&self, k: DimK) -> &[T] {
         let len = self.stride(k) * self.extent().get();
         unsafe { self.ptr.as_std_slice(len.value()) }
     }
 
-    pub(crate) const fn extent(&self) -> NonZeroUsize {
+    pub(in crate::matrix_kernels) const fn extent(&self) -> NonZeroUsize {
         self.extent
     }
 
-    pub(crate) const fn k(&self) -> Bound {
+    pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
-    pub(crate) fn stride(&self, k: DimK) -> Elements<T> {
+    pub(in crate::matrix_kernels) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k.value());
         Elements::new(k.value().get())
     }
@@ -80,8 +80,12 @@ impl<'a, T> View<'a, T> {
     /// # Safety
     ///
     /// Self must have `k` columns.
-    pub(crate) unsafe fn visit_sub_views<F>(&self, sub_extent: NonZeroUsize, k: DimK, mut f: F)
-    where
+    pub(in crate::matrix_kernels) unsafe fn visit_sub_views<F>(
+        &self,
+        sub_extent: NonZeroUsize,
+        k: DimK,
+        mut f: F,
+    ) where
         F: FnMut(View<'_, T>, usize),
     {
         let stride = self.stride(k);
@@ -111,7 +115,7 @@ impl<'a, T> View<'a, T> {
 
     /// TODO: A `View` with a fixed upper capacity.
     #[must_use = "the remainder needs to be handled separately"]
-    pub(crate) unsafe fn visit_panels<const EXTENT: usize>(
+    pub(in crate::matrix_kernels) unsafe fn visit_panels<const EXTENT: usize>(
         &self,
         k: DimK,
         mut f: impl FnMut(Panel<'_, T, EXTENT>, usize),
@@ -177,13 +181,14 @@ impl<'a, T> View<'a, T> {
 
 /// A block of `EXTENT` rows of a matrix with element type `T`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Panel<'a, T, const EXTENT: usize> {
+pub(in crate::matrix_kernels) struct Panel<'a, T, const EXTENT: usize> {
     ptr: Slice<'a, T>,
     k: Bound,
 }
 
 impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
-    pub(crate) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
+    #[cfg(test)]
+    pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         let k: usize = k.value().get();
         bounds::check_eq!(ptr.len(), k * EXTENT);
         unsafe { Self::new_inner(ptr, Bound::new(k)) }
@@ -194,7 +199,7 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
         Self { ptr, k }
     }
 
-    pub(crate) const fn as_ptr(&self) -> Slice<'_, T> {
+    pub(in crate::matrix_kernels) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
     }
 
@@ -204,11 +209,11 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
         unsafe { self.ptr.as_std_slice(EXTENT * k.value().get()) }
     }
 
-    pub(crate) const fn k(&self) -> Bound {
+    pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
-    pub(crate) fn stride(&self, k: DimK) -> Elements<T> {
+    pub(in crate::matrix_kernels) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k(), k);
         Elements::new(k.value().get())
     }
@@ -223,9 +228,9 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Remainder<'a, T, const CAPACITY: usize> {
+pub(in crate::matrix_kernels) struct Remainder<'a, T, const CAPACITY: usize> {
     ptr: Slice<'a, T>,
-    start: usize,
+    _start: usize,
     extent: NonZeroUsize,
     k: Bound,
 }
@@ -235,25 +240,31 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
         bounds::check_eq!(ptr.len(), Bound::new(extent.get()) * k);
         Self {
             ptr,
-            start,
+            _start: start,
             extent,
             k,
         }
     }
 
-    pub(crate) fn extent(&self) -> NonZeroUsize {
+    pub(in crate::matrix_kernels) fn extent(&self) -> NonZeroUsize {
         self.extent
     }
 
-    pub(crate) fn start(&self) -> usize {
-        self.start
+    #[cfg_attr(
+        not(test),
+        expect(unused, reason = "this completes an API but is not used yet")
+    )]
+    pub(in crate::matrix_kernels) fn start(&self) -> usize {
+        self._start
     }
 
     fn k(&self) -> Bound {
         self.k
     }
 
-    pub(crate) fn try_as_panel<const EXTENT: usize>(self) -> Option<Panel<'a, T, EXTENT>> {
+    pub(in crate::matrix_kernels) fn try_as_panel<const EXTENT: usize>(
+        self,
+    ) -> Option<Panel<'a, T, EXTENT>> {
         if self.extent().get() == EXTENT {
             Some(unsafe { Panel::new_inner(self.ptr, self.k()) })
         } else {

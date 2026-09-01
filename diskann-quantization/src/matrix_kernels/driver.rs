@@ -14,4 +14,3 @@ pub(super) trait PanelKernel {
 pub(super) trait MicroKernel {
     fn micro_kernel(&mut self);
 }
-

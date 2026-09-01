@@ -6,11 +6,10 @@
 use half::f16;
 
 use crate::matrix_kernels::{
-    maxsim::MaxSim,
-    driver,
     Cache,
     blocks::{packed, unpacked},
-    bounds,
+    bounds, driver,
+    maxsim::MaxSim,
     num::DimK,
     ptr::{MutSlice, Slice},
     util::{Convert, Converter, LoadStore},
@@ -115,9 +114,8 @@ where
                     let a_block = a_block_base + a_block_offset;
                     let handling_tail = a_block == last_a_block && remainder != 0;
 
-                    let bound = bounds::Bound::from_fn(|| {
-                        if handling_tail { remainder } else { MR }
-                    });
+                    let bound =
+                        bounds::Bound::from_fn(|| if handling_tail { remainder } else { MR });
 
                     let mut region = unsafe { c.subslice(MR * a_block, bound) };
                     let c = if handling_tail {
@@ -125,7 +123,6 @@ where
                     } else {
                         unsafe { *region.as_array::<MR>() }
                     };
-
 
                     // Run the kernel
                     let mut kernel = unsafe {
@@ -138,10 +135,9 @@ where
 
                     // Put back `C`.
                     if handling_tail {
-                        self.kernel.arch().store(
-                            c_final,
-                            unsafe { region.as_std_mut_slice(remainder) },
-                        );
+                        self.kernel
+                            .arch()
+                            .store(c_final, unsafe { region.as_std_mut_slice(remainder) });
                     } else {
                         unsafe { *region.as_array::<MR>() = c_final };
                     }
@@ -181,7 +177,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     use diskann_wide::arch::x86_64::{V3, V4};
 
-    use crate::{matrix_kernels::maxsim, multi_vector::{BlockTransposed}};
+    use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
     fn test_driver<A, const MR: usize, const NR: usize>(arch: A, rng: &mut impl rand::Rng)
     where

@@ -7,7 +7,7 @@ use std::{marker::PhantomData, num::NonZeroUsize};
 
 /// A offset for pointers `*const T` in terms of numbers of `T`.
 #[derive(Debug)]
-pub(crate) struct Elements<T> {
+pub(super) struct Elements<T> {
     elements: usize,
     _type: PhantomData<T>,
 }
@@ -22,7 +22,7 @@ impl<T> Copy for Elements<T> {}
 
 impl<T> Elements<T> {
     /// Construct a new [`Elements`].
-    pub(crate) const fn new(elements: usize) -> Self {
+    pub(super) const fn new(elements: usize) -> Self {
         Self {
             elements,
             _type: PhantomData,
@@ -30,17 +30,17 @@ impl<T> Elements<T> {
     }
 
     /// Return the value of `self`.
-    pub(crate) const fn value(self) -> usize {
+    pub(super) const fn value(self) -> usize {
         self.elements
     }
 
     /// Change the element type to `U`.
-    pub(crate) const fn cast<U>(self) -> Elements<U> {
+    pub(super) const fn cast<U>(self) -> Elements<U> {
         Elements::new(self.value())
     }
 
     /// Return the number of bytes a slice containing `self` elements would occupy.
-    pub(crate) const fn bytes(self) -> Bytes {
+    pub(super) const fn bytes(self) -> Bytes {
         Bytes::new(self.elements * std::mem::size_of::<T>())
     }
 }
@@ -73,14 +73,14 @@ impl<T> std::ops::Add for Elements<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub(crate) struct Bytes(usize);
+pub(super) struct Bytes(usize);
 
 impl Bytes {
-    pub(crate) const fn new(bytes: usize) -> Self {
+    pub(super) const fn new(bytes: usize) -> Self {
         Self(bytes)
     }
 
-    pub(crate) const fn value(self) -> usize {
+    pub(super) const fn value(self) -> usize {
         self.0
     }
 }
@@ -90,7 +90,7 @@ impl Bytes {
 //////////////
 
 // Return `x` as a `NonZeroUsize` or `NonZeroUsize::MIN` if `x` is zero.
-pub(crate) fn value_or_one(x: usize) -> NonZeroUsize {
+pub(super) fn value_or_one(x: usize) -> NonZeroUsize {
     NonZeroUsize::new(x).unwrap_or(NonZeroUsize::MIN)
 }
 
@@ -120,7 +120,7 @@ newtype! {
 
 #[cfg(any(test))]
 impl DimK {
-    pub(crate) fn from_bound(bound: super::bounds::Bound) -> Self {
+    pub(super) fn from_bound(bound: super::bounds::Bound) -> Self {
         Self::new(NonZeroUsize::new(bound.value()).unwrap())
     }
 }

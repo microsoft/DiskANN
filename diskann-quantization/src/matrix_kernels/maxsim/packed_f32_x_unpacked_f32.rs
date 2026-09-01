@@ -11,10 +11,9 @@ use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
 use diskann_wide::arch::x86_64::{V3, V4};
 
 use crate::matrix_kernels::{
-    driver,
     Cache,
     blocks::{packed, unpacked},
-    bounds,
+    bounds, driver,
     maxsim::MaxSim,
     num::{Bytes, DimK, Elements, value_or_one},
     ptr::{MutSlice, Slice},
@@ -140,9 +139,8 @@ where
                     let a_block = a_block_base + a_block_offset;
                     let handling_tail = a_block == last_a_block && remainder != 0;
 
-                    let bound = bounds::Bound::from_fn(|| {
-                        if handling_tail { remainder } else { MR }
-                    });
+                    let bound =
+                        bounds::Bound::from_fn(|| if handling_tail { remainder } else { MR });
 
                     let mut region = unsafe { c.subslice(MR * a_block, bound) };
                     let c = if handling_tail {
@@ -152,9 +150,8 @@ where
                     };
 
                     // run the kernel
-                    let mut kernel = unsafe {
-                        PanelKernel::new(self.kernel, a_panel, b_panels, c, self.k)
-                    };
+                    let mut kernel =
+                        unsafe { PanelKernel::new(self.kernel, a_panel, b_panels, c, self.k) };
 
                     driver::PanelKernel::panel_kernel(&mut kernel);
 
@@ -162,10 +159,9 @@ where
 
                     // Put back `C`.
                     if handling_tail {
-                        self.kernel.arch().store(
-                            c_final,
-                            unsafe { region.as_std_mut_slice(remainder) },
-                        );
+                        self.kernel
+                            .arch()
+                            .store(c_final, unsafe { region.as_std_mut_slice(remainder) });
                     } else {
                         unsafe { *region.as_array::<MR>() = c_final };
                     }
@@ -194,7 +190,7 @@ where
 //-------------//
 
 #[derive(Debug)]
-pub(crate) struct PanelKernel<'a, A, const MR: usize, const NR: usize> {
+pub(super) struct PanelKernel<'a, A, const MR: usize, const NR: usize> {
     kernel: MaxSim<A>,
     a: packed::Panel<'a, f32, MR>,
     b: unpacked::View<'a, f32>,
@@ -208,7 +204,7 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
     /// # Safety
     ///
     /// Bounds `a.k()` and `b.k()` must both be equal to `k`.
-    pub(crate) unsafe fn new(
+    pub(super) unsafe fn new(
         kernel: MaxSim<A>,
         a: packed::Panel<'a, f32, MR>,
         b: unpacked::View<'a, f32>,
@@ -221,7 +217,7 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
         Self { kernel, a, b, c, k }
     }
 
-    pub(crate) fn take(self) -> [f32; MR] {
+    pub(super) fn take(self) -> [f32; MR] {
         self.c
     }
 }
@@ -532,10 +528,7 @@ mod tests {
 
     use rand::{SeedableRng, rngs::StdRng};
 
-    use crate::{
-        matrix_kernels::maxsim,
-        multi_vector::{BlockTransposed}
-    };
+    use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
     /////////////////
     // MicroKernel //
@@ -673,8 +666,7 @@ mod tests {
 
                 let extent = NonZeroUsize::new(cols).unwrap();
 
-                let mut c = [f32::NEG_INFINITY; MR];
-
+                let c = [f32::NEG_INFINITY; MR];
                 let mut kernel = unsafe {
                     PanelKernel::new(
                         MaxSim::new(arch),

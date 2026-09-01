@@ -6,7 +6,6 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::Reborrow;
 use diskann_vector::distance::InnerProduct;
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 use diskann_wide::Architecture;
@@ -20,8 +19,8 @@ use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
 use super::max_sim::{MaxSim, MaxSimError};
 use crate::matrix_kernels;
-use crate::multi_vector::distance::{QueryMatRef};
-use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Mat, MatRef, Standard};
+use crate::multi_vector::distance::QueryMatRef;
+use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Prepared<A, Q, NR> — concrete kernel for the arch-dispatched paths.
@@ -34,14 +33,11 @@ struct Pack<const NR: usize>;
 struct Prepared<A, Q, const NR: usize> {
     arch: A,
     prepared: Q,
-    packing: Pack<NR>,
+    _packing: Pack<NR>,
 }
 
-impl<A, const GROUP: usize, const NR: usize> MaxSimKernel<f32> for Prepared<
-    A,
-    BlockTransposed<f32, GROUP>,
-    NR,
->
+impl<A, const GROUP: usize, const NR: usize> MaxSimKernel<f32>
+    for Prepared<A, BlockTransposed<f32, GROUP>, NR>
 where
     A: Architecture,
     for<'a> matrix_kernels::maxsim::packed_f32_x_unpacked_f32::Driver<'a, A, GROUP, NR>:
@@ -74,12 +70,12 @@ where
             matrix_kernels::maxsim::packed_f32_x_unpacked_f32::Driver::new(
                 self.arch,
                 matrix_kernels::blocks::packed::View::<f32, GROUP>::new(
-                    matrix_kernels::ptr::Slice::new(self.prepared.as_slice()),
+                    matrix_kernels::Slice::new(self.prepared.as_slice()),
                     NonZeroUsize::new(self.prepared.num_blocks()).unwrap(),
                     k,
                 ),
                 matrix_kernels::blocks::unpacked::View::new(
-                    matrix_kernels::ptr::Slice::new(doc.as_slice()),
+                    matrix_kernels::Slice::new(doc.as_slice()),
                     NonZeroUsize::new(doc.num_vectors()).unwrap(),
                     k,
                 ),
@@ -97,7 +93,8 @@ where
     }
 }
 
-impl<A, const GROUP: usize, const NR: usize> MaxSimKernel<half::f16> for Prepared<A, BlockTransposed<f32, GROUP>, NR>
+impl<A, const GROUP: usize, const NR: usize> MaxSimKernel<half::f16>
+    for Prepared<A, BlockTransposed<f32, GROUP>, NR>
 where
     A: Architecture,
     for<'a> matrix_kernels::maxsim::packed_f32_x_unpacked_f16::Driver<'a, A, GROUP, NR>:
@@ -131,12 +128,12 @@ where
             matrix_kernels::maxsim::packed_f32_x_unpacked_f16::Driver::new(
                 self.arch,
                 matrix_kernels::blocks::packed::View::<f32, GROUP>::new(
-                    matrix_kernels::ptr::Slice::new(self.prepared.as_slice()),
+                    matrix_kernels::Slice::new(self.prepared.as_slice()),
                     NonZeroUsize::new(self.prepared.num_blocks()).unwrap(),
                     k,
                 ),
                 matrix_kernels::blocks::unpacked::View::new(
-                    matrix_kernels::ptr::Slice::new(doc.as_slice()),
+                    matrix_kernels::Slice::new(doc.as_slice()),
                     NonZeroUsize::new(doc.num_vectors()).unwrap(),
                     k,
                 ),
@@ -218,8 +215,11 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, St
 {
     fn run(self, arch: Scalar, query: MatRef<'_, Standard<f32>>) -> E::Output {
         let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query.as_matrix_view());
-        let packing = Pack::<2>;
-        self.0.erase(Prepared { arch, prepared, packing })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<2>,
+        })
     }
 }
 
@@ -229,8 +229,11 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standa
 {
     fn run(self, arch: V3, query: MatRef<'_, Standard<f32>>) -> E::Output {
         let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query.as_matrix_view());
-        let packing = Pack::<6>;
-        self.0.erase(Prepared { arch, prepared, packing })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 
@@ -241,8 +244,11 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standa
     fn run(self, arch: V4, query: MatRef<'_, Standard<f32>>) -> E::Output {
         // V4 dispatches to V3 (no V4-specific kernel).
         let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query.as_matrix_view());
-        let packing = Pack::<6>;
-        self.0.erase(Prepared { arch, prepared, packing })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 
@@ -270,8 +276,11 @@ impl<E: Erase<half::f16>>
                 .map(|v| diskann_wide::cast_f16_to_f32(*v))
                 .as_view(),
         );
-        let packing = Pack::<2>;
-        self.0.erase(Prepared { arch, prepared, packing })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<2>,
+        })
     }
 }
 
@@ -287,8 +296,11 @@ impl<E: Erase<half::f16>>
                 .map(|v| diskann_wide::cast_f16_to_f32(*v))
                 .as_view(),
         );
-        let packing = Pack::<6>;
-        self.0.erase(Prepared { arch, prepared, packing })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 
@@ -304,8 +316,11 @@ impl<E: Erase<half::f16>>
                 .map(|v| diskann_wide::cast_f16_to_f32(*v))
                 .as_view(),
         );
-        let packing = Pack::<6>;
-        self.0.erase(Prepared { arch, prepared, packing })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 

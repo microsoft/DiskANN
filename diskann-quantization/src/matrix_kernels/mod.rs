@@ -11,15 +11,15 @@ pub(crate) mod maxsim;
 pub(crate) mod blocks;
 pub(crate) mod bounds;
 pub(crate) mod num;
-pub(crate) mod ptr;
-pub(crate) mod util;
 
-
+// private
 mod driver;
-pub(crate) use driver::Drive;
+mod ptr;
+mod util;
 
-#[cfg(test)]
-mod test_util;
+// re-export
+pub(crate) use driver::Drive;
+pub(crate) use ptr::Slice;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Cache {
@@ -50,3 +50,10 @@ impl Default for Cache {
         Self::new(L1, L2)
     }
 }
+
+//------------//
+// Test utils //
+//------------//
+
+#[cfg(test)]
+mod test_util;

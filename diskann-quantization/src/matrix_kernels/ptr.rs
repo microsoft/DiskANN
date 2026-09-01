@@ -8,7 +8,6 @@ use std::{marker::PhantomData, ptr::NonNull};
 use super::{
     bounds::{self, Bound},
     num::Elements,
-    util::LoadStore,
 };
 
 //-------//
@@ -34,7 +33,7 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// This function has the same requirements as [`std::slice::from_raw_parts`].
-    pub(crate) const unsafe fn from_raw(ptr: NonNull<T>, len: Bound) -> Self {
+    pub(super) const unsafe fn from_raw(ptr: NonNull<T>, len: Bound) -> Self {
         Self {
             ptr,
             len,
@@ -43,16 +42,16 @@ impl<'a, T> Slice<'a, T> {
     }
 
     /// Return the base pointer for `self`.
-    pub(crate) const fn as_ptr(&self) -> *const T {
+    pub(super) const fn as_ptr(&self) -> *const T {
         self.as_nonnull().as_ptr().cast_const()
     }
 
     /// Return the base pointer for `self`.
-    pub(crate) const fn as_nonnull(&self) -> NonNull<T> {
+    pub(super) const fn as_nonnull(&self) -> NonNull<T> {
         self.ptr
     }
 
-    pub(crate) unsafe fn as_std_slice(self, len: usize) -> &'a [T] {
+    pub(super) unsafe fn as_std_slice(self, len: usize) -> &'a [T] {
         bounds::check_eq!(self.len, len);
         unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
     }
@@ -64,7 +63,7 @@ impl<'a, T> Slice<'a, T> {
     /// This function has the same safety reqauirements as [`std::ptr::as_ref_unchecked`].
     /// Additionally, this function will panic if the true length of `self` is not equal
     /// to 1.
-    pub(crate) unsafe fn as_ref(self) -> &'a T {
+    pub(super) unsafe fn as_ref(self) -> &'a T {
         bounds::check_eq!(self.len, 1, "slice must have a length of exactly one",);
 
         unsafe { self.ptr.as_ref() }
@@ -77,7 +76,7 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// This function has the same safety requirements as [`std::ptr::add`].
-    pub(crate) unsafe fn add(self, offset: Elements<T>) -> Slice<'a, T> {
+    pub(super) unsafe fn add(self, offset: Elements<T>) -> Slice<'a, T> {
         let offset = offset.value();
 
         // Debug check that there is room.
@@ -94,7 +93,7 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// `length` must be less than or equal to the length provenance of self.
-    pub(crate) unsafe fn truncate(self, length: Elements<T>) -> Slice<'a, T> {
+    pub(super) unsafe fn truncate(self, length: Elements<T>) -> Slice<'a, T> {
         let length = length.value();
         bounds::check_ge!(self.len, length, "truncation would make the slice longer");
 
@@ -106,12 +105,12 @@ impl<'a, T> Slice<'a, T> {
     /// # Safety
     ///
     /// The true length of `self` must be at least one.
-    pub(crate) unsafe fn as_unit(self) -> Slice<'a, T> {
+    pub(super) unsafe fn as_unit(self) -> Slice<'a, T> {
         unsafe { self.truncate(Elements::new(1)) }
     }
 
     /// Return the tracked [`Bound`].
-    pub(crate) fn len(&self) -> Bound {
+    pub(super) fn len(&self) -> Bound {
         self.len
     }
 }

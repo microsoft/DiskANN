@@ -44,7 +44,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
     /// Construct a [`View`] from a [`BlockTransposedRef`].
     #[cfg(test)]
-    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Self
+    pub(in crate::matrix_kernels) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Self
     where
         T: Copy,
     {
@@ -53,26 +53,30 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) }
     }
 
-    pub(crate) const fn blocks(&self) -> NonZeroUsize {
+    pub(in crate::matrix_kernels) const fn blocks(&self) -> NonZeroUsize {
         self.blocks
     }
 
-    pub(crate) const fn k(&self) -> Bound {
+    pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
-    pub(crate) fn block_stride(&self, k: DimK) -> Elements<T> {
+    pub(in crate::matrix_kernels) fn block_stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k.value());
         Elements::new(SZ * k.value().get())
     }
 
-    pub(crate) fn extent(&self) -> NonZeroUsize {
+    pub(in crate::matrix_kernels) fn extent(&self) -> NonZeroUsize {
         const { assert!(SZ != 0) };
         self.blocks.saturating_mul(NonZeroUsize::new(SZ).unwrap())
     }
 
-    pub(crate) unsafe fn visit_sub_views<F>(&self, sub_blocks: NonZeroUsize, k: DimK, mut f: F)
-    where
+    pub(in crate::matrix_kernels) unsafe fn visit_sub_views<F>(
+        &self,
+        sub_blocks: NonZeroUsize,
+        k: DimK,
+        mut f: F,
+    ) where
         F: FnMut(View<'_, T, SZ>, usize),
     {
         let stride = self.block_stride(k);
@@ -100,7 +104,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         }
     }
 
-    pub(crate) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
+    pub(in crate::matrix_kernels) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
         F: FnMut(Panel<'_, T, SZ>, usize),
     {
@@ -137,13 +141,14 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 //-------//
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
+pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
     ptr: Slice<'a, T>,
     k: Bound,
 }
 
 impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
-    pub(crate) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
+    #[cfg(test)]
+    pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         bounds::check_eq!(ptr.len(), SZ * k.value().get().next_multiple_of(PACK));
         unsafe { Self::new_inner(ptr, Bound::new(k.value().get())) }
     }
@@ -153,15 +158,15 @@ impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
         Self { ptr, k }
     }
 
-    pub(crate) const fn as_ptr(&self) -> Slice<'_, T> {
+    pub(in crate::matrix_kernels) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
     }
 
-    pub(crate) const fn k(&self) -> Bound {
+    pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
-    pub(crate) fn stride(&self, k: DimK) -> Elements<T> {
+    pub(in crate::matrix_kernels) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k);
         Elements::new(SZ * PACK)
     }
