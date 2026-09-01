@@ -5,14 +5,14 @@
 
 use std::num::NonZeroUsize;
 
-#[cfg(test)]
-use diskann_utils::views::MatrixView;
-
 use crate::multi_vector::distance_v2::{
     bounds::{self, Bound},
     num::{DimK, Elements},
     ptr::Slice,
 };
+
+#[cfg(test)]
+use diskann_utils::views::MatrixView;
 
 /// A view over an unpacked 2-dimensional matrix.
 ///
@@ -45,10 +45,10 @@ impl<'a, T> View<'a, T> {
 
     /// Construct a [`View`] from a [`MatrixView`].
     #[cfg(test)]
-    pub(crate) fn from_view(v: MatrixView<'a, T>) -> Option<Self> {
-        let extent = NonZeroUsize::new(v.nrows())?;
-        let k = DimK::new(NonZeroUsize::new(v.ncols())?);
-        Some(unsafe { Self::new(Slice::new(v.into_inner()), extent, k) })
+    pub(crate) fn from_matrix_view(v: MatrixView<'a, T>) -> Self {
+        let extent = NonZeroUsize::new(v.nrows()).unwrap();
+        let k = DimK::new(NonZeroUsize::new(v.ncols()).unwrap());
+        unsafe { Self::new(Slice::new(v.into_inner()), extent, k) }
     }
 
     unsafe fn new_inner(ptr: Slice<'a, T>, extent: NonZeroUsize, k: Bound) -> Self {
@@ -301,7 +301,7 @@ mod test {
             Matrix::new(init, nrows.get(), ncols.get())
         };
 
-        let view = View::from_view(mat.as_view()).unwrap();
+        let view = View::from_matrix_view(mat.as_view());
         assert_eq!(view.extent().get(), mat.nrows());
         assert_eq!(view.k().value(), mat.ncols());
 
@@ -404,7 +404,7 @@ mod test {
             Matrix::new(init, nrows.get(), ncols.get())
         };
 
-        let view = View::from_view(mat.as_view()).unwrap();
+        let view = View::from_matrix_view(mat.as_view());
         assert_eq!(view.extent().get(), mat.nrows());
         assert_eq!(view.k().value(), mat.ncols());
 

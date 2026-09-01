@@ -15,7 +15,7 @@ use crate::multi_vector::distance_v2::{
     blocks::{packed, unpacked},
     bounds,
     kernel::{self, maxsim::MaxSim},
-    num::{DimK, Elements, value_or_one},
+    num::{Bytes, DimK, Elements, value_or_one},
     ptr::{MutSlice, Slice},
     util::{Fold, Folder},
 };
@@ -32,6 +32,24 @@ pub(super) struct Params {
     pub(super) b_cols_in_l1: NonZeroUsize,
 }
 
+impl Params {
+    pub(super) fn new(cache: Cache, a_panel: Bytes, b_col: Bytes, nr: usize) -> Self {
+        // Pick the number of A-panels to process at a time so the working set is within
+        // the L2 cache.
+        let a_panels_in_l2 = value_or_one(cache.l2().get() / a_panel.value());
+
+        // Pick the number of B-panels to process to the `B` working set plus a single
+        // panel of `A` fits in the L1 cache.
+        let b_budget = cache.l1().get().saturating_sub(a_panel.value());
+        let b_cols_in_l1 = value_or_one(nr * (b_budget / (nr * b_col.value())));
+
+        Self {
+            a_panels_in_l2,
+            b_cols_in_l1,
+        }
+    }
+}
+
 pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
     kernel: MaxSim<A>,
     a: packed::View<'a, f32, MR>,
@@ -42,6 +60,10 @@ pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
 }
 
 impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
+    /// # Safety
+    ///
+    /// Bounds `a.k()` and `b.k()` must be equal to `k`. Bound `c.len()` must be equal
+    /// to `a.extent()`.
     pub(crate) unsafe fn new(
         arch: A,
         a: packed::View<'a, f32, MR>,
@@ -58,20 +80,33 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
             "output slice must have one entry for every row in `a`",
         );
 
-        // Pick the number of A-panels to process at a time so the working set is within
-        // the L2 cache.
-        let a_panel_bytes = a.block_stride(k).bytes();
-        let a_panels_in_l2 = value_or_one(cache.l2().get() / a_panel_bytes);
+        unsafe {
+            Self::new_inner(
+                arch,
+                a,
+                b,
+                c,
+                k,
+                Params::new(cache, a.block_stride(k).bytes(), b.stride(k).bytes(), NR),
+            )
+        }
+    }
 
-        // Pick the number of B-panels to process to the `B` working set plus a single
-        // panel of `A` fits in the L1 cache.
-        let b_budget = cache.l1().get().saturating_sub(a_panel_bytes);
-        let b_cols_in_l1 = value_or_one(NR * (b_budget / (NR * b.stride(k).bytes())));
-
-        let params = Params {
-            a_panels_in_l2,
-            b_cols_in_l1,
-        };
+    unsafe fn new_inner(
+        arch: A,
+        a: packed::View<'a, f32, MR>,
+        b: unpacked::View<'a, f32>,
+        c: MutSlice<'a, f32>,
+        k: DimK,
+        params: Params,
+    ) -> Self {
+        bounds::check_eq!(a.k(), k, "constraction dimensions to not agree");
+        bounds::check_eq!(b.k(), k, "constraction dimensions to not agree");
+        bounds::check_eq!(
+            c.len(),
+            a.extent(),
+            "output slice must have one entry for every row in `a`",
+        );
 
         Self {
             kernel: MaxSim::new(arch),
@@ -91,6 +126,9 @@ where
 {
     #[inline(never)]
     fn drive(&mut self) {
+        // SAFETY: Class invariant - the length of `self.c` must be equal to `self.a.extent()`
+        unsafe { self.c.as_std_mut_slice(self.a.extent().get()) }.fill(f32::NEG_INFINITY);
+
         let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
             let on_b_panels = |b_panels: unpacked::View<'_, f32>, _| {
                 let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
@@ -140,6 +178,10 @@ pub(crate) struct PanelKernel<'a, A, const MR: usize, const NR: usize> {
 
 impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
     /// Construct a new kernel.
+    ///
+    /// # Safety
+    ///
+    /// Bounds `a.k()` and `b.k()` must both be equal to `k`.
     pub(crate) unsafe fn new(
         kernel: MaxSim<A>,
         a: packed::Panel<'a, f32, MR>,
@@ -219,6 +261,9 @@ struct MicroKernel<'a, A, const MR: usize, const NR: usize> {
 }
 
 impl<'a, A, const MR: usize, const NR: usize> MicroKernel<'a, A, MR, NR> {
+    /// # Safety
+    ///
+    /// Bounds `a.k()` and `b.k()` must be equal to `k`.
     unsafe fn new(
         kernel: MaxSim<A>,
         a: packed::Panel<'a, f32, MR>,
@@ -233,6 +278,9 @@ impl<'a, A, const MR: usize, const NR: usize> MicroKernel<'a, A, MR, NR> {
     }
 }
 
+/// # Safety
+///
+/// Bounds `a.k()` and `b.k()` must be equal to `k`.
 #[inline(always)]
 unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
     wide: W,
@@ -399,6 +447,7 @@ impl ExtraWide<16> for MaxSim<V4> {
 
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 16);
+
         unsafe { SIMDVector::load_simd(self.0, slice.as_ptr()) }
     }
 
@@ -432,47 +481,9 @@ impl ExtraWide<16> for MaxSim<V4> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::Matrix;
     use rand::{SeedableRng, rngs::StdRng};
 
-    use crate::multi_vector::distance_v2::test_util::TestDistr;
-
-    fn generate_test_problem(
-        mr: usize,
-        k: usize,
-        n: usize,
-        rng: &mut impl rand::Rng,
-    ) -> (Matrix<f32>, Matrix<f32>, Vec<f32>) {
-        // What's happening here with the terminology is very confusing:
-        //
-        // * We go across logical rows of the left-hand side. Due to the block-transposed
-        //   layout a logical row is actually a physical **column** of the `ref_a` we are
-        //   using as a representation.
-        //
-        // * We go across logical columns of the right-hand side. Due to the **row-major**
-        //   nature of `Matrix`, this means that logical columns are physical **rowsd**
-        //   of `ref_b`.
-        let ref_a = TestDistr::matrix::<f32>(k, mr, rng);
-        let ref_b = TestDistr::matrix::<f32>(n, k, rng);
-
-        let ref_c: Vec<f32> = (0..mr)
-            .map(|lhs_logical_row| {
-                let mut max_ip = f32::NEG_INFINITY;
-                ref_b.row_iter().for_each(|rhs_physical_col| {
-                    let mut this_ip = 0.0;
-                    for (k, b) in rhs_physical_col.iter().enumerate() {
-                        this_ip = b.mul_add(ref_a[(k, lhs_logical_row)], this_ip);
-                    }
-
-                    max_ip = max_ip.max(this_ip);
-                });
-
-                max_ip
-            })
-            .collect();
-
-        (ref_a, ref_b, ref_c)
-    }
+    use crate::multi_vector::{BlockTransposed, distance_v2::kernel::maxsim};
 
     /////////////////
     // MicroKernel //
@@ -486,7 +497,12 @@ mod tests {
     ) where
         for<'a> MicroKernel<'a, A, MR, NR>: kernel::MicroKernel,
     {
-        let (ref_a, ref_b, ref_c) = generate_test_problem(MR, k.value().get(), NR, rng);
+        let (ref_a, ref_b, ref_c) = maxsim::test::generate(MR, k.value().get(), NR, rng);
+
+        // From the reference problem, we need to transpose both `ref_a` and `ref_b` to get
+        // them into the desired format.
+        let ref_a = ref_a.transpose();
+        let ref_b = ref_b.transpose();
 
         let mut c = [f32::NEG_INFINITY; MR];
 
@@ -596,7 +612,12 @@ mod tests {
                     continue;
                 }
 
-                let (ref_a, ref_b, ref_c) = generate_test_problem(MR, k.value().get(), cols, rng);
+                let (ref_a, ref_b, ref_c) = maxsim::test::generate(MR, k.value().get(), cols, rng);
+
+                // From the reference problem, we need to transpose both `ref_a` and `ref_b` to get
+                // them into the desired format.
+                let ref_a = ref_a.transpose();
+                let ref_b = ref_b.transpose();
 
                 let extent = NonZeroUsize::new(cols).unwrap();
 
@@ -662,28 +683,124 @@ mod tests {
     }
 
     test_panel_kernel!(
-        test_panel_kernel_scalar_8x2,
+        test_panel_kernel_scalar,
         Some(Scalar::new()),
         0x2c03eb9ee51d30c3,
         (8, 2),
     );
 
     test_panel_kernel!(
-        test_panel_kernel_v3_16x4,
+        test_panel_kernel_v3,
         V3::new_checked(),
         0x2c03eb9ee51d30c3,
         (16, 4),
-    );
-
-    test_panel_kernel!(
-        test_panel_kernel_v3_16x6,
-        V3::new_checked(),
-        0x2c03eb9ee51d30c3,
         (16, 6),
     );
 
     test_panel_kernel!(
-        test_panel_kernel_v4_16x4,
+        test_panel_kernel_v4,
+        V4::new_checked_miri(),
+        0x2c03eb9ee51d30c3,
+        (16, 4),
+    );
+
+    ////////////
+    // Driver //
+    ////////////
+
+    fn test_driver<A, const MR: usize, const NR: usize>(arch: A, rng: &mut impl rand::Rng)
+    where
+        A: Copy,
+        for<'a> Driver<'a, A, MR, NR>: kernel::Drive,
+    {
+        // (a-panels-per-tile, a-rows, b-cols-per-tile, b-cols, k)
+        let cases = [
+            (1, MR * 1, 1, 1, 1),           // Smallest valid setup
+            (1, MR * 3, 1, 3, 1),           // Unit advancement, no reuse.
+            (2, MR * 2, 2 * NR, 2 * NR, 3), // Values a direct multiple of the blocking.
+            (2, MR * 3, 2 * NR, NR, 3),     //
+            (2, MR * 1, 2 * NR, 2 * NR + 1, 3),
+            (2, MR * 3, 2 * NR, 2 * NR + 1, 5),
+            (2, MR * 5, 2 * NR, 4 * NR + 1, 1),
+        ];
+
+        for case in cases {
+            let (a_panels_per_tile, a_rows, b_cols_per_tile, b_cols, k) = case;
+
+            let k = DimK::new(NonZeroUsize::new(k).unwrap());
+
+            let (ref_a, ref_b, ref_c) =
+                maxsim::test::generate(a_rows, k.value().get(), b_cols, rng);
+
+            // Massage the input data in the form needed by the kernel.
+            let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());
+            let b = ref_b.transpose();
+
+            let mut c = vec![f32::NAN; a_bt.padded_nrows()];
+
+            let mut driver = unsafe {
+                Driver::new_inner(
+                    arch,
+                    packed::View::from_block_transposed(a_bt.as_view()),
+                    unpacked::View::from_matrix_view(b.as_view()),
+                    MutSlice::new(&mut c),
+                    k,
+                    Params {
+                        a_panels_in_l2: NonZeroUsize::new(a_panels_per_tile).unwrap(),
+                        b_cols_in_l1: NonZeroUsize::new(b_cols_per_tile).unwrap(),
+                    },
+                )
+            };
+
+            kernel::Drive::drive(&mut driver);
+
+            assert_eq!(
+                ref_c, c,
+                "a_panels_per_tile: {}, a_rows: {}, b_cols_per_tile: {}, b_cols: {}, k: {:?}",
+                a_panels_per_tile, a_rows, b_cols_per_tile, b_cols, k,
+            );
+        }
+    }
+
+    macro_rules! test_driver {
+        (
+            $fn:ident,
+            $arch:expr,
+            $seed:literal,
+            $(
+                (
+                    $MR:literal, $NR:literal
+                )
+            ),+ $(,)?
+        ) => {
+            #[test]
+            fn $fn() {
+                if let Some(arch) = $arch {
+                    let mut rng = StdRng::seed_from_u64($seed);
+
+                    $(test_driver::<_, $MR, $NR>(arch, &mut rng);)+
+                }
+            }
+        }
+    }
+
+    test_driver!(
+        test_driver_scalar,
+        Some(Scalar::new()),
+        0x2c03eb9ee51d30c3,
+        (8, 2),
+    );
+
+    test_driver!(
+        test_driver_v3,
+        V3::new_checked(),
+        0x2c03eb9ee51d30c3,
+        (16, 4),
+        (16, 6),
+    );
+
+    test_driver!(
+        test_driver_v4,
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
         (16, 4),

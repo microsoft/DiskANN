@@ -188,8 +188,7 @@ impl<'a, T> MutSlice<'a, T> {
     ///
     /// This function has the same requirements as [`std::slice::from_raw_parts_mut`] with
     /// the addition that `len` **must** be the true length of `self`.
-    #[cfg(test)]
-    unsafe fn as_std_mut_slice(&mut self, len: usize) -> &mut [T] {
+    pub(super) unsafe fn as_std_mut_slice(&mut self, len: usize) -> &mut [T] {
         bounds::check_eq!(self.len(), len);
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), len) }
     }

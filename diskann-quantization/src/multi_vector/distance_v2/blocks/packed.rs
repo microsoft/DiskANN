@@ -11,6 +11,9 @@ use crate::multi_vector::distance_v2::{
     ptr::Slice,
 };
 
+#[cfg(test)]
+use crate::multi_vector::BlockTransposedRef;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct View<'a, T, const SZ: usize> {
     ptr: Slice<'a, T>,
@@ -37,6 +40,17 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         );
 
         Self { ptr, blocks, k }
+    }
+
+    /// Construct a [`View`] from a [`BlockTransposedRef`].
+    #[cfg(test)]
+    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Self
+    where
+        T: Copy,
+    {
+        let blocks = NonZeroUsize::new(v.num_blocks()).unwrap();
+        let k = DimK::new(NonZeroUsize::new(v.ncols()).unwrap());
+        unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) }
     }
 
     pub(crate) const fn blocks(&self) -> NonZeroUsize {

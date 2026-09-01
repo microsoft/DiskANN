@@ -34,9 +34,14 @@ impl<T> Elements<T> {
         self.elements
     }
 
+    /// Change the element type to `U`.
+    pub(super) const fn cast<U>(self) -> Elements<U> {
+        Elements::new(self.value())
+    }
+
     /// Return the number of bytes a slice containing `self` elements would occupy.
-    pub(super) const fn bytes(self) -> usize {
-        self.elements * std::mem::size_of::<T>()
+    pub(super) const fn bytes(self) -> Bytes {
+        Bytes::new(self.elements * std::mem::size_of::<T>())
     }
 }
 
@@ -61,6 +66,28 @@ impl<T> std::ops::Add for Elements<T> {
         Self::new(self.value() + by.value())
     }
 }
+
+///////////
+// Bytes //
+///////////
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub(super) struct Bytes(usize);
+
+impl Bytes {
+    pub(super) const fn new(bytes: usize) -> Self {
+        Self(bytes)
+    }
+
+    pub(super) const fn value(self) -> usize {
+        self.0
+    }
+}
+
+//////////////
+// NewTypes //
+//////////////
 
 // Return `x` as a `NonZeroUsize` or `NonZeroUsize::MIN` if `x` is zero.
 pub(super) fn value_or_one(x: usize) -> NonZeroUsize {

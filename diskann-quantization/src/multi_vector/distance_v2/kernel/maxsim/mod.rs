@@ -18,3 +18,6 @@ impl<A> MaxSim<A> {
         self.0
     }
 }
+
+#[cfg(test)]
+mod test;
