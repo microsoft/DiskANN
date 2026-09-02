@@ -156,6 +156,49 @@ fn assert_live_invariants(c: &OnlineClusterer, live: &[u32]) {
     }
 }
 
+/// Every live point is assigned to its globally nearest live centroid.
+fn assert_npa(c: &OnlineClusterer, live: &[u32]) {
+    for &pid in live {
+        let assigned = c.partition.assignment(pid);
+        let assigned_distance = sqd(
+            c.points.row(pid as usize),
+            c.centroids
+                .get(assigned)
+                .expect("assigned centroid is live"),
+        );
+        let best = c
+            .centroids
+            .iter_live()
+            .map(|(_, centroid)| sqd(c.points.row(pid as usize), centroid))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            assigned_distance <= best + 1e-5,
+            "point {pid} violates NPA: assigned={assigned_distance} best={best}"
+        );
+    }
+}
+
+#[test]
+fn lire_split_reaches_npa_and_threshold_equilibrium() {
+    let mut rng = StdRng::seed_from_u64(71);
+    let (n, dim) = (400usize, 4usize);
+    let values = (0..n * dim)
+        .map(|_| rng.random_range(-10.0f32..10.0))
+        .collect();
+    let points = mat(values, n, dim);
+    let mut p = params(128, 24);
+    p.max_clusters = None;
+    p.centroid_capacity = 4 * n;
+    p.routing = OnlineCentroidRouting::Exact;
+    let initial = mat(points.row(0).to_vec(), 1, dim);
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
+
+    assert_invariants(&c, n);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 24));
+    assert_npa(&c, &(0..n as u32).collect::<Vec<_>>());
+}
+
 #[test]
 fn no_split_matches_nearest_centroid() {
     // High threshold => no splits; pure online assignment with fixed
@@ -422,21 +465,20 @@ fn batched_inserts_preserve_invariants_and_split() {
         prev = e.insert_index;
     }
 
-    // `clusters_updated` is one number per batch, deduplicated across its
-    // regions: at least as large as the widest single region, never larger
-    // than their sum, and never larger than the live cluster count.
+    // `clusters_updated` is one number per insert batch, deduplicated across
+    // all LIRE cascade rounds. It counts only live postings actually rewritten,
+    // so a neighbor whose candidates all stay put is not included.
     let t = c.telemetry();
     let mut multi_region_batches = 0;
     for batch in t.splits.chunk_by(|a, b| a.insert_index == b.insert_index) {
         let updated = batch[0].clusters_updated;
-        let widths = batch.iter().map(|e| e.num_neighbors + 2);
-        let sum: usize = widths.clone().sum();
         assert!(batch.iter().all(|e| e.clusters_updated == updated));
-        assert!(updated >= widths.max().unwrap() && updated <= sum);
-        assert!(updated <= batch[0].live_after);
-        if batch.len() == 1 {
-            assert_eq!(updated, sum, "one region has nothing to deduplicate");
-        } else {
+        assert!(updated >= 2, "the final split round has two live children");
+        assert!(
+            updated <= batch.last().unwrap().live_after,
+            "batch telemetry is finalized after all cascade rounds"
+        );
+        if batch.len() > 1 {
             multi_region_batches += 1;
         }
     }
@@ -506,7 +548,8 @@ fn telemetry_records_splits_and_reassignments() {
         assert!(e.insert_index >= 1 && e.insert_index <= n as u64);
         prev = e.insert_index;
         assert!(e.cluster_size >= 2);
-        assert!(e.num_reassigned >= e.cluster_size); // all of C always moves
+        assert!(e.npa_candidates <= e.region_points);
+        assert!(e.num_reassigned <= e.region_points);
         reassigned_sum += e.num_reassigned as u64;
     }
     assert_eq!(reassigned_sum, t.total_reassigned);
@@ -760,6 +803,158 @@ fn underflow_retires_the_cluster_and_scatters_it_onto_survivors() {
         e.num_reassigned, 2,
         "only the victim's own members are re-placed"
     );
+    assert_npa(&c, &live);
+}
+
+#[test]
+fn graph_merge_target_excludes_batch_victims() {
+    let (points, initial) = four_groups(5);
+    let mut c = OnlineClusterer::new(points, initial, merge_params(8, 10_000, 3)).unwrap();
+    c.insert_batch(&(0..20u32).collect::<Vec<_>>()).unwrap();
+
+    let victims = std::collections::HashSet::from([0, 1]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            2,
+            &std::collections::HashMap::new(),
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert!(!victims.contains(&target.id));
+    assert_eq!(target.source, MergeTargetSource::Graph);
+}
+
+#[test]
+fn graph_merge_target_widens_to_a_farther_capacity_safe_survivor() {
+    let points = mat(vec![0.0; 20], 20, 1);
+    let initial = mat(vec![0.0, 1.0, 2.0, 100.0], 4, 1);
+    let mut p = merge_params(8, 5, 2);
+    p.reassign_neighbors = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    for pid in 0..5 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 5..10 {
+        c.partition.attach_new(pid, 2);
+    }
+    c.partition.attach_new(10, 3);
+
+    let victims = std::collections::HashSet::from([0]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            1,
+            &std::collections::HashMap::new(),
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(target.id, 3, "the only posting with projected capacity");
+    assert_eq!(target.source, MergeTargetSource::Graph);
+}
+
+#[test]
+fn graph_merge_target_uses_exact_fallback_after_the_bounded_search() {
+    let points = mat(vec![0.0; 20], 20, 1);
+    let initial = mat(vec![0.0, 1.0, 2.0, 100.0], 4, 1);
+    let mut p = merge_params(8, 5, 2);
+    p.reassign_neighbors = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    for pid in 0..5 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 5..10 {
+        c.partition.attach_new(pid, 2);
+    }
+    c.partition.attach_new(10, 3);
+
+    let victims = std::collections::HashSet::from([0]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            1,
+            &std::collections::HashMap::new(),
+            2,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(target.id, 3, "the only posting with projected capacity");
+    assert_eq!(target.source, MergeTargetSource::ExactFallback);
+}
+
+#[test]
+fn exact_merge_target_uses_the_nearest_capacity_safe_survivor() {
+    let (points, initial) = four_groups(5);
+    let mut p = merge_params(8, 6, 3);
+    p.routing = OnlineCentroidRouting::Exact;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 5..10 {
+        c.partition.attach_new(pid, 1);
+    }
+
+    let victims = std::collections::HashSet::from([0]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            2,
+            &std::collections::HashMap::new(),
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(target.id, 2, "cluster 1 lacks capacity, so cluster 2 wins");
+    assert_eq!(target.source, MergeTargetSource::ExactFallback);
+}
+
+#[test]
+fn merge_target_respects_capacity_reserved_by_earlier_victims() {
+    let (points, initial) = four_groups(5);
+    let mut p = merge_params(8, 6, 3);
+    p.routing = OnlineCentroidRouting::Exact;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 5..8 {
+        c.partition.attach_new(pid, 1);
+    }
+
+    let victims = std::collections::HashSet::from([0]);
+    let planned_targets = std::collections::HashMap::from([(1, 2)]);
+    let mut scratch = MergeSearchScratch::default();
+    let target = c
+        .find_merge_target(
+            c.centroids.get(0).unwrap(),
+            &victims,
+            2,
+            &planned_targets,
+            MERGE_GRAPH_MAX_SURVIVORS,
+            &mut scratch,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        target.id, 2,
+        "the nearer target is full after the earlier reservation"
+    );
 }
 
 #[test]
@@ -868,12 +1063,17 @@ fn churn_keeps_the_centroid_graph_and_registry_in_sync() {
     c.insert_batch(&(0..n as u32).collect::<Vec<_>>()).unwrap();
     assert_graph_matches_registry(&c);
 
-    // Recycle a sixth of the corpus at a time. Deleting a contiguous id range
-    // starves whole regions at once, which is the case that retires spatially
-    // adjacent centroids together; reinserting the same ids then splits those
-    // regions back apart and reuses the slots just freed.
-    for round in 0..6u32 {
-        let victims: Vec<u32> = (round * 100..round * 100 + 100).collect();
+    // Recycle one whole current posting at a time. Selecting from current
+    // membership guarantees a merge even when a new split policy changes how
+    // contiguous pid ranges are distributed.
+    for _ in 0..6 {
+        let victim = c
+            .centroids
+            .live_ids()
+            .max_by_key(|&cid| c.partition.list_len(cid))
+            .unwrap();
+        let victims = c.partition.members(victim).to_vec();
+        assert!(!victims.is_empty());
         c.delete_batch(&victims).unwrap();
         assert_graph_matches_registry(&c);
         c.insert_batch(&victims).unwrap();

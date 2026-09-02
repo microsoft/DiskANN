@@ -36,13 +36,13 @@ partition state, [`search.rs`](src/online/search.rs) implements live queries,
 - **Search = route then scan.** A query navigates the centroid graph to its
   `nlist` nearest centroids, reads those lists from disk, and exhaustively scores
   the query against their members.
-- **Online build = stream, route, split/dissolve.** Points stream in and out:
+- **Online build = stream, route, LIRE split/merge.** Points stream in and out:
   each insert is routed to its nearest centroid and appended; each delete removes
   the point from its list. When a cluster overflows `split_threshold` it is
   **split** and its neighbourhood locally **reassigned**. When one falls below
-   `merge_threshold` it is **dissolved** (recorded as a merge) — retired from the
-   centroid graph and its members scattered onto survivors. The centroid count
-   grows with splits and contracts with dissolves; it is not fixed up front.
+   `merge_threshold` it is **merged** — retired from the centroid graph and its
+   members globally rerouted for NPA. The centroid count grows with splits and
+   contracts with merges; it is not fixed up front.
 
 ```mermaid
 flowchart LR
@@ -71,7 +71,7 @@ flowchart LR
   `f32` copy for clustering (row `pid` = point `pid`). It then "streams" points
   by feeding row indices to `insert_batch`; there is no per-insert disk I/O. This
   is not an out-of-core builder, so budget memory for both representations.
-- **Clustering is always squared-L2.** Routing, 2-means splits, and reassignment
+- **Clustering is always squared-L2.** Routing, balanced splits, and reassignment
   all run in full-precision `f32` under squared-L2. The configured
   [`Metric`](src/params.rs) controls search-time routing/scoring after load. For
   cosine-style or normalized inner-product data, the caller must pre-normalize
@@ -225,17 +225,25 @@ partition. For a single streamed point `pid`:
    the affected region. An error after commit starts poisons the clusterer; see
    [State ownership and failure semantics](#3d-state-ownership-and-failure-semantics).
 
-This is the semantics of `batch_size: 1`. Inserts can cause splits but never
-dissolves; deletes can cause dissolves but never splits. Larger batches retain
-that rule while planning all splits together — see
+This is the semantics of `batch_size: 1`. Inserts trigger split-reassign; deletes
+can trigger LIRE merges whose final NPA routes may cascade into splits. Larger
+batches plan all initial splits together — see
 [Batched inserts](#3b-batched-inserts).
 
 
-### 3. Split a cluster (split-and-reassign)
+### 3. LIRE split and reassignment
 
-One admitted parent `c` becomes two children and its local neighborhood is
-re-optimized. The operation has a read-only prepare phase and a mutating commit
-phase.
+Online maintenance follows SPFresh's Lightweight Incremental RE-balancing
+(LIRE) protocol. One admitted parent `c` becomes two capacity-bounded children;
+the two necessary conditions from SPFresh §3.3 select only vectors that can
+possibly violate nearest-partition assignment (NPA), and a final global centroid
+route removes the false positives.
+
+The algorithmic reference is SPFresh §3.2–§3.4
+([SOSP'23 paper](https://arxiv.org/abs/2410.14452)). This in-memory Graph-IVF
+adaptation implements balanced split, both necessary conditions, final NPA
+checks, merge, and cascade convergence. It does not implement SPFresh's
+asynchronous Local Rebuilder, version map, replicas, or SSD Block Controller.
 
 **Prepare, without changing live state:**
 
@@ -244,31 +252,29 @@ phase.
 2. **Select neighbor clusters.** Search from `c`'s centroid and take the
    `reassign_neighbors` (`s`) nearest **live** centroids, excluding `c`. The
    search uses a list at least `max(reassign_l, s + 1)`.
-3. **Fit children.** Run Lloyd 2-means (`two_means_iters`, seeded from two
-   distinct members), producing two child vectors (L2-normalized if
-   `normalize_centroids`).
+3. **Fit balanced children.** Run a capacity-constrained binary fit. Points stay
+   on their geometrically nearer child unless that child would exceed the split
+   capacity, in which case the weakest-preference points move across. Recompute
+   both child centroids after each constrained assignment.
+4. **Filter possible NPA violations.** For a parent member `v`, retain it for a
+   global check only when the old centroid is no farther than both children
+   (LIRE Equation 1). For a neighbor member, retain it only when at least one
+   child is no farther than the old centroid (Equation 2).
 
 **Commit the prepared plan:**
 
-4. **Publish the structural change.** Reserve two fresh ids, insert both child
+5. **Publish the structural change.** Reserve two fresh ids, insert both child
    vertices into the centroid graph, and delete `c` from that graph. Only after
    all graph operations succeed does the private
    [`CentroidRegistry`](src/online/state.rs) publish the child vectors and retire
    `c` in its table. Retired ids are never reused.
-5. **Reassign the neighborhood.** Form
-   - *candidate centroids* = selected neighbors ∪ {child₁, child₂}
-   - *candidate points* = `c`'s members ∪ all points of the neighbor clusters
-
-   Detach those points through the private
-   [`IvfPartition`](src/online/state.rs), then attach each to its nearest
-   candidate by exact squared-L2, rebuilding both the lists and reverse map.
-   Distances are computed as
-   `‖p‖² − 2p·c + ‖c‖²` over a `tile × |candidates|` GEMM rather than a scalar
-   loop per point, which is what makes a large `reassign_neighbors` affordable;
-   points stream through a fixed-size tile so the gathered working set stays
-   bounded regardless of region size. Every member of the retired cluster
-   necessarily moves (its old id is not a candidate); a neighbor point counts as
-   "reassigned" only if it lands on a different centroid than before.
+6. **Final NPA check.** Route only the filtered candidates against the current
+   global centroid set. Parent members that failed Equation 1 go directly to
+   their nearer child. Move a filtered vector only when its newly routed centroid
+   differs from its current assignment.
+7. **Cascade to equilibrium.** Reassignment may overflow another posting. Split
+   every newly overfull posting admitted by the live/id budgets and repeat until
+   all live postings are at or below `split_threshold`.
 
 Each split is a net **+1** to the live-cluster count (−1 retired, +2 children).
 
@@ -277,18 +283,19 @@ flowchart TD
     S0["cluster c exceeds split_threshold"]
    S1["prepare: snapshot current + incoming members"]
    S2["prepare: graph search from c's centroid<br/>→ s nearest live centroids"]
-   S3["prepare: 2-means<br/>→ child1, child2"]
+    S3["prepare: balanced binary fit<br/>→ child1, child2"]
+    S35["LIRE Eq. 1 / Eq. 2<br/>filter possible NPA violations"]
    S4["commit: graph inserts children,<br/>then deletes c"]
    S45["commit: publish table update<br/>after graph success"]
-    S5["candidate centroids = s neighbors + 2 children<br/>candidate points = c's members + neighbor lists"]
-    S6["reassign each candidate point to its<br/>nearest candidate centroid, exact L2"]
-    S7["rebuild affected lists<br/>live cluster count +1"]
-      S0 --> S1 --> S2 --> S3 --> S4 --> S45 --> S5 --> S6 --> S7
+    S5["route filtered vectors against<br/>the global centroid set"]
+    S6["move only true NPA violations"]
+    S7["cascade any new overflow<br/>until threshold equilibrium"]
+      S0 --> S1 --> S2 --> S3 --> S35 --> S4 --> S45 --> S5 --> S6 --> S7
 ```
 
-Only `c` and the `reassign_neighbors` clusters selected by graph search are
-touched; the rest of the partition is unchanged, keeping each split's cost
-**local**.
+Only `c` and the `reassign_neighbors` clusters are examined by the necessary
+conditions. Vectors proven safe stay in place, so the expensive global NPA route
+is paid only by the local boundary subset.
 
 ### 3b. Batched inserts
 
@@ -310,20 +317,14 @@ lifecycle:
 2. **Project and prepare each parent.** Compute post-insert sizes without
    appending anything. Every admitted overflow is a parent `c₁ … c_l`; its
    snapshot includes both current and incoming members. Each snapshot `Xᵢ` is
-   bisected by its **own** 2-means — two seeds drawn from `Xᵢ`,
-   `two_means_iters` Lloyd iterations, and centroid normalization when
-   requested — exactly as in the serial path above. Neighbor searches also run
-   here against the old graph. Parents never see one another, so a cluster
-   splits identically however many others overflowed alongside it.
+   bisected by its own capacity-constrained binary fit. Neighbor searches and
+   LIRE Equation 1/2 filters also run here against the old graph.
 3. **Publish.** Attach all routed points, insert all `2l` child graph vertices,
    and retire the `l` parent vertices. The centroid table changes only after the
    graph operations succeed.
-4. **Reassign per region.** Each parent's region is then reassigned in turn,
-   exactly as in step 3.5: the candidates are the parent's own two children plus
-   the `reassign_neighbors` nearest live centroids selected *before* the
-   mutation, and the candidate points are the parent's members plus everything
-   those neighbors hold. A neighbor that was itself a parent of this batch has
-   been retired and drops out — its region is covered by its own turn.
+4. **LIRE reassign.** Apply Equations 1 and 2 per parent, deduplicate the union
+   of possible violations across the batch, route that subset globally, and move
+   only true NPA violations. Then process cascade splits to equilibrium.
 
 Admission control still applies per batch: a split costs two ids and adds one
 live cluster, so when a batch would breach `max_clusters` or the id budget the
@@ -337,10 +338,10 @@ parent is bisected and its region reassigned exactly as it would be on its own.
 Telemetry coarsens to match — one `SplitEvent` per split parent still, but every
 event from one batch shares that batch's `insert_index` and `live_after`.
 
-The speedup is almost entirely routing: that phase is embarrassingly parallel
-once the graph is frozen, while splitting stays serial per parent.
+Batch routing remains embarrassingly parallel once the graph is frozen; local
+balanced fits run per parent and LIRE globally routes only filtered vectors.
 
-### 3c. Delete a point (remove, maybe dissolve)
+### 3c. Delete a point (remove, maybe merge)
 
 `delete_batch(pids)` also prepares all fallible work before mutation:
 
@@ -350,32 +351,33 @@ once the graph is frozen, while splitting stays serial per parent.
 2. **Project and admit victims.** Subtract each group's delete count from its
    list size without removing anything. Clusters projected below
    `merge_threshold` are considered emptiest-first, subject to the
-   `min_clusters` floor. `merge_threshold = 0` (the default) disables dissolves.
-3. **Prepare landing sites.** Snapshot each admitted victim's remaining members
-   (excluding this batch's deleted points). While the graph is still unchanged,
-   search from each victim centroid for up to `reassign_neighbors` survivors,
-   explicitly excluding **every** victim in the batch. If approximate navigation
-   returns too few survivors, an exact live-centroid scan completes the set.
-   No point, list, centroid table entry, or graph vertex has changed yet.
-4. **Commit removal and dissolves.** Filter each touched list once, resetting the
+   `min_clusters` floor. `merge_threshold = 0` (the default) disables merges.
+3. **Prepare LIRE merges.** Snapshot each admitted victim's remaining members.
+   In graph mode, search a bounded, progressively widened set of surviving
+   centroids, exactly rerank that set, and select the nearest posting whose
+   current plus already-planned merge load remains at or below
+   `split_threshold`. If the bounded candidates have no compatible target, use
+   one packed exact pass without a full sort; exact routing starts with that
+   pass. Skip a victim when no compatible target exists. Neighbor posting
+   vectors require no check: deleting a centroid cannot invalidate a vector
+   already assigned to another live centroid.
+4. **Commit removal and merges.** Filter each touched list once, resetting the
    deleted points to `UNASSIGNED`. Then retire the whole victim batch from the
-   centroid graph and table. Finally detach each victim's remaining members and
-   place them onto its preselected surviving candidates with the same tiled GEMM
-   used by split reassignment.
+   centroid graph and table. Detach each victim's remaining members and route
+   them against the post-retirement global centroid set for the final NPA check.
 
-Candidate search therefore happens **before** retirement, but placement happens
-**after** every victim is retired. Explicit batch-wide victim exclusion makes
-the precomputed landing sites valid even when mutually adjacent clusters are
-dissolved together.
+Capacity-compatible target selection happens **before** retirement, but final
+NPA routing happens **after** every victim is retired. Batch-wide victim
+exclusion prevents one victim from selecting another victim as its merge target.
 
 A merge is a net **−1** to the live-cluster count, fits no new centroid, and
 consumes **no centroid id** — merges are free against the id budget
 (see [§4](#4-id-budget--termination)).
 
-**The cascade rule:** `insert_batch` never merges; `delete_batch` never splits.
-A survivor that absorbs a dissolved cluster's members may end up over
-`split_threshold` — it waits for the next insert routed to it. This makes
-split/merge cascades structurally impossible rather than bounded by a counter.
+**The cascade rule:** insert-driven and merge-reassignment overflows both run
+split-reassign to threshold equilibrium. LIRE's convergence argument applies:
+each split retires one centroid and publishes two, so live-centroid count grows
+by one and remains bounded by the finite vector/id budgets.
 
 The `min_clusters` floor prevents the partition from collapsing entirely: merges
 are admitted emptiest-first until the live count would fall below `min_clusters`.
@@ -388,7 +390,7 @@ for merging.
 Two private types own the cross-structure invariants:
 
 - [`CentroidRegistry`](src/online/state.rs) owns both the id-indexed centroid
-   table and mutable centroid graph. Splits and dissolves cannot update one
+   table and mutable centroid graph. Splits and merges cannot update one
    representation through a separate call site. Table publication is infallible
    and occurs only after the corresponding graph operations succeed.
 - [`IvfPartition`](src/online/state.rs) owns both inverted lists and the reverse
@@ -532,9 +534,9 @@ Online build ([`OnlineParams`](src/params.rs)):
 | `min_clusters` | Live-cluster floor: merges stop before taking the count below this (clamped to `≥ 1` internally). |
 | `max_clusters` | Optional hard cap on live clusters (`None` = data-driven growth). |
 | `centroid_capacity` | Total id budget (live + retired); size to `≈ 2×` expected final clusters. |
-| `reassign_neighbors` | Neighbor clusters pooled with split children, and maximum survivor landing sites per dissolve (`≥ 1`); a candidate count, so it applies under either routing mode. |
-| `two_means_iters` | Lloyd iterations for split k-means (two children per admitted parent; internally at least one). |
-| `routing` | How the clusterer finds nearest centroids. `Graph { graph, assign_l, reassign_l }` navigates the centroid graph: `assign_l` routes inserts; `reassign_l` sizes split-neighbor and dissolve-survivor search, raised internally to fit candidates and exclusions; `graph` is the build recipe (`degree` R, `slack`, `l_build`, `alpha`). `Exact` scans every live centroid and carries none of these. |
+| `reassign_neighbors` | Nearby postings scanned by LIRE's Equation 1/2 filters after a split (`≥ 1`). |
+| `two_means_iters` | Iterations for the capacity-constrained binary child fit (internally at least one). |
+| `routing` | How the clusterer finds nearest centroids. `Graph { graph, assign_l, reassign_l }` navigates the centroid graph: `assign_l` routes inserts and final NPA checks; `reassign_l` sizes split-neighbor discovery; `graph` is the build recipe (`degree` R, `slack`, `l_build`, `alpha`). `Exact` scans every live centroid. |
 | `metric` | Candidate-scoring metric for live and flushed search. Clustering and centroid-graph construction remain L2; a loaded index navigates that same saved graph with this search metric. |
 | `normalize_centroids` | L2-normalize warmup and child centroids (unit-sphere corpora). |
 | `num_threads`, `seed` | Worker pool for warmup/split k-means, routing, and graph build; RNG seed. |
@@ -574,10 +576,10 @@ routing, split, delete, and merge totals plus one event per structural change.
 The library exposes two stable, deliberately separate CSV writers:
 
 - **`<telemetry_csv>`** — one row per split, written by `write_csv`. Fields:
-  triggering insert index, retired cluster and size, neighbor count, points that
-  changed cluster, resulting live count, and 2-means/reassignment/total
-  latencies.
-- **Merge CSV** — one row per dissolve, written by `write_merges_csv`. Fields:
+  triggering insert index, retired cluster and size, neighbor count, local region
+  points, Equation 1/2 candidates, points that changed cluster, resulting live
+  count, and balanced-fit/reassignment/total latencies.
+- **Merge CSV** — one row per LIRE merge, written by `write_merges_csv`. Fields:
    operation index, retired cluster and its size, survivor count, points moved,
    live count after the batch retirement, and search/reassignment/attributed
    latencies.
@@ -588,9 +590,8 @@ and automatically derives `<stem>_merges.<ext>` beside it for merge events. The
 schemas stay separate so existing split analysis remains compatible.
 
 An event's `total_us` is **attributed algorithm time**, not full operation
-latency. For a split it is the parent's member-weighted k-means share plus that
-region's reassignment and excludes neighborhood search and shared graph
-publication. For a dissolve it is landing-site search plus reassignment and
+latency. For a split it is balanced-fit time plus final NPA routing and excludes
+shared graph publication. For a merge it is target search plus reassignment and
 excludes shared graph retirement. Cumulative `BuildTelemetry::split_us` and
 `merge_us` measure the complete prepare/commit passes; `routing_us` and
 `delete_us` are recorded separately.

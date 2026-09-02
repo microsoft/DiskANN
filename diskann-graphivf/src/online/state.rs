@@ -221,6 +221,18 @@ impl CentroidRegistry {
         self.dense.search(ExactMetric::SqL2, query, ids, distances)
     }
 
+    /// The nearest packed live centroid accepted by `keep`.
+    ///
+    /// Used only after bounded graph candidates fail, or as the primary path
+    /// when exact routing is configured.
+    pub(super) fn closest_live_where(
+        &self,
+        query: &[f32],
+        keep: impl FnMut(u32) -> bool,
+    ) -> Option<u32> {
+        self.dense.closest_where(query, keep)
+    }
+
     /// Out-edge health of the centroid graph, or `None` when no graph is
     /// maintained.
     pub(super) fn adjacency_census(&self, runtime: &Runtime) -> Result<Option<AdjacencyCensus>> {
@@ -377,5 +389,33 @@ impl IvfPartition {
                 previous: cid,
             });
         }
+    }
+
+    /// Move selected currently assigned points to new centroids in one pass per
+    /// touched source list. Entries whose target equals their current centroid
+    /// are ignored.
+    pub(super) fn relocate(&mut self, destinations: &[(u32, u32)]) -> usize {
+        let mut moves = Vec::with_capacity(destinations.len());
+        let mut touched = Vec::new();
+        for &(pid, target) in destinations {
+            let source = self.assignment(pid);
+            if source == target {
+                continue;
+            }
+            debug_assert_ne!(source, UNASSIGNED);
+            moves.push((pid, source, target));
+            touched.push(source);
+            self.assignments[pid as usize] = UNASSIGNED;
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        for source in touched {
+            let assignments = &self.assignments;
+            self.lists[source as usize].retain(|&pid| assignments[pid as usize] != UNASSIGNED);
+        }
+        for &(pid, _, target) in &moves {
+            self.attach_new(pid, target);
+        }
+        moves.len()
     }
 }

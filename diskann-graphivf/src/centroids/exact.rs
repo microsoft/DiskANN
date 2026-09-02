@@ -189,6 +189,45 @@ impl DenseCentroids {
         (0..self.rows.len() as u32).filter(|&id| self.contains(id))
     }
 
+    /// The nearest packed live centroid accepted by `keep`.
+    ///
+    /// This is the low-allocation fallback for a graph search whose bounded
+    /// candidate set contains no admissible result. It walks only the packed
+    /// live rows, keeps one running best, and therefore avoids both the sparse
+    /// id map and a full candidate sort.
+    pub(crate) fn closest_where(
+        &self,
+        query: &[f32],
+        mut keep: impl FnMut(u32) -> bool,
+    ) -> Option<u32> {
+        debug_assert_eq!(query.len(), self.dim);
+        let mut best = None;
+        for (&id, centroid) in self.ids.iter().zip(self.vecs.chunks_exact(self.dim)) {
+            if !keep(id) {
+                continue;
+            }
+            let distance = query
+                .iter()
+                .zip(centroid)
+                .map(|(&left, &right)| {
+                    let delta = left - right;
+                    delta * delta
+                })
+                .sum::<f32>();
+            let replace = match best {
+                None => true,
+                Some((best_id, best_distance)) => distance
+                    .total_cmp(&best_distance)
+                    .then(id.cmp(&best_id))
+                    .is_lt(),
+            };
+            if replace {
+                best = Some((id, distance));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
     /// Add centroid `id` with vector `vec`.
     ///
     /// # Panics
@@ -452,6 +491,27 @@ mod tests {
             .collect();
         scored.sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
         scored
+    }
+
+    #[test]
+    fn closest_where_scans_packed_rows_and_breaks_ties_by_id() {
+        let centroids = Matrix::try_from(
+            vec![-1.0, 0.0, 1.0, 0.0, 4.0, 0.0, 8.0, 0.0].into_boxed_slice(),
+            4,
+            2,
+        )
+        .unwrap();
+        let mut dense = DenseCentroids::from_matrix(&centroids);
+
+        assert_eq!(dense.closest_where(&[0.0, 0.0], |_| true), Some(0));
+        assert_eq!(dense.closest_where(&[0.0, 0.0], |id| id != 0), Some(1));
+        dense.remove(1);
+        assert_eq!(
+            dense.closest_where(&[0.0, 0.0], |id| id != 0),
+            Some(2),
+            "retirement must not make the packed scan walk stale id slots"
+        );
+        assert_eq!(dense.closest_where(&[0.0, 0.0], |_| false), None);
     }
 
     /// Compare returned ids against the reference, tolerating a different
