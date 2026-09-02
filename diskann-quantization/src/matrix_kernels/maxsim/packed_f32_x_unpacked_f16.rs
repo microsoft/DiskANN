@@ -9,16 +9,15 @@ use crate::matrix_kernels::{
     Cache,
     blocks::{packed, unpacked},
     bounds, driver,
-    maxsim::MaxSim,
     num::DimK,
     ptr::{MutSlice, Slice},
-    util::{Convert, Converter, LoadStore},
+    util::{Convert, Converter, self},
 };
 
 use super::packed_f32_x_unpacked_f32::{PanelKernel, Params};
 
 pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
-    kernel: MaxSim<A>,
+    arch: A,
     a: packed::View<'a, f32, MR>,
     b: unpacked::View<'a, f16>,
     c: &'a mut [f32],
@@ -71,7 +70,7 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         );
 
         Self {
-            kernel: MaxSim::new(arch),
+            arch,
             a,
             b,
             c,
@@ -84,7 +83,7 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
 
 impl<A, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, MR, NR>
 where
-    A: LoadStore<f32, MR> + Copy,
+    A: util::LoadStore<f32, MR> + Copy,
     Converter<A>: Convert<f32, f16>,
     for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
 {
@@ -102,7 +101,7 @@ where
                 // Convert `f16` to `f32`.
                 let b_flat = unsafe { b_panels.as_std_slice(self.k) };
                 let b_converted = &mut self.b_converted[..b_flat.len()];
-                Converter::new(self.kernel.arch()).convert(b_converted, b_flat);
+                Converter::new(self.arch).convert(b_converted, b_flat);
 
                 let b_panels_converted = unsafe {
                     unpacked::View::new(Slice::new(b_converted), b_panels.extent(), self.k)
@@ -119,14 +118,17 @@ where
 
                     let mut region = unsafe { c.subslice(MR * a_block, bound) };
                     let c = if handling_tail {
-                        unsafe { self.kernel.arch().load(region.as_std_slice(remainder)) }
+                        util::LoadStore::<f32, MR>::load(
+                            self.arch,
+                            unsafe { region.as_std_slice(remainder) },
+                        )
                     } else {
                         unsafe { *region.as_array::<MR>() }
                     };
 
                     // Run the kernel
                     let mut kernel = unsafe {
-                        PanelKernel::new(self.kernel, a_panel, b_panels_converted, c, self.k)
+                        PanelKernel::new(self.arch, a_panel, b_panels_converted, c, self.k)
                     };
 
                     driver::PanelKernel::panel_kernel(&mut kernel);
@@ -135,9 +137,9 @@ where
 
                     // Put back `C`.
                     if handling_tail {
-                        self.kernel
-                            .arch()
-                            .store(c_final, unsafe { region.as_std_mut_slice(remainder) });
+                        util::LoadStore::<f32, MR>::store(self.arch, c_final, unsafe {
+                            region.as_std_mut_slice(remainder)
+                        });
                     } else {
                         unsafe { *region.as_array::<MR>() = c_final };
                     }

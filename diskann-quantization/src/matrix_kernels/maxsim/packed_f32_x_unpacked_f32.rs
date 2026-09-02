@@ -14,10 +14,9 @@ use crate::matrix_kernels::{
     Cache,
     blocks::{packed, unpacked},
     bounds, driver,
-    maxsim::MaxSim,
     num::{Bytes, DimK, Elements, value_or_one},
     ptr::{MutSlice, Slice},
-    util::{Fold, Folder, LoadStore},
+    util::{self, Fold, Folder},
 };
 
 //--------//
@@ -51,7 +50,7 @@ impl Params {
 }
 
 pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
-    kernel: MaxSim<A>,
+    arch: A,
     a: packed::View<'a, f32, MR>,
     b: unpacked::View<'a, f32>,
     c: &'a mut [f32],
@@ -109,7 +108,7 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         );
 
         Self {
-            kernel: MaxSim::new(arch),
+            arch,
             a,
             b,
             c,
@@ -121,7 +120,7 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
 
 impl<A, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, MR, NR>
 where
-    A: LoadStore<f32, MR> + Copy,
+    A: util::LoadStore<f32, MR> + Copy,
     for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
 {
     fn drive(&mut self) {
@@ -144,14 +143,17 @@ where
 
                     let mut region = unsafe { c.subslice(MR * a_block, bound) };
                     let c = if handling_tail {
-                        unsafe { self.kernel.arch().load(region.as_std_slice(remainder)) }
+                        util::LoadStore::<f32, MR>::load(
+                            self.arch,
+                            unsafe { region.as_std_slice(remainder) },
+                        )
                     } else {
                         unsafe { *region.as_array::<MR>() }
                     };
 
                     // run the kernel
                     let mut kernel =
-                        unsafe { PanelKernel::new(self.kernel, a_panel, b_panels, c, self.k) };
+                        unsafe { PanelKernel::new(self.arch, a_panel, b_panels, c, self.k) };
 
                     driver::PanelKernel::panel_kernel(&mut kernel);
 
@@ -159,9 +161,9 @@ where
 
                     // Put back `C`.
                     if handling_tail {
-                        self.kernel
-                            .arch()
-                            .store(c_final, unsafe { region.as_std_mut_slice(remainder) });
+                        util::LoadStore::<f32, MR>::store(self.arch, c_final, unsafe {
+                            region.as_std_mut_slice(remainder)
+                        });
                     } else {
                         unsafe { *region.as_array::<MR>() = c_final };
                     }
@@ -191,7 +193,7 @@ where
 
 #[derive(Debug)]
 pub(super) struct PanelKernel<'a, A, const MR: usize, const NR: usize> {
-    kernel: MaxSim<A>,
+    arch: A,
     a: packed::Panel<'a, f32, MR>,
     b: unpacked::View<'a, f32>,
     c: [f32; MR],
@@ -205,7 +207,7 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
     ///
     /// Bounds `a.k()` and `b.k()` must both be equal to `k`.
     pub(super) unsafe fn new(
-        kernel: MaxSim<A>,
+        arch: A,
         a: packed::Panel<'a, f32, MR>,
         b: unpacked::View<'a, f32>,
         c: [f32; MR],
@@ -214,7 +216,7 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), k);
 
-        Self { kernel, a, b, c, k }
+        Self { arch, a, b, c, k }
     }
 
     pub(super) fn take(self) -> [f32; MR] {
@@ -230,7 +232,7 @@ macro_rules! panel_kernel {
                 let on_b_panels = |b: unpacked::Panel<'_, f32, $nr>, _| {
                     let mut micro = unsafe {
                         MicroKernel::new(
-                            self.kernel,
+                            self.arch,
                             self.a,
                             b,
                             &mut self.c,
@@ -250,7 +252,7 @@ macro_rules! panel_kernel {
                         if let Some(b_panel) = b_tail.try_as_panel::<$ns>() {
                             let mut micro = unsafe {
                                 MicroKernel::new(
-                                    self.kernel,
+                                    self.arch,
                                     self.a,
                                     b_panel,
                                     &mut self.c,
@@ -280,7 +282,7 @@ panel_kernel!(V4, 16, 6, [1, 2, 3, 4, 5]);
 //--------------//
 
 struct MicroKernel<'a, A, const MR: usize, const NR: usize> {
-    kernel: MaxSim<A>,
+    arch: A,
     a: packed::Panel<'a, f32, MR>,
     b: unpacked::Panel<'a, f32, NR>,
     c: &'a mut [f32; MR],
@@ -292,7 +294,7 @@ impl<'a, A, const MR: usize, const NR: usize> MicroKernel<'a, A, MR, NR> {
     ///
     /// Bounds `a.k()` and `b.k()` must be equal to `k`.
     unsafe fn new(
-        kernel: MaxSim<A>,
+        arch: A,
         a: packed::Panel<'a, f32, MR>,
         b: unpacked::Panel<'a, f32, NR>,
         c: &'a mut [f32; MR],
@@ -301,7 +303,7 @@ impl<'a, A, const MR: usize, const NR: usize> MicroKernel<'a, A, MR, NR> {
         bounds::check_eq!(a.k(), k);
         bounds::check_eq!(b.k(), k);
 
-        Self { kernel, a, b, c, k }
+        Self { arch, a, b, c, k }
     }
 }
 
@@ -354,7 +356,7 @@ macro_rules! micro_kernel {
         impl driver::MicroKernel for MicroKernel<'_, $arch, $mr, $nr> {
             #[inline(always)]
             fn micro_kernel(&mut self) {
-                unsafe { micro_kernel(self.kernel, self.a, self.b, self.c, self.k) }
+                unsafe { micro_kernel(self.arch, self.a, self.b, self.c, self.k) }
             }
         }
     };
@@ -379,13 +381,13 @@ trait ExtraWide<const ELEMENTS: usize>: Copy {
     fn max_into(self, max: Self::Wide, into: &mut [f32; ELEMENTS]);
 }
 
-impl ExtraWide<8> for MaxSim<Scalar> {
+impl ExtraWide<8> for Scalar {
     type Wide = [f32x4<Scalar>; 2];
     type Splat = f32x4<Scalar>;
 
     #[inline(always)]
     fn default(self) -> Self::Wide {
-        [SIMDVector::default(self.0), SIMDVector::default(self.0)]
+        [SIMDVector::default(self), SIMDVector::default(self)]
     }
 
     #[inline(always)]
@@ -394,15 +396,15 @@ impl ExtraWide<8> for MaxSim<Scalar> {
 
         unsafe {
             [
-                SIMDVector::load_simd(self.0, slice.as_ptr()),
-                SIMDVector::load_simd(self.0, slice.add(Elements::new(4)).as_ptr()),
+                SIMDVector::load_simd(self, slice.as_ptr()),
+                SIMDVector::load_simd(self, slice.add(Elements::new(4)).as_ptr()),
             ]
         }
     }
 
     #[inline(always)]
     fn splat(self, value: f32) -> Self::Splat {
-        SIMDVector::splat(self.0, value)
+        SIMDVector::splat(self, value)
     }
 
     #[inline(always)]
@@ -428,13 +430,13 @@ impl ExtraWide<8> for MaxSim<Scalar> {
 }
 
 #[cfg(target_arch = "x86_64")]
-impl ExtraWide<16> for MaxSim<V3> {
+impl ExtraWide<16> for V3 {
     type Wide = [f32x8<V3>; 2];
     type Splat = f32x8<V3>;
 
     #[inline(always)]
     fn default(self) -> Self::Wide {
-        [SIMDVector::default(self.0), SIMDVector::default(self.0)]
+        [SIMDVector::default(self), SIMDVector::default(self)]
     }
 
     #[inline(always)]
@@ -442,15 +444,15 @@ impl ExtraWide<16> for MaxSim<V3> {
         bounds::check_eq!(slice.len(), 16);
         unsafe {
             [
-                SIMDVector::load_simd(self.0, slice.as_ptr()),
-                SIMDVector::load_simd(self.0, slice.add(Elements::new(8)).as_ptr()),
+                SIMDVector::load_simd(self, slice.as_ptr()),
+                SIMDVector::load_simd(self, slice.add(Elements::new(8)).as_ptr()),
             ]
         }
     }
 
     #[inline(always)]
     fn splat(self, value: f32) -> Self::Splat {
-        SIMDVector::splat(self.0, value)
+        SIMDVector::splat(self, value)
     }
 
     #[inline(always)]
@@ -476,25 +478,25 @@ impl ExtraWide<16> for MaxSim<V3> {
 }
 
 #[cfg(target_arch = "x86_64")]
-impl ExtraWide<16> for MaxSim<V4> {
+impl ExtraWide<16> for V4 {
     type Wide = f32x16<V4>;
     type Splat = f32x16<V4>;
 
     #[inline(always)]
     fn default(self) -> Self::Wide {
-        SIMDVector::default(self.0)
+        SIMDVector::default(self)
     }
 
     #[inline(always)]
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 16);
 
-        unsafe { SIMDVector::load_simd(self.0, slice.as_ptr()) }
+        unsafe { SIMDVector::load_simd(self, slice.as_ptr()) }
     }
 
     #[inline(always)]
     fn splat(self, value: f32) -> Self::Splat {
-        SIMDVector::splat(self.0, value)
+        SIMDVector::splat(self, value)
     }
 
     #[inline(always)]
@@ -554,7 +556,7 @@ mod tests {
         // Run the test kernel.
         let mut kernel = unsafe {
             MicroKernel::new(
-                MaxSim::new(arch),
+                arch,
                 packed::Panel::new(Slice::new(ref_a.as_slice()), k),
                 unpacked::Panel::new(Slice::new(ref_b.as_slice()), k),
                 &mut c,
@@ -669,7 +671,7 @@ mod tests {
                 let c = [f32::NEG_INFINITY; MR];
                 let mut kernel = unsafe {
                     PanelKernel::new(
-                        MaxSim::new(arch),
+                        arch,
                         packed::Panel::new(Slice::new(ref_a.as_slice()), k),
                         unpacked::View::new(Slice::new(ref_b.as_slice()), extent, k),
                         c,
