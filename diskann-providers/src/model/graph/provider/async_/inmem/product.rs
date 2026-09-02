@@ -235,8 +235,8 @@ where
 ///
 /// This type implements the following traits:
 ///
-/// * [`Accessor`] for the `DefaultProvider`.
-/// * [`BuildQueryComputer`].
+/// * [`glue::SearchAccessor`] for the [`DefaultProvider`].
+/// * [`GetFullPrecision`] when the full-precision store is available.
 pub struct QuantAccessor<'a, V, D, Ctx> {
     provider: &'a DefaultProvider<V, DefaultQuant, D, Ctx>,
     computer: pq::distance::QueryComputer<'a>,

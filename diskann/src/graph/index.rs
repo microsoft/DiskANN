@@ -433,13 +433,13 @@ where
         }
     }
 
-    /// Invoke `DP::set_element` for each vector in `vectors`. For each vector `v, returns:
+    /// Invoke `DP::set_element` for each vector in `vectors`. For each vector `v`, returns:
     ///
-    /// 1. The [`SetElement::Guard`] associated with the insertion.
+    /// 1. The [`DataProvider::Guard`] associated with the insertion.
     /// 2. The raw data of the vector.
     ///
     /// These results are aggregated into a vector, with an error being returned should any
-    /// call to [`DP::set_element`] fail.
+    /// call to [`SetElement::set_element`] fail.
     ///
     /// This is the leaf task for the batch [`Self::set_elements`] method.
     async fn set_chunk<B>(
@@ -467,12 +467,12 @@ where
         Ok(output)
     }
 
-    /// Parallelise the invocation of applying [`DP::set_element`] to all vectors `v` in
+    /// Parallelise the invocation of applying [`SetElement::set_element`] to all vectors `v` in
     /// `vectors` using up to `ntasks` tasks.
     ///
-    /// Return a pair consisting of the [`DP::set_element`] guards for each vector `v` in
+    /// Return a pair consisting of the [`DataProvider::Guard`] values for each vector `v` in
     /// vectors and an [`Arc`] slice of the translated vectors. This function bails if any
-    /// invocation of [`DP::set_element`] fails.
+    /// invocation of [`SetElement::set_element`] fails.
     ///
     /// The ordering of the guards will be consistent with the ordering of the translated
     /// vectors, though this need not necessarily be the order of the input vectors.
@@ -2546,8 +2546,8 @@ where
     ///
     /// Clobbers the following scratch fields:
     ///
-    /// * [`prune::Context::occlude_factor`]
-    /// * [`prune::Context::last_checked`]
+    /// * [`prune::State::occlude_factor`]
+    /// * [`prune::State::last_checked`]
     ///
     /// ## Note
     ///

@@ -48,13 +48,12 @@
 //!
 //! # How Does This Work?
 //!
-//! User error types (those implemented by the [`DataProvider`] and (eventually)
-//! [`NeighborProviderAsync`]) are expected to implement [`ToRanked`], which converts the
-//! error type to a [`RankedError`] consisting of a `Transient` and full `Error` alternatives.
-//! The [`RankedError::Transient`] alternative must implement [`TransientError`], which
-//! provides callback mechanisms for transient error acknowledgement or escalation.
-//! These callback are provided with a concrete reason for the decision to aid in debugging
-//! or program telemetry.
+//! User error types (such as those exposed by [`crate::provider::DataProvider`]) are expected
+//! to implement [`ToRanked`], which converts the error type to a [`RankedError`] consisting of
+//! a `Transient` and full `Error` alternatives. The [`RankedError::Transient`] alternative
+//! must implement [`TransientError`], which provides callback mechanisms for transient error
+//! acknowledgement or escalation. These callbacks are provided with a concrete reason for
+//! the decision to aid in debugging or program telemetry.
 //!
 //! The trait [`ErrorExt`] is then defined which takes `Result`s of such [`ToRanked`] types
 //! and provides the `acknowledge`/`escalate` interface to these `Result`s.
@@ -66,16 +65,16 @@
 //!
 //! 2. Generic algorithmic code should constrain error types to be just [`ToRanked`]. This
 //!    means that the `?` operator will not apply by default, requiring explicit handling
-//!    through either [`ErrorExt::acknowledge`] or [`ErrorExt::escalate`].
+//!    through either [`ErrorExt::allow_transient`] or [`ErrorExt::escalate`].
 //!
 //! 3. The methods in [`ErrorExt`] require reasons for the decision, which are forwarded
 //!    the implementation of [`TransientError`] and therefore made available to user types.
 //!
 //! Now, what about low-overhead?
 //!
-//! User types `T` that wish to **always** escalate can use the [`diskann::always_escalate`]
+//! User types `T` that wish to **always** escalate can use the [`crate::always_escalate!`]
 //! macro. This works be defining the `Transient` alternative of [`ToRanked`] to be the
-//! unconstructable enum [`diskann::error::NeverTransient`]. This ensures at compile time
+//! unconstructable enum [`NeverTransient`]. This ensures at compile time
 //! that the [`RankedError::Transient`] alternative is unreachable and therefore the layout of
 //! `RankedError<NeverTransient, T>` is the same as `T` and all the transient error handling
 //! goes away.

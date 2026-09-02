@@ -29,12 +29,12 @@ pub struct DiskSectorGraph<AlignedReaderType: AlignedFileReader> {
     /// The fp vector is not aligned
     ///
     /// index info for multi-node sectors
-    /// node `i` is in sector: [i / num_nodes_per_sector]
-    /// offset in sector: [(i % num_nodes_per_sector) * node_len]
+    /// node `i` is in sector: `i / num_nodes_per_sector`
+    /// offset in sector: `(i % num_nodes_per_sector) * node_len`
     ///
     /// index info for multi-sector nodes
-    /// node `i` is in sector: [i * max_node_len.div_ceil(block_size)]
-    /// offset in sector: [0]
+    /// node `i` is in sector: `i * max_node_len.div_ceil(block_size)`
+    /// offset in sector: `0`
     sectors_data: Poly<[u8], AlignedAllocator>,
     /// Current sector index into which the next read reads data
     cur_sector_idx: u64,
