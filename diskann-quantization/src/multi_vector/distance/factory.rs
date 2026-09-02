@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Factory + concrete `MaxSimKernel<T>` impls for the multi-vector distance
 //! API. BYOTE entry point — see [`build_max_sim`].
@@ -16,8 +18,7 @@ use diskann_wide::arch::x86_64::{V3, V4};
 
 use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
-use super::kernels::f16::F16Entry;
-use super::kernels::f32::F32Kernel;
+use super::kernels::{MaxIp, MaxIpF16};
 use super::max_sim::{MaxSim, MaxSimError};
 use crate::multi_vector::distance::QueryMatRef;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Mat, MatRef, Standard};
@@ -35,7 +36,7 @@ struct Prepared<A, Q> {
 impl<A, const GROUP: usize> MaxSimKernel<f32> for Prepared<A, BlockTransposed<f32, GROUP>>
 where
     A: Architecture,
-    F32Kernel<GROUP>: for<'a> diskann_wide::arch::Target3<
+    MaxIp: for<'a> diskann_wide::arch::Target3<
             A,
             (),
             BlockTransposedRef<'a, f32, GROUP>,
@@ -59,14 +60,11 @@ where
             scores.fill(f32::MAX);
             return Ok(());
         }
-        let mut scratch = vec![f32::MIN; self.prepared.padded_nrows()];
-        self.arch.run3(
-            F32Kernel::<GROUP>,
-            self.prepared.reborrow(),
-            doc,
-            &mut scratch,
-        );
-        for (dst, &src) in scores.iter_mut().zip(&scratch[..self.prepared.nrows()]) {
+        // `run` seeds the max itself, so the fill value here is arbitrary.
+        let mut state = vec![0.0; self.prepared.padded_nrows()];
+        self.arch
+            .run3(MaxIp, self.prepared.reborrow(), doc, &mut state);
+        for (dst, &src) in scores.iter_mut().zip(&state[..self.prepared.nrows()]) {
             *dst = -src;
         }
         Ok(())
@@ -77,7 +75,7 @@ impl<A, const GROUP: usize> MaxSimKernel<half::f16>
     for Prepared<A, BlockTransposed<half::f16, GROUP>>
 where
     A: Architecture,
-    F16Entry<GROUP>: for<'a> diskann_wide::arch::Target3<
+    MaxIpF16: for<'a> diskann_wide::arch::Target3<
             A,
             (),
             BlockTransposedRef<'a, half::f16, GROUP>,
@@ -101,14 +99,11 @@ where
             scores.fill(f32::MAX);
             return Ok(());
         }
-        let mut scratch = vec![f32::MIN; self.prepared.padded_nrows()];
-        self.arch.run3(
-            F16Entry::<GROUP>,
-            self.prepared.reborrow(),
-            doc,
-            &mut scratch,
-        );
-        for (dst, &src) in scores.iter_mut().zip(&scratch[..self.prepared.nrows()]) {
+        // `run` seeds the max itself, so the fill value here is arbitrary.
+        let mut state = vec![0.0; self.prepared.padded_nrows()];
+        self.arch
+            .run3(MaxIpF16, self.prepared.reborrow(), doc, &mut state);
+        for (dst, &src) in scores.iter_mut().zip(&state[..self.prepared.nrows()]) {
             *dst = -src;
         }
         Ok(())
