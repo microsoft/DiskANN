@@ -297,6 +297,10 @@ mod inner {
             }
         }
 
+        #[expect(
+            clippy::panic,
+            reason = "bounds checks are not enabled in production (instead, we just crash)"
+        )]
         fn check(self, lhs: usize, rhs: usize, message: Option<std::fmt::Arguments<'_>>) {
             let passed = match self {
                 Self::Eq => lhs == rhs,

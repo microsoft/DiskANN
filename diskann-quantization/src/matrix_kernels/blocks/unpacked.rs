@@ -176,6 +176,15 @@ impl<'a, T> View<'a, T> {
         let stride = self.stride(k);
 
         for r in (0..full_groups).step_by(EXTENT) {
+            // SAFETY: By class invariant, `self.ptr.len() == self.extent * self.k`.
+            //
+            // The caller asserts that `k == self.k`.
+            //
+            // Since `r < self.extent()`:
+            //
+            // * The pointer offset if valid.
+            // * The truncation is valid.
+            // * The size of the resulting slice is equal to `EXTENT * k`.
             let sub = unsafe {
                 Panel::new_inner(
                     self.ptr
@@ -188,8 +197,12 @@ impl<'a, T> View<'a, T> {
             visitor.visit(sub, r);
         }
 
-        if let Some(remaining) = NonZeroUsize::new(self.extent().get() - full_groups) {
-            Some(unsafe {
+        NonZeroUsize::new(self.extent().get() - full_groups).map(|remaining| {
+            // SAFETY: Following the logic above, the pointer offset, truncation, and
+            // length are all correct.
+            //
+            // Further, `remaining` is guaranteed to be strictly less than `EXTENT`.
+            unsafe {
                 Remainder::new_inner(
                     self.ptr
                         .add(stride * full_groups)
@@ -198,10 +211,8 @@ impl<'a, T> View<'a, T> {
                     remaining,
                     self.k(),
                 )
-            })
-        } else {
-            None
-        }
+            }
+        })
     }
 }
 
@@ -230,6 +241,7 @@ where
 impl<'a, T> View<'a, T> {
     fn checked_as_std_slice(&self) -> &[T] {
         let k = DimK::from_bound(self.k());
+        // SAFETY: Checked in test builds.
         unsafe { self.as_std_slice(k) }
     }
 
@@ -238,6 +250,7 @@ impl<'a, T> View<'a, T> {
         F: FnMut(View<'_, T>, usize),
     {
         let k = DimK::from_bound(self.k());
+        // SAFETY: Checked in test builds.
         unsafe { self.visit_sub_views(sub_extent, k, f) }
     }
 
@@ -246,6 +259,7 @@ impl<'a, T> View<'a, T> {
         f: impl FnMut(Panel<'_, T, EXTENT>, usize),
     ) -> Option<Remainder<'_, T, EXTENT>> {
         let k = DimK::from_bound(self.k());
+        // SAFETY: Checked in test builds.
         unsafe { self.visit_panels(k, f) }
     }
 }
@@ -271,6 +285,7 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         let k: usize = k.value().get();
         bounds::check_eq!(ptr.len(), k * EXTENT);
+        // SAFETY: Inherited from caller.
         unsafe { Self::new_inner(ptr, Bound::new(k)) }
     }
 
@@ -308,16 +323,20 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
     ///
     /// `k` must equal the contraction dimension tracked by [`Self::k`].
     #[cfg(test)]
-    unsafe fn as_std_slice(self, k: DimK) -> &'a [T] {
+    unsafe fn as_std_slice(&self, k: DimK) -> &[T] {
         bounds::check_eq!(self.k(), k);
+
+        // SAFETY: Since `k == self.k`, the underlying slice has a length of exactly
+        // `EXTENT * k`.
         unsafe { self.ptr.as_std_slice(EXTENT * k.value().get()) }
     }
 }
 
 #[cfg(test)]
-impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
-    fn checked_as_std_slice(self) -> &'a [T] {
+impl<T, const EXTENT: usize> Panel<'_, T, EXTENT> {
+    fn checked_as_std_slice(&self) -> &[T] {
         let k = DimK::from_bound(self.k());
+        // SAFETY: Checked in test builds.
         unsafe { self.as_std_slice(k) }
     }
 }
@@ -385,6 +404,7 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
         self,
     ) -> Option<Panel<'a, T, EXTENT>> {
         if self.extent().get() == EXTENT {
+            // SAFETY: By class invariant, `self.ptr.len() == EXTENT * self.k()`.
             Some(unsafe { Panel::new_inner(self.ptr, self.k()) })
         } else {
             None

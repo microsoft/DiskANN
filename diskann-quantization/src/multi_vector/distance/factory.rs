@@ -54,22 +54,37 @@ where
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
-        if self.nrows() == 0 {
-            return Ok(());
+
+        if doc.vector_dim() != self.prepared.ncols() {
+            return Err(MaxSimError::UnequalLengths(
+                doc.vector_dim(),
+                self.prepared.ncols(),
+            ));
         }
 
-        if doc.num_vectors() == 0 {
+        let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
             scores.fill(f32::MAX);
             return Ok(());
-        }
+        };
 
-        let k = mk::DimK::new(NonZeroUsize::new(self.prepared.ncols()).unwrap());
+        let Some(a) = mk::blocks::packed::View::from_block_transposed(self.prepared.as_view())
+        else {
+            return Ok(());
+        };
 
+        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()) else {
+            scores.fill(f32::MAX);
+            return Ok(());
+        };
+
+        // SAFETY: The dimension check establishes that `a.k() == b.k() == k`.
+        // The length check establishes that `scores` occupies exactly the
+        // packed blocks in `a`.
         let mut driver = unsafe {
             mk::maxsim::packed_f32_x_unpacked_f32::Driver::new(
                 self.arch,
-                mk::blocks::packed::View::from_block_transposed(self.prepared.as_view()).unwrap(),
-                mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()).unwrap(),
+                a,
+                b,
                 scores,
                 k,
                 mk::Cache::detect(),
@@ -103,22 +118,36 @@ where
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
         }
 
-        if self.nrows() == 0 {
-            return Ok(());
+        if doc.vector_dim() != self.prepared.ncols() {
+            return Err(MaxSimError::UnequalLengths(
+                doc.vector_dim(),
+                self.prepared.ncols(),
+            ));
         }
 
-        if doc.num_vectors() == 0 {
+        let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
             scores.fill(f32::MAX);
             return Ok(());
-        }
+        };
 
-        let k = mk::DimK::new(NonZeroUsize::new(self.prepared.ncols()).unwrap());
+        let Some(a) = mk::blocks::packed::View::from_block_transposed(self.prepared.as_view())
+        else {
+            return Ok(());
+        };
 
+        let Some(b) = mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()) else {
+            scores.fill(f32::MAX);
+            return Ok(());
+        };
+
+        // SAFETY: The dimension check establishes that `a.k() == b.k() == k`.
+        // The length check establishes that `scores` occupies exactly the
+        // packed blocks in `a`.
         let mut driver = unsafe {
             mk::maxsim::packed_f32_x_unpacked_f16::Driver::new(
                 self.arch,
-                mk::blocks::packed::View::from_block_transposed(self.prepared.as_view()).unwrap(),
-                mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()).unwrap(),
+                a,
+                b,
                 scores,
                 k,
                 mk::Cache::detect(),

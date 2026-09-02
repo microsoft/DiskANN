@@ -261,7 +261,7 @@ mod tests {
             (1, MR * 3, 1, 3, 1),                   // Unit advancement, no reuse.
             (2, MR * 2, 2 * NR, 2 * NR, 3),         // Values a direct multiple of the blocking.
             (2, MR * 3, 2 * NR, NR, 3),             //
-            (2, MR * 1, 2 * NR, 2 * NR + 1, 3),
+            (2, MR, 2 * NR, 2 * NR + 1, 3),
             (2, MR * 3, 2 * NR, 2 * NR + 1, 5),
             (2, MR * 5, 2 * NR, 4 * NR + 1, 1),
         ];
@@ -280,6 +280,7 @@ mod tests {
 
             let mut c = vec![f32::NAN; a_bt.nrows()];
 
+            // SAFETY: Test builds will verify the bounds we passed.
             let mut driver = unsafe {
                 Driver::new_inner(
                     arch,

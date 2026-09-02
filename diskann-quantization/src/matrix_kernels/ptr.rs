@@ -25,6 +25,7 @@ pub(crate) struct Slice<'a, T> {
 impl<'a, T> Slice<'a, T> {
     /// Construct a new [`Slice`] with the same length and base pointer as `slice`.
     pub(crate) const fn new(slice: &'a [T]) -> Self {
+        // SAFETY: The argument `slice` attests that `std::slice::from_raw_parts` is correct.
         unsafe { Self::from_raw(slice_to_nonnull(slice), Bound::new(slice.len())) }
     }
 
@@ -51,8 +52,15 @@ impl<'a, T> Slice<'a, T> {
         self.ptr
     }
 
+    /// View `self` as a `&[T]`.
+    ///
+    /// # SAFETY
+    ///
+    /// The tracked `self.len()` must be equal to `len`.
     pub(super) unsafe fn as_std_slice(self, len: usize) -> &'a [T] {
         bounds::check_eq!(self.len, len);
+
+        // SAFETY: Inherited from caller.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
     }
 
@@ -66,6 +74,7 @@ impl<'a, T> Slice<'a, T> {
     pub(super) unsafe fn as_ref(self) -> &'a T {
         bounds::check_eq!(self.len, 1, "slice must have a length of exactly one",);
 
+        // SAFETY: Inherited from caller.
         unsafe { self.ptr.as_ref() }
     }
 
@@ -82,6 +91,7 @@ impl<'a, T> Slice<'a, T> {
         // Debug check that there is room.
         bounds::check_ge!(self.len, offset, "offset would go out-of-bounds");
 
+        // SAFETY: Inherited from caller.
         unsafe { Self::from_raw(self.ptr.add(offset), self.len - Bound::new(offset)) }
     }
 
@@ -97,6 +107,7 @@ impl<'a, T> Slice<'a, T> {
         let length = length.value();
         bounds::check_ge!(self.len, length, "truncation would make the slice longer");
 
+        // SAFETY: Inherited from caller.
         unsafe { Self::from_raw(self.ptr, Bound::new(length)) }
     }
 
@@ -106,6 +117,7 @@ impl<'a, T> Slice<'a, T> {
     ///
     /// The true length of `self` must be at least one.
     pub(super) unsafe fn as_unit(self) -> Slice<'a, T> {
+        // SAFETY: Inherited from caller.
         unsafe { self.truncate(Elements::new(1)) }
     }
 
@@ -166,6 +178,9 @@ pub(crate) struct MutSlice<'a, T> {
 impl<'a, T> MutSlice<'a, T> {
     /// Construct a new [`MutSlice`] with the same length and base pointer as `slice`.
     pub(crate) const fn new(slice: &'a mut [T]) -> Self {
+        // SAFETY: `&mut [T]` attests that this operation is safe.
+        //
+        // We mutably borrow from `slice`.
         unsafe { Self::from_raw(mut_slice_to_nonnull(slice), Bound::new(slice.len())) }
     }
 
@@ -190,6 +205,8 @@ impl<'a, T> MutSlice<'a, T> {
     /// the addition that `len` **must** be the true length of `self`.
     pub(super) unsafe fn as_std_slice(&self, len: usize) -> &[T] {
         bounds::check_eq!(self.len(), len);
+
+        // SAFETY: Inherited from caller.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
     }
 
@@ -201,6 +218,8 @@ impl<'a, T> MutSlice<'a, T> {
     /// the addition that `len` **must** be the true length of `self`.
     pub(super) unsafe fn as_std_mut_slice(&mut self, len: usize) -> &mut [T] {
         bounds::check_eq!(self.len(), len);
+
+        // SAFETY: Inherited from caller.
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), len) }
     }
 
@@ -225,6 +244,7 @@ impl<'a, T> MutSlice<'a, T> {
         bounds::check_ge!(self.len, start, "start is out-of-bounds");
         bounds::check_ge!(self.len, Bound::new(start) + length, "end is out-of-bounds");
 
+        // SAFETY: Inherited from caller.
         unsafe { Self::from_raw(self.ptr.add(start), length) }
     }
 
@@ -235,6 +255,8 @@ impl<'a, T> MutSlice<'a, T> {
     /// The length of `self` must be exactly `N`. This is checked in debug builds.
     pub(super) unsafe fn as_array<const N: usize>(&mut self) -> &mut [T; N] {
         bounds::check_eq!(self.len, N, "invalid materialization of size {N}");
+
+        // SAFETY: Inherited from caller.
         unsafe { &mut *self.as_mut_ptr().cast::<[T; N]>() }
     }
 
@@ -351,7 +373,7 @@ mod tests {
             // Out-of-bounds "adds" should panic.
             for i in 1..3 {
                 let message = panic_message_for(|| {
-                    // SAEFTY: The provided `offset` exceeds the true length of `s`, but
+                    // SAFETY: The provided `offset` exceeds the true length of `s`, but
                     // this is caught in debug builds.
                     let _ = unsafe { s.add(Elements::new(base.len() + i)) };
                 });
@@ -370,7 +392,7 @@ mod tests {
             // Truncate - out-of-bounds
             for i in 1..3 {
                 let message = panic_message_for(|| {
-                    // SAEFTY: The provided `length` exceeds the true length of `s`, but
+                    // SAFETY: The provided `length` exceeds the true length of `s`, but
                     // this is caught in debug builds.
                     let _ = unsafe { s.truncate(Elements::new(base.len() + i)) };
                 });

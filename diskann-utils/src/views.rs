@@ -638,7 +638,7 @@ where
         }
     }
 
-    /// Perform an in-place transpose.
+    /// Transpose the elements in `self`.
     pub fn transpose(&self) -> Matrix<T::Elem>
     where
         T::Elem: Clone,
@@ -647,6 +647,8 @@ where
         let mut col = 0;
 
         let f = Init(|| {
+            // SAFETY: `row` and `cols` are always less than `self.nrows()` and `self.ncols()`
+            // respectively.
             let v = unsafe { self.get_unchecked(row, col) }.clone();
             row += 1;
             if row == self.nrows() {

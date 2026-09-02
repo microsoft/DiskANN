@@ -1,5 +1,6 @@
 /*
- * Copyright (c) Microsoft Corporation.
+ * Copyright (c) Microsoft Corporationk:wa
+ * .
  * Licensed under the MIT license.
  */
 
@@ -74,6 +75,7 @@ macro_rules! impl_loadstore {
                 use diskann_wide::SIMDVector;
                 diskann_wide::alias!(wide = <$arch>::$wide);
 
+                // SAFETY: Loading from `src` up to `src.len()` is valid.
                 unsafe { wide::load_simd_first(self, src.as_ptr(), src.len()) }.to_array()
             }
 
@@ -83,6 +85,8 @@ macro_rules! impl_loadstore {
                 diskann_wide::alias!(wide = <$arch>::$wide);
 
                 let w = wide::from_array(self, v);
+
+                // SAFETY: Storing to `dst` up to `dst.len()` is valid.
                 unsafe { wide::store_simd_first(w, dst.as_mut_ptr(), dst.len()) }
             }
         }
@@ -101,7 +105,10 @@ impl LoadStore<f32, 32> for V4 {
         use diskann_wide::{LoHi, SIMDVector};
         diskann_wide::alias!(wide = <V4>::f32x16);
 
+        // SAFETY: Loading the first `src.len().min(16)` elements from `src` is valid.
         let lo = unsafe { wide::load_simd_first(self, src.as_ptr(), src.len()) }.to_array();
+
+        // SAFETY: This only reads `src.len() - 16` values if `src.len()` exceeds 16.
         let hi = unsafe {
             wide::load_simd_first(self, src.as_ptr().offset(16), src.len().saturating_sub(16))
         }
@@ -117,7 +124,10 @@ impl LoadStore<f32, 32> for V4 {
 
         let LoHi { lo, hi } = v.split();
 
+        // SAFETY: Storing the first `dst.len().min(16)` elements to `dst` is valid.
         unsafe { wide::from_array(self, lo).store_simd_first(dst.as_mut_ptr(), dst.len()) };
+
+        // SAFETY: This only writes if `dst.len() - 16` values if `dst.len()` exceeds 16.
         unsafe {
             wide::from_array(self, hi)
                 .store_simd_first(dst.as_mut_ptr().offset(16), dst.len().saturating_sub(16))

@@ -52,6 +52,9 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 
         let blocks = NonZeroUsize::new(v.num_blocks())?;
         let k = DimK::new(NonZeroUsize::new(v.ncols())?);
+
+        // SAFETY: `BlockTransposedRef` ensures the underlying slice has a length of
+        // exactly `SZ * blocks * k`.
         Some(unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) })
     }
 
@@ -70,6 +73,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         );
         bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
 
+        // SAFETY: Inherited from caller.
         unsafe { Self::new_inner(ptr, blocks, Bound::new(k.value().get())) }
     }
 
@@ -142,6 +146,15 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         while let Some(remaining) = NonZeroUsize::new(self.blocks().get() - i) {
             let this_blocks = remaining.min(sub_blocks);
 
+            // SAFETY: By class invariant, `self.ptr.len() == SZ * self.blocks * self.k`.
+            //
+            // The caller asserts that `k == self.k`.
+            //
+            // Since `i < self.blocks()`:
+            //
+            // * The pointer offset if valid.
+            // * The truncation is valid.
+            // * The size of the resulting slice is equal to `SZ * this_blocks * self.k`.
             let sub = unsafe {
                 Self::new_inner(
                     self.ptr
@@ -172,6 +185,15 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
     {
         let stride = self.block_stride(k);
         for b in 0..self.blocks().get() {
+            // SAFETY: By class invariant, `self.ptr.len() == SZ * self.blocks * self.k`.
+            //
+            // The caller asserts that `k == self.k`.
+            //
+            // Since `b < self.blocks()`:
+            //
+            // * The pointer offset if valid.
+            // * The truncation is valid.
+            // * The size of the resulting slice is equal to `SZ * self.k`.
             let panel =
                 unsafe { Panel::new_inner(self.ptr.add(stride * b).truncate(stride), self.k) };
             f(panel, b);
@@ -186,6 +208,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         F: FnMut(View<'_, T, SZ>, usize),
     {
         let k = DimK::from_bound(self.k());
+        // SAFETY: Checked in test builds.
         unsafe { self.visit_sub_views(sub_blocks, k, f) }
     }
 
@@ -194,6 +217,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         F: FnMut(Panel<'_, T, SZ>, usize),
     {
         let k = DimK::from_bound(self.k());
+        // SAFETY: Checked in test builds.
         unsafe { self.visit_panels(k, f) }
     }
 }
@@ -220,6 +244,7 @@ impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
     #[cfg(test)]
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         bounds::check_eq!(ptr.len(), SZ * k.value().get());
+        // SAFETY: Inherited from caller.
         unsafe { Self::new_inner(ptr, Bound::new(k.value().get())) }
     }
 
