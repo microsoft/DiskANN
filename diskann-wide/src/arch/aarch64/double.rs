@@ -8,14 +8,14 @@ use std::arch::aarch64::*;
 use half::f16;
 
 use crate::{
-    LoHi, SplitJoin,
+    LoHi, SplitJoin, ZipUnzip,
     doubled::{self, Doubled},
 };
 
 use super::{
     f16x8, f32x4, i8x16, i16x8, i32x4,
     masks::{mask8x16, mask16x8, mask32x4, mask64x2},
-    u8x16, u32x4, u64x2,
+    u8x8, u8x16, u32x4, u64x2,
 };
 
 // Double Masks
@@ -89,6 +89,37 @@ super::macros::aarch64_zipunzip!(i32x4, vzip1q_s32, vzip2q_s32, vuzp1q_s32, vuzp
 super::macros::aarch64_zipunzip!(u8x16, vzip1q_u8, vzip2q_u8, vuzp1q_u8, vuzp2q_u8);
 super::macros::aarch64_zipunzip!(u32x4, vzip1q_u32, vzip2q_u32, vuzp1q_u32, vuzp2q_u32);
 super::macros::aarch64_zipunzip!(f16x8, vzip1q_u16, vzip2q_u16, vuzp1q_u16, vuzp2q_u16);
+
+impl ZipUnzip for u8x16 {
+    #[inline(always)]
+    fn zip(halves: LoHi<<Self as SplitJoin>::Halved>) -> Self {
+        use crate::SIMDVector;
+        // SAFETY: Caller asserts that these intrinsics match the element types.
+        unsafe {
+            let lo_raw = halves.lo.to_underlying();
+            let hi_raw = halves.hi.to_underlying();
+            <Self as SplitJoin>::join(LoHi::new(
+                u8x8::from_underlying(halves.lo.arch(), vzip1_u8(lo_raw, hi_raw)),
+                u8x8::from_underlying(halves.lo.arch(), vzip2_u8(lo_raw, hi_raw)),
+            ))
+        }
+    }
+
+    #[inline(always)]
+    fn unzip(self) -> LoHi<<Self as SplitJoin>::Halved> {
+        use crate::SIMDVector;
+        // SAFETY: Caller asserts that these intrinsics match the element types.
+        unsafe {
+            let halves = self.split();
+            let lo_raw = halves.lo.to_underlying();
+            let hi_raw = halves.hi.to_underlying();
+            LoHi::new(
+                u8x8::from_underlying(self.arch(), vuzp1_u8(lo_raw, hi_raw)),
+                u8x8::from_underlying(self.arch(), vuzp2_u8(lo_raw, hi_raw)),
+            )
+        }
+    }
+}
 
 //-------------//
 // Conversions //
