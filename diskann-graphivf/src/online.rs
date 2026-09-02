@@ -888,9 +888,14 @@ impl OnlineClusterer {
     /// that can run against the old graph and partition is complete, but graph
     /// publication and final NPA routing remain fallible and irreversible.
     fn commit_split(&mut self, plan: SplitPlan) -> Result<()> {
+        let event_start = self.telemetry.splits.len();
+        let mut clusters_updated = std::collections::HashSet::new();
         let mut pending = Some(plan);
         while let Some(plan) = pending {
-            self.commit_split_once(plan)?;
+            if let Err(error) = self.commit_split_once(plan, &mut clusters_updated) {
+                self.finish_split_batch_telemetry(event_start, &clusters_updated);
+                return Err(error);
+            }
             let parents = self.select_live_split_parents();
             pending = if parents.is_empty() {
                 None
@@ -898,13 +903,32 @@ impl OnlineClusterer {
                 Some(self.prepare_split(&parents, &std::collections::HashMap::new())?)
             };
         }
+        self.finish_split_batch_telemetry(event_start, &clusters_updated);
         Ok(())
+    }
+
+    fn finish_split_batch_telemetry(
+        &mut self,
+        event_start: usize,
+        clusters_updated: &std::collections::HashSet<u32>,
+    ) {
+        let count = clusters_updated
+            .iter()
+            .filter(|&&cluster| self.centroids.is_live(cluster))
+            .count();
+        for event in &mut self.telemetry.splits[event_start..] {
+            event.clusters_updated = count;
+        }
     }
 
     /// Publish one LIRE split round, apply the paper's final NPA check to the
     /// necessary-condition candidates, and move only points whose assignment
     /// changes.
-    fn commit_split_once(&mut self, plan: SplitPlan) -> Result<()> {
+    fn commit_split_once(
+        &mut self,
+        plan: SplitPlan,
+        clusters_updated: &mut std::collections::HashSet<u32>,
+    ) -> Result<()> {
         let parent_ids: Vec<u32> = plan.parents.iter().map(|parent| parent.id).collect();
         let children: Vec<Box<[f32]>> = plan
             .parents
@@ -915,6 +939,14 @@ impl OnlineClusterer {
             .centroids
             .apply_split(&self.runtime, &parent_ids, children)?;
         let live_after = self.centroids.live_count();
+
+        // A child from an earlier cascade round may itself be a parent now. It
+        // is no longer a live posting when this batch finishes, so remove it
+        // before recording the children born in this round.
+        for &parent in &parent_ids {
+            clusters_updated.remove(&parent);
+        }
+        clusters_updated.extend(child_ids.iter().copied());
 
         let mut candidate_pids: Vec<u32> = plan
             .parents
@@ -960,6 +992,16 @@ impl OnlineClusterer {
         }
         let mut destinations: Vec<(u32, u32)> = destinations.into_iter().collect();
         destinations.sort_unstable_by_key(|&(pid, _)| pid);
+        for &(pid, target) in &destinations {
+            let source = self.partition.assignment(pid);
+            if source == target {
+                continue;
+            }
+            if self.centroids.is_live(source) {
+                clusters_updated.insert(source);
+            }
+            clusters_updated.insert(target);
+        }
 
         let moved: std::collections::HashSet<u32> = destinations
             .iter()
@@ -1007,6 +1049,7 @@ impl OnlineClusterer {
                     npa_candidates,
                     num_reassigned,
                     live_after,
+                    clusters_updated: 0,
                     two_means_us: parent.two_means_us,
                     reassign_us,
                     total_us: parent.two_means_us + reassign_us,

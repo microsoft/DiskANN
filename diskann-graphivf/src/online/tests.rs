@@ -465,6 +465,25 @@ fn batched_inserts_preserve_invariants_and_split() {
         prev = e.insert_index;
     }
 
+    // `clusters_updated` is one number per insert batch, deduplicated across
+    // all LIRE cascade rounds. It counts only live postings actually rewritten,
+    // so a neighbor whose candidates all stay put is not included.
+    let t = c.telemetry();
+    let mut multi_region_batches = 0;
+    for batch in t.splits.chunk_by(|a, b| a.insert_index == b.insert_index) {
+        let updated = batch[0].clusters_updated;
+        assert!(batch.iter().all(|e| e.clusters_updated == updated));
+        assert!(updated >= 2, "the final split round has two live children");
+        assert!(
+            updated <= batch.last().unwrap().live_after,
+            "batch telemetry is finalized after all cascade rounds"
+        );
+        if batch.len() > 1 {
+            multi_region_batches += 1;
+        }
+    }
+    assert!(multi_region_batches > 0, "expected batches to co-split");
+
     // Local assignment can only be worse than the optimal one for the
     // centroid set it produced.
     let opt = optimal_residual(&points, &live_centroids(&c));
