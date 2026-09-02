@@ -23,17 +23,17 @@ pub(crate) trait AsDeletionCheck {
     fn as_deletion_check(&self) -> &Self::Checker;
 }
 
-/// A light-weight, synchronous alternative to [`Delete`], targeted at quickly filtering out
-/// deleted IDs during search post-processing.
+/// A light-weight, synchronous alternative to [`diskann::provider::Delete`], targeted at
+/// quickly filtering out deleted IDs during search post-processing.
 ///
-/// For the [`NoDeletes`] case, we rely on constant-propagation and dead code elimination
-/// to optimize away filters.
+/// For the [`super::common::NoDeletes`] case, we rely on constant-propagation and dead code
+/// elimination to optimize away filters.
 pub(crate) trait DeletionCheck {
     fn deletion_check(&self, id: u32) -> bool;
 }
 
-/// A [`SearchPostProcess`] routine that fuses the removal of deleted elements with the
-/// copying of IDs into an output buffer.
+/// A [`glue::SearchPostProcess`] routine that fuses the removal of deleted elements with
+/// copying IDs into an output buffer.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemoveDeletedIdsAndCopy;
 

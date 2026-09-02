@@ -12,8 +12,7 @@
 //! * [`Context::as_object`] / [`Object::field`] for nested records.
 //! * [`Context::as_array`] / [`Array::iter`] for sequences.
 //! * [`Context::as_str`] / [`Context::as_number`] / [`Context::as_bool`] / [`Context::is_null`] for scalars.
-//! * [`Object::read`] for side-car artifacts referenced by a
-//!   [`save::Handle`](super::save::Handle).
+//! * [`Object::read`] for side-car artifacts referenced by a [`save::Handle`].
 //!
 //! [`Reader`] implements [`std::io::Read`] and [`std::io::Seek`] over a side-car
 //! artifact, regardless of the provider's backing store.
