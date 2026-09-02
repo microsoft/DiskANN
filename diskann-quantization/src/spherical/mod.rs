@@ -4,6 +4,7 @@
  */
 
 pub mod iface;
+mod pairwise;
 pub(crate) mod quantizer;
 mod vectors;
 
@@ -14,6 +15,8 @@ pub mod __codegen;
 /////////////
 // Exports //
 /////////////
+
+pub use pairwise::{Pairwise1Bit, Pairwise1BitScratch, PairwiseError, PairwiseSIMDSchema};
 
 pub use quantizer::{CompressionError, PreScale, SphericalQuantizer, TrainError};
 #[cfg(feature = "flatbuffers")]

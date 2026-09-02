@@ -29,6 +29,8 @@ pub struct PiPNNParameters {
     pub k: usize,
     /// Number of independent partition passes.
     pub replicas: usize,
+    /// Use build-only spherical RaBitQ1 distances.
+    pub rabitq1: bool,
     /// HashPrune policy. `None` keeps all unique direct candidates.
     pub hash_prune: Option<HashPruneParameters>,
 }
@@ -78,6 +80,7 @@ impl Default for PiPNNParameters {
             fanout: vec![8, 3],
             k: 2,
             replicas: 1,
+            rabitq1: false,
             hash_prune: None,
         }
     }

@@ -485,6 +485,44 @@ impl<const NBITS: usize> ConstOffset<NBITS> {
     const OFFSET_SQUARED: f32 = DataMeta::offset_term::<NBITS>() * DataMeta::offset_term::<NBITS>();
 }
 
+/// Apply spherical data/data compensation to one raw packed inner product.
+///
+/// Both the scalar one-pair functors and the prepared panel scorer call this
+/// helper, keeping the RaBitQ estimator formula in one place.
+#[inline(always)]
+pub(super) fn corrected_component_from_raw<const NBITS: usize>(
+    raw_inner_product: u32,
+    source: DataMetaF32,
+    target: DataMetaF32,
+    dim: f32,
+) -> f32 {
+    let offset = ConstOffset::<NBITS>::OFFSET;
+    let offset_squared = ConstOffset::<NBITS>::OFFSET_SQUARED;
+    source.inner_product_correction
+        * target.inner_product_correction
+        * (raw_inner_product as f32 - offset * (source.bit_sum + target.bit_sum)
+            + offset_squared * dim)
+}
+
+#[inline(always)]
+pub(super) fn squared_l2_from_corrected(
+    source: DataMetaF32,
+    target: DataMetaF32,
+    corrected: f32,
+) -> f32 {
+    source.metric_specific + target.metric_specific - 2.0 * corrected
+}
+
+#[inline(always)]
+pub(super) fn inner_product_from_corrected(
+    source: DataMetaF32,
+    target: DataMetaF32,
+    corrected: f32,
+    squared_shift_norm: f32,
+) -> f32 {
+    source.metric_specific + target.metric_specific + corrected + squared_shift_norm
+}
+
 /// This represents the computation
 /// ```math
 /// |X'| |Y'| <x, y>
@@ -514,17 +552,12 @@ where
     let ip: distances::MathematicalResult<u32> =
         <_ as Target2<_, _, _, _>>::run(InnerProduct, arch, x.vector(), y.vector());
 
-    let ip = ip?.into_inner() as f32;
-
-    let offset = ConstOffset::<NBITS>::OFFSET;
-    let offset_squared = ConstOffset::<NBITS>::OFFSET_SQUARED;
-
-    let xc = x.meta().to_full(arch);
-    let yc = y.meta().to_full(arch);
-
-    Ok(xc.inner_product_correction
-        * yc.inner_product_correction
-        * (ip - offset * (xc.bit_sum + yc.bit_sum) + offset_squared * dim))
+    Ok(corrected_component_from_raw::<NBITS>(
+        ip?.into_inner(),
+        x.meta().to_full(arch),
+        y.meta().to_full(arch),
+        dim,
+    ))
 }
 
 ////////////////////////////
@@ -589,8 +622,8 @@ where
     ) -> distances::MathematicalResult<f32> {
         let xc = x.meta().to_full(arch);
         let yc = y.meta().to_full(arch);
-        let result = xc.metric_specific + yc.metric_specific - 2.0 * kernel(arch, x, y, self.dim)?;
-        Ok(MV::new(result))
+        let corrected = kernel(arch, x, y, self.dim)?;
+        Ok(MV::new(squared_l2_from_corrected(xc, yc, corrected)))
     }
 }
 
@@ -750,11 +783,13 @@ where
         let xc = x.meta().to_full(arch);
         let yc = y.meta().to_full(arch);
 
-        let result = xc.metric_specific
-            + yc.metric_specific
-            + kernel(arch, x, y, self.dim)?
-            + self.squared_shift_norm;
-        Ok(MV::new(result))
+        let corrected = kernel(arch, x, y, self.dim)?;
+        Ok(MV::new(inner_product_from_corrected(
+            xc,
+            yc,
+            corrected,
+            self.squared_shift_norm,
+        )))
     }
 }
 

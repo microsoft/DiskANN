@@ -5,6 +5,7 @@
 
 //! SIMD schema for PiPNN numerical kernels.
 
+use diskann_quantization::spherical::PairwiseSIMDSchema;
 use diskann_wide::{
     Architecture, Const, SIMDFloat, SIMDMask, SIMDSelect, SIMDVector, SupportedLaneCount,
 };
@@ -53,14 +54,14 @@ where
 }
 
 /// PiPNN SIMD representation for one architecture.
-pub(super) trait PiPNNSIMDSchema: Architecture {
+pub(super) trait PiPNNSIMDSchema: Architecture + PairwiseSIMDSchema {
     /// SIMD vector used by every numerical stage.
     type Vector: PiPNNSIMDVector<Arch = Self>;
 }
 
 impl<A> PiPNNSIMDSchema for A
 where
-    A: Architecture,
+    A: Architecture + PairwiseSIMDSchema,
     DefaultVector<A>: PiPNNSIMDVector<Arch = A>,
 {
     type Vector = DefaultVector<A>;

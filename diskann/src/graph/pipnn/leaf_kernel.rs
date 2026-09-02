@@ -227,6 +227,103 @@ fn scan_runtime_width<A, M>(
     });
 }
 
+/// Insert one prepared final-score row into both endpoint top-k sets.
+pub(super) fn rank_final_score_row<A>(
+    arch: A,
+    source: usize,
+    scores: &[f32],
+    output: &mut [LeafNeighbor],
+    width: usize,
+    worst: &mut [f32],
+) where
+    A: PiPNNSIMDSchema,
+{
+    // Rayon outlines leaf workers. Reapply target features before score ranking.
+    arch.run(move || match width {
+        1 => {
+            let (rows, _) = output.as_chunks_mut::<1>();
+            rank_final_score_row_with(arch, source, scores, worst, |point, target, distance| {
+                insert_eligible_neighbor(&mut rows[point], target, distance)
+            });
+        }
+        2 => {
+            let (rows, _) = output.as_chunks_mut::<2>();
+            rank_final_score_row_with(arch, source, scores, worst, |point, target, distance| {
+                insert_eligible_neighbor(&mut rows[point], target, distance)
+            });
+        }
+        3 => {
+            let (rows, _) = output.as_chunks_mut::<3>();
+            rank_final_score_row_with(arch, source, scores, worst, |point, target, distance| {
+                insert_eligible_neighbor(&mut rows[point], target, distance)
+            });
+        }
+        _ => rank_final_score_row_with(arch, source, scores, worst, |point, target, distance| {
+            let first = point * width;
+            insert_eligible_neighbor(&mut output[first..first + width], target, distance)
+        }),
+    });
+}
+
+#[inline(always)]
+fn rank_final_score_row_with<A, I>(
+    arch: A,
+    source: usize,
+    scores: &[f32],
+    worst: &mut [f32],
+    mut insert: I,
+) where
+    A: PiPNNSIMDSchema,
+    I: FnMut(usize, u32, f32) -> f32,
+{
+    let worst_ptr = worst.as_mut_ptr();
+    let mut source_worst = worst[source];
+    let simd_prefix = scores.len() - scores.len() % A::Vector::LANES;
+    let mut target = 0usize;
+    while target < simd_prefix {
+        // SAFETY: This complete SIMD group is inside `scores`.
+        let distances = unsafe { A::Vector::load_simd(arch, scores.as_ptr().add(target)) };
+        let source_eligible = distances.lt_simd(A::Vector::splat(arch, source_worst));
+        // SAFETY: All targets are less than `source` and inside `worst`.
+        let target_worst = unsafe { A::Vector::load_simd(arch, worst_ptr.add(target)) };
+        let target_eligible = distances.lt_simd(target_worst);
+        let mut source_bits = A::Vector::active_lanes(source_eligible);
+        let mut target_bits = A::Vector::active_lanes(target_eligible);
+        if source_bits | target_bits != 0 {
+            let values = distances.to_lane_array();
+            let values = values.as_ref();
+            while source_bits != 0 {
+                let lane = source_bits.trailing_zeros() as usize;
+                source_bits &= source_bits - 1;
+                let distance = values[lane];
+                if distance < source_worst {
+                    source_worst = insert(source, (target + lane) as u32, distance);
+                }
+            }
+            while target_bits != 0 {
+                let lane = target_bits.trailing_zeros() as usize;
+                target_bits &= target_bits - 1;
+                let target_source = target + lane;
+                let new_worst = insert(target_source, source as u32, values[lane]);
+                // SAFETY: `target_source < source < worst.len()`.
+                unsafe { *worst_ptr.add(target_source) = new_worst };
+            }
+        }
+        target += A::Vector::LANES;
+    }
+    while target < scores.len() {
+        let distance = scores[target];
+        if distance < source_worst {
+            source_worst = insert(source, target as u32, distance);
+        }
+        if distance < worst[target] {
+            worst[target] = insert(target, source as u32, distance);
+        }
+        target += 1;
+    }
+    worst[source] = source_worst;
+}
+
 /// Select neighbors from all unordered point pairs in one leaf.
 ///
 /// The function reads the strict lower triangle once. It offers each distance to

@@ -43,6 +43,7 @@ mod leaf_kernel;
 mod lsh;
 mod partition_kernel;
 mod partitioning;
+mod rabitq1;
 
 use crate::{
     ANNError, ANNResult,
@@ -173,6 +174,7 @@ pub struct PiPNNBuildContext<'a> {
     pub(crate) metric: Metric,
     pub(crate) pool: &'a ThreadPool,
     hash_prune: Option<HashPruneConfig>,
+    rabitq1_seed: Option<u64>,
 }
 
 impl<'a> PiPNNBuildContext<'a> {
@@ -197,7 +199,14 @@ impl<'a> PiPNNBuildContext<'a> {
             metric,
             pool,
             hash_prune: None,
+            rabitq1_seed: None,
         })
+    }
+
+    /// Use build-only spherical RaBitQ1 distances.
+    pub fn with_rabitq1(mut self, seed: u64) -> ANNResult<Self> {
+        self.rabitq1_seed = Some(seed);
+        Ok(self)
     }
 
     /// Enable HashPrune candidate merging for this build.
@@ -318,8 +327,13 @@ where
     M: LeafMetric + PartitionMetric,
     T: VectorRepr + Send + Sync + 'static,
 {
+    let rabitq1 = context
+        .rabitq1_seed
+        .map(|seed| rabitq1::Store::train(data, metric, seed).map_err(ANNError::new))
+        .transpose()?;
+    let scorer = rabitq1.as_ref();
     let leaves = tracing::info_span!("pipnn.partition")
-        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
+        .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config, scorer))?;
     match &context.hash_prune {
         None => {
             // Leaf jobs borrow individual ID lists. This call consumes the leaf
@@ -330,11 +344,16 @@ where
                     data,
                     leaves,
                     context.config.leaf_k,
+                    scorer,
                 )
                 .map_err(ANNError::new)
             })?;
-            tracing::info_span!("pipnn.finalization")
-                .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+            tracing::info_span!("pipnn.finalization").in_scope(|| match scorer {
+                Some(store) => {
+                    finalization::prune_overfull_rabitq1(arch, store, candidates, context.graph)
+                }
+                None => finalization::prune_overfull(data, candidates, context.graph, metric),
+            })
         }
         Some(config) => {
             // `HashPrune` lives until all leaf jobs finish. A leaf job locks only
@@ -350,13 +369,17 @@ where
                     leaves,
                     context.config.leaf_k,
                     &hash_prune,
+                    scorer,
                 )
                 .map_err(ANNError::new)
             })?;
             if config.final_prune {
                 let candidates = hash_prune.into_candidate_lists();
-                tracing::info_span!("pipnn.finalization").in_scope(|| {
-                    finalization::prune_overfull(data, candidates, context.graph, metric)
+                tracing::info_span!("pipnn.finalization").in_scope(|| match scorer {
+                    Some(store) => {
+                        finalization::prune_overfull_rabitq1(arch, store, candidates, context.graph)
+                    }
+                    None => finalization::prune_overfull(data, candidates, context.graph, metric),
                 })
             } else {
                 Ok(hash_prune.into_nearest_lists(context.graph.pruned_degree().get()))

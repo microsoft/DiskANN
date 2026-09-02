@@ -156,6 +156,34 @@ fn rank_leader_dots<A, M>(
     });
 }
 
+/// Rank final distance scores for one point without recomputing distances.
+pub(super) fn rank_final_scores<A>(
+    arch: A,
+    scores: &[f32],
+    output: &mut [u32],
+    ranked_leaders: &mut Vec<(u32, f32)>,
+) where
+    A: PiPNNSIMDSchema,
+{
+    if output.is_empty() {
+        return;
+    }
+    ranked_leaders.resize(output.len(), (UNASSIGNED_LEADER, f32::INFINITY));
+    ranked_leaders.fill((UNASSIGNED_LEADER, f32::INFINITY));
+    let simd_prefix = scores.len() - scores.len() % A::Vector::LANES;
+    for first_leader in (0..simd_prefix).step_by(A::Vector::LANES) {
+        // SAFETY: This complete SIMD group is inside `scores`.
+        let group = unsafe { A::Vector::load_simd(arch, scores.as_ptr().add(first_leader)) };
+        insert_leader_lanes(group, first_leader, ranked_leaders);
+    }
+    for (leader, &score) in scores.iter().enumerate().skip(simd_prefix) {
+        insert_leader(ranked_leaders, leader as u32, score);
+    }
+    for (destination, &(leader, _)) in output.iter_mut().zip(ranked_leaders.iter()) {
+        *destination = leader;
+    }
+}
+
 /// Rank sampled partition centers for each assigned point.
 ///
 /// The function keeps nearest-first order for every point. Full SIMD groups use

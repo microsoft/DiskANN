@@ -16,6 +16,7 @@ anyhow.workspace = true
 bytemuck = { workspace = true, features = ["must_cast"]}
 diskann-linalg = { workspace = true, optional = true }
 diskann-utils = { workspace = true, default-features = false }
+diskann-quantization.workspace = true
 futures-util = { workspace = true, default-features = false }
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
 # Note: hashbrown not using workspace because diskann needs default-features = false

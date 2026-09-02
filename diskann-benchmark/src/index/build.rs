@@ -151,6 +151,9 @@ where
         if let Some(hash_prune) = &parameters.hash_prune {
             context = context.with_hash_prune(hash_prune.into())?;
         }
+        if parameters.rabitq1 {
+            context = context.with_rabitq1(42)?;
+        }
         diskann::graph::pipnn::build_graph(data.as_view(), &context)?
     };
     let start_points = input

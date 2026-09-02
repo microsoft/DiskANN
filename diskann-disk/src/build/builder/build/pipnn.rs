@@ -64,6 +64,9 @@ where
     if let Some(hash_prune) = &parameters.hash_prune {
         context = context.with_hash_prune(hash_prune.into())?;
     }
+    if parameters.rabitq1 {
+        context = context.with_rabitq1(42)?;
+    }
     let adjacency = diskann::graph::pipnn::build_graph(data.as_view(), &context)?;
 
     // The disk header requires a start point. Use the same sampled medoid policy
@@ -119,6 +122,7 @@ mod tests {
             fanout: vec![10, 3],
             k: 2,
             replicas: 1,
+            rabitq1: false,
             hash_prune: Some(crate::HashPruneParameters::default()),
         }
     }

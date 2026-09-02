@@ -21,6 +21,7 @@
 use parking_lot::Mutex;
 
 use crate::{graph::AdjacencyList, utils::VectorRepr};
+use diskann_quantization::spherical::Pairwise1BitScratch;
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
@@ -66,6 +67,10 @@ pub(crate) enum LeafBuildError {
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
+    encoded_rows: Vec<u8>,
+    scores: Vec<f32>,
+    worst: Vec<f32>,
+    pairwise: Pairwise1BitScratch,
     neighbors: Vec<LeafNeighbor>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
@@ -175,6 +180,7 @@ pub(super) fn build_leaf_candidates<A, M, T>(
     data: MatrixView<'_, T>,
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> Result<Vec<AdjacencyList<u32>>, LeafBuildError>
 where
     A: PiPNNSIMDSchema,
@@ -193,6 +199,7 @@ where
                 requested_k,
                 buffers,
                 &candidates,
+                scorer,
             )
         },
     )?;
@@ -207,6 +214,7 @@ pub(super) fn add_hash_prune_candidates<A, M, T>(
     leaves: Vec<Vec<u32>>,
     requested_k: usize,
     hash_prune: &super::hash_prune::HashPrune,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> Result<(), LeafBuildError>
 where
     A: PiPNNSIMDSchema,
@@ -223,6 +231,7 @@ where
                 point_ids,
                 requested_k,
                 buffers,
+                scorer,
             )?;
             let point_count = point_ids.len();
             buffers.prepare_seen_pairs(point_count);
@@ -262,14 +271,22 @@ fn add_direct_leaf_candidates<A, M, T>(
     requested_k: usize,
     buffers: &mut LeafBuffers,
     candidates: &DirectCandidates,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> Result<(), LeafBuildError>
 where
     A: PiPNNSIMDSchema,
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
-    let leaf_k =
-        gather_leaf_neighbors::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
+    let leaf_k = gather_leaf_neighbors::<A, M, T>(
+        arch,
+        data,
+        leaf,
+        point_ids,
+        requested_k,
+        buffers,
+        scorer,
+    )?;
     if leaf_k == 0 {
         return Ok(());
     }
@@ -296,6 +313,7 @@ fn gather_leaf_neighbors<A, M, T>(
     point_ids: &[u32],
     requested_k: usize,
     buffers: &mut LeafBuffers,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> Result<usize, LeafBuildError>
 where
     A: PiPNNSIMDSchema,
@@ -306,6 +324,39 @@ where
         buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
     if leaf_k == 0 {
         return Ok(0);
+    }
+
+    if let Some(store) = scorer {
+        store
+            .gather(point_ids, &mut buffers.encoded_rows)
+            .map_err(|source| LeafBuildError::Kernel {
+                leaf,
+                source: crate::ANNError::new(source),
+            })?;
+        let rows = MatrixView::try_from(
+            &buffers.encoded_rows[..point_ids.len() * store.row_bytes()],
+            point_ids.len(),
+            store.row_bytes(),
+        )
+        .map_err(|_| LeafBuildError::InvalidView {
+            leaf,
+            buffer: "RaBitQ1 rows",
+        })?;
+        store
+            .rank_leaf(
+                arch,
+                rows,
+                leaf_k,
+                &mut buffers.neighbors[..neighbor_value_count],
+                &mut buffers.scores,
+                &mut buffers.worst,
+                &mut buffers.pairwise,
+            )
+            .map_err(|source| LeafBuildError::Kernel {
+                leaf,
+                source: crate::ANNError::new(source),
+            })?;
+        return Ok(leaf_k);
     }
 
     let point_value_count = point_ids.len() * data.ncols();

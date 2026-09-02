@@ -19,6 +19,7 @@
 use std::collections::HashSet;
 
 use crate::{ANNError, ANNResult, utils::VectorRepr};
+use diskann_quantization::spherical::Pairwise1BitScratch;
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool},
     views::{MatrixView, MutMatrixView},
@@ -31,6 +32,7 @@ use super::{
     kernel_metric::PartitionMetric,
     partition_kernel::{
         PartitionKernelWorkspace, PreparedLeaders, UNASSIGNED_LEADER, assign_leaders,
+        rank_final_scores,
     },
     simd::PiPNNSIMDSchema,
 };
@@ -74,6 +76,10 @@ struct WorkItem {
 #[derive(Default)]
 struct StripeBuffers {
     point_values: Vec<f32>,
+    encoded_rows: Vec<u8>,
+    scores: Vec<f32>,
+    ranked_scores: Vec<(u32, f32)>,
+    pairwise: Pairwise1BitScratch,
     kernel_workspace: PartitionKernelWorkspace,
 }
 
@@ -104,6 +110,7 @@ pub(super) fn partition<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     config: &PiPNNConfig,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     A: PiPNNSIMDSchema,
@@ -115,7 +122,7 @@ where
     for replica in 0..config.replicas {
         let seed = replica_seed(replica);
         let mut replica_leaves =
-            partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers)?;
+            partition_replica::<A, M, T>(arch, data, config, seed, &stripe_buffers, scorer)?;
         leaves.append(&mut replica_leaves);
     }
     Ok(leaves)
@@ -131,6 +138,7 @@ fn partition_replica<A, M, T>(
     config: &PiPNNConfig,
     seed: u64,
     stripe_buffers: &StripeBufferPool,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     A: PiPNNSIMDSchema,
@@ -158,7 +166,9 @@ where
         #[allow(clippy::disallowed_methods)]
         let results: ANNResult<Vec<_>> = work
             .into_par_iter()
-            .map(|item| partition_work_item::<A, M, T>(arch, data, config, item, stripe_buffers))
+            .map(|item| {
+                partition_work_item::<A, M, T>(arch, data, config, item, stripe_buffers, scorer)
+            })
             .collect();
 
         let mut next_work = Vec::new();
@@ -189,6 +199,7 @@ fn partition_work_item<A, M, T>(
     config: &PiPNNConfig,
     item: WorkItem,
     stripe_buffers: &StripeBufferPool,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> ANNResult<(Vec<WorkItem>, Vec<Vec<u32>>)>
 where
     A: PiPNNSIMDSchema,
@@ -202,8 +213,15 @@ where
         config.p_samp,
         mix_seed(item.seed, points as u64),
     );
-    let clusters =
-        assign_to_leaders::<A, M, T>(arch, data, &item.indices, &leaders, fanout, stripe_buffers)?;
+    let clusters = assign_to_leaders::<A, M, T>(
+        arch,
+        data,
+        &item.indices,
+        &leaders,
+        fanout,
+        stripe_buffers,
+        scorer,
+    )?;
 
     let mut pending = Vec::new();
     let mut finished = Vec::new();
@@ -266,12 +284,23 @@ fn assign_to_leaders<A, M, T>(
     leader_ids: &[u32],
     fanout: usize,
     stripe_buffers: &StripeBufferPool,
+    scorer: Option<&super::rabitq1::Store>,
 ) -> ANNResult<Vec<Vec<u32>>>
 where
     A: PiPNNSIMDSchema,
     M: PartitionMetric,
     T: VectorRepr + Send + Sync,
 {
+    if let Some(store) = scorer {
+        return assign_to_leaders_rabitq1(
+            arch,
+            point_ids,
+            leader_ids,
+            fanout,
+            stripe_buffers,
+            store,
+        );
+    }
     let dimension_count = data.ncols();
     let leader_values_len = checked_area("leader data", leader_ids.len(), dimension_count)?;
     let mut leader_values = vec![0.0f32; leader_values_len];
@@ -323,6 +352,110 @@ where
     scatter_assignments(point_ids, &assignments, fanout, leader_ids.len())
 }
 
+fn assign_to_leaders_rabitq1<A>(
+    arch: A,
+    point_ids: &[u32],
+    leader_ids: &[u32],
+    requested_fanout: usize,
+    stripe_buffers: &StripeBufferPool,
+    store: &super::rabitq1::Store,
+) -> ANNResult<Vec<Vec<u32>>>
+where
+    A: PiPNNSIMDSchema,
+{
+    let mut leader_storage = Vec::new();
+    store
+        .gather(leader_ids, &mut leader_storage)
+        .map_err(ANNError::new)?;
+    let leaders = MatrixView::try_from(
+        leader_storage.as_slice(),
+        leader_ids.len(),
+        store.row_bytes(),
+    )
+    .map_err(|error| ANNError::new(error.as_static()))?;
+    let mut leader_positions: Vec<_> = leader_ids
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(position, id)| (id, position))
+        .collect();
+    leader_positions.sort_unstable_by_key(|&(id, _)| id);
+    let fanout = requested_fanout.min(leader_ids.len());
+    let assignment_len = checked_area("partition assignments", point_ids.len(), fanout)?;
+    let mut assignments = vec![0u32; assignment_len];
+    let stripe_points = assignment_stripe_point_count(leader_ids.len());
+    let stripe_assignment_count = checked_area("assignment stripe", stripe_points, fanout)?;
+    let stripe_count = point_ids.len().div_ceil(stripe_points);
+    let worker_stripe_count = stripe_count.div_ceil(rayon::current_num_threads().max(1));
+    let worker_point_count = checked_area("assignment worker", worker_stripe_count, stripe_points)?;
+    let worker_assignment_count = checked_area("assignment worker", worker_point_count, fanout)?;
+    assignments
+        .par_chunks_mut(worker_assignment_count)
+        .enumerate()
+        .try_for_each(|(worker, worker_assignments)| {
+            let mut buffers = stripe_buffers.get_ref(());
+            store
+                .prepare_panel(arch, leaders, &mut buffers.pairwise)
+                .map_err(ANNError::new)?;
+            buffers.scores.resize(leader_ids.len(), 0.0);
+            let StripeBuffers {
+                scores,
+                ranked_scores,
+                pairwise,
+                ..
+            } = &mut *buffers;
+            let worker_first = worker * worker_point_count;
+            for (stripe, stripe_assignments) in worker_assignments
+                .chunks_mut(stripe_assignment_count)
+                .enumerate()
+            {
+                let first_point = worker_first + stripe * stripe_points;
+                let stripe_point_count = stripe_assignments.len() / fanout;
+                for (&point, output) in point_ids[first_point..first_point + stripe_point_count]
+                    .iter()
+                    .zip(stripe_assignments.chunks_exact_mut(fanout))
+                {
+                    let self_target = leader_positions
+                        .binary_search_by_key(&point, |&(id, _)| id)
+                        .ok()
+                        .map(|index| leader_positions[index].1);
+                    store
+                        .score_prepared(
+                            arch,
+                            point,
+                            self_target,
+                            leaders,
+                            &mut scores[..leader_ids.len()],
+                            pairwise,
+                        )
+                        .map_err(ANNError::new)?;
+                    rank_final_scores(arch, &scores[..leader_ids.len()], output, ranked_scores);
+                }
+            }
+            Ok::<(), ANNError>(())
+        })?;
+    scatter_assignments(point_ids, &assignments, fanout, leader_ids.len())
+}
+
+fn rank_scores(scores: &[f32], output: &mut [u32]) {
+    let mut tracker = [(u32::MAX, f32::INFINITY); 16];
+    for (leader, &score) in scores.iter().enumerate() {
+        let last = output.len() - 1;
+        if score.partial_cmp(&tracker[last].1) != Some(std::cmp::Ordering::Less) {
+            continue;
+        }
+        tracker[last] = (leader as u32, score);
+        let mut slot = last;
+        while slot > 0 && tracker[slot].1 < tracker[slot - 1].1 {
+            tracker.swap(slot, slot - 1);
+            slot -= 1;
+        }
+    }
+    for (destination, &(leader, _)) in output.iter_mut().zip(&tracker) {
+        *destination = leader;
+    }
+}
+
 /// Assign one point stripe to sampled partition centers.
 ///
 /// The function gathers point IDs into a packed `f32` matrix. The partition
@@ -352,6 +485,7 @@ where
     let StripeBuffers {
         point_values,
         kernel_workspace,
+        ..
     } = buffers;
     let mut points = MutMatrixView::try_from(
         &mut point_values[..point_values_len],

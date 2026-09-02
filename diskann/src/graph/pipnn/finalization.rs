@@ -137,6 +137,69 @@ where
         .collect()
 }
 
+pub(crate) fn prune_overfull_rabitq1<A: super::simd::PiPNNSIMDSchema>(
+    arch: A,
+    store: &super::rabitq1::Store,
+    candidates: Vec<AdjacencyList<u32>>,
+    graph: &Config,
+) -> ANNResult<Vec<AdjacencyList<u32>>> {
+    let degree = graph.pruned_degree().get();
+    candidates
+        .into_par_iter()
+        .enumerate()
+        .map_init(
+            PruneWorkspace::default,
+            |workspace, (source, mut source_candidates)| {
+                if source_candidates.len() <= degree {
+                    return Ok(source_candidates);
+                }
+                let source_id = u32::try_from(source).map_err(ANNError::new)?;
+                workspace.sorted_candidates.clear();
+                for candidate in source_candidates.iter().copied() {
+                    workspace.sorted_candidates.push(Neighbor::new(
+                        candidate,
+                        store
+                            .score_pair(arch, source_id, candidate)
+                            .map_err(ANNError::new)?,
+                    ));
+                }
+                let candidate_count = workspace.sorted_candidates.len();
+                if candidate_count > u16::MAX as usize {
+                    return Err(ANNError::new(FinalizationError::TooManyCandidates {
+                        actual: candidate_count,
+                        max: u16::MAX as usize,
+                    }));
+                }
+                workspace.sorted_cache.clear();
+                let sorted =
+                    SortedNeighbors::new(&mut workspace.sorted_candidates, candidate_count);
+                workspace.sorted_cache.extend(sorted.iter().map(|neighbor| {
+                    let id = *neighbor.id();
+                    (*neighbor.distance(), (id != source_id).then_some(id))
+                }));
+                workspace
+                    .prune_states
+                    .resize(workspace.sorted_cache.len(), prune::State::default());
+                workspace.prune_states.fill(prune::State::default());
+                let selected = prune::robust_prune(
+                    &workspace.sorted_cache,
+                    workspace.prune_states.as_mut_slice(),
+                    degree,
+                    graph.alpha(),
+                    graph.prune_kind(),
+                    |left, right| store.score_pair(arch, *left, *right).unwrap(),
+                );
+                let mut guard = source_candidates.resize(selected);
+                for (destination, state) in guard.iter_mut().zip(workspace.prune_states.iter()) {
+                    *destination = *sorted[state.neighbor as usize].id();
+                }
+                guard.finish(selected);
+                Ok(source_candidates)
+            },
+        )
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::graph::{
