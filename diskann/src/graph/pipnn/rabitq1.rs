@@ -4,8 +4,7 @@ use diskann_quantization::{
     algorithms::{TransformKind, transforms::TargetDim},
     alloc::{GlobalAllocator, ScopedAllocator},
     spherical::{
-        DataMut, Pairwise1Bit, Pairwise1BitScratch, PairwiseError, PreScale, SphericalQuantizer,
-        SupportedMetric,
+        DataMut, Pairwise1Bit, Pairwise1BitScratch, PreScale, SphericalQuantizer, SupportedMetric,
     },
 };
 use diskann_utils::views::{Matrix, MatrixView};
@@ -41,8 +40,6 @@ pub(super) enum Error {
     Canonical { point: usize },
     #[error("RaBitQ1 point {point} is outside {points} rows")]
     Point { point: u32, points: usize },
-    #[error(transparent)]
-    Pairwise(#[from] PairwiseError),
     #[error("RaBitQ1 training failed: {0}")]
     Training(#[from] diskann_quantization::spherical::TrainError),
     #[error("RaBitQ1 plan failed: {0}")]
@@ -98,7 +95,7 @@ impl Store {
             GlobalAllocator,
         )?;
         let plan = diskann_quantization::spherical::iface::Impl::<1>::new(quantizer)?;
-        let pairwise = Pairwise1Bit::new(plan.quantizer())?;
+        let pairwise = Pairwise1Bit::new(plan.quantizer());
         let dimensions = pairwise.encoded_dim();
         let row_bytes = pairwise.row_bytes();
         data.nrows().checked_mul(row_bytes).ok_or(Error::Shape)?;
@@ -172,9 +169,8 @@ impl Store {
         arch: A,
         rows: MatrixView<'_, u8>,
         scratch: &mut Pairwise1BitScratch,
-    ) -> Result<(), Error> {
-        self.pairwise.prepare_panel(arch, rows, scratch)?;
-        Ok(())
+    ) {
+        self.pairwise.prepare_panel(arch, rows, scratch);
     }
     pub(super) fn score_prepared<A: super::simd::PiPNNSIMDSchema>(
         &self,
@@ -186,7 +182,7 @@ impl Store {
         scratch: &mut Pairwise1BitScratch,
     ) -> Result<(), Error> {
         self.pairwise
-            .score_prepared_panel(arch, self.row(source)?, 0, targets, scores, scratch)?;
+            .score_prepared_panel(arch, self.row(source)?, 0, targets, scores, scratch);
         if let Some(target) = self_target {
             scores[target] = self.self_score(source)?;
         }
@@ -201,8 +197,7 @@ impl Store {
         scores: &mut Vec<f32>,
         worst: &mut Vec<f32>,
         scratch: &mut Pairwise1BitScratch,
-    ) -> Result<(), Error>
-    where
+    ) where
         A: super::simd::PiPNNSIMDSchema,
     {
         let points = rows.nrows();
@@ -210,7 +205,7 @@ impl Store {
         worst.resize(points, f32::INFINITY);
         worst.fill(f32::INFINITY);
         output.fill(LeafNeighbor::default());
-        self.prepare_panel(arch, rows, scratch)?;
+        self.prepare_panel(arch, rows, scratch);
         for source in 1..points {
             let targets = rows.subview(0..source).unwrap();
             self.pairwise.score_prepared_panel_from_prepared_source(
@@ -221,7 +216,7 @@ impl Store {
                 targets,
                 &mut scores[..source],
                 scratch,
-            )?;
+            );
             super::leaf_kernel::rank_final_score_row(
                 arch,
                 source,
@@ -231,7 +226,6 @@ impl Store {
                 worst,
             );
         }
-        Ok(())
     }
     pub(super) fn score_pair<A: super::simd::PiPNNSIMDSchema>(
         &self,
@@ -244,7 +238,7 @@ impl Store {
         } else {
             Ok(self
                 .pairwise
-                .score_pair(arch, self.row(left)?, self.row(right)?)?)
+                .score_pair(arch, self.row(left)?, self.row(right)?))
         }
     }
 }

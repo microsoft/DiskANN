@@ -394,9 +394,7 @@ where
         .enumerate()
         .try_for_each(|(worker, worker_assignments)| {
             let mut buffers = stripe_buffers.get_ref(());
-            store
-                .prepare_panel(arch, leaders, &mut buffers.pairwise)
-                .map_err(ANNError::new)?;
+            store.prepare_panel(arch, leaders, &mut buffers.pairwise);
             buffers.scores.resize(leader_ids.len(), 0.0);
             let StripeBuffers {
                 scores,
@@ -695,13 +693,13 @@ mod tests {
             use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
-                Metric::L2 => partition::<A, L2, T>(arch, call.data, call.config),
-                Metric::Cosine => partition::<A, Cosine, T>(arch, call.data, call.config),
+                Metric::L2 => partition::<A, L2, T>(arch, call.data, call.config, None),
+                Metric::Cosine => partition::<A, Cosine, T>(arch, call.data, call.config, None),
                 Metric::CosineNormalized => {
-                    partition::<A, CosineNormalized, T>(arch, call.data, call.config)
+                    partition::<A, CosineNormalized, T>(arch, call.data, call.config, None)
                 }
                 Metric::InnerProduct => {
-                    partition::<A, InnerProduct, T>(arch, call.data, call.config)
+                    partition::<A, InnerProduct, T>(arch, call.data, call.config, None)
                 }
             }
         }
@@ -1053,6 +1051,7 @@ mod tests {
             &[0, 1],
             1,
             &StripeBufferPool::new((), 0, None),
+            None,
         )
         .unwrap();
 
@@ -1116,6 +1115,7 @@ mod tests {
             &[0, 2_047],
             1,
             &StripeBufferPool::new((), 0, None),
+            None,
         )
         .unwrap();
 

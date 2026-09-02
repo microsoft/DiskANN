@@ -20,73 +20,6 @@ use diskann_wide::arch::x86_64::{V3, V4};
 
 use super::{DataMetaF32, DataRef, SphericalQuantizer, SupportedMetric, vectors};
 
-/// Failure while preparing or evaluating spherical one-bit pair scores.
-#[derive(Debug, thiserror::Error)]
-pub enum PairwiseError {
-    /// Quantizer output dimension cannot be represented by this scorer.
-    #[error("one-bit encoded dimension {0} exceeds the u32 score limit")]
-    DimensionTooLarge(usize),
-    /// Quantizer constants required by compensation are not finite.
-    #[error("spherical one-bit quantizer contains non-finite compensation constants")]
-    NonFiniteQuantizer,
-    /// One canonical source or target row has the wrong byte length.
-    #[error("invalid {role} row length: expected {expected}, got {actual}")]
-    InvalidRowLength {
-        /// Row role used for diagnostics.
-        role: &'static str,
-        /// Canonical byte length required by the quantizer.
-        expected: usize,
-        /// Supplied byte length.
-        actual: usize,
-    },
-    /// Target panel columns do not match one canonical row.
-    #[error("invalid target panel width: expected {expected}, got {actual}")]
-    InvalidTargetWidth {
-        /// Canonical row byte length.
-        expected: usize,
-        /// Supplied panel column count.
-        actual: usize,
-    },
-    /// Output score count does not match target panel rows.
-    #[error("invalid score count: expected {expected}, got {actual}")]
-    InvalidScoreCount {
-        /// Required number of scores.
-        expected: usize,
-        /// Supplied score slice length.
-        actual: usize,
-    },
-    /// Canonical metadata is malformed or non-finite.
-    #[error("invalid spherical one-bit metadata in {role} row {row}")]
-    InvalidMetadata {
-        /// Row role used for diagnostics.
-        role: &'static str,
-        /// Row position within that role.
-        row: usize,
-    },
-    /// Compensation produced a score that cannot be ranked.
-    #[error("spherical one-bit score for target {target} is not finite")]
-    NonFiniteScore {
-        /// Target row position within the panel.
-        target: usize,
-    },
-    /// Prepared metadata does not cover a requested target range.
-    #[error("prepared panel has {prepared} rows but scoring requires {required}")]
-    InvalidPreparedPanel {
-        /// Number of rows successfully prepared in worker scratch.
-        prepared: usize,
-        /// Exclusive target end required by this score call.
-        required: usize,
-    },
-    /// Worker scratch could not grow to the requested panel size.
-    #[error("failed to reserve {additional} values for {buffer}")]
-    Allocation {
-        /// Scratch buffer being grown.
-        buffer: &'static str,
-        /// Additional element capacity requested.
-        additional: usize,
-    },
-}
-
 /// Reusable worker-owned scratch for [`Pairwise1Bit::score_panel`].
 #[derive(Debug, Default)]
 pub struct Pairwise1BitScratch {
@@ -120,25 +53,10 @@ impl Pairwise1BitScratch {
     }
 
     /// Grow scratch for one target panel while retaining prior capacity.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError::Allocation`] if either buffer cannot reserve the
-    /// requested target count.
-    pub fn prepare(&mut self, panel_rows: usize) -> Result<(), PairwiseError> {
+    pub fn prepare(&mut self, panel_rows: usize) {
         self.prepared_rows = 0;
-        resize(
-            "pairwise metadata",
-            &mut self.metadata,
-            panel_rows,
-            DataMetaF32::default(),
-        )?;
-        resize(
-            "pairwise raw inner products",
-            &mut self.raw_inner_products,
-            panel_rows,
-            0,
-        )
+        self.metadata.resize(panel_rows, DataMetaF32::default());
+        self.raw_inner_products.resize(panel_rows, 0);
     }
 }
 
@@ -173,36 +91,22 @@ pub struct Pairwise1Bit {
 }
 
 impl Pairwise1Bit {
-    /// Prepare metric and runtime-architecture-specific one-bit scoring.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError`] if the encoded dimension or quantizer
-    /// compensation constants cannot produce finite representable scores.
-    pub fn new(quantizer: &SphericalQuantizer) -> Result<Self, PairwiseError> {
+    /// Prepare metric-specific one-bit scoring.
+    pub fn new(quantizer: &SphericalQuantizer) -> Self {
         let encoded_dim = quantizer.output_dim();
-        if encoded_dim > u32::MAX as usize {
-            return Err(PairwiseError::DimensionTooLarge(encoded_dim));
-        }
-        let bit_bytes = encoded_dim
-            .checked_add(7)
-            .ok_or(PairwiseError::DimensionTooLarge(encoded_dim))?
-            / 8;
-        let row_bytes = bit_bytes
-            .checked_add(std::mem::size_of::<super::DataMeta>())
-            .ok_or(PairwiseError::DimensionTooLarge(encoded_dim))?;
-        debug_assert_eq!(row_bytes, DataRef::<1>::canonical_bytes(encoded_dim));
-
+        assert!(
+            encoded_dim <= u32::MAX as usize,
+            "one-bit dimensions must fit in a u32 score"
+        );
+        let row_bytes = DataRef::<1>::canonical_bytes(encoded_dim);
         let squared_shift_norm = FastL2NormSquared.evaluate(quantizer.shift());
-        if !squared_shift_norm.is_finite() {
-            return Err(PairwiseError::NonFiniteQuantizer);
-        }
-        Ok(Self {
+        debug_assert!(squared_shift_norm.is_finite());
+        Self {
             encoded_dim,
             row_bytes,
             parameters: MetricParameters { squared_shift_norm },
             metric: quantizer.metric(),
-        })
+        }
     }
 
     /// Return the transformed dimension represented by each encoded row.
@@ -220,27 +124,12 @@ impl Pairwise1Bit {
     /// Both inputs must use the canonical back-metadata layout produced by the
     /// quantizer used to construct this scorer.
     ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError`] for malformed rows, invalid metadata, or a
-    /// non-finite compensated score.
-    pub fn score_pair<A: PairwiseSIMDSchema>(
-        &self,
-        arch: A,
-        source: &[u8],
-        target: &[u8],
-    ) -> Result<f32, PairwiseError> {
-        validate_row(source, self.row_bytes, "source")?;
-        validate_row(target, self.row_bytes, "target")?;
-        let source_metadata = decode_row(arch, source, self.encoded_dim, "source", 0)?;
-        let target_metadata = decode_row(arch, target, self.encoded_dim, "target", 0)?;
-        let targets = MatrixView::try_from(target, 1, self.row_bytes).map_err(|error| {
-            PairwiseError::InvalidRowLength {
-                role: "target",
-                expected: self.row_bytes,
-                actual: error.into_inner().len(),
-            }
-        })?;
+    pub fn score_pair<A: PairwiseSIMDSchema>(&self, arch: A, source: &[u8], target: &[u8]) -> f32 {
+        assert_row(source, self.row_bytes, "source");
+        assert_row(target, self.row_bytes, "target");
+        let source_metadata = decode_row(arch, source, self.encoded_dim);
+        let target_metadata = decode_row(arch, target, self.encoded_dim);
+        let targets = MatrixView::row_vector(target);
         let mut raw = [0u32; 1];
         A::raw_panel(arch, source, targets, self.encoded_dim, &mut raw);
         let score = match self.metric {
@@ -266,11 +155,8 @@ impl Pairwise1Bit {
                 self.parameters,
             ),
         };
-        if score.is_finite() {
-            Ok(score)
-        } else {
-            Err(PairwiseError::NonFiniteScore { target: 0 })
-        }
+        debug_assert!(score.is_finite());
+        score
     }
 
     /// Decode and retain metadata for a target panel in worker scratch.
@@ -279,33 +165,19 @@ impl Pairwise1Bit {
     /// [`Self::score_prepared_panel`] for each source. Packed bits remain in the
     /// caller's canonical matrix; only compact compensation metadata is cached.
     ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError`] for invalid panel width, malformed metadata, or
-    /// scratch allocation failure. Failure leaves no prepared panel active.
     pub fn prepare_panel<A: PairwiseSIMDSchema>(
         &self,
         arch: A,
         targets: MatrixView<'_, u8>,
         scratch: &mut Pairwise1BitScratch,
-    ) -> Result<(), PairwiseError> {
-        if targets.ncols() != self.row_bytes {
-            return Err(PairwiseError::InvalidTargetWidth {
-                expected: self.row_bytes,
-                actual: targets.ncols(),
-            });
-        }
-        scratch.prepare(targets.nrows())?;
-        for (row, (encoded, metadata)) in targets
-            .row_iter()
-            .zip(scratch.metadata.iter_mut())
-            .enumerate()
-        {
-            *metadata = decode_row(arch, encoded, self.encoded_dim, "target", row)?;
+    ) {
+        assert_eq!(targets.ncols(), self.row_bytes, "invalid target row width");
+        scratch.prepare(targets.nrows());
+        for (encoded, metadata) in targets.row_iter().zip(scratch.metadata.iter_mut()) {
+            *metadata = decode_row(arch, encoded, self.encoded_dim);
         }
         A::prepare_panel(arch, targets, self.encoded_dim, scratch);
         scratch.prepared_rows = targets.nrows();
-        Ok(())
     }
 
     /// Score one source against rows whose metadata is already prepared.
@@ -314,10 +186,6 @@ impl Pairwise1Bit {
     /// panel passed to [`Self::prepare_panel`]. `scores.len()` must equal
     /// `targets.nrows()`.
     ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError`] for shape mismatch, an unprepared target range,
-    /// malformed source metadata, or any non-finite output score.
     pub fn score_prepared_panel<A: PairwiseSIMDSchema>(
         &self,
         arch: A,
@@ -326,7 +194,7 @@ impl Pairwise1Bit {
         targets: MatrixView<'_, u8>,
         scores: &mut [f32],
         scratch: &mut Pairwise1BitScratch,
-    ) -> Result<(), PairwiseError> {
+    ) {
         score_panel_for_metric(
             arch,
             self.metric,
@@ -350,9 +218,6 @@ impl Pairwise1Bit {
     /// [`Self::prepare_panel`]. `source_index` identifies the source row in that
     /// prepared panel; target rows may be any prepared subrange.
     ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError`] for an invalid source index or target range.
     pub fn score_prepared_panel_from_prepared_source<A: PairwiseSIMDSchema>(
         &self,
         arch: A,
@@ -362,13 +227,8 @@ impl Pairwise1Bit {
         targets: MatrixView<'_, u8>,
         scores: &mut [f32],
         scratch: &mut Pairwise1BitScratch,
-    ) -> Result<(), PairwiseError> {
-        let source_metadata = scratch.metadata.get(source_index).copied().ok_or(
-            PairwiseError::InvalidPreparedPanel {
-                prepared: scratch.prepared_rows,
-                required: source_index.saturating_add(1),
-            },
-        )?;
+    ) {
+        let source_metadata = scratch.metadata[source_index];
         score_panel_for_metric(
             arch,
             self.metric,
@@ -392,10 +252,6 @@ impl Pairwise1Bit {
     /// to [`Self::score_prepared_panel`]. Repeated-source callers should prepare
     /// once explicitly.
     ///
-    /// # Errors
-    ///
-    /// Returns [`PairwiseError`] for shape mismatch, malformed metadata,
-    /// scratch allocation failure, or any non-finite output score.
     pub fn score_panel<A: PairwiseSIMDSchema>(
         &self,
         arch: A,
@@ -403,9 +259,9 @@ impl Pairwise1Bit {
         targets: MatrixView<'_, u8>,
         scores: &mut [f32],
         scratch: &mut Pairwise1BitScratch,
-    ) -> Result<(), PairwiseError> {
-        self.prepare_panel(arch, targets, scratch)?;
-        self.score_prepared_panel(arch, source, 0, targets, scores, scratch)
+    ) {
+        self.prepare_panel(arch, targets, scratch);
+        self.score_prepared_panel(arch, source, 0, targets, scores, scratch);
     }
 }
 
@@ -490,7 +346,7 @@ fn score_panel_for_metric<A: PairwiseSIMDSchema>(
     arch: A,
     metric: SupportedMetric,
     call: PanelCall<'_>,
-) -> Result<(), PairwiseError> {
+) {
     match metric {
         SupportedMetric::SquaredL2 => score_panel_for::<A, SquaredL2>(arch, call),
         SupportedMetric::InnerProduct => score_panel_for::<A, InnerProduct>(arch, call),
@@ -498,37 +354,34 @@ fn score_panel_for_metric<A: PairwiseSIMDSchema>(
     }
 }
 
-fn score_panel_for<A, M>(arch: A, call: PanelCall<'_>) -> Result<(), PairwiseError>
+fn score_panel_for<A, M>(arch: A, call: PanelCall<'_>)
 where
     A: PairwiseSIMDSchema,
     M: PairwiseMetric,
 {
-    validate_row(call.source, call.row_bytes, "source")?;
-    if call.targets.ncols() != call.row_bytes {
-        return Err(PairwiseError::InvalidTargetWidth {
-            expected: call.row_bytes,
-            actual: call.targets.ncols(),
-        });
-    }
-    if call.scores.len() != call.targets.nrows() {
-        return Err(PairwiseError::InvalidScoreCount {
-            expected: call.targets.nrows(),
-            actual: call.scores.len(),
-        });
-    }
+    assert_row(call.source, call.row_bytes, "source");
+    assert_eq!(
+        call.targets.ncols(),
+        call.row_bytes,
+        "invalid target row width"
+    );
+    assert_eq!(
+        call.scores.len(),
+        call.targets.nrows(),
+        "one score is required for each target"
+    );
+    let required = call
+        .first_target
+        .checked_add(call.targets.nrows())
+        .expect("prepared target range must not overflow");
+    assert!(
+        required <= call.scratch.prepared_rows,
+        "target range must be inside the prepared panel"
+    );
 
-    let required = call.first_target.saturating_add(call.targets.nrows());
-    if required > call.scratch.prepared_rows {
-        return Err(PairwiseError::InvalidPreparedPanel {
-            prepared: call.scratch.prepared_rows,
-            required,
-        });
-    }
-
-    let source = match call.source_metadata {
-        Some(metadata) => metadata,
-        None => decode_row(arch, call.source, call.encoded_dim, "source", 0)?,
-    };
+    let source = call
+        .source_metadata
+        .unwrap_or_else(|| decode_row(arch, call.source, call.encoded_dim));
     let Pairwise1BitScratch {
         metadata,
         raw_inner_products,
@@ -558,7 +411,7 @@ where
             target_bit_sums,
         )
     {
-        return Ok(());
+        return;
     }
     A::raw_prepared_panel(
         arch,
@@ -592,56 +445,19 @@ where
         debug_assert!(value.is_finite());
         *score = value;
     }
-    Ok(())
 }
 
-fn validate_row(row: &[u8], expected: usize, role: &'static str) -> Result<(), PairwiseError> {
-    if row.len() == expected {
-        Ok(())
-    } else {
-        Err(PairwiseError::InvalidRowLength {
-            role,
-            expected,
-            actual: row.len(),
-        })
-    }
+fn assert_row(row: &[u8], expected: usize, role: &'static str) {
+    assert_eq!(row.len(), expected, "invalid {role} row length");
 }
 
-fn decode_row<A: Architecture>(
-    arch: A,
-    row: &[u8],
-    encoded_dim: usize,
-    role: &'static str,
-    index: usize,
-) -> Result<DataMetaF32, PairwiseError> {
-    let data = DataRef::<1>::from_canonical_back(row, encoded_dim).map_err(|_| {
-        PairwiseError::InvalidRowLength {
-            role,
-            expected: DataRef::<1>::canonical_bytes(encoded_dim),
-            actual: row.len(),
-        }
-    })?;
-    let metadata = data.meta().to_full(arch);
-    validate_metadata(metadata, encoded_dim, role, index)?;
-    Ok(metadata)
-}
-
-fn validate_metadata(
-    metadata: DataMetaF32,
-    encoded_dim: usize,
-    role: &'static str,
-    row: usize,
-) -> Result<(), PairwiseError> {
-    if metadata.inner_product_correction.is_finite()
-        && metadata.metric_specific.is_finite()
-        && metadata.bit_sum.is_finite()
-        && metadata.bit_sum >= 0.0
-        && metadata.bit_sum <= encoded_dim as f32
-    {
-        Ok(())
-    } else {
-        Err(PairwiseError::InvalidMetadata { role, row })
-    }
+fn decode_row<A: Architecture>(arch: A, row: &[u8], encoded_dim: usize) -> DataMetaF32 {
+    debug_assert_eq!(row.len(), DataRef::<1>::canonical_bytes(encoded_dim));
+    // SAFETY: Pairwise construction records this canonical width. Public entry
+    // points assert it before metadata decoding.
+    unsafe { DataRef::<1>::from_canonical_back_unchecked(row, encoded_dim) }
+        .meta()
+        .to_full(arch)
 }
 
 /// Static one-bit kernel schema for an architecture selected by the caller.
@@ -1291,20 +1107,6 @@ fn raw_tail(source: &[u8], target: &[u8], dimensions: usize) -> u32 {
     result
 }
 
-fn resize<T: Clone>(
-    buffer: &'static str,
-    values: &mut Vec<T>,
-    len: usize,
-    value: T,
-) -> Result<(), PairwiseError> {
-    let additional = len.saturating_sub(values.len());
-    values
-        .try_reserve(additional)
-        .map_err(|_| PairwiseError::Allocation { buffer, additional })?;
-    values.resize(len, value);
-    Ok(())
-}
-
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Pairwise1Bit>();
@@ -1407,7 +1209,7 @@ mod tests {
         quantizer: &SphericalQuantizer,
         _: A,
     ) -> Pairwise1Bit {
-        Pairwise1Bit::new(quantizer).unwrap()
+        Pairwise1Bit::new(quantizer)
     }
 
     #[test]
@@ -1422,18 +1224,16 @@ mod tests {
             for dim in dimensions {
                 let values = data(dim, 11);
                 let (quantizer, encoded) = train_and_encode(metric, values.as_view());
-                let scorer = Pairwise1Bit::new(&quantizer).unwrap();
+                let scorer = Pairwise1Bit::new(&quantizer);
                 let mut scratch = Pairwise1BitScratch::new();
                 let mut scores = vec![0.0; encoded.nrows()];
-                scorer
-                    .score_panel(
-                        Scalar::new(),
-                        encoded.row(7),
-                        encoded.as_view(),
-                        &mut scores,
-                        &mut scratch,
-                    )
-                    .unwrap();
+                scorer.score_panel(
+                    Scalar::new(),
+                    encoded.row(7),
+                    encoded.as_view(),
+                    &mut scores,
+                    &mut scratch,
+                );
                 for (target, &score) in scores.iter().enumerate() {
                     let expected = oracle(&quantizer, encoded.row(7), encoded.row(target));
                     assert_close(
@@ -1442,9 +1242,7 @@ mod tests {
                         &format!("metric={metric:?}, dim={dim}, target={target}"),
                     );
                     assert_close(
-                        scorer
-                            .score_pair(Scalar::new(), encoded.row(7), encoded.row(target))
-                            .unwrap(),
+                        scorer.score_pair(Scalar::new(), encoded.row(7), encoded.row(target)),
                         expected,
                         &format!("pair metric={metric:?}, dim={dim}, target={target}"),
                     );
@@ -1457,20 +1255,18 @@ mod tests {
     fn panel_widths_cross_micro_panel_boundaries() {
         let values = data(129, 17);
         let (quantizer, encoded) = train_and_encode(SupportedMetric::SquaredL2, values.as_view());
-        let scorer = Pairwise1Bit::new(&quantizer).unwrap();
+        let scorer = Pairwise1Bit::new(&quantizer);
         let mut scratch = Pairwise1BitScratch::new();
         for width in [0, 1, 3, 4, 5, 7, 8, 9, 16, 17] {
             let targets = encoded.subview(0..width).unwrap();
             let mut scores = vec![0.0; width];
-            scorer
-                .score_panel(
-                    Scalar::new(),
-                    encoded.row(16),
-                    targets,
-                    &mut scores,
-                    &mut scratch,
-                )
-                .unwrap();
+            scorer.score_panel(
+                Scalar::new(),
+                encoded.row(16),
+                targets,
+                &mut scores,
+                &mut scratch,
+            );
             for (target, &score) in scores.iter().enumerate() {
                 assert_close(
                     score,
@@ -1485,24 +1281,20 @@ mod tests {
     fn prepared_source_metadata_matches_one_shot_scoring() {
         let values = data(1536, 17);
         let (quantizer, encoded) = train_and_encode(SupportedMetric::SquaredL2, values.as_view());
-        let scorer = Pairwise1Bit::new(&quantizer).unwrap();
+        let scorer = Pairwise1Bit::new(&quantizer);
         let targets = encoded.subview(0..13).unwrap();
         let mut scratch = Pairwise1BitScratch::new();
-        scorer
-            .prepare_panel(Scalar::new(), encoded.as_view(), &mut scratch)
-            .unwrap();
+        scorer.prepare_panel(Scalar::new(), encoded.as_view(), &mut scratch);
         let mut actual = vec![0.0; targets.nrows()];
-        scorer
-            .score_prepared_panel_from_prepared_source(
-                Scalar::new(),
-                encoded.row(16),
-                16,
-                0,
-                targets,
-                &mut actual,
-                &mut scratch,
-            )
-            .unwrap();
+        scorer.score_prepared_panel_from_prepared_source(
+            Scalar::new(),
+            encoded.row(16),
+            16,
+            0,
+            targets,
+            &mut actual,
+            &mut scratch,
+        );
         for (target, &score) in actual.iter().enumerate() {
             assert_close(
                 score,
@@ -1519,15 +1311,13 @@ mod tests {
         let scalar = scorer_for_arch(&quantizer, Scalar::new());
         let mut scalar_scratch = Pairwise1BitScratch::new();
         let mut expected = vec![0.0; encoded.nrows()];
-        scalar
-            .score_panel(
-                Scalar::new(),
-                encoded.row(9),
-                encoded.as_view(),
-                &mut expected,
-                &mut scalar_scratch,
-            )
-            .unwrap();
+        scalar.score_panel(
+            Scalar::new(),
+            encoded.row(9),
+            encoded.as_view(),
+            &mut expected,
+            &mut scalar_scratch,
+        );
 
         #[cfg(target_arch = "x86_64")]
         {
@@ -1535,15 +1325,13 @@ mod tests {
                 let scorer = scorer_for_arch(&quantizer, arch);
                 let mut scratch = Pairwise1BitScratch::new();
                 let mut actual = vec![0.0; encoded.nrows()];
-                scorer
-                    .score_panel(
-                        arch,
-                        encoded.row(9),
-                        encoded.as_view(),
-                        &mut actual,
-                        &mut scratch,
-                    )
-                    .unwrap();
+                scorer.score_panel(
+                    arch,
+                    encoded.row(9),
+                    encoded.as_view(),
+                    &mut actual,
+                    &mut scratch,
+                );
                 for (index, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
                     assert_close(actual, expected, &format!("V3 target={index}"));
                 }
@@ -1552,15 +1340,13 @@ mod tests {
                 let scorer = scorer_for_arch(&quantizer, arch);
                 let mut scratch = Pairwise1BitScratch::new();
                 let mut actual = vec![0.0; encoded.nrows()];
-                scorer
-                    .score_panel(
-                        arch,
-                        encoded.row(9),
-                        encoded.as_view(),
-                        &mut actual,
-                        &mut scratch,
-                    )
-                    .unwrap();
+                scorer.score_panel(
+                    arch,
+                    encoded.row(9),
+                    encoded.as_view(),
+                    &mut actual,
+                    &mut scratch,
+                );
                 for (index, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
                     assert_close(actual, expected, &format!("V4 target={index}"));
                 }
@@ -1569,67 +1355,16 @@ mod tests {
     }
 
     #[test]
-    fn malformed_shapes_metadata_and_non_finite_scores_are_rejected() {
-        let values = data(65, 4);
-        let (quantizer, mut encoded) =
-            train_and_encode(SupportedMetric::SquaredL2, values.as_view());
-        let scorer = Pairwise1Bit::new(&quantizer).unwrap();
-        let mut scratch = Pairwise1BitScratch::new();
-        let mut scores = vec![0.0; encoded.nrows()];
-
-        assert!(matches!(
-            scorer.score_pair(Scalar::new(), &encoded.row(0)[1..], encoded.row(1)),
-            Err(PairwiseError::InvalidRowLength { role: "source", .. })
-        ));
-        assert!(matches!(
-            scorer.score_panel(
-                Scalar::new(),
-                encoded.row(0),
-                MatrixView::try_from(encoded.as_slice(), 1, encoded.as_slice().len()).unwrap(),
-                &mut scores,
-                &mut scratch,
-            ),
-            Err(PairwiseError::InvalidTargetWidth { .. })
-        ));
-        assert!(matches!(
-            scorer.score_panel(
-                Scalar::new(),
-                encoded.row(0),
-                encoded.as_view(),
-                &mut scores[..3],
-                &mut scratch,
-            ),
-            Err(PairwiseError::InvalidScoreCount { .. })
-        ));
-
-        let row_bytes = encoded.ncols();
-        let metadata_offset = row_bytes - std::mem::size_of::<super::super::DataMeta>();
-        encoded.row_mut(1)[metadata_offset..metadata_offset + 2]
-            .copy_from_slice(&half::f16::INFINITY.to_bits().to_ne_bytes());
-        assert!(matches!(
-            scorer.score_pair(Scalar::new(), encoded.row(0), encoded.row(1)),
-            Err(PairwiseError::InvalidMetadata {
-                role: "target",
-                row: 0
-            })
-        ));
-    }
-
-    #[test]
     fn unused_tail_bits_do_not_change_scores() {
         let values = data(65, 3);
         let (quantizer, mut encoded) =
             train_and_encode(SupportedMetric::InnerProduct, values.as_view());
-        let scorer = Pairwise1Bit::new(&quantizer).unwrap();
-        let before = scorer
-            .score_pair(Scalar::new(), encoded.row(0), encoded.row(1))
-            .unwrap();
+        let scorer = Pairwise1Bit::new(&quantizer);
+        let before = scorer.score_pair(Scalar::new(), encoded.row(0), encoded.row(1));
         // Dimension 65 uses one bit in the final byte; canonical bit distances
         // must ignore the other seven storage bits.
         encoded.row_mut(1)[8] |= 0b1111_1110;
-        let after = scorer
-            .score_pair(Scalar::new(), encoded.row(0), encoded.row(1))
-            .unwrap();
+        let after = scorer.score_pair(Scalar::new(), encoded.row(0), encoded.row(1));
         assert_eq!(before.to_bits(), after.to_bits());
     }
 

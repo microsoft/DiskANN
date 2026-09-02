@@ -342,20 +342,15 @@ where
             leaf,
             buffer: "RaBitQ1 rows",
         })?;
-        store
-            .rank_leaf(
-                arch,
-                rows,
-                leaf_k,
-                &mut buffers.neighbors[..neighbor_value_count],
-                &mut buffers.scores,
-                &mut buffers.worst,
-                &mut buffers.pairwise,
-            )
-            .map_err(|source| LeafBuildError::Kernel {
-                leaf,
-                source: crate::ANNError::new(source),
-            })?;
+        store.rank_leaf(
+            arch,
+            rows,
+            leaf_k,
+            &mut buffers.neighbors[..neighbor_value_count],
+            &mut buffers.scores,
+            &mut buffers.worst,
+            &mut buffers.pairwise,
+        );
         return Ok(leaf_k);
     }
 
@@ -607,22 +602,28 @@ mod tests {
 
             match self.0 {
                 Metric::L2 => {
-                    build_leaf_candidates::<A, L2, T>(arch, call.data, call.leaves, call.k)
+                    build_leaf_candidates::<A, L2, T>(arch, call.data, call.leaves, call.k, None)
                 }
-                Metric::Cosine => {
-                    build_leaf_candidates::<A, Cosine, T>(arch, call.data, call.leaves, call.k)
-                }
+                Metric::Cosine => build_leaf_candidates::<A, Cosine, T>(
+                    arch,
+                    call.data,
+                    call.leaves,
+                    call.k,
+                    None,
+                ),
                 Metric::CosineNormalized => build_leaf_candidates::<A, CosineNormalized, T>(
                     arch,
                     call.data,
                     call.leaves,
                     call.k,
+                    None,
                 ),
                 Metric::InnerProduct => build_leaf_candidates::<A, InnerProduct, T>(
                     arch,
                     call.data,
                     call.leaves,
                     call.k,
+                    None,
                 ),
             }
         }

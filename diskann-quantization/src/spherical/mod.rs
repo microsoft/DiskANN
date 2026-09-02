@@ -16,7 +16,7 @@ pub mod __codegen;
 // Exports //
 /////////////
 
-pub use pairwise::{Pairwise1Bit, Pairwise1BitScratch, PairwiseError, PairwiseSIMDSchema};
+pub use pairwise::{Pairwise1Bit, Pairwise1BitScratch, PairwiseSIMDSchema};
 
 pub use quantizer::{CompressionError, PreScale, SphericalQuantizer, TrainError};
 #[cfg(feature = "flatbuffers")]
