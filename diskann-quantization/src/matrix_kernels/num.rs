@@ -118,7 +118,7 @@ newtype! {
     pub(crate) DimK
 }
 
-#[cfg(any(test))]
+#[cfg(test)]
 impl DimK {
     pub(super) fn from_bound(bound: super::bounds::Bound) -> Self {
         Self::new(NonZeroUsize::new(bound.value()).unwrap())

@@ -3,9 +3,25 @@
  * Licensed under the MIT license.
  */
 
+//! The lowering of operations mimics a GEMM style operation with inplace application of the
+//! max-sim reduction operation. Currently, blocking across the contraction dimension "k"
+//! is not implemented. As such, expect a performance penalty for large-dimensional vectors.
+//!
+//! The kernel is implemented as follows:
+//!
+//! * Partition `a` into sub-views `suba` that roughly occupy the L2 cache.
+//! * Partition `b` into sub-views `subb` that roughly occupy a portion of the L1 cache.
+//! * Partition `suba` into panels `pa`. We want `pa + subb` to fit in L1.
+//! * Perform micro-kernel operations on `pa + subb`. This computes the max-sim in-place.
+//!
+//! There is plenty of room for improvement. This is just a starting point.
+
 use std::num::NonZeroUsize;
 
-use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector, arch::Scalar};
+use diskann_wide::{
+    SIMDMinMax, SIMDMulAdd, SIMDVector,
+    arch::{Architecture, Scalar},
+};
 
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
@@ -19,10 +35,7 @@ use crate::matrix_kernels::{
     util::{self, Fold, Folder},
 };
 
-//--------//
-// Driver //
-//--------//
-
+/// Blocking parameters for the `packed x unpacked` kernel.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Params {
     /// The (approximate) number of blocks of `A` that fit in the L2 cache.
@@ -32,6 +45,7 @@ pub(super) struct Params {
 }
 
 impl Params {
+    /// Select hyper-parameters for the `packed x unpacked` kernel based on cache size.
     pub(super) fn new(cache: Cache, a_panel: Bytes, b_col: Bytes, nr: usize) -> Self {
         // Pick the number of A-panels to process at a time so the working set is within
         // the L2 cache.
@@ -49,6 +63,24 @@ impl Params {
     }
 }
 
+//--------//
+// Driver //
+//--------//
+
+/// A driver for prepacked by unpacked "maxsim" computations.
+///
+/// Results are returned directly in `c`.
+///
+/// Note that class invariant (2) allows the physical length of the output to be less than
+/// the packed extent of `a` as long as it resides within the last physical block of `a`.
+///
+/// This allows the kernel to write directly into an output buffer when `a` is not logically
+/// filled. `a` being *physically* filled is still a requirement.
+///
+/// # Class Invariants
+///
+/// 1. `a.k()` and `b.k()` must be equal to `k`.
+/// 2. `c.len().div_ceil(MR)` must be equal to `a.blocks()`.
 pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
     arch: A,
     a: packed::View<'a, f32, MR>,
@@ -59,10 +91,14 @@ pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
 }
 
 impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
+    /// Prepare for a maxsim on `a` and `b` with the results stored directly into `c`.
+    ///
+    /// `c` does not any specific initial value.
+    ///
     /// # Safety
     ///
-    /// Bounds `a.k()` and `b.k()` must be equal to `k`. Bound `c.len()` must be equal
-    /// to `a.extent()`.
+    /// 1. `a.k()` and `b.k()` must be equal to `k`.
+    /// 2. `c.len().div_ceil(MR)` must be equal to `a.blocks()`.
     pub(crate) unsafe fn new(
         arch: A,
         a: packed::View<'a, f32, MR>,
@@ -79,6 +115,7 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
             "output length must occupiy exactly the packed A blocks",
         );
 
+        // SAFETY: Inherited from caller.
         unsafe {
             Self::new_inner(
                 arch,
@@ -91,6 +128,10 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
         }
     }
 
+    /// # Safety
+    ///
+    /// 1. `a.k()` and `b.k()` must be equal to `k`.
+    /// 2. `c.len().div_ceil(MR)` must be equal to `a.blocks()`.
     unsafe fn new_inner(
         arch: A,
         a: packed::View<'a, f32, MR>,
@@ -120,70 +161,100 @@ impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
 
 impl<A, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, MR, NR>
 where
-    A: util::LoadStore<f32, MR> + Copy,
+    A: util::LoadStore<f32, MR> + Architecture,
     for<'a> PanelKernel<'a, A, MR, NR>: driver::PanelKernel,
 {
     fn drive(&mut self) {
-        self.c.fill(f32::NEG_INFINITY);
+        self.arch.run(
+            #[inline]
+            || {
+                // Pre-fill `c`.
+                self.c.fill(f32::NEG_INFINITY);
 
-        let remainder = self.c.len() % MR;
-        let last_a_block = self.a.blocks().get() - 1;
+                // We allow `c` to be slightly under-filled.
+                //
+                // These variables track if under-fill is happening.
+                let remainder = self.c.len() % MR;
+                let last_a_block = self.a.blocks().get() - 1;
 
-        let mut c = MutSlice::new(&mut self.c);
-        let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
-            let on_b_panels = |b_panels: unpacked::View<'_, f32>, _| {
-                let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
-                    // If we are in the very last block and we need to sub-fill, do that.
-                    // Otherwise, reference the output in place.
-                    let a_block = a_block_base + a_block_offset;
-                    let handling_tail = a_block == last_a_block && remainder != 0;
+                let mut c = MutSlice::new(self.c);
 
-                    let bound =
-                        bounds::Bound::from_fn(|| if handling_tail { remainder } else { MR });
+                let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
+                    let on_b_panels = |b_panels: unpacked::View<'_, f32>, _| {
+                        let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
+                            // If we are in the very last block and we need to sub-fill, do that.
+                            // Otherwise, reference the output in place.
+                            let a_block = a_block_base + a_block_offset;
+                            let handling_tail = a_block == last_a_block && remainder != 0;
 
-                    let mut region = unsafe { c.subslice(MR * a_block, bound) };
-                    let c = if handling_tail {
-                        util::LoadStore::<f32, MR>::load(
-                            self.arch,
-                            unsafe { region.as_std_slice(remainder) },
-                        )
-                    } else {
-                        unsafe { *region.as_array::<MR>() }
+                            let bound =
+                                bounds::Bound::from_fn(
+                                    || if handling_tail { remainder } else { MR },
+                                );
+
+                            // SAFETY: By class invariant,
+                            //
+                            // `MR * (self.a.blocks() - 1) < c.len() <= MR * self.a.blocks()`.
+                            //
+                            // From the visitor, `a_block <= self.a.blocks()`.
+                            let mut region = unsafe { c.subslice(MR * a_block, bound) };
+                            let c = if handling_tail {
+                                util::LoadStore::<f32, MR>::load(
+                                    self.arch,
+                                    // SAFETY: `region` as length exactly `remainder`.
+                                    unsafe { region.as_std_slice(remainder) },
+                                )
+                            } else {
+                                // SAFETY: `region` has length exactly `MR`.
+                                unsafe { *region.as_array::<MR>() }
+                            };
+
+                            // run the kernel
+                            //
+                            // SAFETY: By class invariant, `a_panel.k()` and `b_panels.k()`
+                            // are both equal to `self.k`.
+                            let mut kernel = unsafe {
+                                PanelKernel::new(self.arch, a_panel, b_panels, c, self.k)
+                            };
+
+                            driver::PanelKernel::panel_kernel(&mut kernel);
+
+                            let c_final = kernel.take();
+
+                            // Put back `C`.
+                            if handling_tail {
+                                util::LoadStore::<f32, MR>::store(
+                                    self.arch,
+                                    c_final,
+                                    // SAFETY: `region` has length exactly `remainder`.
+                                    unsafe { region.as_std_mut_slice(remainder) },
+                                );
+                            } else {
+                                // SAFETY: `region` has length exactly `MR`.
+                                unsafe { *region.as_array::<MR>() = c_final };
+                            }
+                        };
+
+                        // SAFETY: By class invariant, `a_panels.k() == self.k`.
+                        unsafe {
+                            a_panels.visit_panels(self.k, panel_kernel);
+                        }
                     };
 
-                    // run the kernel
-                    let mut kernel =
-                        unsafe { PanelKernel::new(self.arch, a_panel, b_panels, c, self.k) };
-
-                    driver::PanelKernel::panel_kernel(&mut kernel);
-
-                    let c_final = kernel.take();
-
-                    // Put back `C`.
-                    if handling_tail {
-                        util::LoadStore::<f32, MR>::store(self.arch, c_final, unsafe {
-                            region.as_std_mut_slice(remainder)
-                        });
-                    } else {
-                        unsafe { *region.as_array::<MR>() = c_final };
+                    // SAFETY: By class invariant, `self.b.k() == self.k`.
+                    unsafe {
+                        self.b
+                            .visit_sub_views(self.params.b_cols_in_l1, self.k, on_b_panels);
                     }
                 };
 
+                // SAFETY: By class invariant, `self.a.k() == self.k`.
                 unsafe {
-                    a_panels.visit_panels(self.k, panel_kernel);
-                }
-            };
-
-            unsafe {
-                self.b
-                    .visit_sub_views(self.params.b_cols_in_l1, self.k, on_b_panels);
-            }
-        };
-
-        unsafe {
-            self.a
-                .visit_sub_views(self.params.a_panels_in_l2, self.k, on_a_panels)
-        };
+                    self.a
+                        .visit_sub_views(self.params.a_panels_in_l2, self.k, on_a_panels)
+                };
+            },
+        );
     }
 }
 
@@ -224,25 +295,47 @@ impl<'a, A, const MR: usize, const NR: usize> PanelKernel<'a, A, MR, NR> {
     }
 }
 
+/// A custom visitor for the [`MicroKernel`].
+///
+/// This is needed to ensure the visitor body is inlined to inherit target features.
+#[derive(Debug)]
+struct Visitor<'a, A, const MR: usize, const NR: usize> {
+    arch: A,
+    a: packed::Panel<'a, f32, MR>,
+    c: &'a mut [f32; MR],
+    k: DimK,
+}
+
+impl<A, const MR: usize, const NR: usize> unpacked::PanelVisitor<f32, NR> for Visitor<'_, A, MR, NR>
+where
+    A: Copy,
+    for<'a> MicroKernel<'a, A, MR, NR>: driver::MicroKernel,
+{
+    #[inline(always)]
+    fn visit(&mut self, b: unpacked::Panel<'_, f32, NR>, _: usize) {
+        // SAFETY: This is only used on contexts where `self.a.k()`, `b.k()`, and `self.k`
+        // are all equal.
+        let mut micro = unsafe { MicroKernel::new(self.arch, self.a, b, self.c, self.k) };
+        driver::MicroKernel::micro_kernel(&mut micro);
+    }
+}
+
 macro_rules! panel_kernel {
     ($arch:ty, $mr:literal, $nr: literal, [ $($ns:literal),+ $(,)? ]) => {
         impl driver::PanelKernel for PanelKernel<'_, $arch, $mr, $nr> {
-            #[inline]
+            #[inline(always)]
             fn panel_kernel(&mut self) {
-                let on_b_panels = |b: unpacked::Panel<'_, f32, $nr>, _| {
-                    let mut micro = unsafe {
-                        MicroKernel::new(
-                            self.arch,
-                            self.a,
-                            b,
-                            &mut self.c,
-                            self.k,
-                        )
-                    };
-
-                    driver::MicroKernel::micro_kernel(&mut micro);
+                // NOTE: A `Visitor` is used here instead of a closure because a `Visitor`
+                // is more reliably inlined, which means that target-features are inherited
+                // more reliably.
+                let on_b_panels = Visitor {
+                    arch: self.arch,
+                    a: self.a,
+                    c: &mut self.c,
+                    k: self.k,
                 };
 
+                // SAFETY: By class invariant, `self.k` is equal to `self.b.k()`.
                 let b_tail = unsafe { self.b.visit_panels::<$nr>(self.k, on_b_panels) };
 
                 if let Some(b_tail) = b_tail {
@@ -250,6 +343,8 @@ macro_rules! panel_kernel {
                     $(
                         const { assert!($ns < $nr) };
                         if let Some(b_panel) = b_tail.try_as_panel::<$ns>() {
+                            // SAFETY: By class invariant, `self.a.k()` and `self.b.k()`
+                            // are equal to `self.k`.
                             let mut micro = unsafe {
                                 MicroKernel::new(
                                     self.arch,
@@ -271,16 +366,18 @@ macro_rules! panel_kernel {
 
 panel_kernel!(Scalar, 8, 2, [1]);
 
-panel_kernel!(V3, 16, 4, [1, 2, 3]);
 panel_kernel!(V3, 16, 6, [1, 2, 3, 4, 5]);
 
-panel_kernel!(V4, 16, 4, [1, 2, 3]);
 panel_kernel!(V4, 16, 6, [1, 2, 3, 4, 5]);
+panel_kernel!(V4, 32, 6, [1, 2, 3, 4, 5]);
 
 //--------------//
 // Micro Kernel //
 //--------------//
 
+/// # Class Invariants
+///
+/// `a.k()` and `b.k()` are equal to `k`.
 struct MicroKernel<'a, A, const MR: usize, const NR: usize> {
     arch: A,
     a: packed::Panel<'a, f32, MR>,
@@ -330,17 +427,25 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
 
     let mut acc = [wide.default(); NR];
 
-    let astride = a.stride(k);
+    let astride = Elements::<f32>::new(MR);
     let bstride = b.stride(k);
 
     for i in 0..k.value().get() {
-        let ai = unsafe { wide.load(ap.add(astride * i).truncate(Elements::new(MR))) };
+        // SAFETY: By preconditions, `ap.len() == astride * k`. Since `i < k` and `astride == MR`:
+        //
+        // * The pointer offset is valid.
+        // * The subsequent truncation is valid.
+        // * The slice passed to `wide.load` has a length equal to `astride` (and hence `MR`).
+        let ai = unsafe { wide.load(ap.add(astride * i).truncate(astride)) };
 
-        for j in 0..NR {
+        for (j, acc) in acc.iter_mut().enumerate() {
+            // SAFETY: By precionditions, `bp.len() == bstride * NR`. Since `i < k` and `j < NR`:
+            //
+            // * The pointer offset is valid and readable.
             let bj =
                 wide.splat(*unsafe { bp.add(bstride * j + Elements::new(i)).as_unit().as_ref() });
 
-            acc[j] = W::mul_add_splat(ai, bj, acc[j]);
+            *acc = W::mul_add_splat(ai, bj, *acc);
         }
     }
 
@@ -356,6 +461,7 @@ macro_rules! micro_kernel {
         impl driver::MicroKernel for MicroKernel<'_, $arch, $mr, $nr> {
             #[inline(always)]
             fn micro_kernel(&mut self) {
+                // SAFETY: By class invariant, `self.a.k()` and `self.b.k()` equal `self.k`.
                 unsafe { micro_kernel(self.arch, self.a, self.b, self.c, self.k) }
             }
         }
@@ -368,13 +474,18 @@ macro_rules! micro_kernel {
 micro_kernel!(Scalar, 8, { 2, 1 });
 micro_kernel!(V3, 16, { 6, 5, 4, 3, 2, 1 });
 micro_kernel!(V4, 16, { 6, 5, 4, 3, 2, 1 });
+micro_kernel!(V4, 32, { 6, 5, 4, 3, 2, 1 });
 
 trait ExtraWide<const ELEMENTS: usize>: Copy {
     type Wide: Copy;
     type Splat: Copy;
 
-    fn default(self) -> Self::Wide;
+    /// # Safety
+    ///
+    /// `slice.len()` must be exactly `ELEMENTS`.
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide;
+
+    fn default(self) -> Self::Wide;
     fn splat(self, value: f32) -> Self::Splat;
     fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide;
     fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide;
@@ -394,6 +505,8 @@ impl ExtraWide<8> for Scalar {
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 8);
 
+        // SAFETY: Since `slice.len()` must be 8, the pointer offset and 4-wide SIMD loads
+        // are valid.
         unsafe {
             [
                 SIMDVector::load_simd(self, slice.as_ptr()),
@@ -409,7 +522,7 @@ impl ExtraWide<8> for Scalar {
 
     #[inline(always)]
     fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
-        core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
+        core::array::from_fn(|i| (a[i] * b) + acc[i])
     }
 
     #[inline(always)]
@@ -419,9 +532,11 @@ impl ExtraWide<8> for Scalar {
 
     #[inline(always)]
     fn max_into(self, lhs: Self::Wide, into: &mut [f32; 8]) {
+        // SAFETY: `into` has a length of exactly 8.
         let previous = unsafe { self.load(Slice::new(into)) };
         let max = Self::max(lhs, previous);
 
+        // SAFETY: Since `into.len()` is 8, the pointer offset and 4-wide SIMD stores are valid.
         unsafe {
             max[0].store_simd(into.as_mut_ptr());
             max[1].store_simd(into.as_mut_ptr().add(4));
@@ -442,6 +557,9 @@ impl ExtraWide<16> for V3 {
     #[inline(always)]
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 16);
+
+        // SAFETY: Since `slice.len()` must be 16, the pointer offset and 8-wide SIMD loads
+        // are valid.
         unsafe {
             [
                 SIMDVector::load_simd(self, slice.as_ptr()),
@@ -467,9 +585,11 @@ impl ExtraWide<16> for V3 {
 
     #[inline(always)]
     fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
+        // SAFETY: `into` has a length of exactly 16.
         let previous = unsafe { self.load(Slice::new(into)) };
         let max = Self::max(lhs, previous);
 
+        // SAFETY: Since `into.len()` is 16, the pointer offset and 8-wide SIMD stores are valid.
         unsafe {
             max[0].store_simd(into.as_mut_ptr());
             max[1].store_simd(into.as_mut_ptr().add(8));
@@ -491,6 +611,7 @@ impl ExtraWide<16> for V4 {
     unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
         bounds::check_eq!(slice.len(), 16);
 
+        // SAFETY: Since `slice.len()` must be 16, the 16-wide SIMD load is safe.
         unsafe { SIMDVector::load_simd(self, slice.as_ptr()) }
     }
 
@@ -511,11 +632,67 @@ impl ExtraWide<16> for V4 {
 
     #[inline(always)]
     fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
-        let previous = unsafe { self.load(Slice::new(into)) };
-        let max = Self::max(lhs, previous);
+        // SAFETY: `into` has a length of exactly 16.
+        let previous = unsafe { ExtraWide::<16>::load(self, Slice::new(into)) };
+        let max = <Self as ExtraWide<16>>::max(lhs, previous);
 
+        // SAFETY: Since `into.len()` is 16, the store is valid.
         unsafe {
             max.store_simd(into.as_mut_ptr());
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl ExtraWide<32> for V4 {
+    type Wide = [f32x16<V4>; 2];
+    type Splat = f32x16<V4>;
+
+    #[inline(always)]
+    fn default(self) -> Self::Wide {
+        [SIMDVector::default(self), SIMDVector::default(self)]
+    }
+
+    #[inline(always)]
+    unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
+        bounds::check_eq!(slice.len(), 32);
+
+        // SAFETY: Since `slice.len()` must be 32, the pointer offset and 16-wide SIMD loads
+        // are valid.
+        unsafe {
+            [
+                SIMDVector::load_simd(self, slice.as_ptr()),
+                SIMDVector::load_simd(self, slice.add(Elements::new(16)).as_ptr()),
+            ]
+        }
+    }
+
+    #[inline(always)]
+    fn splat(self, value: f32) -> Self::Splat {
+        SIMDVector::splat(self, value)
+    }
+
+    #[inline(always)]
+    fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
+        core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
+    }
+
+    #[inline(always)]
+    fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
+        core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+    }
+
+    #[inline(always)]
+    fn max_into(self, lhs: Self::Wide, into: &mut [f32; 32]) {
+        // SAFETY: `into` has a length of exactly 32.
+        let previous = unsafe { ExtraWide::<32>::load(self, Slice::new(into)) };
+        let max = <Self as ExtraWide<32>>::max(lhs, previous);
+
+        // SAFETY: Since `into.len()` is 32, the pointer offset and 16-wide SIMD stores are
+        // valid.
+        unsafe {
+            max[0].store_simd(into.as_mut_ptr());
+            max[1].store_simd(into.as_mut_ptr().add(16));
         }
     }
 }
@@ -630,6 +807,7 @@ mod tests {
         V4::new_checked_miri(),
         0xca13f736977f96fe,
         16 => { 6, 5, 4, 3, 2, 1},
+        32 => { 6, 5, 4, 3, 2, 1},
     );
 
     /////////////////
@@ -739,7 +917,6 @@ mod tests {
         test_panel_kernel_v3,
         V3::new_checked(),
         0x2c03eb9ee51d30c3,
-        (16, 4),
         (16, 6),
     );
 
@@ -747,8 +924,8 @@ mod tests {
         test_panel_kernel_v4,
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
-        (16, 4),
         (16, 6),
+        (32, 6),
     );
 
     ////////////
@@ -793,8 +970,8 @@ mod tests {
             let mut driver = unsafe {
                 Driver::new_inner(
                     arch,
-                    packed::View::from_block_transposed(a_bt.as_view()),
-                    unpacked::View::from_matrix_view(b.as_view()),
+                    packed::View::from_block_transposed(a_bt.as_view()).unwrap(),
+                    unpacked::View::from_matrix_view(b.as_view()).unwrap(),
                     &mut c,
                     k,
                     Params {
@@ -847,7 +1024,6 @@ mod tests {
         test_driver_v3,
         V3::new_checked(),
         0x2c03eb9ee51d30c3,
-        (16, 4),
         (16, 6),
     );
 
@@ -855,6 +1031,7 @@ mod tests {
         test_driver_v4,
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
-        (16, 4),
+        (16, 6),
+        (32, 6),
     );
 }

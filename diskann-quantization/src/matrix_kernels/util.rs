@@ -95,6 +95,36 @@ impl_loadstore!(f32, 16, f32x16, V3);
 impl_loadstore!(f32, 8, f32x8, V4);
 impl_loadstore!(f32, 16, f32x16, V4);
 
+impl LoadStore<f32, 32> for V4 {
+    #[inline(always)]
+    fn load(self, src: &[f32]) -> [f32; 32] {
+        use diskann_wide::{LoHi, SIMDVector};
+        diskann_wide::alias!(wide = <V4>::f32x16);
+
+        let lo = unsafe { wide::load_simd_first(self, src.as_ptr(), src.len()) }.to_array();
+        let hi = unsafe {
+            wide::load_simd_first(self, src.as_ptr().offset(16), src.len().saturating_sub(16))
+        }
+        .to_array();
+
+        LoHi::new(lo, hi).join()
+    }
+
+    #[inline(always)]
+    fn store(self, v: [f32; 32], dst: &mut [f32]) {
+        use diskann_wide::{LoHi, SIMDVector, SplitJoin};
+        diskann_wide::alias!(wide = <V4>::f32x16);
+
+        let LoHi { lo, hi } = v.split();
+
+        unsafe { wide::from_array(self, lo).store_simd_first(dst.as_mut_ptr(), dst.len()) };
+        unsafe {
+            wide::from_array(self, hi)
+                .store_simd_first(dst.as_mut_ptr().offset(16), dst.len().saturating_sub(16))
+        };
+    }
+}
+
 //////////
 // Fold //
 //////////

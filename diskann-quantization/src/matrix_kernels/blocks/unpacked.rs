@@ -5,14 +5,13 @@
 
 use std::num::NonZeroUsize;
 
+use diskann_utils::views::MatrixView;
+
 use crate::matrix_kernels::{
     bounds::{self, Bound},
     num::{DimK, Elements},
     ptr::Slice,
 };
-
-#[cfg(test)]
-use diskann_utils::views::MatrixView;
 
 /// A view over an unpacked 2-dimensional matrix.
 ///
@@ -24,6 +23,10 @@ use diskann_utils::views::MatrixView;
 ///
 /// For row-major matrices, "bands" is interpreted as "rows". For column-major, "bands" is
 /// interpreted as "columns".
+///
+/// # Class Invariants
+///
+/// The bound `ptr.len()` must be equal to `self.extent * self.k`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct View<'a, T> {
     ptr: Slice<'a, T>,
@@ -32,6 +35,20 @@ pub(crate) struct View<'a, T> {
 }
 
 impl<'a, T> View<'a, T> {
+    /// Construct a [`View`] from a [`MatrixView`].
+    ///
+    /// Since [`MatrixView`]s are interpreted as "row-major", the value `k` will be derived
+    /// from `v.ncols()` and the extent will be taken from `v.nrows()`.
+    ///
+    /// Returns `None` if either dimension is zero.
+    pub(crate) fn from_matrix_view(v: MatrixView<'a, T>) -> Option<Self> {
+        let extent = NonZeroUsize::new(v.nrows())?;
+        let k = DimK::new(NonZeroUsize::new(v.ncols())?);
+
+        // SAFETY: The `MatrixView` ensures that the inner slice has size `extent * k`.
+        Some(unsafe { Self::new(Slice::new(v.into_inner()), extent, k) })
+    }
+
     /// Construct a new [`View`] over `ptr`.
     ///
     /// # Safety
@@ -40,46 +57,63 @@ impl<'a, T> View<'a, T> {
     pub(crate) unsafe fn new(ptr: Slice<'a, T>, extent: NonZeroUsize, k: DimK) -> Self {
         let k: usize = k.value().get();
         bounds::check_eq!(ptr.len(), extent.get() * k);
+
+        // SAFETY: Inherited from caller
         unsafe { Self::new_inner(ptr, extent, Bound::new(k)) }
     }
 
-    /// Construct a [`View`] from a [`MatrixView`].
-    #[cfg(test)]
-    pub(in crate::matrix_kernels) fn from_matrix_view(v: MatrixView<'a, T>) -> Self {
-        let extent = NonZeroUsize::new(v.nrows()).unwrap();
-        let k = DimK::new(NonZeroUsize::new(v.ncols()).unwrap());
-        unsafe { Self::new(Slice::new(v.into_inner()), extent, k) }
-    }
-
+    /// # Safety
+    ///
+    /// The true length of `ptr` must be exactly `extent * k`.
     unsafe fn new_inner(ptr: Slice<'a, T>, extent: NonZeroUsize, k: Bound) -> Self {
         bounds::check_eq!(ptr.len(), Bound::new(extent.get()) * k);
         Self { ptr, extent, k }
     }
 
+    /// View the underlying memory as a `&[T]`.
+    ///
+    /// # Safety
+    ///
+    /// `k` must equal the contraction dimension tracked by [`Self::k`].
     pub(in crate::matrix_kernels) unsafe fn as_std_slice(&self, k: DimK) -> &[T] {
         let len = self.stride(k) * self.extent().get();
+
+        // SAFETY: By class invariant, the true ize f the underlying slice will be `len`.
         unsafe { self.ptr.as_std_slice(len.value()) }
     }
 
+    /// Return the number of contiguous bands in `self`.
+    ///
+    /// Each band contains [`Self::k`] elements.
     pub(in crate::matrix_kernels) const fn extent(&self) -> NonZeroUsize {
         self.extent
     }
 
+    /// Return the number of elements in each "band" of `self`.
+    ///
+    /// This is tracked as a [`Bound`]. Its provenance comes from the constructors of `self`.
     pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
+    /// Return the number of elements in each "band" of self.
+    ///
+    /// The value `k` must be equal to [`Self::k`].
     pub(in crate::matrix_kernels) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k.value());
         Elements::new(k.value().get())
     }
 
-    /// Partition the matrix into bands consisting of `nr` rows (with the last group being
-    /// potentially smaller). Provide all sub-matrices to `f`.
+    /// Partition the matrix into sub-views each containing at most `sub_extent` bands, with
+    /// the last one potentially containing fewer.
+    ///
+    /// Provide all sub-views to `f` in memory order. The second argument to `f` is the index
+    /// of the first band in the sub-view within `self`.
     ///
     /// # Safety
     ///
-    /// Self must have `k` columns.
+    /// The bound [`Self::k`] must be equal to `k`.
+    #[inline(always)]
     pub(in crate::matrix_kernels) unsafe fn visit_sub_views<F>(
         &self,
         sub_extent: NonZeroUsize,
@@ -97,6 +131,10 @@ impl<'a, T> View<'a, T> {
         while let Some(remaining) = NonZeroUsize::new(self.extent().get() - i) {
             let this_extent = remaining.min(sub_extent);
 
+            // SAFETY: If `k` is correct:
+            //
+            // * The pointer offset and truncation are valid.
+            // * The `Slice` provided to `new_inner` has a length of `this_extent * k`.
             let sub = unsafe {
                 Self::new_inner(
                     self.ptr
@@ -113,12 +151,24 @@ impl<'a, T> View<'a, T> {
         }
     }
 
-    /// TODO: A `View` with a fixed upper capacity.
+    /// Partition the matrix into panels each containing exactly `EXTENT` bands.
+    ///
+    /// Provide all panels to `visitor` in memory order. The visitor receives the index of
+    /// each panel's first band within `self`.
+    ///
+    /// If [`Self::extent`] is not a multiple of `EXTENT`, then a [`Remainder`] will be
+    /// returned for the remaining bands. The remainder starts immediately after the visited
+    /// panels.
+    ///
+    /// # Safety
+    ///
+    /// The bound [`Self::k`] must be equal to `k`.
+    #[inline(always)]
     #[must_use = "the remainder needs to be handled separately"]
     pub(in crate::matrix_kernels) unsafe fn visit_panels<const EXTENT: usize>(
         &self,
         k: DimK,
-        mut f: impl FnMut(Panel<'_, T, EXTENT>, usize),
+        mut visitor: impl PanelVisitor<T, EXTENT>,
     ) -> Option<Remainder<'_, T, EXTENT>> {
         const { assert!(EXTENT > 0) };
 
@@ -135,7 +185,7 @@ impl<'a, T> View<'a, T> {
                 )
             };
 
-            f(sub, r);
+            visitor.visit(sub, r);
         }
 
         if let Some(remaining) = NonZeroUsize::new(self.extent().get() - full_groups) {
@@ -152,6 +202,27 @@ impl<'a, T> View<'a, T> {
         } else {
             None
         }
+    }
+}
+
+/// A visitor for [`View::visit_panels`].
+///
+/// This is expressed as a custom trait rather than a closure because rustc/LLVM do not
+/// seem to reliably inline closures, which is necessary when embedding visitation in a
+/// context with `target_feature` enabled.
+pub(in crate::matrix_kernels) trait PanelVisitor<T, const N: usize> {
+    /// Visit a [`Panel`] from [`View::visit_panels`]. Argument `start` gives the index
+    /// of the first band in `panel` in the parent [`View`].
+    fn visit(&mut self, panel: Panel<'_, T, N>, start: usize);
+}
+
+impl<T, const N: usize, F> PanelVisitor<T, N> for F
+where
+    F: FnMut(Panel<'_, T, N>, usize),
+{
+    #[inline(always)]
+    fn visit(&mut self, panel: Panel<'_, T, N>, start: usize) {
+        (self)(panel, start)
     }
 }
 
@@ -179,7 +250,11 @@ impl<'a, T> View<'a, T> {
     }
 }
 
-/// A block of `EXTENT` rows of a matrix with element type `T`.
+/// A block of `EXTENT` bands of a matrix of type `T`.
+///
+/// # Class Invariants
+///
+/// The bound `ptr.len()` must be equal to `EXTENT * self.k`.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::matrix_kernels) struct Panel<'a, T, const EXTENT: usize> {
     ptr: Slice<'a, T>,
@@ -187,6 +262,11 @@ pub(in crate::matrix_kernels) struct Panel<'a, T, const EXTENT: usize> {
 }
 
 impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
+    /// Construct a new [`Panel`].
+    ///
+    /// # Safety
+    ///
+    /// The bound `ptr.len()` must be equal to exactly `k * EXTENT`.
     #[cfg(test)]
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
         let k: usize = k.value().get();
@@ -194,28 +274,43 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
         unsafe { Self::new_inner(ptr, Bound::new(k)) }
     }
 
+    /// # Safety
+    ///
+    /// The bound `ptr.len()` must be equal to exactly `k * EXTENT`.
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
         bounds::check_eq!(ptr.len(), k * Bound::new(EXTENT));
         Self { ptr, k }
     }
 
+    /// Return the base span of this panel as a [`Slice`].
     pub(in crate::matrix_kernels) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
     }
 
-    #[cfg(test)]
-    unsafe fn as_std_slice(self, k: DimK) -> &'a [T] {
-        bounds::check_eq!(self.k(), k);
-        unsafe { self.ptr.as_std_slice(EXTENT * k.value().get()) }
-    }
-
+    /// Return the contraction dimension of `self`.
+    ///
+    /// This is inherited from all constructors.
     pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
+    /// Return the number of elements in each band of `self`.
+    ///
+    /// `k` must equal the contraction dimension tracked by [`Self::k`].
     pub(in crate::matrix_kernels) fn stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k(), k);
         Elements::new(k.value().get())
+    }
+
+    /// Return the contents of `self` as a `&[T]`.
+    ///
+    /// # Safety
+    ///
+    /// `k` must equal the contraction dimension tracked by [`Self::k`].
+    #[cfg(test)]
+    unsafe fn as_std_slice(self, k: DimK) -> &'a [T] {
+        bounds::check_eq!(self.k(), k);
+        unsafe { self.ptr.as_std_slice(EXTENT * k.value().get()) }
     }
 }
 
@@ -227,6 +322,12 @@ impl<'a, T, const EXTENT: usize> Panel<'a, T, EXTENT> {
     }
 }
 
+/// A nonempty trailing view containing fewer than `CAPACITY` bands.
+///
+/// # Class Invariants
+///
+/// * The bound `ptr.len()` must be equal to `self.extent * self.k`.
+/// * `self.extent` must be **strictly less** than `CAPACITY`.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::matrix_kernels) struct Remainder<'a, T, const CAPACITY: usize> {
     ptr: Slice<'a, T>,
@@ -236,8 +337,18 @@ pub(in crate::matrix_kernels) struct Remainder<'a, T, const CAPACITY: usize> {
 }
 
 impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
+    /// # Safety
+    ///
+    /// * `ptr.len()` must be equal to `extent * k`.
+    /// * `extent` must be strictly less than `CAPACITY`.
     unsafe fn new_inner(ptr: Slice<'a, T>, start: usize, extent: NonZeroUsize, k: Bound) -> Self {
         bounds::check_eq!(ptr.len(), Bound::new(extent.get()) * k);
+        bounds::check_lt!(
+            Bound::new(extent.get()),
+            CAPACITY,
+            "remainder must be strictly less than capacity"
+        );
+
         Self {
             ptr,
             _start: start,
@@ -246,10 +357,14 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
         }
     }
 
+    /// Return the number of bands in `self`.
+    ///
+    /// This is guaranteed to be less than `CAPACITY`.
     pub(in crate::matrix_kernels) fn extent(&self) -> NonZeroUsize {
         self.extent
     }
 
+    /// Return the index of the first band in `self`'s immediate parent [`View`].
     #[cfg_attr(
         not(test),
         expect(unused, reason = "this completes an API but is not used yet")
@@ -258,10 +373,14 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
         self._start
     }
 
+    /// Return the number of elements in each "band" of `self`.
     fn k(&self) -> Bound {
         self.k
     }
 
+    /// Return a [`Panel`] if [`Self::extent`] is equal to `EXTENT`.
+    ///
+    /// Otherwise, returns `None`.
     pub(in crate::matrix_kernels) fn try_as_panel<const EXTENT: usize>(
         self,
     ) -> Option<Panel<'a, T, EXTENT>> {
@@ -312,7 +431,7 @@ mod test {
             Matrix::new(init, nrows.get(), ncols.get())
         };
 
-        let view = View::from_matrix_view(mat.as_view());
+        let view = View::from_matrix_view(mat.as_view()).unwrap();
         assert_eq!(view.extent().get(), mat.nrows());
         assert_eq!(view.k().value(), mat.ncols());
 
@@ -415,7 +534,7 @@ mod test {
             Matrix::new(init, nrows.get(), ncols.get())
         };
 
-        let view = View::from_matrix_view(mat.as_view());
+        let view = View::from_matrix_view(mat.as_view()).unwrap();
         assert_eq!(view.extent().get(), mat.nrows());
         assert_eq!(view.k().value(), mat.ncols());
 
@@ -485,6 +604,14 @@ mod test {
             });
             assert_contains!(message, "equal to 6");
         }
+
+        let message = panic_message_for(|| {
+            // SAFETY: The deliberate capacity mismatch is caught while bounds are retained.
+            let _ = unsafe {
+                Remainder::<_, 2>::new_inner(Slice::new(&data[..6]), 0, extent, Bound::new(3))
+            };
+        });
+        assert_contains!(message, "remainder must be strictly less than capacity");
     }
 
     #[test]
@@ -511,7 +638,7 @@ mod test {
         });
         assert_k_mismatch(|| {
             // SAFETY: The deliberate K mismatch is caught before pointer arithmetic.
-            let _ = unsafe { view.visit_panels::<2>(wrong_k, |_, _| {}) };
+            let _ = unsafe { view.visit_panels::<2>(wrong_k, |_: Panel<'_, _, _>, _| {}) };
         });
 
         // SAFETY: `data` contains exactly two bands of three elements.

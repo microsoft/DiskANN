@@ -5,15 +5,26 @@
 
 use std::num::NonZeroUsize;
 
-use crate::matrix_kernels::{
-    bounds::{self, Bound},
-    num::{DimK, Elements},
-    ptr::Slice,
+use crate::{
+    matrix_kernels::{
+        bounds::{self, Bound},
+        num::{DimK, Elements},
+        ptr::Slice,
+    },
+    multi_vector::BlockTransposedRef,
 };
 
-#[cfg(test)]
-use crate::multi_vector::BlockTransposedRef;
-
+/// A view over packed memory.
+///
+/// Elements are gathered into groups of size `SZ`. A collection of `self.k` groups forms
+/// a "block". `self.blocks` tracks how many such blocks are in the view.
+///
+/// This layout requires that no block is partially filled.
+///
+/// # Class Invariants
+///
+/// * The tracked length `ptr.len()` must be equal to `SZ * blocks * k`.
+/// * `SZ` may not be zero.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct View<'a, T, const SZ: usize> {
     ptr: Slice<'a, T>,
@@ -22,55 +33,98 @@ pub(crate) struct View<'a, T, const SZ: usize> {
 }
 
 impl<'a, T, const SZ: usize> View<'a, T, SZ> {
-    pub(crate) unsafe fn new(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: DimK) -> Self {
+    /// Construct a [`View`] from a [`BlockTransposedRef`].
+    ///
+    /// The mapping of parameters is as follows:
+    ///
+    /// * The group size `SZ` is taken from the `GROUP` const-generic on [`BlockTransposedRef`].
+    /// * The number of groups in each block is [`BlockTransposedRef::ncols`].
+    /// * The number of blocks is [`BlockTransposedRef::num_blocks`].
+    ///
+    /// Returns `None` if any of the runtime values is zero.
+    pub(crate) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Option<Self>
+    where
+        T: Copy,
+    {
+        if SZ == 0 {
+            return None;
+        }
+
+        let blocks = NonZeroUsize::new(v.num_blocks())?;
+        let k = DimK::new(NonZeroUsize::new(v.ncols())?);
+        Some(unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) })
+    }
+
+    /// # Safety
+    ///
+    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`.
+    pub(in crate::matrix_kernels) unsafe fn new(
+        ptr: Slice<'a, T>,
+        blocks: NonZeroUsize,
+        k: DimK,
+    ) -> Self {
         bounds::check_eq!(
             ptr.len(),
             blocks.get() * SZ * k.value().get(),
             "invalid block-transposed access",
         );
+        bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
 
         unsafe { Self::new_inner(ptr, blocks, Bound::new(k.value().get())) }
     }
 
+    /// # Safety
+    ///
+    /// `ptr.len()` must be exactly equal to `SZ * blocks * k`.
     unsafe fn new_inner(ptr: Slice<'a, T>, blocks: NonZeroUsize, k: Bound) -> Self {
         bounds::check_eq!(
             ptr.len(),
             Bound::new(blocks.get()) * Bound::new(SZ) * k,
             "invalid block-transposed access",
         );
+        bounds::check_lt!(Bound::new(0), SZ, "group size may not be zero.",);
 
         Self { ptr, blocks, k }
     }
 
-    /// Construct a [`View`] from a [`BlockTransposedRef`].
-    #[cfg(test)]
-    pub(in crate::matrix_kernels) fn from_block_transposed(v: BlockTransposedRef<'a, T, SZ>) -> Self
-    where
-        T: Copy,
-    {
-        let blocks = NonZeroUsize::new(v.num_blocks()).unwrap();
-        let k = DimK::new(NonZeroUsize::new(v.ncols()).unwrap());
-        unsafe { Self::new(Slice::new(v.as_slice()), blocks, k) }
-    }
-
+    /// Return the number of blocks in the [`View`].
     pub(in crate::matrix_kernels) const fn blocks(&self) -> NonZeroUsize {
         self.blocks
     }
 
+    /// Return the contraction dimension of `self`.
+    ///
+    /// This is inherited from all constructors.
     pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
     }
 
+    /// Return the number of elements in each block.
+    ///
+    /// `k` must be equal to the contraction dimension tracked by [`Self::k`].
     pub(in crate::matrix_kernels) fn block_stride(&self, k: DimK) -> Elements<T> {
         bounds::check_eq!(self.k, k.value());
         Elements::new(SZ * k.value().get())
     }
 
-    pub(in crate::matrix_kernels) fn extent(&self) -> NonZeroUsize {
+    /// Return the number of bands stored in `self`.
+    ///
+    /// This is equal to `Self::blocks() * SZ`.
+    #[cfg(test)]
+    fn extent(&self) -> NonZeroUsize {
         const { assert!(SZ != 0) };
         self.blocks.saturating_mul(NonZeroUsize::new(SZ).unwrap())
     }
 
+    /// Partition the view into sub-views each containing at most `sub_blocks` blocks, with
+    /// the last one potentially containing fewer.
+    ///
+    /// Provide all sub-views to `f` in memory order. The second argument to `f` is the index
+    /// of the first **block** in the sub-view within `self`.
+    ///
+    /// # Safety
+    ///
+    /// The bound [`Self::k`] must be equal to `k`.
     pub(in crate::matrix_kernels) unsafe fn visit_sub_views<F>(
         &self,
         sub_blocks: NonZeroUsize,
@@ -84,7 +138,7 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         let mut i = 0;
 
         // The loop bound is a bit funky because it is setup to give us a `NonZeroUsize` for
-        // free. Once it returns `None`, we know `i == self.extent()` and we're done.
+        // free. Once it returns `None`, we know `i == self.blocks()` and we're done.
         while let Some(remaining) = NonZeroUsize::new(self.blocks().get() - i) {
             let this_blocks = remaining.min(sub_blocks);
 
@@ -104,6 +158,14 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
         }
     }
 
+    /// Partition the view into panels each containing exactly `SZ` bands and `SZ * k` elements.
+    ///
+    /// Provide all panels to `f` in memory order. The callback receives the index of
+    /// each panel's first block within `self`.
+    ///
+    /// # Safety
+    ///
+    /// The bound [`Self::k`] must be equal to `k`.
     pub(in crate::matrix_kernels) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
         F: FnMut(Panel<'_, T, SZ>, usize),
@@ -140,42 +202,53 @@ impl<'a, T, const SZ: usize> View<'a, T, SZ> {
 // Panel //
 //-------//
 
+/// A block containing `k` contiguous groups of size `SZ`.
+///
+/// # Class Invariants
+///
+/// The bound `ptr.len()` must be equal to `SZ * k`.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize, const PACK: usize = 1> {
+pub(in crate::matrix_kernels) struct Panel<'a, T, const SZ: usize> {
     ptr: Slice<'a, T>,
     k: Bound,
 }
 
-impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
+impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
+    /// # Safety
+    ///
+    /// `ptr.len()` must be equal to `SZ * k`.
     #[cfg(test)]
     pub(in crate::matrix_kernels) unsafe fn new(ptr: Slice<'a, T>, k: DimK) -> Self {
-        bounds::check_eq!(ptr.len(), SZ * k.value().get().next_multiple_of(PACK));
+        bounds::check_eq!(ptr.len(), SZ * k.value().get());
         unsafe { Self::new_inner(ptr, Bound::new(k.value().get())) }
     }
 
+    /// # Safety
+    ///
+    /// `ptr.len()` must be equal to `SZ * k`.
     unsafe fn new_inner(ptr: Slice<'a, T>, k: Bound) -> Self {
-        k.with(|k| bounds::check_eq!(ptr.len(), SZ * k.next_multiple_of(PACK)));
+        k.with(|k| bounds::check_eq!(ptr.len(), SZ * k));
+
         Self { ptr, k }
     }
 
+    /// Return the base span of this panel as a [`Slice`].
     pub(in crate::matrix_kernels) const fn as_ptr(&self) -> Slice<'_, T> {
         self.ptr
     }
 
+    /// Return the contraction dimension of `self`.
+    ///
+    /// This is inherited from all constructors.
     pub(in crate::matrix_kernels) const fn k(&self) -> Bound {
         self.k
-    }
-
-    pub(in crate::matrix_kernels) fn stride(&self, k: DimK) -> Elements<T> {
-        bounds::check_eq!(self.k, k);
-        Elements::new(SZ * PACK)
     }
 }
 
 #[cfg(test)]
-impl<'a, T, const SZ: usize, const PACK: usize> Panel<'a, T, SZ, PACK> {
+impl<'a, T, const SZ: usize> Panel<'a, T, SZ> {
     fn checked_as_std_slice(self) -> &'a [T] {
-        let len = SZ * self.k().value().next_multiple_of(PACK);
+        let len = SZ * self.k().value();
         // SAFETY: Bounds are retained under `cfg(test)`.
         unsafe { self.ptr.as_std_slice(len) }
     }
@@ -288,7 +361,7 @@ mod tests {
                     sub_view.blocks().get() * SZ,
                     "{ctx}",
                 );
-                assert_eq!(sub_view.k(), view.k(), "{ctx}");
+                assert_eq!(sub_view.k().value(), view.k().value(), "{ctx}");
 
                 let mut panel_count = 0;
                 sub_view.checked_visit_panels(|panel, panel_start| {
@@ -312,11 +385,9 @@ mod tests {
         ctx: std::fmt::Arguments<'_>,
     ) {
         let k = reference.ncols();
-        let dim_k = DimK::new(NonZeroUsize::new(k).unwrap());
         let packed = panel.checked_as_std_slice();
 
         assert_eq!(panel.k().value(), k, "{ctx}");
-        assert_eq!(panel.stride(dim_k).value(), SZ, "{ctx}");
 
         for col in 0..k {
             for row in 0..SZ {
@@ -352,15 +423,6 @@ mod tests {
             });
             assert_contains!(message, "equal to 12");
         }
-
-        let data = [0u8; 17];
-        for len in [15, 17] {
-            let message = panic_message_for(|| {
-                // SAFETY: The deliberate length mismatch is caught while bounds are retained.
-                let _ = unsafe { Panel::<_, 4, 2>::new(Slice::new(&data[..len]), k) };
-            });
-            assert_contains!(message, "equal to 16");
-        }
     }
 
     #[test]
@@ -388,11 +450,6 @@ mod tests {
             unsafe {
                 view.visit_panels(wrong_k, |_, _| {});
             }
-        });
-
-        let panel = unsafe { Panel::<_, 4>::new(Slice::new(&data[..12]), actual_k) };
-        assert_k_mismatch(|| {
-            let _ = panel.stride(wrong_k);
         });
     }
 

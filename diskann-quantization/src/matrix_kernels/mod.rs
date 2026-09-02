@@ -21,8 +21,8 @@ mod util;
 // re-export
 pub(crate) use driver::Drive;
 pub(crate) use num::DimK;
-pub(crate) use ptr::Slice;
 
+/// Placeholder model for CPU caches.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Cache {
     l1: NonZeroUsize,
@@ -43,10 +43,13 @@ impl Cache {
     fn l2(&self) -> NonZeroUsize {
         self.l2
     }
-}
 
-impl Default for Cache {
-    fn default() -> Self {
+    /// Try to detect the cache of the CPU.
+    ///
+    /// # Note
+    ///
+    /// This currently doesn't work.
+    pub(crate) fn detect() -> Self {
         const L1: NonZeroUsize = NonZeroUsize::new((3 * 48_000) / 4).unwrap();
         const L2: NonZeroUsize = NonZeroUsize::new(1_250_000 / 2).unwrap();
         Self::new(L1, L2)

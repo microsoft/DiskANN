@@ -68,19 +68,11 @@ where
         let mut driver = unsafe {
             mk::maxsim::packed_f32_x_unpacked_f32::Driver::new(
                 self.arch,
-                mk::blocks::packed::View::<f32, GROUP>::new(
-                    mk::Slice::new(self.prepared.as_slice()),
-                    NonZeroUsize::new(self.prepared.num_blocks()).unwrap(),
-                    k,
-                ),
-                mk::blocks::unpacked::View::new(
-                    mk::Slice::new(doc.as_slice()),
-                    NonZeroUsize::new(doc.num_vectors()).unwrap(),
-                    k,
-                ),
+                mk::blocks::packed::View::from_block_transposed(self.prepared.as_view()).unwrap(),
+                mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()).unwrap(),
                 scores,
                 k,
-                mk::Cache::default(),
+                mk::Cache::detect(),
             )
         };
 
@@ -125,19 +117,11 @@ where
         let mut driver = unsafe {
             mk::maxsim::packed_f32_x_unpacked_f16::Driver::new(
                 self.arch,
-                mk::blocks::packed::View::<f32, GROUP>::new(
-                    mk::Slice::new(self.prepared.as_slice()),
-                    NonZeroUsize::new(self.prepared.num_blocks()).unwrap(),
-                    k,
-                ),
-                mk::blocks::unpacked::View::new(
-                    mk::Slice::new(doc.as_slice()),
-                    NonZeroUsize::new(doc.num_vectors()).unwrap(),
-                    k,
-                ),
+                mk::blocks::packed::View::from_block_transposed(self.prepared.as_view()).unwrap(),
+                mk::blocks::unpacked::View::from_matrix_view(doc.as_matrix_view()).unwrap(),
                 scores,
                 k,
-                mk::Cache::default(),
+                mk::Cache::detect(),
             )
         };
 
@@ -241,7 +225,7 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standa
 {
     fn run(self, arch: V4, query: MatRef<'_, Standard<f32>>) -> E::Output {
         // V4 dispatches to V3 (no V4-specific kernel).
-        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query.as_matrix_view());
+        let prepared = BlockTransposed::<f32, 32>::from_matrix_view(query.as_matrix_view());
         self.0.erase(Prepared {
             arch,
             prepared,
@@ -308,7 +292,7 @@ impl<E: Erase<half::f16>>
     for BuildAndErase<E>
 {
     fn run(self, arch: V4, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(
+        let prepared = BlockTransposed::<f32, 32>::from_matrix_view(
             query
                 .as_matrix_view()
                 .map(|v| diskann_wide::cast_f16_to_f32(*v))
