@@ -97,11 +97,28 @@ FIXTURE_CONTEXT_PARTS = {
 }
 STRUCTURAL_CLIPPY_LINTS = {"single_match", "too_many_arguments"}
 
-ALLOW_RE = re.compile(
-    r"^[ \t]*(?P<prefix>#!?)\s*\[\s*allow\s*\((?P<body>.*?)\)\s*\]",
-    re.DOTALL | re.MULTILINE,
+GENERATED_PREAMBLE_RE = re.compile(
+    r"""(?ix)^\s*(?://+|\#+|\*+|/\*+)\s*
+    (?:
+        (?:this\s+file\s+is\s+)?@generated\b
+        | this\s+file\s+(?:is|was)\s+automatically\s+generated\b
+        | automatically\s+generated\s+by\b
+        | code\s+(?:is|was)\s+automatically\s+generated\b
+        | code\s+generated\b.*\bdo\s+not\s+edit\b
+        | do\s+not\s+edit\b.*\bgenerated\b
+    )"""
 )
-CLIPPY_LINT_RE = re.compile(r"\bclippy::([a-zA-Z0-9_]+)\b")
+LFS_POINTER_RE = re.compile(
+    rb"\Aversion https://git-lfs\.github\.com/spec/v1\r?\n"
+    rb"oid sha256:[0-9a-f]{64}\r?\n"
+    rb"size [0-9]+\r?\n?\Z"
+)
+
+
+class RustLexError(ValueError):
+    def __init__(self, source: str, offset: int, message: str) -> None:
+        self.line = source.count("\n", 0, offset) + 1
+        super().__init__(message)
 
 
 def normalized_path(path: str) -> PurePosixPath:
@@ -124,11 +141,25 @@ def is_generated(path: str, data: bytes) -> bool:
     if GENERATED_PATH_PARTS.intersection(parts):
         return True
 
-    prefix = data[:2048].lower()
-    return any(
-        marker in prefix
-        for marker in (b"@generated", b"automatically generated", b"do not edit")
-    )
+    try:
+        lines = data.decode("utf-8-sig").splitlines()
+    except UnicodeDecodeError:
+        return False
+
+    offset = 1 if lines and lines[0].startswith("#!") else 0
+    for header in (BLOCK_HEADER, SLASH_HEADER, HASH_HEADER):
+        if tuple(lines[offset : offset + len(header)]) == header:
+            offset += len(header)
+            break
+
+    candidates = []
+    for line in lines[offset:]:
+        if not line.strip():
+            continue
+        candidates.append(line)
+        if len(candidates) == 4:
+            break
+    return any(GENERATED_PREAMBLE_RE.match(line) for line in candidates)
 
 
 def expected_headers(path: str) -> tuple[tuple[str, ...], ...]:
@@ -177,11 +208,19 @@ def looks_binary(data: bytes) -> bool:
     return control_characters / len(text) > 0.01
 
 
-def is_binary_fixture(path: str, data: bytes) -> bool:
+def is_lfs_pointer(data: bytes) -> bool:
+    return bool(LFS_POINTER_RE.fullmatch(data))
+
+
+def is_binary_fixture(path: str, data: bytes, lfs_filter: str | None = None) -> bool:
     parsed = normalized_path(path)
     if parsed.suffix.lower() in BINARY_FIXTURE_EXTENSIONS:
         return True
-    return bool(FIXTURE_CONTEXT_PARTS.intersection(parsed.parts)) and looks_binary(data)
+    return bool(FIXTURE_CONTEXT_PARTS.intersection(parsed.parts)) and (
+        looks_binary(data)
+        or lfs_filter == "lfs"
+        or is_lfs_pointer(data)
+    )
 
 
 def check_binary_fixture(
@@ -189,7 +228,8 @@ def check_binary_fixture(
     data: bytes,
     lfs_filter: Callable[[str], str | None],
 ) -> list[str]:
-    if not is_binary_fixture(path, data):
+    filter_value = lfs_filter(path)
+    if not is_binary_fixture(path, data, filter_value):
         return []
 
     violations = []
@@ -197,35 +237,279 @@ def check_binary_fixture(
         violations.append(
             f"{path}: binary fixture must be stored under a test_data directory"
         )
-    if lfs_filter(path) != "lfs":
+    if filter_value != "lfs":
         violations.append(f"{path}: binary fixture must be tracked by Git LFS")
     return violations
 
 
+def skip_block_comment(source: str, offset: int) -> int:
+    depth = 1
+    index = offset + 2
+    while index < len(source):
+        if source.startswith("/*", index):
+            depth += 1
+            index += 2
+        elif source.startswith("*/", index):
+            depth -= 1
+            index += 2
+            if depth == 0:
+                return index
+        else:
+            index += 1
+    raise RustLexError(source, offset, "unterminated block comment")
+
+
+def skip_quoted_literal(source: str, quote: int, delimiter: str) -> int:
+    index = quote + 1
+    while index < len(source):
+        if source[index] == "\\":
+            index += 2
+        elif source[index] == delimiter:
+            return index + 1
+        else:
+            index += 1
+    raise RustLexError(source, quote, f"unterminated {delimiter} literal")
+
+
+def skip_raw_string(source: str, offset: int) -> int | None:
+    index = offset
+    if source.startswith(("br", "cr"), index):
+        index += 2
+    elif source.startswith("r", index):
+        index += 1
+    else:
+        return None
+
+    hash_start = index
+    while index < len(source) and source[index] == "#":
+        index += 1
+    if index >= len(source) or source[index] != '"':
+        return None
+
+    terminator = '"' + "#" * (index - hash_start)
+    end = source.find(terminator, index + 1)
+    if end < 0:
+        raise RustLexError(source, offset, "unterminated raw string literal")
+    return end + len(terminator)
+
+
+def skip_char_literal(source: str, quote: int) -> int | None:
+    if quote + 1 >= len(source):
+        return None
+    if source[quote + 1] != "\\":
+        return quote + 3 if source[quote + 2 : quote + 3] == "'" else None
+    return skip_quoted_literal(source, quote, "'")
+
+
+def rust_non_code(source: str, offset: int) -> tuple[str, int] | None:
+    if source.startswith("//", offset):
+        end = source.find("\n", offset + 2)
+        return ("comment", len(source) if end < 0 else end)
+    if source.startswith("/*", offset):
+        return ("comment", skip_block_comment(source, offset))
+
+    raw_end = skip_raw_string(source, offset)
+    if raw_end is not None:
+        return ("literal", raw_end)
+
+    if source.startswith(('b"', 'c"'), offset):
+        return ("literal", skip_quoted_literal(source, offset + 1, '"'))
+    if source[offset] == '"':
+        return ("literal", skip_quoted_literal(source, offset, '"'))
+    if source.startswith("b'", offset):
+        end = skip_char_literal(source, offset + 1)
+        return ("literal", end) if end is not None else None
+    if source[offset] == "'":
+        end = skip_char_literal(source, offset)
+        return ("literal", end) if end is not None else None
+    return None
+
+
+def rust_attributes(source: str) -> list[tuple[bool, str, int, int]]:
+    attributes = []
+    index = 0
+    delimiter_pairs = {")": "(", "]": "[", "}": "{"}
+
+    while index < len(source):
+        non_code = rust_non_code(source, index)
+        if non_code is not None:
+            index = non_code[1]
+            continue
+        if source[index] != "#":
+            index += 1
+            continue
+
+        start = index
+        index += 1
+        inner = index < len(source) and source[index] == "!"
+        if inner:
+            index += 1
+        while index < len(source) and source[index].isspace():
+            index += 1
+        if index >= len(source) or source[index] != "[":
+            continue
+
+        body_start = index + 1
+        stack = ["["]
+        index += 1
+        while index < len(source) and stack:
+            non_code = rust_non_code(source, index)
+            if non_code is not None:
+                index = non_code[1]
+                continue
+            character = source[index]
+            if character in "([{":
+                stack.append(character)
+            elif character in ")]}":
+                if delimiter_pairs[character] != stack[-1]:
+                    raise RustLexError(
+                        source, index, "mismatched delimiter in attribute"
+                    )
+                stack.pop()
+                if not stack:
+                    attributes.append(
+                        (
+                            inner,
+                            source[body_start:index],
+                            source.count("\n", 0, start) + 1,
+                            body_start,
+                        )
+                    )
+            index += 1
+        if stack:
+            raise RustLexError(source, start, "unterminated attribute")
+
+    return attributes
+
+
+def rust_tokens(source: str) -> list[str]:
+    tokens = []
+    index = 0
+    while index < len(source):
+        if source[index].isspace():
+            index += 1
+            continue
+        non_code = rust_non_code(source, index)
+        if non_code is not None:
+            if non_code[0] == "literal":
+                tokens.append("<literal>")
+            index = non_code[1]
+            continue
+        if source[index].isalpha() or source[index] == "_":
+            end = index + 1
+            while end < len(source) and (
+                source[end].isalnum() or source[end] == "_"
+            ):
+                end += 1
+            tokens.append(source[index:end])
+            index = end
+        elif source.startswith("::", index):
+            tokens.append("::")
+            index += 2
+        else:
+            tokens.append(source[index])
+            index += 1
+    return tokens
+
+
+def closing_delimiter(tokens: list[str], opening: int, end: int) -> int:
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    stack = [tokens[opening]]
+    for index in range(opening + 1, end):
+        token = tokens[index]
+        if token in pairs:
+            stack.append(token)
+        elif token in pairs.values():
+            if not stack or token != pairs[stack[-1]]:
+                raise ValueError("mismatched delimiter")
+            stack.pop()
+            if not stack:
+                return index
+    raise ValueError("unterminated delimiter")
+
+
+def split_meta_arguments(tokens: list[str], start: int, end: int) -> list[list[str]]:
+    arguments = []
+    argument_start = start
+    stack = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    for index in range(start, end):
+        token = tokens[index]
+        if token in pairs:
+            stack.append(token)
+        elif token in pairs.values():
+            if not stack or token != pairs[stack[-1]]:
+                raise ValueError("mismatched delimiter")
+            stack.pop()
+        elif token == "," and not stack:
+            arguments.append(tokens[argument_start:index])
+            argument_start = index + 1
+    if stack:
+        raise ValueError("unterminated delimiter")
+    arguments.append(tokens[argument_start:end])
+    return arguments
+
+
+def allow_metas(tokens: list[str]) -> list[tuple[frozenset[str], bool]]:
+    if not tokens:
+        return []
+    name = tokens[0]
+    if name not in {"allow", "cfg_attr"}:
+        return []
+    if len(tokens) < 3 or tokens[1] != "(":
+        raise ValueError(f"malformed {name} attribute")
+    close = closing_delimiter(tokens, 1, len(tokens))
+    if close != len(tokens) - 1:
+        raise ValueError(f"unexpected tokens after {name} attribute")
+
+    arguments = split_meta_arguments(tokens, 2, close)
+    if name == "cfg_attr":
+        if len(arguments) < 2:
+            raise ValueError("cfg_attr must contain a condition and an attribute")
+        output = []
+        for argument in arguments[1:]:
+            output.extend(allow_metas(argument))
+        return output
+
+    lints = set()
+    has_reason = False
+    for argument in arguments:
+        if len(argument) >= 3 and argument[:2] == ["reason", "="]:
+            has_reason = True
+        if (
+            len(argument) == 3
+            and argument[0] == "clippy"
+            and argument[1] == "::"
+            and argument[2] in STRUCTURAL_CLIPPY_LINTS
+        ):
+            lints.add(argument[2])
+    return [(frozenset(lints), has_reason)] if lints else []
+
+
 def allow_annotations(source: str) -> list[tuple[bool, frozenset[str], bool, int]]:
     annotations = []
-    for match in ALLOW_RE.finditer(source):
-        lints = frozenset(CLIPPY_LINT_RE.findall(match.group("body")))
-        targeted_lints = lints.intersection(STRUCTURAL_CLIPPY_LINTS)
-        if targeted_lints:
-            annotations.append(
-                (
-                    match.group("prefix") == "#!",
-                    frozenset(targeted_lints),
-                    bool(re.search(r"\breason\s*=", match.group("body"))),
-                    source.count("\n", 0, match.start()) + 1,
-                )
-            )
+    for inner, body, line, body_offset in rust_attributes(source):
+        try:
+            metas = allow_metas(rust_tokens(body))
+        except (RustLexError, ValueError) as error:
+            raise RustLexError(source, body_offset, str(error)) from error
+        annotations.extend((inner, lints, has_reason, line) for lints, has_reason in metas)
     return annotations
 
 
 def check_new_structural_allows(path: str, before: str, after: str) -> list[str]:
-    before_counts = collections.Counter(
-        annotation[:3] for annotation in allow_annotations(before)
-    )
+    try:
+        before_counts = collections.Counter(
+            annotation[:3] for annotation in allow_annotations(before)
+        )
+        after_annotations = allow_annotations(after)
+    except RustLexError as error:
+        return [
+            f"{path}:{error.line}: malformed Rust attribute prevents structural lint validation"
+        ]
     violations = []
 
-    for inner, lints, has_reason, line in allow_annotations(after):
+    for inner, lints, has_reason, line in after_annotations:
         key = (inner, lints, has_reason)
         if before_counts[key]:
             before_counts[key] -= 1
@@ -265,6 +549,7 @@ def changed_files(repo: Path, base: str) -> list[tuple[str, str, str]]:
         "-z",
         "--find-renames",
         "--find-copies",
+        "--find-copies-harder",
         "--diff-filter=ACMR",
         f"{base}...HEAD",
     )
@@ -311,6 +596,8 @@ def collect_violations(repo: Path, base_ref: str) -> list[str]:
 
         if status.startswith(("A", "C")):
             violations.extend(check_source_header(path, data))
+
+        if status.startswith(("A", "C", "R")):
             violations.extend(
                 check_binary_fixture(
                     path,
@@ -320,7 +607,11 @@ def collect_violations(repo: Path, base_ref: str) -> list[str]:
             )
 
         if normalized_path(path).suffix.lower() == ".rs" and not is_generated(path, data):
-            before = file_at_revision(repo, merge_base, old_path)
+            before = (
+                file_at_revision(repo, merge_base, old_path)
+                if status.startswith(("M", "R"))
+                else ""
+            )
             after = data.decode("utf-8", errors="replace")
             violations.extend(check_new_structural_allows(path, before, after))
 
