@@ -487,6 +487,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
         self.fsm.max_id()
     }
 
+    pub(crate) fn max_degree(&self) -> usize {
+        self.max_degree
+    }
+
     /// Train the quantizer.
     ///
     /// This should only be called when at least `quantizer.required_vectors()` vectors exist in
@@ -790,6 +794,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
         }
 
         Ok(result)
+    }
+
+    /// Log a message to Garnet.
+    pub(crate) fn log(&self, context: &Context, msg: &str) {
+        self.callbacks.log(context, msg);
     }
 
     /// Returns the quantizer associated with the index.
@@ -2152,6 +2161,7 @@ mod tests {
         let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
         let mut output_dists = vec![0f32; 10];
         let mut output = SearchResults::new(
+            10,
             output_ids.as_mut_ptr(),
             output_ids.len(),
             output_dists.as_mut_ptr(),
@@ -2343,6 +2353,7 @@ mod tests {
         let mut output_ids = vec![0u8; mem::size_of::<u32>() * 2 * 10];
         let mut output_dists = vec![0f32; 10];
         let mut output = SearchResults::new(
+            10,
             output_ids.as_mut_ptr(),
             output_ids.len(),
             output_dists.as_mut_ptr(),
