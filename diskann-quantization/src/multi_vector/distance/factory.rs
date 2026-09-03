@@ -26,6 +26,9 @@ use crate::multi_vector::{BlockTransposed, Mat, MatRef, Standard};
 //  Prepared<A, Q, NR> — concrete kernel for the arch-dispatched paths.
 // ─────────────────────────────────────────────────────────────────────────
 
+// ZST for selecting the packing for the documents.
+//
+// TODO: Some of these decisions should eventually ve moved lower into `matrix_kernels`.
 #[derive(Debug, Clone, Copy)]
 struct Pack<const NR: usize>;
 
@@ -56,14 +59,14 @@ where
         }
 
         if doc.vector_dim() != self.prepared.ncols() {
-            return Err(MaxSimError::UnequalLengths(
+            return Err(MaxSimError::UnequalDim(
                 doc.vector_dim(),
                 self.prepared.ncols(),
             ));
         }
 
         let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
-            scores.fill(f32::MAX);
+            scores.fill(0.0);
             return Ok(());
         };
 
@@ -119,14 +122,14 @@ where
         }
 
         if doc.vector_dim() != self.prepared.ncols() {
-            return Err(MaxSimError::UnequalLengths(
+            return Err(MaxSimError::UnequalDim(
                 doc.vector_dim(),
                 self.prepared.ncols(),
             ));
         }
 
         let Some(k) = NonZeroUsize::new(self.prepared.ncols()).map(mk::DimK::new) else {
-            scores.fill(f32::MAX);
+            scores.fill(0.0);
             return Ok(());
         };
 
@@ -202,6 +205,12 @@ where
     ) -> Result<(), MaxSimError> {
         if scores.len() != self.nrows() {
             return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
+        }
+        if doc.vector_dim() != self.query.vector_dim() {
+            return Err(MaxSimError::UnequalDim(
+                doc.vector_dim(),
+                self.query.vector_dim(),
+            ));
         }
         if doc.num_vectors() == 0 {
             scores.fill(f32::MAX);

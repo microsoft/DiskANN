@@ -173,6 +173,13 @@ where
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
         }
 
+        if query.vector_dim() != doc.vector_dim() {
+            return Err(MaxSimError::UnequalDim(
+                doc.vector_dim(),
+                query.vector_dim(),
+            ));
+        }
+
         FallbackKernel::max_sim_kernel(query, doc, |i, score| {
             // SAFETY: We asserted that self.size() == query.num_vectors(),
             // and i < query.num_vectors() due to the kernel loop bound.

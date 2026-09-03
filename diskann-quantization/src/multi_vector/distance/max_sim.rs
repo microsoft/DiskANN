@@ -12,8 +12,8 @@ pub enum MaxSimError {
     IndexOutOfBounds(usize, usize),
     #[error("Invalid buffer length {0} for query size {1}")]
     InvalidBufferLength(usize, usize),
-    #[error("doc-vector length {0} does not equal query-vector length {1}")]
-    UnequalLengths(usize, usize),
+    #[error("doc-vector dim {0} does not equal query-vector dim {1}")]
+    UnequalDim(usize, usize),
 }
 
 ////////////
