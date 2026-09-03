@@ -3,6 +3,31 @@
  * Licensed under the MIT license.
  */
 
+//! # GEMM-lite Matrix Kernels
+//!
+//! This module is a work in progress. There are many pieces that are still needed:
+//!
+//! * Proper run time cache-size detection.
+//! * GEMM-like kernels beyond "maxsim".
+//! * Quantization support.
+//! * Blocking along the contraction dimension "k".
+//! * Comprehensive performance tuning.
+//!
+//! For consistency with GEMM terminology, the following conventions are used.
+//!
+//! A matrix-kernel has the general form
+//!
+//! ```text
+//! C[M x N] = A[M x K] . B[K x N]
+//! ```
+//! with internal dimensions as follows:
+//!
+//! * `M`: The number of rows of `A` and `C`.
+//! * `N`: The number of oclumns of `B` and `C`.
+//! * `K`: Contraction dimension. Columns of `A` and rows of `B`.
+//! * `MR`: Packing parameter for `A`. This is the number of rows processed in a micro-kernel.
+//! * `NR`: Packing parameter for `B`. This is the number of columns processed in a micro-kernel.
+
 use std::num::NonZeroUsize;
 
 // Kernels
