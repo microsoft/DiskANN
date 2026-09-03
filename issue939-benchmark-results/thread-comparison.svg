@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650" role="img" aria-labelledby="title desc">
+  <title id="title">Total K-means latency by configured thread count</title>
+  <desc id="desc">Disk and quantization median total latency for dimensions 4, 32, and 128.</desc>
+  <rect width="900" height="650" fill="#ffffff"/>
+  <text x="450" y="28" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="20" font-weight="600" fill="#1f2328">Total K-means latency by configured threads</text>
+  <g font-family="Segoe UI, sans-serif" font-size="13">
+    <line x1="590" y1="50" x2="625" y2="50" stroke="#0969da" stroke-width="4"/><circle cx="607" cy="50" r="4" fill="#0969da"/><text x="633" y="55" fill="#1f2328">Disk</text>
+    <line x1="695" y1="50" x2="730" y2="50" stroke="#d97706" stroke-width="4"/><circle cx="712" cy="50" r="4" fill="#d97706"/><text x="738" y="55" fill="#1f2328">Quantization</text>
+  </g>
+
+  <g font-family="Segoe UI, sans-serif" font-size="12" fill="#1f2328">
+    <text x="75" y="88" font-size="15" font-weight="600">Dimension 4</text>
+    <line x1="90" y1="230" x2="820" y2="230" stroke="#1f2328"/><line x1="90" y1="80" x2="90" y2="230" stroke="#1f2328"/>
+    <line x1="90" y1="155" x2="820" y2="155" stroke="#d0d7de"/><text x="80" y="234" text-anchor="end">0</text><text x="80" y="159" text-anchor="end">350</text><text x="80" y="84" text-anchor="end">700 ms</text>
+    <polyline points="130,179.9 350,167.4 570,169.1 790,91.5" fill="none" stroke="#0969da" stroke-width="4"/><polyline points="130,221.6 350,220.8 570,220.5 790,220.7" fill="none" stroke="#d97706" stroke-width="4"/>
+
+    <text x="75" y="278" font-size="15" font-weight="600">Dimension 32</text>
+    <line x1="90" y1="420" x2="820" y2="420" stroke="#1f2328"/><line x1="90" y1="270" x2="90" y2="420" stroke="#1f2328"/>
+    <line x1="90" y1="345" x2="820" y2="345" stroke="#d0d7de"/><text x="80" y="424" text-anchor="end">0</text><text x="80" y="349" text-anchor="end">450</text><text x="80" y="274" text-anchor="end">900 ms</text>
+    <polyline points="130,364.5 350,356.6 570,354.9 790,280.8" fill="none" stroke="#0969da" stroke-width="4"/><polyline points="130,389.4 350,386.4 570,385.6 790,386.4" fill="none" stroke="#d97706" stroke-width="4"/>
+
+    <text x="75" y="468" font-size="15" font-weight="600">Dimension 128</text>
+    <line x1="90" y1="610" x2="820" y2="610" stroke="#1f2328"/><line x1="90" y1="460" x2="90" y2="610" stroke="#1f2328"/>
+    <line x1="90" y1="535" x2="820" y2="535" stroke="#d0d7de"/><text x="80" y="614" text-anchor="end">0</text><text x="80" y="539" text-anchor="end">650</text><text x="80" y="464" text-anchor="end">1300 ms</text>
+    <polyline points="130,522.3 350,520.3 570,524.7 790,466.7" fill="none" stroke="#0969da" stroke-width="4"/><polyline points="130,513.4 350,499.8 570,498.6 790,496.2" fill="none" stroke="#d97706" stroke-width="4"/>
+
+    <g fill="#0969da"><circle cx="130" cy="179.9" r="4"/><circle cx="350" cy="167.4" r="4"/><circle cx="570" cy="169.1" r="4"/><circle cx="790" cy="91.5" r="4"/><circle cx="130" cy="364.5" r="4"/><circle cx="350" cy="356.6" r="4"/><circle cx="570" cy="354.9" r="4"/><circle cx="790" cy="280.8" r="4"/><circle cx="130" cy="522.3" r="4"/><circle cx="350" cy="520.3" r="4"/><circle cx="570" cy="524.7" r="4"/><circle cx="790" cy="466.7" r="4"/></g>
+    <g fill="#d97706"><circle cx="130" cy="221.6" r="4"/><circle cx="350" cy="220.8" r="4"/><circle cx="570" cy="220.5" r="4"/><circle cx="790" cy="220.7" r="4"/><circle cx="130" cy="389.4" r="4"/><circle cx="350" cy="386.4" r="4"/><circle cx="570" cy="385.6" r="4"/><circle cx="790" cy="386.4" r="4"/><circle cx="130" cy="513.4" r="4"/><circle cx="350" cy="499.8" r="4"/><circle cx="570" cy="498.6" r="4"/><circle cx="790" cy="496.2" r="4"/></g>
+
+    <g text-anchor="middle"><text x="130" y="635">1</text><text x="350" y="635">2</text><text x="570" y="635">4</text><text x="790" y="635">8</text></g>
+    <text x="450" y="649" text-anchor="middle">Configured threads</text>
+  </g>
+</svg>
