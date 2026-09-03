@@ -35,3 +35,53 @@ pub(super) fn generate(
 
     (ref_a, ref_b, ref_c)
 }
+
+#[derive(Debug, Clone)]
+pub(super) struct TestDims {
+    pub(super) a_panels_per_tile: usize,
+    pub(super) total_a_rows: usize,
+    pub(super) b_cols_per_tile: usize,
+    pub(super) total_b_cols: usize,
+    pub(super) k: usize,
+}
+
+impl TestDims {
+    fn from_tuple(
+        [
+            a_panels_per_tile,
+            total_a_rows,
+            b_cols_per_tile,
+            total_b_cols,
+            k,
+        ]: [usize; 5],
+    ) -> Self {
+        Self {
+            a_panels_per_tile,
+            total_a_rows,
+            b_cols_per_tile,
+            total_b_cols,
+            k,
+        }
+    }
+}
+
+/// Test dimensions for `packed_x_unpacked` kernels.
+pub(super) fn packed_x_unpacked_test_dims(mr: usize, nr: usize) -> Vec<TestDims> {
+    [
+        [1, 1, 1, 1, 1],                        // Smallest logical output
+        [1, mr / 2, 1, 1, 1],                   // Partial first A panel
+        [1, mr - 1, 2 * nr, nr, 3],             // Nearly full first A panel
+        [2, mr + 1, 2 * nr, nr, 3],             // Partial second A panel
+        [2, 2 * mr - 1, 2 * nr, 2 * nr + 1, 5], // Partial A panel and split B
+        [2, 2 * mr + 1, 2 * nr, 2 * nr + 1, 5], // Split A and B with a partial panel
+        [1, mr * 3, 1, 3, 1],                   // Unit advancement, no reuse.
+        [2, mr * 2, 2 * nr, 2 * nr, 3],         // Values a direct multiple of the blocking.
+        [2, mr * 3, 2 * nr, nr, 3],
+        [2, mr, 2 * nr, 2 * nr + 1, 3],
+        [2, mr * 3, 2 * nr, 2 * nr + 1, 5],
+        [2, mr * 5, 2 * nr, 4 * nr + 1, 1],
+    ]
+    .map(TestDims::from_tuple)
+    .into_iter()
+    .collect()
+}

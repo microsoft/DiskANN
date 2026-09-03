@@ -23,9 +23,6 @@ use diskann_wide::{
     arch::{Architecture, Scalar},
 };
 
-#[cfg(target_arch = "x86_64")]
-use diskann_wide::arch::x86_64::{V3, V4};
-
 use crate::matrix_kernels::{
     Cache,
     blocks::{packed, unpacked},
@@ -369,11 +366,6 @@ macro_rules! panel_kernel {
 
 panel_kernel!(Scalar, 8, 2, [1]);
 
-panel_kernel!(V3, 16, 6, [1, 2, 3, 4, 5]);
-
-panel_kernel!(V4, 16, 6, [1, 2, 3, 4, 5]);
-panel_kernel!(V4, 32, 6, [1, 2, 3, 4, 5]);
-
 //--------------//
 // Micro Kernel //
 //--------------//
@@ -475,9 +467,6 @@ macro_rules! micro_kernel {
 }
 
 micro_kernel!(Scalar, 8, { 2, 1 });
-micro_kernel!(V3, 16, { 6, 5, 4, 3, 2, 1 });
-micro_kernel!(V4, 16, { 6, 5, 4, 3, 2, 1 });
-micro_kernel!(V4, 32, { 6, 5, 4, 3, 2, 1 });
 
 trait ExtraWide<const ELEMENTS: usize>: Copy {
     type Wide: Copy;
@@ -548,154 +537,238 @@ impl ExtraWide<8> for Scalar {
 }
 
 #[cfg(target_arch = "x86_64")]
-impl ExtraWide<16> for V3 {
-    type Wide = [f32x8<V3>; 2];
-    type Splat = f32x8<V3>;
+mod x86_64 {
+    use super::*;
 
-    #[inline(always)]
-    fn default(self) -> Self::Wide {
-        [SIMDVector::default(self), SIMDVector::default(self)]
-    }
+    use diskann_wide::arch::x86_64::{V3, V4};
 
-    #[inline(always)]
-    unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
-        bounds::check_eq!(slice.len(), 16);
+    panel_kernel!(V3, 16, 6, [1, 2, 3, 4, 5]);
+    panel_kernel!(V4, 16, 6, [1, 2, 3, 4, 5]);
+    panel_kernel!(V4, 32, 6, [1, 2, 3, 4, 5]);
 
-        // SAFETY: Since `slice.len()` must be 16, the pointer offset and 8-wide SIMD loads
-        // are valid.
-        unsafe {
-            [
-                SIMDVector::load_simd(self, slice.as_ptr()),
-                SIMDVector::load_simd(self, slice.add(Elements::new(8)).as_ptr()),
-            ]
+    micro_kernel!(V3, 16, { 6, 5, 4, 3, 2, 1 });
+    micro_kernel!(V4, 16, { 6, 5, 4, 3, 2, 1 });
+    micro_kernel!(V4, 32, { 6, 5, 4, 3, 2, 1 });
+
+    //-----------//
+    // ExtraWide //
+    //-----------//
+
+    impl ExtraWide<16> for V3 {
+        type Wide = [f32x8<V3>; 2];
+        type Splat = f32x8<V3>;
+
+        #[inline(always)]
+        fn default(self) -> Self::Wide {
+            [SIMDVector::default(self), SIMDVector::default(self)]
+        }
+
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 16);
+
+            // SAFETY: Since `slice.len()` must be 16, the pointer offset and 8-wide SIMD loads
+            // are valid.
+            unsafe {
+                [
+                    SIMDVector::load_simd(self, slice.as_ptr()),
+                    SIMDVector::load_simd(self, slice.add(Elements::new(8)).as_ptr()),
+                ]
+            }
+        }
+
+        #[inline(always)]
+        fn splat(self, value: f32) -> Self::Splat {
+            SIMDVector::splat(self, value)
+        }
+
+        #[inline(always)]
+        fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
+            core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
+        }
+
+        #[inline(always)]
+        fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
+            core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+        }
+
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
+            // SAFETY: `into` has a length of exactly 16.
+            let previous = unsafe { self.load(Slice::new(into)) };
+            let max = Self::max(lhs, previous);
+
+            // SAFETY: Since `into.len()` is 16, the pointer offset and 8-wide SIMD stores are valid.
+            unsafe {
+                max[0].store_simd(into.as_mut_ptr());
+                max[1].store_simd(into.as_mut_ptr().add(8));
+            }
         }
     }
 
-    #[inline(always)]
-    fn splat(self, value: f32) -> Self::Splat {
-        SIMDVector::splat(self, value)
+    impl ExtraWide<16> for V4 {
+        type Wide = f32x16<V4>;
+        type Splat = f32x16<V4>;
+
+        #[inline(always)]
+        fn default(self) -> Self::Wide {
+            SIMDVector::default(self)
+        }
+
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 16);
+
+            // SAFETY: Since `slice.len()` must be 16, the 16-wide SIMD load is safe.
+            unsafe { SIMDVector::load_simd(self, slice.as_ptr()) }
+        }
+
+        #[inline(always)]
+        fn splat(self, value: f32) -> Self::Splat {
+            SIMDVector::splat(self, value)
+        }
+
+        #[inline(always)]
+        fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
+            a.mul_add_simd(b, acc)
+        }
+
+        #[inline(always)]
+        fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
+            lhs.max_simd(rhs)
+        }
+
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
+            // SAFETY: `into` has a length of exactly 16.
+            let previous = unsafe { ExtraWide::<16>::load(self, Slice::new(into)) };
+            let max = <Self as ExtraWide<16>>::max(lhs, previous);
+
+            // SAFETY: Since `into.len()` is 16, the store is valid.
+            unsafe {
+                max.store_simd(into.as_mut_ptr());
+            }
+        }
     }
 
-    #[inline(always)]
-    fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
-        core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
-    }
+    impl ExtraWide<32> for V4 {
+        type Wide = [f32x16<V4>; 2];
+        type Splat = f32x16<V4>;
 
-    #[inline(always)]
-    fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
-        core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
-    }
+        #[inline(always)]
+        fn default(self) -> Self::Wide {
+            [SIMDVector::default(self), SIMDVector::default(self)]
+        }
 
-    #[inline(always)]
-    fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
-        // SAFETY: `into` has a length of exactly 16.
-        let previous = unsafe { self.load(Slice::new(into)) };
-        let max = Self::max(lhs, previous);
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 32);
 
-        // SAFETY: Since `into.len()` is 16, the pointer offset and 8-wide SIMD stores are valid.
-        unsafe {
-            max[0].store_simd(into.as_mut_ptr());
-            max[1].store_simd(into.as_mut_ptr().add(8));
+            // SAFETY: Since `slice.len()` must be 32, the pointer offset and 16-wide SIMD loads
+            // are valid.
+            unsafe {
+                [
+                    SIMDVector::load_simd(self, slice.as_ptr()),
+                    SIMDVector::load_simd(self, slice.add(Elements::new(16)).as_ptr()),
+                ]
+            }
+        }
+
+        #[inline(always)]
+        fn splat(self, value: f32) -> Self::Splat {
+            SIMDVector::splat(self, value)
+        }
+
+        #[inline(always)]
+        fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
+            core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
+        }
+
+        #[inline(always)]
+        fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
+            core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+        }
+
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Wide, into: &mut [f32; 32]) {
+            // SAFETY: `into` has a length of exactly 32.
+            let previous = unsafe { ExtraWide::<32>::load(self, Slice::new(into)) };
+            let max = <Self as ExtraWide<32>>::max(lhs, previous);
+
+            // SAFETY: Since `into.len()` is 32, the pointer offset and 16-wide SIMD stores
+            // are valid.
+            unsafe {
+                max[0].store_simd(into.as_mut_ptr());
+                max[1].store_simd(into.as_mut_ptr().add(16));
+            }
         }
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-impl ExtraWide<16> for V4 {
-    type Wide = f32x16<V4>;
-    type Splat = f32x16<V4>;
+#[cfg(target_arch = "aarch64")]
+mod aarch64 {
+    use super::*;
 
-    #[inline(always)]
-    fn default(self) -> Self::Wide {
-        SIMDVector::default(self)
-    }
+    use diskann_wide::arch::aarch64::Neon;
 
-    #[inline(always)]
-    unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
-        bounds::check_eq!(slice.len(), 16);
+    panel_kernel!(Neon, 8, 6, [1, 2, 3, 4, 5]);
 
-        // SAFETY: Since `slice.len()` must be 16, the 16-wide SIMD load is safe.
-        unsafe { SIMDVector::load_simd(self, slice.as_ptr()) }
-    }
+    micro_kernel!(Neon, 8, { 6, 5, 4, 3, 2, 1 });
 
-    #[inline(always)]
-    fn splat(self, value: f32) -> Self::Splat {
-        SIMDVector::splat(self, value)
-    }
+    //-----------//
+    // ExtraWide //
+    //-----------//
 
-    #[inline(always)]
-    fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
-        a.mul_add_simd(b, acc)
-    }
+    impl ExtraWide<8> for Neon {
+        type Wide = [f32x4<Neon>; 2];
+        type Splat = f32x4<Neon>;
 
-    #[inline(always)]
-    fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
-        lhs.max_simd(rhs)
-    }
-
-    #[inline(always)]
-    fn max_into(self, lhs: Self::Wide, into: &mut [f32; 16]) {
-        // SAFETY: `into` has a length of exactly 16.
-        let previous = unsafe { ExtraWide::<16>::load(self, Slice::new(into)) };
-        let max = <Self as ExtraWide<16>>::max(lhs, previous);
-
-        // SAFETY: Since `into.len()` is 16, the store is valid.
-        unsafe {
-            max.store_simd(into.as_mut_ptr());
+        #[inline(always)]
+        fn default(self) -> Self::Wide {
+            [SIMDVector::default(self), SIMDVector::default(self)]
         }
-    }
-}
 
-#[cfg(target_arch = "x86_64")]
-impl ExtraWide<32> for V4 {
-    type Wide = [f32x16<V4>; 2];
-    type Splat = f32x16<V4>;
+        #[inline(always)]
+        unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
+            bounds::check_eq!(slice.len(), 8);
 
-    #[inline(always)]
-    fn default(self) -> Self::Wide {
-        [SIMDVector::default(self), SIMDVector::default(self)]
-    }
-
-    #[inline(always)]
-    unsafe fn load(self, slice: Slice<'_, f32>) -> Self::Wide {
-        bounds::check_eq!(slice.len(), 32);
-
-        // SAFETY: Since `slice.len()` must be 32, the pointer offset and 16-wide SIMD loads
-        // are valid.
-        unsafe {
-            [
-                SIMDVector::load_simd(self, slice.as_ptr()),
-                SIMDVector::load_simd(self, slice.add(Elements::new(16)).as_ptr()),
-            ]
+            // SAFETY: Since `slice.len()` must be 8, the pointer offset and 4-wide SIMD loads
+            // are valid.
+            unsafe {
+                [
+                    SIMDVector::load_simd(self, slice.as_ptr()),
+                    SIMDVector::load_simd(self, slice.add(Elements::new(4)).as_ptr()),
+                ]
+            }
         }
-    }
 
-    #[inline(always)]
-    fn splat(self, value: f32) -> Self::Splat {
-        SIMDVector::splat(self, value)
-    }
+        #[inline(always)]
+        fn splat(self, value: f32) -> Self::Splat {
+            SIMDVector::splat(self, value)
+        }
 
-    #[inline(always)]
-    fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
-        core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
-    }
+        #[inline(always)]
+        fn mul_add_splat(a: Self::Wide, b: Self::Splat, acc: Self::Wide) -> Self::Wide {
+            core::array::from_fn(|i| a[i].mul_add_simd(b, acc[i]))
+        }
 
-    #[inline(always)]
-    fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
-        core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
-    }
+        #[inline(always)]
+        fn max(lhs: Self::Wide, rhs: Self::Wide) -> Self::Wide {
+            core::array::from_fn(|i| lhs[i].max_simd(rhs[i]))
+        }
 
-    #[inline(always)]
-    fn max_into(self, lhs: Self::Wide, into: &mut [f32; 32]) {
-        // SAFETY: `into` has a length of exactly 32.
-        let previous = unsafe { ExtraWide::<32>::load(self, Slice::new(into)) };
-        let max = <Self as ExtraWide<32>>::max(lhs, previous);
+        #[inline(always)]
+        fn max_into(self, lhs: Self::Wide, into: &mut [f32; 8]) {
+            // SAFETY: `into` has a length of exactly 8.
+            let previous = unsafe { self.load(Slice::new(into)) };
+            let max = Self::max(lhs, previous);
 
-        // SAFETY: Since `into.len()` is 32, the pointer offset and 16-wide SIMD stores are
-        // valid.
-        unsafe {
-            max[0].store_simd(into.as_mut_ptr());
-            max[1].store_simd(into.as_mut_ptr().add(16));
+            // SAFETY: Since `into.len()` is 8, the pointer offset and 8-wide SIMD stores are
+            // valid.
+            unsafe {
+                max[0].store_simd(into.as_mut_ptr());
+                max[1].store_simd(into.as_mut_ptr().add(4));
+            }
         }
     }
 }
@@ -709,6 +782,12 @@ mod tests {
     use super::*;
 
     use rand::{SeedableRng, rngs::StdRng};
+
+    #[cfg(target_arch = "x86_64")]
+    use diskann_wide::arch::x86_64::{V3, V4};
+
+    #[cfg(target_arch = "aarch64")]
+    use diskann_wide::arch::aarch64::Neon;
 
     use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
@@ -800,6 +879,7 @@ mod tests {
         8 => { 2, 1 },
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_micro_kernel!(
         test_micro_kernel_v3,
         V3::new_checked(),
@@ -807,12 +887,21 @@ mod tests {
         16 => { 6, 5, 4, 3, 2, 1},
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_micro_kernel!(
         test_micro_kernel_v4,
         V4::new_checked_miri(),
         0xca13f736977f96fe,
         16 => { 6, 5, 4, 3, 2, 1},
         32 => { 6, 5, 4, 3, 2, 1},
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    test_micro_kernel!(
+        test_micro_kernel_neon,
+        Neon::new_checked(),
+        0x157f59d99f648437,
+        8 => { 6, 5, 4, 3, 2, 1},
     );
 
     /////////////////
@@ -920,6 +1009,7 @@ mod tests {
         (8, 2),
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_panel_kernel!(
         test_panel_kernel_v3,
         V3::new_checked(),
@@ -927,12 +1017,21 @@ mod tests {
         (16, 6),
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_panel_kernel!(
         test_panel_kernel_v4,
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
         (16, 6),
         (32, 6),
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    test_panel_kernel!(
+        test_panel_kernel_neon,
+        Neon::new_checked(),
+        0x2c03eb9ee51d30c3,
+        (8, 6),
     );
 
     ////////////
@@ -944,29 +1043,20 @@ mod tests {
         A: Copy,
         for<'a> Driver<'a, A, MR, NR>: driver::Drive,
     {
-        // (a-panels-per-tile, a-rows, b-cols-per-tile, b-cols, k)
-        let cases = [
-            (1, 1, 1, 1, 1),                        // Smallest logical output
-            (1, MR / 2, 1, 1, 1),                   // Partial first panel
-            (1, MR - 1, 2 * NR, NR, 3),             // Nearly full first panel
-            (2, MR + 1, 2 * NR, NR, 3),             // Partial second panel
-            (2, 2 * MR - 1, 2 * NR, 2 * NR + 1, 5), // Partial panel and split B
-            (2, 2 * MR + 1, 2 * NR, 2 * NR + 1, 5), // Split A and B with a partial panel
-            (1, MR * 3, 1, 3, 1),                   // Unit advancement, no reuse.
-            (2, MR * 2, 2 * NR, 2 * NR, 3),         // Values a direct multiple of the blocking.
-            (2, MR * 3, 2 * NR, NR, 3),
-            (2, MR, 2 * NR, 2 * NR + 1, 3),
-            (2, MR * 3, 2 * NR, 2 * NR + 1, 5),
-            (2, MR * 5, 2 * NR, 4 * NR + 1, 1),
-        ];
-
+        let cases = maxsim::test::packed_x_unpacked_test_dims(MR, NR);
         for case in cases {
-            let (a_panels_per_tile, a_rows, b_cols_per_tile, b_cols, k) = case;
+            let maxsim::test::TestDims {
+                a_panels_per_tile,
+                total_a_rows,
+                b_cols_per_tile,
+                total_b_cols,
+                k,
+            } = case.clone();
 
             let k = DimK::new(NonZeroUsize::new(k).unwrap());
 
             let (ref_a, ref_b, ref_c) =
-                maxsim::test::generate(a_rows, k.value().get(), b_cols, rng);
+                maxsim::test::generate(total_a_rows, k.value().get(), total_b_cols, rng);
 
             // Massage the input data in the form needed by the kernel.
             let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());
@@ -991,11 +1081,7 @@ mod tests {
 
             driver::Drive::drive(&mut driver);
 
-            assert_eq!(
-                ref_c, c,
-                "a_panels_per_tile: {}, a_rows: {}, b_cols_per_tile: {}, b_cols: {}, k: {:?}",
-                a_panels_per_tile, a_rows, b_cols_per_tile, b_cols, k,
-            );
+            assert_eq!(ref_c, c, "setup: {:?}", case)
         }
     }
 
@@ -1028,6 +1114,7 @@ mod tests {
         (8, 2),
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_driver!(
         test_driver_v3,
         V3::new_checked(),
@@ -1035,11 +1122,20 @@ mod tests {
         (16, 6),
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_driver!(
         test_driver_v4,
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
         (16, 6),
         (32, 6),
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    test_driver!(
+        test_driver_neon,
+        Neon::new_checked(),
+        0x2c03eb9ee51d30c3,
+        (8, 6),
     );
 }

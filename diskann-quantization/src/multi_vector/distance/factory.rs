@@ -268,9 +268,12 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Stan
     for BuildAndErase<E>
 {
     fn run(self, arch: Neon, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        // Neon dispatches to Scalar (no Neon-specific kernel).
         let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared { arch, prepared })
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 
@@ -342,9 +345,17 @@ impl<E: Erase<half::f16>>
 {
     fn run(self, arch: Neon, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
         // Neon dispatches to Scalar (no Neon-specific kernel).
-        let arch = arch.retarget();
-        let prepared = BlockTransposed::<half::f16, 8>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared { arch, prepared })
+        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(
+            query
+                .as_matrix_view()
+                .map(|v| diskann_wide::cast_f16_to_f32(*v))
+                .as_view(),
+        );
+        self.0.erase(Prepared {
+            arch,
+            prepared,
+            _packing: Pack::<6>,
+        })
     }
 }
 

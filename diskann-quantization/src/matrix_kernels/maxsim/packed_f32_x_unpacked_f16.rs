@@ -243,6 +243,9 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     use diskann_wide::arch::x86_64::{V3, V4};
 
+    #[cfg(target_arch = "aarch64")]
+    use diskann_wide::arch::aarch64::Neon;
+
     use crate::{matrix_kernels::maxsim, multi_vector::BlockTransposed};
 
     fn test_driver<A, const MR: usize, const NR: usize>(arch: A, rng: &mut impl rand::Rng)
@@ -250,29 +253,20 @@ mod tests {
         A: Copy,
         for<'a> Driver<'a, A, MR, NR>: driver::Drive,
     {
-        // (a-panels-per-tile, a-rows, b-cols-per-tile, b-cols, k)
-        let cases = [
-            (1, 1, 1, 1, 1),                        // Smallest logical output
-            (1, MR / 2, 1, 1, 1),                   // Partial first panel
-            (1, MR - 1, 2 * NR, NR, 3),             // Nearly full first panel
-            (2, MR + 1, 2 * NR, NR, 3),             // Partial second panel
-            (2, 2 * MR - 1, 2 * NR, 2 * NR + 1, 5), // Partial panel and split B
-            (2, 2 * MR + 1, 2 * NR, 2 * NR + 1, 5), // Split A and B with a partial panel
-            (1, MR * 3, 1, 3, 1),                   // Unit advancement, no reuse.
-            (2, MR * 2, 2 * NR, 2 * NR, 3),         // Values a direct multiple of the blocking.
-            (2, MR * 3, 2 * NR, NR, 3),             //
-            (2, MR, 2 * NR, 2 * NR + 1, 3),
-            (2, MR * 3, 2 * NR, 2 * NR + 1, 5),
-            (2, MR * 5, 2 * NR, 4 * NR + 1, 1),
-        ];
-
+        let cases = maxsim::test::packed_x_unpacked_test_dims(MR, NR);
         for case in cases {
-            let (a_panels_per_tile, a_rows, b_cols_per_tile, b_cols, k) = case;
+            let maxsim::test::TestDims {
+                a_panels_per_tile,
+                total_a_rows,
+                b_cols_per_tile,
+                total_b_cols,
+                k,
+            } = case.clone();
 
             let k = DimK::new(NonZeroUsize::new(k).unwrap());
 
             let (ref_a, ref_b, ref_c) =
-                maxsim::test::generate(a_rows, k.value().get(), b_cols, rng);
+                maxsim::test::generate(total_a_rows, k.value().get(), total_b_cols, rng);
 
             // Massage the input data in the form needed by the kernel.
             let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());
@@ -296,12 +290,7 @@ mod tests {
             };
 
             driver::Drive::drive(&mut driver);
-
-            assert_eq!(
-                ref_c, c,
-                "a_panels_per_tile: {}, a_rows: {}, b_cols_per_tile: {}, b_cols: {}, k: {:?}",
-                a_panels_per_tile, a_rows, b_cols_per_tile, b_cols, k,
-            );
+            assert_eq!(ref_c, c, "setup: {:?}", case);
         }
     }
 
@@ -334,6 +323,7 @@ mod tests {
         (8, 2),
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_driver!(
         test_driver_v3,
         V3::new_checked(),
@@ -341,11 +331,20 @@ mod tests {
         (16, 6),
     );
 
+    #[cfg(target_arch = "x86_64")]
     test_driver!(
         test_driver_v4,
         V4::new_checked_miri(),
         0x2c03eb9ee51d30c3,
         (16, 6),
         (32, 6),
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    test_driver!(
+        test_driver_neon,
+        Neon::new_checked(),
+        0x2c03eb9ee51d30c3,
+        (8, 6),
     );
 }
