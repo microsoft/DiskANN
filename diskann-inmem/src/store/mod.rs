@@ -226,7 +226,24 @@ pub(crate) struct Store<T> {
 }
 
 // TODO: This is a guess and probably needs tuning.
-const RETRY_LIMIT: usize = 20;
+//
+// This is the number of times we attempt to:
+//
+// 1. Retrieve an free slot-id from the fast free-list.
+// 2. Failing that, attempt to acquire a free slot-id from a linear scan.
+// 3. Failing that, attempt to advance the epoch.
+// 4. Go back to 1.
+const SCAN_ADVANCE_RETRY_LIMIT: usize = 20;
+
+// TODO: This is a guess and probably needs tuning.
+//
+// Id scans are cooperative. Threads process disjoing buckets and once an ID is found, will
+// continue to scan the rest of their bucket and add any additional free IDs to the freelist.
+//
+// This parameter controls how many buckets get scanned without an ID found before a scanning
+// thread looks back again at the freelist with the hope another thread may have found a
+// free ID in another bucket.
+const CHECK_FREELIST_EVERY: usize = 4;
 
 impl<T> Store<T>
 where
@@ -381,7 +398,7 @@ where
     /// This method first consults the freelist and falls back to scanning the tags list
     /// if no ID is available from the fast path.
     pub(crate) fn acquire(&self) -> Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> {
-        for _ in 0..RETRY_LIMIT {
+        for _ in 0..SCAN_ADVANCE_RETRY_LIMIT {
             match self.freelist.pop() {
                 freelist::Id::Found(id) => {
                     if let Some(slot) = self.slot(id) {
@@ -460,9 +477,9 @@ where
     /// Periodically, the freelist is checked to see if another thread has found an available
     /// slot for us.
     fn scan_acquire(&self) -> Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> {
-        // This is potentially quite slow, so scan approximately `1 / RETRY_LIMIT` of the
-        // writable range. The outer retry loop provides broader coverage.
-        let mut remaining = self.unfrozen.value().div_ceil(RETRY_LIMIT);
+        // This is potentially quite slow, so scan approximately `1 / SCAN_ADVANCE_RETRY_LIMIT`
+        // of the writable range. The outer retry loop provides broader coverage.
+        let mut remaining = self.unfrozen.value().div_ceil(SCAN_ADVANCE_RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
         let mut acquired: Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> = None;
 
@@ -498,7 +515,7 @@ where
             }
 
             chunks_since_freelist_check += 1;
-            if chunks_since_freelist_check == 4 {
+            if chunks_since_freelist_check == CHECK_FREELIST_EVERY {
                 if let Some(id) = self.freelist.pop_recycled()
                     && let Some(slot) = self.slot(id)
                 {

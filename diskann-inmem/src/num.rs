@@ -184,8 +184,6 @@ macro_rules! typed_int {
     };
 }
 
-// TODO: Provide a linkable reference for "immutable" points.
-
 typed_int!(
     /// The number of distinct slots a [`crate::Provider`] or [`crate::repr::Representation`]
     /// has capacity for. This is logically distinct from [`IdLimit`], which may be greater

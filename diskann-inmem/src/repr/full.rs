@@ -373,12 +373,7 @@ where
     type Guard<'a> = Guard<'a>;
 
     fn set(&self, v: &[T]) -> ANNResult<Guard<'_>> {
-        if v.len() != self.dim() {
-            return Err(ANNError::from(SetError {
-                got: v.len(),
-                expected: self.dim(),
-            }));
-        }
+        self.check_dim(v.len())?;
 
         let mut slot = self
             .store
@@ -413,19 +408,6 @@ impl repr::Guard for Guard<'_> {
         self.slot.slot()
     }
 }
-
-#[derive(Debug, Error)]
-#[error(
-    "data of dimension {} does not match full precision representation's dimension {}",
-    self.got,
-    self.expected
-)]
-struct SetError {
-    got: usize,
-    expected: usize,
-}
-
-diskann::convert_error!(SetError);
 
 impl<T> repr::Search for Full<T>
 where
