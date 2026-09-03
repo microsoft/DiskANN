@@ -721,8 +721,18 @@ mod sgemm_aat_lower_tests {
     }
 
     #[test]
-    fn accepts_a_matrix_with_no_rows() {
-        sgemm_aat_lower(0, 3, &[], &mut []).unwrap();
+    fn zero_row_matrix_returns_success() {
+        // Given
+        let zero_rows = 0;
+        let dimensions = 3;
+        let no_input = [];
+        let mut no_output = [];
+
+        // When
+        let result = sgemm_aat_lower(zero_rows, dimensions, &no_input, &mut no_output);
+
+        // Then
+        assert!(result.is_ok());
     }
 
     #[test]
