@@ -736,7 +736,7 @@ mod sgemm_aat_lower_tests {
     }
 
     #[test]
-    fn zero_inner_dimension_zeros_only_the_lower_triangle() {
+    fn zero_inner_dimension_produces_zero_lower_triangle() {
         let untouched = -123.0;
         let mut c = [untouched; 9];
 
