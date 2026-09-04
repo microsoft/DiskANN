@@ -211,26 +211,42 @@ where
         writeln!(output, "{}", input)?;
         let (index, build_stats) = match &input.source {
             IndexSource::Build(build) => {
-                let (index, build_stats) = run_build(
-                    build,
-                    common::FullPrecision,
-                    None,
-                    output,
-                    |data| {
-                        let index = diskann_async::new_index::<T, _>(
-                            build.try_as_config()?.build()?,
-                            build.inmem_parameters(data.nrows(), data.ncols()),
-                            common::NoDeletes,
-                        )?;
-                        build::set_start_points(
-                            index.provider(),
-                            data.as_view(),
-                            *build.start_point_strategy(),
-                        )?;
-                        Ok(index)
-                    },
-                    single_or_multi_insert,
-                )?;
+                let mut incremental = || {
+                    run_build(
+                        build,
+                        common::FullPrecision,
+                        None,
+                        output,
+                        |data| {
+                            let index = diskann_async::new_index::<T, _>(
+                                build.try_as_config()?.build()?,
+                                build.inmem_parameters(data.nrows(), data.ncols()),
+                                common::NoDeletes,
+                            )?;
+                            build::set_start_points(
+                                index.provider(),
+                                data.as_view(),
+                                *build.start_point_strategy(),
+                            )?;
+                            Ok(index)
+                        },
+                        single_or_multi_insert,
+                    )
+                };
+                // PiPNN uses the batch build path. Do not create an incremental
+                // provider or run Vamana insertion.
+                #[cfg(feature = "pipnn")]
+                let result = match build.build_algorithm() {
+                    diskann_disk::BuildAlgorithm::PiPNN(parameters) => {
+                        let data =
+                            Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
+                        build::pipnn_build(data, build, parameters)
+                    }
+                    _ => incremental(),
+                };
+                #[cfg(not(feature = "pipnn"))]
+                let result = incremental();
+                let (index, build_stats) = result?;
 
                 // save the index if requested
                 if let Some(save_path) = build.save_path() {

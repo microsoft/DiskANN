@@ -82,3 +82,6 @@ disk-index = [
     "dep:opentelemetry_sdk",
     "dep:scopeguard",
 ]
+
+# Enable PiPNN graph construction.
+pipnn = ["diskann/pipnn", "diskann-disk/pipnn"]
