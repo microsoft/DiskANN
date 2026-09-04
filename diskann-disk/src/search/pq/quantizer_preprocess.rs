@@ -32,7 +32,11 @@ impl PQScratch {
         .bridge_err()?;
 
         match metric {
-            // Disk search historically treats cosine metrics as L2 here.
+            // Prior to moving query preprocessing onto `PQScratch`, the disk index
+            // was hard-coded to use L2 distance for comparisons.
+            //
+            // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
+            // as L2 until a more thorough evaluation can be made.
             Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
                 table.process_into::<diskann_quantization::distances::SquaredL2>(
                     &self.query_scratch,

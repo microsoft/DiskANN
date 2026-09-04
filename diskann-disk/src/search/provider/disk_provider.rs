@@ -20,9 +20,7 @@ use diskann::{
     graph::{
         self,
         ext::labeled::{self, QueryLabelProvider},
-        glue::{
-            self, DefaultPostProcessor, SearchPostProcess, SearchStrategy as GraphSearchStrategy,
-        },
+        glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
         search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer::{self, BufferState, IdDistanceAssociatedData},
         DiskANNIndex,
@@ -222,11 +220,15 @@ where
 /// `clippy::type_complexity`'s default threshold.
 type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
 
-/// Encodes whether to accept all candidates at post-processing time or apply a
-/// specific predicate.
+/// Encodes whether to accept all candidates at rerank time or apply a
+/// specific predicate. Used by `RerankAndFilter` and
+/// `DeterminantDiversityAndFilter` instead of `Option<PostprocessFilter>`
+/// so call sites are self-documenting without relying on comments to
+/// explain what `None` means.
 #[derive(Clone, Copy)]
 pub enum PostprocessStrategy<'a> {
-    /// Accept every candidate — no predicate is called.
+    /// Accept every candidate — no predicate is called. Used by `FlatScan`
+    /// (filtered at scan time) and `InlineFilter` (filtered at visit time).
     AcceptAll,
     /// Apply the given predicate; non-matching candidates are dropped.
     Apply(PostprocessFilter<'a>),
@@ -240,7 +242,9 @@ where
     // Borrowed from `search_internal` so the strategy can be passed by value
     io_tracker: &'a IOTracker,
     cache_indexed_vectors: bool,
-    /// Consumed by the default graph-search post-processor.
+    /// Consumed only by `default_post_processor()` → `RerankAndFilter`.
+    /// `FlatScan` and `InlineFilter` filter earlier in their pipelines and
+    /// pass `AcceptAll` here to avoid a redundant second pass.
     postprocess_filter: PostprocessStrategy<'a>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
@@ -468,42 +472,43 @@ where
             + ?Sized,
     {
         let provider = accessor.provider;
+
         let mut uncached_ids = Vec::new();
         let mut reranked: Vec<_> = {
-            let mut process = |id: u32| {
-                if let Some(entry) = accessor.scratch.distance_cache.get(&id) {
-                    Some(Neighbor::new((id, entry.1), entry.0))
+            let mut process = |n: u32| {
+                if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
+                    Some(Neighbor::new((n, entry.1), entry.0))
                 } else {
-                    uncached_ids.push(id);
+                    uncached_ids.push(n);
                     None
                 }
             };
             match self.filter {
                 PostprocessStrategy::AcceptAll => candidates
-                    .map(|candidate| *candidate.id())
+                    .map(|n| *n.id())
                     .filter_map(&mut process)
                     .collect(),
-                PostprocessStrategy::Apply(predicate) => candidates
-                    .map(|candidate| *candidate.id())
-                    .filter(|id| predicate(id))
+                PostprocessStrategy::Apply(f) => candidates
+                    .map(|n| *n.id())
+                    .filter(|id| f(id))
                     .filter_map(&mut process)
                     .collect(),
             }
         };
-
         if !uncached_ids.is_empty() {
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
-            for id in uncached_ids {
-                let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
-                let distance = provider
-                    .distance_comparer
-                    .evaluate_similarity(query, vector);
-                let data = *accessor.scratch.vertex_provider.get_associated_data(&id)?;
-                reranked.push(Neighbor::new((id, data), distance));
+            for n in &uncached_ids {
+                let v = accessor.scratch.vertex_provider.get_vector(n)?;
+                let d = provider.distance_comparer.evaluate_similarity(query, v);
+                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
+                reranked.push(Neighbor::new((*n, *a), d));
             }
         }
 
+        // Sort the full precision distances.
         reranked.sort_unstable_by(neighbor::ord::fast_distance);
+
+        // Store the reranked results.
         extend_output(accessor, reranked, output)
     }
 }
@@ -626,7 +631,7 @@ where
 }
 
 impl<'this, Data, ProviderFactory>
-    GraphSearchStrategy<'this, DiskProvider<Data>, &'this [Data::VectorDataType]>
+    SearchStrategy<'this, DiskProvider<Data>, &'this [Data::VectorDataType]>
     for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -762,27 +767,6 @@ where
         );
         Ok(scratch)
     }
-
-    fn pq_distances<F>(&mut self, pq_data: &PQData, ids: &[u32], mut f: F) -> ANNResult<()>
-    where
-        F: FnMut(u32, f32),
-    {
-        compute_pq_distance(
-            ids,
-            pq_data.get_num_chunks(),
-            &self.pq_scratch.aligned_pqtable_dist_scratch,
-            pq_data.pq_compressed_data().as_slice(),
-            &mut self.pq_scratch.aligned_pq_coord_scratch,
-            &mut self.pq_scratch.aligned_dist_scratch,
-        )?;
-
-        for (id, distance) in
-            std::iter::zip(ids, &self.pq_scratch.aligned_dist_scratch[..ids.len()])
-        {
-            f(*id, *distance);
-        }
-        Ok(())
-    }
 }
 
 pub struct DiskAccessor<'a, Data, VP>
@@ -809,10 +793,22 @@ where
     where
         F: FnMut(f32, u32),
     {
-        self.scratch
-            .pq_distances(&self.provider.pq_data, ids, |id, distance| {
-                f(distance, id);
-            })
+        let pq_scratch = &mut self.scratch.pq_scratch;
+        compute_pq_distance(
+            ids,
+            self.provider.pq_data.get_num_chunks(),
+            &pq_scratch.aligned_pqtable_dist_scratch,
+            self.provider.pq_data.pq_compressed_data().as_slice(),
+            &mut pq_scratch.aligned_pq_coord_scratch,
+            &mut pq_scratch.aligned_dist_scratch,
+        )?;
+
+        for (i, id) in ids.iter().enumerate() {
+            let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
+            f(distance, *id);
+        }
+
+        Ok(())
     }
 }
 
@@ -856,8 +852,7 @@ where
                     break;
                 }
 
-                self.scratch
-                    .pq_distances(&self.provider.pq_data, &ids, &mut f)?;
+                self.pq_distances(&ids, |distance, id| f(id, distance))?;
             }
 
             Ok(())
