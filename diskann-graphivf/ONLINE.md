@@ -576,9 +576,12 @@ routing, split, delete, and merge totals plus one event per structural change.
 The library exposes two stable, deliberately separate CSV writers:
 
 - **`<telemetry_csv>`** — one row per split, written by `write_csv`. Fields:
-  triggering insert index, retired cluster and size, neighbor count, local region
-  points, Equation 1/2 candidates, points that changed cluster, resulting live
-  count, and balanced-fit/reassignment/total latencies.
+  triggering insert index, retired cluster and size, neighbor count, points that
+  changed cluster, resulting live count, balanced-fit/reassignment/total
+  latencies, logical postings updated, local region points, Equation 1/2
+  candidates, and an operation index. New fields are appended after the stable
+  legacy prefix. `operation_index` counts completed inserts plus deletes, so it
+  also identifies split cascades triggered by a delete/merge batch.
 - **Merge CSV** — one row per LIRE merge, written by `write_merges_csv`. Fields:
    operation index, retired cluster and its size, survivor count, points moved,
    live count after the batch retirement, and search/reassignment/attributed

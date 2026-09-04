@@ -1135,6 +1135,7 @@ impl OnlineClusterer {
                     num_neighbors: parent.neighbors.len(),
                     region_points: parent.region_points,
                     npa_candidates,
+                    operation_index: self.telemetry.total_inserts + self.telemetry.total_deletes,
                     num_reassigned,
                     live_after,
                     clusters_updated: 0,

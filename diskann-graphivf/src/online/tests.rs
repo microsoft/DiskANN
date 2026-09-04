@@ -574,7 +574,7 @@ fn telemetry_records_splits_and_reassignments() {
     assert_eq!(
         lines[0],
         "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
-         live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates"
+         live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates,operation_index"
     );
     assert_eq!(lines.len(), 1 + t.splits.len());
     let _ = std::fs::remove_dir_all(&dir);

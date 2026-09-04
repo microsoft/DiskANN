@@ -26,6 +26,11 @@ pub struct SplitEvent {
     /// Deduplicated points surviving LIRE's two necessary-condition filters and
     /// sent to the final global NPA check, attributed once within the batch.
     pub npa_candidates: usize,
+    /// Total completed inserts plus deletes at the update-batch boundary that
+    /// triggered this split. Unlike `insert_index`, this also advances for
+    /// delete-triggered cascade splits and therefore identifies the maintenance
+    /// batch unambiguously.
+    pub operation_index: u64,
     /// Points that actually changed cluster during reassignment.
     pub num_reassigned: usize,
     /// Live centroid count immediately after the batch's splits.
@@ -118,12 +123,12 @@ impl BuildTelemetry {
         let mut out = String::with_capacity(64 + self.splits.len() * 48);
         out.push_str(
             "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
-             live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates\n",
+             live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates,operation_index\n",
         );
         for event in &self.splits {
             let _ = writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 event.insert_index,
                 event.cluster,
                 event.cluster_size,
@@ -136,6 +141,7 @@ impl BuildTelemetry {
                 event.clusters_updated,
                 event.region_points,
                 event.npa_candidates,
+                event.operation_index,
             );
         }
         std::fs::write(path, out)
