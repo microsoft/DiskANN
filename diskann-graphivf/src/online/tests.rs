@@ -571,7 +571,11 @@ fn telemetry_records_splits_and_reassignments() {
     t.write_csv(&csv).unwrap();
     let text = std::fs::read_to_string(&csv).unwrap();
     let lines: Vec<&str> = text.lines().collect();
-    assert!(lines[0].starts_with("insert_index,cluster,cluster_size"));
+    assert_eq!(
+        lines[0],
+        "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
+         live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates"
+    );
     assert_eq!(lines.len(), 1 + t.splits.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -817,10 +821,13 @@ fn graph_merge_target_excludes_batch_victims() {
     let target = c
         .find_merge_target(
             c.centroids.get(0).unwrap(),
-            &victims,
             2,
-            &std::collections::HashMap::new(),
-            MERGE_GRAPH_MAX_SURVIVORS,
+            MergeTargetContext {
+                excluded: &victims,
+                deleted_counts: &std::collections::HashMap::new(),
+                planned_targets: &std::collections::HashMap::new(),
+                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
+            },
             &mut scratch,
         )
         .unwrap()
@@ -851,10 +858,13 @@ fn graph_merge_target_widens_to_a_farther_capacity_safe_survivor() {
     let target = c
         .find_merge_target(
             c.centroids.get(0).unwrap(),
-            &victims,
             1,
-            &std::collections::HashMap::new(),
-            MERGE_GRAPH_MAX_SURVIVORS,
+            MergeTargetContext {
+                excluded: &victims,
+                deleted_counts: &std::collections::HashMap::new(),
+                planned_targets: &std::collections::HashMap::new(),
+                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
+            },
             &mut scratch,
         )
         .unwrap()
@@ -885,10 +895,13 @@ fn graph_merge_target_uses_exact_fallback_after_the_bounded_search() {
     let target = c
         .find_merge_target(
             c.centroids.get(0).unwrap(),
-            &victims,
             1,
-            &std::collections::HashMap::new(),
-            2,
+            MergeTargetContext {
+                excluded: &victims,
+                deleted_counts: &std::collections::HashMap::new(),
+                planned_targets: &std::collections::HashMap::new(),
+                max_graph_survivors: 2,
+            },
             &mut scratch,
         )
         .unwrap()
@@ -913,10 +926,13 @@ fn exact_merge_target_uses_the_nearest_capacity_safe_survivor() {
     let target = c
         .find_merge_target(
             c.centroids.get(0).unwrap(),
-            &victims,
             2,
-            &std::collections::HashMap::new(),
-            MERGE_GRAPH_MAX_SURVIVORS,
+            MergeTargetContext {
+                excluded: &victims,
+                deleted_counts: &std::collections::HashMap::new(),
+                planned_targets: &std::collections::HashMap::new(),
+                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
+            },
             &mut scratch,
         )
         .unwrap()
@@ -942,10 +958,13 @@ fn merge_target_respects_capacity_reserved_by_earlier_victims() {
     let target = c
         .find_merge_target(
             c.centroids.get(0).unwrap(),
-            &victims,
             2,
-            &planned_targets,
-            MERGE_GRAPH_MAX_SURVIVORS,
+            MergeTargetContext {
+                excluded: &victims,
+                deleted_counts: &std::collections::HashMap::new(),
+                planned_targets: &planned_targets,
+                max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
+            },
             &mut scratch,
         )
         .unwrap()
@@ -1392,4 +1411,143 @@ fn warmup_rejects_bad_config() {
         iters: 5,
     };
     assert!(OnlineClusterer::with_seed(points, seed, params(8, 10)).is_err());
+}
+
+#[test]
+fn balanced_split_commit_preserves_capacity_on_identical_points() {
+    let points = mat(vec![0.0; 9], 9, 1);
+    let initial = mat(vec![0.0], 1, 1);
+    let mut p = params(32, 4);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.max_clusters = None;
+    p.centroid_capacity = 64;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    c.insert_batch(&(0..9).collect::<Vec<_>>()).unwrap();
+
+    assert_invariants(&c, 9);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+}
+
+#[test]
+fn split_rechecks_points_routed_to_a_neighbor_in_the_same_batch() {
+    let points = mat(vec![0.0, 0.0, 4.8, 4.8, 0.0, 5.2], 6, 1);
+    let initial = mat(vec![0.0, 10.0], 2, 1);
+    let mut p = params(10, 4);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.reassign_neighbors = 8;
+    p.centroid_capacity = 32;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..4).collect::<Vec<_>>()).unwrap();
+
+    c.insert_batch(&[4, 5]).unwrap();
+
+    assert_live_invariants(&c, &(0..6).collect::<Vec<_>>());
+    assert_npa(&c, &(0..6).collect::<Vec<_>>());
+}
+
+#[test]
+fn co_split_routes_candidates_across_all_new_children() {
+    let points = mat(
+        vec![0.0, 0.0, 4.8, 4.8, 10.0, 10.0, 20.0, 20.0, 0.0, 5.2],
+        10,
+        1,
+    );
+    let initial = mat(vec![0.0, 10.0], 2, 1);
+    let mut p = params(10, 4);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.reassign_neighbors = 8;
+    p.centroid_capacity = 32;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.insert_batch(&(0..8).collect::<Vec<_>>()).unwrap();
+
+    c.insert_batch(&[8, 9]).unwrap();
+
+    assert_live_invariants(&c, &(0..10).collect::<Vec<_>>());
+    assert_npa(&c, &(0..10).collect::<Vec<_>>());
+}
+
+#[test]
+fn merge_capacity_accounts_for_deletes_in_the_same_batch() {
+    let points = mat((0..15).map(|x| x as f32).collect(), 15, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 6, 3);
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 16;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 0..3 {
+        c.partition.attach_new(pid, 0);
+    }
+    for pid in 3..9 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 9..15 {
+        c.partition.attach_new(pid, 2);
+    }
+
+    c.delete_batch(&[0, 3, 4]).unwrap();
+
+    assert_eq!(c.telemetry().total_merges, 1);
+    assert_eq!(c.num_clusters(), 2);
+}
+
+#[test]
+fn underfull_victims_can_merge_with_each_other_when_other_survivors_are_full() {
+    let points = mat(vec![0.0, 0.1, 1.0, 1.1, 100.0, 100.1, 100.2, 100.3], 8, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 4, 2);
+    p.max_clusters = None;
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 16;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    for pid in 0..2 {
+        c.partition.attach_new(pid, 0);
+    }
+    for pid in 2..4 {
+        c.partition.attach_new(pid, 1);
+    }
+    for pid in 4..8 {
+        c.partition.attach_new(pid, 2);
+    }
+
+    c.delete_batch(&[0, 2]).unwrap();
+
+    assert_eq!(c.telemetry().total_merges, 1);
+    assert_eq!(c.num_clusters(), 2);
+    assert_live_invariants(&c, &[1, 3, 4, 5, 6, 7]);
+    assert!(c.cluster_sizes().into_iter().all(|size| size <= 4));
+}
+
+#[test]
+fn merge_preserves_capacity_when_npa_prefers_a_full_posting() {
+    let points = mat(vec![0.0, 0.1, 1.0, 1.1, 1.2, 1.3, 100.0], 7, 1);
+    let initial = mat(vec![0.0, 1.0, 100.0], 3, 1);
+    let mut p = merge_params(8, 4, 2);
+    p.max_clusters = None;
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 3;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+    c.partition.attach_new(0, 0);
+    c.partition.attach_new(1, 0);
+    for pid in 2..6 {
+        c.partition.attach_new(pid, 1);
+    }
+    c.partition.attach_new(6, 2);
+
+    assert!(c.delete_batch(&[0]).is_err());
+    assert!(c.is_poisoned());
+}
+
+#[test]
+fn id_budget_exhaustion_is_reported_instead_of_leaving_overflow() {
+    let points = mat((0..6).map(|x| x as f32).collect(), 6, 1);
+    let initial = mat(vec![0.0], 1, 1);
+    let mut p = params(10, 2);
+    p.max_clusters = None;
+    p.routing = OnlineCentroidRouting::Exact;
+    p.centroid_capacity = 1;
+    let mut c = OnlineClusterer::new(points, initial, p).unwrap();
+
+    assert!(c.insert_batch(&(0..6).collect::<Vec<_>>()).is_err());
+    assert!(c.is_poisoned());
 }

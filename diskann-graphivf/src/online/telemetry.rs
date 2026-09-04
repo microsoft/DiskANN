@@ -117,8 +117,8 @@ impl BuildTelemetry {
         use std::fmt::Write as _;
         let mut out = String::with_capacity(64 + self.splits.len() * 48);
         out.push_str(
-            "insert_index,cluster,cluster_size,num_neighbors,region_points,npa_candidates,num_reassigned,\
-             live_after,two_means_us,reassign_us,total_us,clusters_updated\n",
+            "insert_index,cluster,cluster_size,num_neighbors,num_reassigned,\
+             live_after,two_means_us,reassign_us,total_us,clusters_updated,region_points,npa_candidates\n",
         );
         for event in &self.splits {
             let _ = writeln!(
@@ -128,14 +128,14 @@ impl BuildTelemetry {
                 event.cluster,
                 event.cluster_size,
                 event.num_neighbors,
-                event.region_points,
-                event.npa_candidates,
                 event.num_reassigned,
                 event.live_after,
                 event.two_means_us,
                 event.reassign_us,
                 event.total_us,
                 event.clusters_updated,
+                event.region_points,
+                event.npa_candidates,
             );
         }
         std::fs::write(path, out)

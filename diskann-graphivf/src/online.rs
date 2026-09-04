@@ -113,6 +113,13 @@ struct MergeSearchScratch {
     candidates: Vec<(u32, f32)>,
 }
 
+struct MergeTargetContext<'a> {
+    excluded: &'a std::collections::HashSet<u32>,
+    deleted_counts: &'a std::collections::HashMap<u32, usize>,
+    planned_targets: &'a std::collections::HashMap<u32, usize>,
+    max_graph_survivors: usize,
+}
+
 /// Route one point to its nearest live centroid via the centroid graph.
 ///
 /// The centroid graph is mutated in place as clusters split and merge:
@@ -166,6 +173,7 @@ struct SplitParentPlan {
     members: Vec<u32>,
     neighbors: Vec<u32>,
     children: [Box<[f32]>; 2],
+    assignments: Vec<u8>,
     reassign_candidates: Vec<u32>,
     region_points: usize,
     two_means_us: u64,
@@ -488,12 +496,13 @@ impl OnlineClusterer {
         let split = if parents.is_empty() {
             None
         } else {
-            let parent_set: std::collections::HashSet<u32> = parents.iter().copied().collect();
             let mut incoming = std::collections::HashMap::<u32, Vec<u32>>::new();
             for (&pid, &cid) in pids.iter().zip(&routes) {
-                if parent_set.contains(&cid) {
-                    incoming.entry(cid).or_default().push(pid);
-                }
+                // Split-neighbor Equation 2 must see points routed to every
+                // posting in this batch, not only points routed to a parent.
+                // None are attached until commit, so they are otherwise absent
+                // from `partition.members(neighbor)`.
+                incoming.entry(cid).or_default().push(pid);
             }
             Some(self.prepare_split(&parents, &incoming)?)
         };
@@ -524,7 +533,31 @@ impl OnlineClusterer {
         match split {
             Some(plan) => self.commit_split(plan),
             None => Ok(()),
+        }?;
+        self.ensure_split_equilibrium()
+    }
+
+    /// Reject a successful-looking uncapped mutation if resource exhaustion
+    /// prevented the split cascade from restoring the configured threshold.
+    /// Explicit `max_clusters` is different: its documented purpose is to cap
+    /// live clusters even when postings remain overfull.
+    fn ensure_split_equilibrium(&self) -> Result<()> {
+        if self.params.max_clusters.is_some() {
+            return Ok(());
         }
+        if let Some(blocked) = self
+            .centroids
+            .live_ids()
+            .find(|&cid| self.partition.list_len(cid) > self.params.split_threshold)
+        {
+            return Err(GraphIvfError::invalid(format!(
+                "centroid id budget exhausted before split equilibrium; \
+                 posting {blocked} has {} points above threshold {}",
+                self.partition.list_len(blocked),
+                self.params.split_threshold
+            )));
+        }
+        Ok(())
     }
 
     /// Select overflowing routed-to clusters using their projected post-insert
@@ -621,6 +654,7 @@ impl OnlineClusterer {
         // their fallible candidate searches before removing a single point.
         let merge = if self.params.merges_enabled() {
             let mut victims = Vec::new();
+            let mut deleted_counts = std::collections::HashMap::<u32, usize>::new();
             let mut start = 0;
             while start < by_cluster.len() {
                 let cid = by_cluster[start].0;
@@ -628,7 +662,9 @@ impl OnlineClusterer {
                     .iter()
                     .position(|&(candidate, _)| candidate != cid)
                     .map_or(by_cluster.len(), |offset| start + offset);
-                if self.partition.list_len(cid) - (end - start) < self.params.merge_threshold {
+                let deleted = end - start;
+                deleted_counts.insert(cid, deleted);
+                if self.partition.list_len(cid) - deleted < self.params.merge_threshold {
                     victims.push(cid);
                 }
                 start = end;
@@ -639,10 +675,7 @@ impl OnlineClusterer {
                 .len()
                 .min(self.centroids.live_count().saturating_sub(floor));
             victims.sort_unstable_by_key(|&cid| {
-                let deleted = by_cluster
-                    .iter()
-                    .filter(|&&(candidate, _)| candidate == cid)
-                    .count();
+                let deleted = deleted_counts.get(&cid).copied().unwrap_or(0);
                 (self.partition.list_len(cid) - deleted, cid)
             });
             victims.truncate(admitted);
@@ -652,7 +685,7 @@ impl OnlineClusterer {
             } else {
                 let deleted: std::collections::HashSet<u32> =
                     by_cluster.iter().map(|&(_, pid)| pid).collect();
-                Some(self.prepare_merge(&victims, &deleted)?)
+                Some(self.prepare_merge(&victims, &deleted, &deleted_counts)?)
             }
         } else {
             None
@@ -856,19 +889,34 @@ impl OnlineClusterer {
                         reassign_candidates.push(pid);
                     }
                 }
+                if let Some(inserted) = incoming.get(&neighbor) {
+                    for &pid in inserted {
+                        if lire::neighbor_may_move_to_child(
+                            self.points.row(pid as usize),
+                            &old_centroid,
+                            &balanced.children,
+                        ) {
+                            reassign_candidates.push(pid);
+                        }
+                    }
+                }
             }
             reassign_candidates.sort_unstable();
             reassign_candidates.dedup();
             let region_points = members.len()
                 + neighbors
                     .iter()
-                    .map(|&neighbor| self.partition.list_len(neighbor))
+                    .map(|&neighbor| {
+                        self.partition.list_len(neighbor)
+                            + incoming.get(&neighbor).map_or(0, Vec::len)
+                    })
                     .sum::<usize>();
             parent_plans.push(SplitParentPlan {
                 id: c,
                 members,
                 neighbors,
                 children: balanced.children,
+                assignments: balanced.assignments,
                 reassign_candidates,
                 region_points,
                 two_means_us: kmeans_start.elapsed().as_micros() as u64,
@@ -975,20 +1023,60 @@ impl OnlineClusterer {
 
         let mut destinations = std::collections::HashMap::<u32, u32>::new();
         for (parent_index, parent) in plan.parents.iter().enumerate() {
-            for &pid in &parent.members {
-                let target = routed.get(&pid).copied().unwrap_or_else(|| {
-                    let point = self.points.row(pid as usize);
-                    let child = usize::from(
-                        cluster::sq_l2(point, &parent.children[1])
-                            < cluster::sq_l2(point, &parent.children[0]),
-                    );
-                    child_ids[2 * parent_index + child]
+            for (member_index, &pid) in parent.members.iter().enumerate() {
+                let point = self.points.row(pid as usize);
+                let distances = [
+                    cluster::sq_l2(point, &parent.children[0]),
+                    cluster::sq_l2(point, &parent.children[1]),
+                ];
+                // Preserve NPA by choosing the strictly nearer child. The
+                // constrained training assignment is needed for exact distance
+                // ties; otherwise identical points all choose child zero and
+                // immediately overflow it again.
+                let fitted = parent.assignments[member_index] as usize;
+                let local_child = match distances[0].total_cmp(&distances[1]) {
+                    std::cmp::Ordering::Less => 0,
+                    std::cmp::Ordering::Greater => 1,
+                    std::cmp::Ordering::Equal => fitted,
+                };
+                let local_target = child_ids[2 * parent_index + local_child];
+                let local_distance = distances[local_child];
+                let target = routed.get(&pid).copied().map_or(local_target, |global| {
+                    let global_distance = self
+                        .centroids
+                        .get(global)
+                        .map(|centroid| cluster::sq_l2(point, centroid))
+                        .unwrap_or(f32::INFINITY);
+                    if global_distance < local_distance {
+                        global
+                    } else {
+                        local_target
+                    }
                 });
                 destinations.insert(pid, target);
             }
         }
         for (&pid, &target) in &routed {
-            destinations.entry(pid).or_insert(target);
+            destinations.entry(pid).or_insert_with(|| {
+                let source = self.partition.assignment(pid);
+                let Some(source_centroid) = self.centroids.get(source) else {
+                    // Every retired-parent member was inserted above. This is
+                    // defensive for a partially prepared plan.
+                    return target;
+                };
+                let point = self.points.row(pid as usize);
+                let source_distance = cluster::sq_l2(point, source_centroid);
+                let target_distance = self
+                    .centroids
+                    .get(target)
+                    .map(|centroid| cluster::sq_l2(point, centroid))
+                    .unwrap_or(f32::INFINITY);
+                if target_distance < source_distance {
+                    target
+                } else {
+                    source
+                }
+            });
         }
         let mut destinations: Vec<(u32, u32)> = destinations.into_iter().collect();
         destinations.sort_unstable_by_key(|&(pid, _)| pid);
@@ -1110,12 +1198,14 @@ impl OnlineClusterer {
         &self,
         victims: &[u32],
         deleted: &std::collections::HashSet<u32>,
+        deleted_counts: &std::collections::HashMap<u32, usize>,
     ) -> Result<MergePlan> {
         let started = Instant::now();
         let victim_set: std::collections::HashSet<u32> = victims.iter().copied().collect();
         let mut planned_targets = std::collections::HashMap::<u32, usize>::new();
         let mut search_scratch = MergeSearchScratch::default();
         let mut plans = Vec::new();
+        let mut skipped = Vec::new();
         for &id in victims {
             let anchor = self
                 .centroids
@@ -1131,15 +1221,63 @@ impl OnlineClusterer {
             let search_start = Instant::now();
             let target = self.find_merge_target(
                 anchor,
-                &victim_set,
                 members.len(),
-                &planned_targets,
-                MERGE_GRAPH_MAX_SURVIVORS,
+                MergeTargetContext {
+                    excluded: &victim_set,
+                    deleted_counts,
+                    planned_targets: &planned_targets,
+                    max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
+                },
+                &mut search_scratch,
+            )?;
+            let Some(target) = target else {
+                skipped.push((id, members));
+                continue;
+            };
+            *planned_targets.entry(target.id).or_default() += members.len();
+            plans.push(MergeVictimPlan {
+                id,
+                members,
+                target: target.id,
+                search_us: search_start.elapsed().as_micros() as u64,
+            });
+        }
+
+        // A victim rejected above remains live. It can therefore be a valid
+        // destination for another rejected victim, but the first pass excluded
+        // it together with the tentative victim set. Retry skipped victims
+        // greedily against the now-known retirement set. If a future skipped
+        // victim is selected as a target, protect it from retirement.
+        let mut retiring: std::collections::HashSet<u32> =
+            plans.iter().map(|victim| victim.id).collect();
+        let mut protected = std::collections::HashSet::new();
+        for (id, members) in skipped {
+            if protected.contains(&id) {
+                continue;
+            }
+            let mut excluded = retiring.clone();
+            excluded.insert(id);
+            let anchor = self
+                .centroids
+                .get(id)
+                .ok_or_else(|| GraphIvfError::invalid(format!("merge victim {id} is not live")))?;
+            let search_start = Instant::now();
+            let target = self.find_merge_target(
+                anchor,
+                members.len(),
+                MergeTargetContext {
+                    excluded: &excluded,
+                    deleted_counts,
+                    planned_targets: &planned_targets,
+                    max_graph_survivors: MERGE_GRAPH_MAX_SURVIVORS,
+                },
                 &mut search_scratch,
             )?;
             let Some(target) = target else {
                 continue;
             };
+            retiring.insert(id);
+            protected.insert(target.id);
             *planned_targets.entry(target.id).or_default() += members.len();
             plans.push(MergeVictimPlan {
                 id,
@@ -1164,22 +1302,23 @@ impl OnlineClusterer {
     fn find_merge_target(
         &self,
         anchor: &[f32],
-        victim_set: &std::collections::HashSet<u32>,
         incoming: usize,
-        planned_targets: &std::collections::HashMap<u32, usize>,
-        max_graph_survivors: usize,
+        context: MergeTargetContext<'_>,
         scratch: &mut MergeSearchScratch,
     ) -> Result<Option<MergeTarget>> {
-        let survivor_count = self.centroids.live_count().saturating_sub(victim_set.len());
+        let survivor_count = self
+            .centroids
+            .live_count()
+            .saturating_sub(context.excluded.len());
         if survivor_count == 0 {
             return Ok(None);
         }
 
         if self.params.routing.neighbor_beam(1).is_some() {
-            let survivor_cap = survivor_count.min(max_graph_survivors.max(1));
+            let survivor_cap = survivor_count.min(context.max_graph_survivors.max(1));
             let mut survivor_budget = self.params.reassign_neighbors.min(survivor_cap).max(1);
             loop {
-                let victim_allowance = victim_set.len().min(MERGE_GRAPH_MAX_SURVIVORS);
+                let victim_allowance = context.excluded.len().min(MERGE_GRAPH_MAX_SURVIVORS);
                 let search_k = victim_allowance
                     .saturating_add(survivor_budget)
                     .min(self.centroids.live_count());
@@ -1203,7 +1342,7 @@ impl OnlineClusterer {
 
                 scratch.candidates.clear();
                 for &candidate in &scratch.ids {
-                    if victim_set.contains(&candidate) || !self.centroids.is_live(candidate) {
+                    if context.excluded.contains(&candidate) || !self.centroids.is_live(candidate) {
                         continue;
                     }
                     let vector = self
@@ -1216,7 +1355,12 @@ impl OnlineClusterer {
                     .candidates
                     .sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
                 if let Some(&(target, _)) = scratch.candidates.iter().find(|(candidate, _)| {
-                    self.merge_target_has_capacity(*candidate, incoming, planned_targets)
+                    self.merge_target_has_capacity(
+                        *candidate,
+                        incoming,
+                        context.deleted_counts,
+                        context.planned_targets,
+                    )
                 }) {
                     return Ok(Some(MergeTarget {
                         id: target,
@@ -1235,8 +1379,13 @@ impl OnlineClusterer {
         Ok(self
             .centroids
             .closest_live_where(anchor, |candidate| {
-                !victim_set.contains(&candidate)
-                    && self.merge_target_has_capacity(candidate, incoming, planned_targets)
+                !context.excluded.contains(&candidate)
+                    && self.merge_target_has_capacity(
+                        candidate,
+                        incoming,
+                        context.deleted_counts,
+                        context.planned_targets,
+                    )
             })
             .map(|id| MergeTarget {
                 id,
@@ -1249,10 +1398,13 @@ impl OnlineClusterer {
         &self,
         candidate: u32,
         incoming: usize,
+        deleted_counts: &std::collections::HashMap<u32, usize>,
         planned_targets: &std::collections::HashMap<u32, usize>,
     ) -> bool {
+        let deleted_from_candidate = deleted_counts.get(&candidate).copied().unwrap_or(0);
         self.partition
             .list_len(candidate)
+            .saturating_sub(deleted_from_candidate)
             .saturating_add(planned_targets.get(&candidate).copied().unwrap_or(0))
             .saturating_add(incoming)
             <= self.params.split_threshold
@@ -1290,13 +1442,17 @@ impl OnlineClusterer {
             let mut routes = vec![0u32; self.scratch.points.len()];
             let pids: Vec<u32> = self.scratch.points.iter().map(|point| point.id).collect();
             self.route_batch(&pids, &mut routes)?;
-            let num_reassigned = self
-                .scratch
-                .points
-                .drain(..)
-                .zip(routes)
-                .map(|(point, target)| usize::from(self.partition.attach_detached(point, target)))
-                .sum::<usize>();
+            let mut destinations = Vec::with_capacity(self.scratch.points.len());
+            let num_reassigned = self.scratch.points.len();
+            for (point, routed) in self.scratch.points.drain(..).zip(routes) {
+                let pid = point.id;
+                self.partition.attach_detached(point, victim.target);
+                destinations.push((pid, routed));
+            }
+            // Materialize the capacity-safe merge target first, then perform
+            // the final global NPA moves. Any destination overflow enters the
+            // normal split cascade below.
+            self.partition.relocate(&destinations);
             let reassign_us = reassign_start.elapsed().as_micros() as u64;
 
             total_reassigned += num_reassigned as u64;
@@ -1325,7 +1481,7 @@ impl OnlineClusterer {
             let split = self.prepare_split(&parents, &std::collections::HashMap::new())?;
             self.commit_split(split)?;
         }
-        Ok(())
+        self.ensure_split_equilibrium()
     }
 
     /// Restore any scratch points that remain detached after a failed

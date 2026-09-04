@@ -18,7 +18,11 @@ use crate::{cluster, GraphIvfError, Result};
 
 pub(super) struct BalancedSplit {
     pub(super) children: [Box<[f32]>; 2],
-    #[cfg(test)]
+    /// Capacity-constrained training assignment, aligned with `members`.
+    ///
+    /// Final NPA placement normally selects the nearer child. This assignment
+    /// supplies its stable tie-break, preserving the fitter's balance when the
+    /// two child centroids are exactly equidistant (including duplicate data).
     pub(super) assignments: Vec<u8>,
 }
 
@@ -145,7 +149,6 @@ pub(super) fn balanced_two_means(
 
     Ok(BalancedSplit {
         children,
-        #[cfg(test)]
         assignments,
     })
 }
