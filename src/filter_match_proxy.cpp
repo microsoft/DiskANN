@@ -4,6 +4,35 @@ namespace diskann
 {
 
 template <typename LabelT>
+void bitmask_filter_match<LabelT>::build_query_mask(const std::vector<LabelT>& filter_labels, LabelT unv_label)
+{
+    // _query_bitmask_buf is already bound (by the ctor init list) to either the
+    // caller-supplied scratch buffer or the owned buffer. Size it to
+    // _bitmask_size + AVX2_TAIL_PADDING words so the unconditional 256-bit load
+    // in test_full_mask_val's fast path never reads past the end (matches the
+    // node-side simple_bitmask_buf padding scheme).
+    //
+    // clear() first so the resize zero-fills every word: a reused scratch buffer
+    // may already be at padded_size, in which case a bare resize is a no-op that
+    // leaves stale high words from a previous query -- test_full_mask_val's
+    // unconditional 256-bit AND would then treat them as real filter bits.
+    const std::uint64_t padded_size = _bitmask_filters._bitmask_size + simple_bitmask_buf::AVX2_TAIL_PADDING;
+    _query_bitmask_buf.clear();
+    _query_bitmask_buf.resize(padded_size, 0);
+    _bitmask_full_val._mask = _query_bitmask_buf.data();
+
+    for (const auto& filter_label : filter_labels)
+    {
+        auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
+        _bitmask_full_val.merge_bitmask_val(bitmask_val);
+    }
+
+    // if unv isn't set, it will be default value 0
+    auto bitmask_val = simple_bitmask::get_bitmask_val(unv_label);
+    _bitmask_full_val.merge_bitmask_val(bitmask_val);
+}
+
+template <typename LabelT>
 bitmask_filter_match<LabelT>::bitmask_filter_match(
     simple_bitmask_buf& bitmask_filters,
     std::vector<std::uint64_t>& query_bitmask_buf,
@@ -15,18 +44,7 @@ bitmask_filter_match<LabelT>::bitmask_filter_match(
     // _bitmask_size == 0 means no filter is set
     if (_bitmask_filters._bitmask_size > 0)
     {
-        _query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
-        _bitmask_full_val._mask = _query_bitmask_buf.data();
-
-        for (const auto& filter_label : filter_labels)
-        {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
-            _bitmask_full_val.merge_bitmask_val(bitmask_val);
-        }
-
-        // if unv isn't set, it will be default value 0
-        auto bitmask_val = simple_bitmask::get_bitmask_val(unv_label);
-        _bitmask_full_val.merge_bitmask_val(bitmask_val);
+        build_query_mask(filter_labels, unv_label);
     }
 }
 
@@ -40,17 +58,7 @@ bitmask_filter_match<LabelT>::bitmask_filter_match(
 {
     if (_bitmask_filters._bitmask_size > 0)
     {
-        _query_bitmask_buf.resize(_bitmask_filters._bitmask_size, 0);
-        _bitmask_full_val._mask = _query_bitmask_buf.data();
-
-        for (const auto& filter_label : filter_labels)
-        {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
-            _bitmask_full_val.merge_bitmask_val(bitmask_val);
-        }
-
-        auto bitmask_val = simple_bitmask::get_bitmask_val(unv_label);
-        _bitmask_full_val.merge_bitmask_val(bitmask_val);
+        build_query_mask(filter_labels, unv_label);
     }
 }
 
@@ -60,6 +68,16 @@ bool bitmask_filter_match<LabelT>::contain_filtered_label(uint32_t id)
     simple_bitmask bm(_bitmask_filters.get_bitmask(id), _bitmask_filters._bitmask_size);
 
     return bm.test_full_mask_val(_bitmask_full_val);
+}
+
+template <typename LabelT>
+void bitmask_filter_match<LabelT>::prefetch_bitmask(uint32_t id)
+{
+    // Prefetch the bitmask for id to L1 cache to hide DRAM latency
+    if (_bitmask_filters._bitmask_size > 0)
+    {
+        _mm_prefetch(reinterpret_cast<const char*>(_bitmask_filters.get_bitmask(id)), _MM_HINT_T0);
+    }
 }
 
 template <typename LabelT>
@@ -77,8 +95,15 @@ template <typename LabelT>
 bool integer_label_filter_match<LabelT>::contain_filtered_label(uint32_t id)
 {
     // if unv isn't set, it will be default value 0, and there will be no match
-    return _label_vector.check_label_exists(id, _filter_labels) 
+    return _label_vector.check_label_exists(id, _filter_labels)
         || _label_vector.check_label_exists(id, _unv_label);
+}
+
+template <typename LabelT>
+void integer_label_filter_match<LabelT>::prefetch_bitmask(uint32_t id)
+{
+    // No-op for integer labels (no bitmask to prefetch)
+    (void)id;
 }
 
 template <typename LabelT>
@@ -104,6 +129,15 @@ bool label_filter_match_holder<LabelT>::contain_filtered_label(uint32_t id)
     else
     {
         return _bitmask_filter_match.contain_filtered_label(id);
+    }
+}
+
+template <typename LabelT>
+void label_filter_match_holder<LabelT>::prefetch_bitmask(uint32_t id)
+{
+    if (!_use_integer_labels)
+    {
+        _bitmask_filter_match.prefetch_bitmask(id);
     }
 }
 

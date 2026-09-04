@@ -592,7 +592,12 @@ void Index<T, TagT, LabelT>::save_unified(const char *filename, const std::vecto
         }
         else if (_bitmask_buf._buf.size() > 0)
         {
-            const uint64_t bitmap_bytes = _bitmask_buf._buf.size() * sizeof(uint64_t);
+            // _buf is over-allocated by up to 4 words for AVX2 padding
+            // (convert_pts_label_to_bitmask). The unified format stores exactly
+            // npts * bitmask_size words, matching the reader's expectation in
+            // unified_label_data_bitmask::load_encoding.
+            const uint64_t exact_words = static_cast<uint64_t>(_nd) * _bitmask_buf._bitmask_size;
+            const uint64_t bitmap_bytes = exact_words * sizeof(uint64_t);
             writer.write_labels_bitmask(total_labels, universal, dict_bytes.data(), dict_bytes.size(),
                                         _bitmask_buf._buf.data(), bitmap_bytes);
         }
@@ -1221,14 +1226,36 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             LockGuard guard(_locks[n]);
             auto neighbour_list = _graph_store->get_neighbours(n);
-            for (auto id : neighbour_list)
+            const location_t* neighbour_data = neighbour_list.data();
+            const size_t nbrs_count = neighbour_list.size();
+            constexpr size_t BITMASK_PREFETCH_K = 8;
+
+            // Pre-prefetch bitmasks for first K neighbors (only if filtering)
+            if (use_filter)
             {
+                const size_t prefetch_init = std::min(BITMASK_PREFETCH_K, nbrs_count);
+                for (size_t p = 0; p < prefetch_init; ++p)
+                {
+                    match_proxy.prefetch_bitmask(neighbour_data[p]);
+                }
+            }
+
+            for (size_t i = 0; i < nbrs_count; ++i)
+            {
+                auto id = neighbour_data[i];
                 assert(id < _max_points);
 
                 if (!is_not_visited(id))
                 {
                     continue;
                 }
+
+                // Prefetch bitmask K steps ahead (sliding window)
+                if (use_filter && i + BITMASK_PREFETCH_K < nbrs_count)
+                {
+                    match_proxy.prefetch_bitmask(neighbour_data[i + BITMASK_PREFETCH_K]);
+                }
+
                 cmps++;
                 if (use_filter)
                 {
@@ -1258,14 +1285,36 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             // mark visited and collect unvisited into id_scratch
             _locks[n].lock_shared();
             auto nbrs = _graph_store->get_neighbours(n);
-            for (auto id : nbrs)
+            const location_t* nbrs_data = nbrs.data();
+            const size_t nbrs_count = nbrs.size();
+            constexpr size_t BITMASK_PREFETCH_K = 8;
+
+            // Pre-prefetch bitmasks for first K neighbors (only if filtering)
+            if (use_filter)
             {
+                const size_t prefetch_init = std::min(BITMASK_PREFETCH_K, nbrs_count);
+                for (size_t p = 0; p < prefetch_init; ++p)
+                {
+                    match_proxy.prefetch_bitmask(nbrs_data[p]);
+                }
+            }
+
+            for (size_t i = 0; i < nbrs_count; ++i)
+            {
+                auto id = nbrs_data[i];
                 assert(id < _max_points);
 
                 if (!is_not_visited(id))
                 {
                     continue;
                 }
+
+                // Prefetch bitmask K steps ahead (sliding window)
+                if (use_filter && i + BITMASK_PREFETCH_K < nbrs_count)
+                {
+                    match_proxy.prefetch_bitmask(nbrs_data[i + BITMASK_PREFETCH_K]);
+                }
+
                 cmps++;
                 if (use_filter)
                 {
@@ -2465,7 +2514,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels)
 {
     _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
-    _bitmask_buf._buf.resize(pts_to_labels.size() * _bitmask_buf._bitmask_size, 0);
+    _bitmask_buf.resize_for_points(pts_to_labels.size());
 
     for (size_t i = 0; i < pts_to_labels.size(); i++)
     {
@@ -2562,8 +2611,12 @@ void Index<T, TagT, LabelT>::aggregate_points_by_bitmask_label(
         std::advance(itr, lbl);
         auto& x = *itr;
 
+        // Pad by AVX2_TAIL_PADDING words: test_full_mask_val issues an
+        // unconditional 256-bit load over this query mask, so it must be at least
+        // 4 words long. clear() first so resize zero-fills every word (no stale
+        // bits carried across label iterations).
         label_bitmask.clear();
-        label_bitmask.resize(_bitmask_buf._bitmask_size, 0);
+        label_bitmask.resize(_bitmask_buf._bitmask_size + simple_bitmask_buf::AVX2_TAIL_PADDING, 0);
 
         simple_bitmask_full_val bitmask_full_val;
         bitmask_full_val._mask = label_bitmask.data();

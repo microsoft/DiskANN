@@ -50,11 +50,11 @@ bool label_helper::parse_label_file_in_bitset(
     bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
     if (num_points > line_cnt)
     {
-        bitmask_buf._buf.resize(num_points * bitmask_buf._bitmask_size, 0);
+        bitmask_buf.resize_for_points(num_points);
     }
     else
     {
-        bitmask_buf._buf.resize(line_cnt * bitmask_buf._bitmask_size, 0);
+        bitmask_buf.resize_for_points(line_cnt);
     }
 
     tsl::robin_set<size_t> labels;
@@ -124,7 +124,12 @@ bool label_helper::write_bitmask_to_file(const std::string& bitmask_label_file, 
         throw diskann::ANNException(std::string("Failed to open file ") + bitmask_label_file, -1);
     }
 
-    if (bitmask_buf._buf.size() != bitmask_buf._bitmask_size * num_points)
+    // convert_pts_label_to_bitmask over-allocates by up to 4 words for AVX2
+    // padding, so the buffer may be larger than the exact per-point extent.
+    // Require at least the exact extent; only the unpadded words are written so
+    // the file format (num_points * bitmask_size words) stays canonical.
+    const size_t exact_words = bitmask_buf._bitmask_size * num_points;
+    if (bitmask_buf._buf.size() < exact_words)
     {
         throw diskann::ANNException(std::string("Bitmask buffer is empty"), -1);
     }
@@ -132,7 +137,7 @@ bool label_helper::write_bitmask_to_file(const std::string& bitmask_label_file, 
     std::uint32_t bitmask_size = static_cast<std::uint32_t>(bitmask_buf._bitmask_size);
     outfile.write((char*)(&num_points), sizeof(std::uint32_t));
     outfile.write((char*)(&bitmask_size), sizeof(std::uint32_t));
-    outfile.write((char *)bitmask_buf._buf.data(), bitmask_buf._buf.size() * sizeof(std::uint64_t));
+    outfile.write((char *)bitmask_buf._buf.data(), exact_words * sizeof(std::uint64_t));
     outfile.close();
 
     return true;
@@ -157,21 +162,22 @@ bool label_helper::read_bitmask_from_file(const std::string& bitmask_label_file,
     infile.read((char *)(&num_points_in_file), sizeof(std::uint32_t));
     infile.read((char *)(&bitmask_size), sizeof(std::uint32_t));
 
-    size_t bitmask_data_size = num_points_in_file * bitmask_size * sizeof(std::uint64_t);
+    size_t bitmask_data_size =
+        static_cast<size_t>(num_points_in_file) * bitmask_size * sizeof(std::uint64_t);
     if (file_size != (sizeof(std::uint32_t) * 2 + bitmask_data_size))
     {
         return false;
     }
 
     bitmask_buf._bitmask_size = bitmask_size;
-    // num_points > num_points_in_file in dynamic index 
+    // num_points > num_points_in_file in dynamic index
     if (num_points > static_cast<size_t>(num_points_in_file))
     {
-        bitmask_buf._buf.resize(num_points * bitmask_buf._bitmask_size, 0);
+        bitmask_buf.resize_for_points(num_points);
     }
     else
     {
-        bitmask_buf._buf.resize(num_points_in_file * bitmask_buf._bitmask_size, 0);
+        bitmask_buf.resize_for_points(num_points_in_file);
     }
     
     num_points = num_points_in_file;

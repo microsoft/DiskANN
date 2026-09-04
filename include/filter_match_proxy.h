@@ -1,6 +1,7 @@
 #pragma once
 #include "label_bitmask.h"
 #include "integer_label_vector.h"
+#include <xmmintrin.h>  // _mm_prefetch
 
 namespace diskann
 {
@@ -9,6 +10,7 @@ namespace diskann
     {
     public:
         virtual bool contain_filtered_label(uint32_t id) = 0;
+        virtual void prefetch_bitmask(uint32_t id) = 0;
     };
 
     template <typename LabelT>
@@ -27,8 +29,15 @@ namespace diskann
             LabelT unv_label);
 
         virtual bool contain_filtered_label(uint32_t id) override;
+        virtual void prefetch_bitmask(uint32_t id) override;
 
     private:
+        // Single place that sizes _query_bitmask_buf (padded to >=4 words so the
+        // AVX2 256-bit load in test_full_mask_val never reads past the buffer)
+        // and folds the filter + universal labels into the query mask. Both ctors
+        // delegate here after binding _query_bitmask_buf to their chosen storage.
+        void build_query_mask(const std::vector<LabelT>& filter_labels, LabelT unv_label);
+
         simple_bitmask_buf& _bitmask_filters;
         std::vector<std::uint64_t> _owned_query_bitmask_buf;  // populated only by the 3-arg ctor
         std::vector<std::uint64_t>& _query_bitmask_buf;       // refs either external or _owned
@@ -44,6 +53,7 @@ namespace diskann
             LabelT unv_label);
 
         virtual bool contain_filtered_label(uint32_t id) override;
+        virtual void prefetch_bitmask(uint32_t id) override;
 
     private:
         integer_label_vector& _label_vector;
@@ -63,6 +73,7 @@ public:
         bool use_integer_labels);
 
     virtual bool contain_filtered_label(uint32_t id) override;
+    virtual void prefetch_bitmask(uint32_t id) override;
 
 private:
     bitmask_filter_match<LabelT> _bitmask_filter_match;
