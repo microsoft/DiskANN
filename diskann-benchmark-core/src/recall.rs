@@ -9,7 +9,7 @@ use std::{
 };
 
 use diskann_utils::{
-    strided::StridedView,
+    strided::Strided,
     views::{Matrix, MatrixView},
 };
 use thiserror::Error;
@@ -145,7 +145,7 @@ pub enum GroundTruthMode {
 /// than `recall_k` candidates.
 pub fn knn<T>(
     groundtruth: &dyn Rows<T>,
-    groundtruth_distances: Option<StridedView<'_, f32>>,
+    groundtruth_distances: Option<Strided<'_, f32>>,
     results: &dyn Rows<T>,
     recall_k: usize,
     recall_n: usize,
@@ -189,7 +189,7 @@ where
 
         for i in 0..nrows {
             let gt_row = groundtruth.row(i);
-            let distances_row = distances.row(i);
+            let distances_row = distances.row_or_panic(i);
             if gt_row.len() != distances_row.len() {
                 return Err(ComputeRecallError::GroundTruthDistanceMismatch(
                     distances_row.len(),
@@ -239,7 +239,7 @@ where
         // If we have distances, then continue to append distances as long as the distance
         // value is constant
         if let Some(distances) = groundtruth_distances {
-            let distances_row = distances.row(i);
+            let distances_row = distances.row_or_panic(i);
 
             // we've already checked that `results` and `distances` have at lesat
             // `recall_k >= this_recall_k` entries, so it's safe to access `distances_row[this_recall_k - 1]`
