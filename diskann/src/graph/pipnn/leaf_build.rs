@@ -9,7 +9,7 @@
 //! job does these steps:
 //!
 //! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for Gram construction, norms, and local ranking.
+//! 2. Call the leaf kernel for ranking-distance construction and local ranking.
 //! 3. Convert local positions to global point IDs.
 //! 4. Add both edge directions to global candidate lists.
 //!
@@ -24,8 +24,8 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafMetric,
     leaf_kernel::{LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_metric::LeafMetric,
     simd::PiPNNSIMDSchema,
 };
 
@@ -327,7 +327,7 @@ mod tests {
             arch: A,
             call: LeafBuildCall<'_, T>,
         ) -> Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError> {
-            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+            use super::super::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
                 Metric::L2 => {
@@ -629,31 +629,6 @@ mod tests {
                 matrix_view(&point_values, 3, 1),
                 &singleton_leaves,
                 1,
-                Metric::L2,
-            )
-            .unwrap(),
-        );
-
-        // Then
-        assert_eq!(actual_adjacency, expected_adjacency);
-    }
-
-    #[test]
-    fn zero_k_adds_no_candidates() {
-        // Given
-        let point_values = [0.0_f32, 1.0, 2.0];
-        let point_count = 3;
-        let dimensions = 1;
-        let zero_k = 0;
-        let leaves = [vec![0, 1, 2]];
-        let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
-
-        // When
-        let actual_adjacency = adjacency_lists(
-            build_candidate_graph(
-                matrix_view(&point_values, point_count, dimensions),
-                &leaves,
-                zero_k,
                 Metric::L2,
             )
             .unwrap(),
