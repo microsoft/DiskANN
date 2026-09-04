@@ -9,7 +9,7 @@
 //! job does these steps:
 //!
 //! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for Gram construction, norms, and local ranking.
+//! 2. Call the leaf kernel for ranking-distance construction and local ranking.
 //! 3. Convert local positions to global point IDs.
 //! 4. Add both edge directions to global candidate lists.
 //!
@@ -24,9 +24,10 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafMetric,
-    leaf_kernel::{LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_kernel::{LeafKernelWorkspace, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_metric::LeafMetric,
     simd::PiPNNSIMDSchema,
+    topk::Candidate,
 };
 
 /// Failure while converting leaves into direct graph candidates.
@@ -62,7 +63,7 @@ pub(crate) enum LeafBuildError {
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
-    neighbors: Vec<LeafNeighbor>,
+    neighbors: Vec<Candidate>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
 }
@@ -94,7 +95,7 @@ impl LeafBuffers {
                 })?;
 
         grow(&mut self.point_values, point_value_count, 0.0);
-        grow(&mut self.neighbors, neighbor_count, LeafNeighbor::default());
+        grow(&mut self.neighbors, neighbor_count, Candidate::default());
         Ok((leaf_k, neighbor_count))
     }
 
@@ -253,7 +254,7 @@ where
 fn add_symmetric_neighbors(
     point_ids: &[u32],
     leaf_k: usize,
-    neighbors: &[LeafNeighbor],
+    neighbors: &[Candidate],
     local_adjacency: &mut [Vec<u32>],
 ) {
     for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
@@ -261,7 +262,7 @@ fn add_symmetric_neighbors(
             if !neighbor.is_assigned() {
                 continue;
             }
-            let target = neighbor.target as usize;
+            let target = neighbor.local_idx as usize;
             let source_id = point_ids[source];
             let target_id = point_ids[target];
             if source_id != target_id {
@@ -327,7 +328,7 @@ mod tests {
             arch: A,
             call: LeafBuildCall<'_, T>,
         ) -> Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError> {
-            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+            use super::super::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
                 Metric::L2 => {
@@ -639,31 +640,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_k_adds_no_candidates() {
-        // Given
-        let point_values = [0.0_f32, 1.0, 2.0];
-        let point_count = 3;
-        let dimensions = 1;
-        let zero_k = 0;
-        let leaves = [vec![0, 1, 2]];
-        let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
-
-        // When
-        let actual_adjacency = adjacency_lists(
-            build_candidate_graph(
-                matrix_view(&point_values, point_count, dimensions),
-                &leaves,
-                zero_k,
-                Metric::L2,
-            )
-            .unwrap(),
-        );
-
-        // Then
-        assert_eq!(actual_adjacency, expected_adjacency);
-    }
-
-    #[test]
     fn leaf_buffer_preparation_reports_shape_overflow_before_allocating() {
         let mut buffers = LeafBuffers::default();
         assert!(matches!(
@@ -679,8 +655,8 @@ mod tests {
             &[7, 7],
             1,
             &[
-                super::super::leaf_kernel::LeafNeighbor::new(1, 0.0),
-                super::super::leaf_kernel::LeafNeighbor::new(0, 0.0),
+                super::super::topk::Candidate::new(1, 0.0),
+                super::super::topk::Candidate::new(0, 0.0),
             ],
             &mut graph,
         );

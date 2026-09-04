@@ -28,10 +28,8 @@ use rayon::prelude::*;
 
 use super::{
     PiPNNConfig,
-    kernel_metric::PartitionMetric,
-    partition_kernel::{
-        PartitionKernelWorkspace, PreparedLeaders, UNASSIGNED_LEADER, assign_leaders,
-    },
+    partition_kernel::{PartitionKernelWorkspace, UNASSIGNED_LEADER, assign_leaders},
+    partition_metric::PartitionMetric,
     simd::PiPNNSIMDSchema,
 };
 
@@ -280,12 +278,13 @@ where
     let leader_matrix =
         MatrixView::try_from(leader_values.as_slice(), leader_ids.len(), dimension_count)
             .map_err(|error| ANNError::new(error.as_static()))?;
-    let leaders = PreparedLeaders::<M>::new(leader_matrix);
+    let leaders = M::create_leaders(leader_matrix);
+    let leader_count = M::leader_count(&leaders);
 
-    let fanout = fanout.min(leaders.len());
+    let fanout = fanout.min(leader_count);
     let assignment_len = checked_area("partition assignments", point_ids.len(), fanout)?;
     let mut assignments = vec![0u32; assignment_len];
-    let stripe_points = assignment_stripe_point_count(leaders.len());
+    let stripe_points = assignment_stripe_point_count(leader_count);
     let stripe_assignment_count = checked_area("assignment stripe", stripe_points, fanout)?;
     let stripe_count = point_ids.len().div_ceil(stripe_points);
     let worker_stripe_count = stripe_count.div_ceil(rayon::current_num_threads().max(1));
@@ -320,20 +319,20 @@ where
             Ok::<(), ANNError>(())
         })?;
 
-    scatter_assignments(point_ids, &assignments, fanout, leader_ids.len())
+    scatter_assignments(point_ids, &assignments, fanout, leader_count)
 }
 
 /// Assign one point stripe to sampled partition centers.
 ///
 /// The function gathers point IDs into a packed `f32` matrix. The partition
-/// kernel owns dot products, point norms, and ranking. This function writes the
+/// kernel owns ranking-distance construction and ranking. This function writes the
 /// returned leader-column IDs for partition scatter.
 #[inline]
 fn assign_point_stripe<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
     point_ids: &[u32],
-    leaders: &PreparedLeaders<'_, M>,
+    leaders: &M::Leaders<'_>,
     fanout: usize,
     buffers: &mut StripeBuffers,
     assignments: &mut [u32],
@@ -558,7 +557,7 @@ mod tests {
         T: VectorRepr + Send + Sync,
     {
         fn run(self, arch: A, call: PartitionCall<'_, T>) -> ANNResult<Vec<Vec<u32>>> {
-            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+            use super::super::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
                 Metric::L2 => partition::<A, L2, T>(arch, call.data, call.config),
@@ -912,7 +911,7 @@ mod tests {
         let data = MatrixView::try_from(data.as_slice(), 3, REDUCTION_BOUNDARY_DIMENSIONS).unwrap();
         let expected_clusters = [vec![], vec![2]];
 
-        let actual_clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
+        let actual_clusters = assign_to_leaders::<_, super::super::L2, _>(
             diskann_wide::ARCH,
             data,
             &[2],
@@ -975,7 +974,7 @@ mod tests {
         let data = MatrixView::try_from(data.as_slice(), points, 1).unwrap();
         let point_ids: Vec<u32> = (0..points as u32).collect();
 
-        let clusters = assign_to_leaders::<_, super::super::kernel_metric::L2, _>(
+        let clusters = assign_to_leaders::<_, super::super::L2, _>(
             diskann_wide::ARCH,
             data,
             &point_ids,

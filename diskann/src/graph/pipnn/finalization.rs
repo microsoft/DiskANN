@@ -42,7 +42,7 @@ pub(crate) enum FinalizationError {
 #[derive(Default)]
 struct PruneWorkspace {
     sorted_candidates: Vec<Neighbor<u32>>,
-    sorted_cache: Vec<(f32, Option<u32>)>,
+    sorted_cache: Vec<Neighbor<Option<u32>>>,
     prune_states: Vec<prune::State>,
 }
 
@@ -95,25 +95,23 @@ where
                         max: u16::MAX as usize,
                     }));
                 }
-                workspace.sorted_cache.clear();
                 // Sort all candidates before the code marks a self-edge as absent.
-                // Thus, self-edge removal cannot add a farther candidate. Cache
-                // construction preserves this order for RobustPrune.
+                // Thus, self-edge removal cannot add a farther candidate. The
+                // mapped list keeps the same positions for RobustPrune states.
                 let sorted =
                     SortedNeighbors::new(&mut workspace.sorted_candidates, candidate_count);
-                workspace.sorted_cache.extend(sorted.iter().map(|neighbor| {
-                    let id = *neighbor.id();
-                    (*neighbor.distance(), (id != source_id).then_some(id))
-                }));
+                let sorted_cache = sorted.map_in(&mut workspace.sorted_cache, |id| {
+                    (*id != source_id).then_some(*id)
+                });
                 workspace
                     .prune_states
-                    .resize(workspace.sorted_cache.len(), prune::State::default());
+                    .resize(sorted_cache.len(), prune::State::default());
                 // Each candidate list starts a separate RobustPrune state machine.
                 // Reset retained entries because resize initializes only new entries.
                 workspace.prune_states.fill(prune::State::default());
 
                 let selected = prune::robust_prune(
-                    &workspace.sorted_cache,
+                    sorted_cache,
                     workspace.prune_states.as_mut_slice(),
                     degree,
                     graph.alpha(),
