@@ -144,6 +144,7 @@ fn test_f16_to_f32_exhaustive<T, U, const N: usize>(
 diskann_wide::alias!(f32x8);
 diskann_wide::alias!(f16x8);
 
+#[cfg(not(miri))]
 #[test]
 fn test_f16_to_f32() {
     let cases = parse_float16_reference_file();
@@ -272,6 +273,7 @@ fn test_f32_to_f16_exhaustive<T, U, const N: usize>(
     );
 }
 
+#[cfg(not(miri))]
 #[test]
 fn test_f32_to_f16() {
     let cases = parse_float16_reference_file();
