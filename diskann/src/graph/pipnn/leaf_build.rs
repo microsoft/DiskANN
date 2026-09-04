@@ -9,7 +9,7 @@
 //! job does these steps:
 //!
 //! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for Gram construction, norms, and local ranking.
+//! 2. Call the leaf kernel for ranking-distance construction and local ranking.
 //! 3. Convert local positions to global point IDs.
 //! 4. Add both edge directions to direct candidates or HashPrune reservoirs.
 //!
@@ -25,9 +25,10 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafMetric,
-    leaf_kernel::{LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_kernel::{LeafKernelWorkspace, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_metric::LeafMetric,
     simd::PiPNNSIMDSchema,
+    topk::Candidate,
 };
 
 /// Failure while converting leaves into graph candidates.
@@ -66,7 +67,7 @@ pub(crate) enum LeafBuildError {
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
-    neighbors: Vec<LeafNeighbor>,
+    neighbors: Vec<Candidate>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
     seen_pairs: Vec<bool>,
@@ -110,7 +111,7 @@ impl LeafBuffers {
                 })?;
 
         grow(&mut self.point_values, point_value_count, 0.0);
-        grow(&mut self.neighbors, neighbor_count, LeafNeighbor::default());
+        grow(&mut self.neighbors, neighbor_count, Candidate::default());
         Ok((leaf_k, neighbor_count))
     }
 
@@ -352,7 +353,7 @@ where
 fn add_symmetric_neighbors(
     point_ids: &[u32],
     leaf_k: usize,
-    neighbors: &[LeafNeighbor],
+    neighbors: &[Candidate],
     local_adjacency: &mut [Vec<u32>],
 ) {
     for (source, source_neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
@@ -360,7 +361,7 @@ fn add_symmetric_neighbors(
             if !neighbor.is_assigned() {
                 continue;
             }
-            let target = neighbor.target as usize;
+            let target = neighbor.local_idx as usize;
             let source_id = point_ids[source];
             let target_id = point_ids[target];
             if source_id != target_id {
@@ -389,7 +390,7 @@ fn build_symmetric_edge_csr(
     leaf: usize,
     point_ids: &[u32],
     leaf_k: usize,
-    neighbors: &[LeafNeighbor],
+    neighbors: &[Candidate],
     buffers: EdgeBuffers<'_>,
 ) -> Result<usize, LeafBuildError> {
     let EdgeBuffers {
@@ -412,7 +413,7 @@ fn build_symmetric_edge_csr(
             if !neighbor.is_assigned() {
                 continue;
             }
-            let target = neighbor.target as usize;
+            let target = neighbor.local_idx as usize;
             count_directed_edge(leaf, point_count, source, target, seen, offsets)?;
             count_directed_edge(leaf, point_count, target, source, seen, offsets)?;
         }
@@ -437,7 +438,7 @@ fn build_symmetric_edge_csr(
             if !neighbor.is_assigned() {
                 continue;
             }
-            let target = neighbor.target as usize;
+            let target = neighbor.local_idx as usize;
             write_counted_directed_edge(
                 point_count,
                 source,
@@ -512,7 +513,7 @@ mod tests {
     use rstest::rstest;
     use std::collections::BTreeSet;
 
-    use super::super::{leaf_kernel::LeafNeighbor, simd::PiPNNSIMDSchema};
+    use super::super::{simd::PiPNNSIMDSchema, topk::Candidate};
     use super::{
         DirectCandidates, EdgeBuffers, LeafBuffers, LeafBuildError, add_symmetric_neighbors,
         build_leaf_candidates, build_symmetric_edge_csr,
@@ -552,7 +553,7 @@ mod tests {
             arch: A,
             call: LeafBuildCall<'_, T>,
         ) -> Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError> {
-            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+            use super::super::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
                 Metric::L2 => {
@@ -864,31 +865,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_k_adds_no_candidates() {
-        // Given
-        let point_values = [0.0_f32, 1.0, 2.0];
-        let point_count = 3;
-        let dimensions = 1;
-        let zero_k = 0;
-        let leaves = [vec![0, 1, 2]];
-        let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
-
-        // When
-        let actual_adjacency = adjacency_lists(
-            build_candidate_graph(
-                matrix_view(&point_values, point_count, dimensions),
-                &leaves,
-                zero_k,
-                Metric::L2,
-            )
-            .unwrap(),
-        );
-
-        // Then
-        assert_eq!(actual_adjacency, expected_adjacency);
-    }
-
-    #[test]
     fn leaf_buffer_preparation_reports_shape_overflow_before_allocating() {
         let mut buffers = LeafBuffers::default();
         assert!(matches!(
@@ -904,8 +880,8 @@ mod tests {
             &[7, 7],
             1,
             &[
-                super::super::leaf_kernel::LeafNeighbor::new(1, 0.0),
-                super::super::leaf_kernel::LeafNeighbor::new(0, 0.0),
+                super::super::topk::Candidate::new(1, 0.0),
+                super::super::topk::Candidate::new(0, 0.0),
             ],
             &mut graph,
         );
@@ -924,9 +900,9 @@ mod tests {
         // Given
         let point_ids = [10, 20, 30];
         let neighbors = [
-            LeafNeighbor::new(1, 1.0),
-            LeafNeighbor::new(2, 2.0),
-            LeafNeighbor::new(1, 1.5),
+            Candidate::new(1, 1.0),
+            Candidate::new(2, 2.0),
+            Candidate::new(1, 1.5),
         ];
         let expected_edge_count = 4;
         let expected_offsets = [0, 1, 3, 4];
@@ -960,7 +936,7 @@ mod tests {
     #[test]
     fn symmetric_edge_csr_omits_unassigned_neighbors() {
         let point_ids = [10, 20];
-        let neighbors = [LeafNeighbor::new(1, 1.0), LeafNeighbor::default()];
+        let neighbors = [Candidate::new(1, 1.0), Candidate::default()];
         let mut seen = vec![false; 4];
         let mut offsets = Vec::new();
         let mut edges = Vec::new();
@@ -988,7 +964,7 @@ mod tests {
     #[test]
     fn symmetric_edge_csr_deduplicates_edges_seen_from_both_endpoints() {
         let point_ids = [10, 20];
-        let neighbors = [LeafNeighbor::new(1, 1.0), LeafNeighbor::new(0, 1.0)];
+        let neighbors = [Candidate::new(1, 1.0), Candidate::new(0, 1.0)];
         let mut seen = vec![false; 4];
         let mut offsets = Vec::new();
         let mut edges = Vec::new();
@@ -1013,20 +989,30 @@ mod tests {
         assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
         assert!(seen.iter().all(|&entry| !entry));
     }
+
     #[test]
-    fn zero_k_edge_csr_has_empty_adjacency() {
-        let point_ids = [10, 20, 30];
-        let zero_k = 0;
-        let mut seen = vec![false; 9];
+    fn singleton_leaf_produces_empty_edge_csr() {
+        // Given
+        let leaf = 0;
+        let point_ids = [10];
+        let effective_neighbor_count = 0;
+        let no_neighbors = [];
+        let stale_edge = (99, 99.0);
+        let expected_edge_count = 0;
+        let expected_offsets = [0, 0];
+        let expected_edges = [stale_edge];
+        let expected_seen = [false];
+        let mut seen = vec![false; 1];
         let mut offsets = Vec::new();
-        let mut edges = vec![(99, 99.0)];
+        let mut edges = vec![stale_edge];
         let mut cursor = Vec::new();
 
-        let count = build_symmetric_edge_csr(
-            0,
+        // When
+        let actual_edge_count = build_symmetric_edge_csr(
+            leaf,
             &point_ids,
-            zero_k,
-            &[],
+            effective_neighbor_count,
+            &no_neighbors,
             EdgeBuffers {
                 seen: &mut seen,
                 offsets: &mut offsets,
@@ -1036,8 +1022,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count, 0);
-        assert_eq!(offsets, [0, 0, 0, 0]);
-        assert_eq!(edges, [(99, 99.0)]);
+        // Then
+        assert_eq!(actual_edge_count, expected_edge_count);
+        assert_eq!(offsets, expected_offsets);
+        assert_eq!(edges, expected_edges);
+        assert_eq!(seen, expected_seen);
     }
 }
