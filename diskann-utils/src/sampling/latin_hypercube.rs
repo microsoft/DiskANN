@@ -68,9 +68,10 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use std::fmt::Display;
 
-    use crate::views::{Init, Matrix};
     use diskann_vector::conversion::CastFromSlice;
     use half::f16;
     use rand::{
@@ -79,9 +80,9 @@ mod tests {
         SeedableRng,
     };
 
-    use super::*;
+    use crate::views::rowmajor::{self, Matrix, MatrixMut};
 
-    fn example_dataset() -> Matrix<f32> {
+    fn example_dataset() -> rowmajor::Owned<f32> {
         let data: Vec<f32> = vec![
             // row 0
             0.203688,
@@ -145,10 +146,10 @@ mod tests {
             0.329328,
         ];
 
-        Matrix::<f32>::try_from(data.into(), 10, 5).unwrap()
+        rowmajor::Owned::<f32>::try_from_data(data.into(), 10, 5).unwrap()
     }
 
-    fn example_dataset_u8() -> Matrix<u8> {
+    fn example_dataset_u8() -> rowmajor::Owned<u8> {
         let data: Vec<u8> = vec![
             52, 215, 218, 204, 192, // row 0
             79, 55, 16, 89, 255, // row 1
@@ -158,11 +159,11 @@ mod tests {
             145, 111, 142, 122, 181, // row 5 -- this is the medoid
         ];
 
-        Matrix::<u8>::try_from(data.into(), 6, 5).unwrap()
+        rowmajor::Owned::<u8>::try_from_data(data.into(), 6, 5).unwrap()
     }
 
     // This is a test for the i8 function. Each entry is between -128 and 127.
-    fn example_dataset_i8() -> Matrix<i8> {
+    fn example_dataset_i8() -> rowmajor::Owned<i8> {
         let data: Vec<i8> = vec![
             -76, 87, 90, 76, 64, // row 0
             -49, -73, -112, -39, 127, // row 1
@@ -172,26 +173,26 @@ mod tests {
             17, -17, 14, -6, 53, // row 5 -- this is the medoid
         ];
 
-        Matrix::<i8>::try_from(data.into(), 6, 5).unwrap()
+        rowmajor::Owned::<i8>::try_from_data(data.into(), 6, 5).unwrap()
     }
 
-    fn test_for_type<T>(data: Matrix<T>)
+    fn test_for_type<T>(data: rowmajor::Owned<T>)
     where
         T: SampleLatinHyperCube + PartialEq + std::fmt::Debug + Display,
         StandardUniform: Distribution<T>,
     {
         // No Rows
-        let x = Matrix::<T>::new(T::default(), 0, 10);
+        let x = rowmajor::Owned::<T>::defaulted(0, 10).unwrap();
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            Matrix::<T>::new(T::default(), 1, x.ncols())
+            rowmajor::Owned::<T>::defaulted(1, x.ncols()).unwrap()
         );
 
         // No Cols0
-        let x = Matrix::<T>::new(T::default(), 1, 0);
+        let x = rowmajor::Owned::<T>::defaulted(1, 0).unwrap();
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            Matrix::<T>::new(T::default(), 1, x.ncols())
+            rowmajor::Owned::<T>::defaulted(1, x.ncols()).unwrap()
         );
 
         let mut rng: StdRng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -199,10 +200,11 @@ mod tests {
         // One row
         let dist = StandardUniform;
         for dim in 1..20 {
-            let x = Matrix::<T>::new(Init(|| dist.sample(&mut rng)), 1, dim);
+            let x = rowmajor::Owned::<T>::from_fn(1, dim, || dist.sample(&mut rng)).unwrap();
             assert_eq!(
                 T::sample_latin_hypercube(x.as_view(), 1, None),
-                Matrix::<T>::try_from(x.row(0).to_vec().into_boxed_slice(), 1, dim).unwrap()
+                rowmajor::Owned::<T>::try_from_data(x.row(0).to_vec().into_boxed_slice(), 1, dim)
+                    .unwrap()
             );
         }
 
@@ -237,7 +239,7 @@ mod tests {
     #[test]
     fn test_f16() {
         let data = example_dataset();
-        let mut data_f16 = Matrix::<f16>::new(f16::default(), data.nrows(), data.ncols());
+        let mut data_f16 = rowmajor::Owned::<f16>::defaulted(data.nrows(), data.ncols());
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
         test_for_type(data_f16);
     }

@@ -3,13 +3,131 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    fmt,
-    ops::{Index, IndexMut},
-};
+use std::{fmt, marker::PhantomData, ptr::NonNull};
 use thiserror::Error;
 
-use crate::views::{DenseData, MutDenseData, rowmajor::{self, Matrix}};
+use crate::{
+    internal,
+    views::rowmajor::{self, Matrix},
+    Reborrow,
+};
+
+/// The layout for [`Strided`].
+///
+/// This struct ensures that the [`Self::cstride`] is greater than [`Self::ncols`] and that
+/// the linear length of the representation does not overflow `usize::MAX`.
+///
+/// The linear length of [`Strided]` is given by the forumula
+/// ```text
+/// self.nrows.saturating_sub(1) * self.cstride + self.nrows.min(1) * self.ncols
+/// ```
+/// This allows the last row to occupy less than a full stride.
+#[derive(Debug, Clone, Copy)]
+pub struct Layout {
+    nrows: usize,
+    ncols: usize,
+    cstride: usize,
+}
+
+impl Layout {
+    /// Construct a new [`Layout`].
+    ///
+    /// Errors if:
+    ///
+    /// * `cstride < ncols`.
+    /// * The computation of the linear length overflows `usize::MAX`.
+    pub fn new(nrows: usize, ncols: usize, cstride: usize) -> Result<Self, LayoutError> {
+        LayoutError::check(nrows, ncols, cstride)?;
+        Ok(Self {
+            nrows,
+            ncols,
+            cstride,
+        })
+    }
+
+    /// Return the number of rows.
+    pub fn nrows(&self) -> usize {
+        self.nrows
+    }
+
+    /// Return the number of columns.
+    pub fn ncols(&self) -> usize {
+        self.ncols
+    }
+
+    /// Return the stride between subsequent rows.
+    pub fn cstride(&self) -> usize {
+        self.cstride
+    }
+
+    /// Return the linear length of the [`Strided`] described by this [`Layout`].
+    pub fn linear_length(&self) -> usize {
+        self.nrows.saturating_sub(1) * self.cstride + self.nrows.min(1) * self.ncols
+    }
+}
+
+fn linear_length(nrows: usize, ncols: usize, cstride: usize) -> Option<usize> {
+    nrows
+        .saturating_sub(1)
+        .checked_mul(cstride)
+        .and_then(|main| main.checked_add(nrows.min(1) * ncols))
+}
+
+impl From<rowmajor::Layout> for Layout {
+    fn from(layout: rowmajor::Layout) -> Self {
+        Self {
+            nrows: layout.nrows(),
+            ncols: layout.ncols(),
+            cstride: layout.ncols(),
+        }
+    }
+}
+
+/// Errors for [`Layout::new`].
+#[derive(Debug)]
+pub struct LayoutError(LayoutErrorInner);
+
+impl LayoutError {
+    fn check(nrows: usize, ncols: usize, cstride: usize) -> Result<usize, Self> {
+        if cstride < ncols {
+            Err(Self(LayoutErrorInner::InvalidStride { ncols, cstride }))
+        } else {
+            linear_length(nrows, ncols, cstride)
+                .ok_or(Self(LayoutErrorInner::Overflow { nrows, cstride }))
+        }
+    }
+}
+
+impl fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for LayoutError {}
+
+#[derive(Debug)]
+enum LayoutErrorInner {
+    InvalidStride { ncols: usize, cstride: usize },
+    Overflow { nrows: usize, cstride: usize },
+}
+
+impl fmt::Display for LayoutErrorInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidStride { ncols, cstride } => write!(
+                f,
+                "column stride {} must be greater than or equal to number of columns {}",
+                cstride, ncols
+            ),
+            Self::Overflow { nrows, cstride } => write!(
+                f,
+                "a {}x{} strided matrix has a length exceeding usize::MAX",
+                nrows, cstride
+            ),
+        }
+    }
+}
 
 /// A row-major strided matrix.
 ///
@@ -29,218 +147,78 @@ use crate::views::{DenseData, MutDenseData, rowmajor::{self, Matrix}};
 ///            +-------------+
 ///                  ^
 ///                  |
-///             StridedView
+///               Strided
 /// ```
 ///
 /// This abstraction is useful when performing PQ related operations such as training or
 /// compression as it provides a convenient abstraction for working with columnar subsets
 /// of dense data in-place.
-#[derive(Debug, Clone, Copy)]
-pub struct StridedBase<T>
-where
-    T: DenseData,
-{
-    data: T,
-    nrows: usize,
-    ncols: usize,
-    // The stride along the columns. This must be greater than or equal to `ncols`.
-    cstride: usize,
+#[derive(Debug)]
+pub struct Strided<'a, T> {
+    ptr: NonNull<T>,
+    layout: Layout,
+    _lifetime: PhantomData<&'a [T]>,
 }
 
-/// Return the linear length of a slice underlying a `StridedBase` with the given parameters.
-pub fn linear_length(nrows: usize, ncols: usize, cstride: usize) -> usize {
-    (nrows.max(1) - 1) * cstride + nrows.min(1) * ncols
-}
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
-#[error(
-    "tried to construct a strided matrix with {nrows} rows and {ncols} cols and \
-     column stride {cstride} over a slice of length {} (expected {})",
-     len,
-     linear_length(self.nrows, self.ncols, self.cstride)
-)]
-pub struct TryFromErrorLight {
-    len: usize,
-    nrows: usize,
-    ncols: usize,
-    cstride: usize,
-}
-
-#[derive(Error)]
-#[non_exhaustive]
-#[error(
-    "tried to construct a strided matrix with {nrows} rows and {ncols} cols and \
-     column stride {cstride} over a slice of length {} (expected {})",
-     data.as_slice().len(),
-     linear_length(self.nrows, self.ncols, self.cstride)
-)]
-pub struct TryFromError<T: DenseData> {
-    data: T,
-    nrows: usize,
-    ncols: usize,
-    cstride: usize,
-}
-
-// Manually implement `fmt::Debug` so we don't require `T::Debug`.
-impl<T: DenseData> fmt::Debug for TryFromError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TryFromError")
-            .field("data_len", &self.data.as_slice().len())
-            .field("nrows", &self.nrows)
-            .field("ncols", &self.ncols)
-            .field("cstride", &self.cstride)
-            .finish()
-    }
-}
-
-impl<T: DenseData> TryFromError<T> {
-    /// Consume the error and return the base data.
-    pub fn into_inner(self) -> T {
-        self.data
-    }
-
-    /// Drop the data portion of the error and return an equivalent error that is guaranteed
-    /// to be `'static`.
-    pub fn as_static(&self) -> TryFromErrorLight {
-        TryFromErrorLight {
-            len: self.data.as_slice().len(),
-            nrows: self.nrows,
-            ncols: self.ncols,
-            cstride: self.cstride,
-        }
-    }
-}
-
-impl<'a, T> StridedBase<&'a [T]> {
+impl<'a, T> Strided<'a, T> {
     /// Construct a strided view over data slice, shrinking the slice as needed.
     ///
-    /// Returns an error if `data` is shorter than the value returned by `linear_length`.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `cstride < ncols`.
-    pub fn try_shrink_from(
+    /// Returns an error if the layout is invalid or `data` is not at least
+    /// [`Layout::linear_length`].
+    pub fn try_from_data(
         data: &'a [T],
         nrows: usize,
         ncols: usize,
         cstride: usize,
-    ) -> Result<Self, TryFromError<&'a [T]>> {
-        assert!(
-            cstride >= ncols,
-            "cstride must be greater than or equal to ncols"
-        );
-        let required_length = linear_length(nrows, ncols, cstride);
-        match data.get(..required_length) {
-            Some(data) => Ok(Self {
-                data,
-                nrows,
-                ncols,
-                cstride,
-            }),
-            None => Err(TryFromError {
-                data,
-                nrows,
-                ncols,
-                cstride,
-            }),
-        }
-    }
-}
-
-impl<'a, T> StridedBase<&'a mut [T]> {
-    /// Construct a strided view over data slice, shrinking the slice as needed.
-    ///
-    /// Returns an error if `data` is shorter than the value returned by `linear_length`.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `cstride < ncols`.
-    pub fn try_shrink_from_mut(
-        data: &'a mut [T],
-        nrows: usize,
-        ncols: usize,
-        cstride: usize,
-    ) -> Result<Self, TryFromError<&'a mut [T]>> {
-        assert!(
-            cstride >= ncols,
-            "cstride must be greater than or equal to ncols"
-        );
-        let required_length = linear_length(nrows, ncols, cstride);
-        if data.as_slice().len() >= required_length {
-            Ok(Self {
-                data: &mut data[..required_length],
-                nrows,
-                ncols,
-                cstride,
-            })
+    ) -> Result<Self, TryFromError> {
+        let layout = Layout::new(nrows, ncols, cstride).map_err(TryFromError::LayoutError)?;
+        let expected = layout.linear_length();
+        if let Some(data) = data.get(..expected) {
+            Ok(unsafe { Self::from_data_unchecked(data, layout) })
         } else {
-            Err(TryFromError {
-                data,
-                nrows,
-                ncols,
-                cstride,
+            Err(TryFromError::InvalidLength {
+                got: data.len(),
+                expected,
             })
         }
     }
-}
 
-impl<T> StridedBase<T>
-where
-    T: DenseData,
-{
-    /// Construct a strided view over data slice, shrinking the slice as needed.
-    ///
-    /// Returns an error if `data` is not equal to the expected length as determined
-    /// by `linear_length`.
-    ///
-    /// # Panics
-    ///
-    /// * Panics if `cstride < ncols`.
-    pub fn try_from(
-        data: T,
-        nrows: usize,
-        ncols: usize,
-        cstride: usize,
-    ) -> Result<Self, TryFromError<T>> {
-        assert!(
-            cstride >= ncols,
-            "cstride must be greater than or equal to ncols"
-        );
-        // This computation needs to be set up such that:
-        // 1. When `nrows == 0`, the expected length is 0.
-        // 2. We make a tight upper-bound on the expected length for the last row.
-        let required_length = linear_length(nrows, ncols, cstride);
-        if data.as_slice().len() == required_length {
-            Ok(Self {
-                data,
-                nrows,
-                ncols,
-                cstride,
-            })
-        } else {
-            Err(TryFromError {
-                data,
-                nrows,
-                ncols,
-                cstride,
-            })
+    unsafe fn from_data_unchecked(data: &'a [T], layout: Layout) -> Self {
+        debug_assert_eq!(data.len(), layout.linear_length());
+        Self {
+            ptr: internal::slice_to_nonnull(data),
+            layout,
+            _lifetime: PhantomData,
         }
+    }
+
+    fn as_nonnull(&self) -> NonNull<T> {
+        self.ptr
+    }
+
+    /// Return the [`Layout`] for the matrix.
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Return a pointer to the base of the matrix.
+    pub fn as_ptr(&self) -> *const T {
+        self.as_nonnull().as_ptr().cast_const()
     }
 
     /// Return the number of columns in the matrix.
     pub fn ncols(&self) -> usize {
-        self.ncols
+        self.layout().ncols()
     }
 
     /// Return the number of rows in the matrix.
     pub fn nrows(&self) -> usize {
-        self.nrows
+        self.layout().nrows()
     }
 
     /// Return the count of elements between the start of each row.
     pub fn cstride(&self) -> usize {
-        self.cstride
+        self.layout().cstride()
     }
 
     /// Return the underlying data as a slice.
@@ -248,20 +226,93 @@ where
     /// # Note
     ///
     /// The underlying representation for a strided matrix is not necessarily dense.
-    pub fn as_slice(&self) -> &[T::Elem] {
-        self.data.as_slice()
+    pub fn as_slice(&self) -> &[T] {
+        let layout = self.layout();
+
+        // SAFETY: Constructors verify that the backing memory has a length at least
+        // `layout.linear_length()`.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), layout.linear_length()) }
     }
 
-    /// Return the underlying data as a slice.
+    // Element Access
+
+    /// Return the specified element.
     ///
-    /// # Note
+    /// # Safety
     ///
-    /// The underlying representation for a strided matrix is not necessarily dense.
-    pub fn as_mut_slice(&mut self) -> &mut [T::Elem]
-    where
-        T: MutDenseData,
-    {
-        self.data.as_mut_slice()
+    /// * `row < self.nrows()`.
+    /// * `col < self.ncols()`.
+    pub unsafe fn element_unchecked(&self, row: usize, col: usize) -> &T {
+        let layout = self.layout();
+        debug_assert!(row < layout.nrows());
+        debug_assert!(col < layout.ncols());
+
+        // SAFETY: Constructors verify that the backing memory has a length of at least
+        // `layout.linear_length`. Since `row` and `col` are in-bounds, the pointer offset
+        // is valid and it is safe to return a reference.
+        unsafe { &*self.as_ptr().add(layout.cstride() * row + col) }
+    }
+
+    /// Return the specified element if `row < self.nrows()` and `col < self.ncols()`.
+    pub fn element(&self, row: usize, col: usize) -> Option<&T> {
+        if row < self.nrows() && col < self.ncols() {
+            // SAFETY: `row` and `col` are in-bounds.
+            Some(unsafe { self.element_unchecked(row, col) })
+        } else {
+            None
+        }
+    }
+
+    /// Return the specified element.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    pub fn element_or_panic(&self, row: usize, col: usize) -> &T {
+        assert!(
+            row < self.nrows(),
+            "row {} is out of bounds for a matrix with {} rows",
+            row,
+            self.nrows()
+        );
+        assert!(
+            col < self.ncols(),
+            "col {} is out of bounds for a matrix with {} cols",
+            col,
+            self.ncols()
+        );
+
+        // SAFETY: `row` and `col` are in-bounds.
+        unsafe { self.element_unchecked(row, col) }
+    }
+
+    // Row Access
+
+    /// Returns the requested row without boundschecking.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `row < self.nrows()`.
+    pub unsafe fn row_unchecked(&self, row: usize) -> &[T] {
+        let layout = self.layout();
+        debug_assert!(row < layout.nrows());
+
+        // SAFETY: Constructors verify that the backing memory has a length of at least
+        // `layout.linear_length`. Since `row` is in-bounds, the pointer offset
+        // is valid and it is safe to form a slice of length `layout.ncols()`.
+        unsafe {
+            std::slice::from_raw_parts(self.as_ptr().add(layout.cstride() * row), layout.ncols())
+        }
+    }
+
+    /// Return the requested row if `row < self.nrows()`.
+    pub fn row(&self, row: usize) -> Option<&[T]> {
+        if row < self.nrows() {
+            // SAFETY: `row` is in-bounds.
+            Some(unsafe { self.row_unchecked(row) })
+        } else {
+            None
+        }
     }
 
     /// Return row `row` as a slice.
@@ -269,246 +320,132 @@ where
     /// # Panic
     ///
     /// Panics if `row >= self.nrows()`.
-    pub fn row(&self, row: usize) -> &[T::Elem] {
+    pub fn row_or_panic(&self, row: usize) -> &[T] {
         assert!(
             row < self.nrows(),
-            "tried to access row {row} of a matrix with {} rows",
+            "row {} is out of bounds for a matrix with {} rows",
+            row,
             self.nrows()
         );
 
         // SAFETY: `row` is in-bounds.
-        unsafe { self.get_row_unchecked(row) }
-    }
-
-    /// Returns the requested row without boundschecking.
-    ///
-    /// # Safety
-    ///
-    /// The following conditions must hold to avoid undefined behavior:
-    /// * `row < self.nrows()`.
-    pub unsafe fn get_row_unchecked(&self, row: usize) -> &[T::Elem] {
-        debug_assert!(row < self.nrows);
-        let cstride = self.cstride;
-        let ncols = self.ncols;
-        let start = row * cstride;
-
-        debug_assert!(start + ncols <= self.as_slice().len());
-        // SAFETY: The idempotency requirement of `as_slice` and our audited constructors
-        // mean that `self.as_slice()` has a length of `self.nrows * self.ncols`.
-        //
-        // Therefore, this access is in-bounds.
-        unsafe { self.as_slice().get_unchecked(start..start + ncols) }
-    }
-
-    /// Return row `row` as a mutable slice.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `row >= self.nrows()`.
-    pub fn row_mut(&mut self, row: usize) -> &mut [T::Elem]
-    where
-        T: MutDenseData,
-    {
-        assert!(
-            row < self.nrows(),
-            "tried to access row {row} of a matrix with {} rows",
-            self.nrows()
-        );
-
-        // SAFETY: `row` is in-bounds.
-        unsafe { self.get_row_unchecked_mut(row) }
-    }
-
-    /// Returns the requested row without boundschecking.
-    ///
-    /// # Safety
-    ///
-    /// The following conditions must hold to avoid undefined behavior:
-    /// * `row < self.nrows()`.
-    pub unsafe fn get_row_unchecked_mut(&mut self, row: usize) -> &mut [T::Elem]
-    where
-        T: MutDenseData,
-    {
-        debug_assert!(row < self.nrows);
-        let cstride = self.cstride;
-        let ncols = self.ncols;
-        let start = row * cstride;
-
-        debug_assert!(start + ncols <= self.as_slice().len());
-        // SAFETY: The idempotency requirement of `as_mut_slice` and our audited constructors
-        // mean that `self.as_mut_slice()` has a length of `self.nrows * self.ncols`.
-        //
-        // Therefore, this access is in-bounds.
-        unsafe {
-            self.data
-                .as_mut_slice()
-                .get_unchecked_mut(start..start + ncols)
-        }
+        unsafe { self.row_unchecked(row) }
     }
 
     /// Return a iterator over all rows in the matrix.
     ///
     /// Rows are yielded sequentially beginning with row 0.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `self.ncols() == 0` (because the implementation does not work correctly
-    /// in this case and it's too corner-case to bother fixing). This restriction may
-    /// be lifted in the future.
-    pub fn row_iter(&self) -> impl Iterator<Item = &[T::Elem]> {
-        assert!(self.ncols() != 0);
-        let ncols = self.ncols;
-
-        self.data
-            .as_slice()
-            .chunks(self.cstride())
-            .map(move |i| &i[..ncols])
-    }
-
-    /// Return a mutable iterator over all rows in the matrix.
-    ///
-    /// Rows are yielded sequentially beginning with row 0.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `self.ncols() == 0` (because the implementation does not work correctly
-    /// in this case and it's too corner-case to bother fixing). This restriction may
-    /// be lifted in the future.
-    pub fn row_iter_mut(&mut self) -> impl Iterator<Item = &mut [T::Elem]>
-    where
-        T: MutDenseData,
-    {
-        assert!(self.ncols() != 0);
-
-        let ncols = self.ncols();
-        let cstride = self.cstride();
-        self.data
-            .as_mut_slice()
-            .chunks_mut(cstride)
-            .map(move |i| &mut i[..ncols])
-    }
-
-    /// Return a pointer to the base of the matrix.
-    pub fn as_ptr(&self) -> *const T::Elem {
-        self.as_slice().as_ptr()
-    }
-
-    /// Return a pointer to the base of the matrix.
-    pub fn as_mut_ptr(&mut self) -> *mut T::Elem
-    where
-        T: MutDenseData,
-    {
-        self.as_mut_slice().as_mut_ptr()
-    }
-
-    /// Returns a reference to an element without boundschecking.
-    ///
-    /// # Safety
-    ///
-    /// The following conditions must hold to avoid undefined behavior:
-    /// * `row < self.nrows()`.
-    /// * `col < self.ncols()`.
-    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T::Elem {
-        debug_assert!(row < self.nrows);
-        debug_assert!(col < self.ncols);
-        self.as_slice().get_unchecked(row * self.cstride + col)
-    }
-
-    /// Returns a mutable reference to an element without boundschecking.
-    ///
-    /// # Safety
-    ///
-    /// The following conditions must hold to avoid undefined behavior:
-    /// * `row < self.nrows()`.
-    /// * `col < self.ncols()`.
-    pub unsafe fn get_unchecked_mut(&mut self, row: usize, col: usize) -> &mut T::Elem
-    where
-        T: MutDenseData,
-    {
-        let cstride = self.cstride;
-        debug_assert!(row < self.nrows);
-        debug_assert!(col < self.ncols);
-        self.as_mut_slice().get_unchecked_mut(row * cstride + col)
-    }
-
-    /// Return a view over the matrix.
-    pub fn as_view(&self) -> StridedView<'_, T::Elem> {
-        StridedView {
-            data: self.as_slice(),
-            nrows: self.nrows,
-            ncols: self.ncols,
-            cstride: self.cstride,
-        }
+    pub fn rows(&self) -> Rows<'_, T> {
+        Rows::new(*self)
     }
 }
 
-pub type StridedView<'a, T> = StridedBase<&'a [T]>;
-pub type MutStridedView<'a, T> = StridedBase<&'a mut [T]>;
-
-/// Return a reference to the item at entry `(row, col)` in the matrix.
-///
-/// # Panics
-///
-/// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-impl<T> Index<(usize, usize)> for StridedBase<T>
-where
-    T: DenseData,
-{
-    type Output = T::Elem;
-
-    fn index(&self, (row, col): (usize, usize)) -> &Self::Output {
-        assert!(
-            row < self.nrows(),
-            "row {row} is out of bounds (max: {})",
-            self.nrows()
-        );
-        assert!(
-            col < self.ncols(),
-            "col {col} is out of bounds (max: {})",
-            self.ncols()
-        );
-        // SAFETY: We have checked that `row` and `col` are in-bounds.
-        unsafe { self.get_unchecked(row, col) }
-    }
+/// Errors for [`Strided::try_from_data`].
+#[derive(Debug, Error)]
+pub enum TryFromError {
+    #[error(transparent)]
+    LayoutError(LayoutError),
+    #[error(
+        "argument of length {} is shorter than the expected length {}",
+        got,
+        expected
+    )]
+    InvalidLength { got: usize, expected: usize },
 }
 
-/// Return a mutable reference to the item at entry `(row, col)` in the matrix.
-///
-/// # Panics
-///
-/// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-impl<T> IndexMut<(usize, usize)> for StridedBase<T>
-where
-    T: MutDenseData,
-{
-    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut Self::Output {
-        assert!(
-            row < self.nrows(),
-            "row {row} is out of bounds (max: {})",
-            self.nrows()
-        );
-        assert!(
-            col < self.ncols(),
-            "col {col} is out of bounds (max: {})",
-            self.ncols()
-        );
-        // SAFETY: We have checked that `row` and `col` are in-bounds.
-        unsafe { self.get_unchecked_mut(row, col) }
-    }
-}
-
-impl<'a, T> From<rowmajor::Ref<'a, T>> for StridedBase<&'a [T]> {
+impl<'a, T> From<rowmajor::Ref<'a, T>> for Strided<'a, T> {
     fn from(matrix: rowmajor::Ref<'a, T>) -> Self {
-        let nrows = matrix.nrows();
-        let ncols = matrix.ncols();
+        let layout = Layout::from(matrix.layout());
+        debug_assert_eq!(layout.linear_length(), matrix.layout().num_elements());
         Self {
-            data: matrix.into_slice(),
-            nrows,
-            ncols,
-            cstride: ncols,
+            ptr: matrix.as_nonnull(),
+            layout,
+            _lifetime: PhantomData,
         }
     }
 }
+
+// SAFETY: `Strided` only exposes shared access to its `T` elements (via `&T`/`&[T]`), so
+// sharing or transferring a `Strided<T>` across threads is sound whenever `T: Sync`.
+unsafe impl<T> Send for Strided<'_, T> where T: Sync {}
+// SAFETY: See above.
+unsafe impl<T> Sync for Strided<'_, T> where T: Sync {}
+
+impl<T> Clone for Strided<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Strided<'_, T> {}
+
+impl<'a, T> Reborrow<'a> for Strided<'_, T> {
+    type Target = Strided<'a, T>;
+    fn reborrow(&'a self) -> Self::Target {
+        *self
+    }
+}
+
+/// Iterator for [`Strided::rows`].
+#[derive(Debug)]
+pub struct Rows<'a, T> {
+    ptr: NonNull<T>,
+    remaining: usize,
+    ncols: usize,
+    cstride: usize,
+    _lifetime: PhantomData<&'a T>,
+}
+
+impl<'a, T> Rows<'a, T> {
+    fn new(strided: Strided<'a, T>) -> Self {
+        let layout = strided.layout();
+        Self {
+            ptr: strided.as_nonnull(),
+            remaining: layout.nrows(),
+            ncols: layout.ncols(),
+            cstride: layout.cstride(),
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+// SAFETY: `Rows` only yields shared `&[T]` slices borrowed from a `Strided`, so sharing or
+// transferring a `Rows<T>` across threads is sound whenever `T: Sync`.
+unsafe impl<T> Send for Rows<'_, T> where T: Sync {}
+// SAFETY: See above.
+unsafe impl<T> Sync for Rows<'_, T> where T: Sync {}
+
+impl<'a, T> Iterator for Rows<'a, T> {
+    type Item = &'a [T];
+    fn next(&mut self) -> Option<&'a [T]> {
+        self.remaining.checked_sub(1).map(|remaining| {
+            // SAFETY: The originating `Strided` guarantees `self.remaining` rows of
+            // `self.ncols` elements each are readable starting from `self.ptr`, so the
+            // current row is valid for `self.ncols` elements.
+            let item =
+                unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast_const(), self.ncols) };
+            self.remaining = remaining;
+            if remaining != 0 {
+                // SAFETY: There is at least one more row remaining, so advancing by
+                // `self.cstride` stays within (or one-past-the-end of) the originating
+                // allocation, per `Layout::linear_length`.
+                self.ptr = unsafe { self.ptr.add(self.cstride) };
+            }
+            item
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for Rows<'_, T> {}
+impl<T> std::iter::FusedIterator for Rows<'_, T> {}
+
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod tests {
@@ -517,73 +454,231 @@ mod tests {
     #[test]
     fn test_linear_length() {
         // If the number of rows is zero - the output should always be zero.
-        assert_eq!(linear_length(0, 1, 1), 0);
-        assert_eq!(linear_length(0, 2, 2), 0);
-        assert_eq!(linear_length(0, 2, 3), 0);
-        assert_eq!(linear_length(0, 2, 4), 0);
+        assert_eq!(linear_length(0, 1, 1).unwrap(), 0);
+        assert_eq!(linear_length(0, 2, 2).unwrap(), 0);
+        assert_eq!(linear_length(0, 2, 3).unwrap(), 0);
+        assert_eq!(linear_length(0, 2, 4).unwrap(), 0);
 
         // If `cstride == ncols`, then the computation should be trivial.
         for row in 1..10 {
             for col in 1..10 {
-                assert_eq!(linear_length(row, col, col), row * col);
+                assert_eq!(linear_length(row, col, col).unwrap(), row * col);
             }
         }
 
         // If there is only one row, then `cstride` should be ignored.
-        assert_eq!(linear_length(1, 5, 10), 5);
-        assert_eq!(linear_length(1, 7, 99), 7);
+        assert_eq!(linear_length(1, 5, 10).unwrap(), 5);
+        assert_eq!(linear_length(1, 7, 99).unwrap(), 7);
 
         // Otherwise, the computation is a block of `nrows - 1` chunks of `cstride` and then
         // `ncols`. Yes - this runs a bunch of computations.
         for row in 2..10 {
             for col in 0..10 {
                 for cstride in col..12 {
-                    assert_eq!(linear_length(row, col, cstride), (row - 1) * cstride + col);
+                    assert_eq!(
+                        linear_length(row, col, cstride).unwrap(),
+                        (row - 1) * cstride + col
+                    );
                 }
             }
         }
+
+        // Check OOB detection.
+        assert!(linear_length(usize::MAX, 2, 2).is_none());
+        assert!(linear_length(2, usize::MAX, 2).is_none());
+        assert!(linear_length(2, 2, usize::MAX).is_none());
     }
 
-    fn assert_is_static<T: 'static>(_x: &T) {}
-
     #[test]
-    fn try_from_error_misc() {
-        let x = TryFromError::<&[f32]> {
-            data: &[],
-            nrows: 1,
-            ncols: 2,
-            cstride: 3,
-        };
+    fn test_layout_new() {
+        // Valid layouts.
+        let layout = Layout::new(3, 4, 4).unwrap();
+        assert_eq!(layout.nrows(), 3);
+        assert_eq!(layout.ncols(), 4);
+        assert_eq!(layout.cstride(), 4);
+        assert_eq!(layout.linear_length(), 12);
 
-        let display = format!("{}", x);
-        let debug = format!("{:?}", x);
-        println!("debug = {}", debug);
-        assert!(debug.contains("TryFromError"));
-        assert!(debug.contains("data_len: 0"));
-        assert!(debug.contains("nrows: 1"));
-        assert!(debug.contains("ncols: 2"));
-        assert!(debug.contains("cstride: 3"));
+        let layout = Layout::new(3, 4, 6).unwrap();
+        assert_eq!(layout.linear_length(), 2 * 6 + 4);
 
-        let x = x.as_static();
-        assert_is_static(&x);
+        // `cstride == ncols` is fine, even at zero.
+        assert!(Layout::new(0, 0, 0).is_ok());
+
+        // Invalid stride: `cstride < ncols`.
+        let err = Layout::new(3, 4, 3).unwrap_err();
         assert_eq!(
-            display,
-            format!("{}", x),
-            "static version of the error must hav ethe same message"
+            err.to_string(),
+            "column stride 3 must be greater than or equal to number of columns 4"
+        );
+
+        // Overflow: linear length exceeds `usize::MAX`.
+        let err = Layout::new(usize::MAX, usize::MAX, usize::MAX).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "a {}x{} strided matrix has a length exceeding usize::MAX",
+                usize::MAX,
+                usize::MAX
+            )
         );
     }
 
-    fn expected_error(len: usize, nrows: usize, ncols: usize, cstride: usize) -> String {
-        format!(
-            "tried to construct a strided matrix with {nrows} rows and {ncols} cols and \
-             column stride {cstride} over a slice of length {} (expected {})",
-            len,
-            linear_length(nrows, ncols, cstride)
-        )
+    #[test]
+    fn test_try_from_data_errors() {
+        let m = rowmajor::Owned::<usize>::defaulted(10, 10);
+        let nrows = m.nrows();
+        let ncols = m.ncols();
+
+        // An invalid layout (`cstride < ncols`) is reported as a `LayoutError`, not a panic.
+        let err = Strided::try_from_data(m.as_slice(), 2, 2, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "column stride 1 must be greater than or equal to number of columns 2"
+        );
+
+        // A slice shorter than `Layout::linear_length` is reported as `InvalidLength`.
+        let err = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols + 1).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "argument of length 100 is shorter than the expected length 109",
+        );
+    }
+
+    #[test]
+    fn test_element_and_row_out_of_bounds() {
+        let m = create_test_matrix(3, 4);
+        let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
+
+        // In-bounds accesses succeed.
+        assert!(v.element(2, 3).is_some());
+        assert!(v.row(2).is_some());
+
+        // Out-of-bounds row and/or col return `None` rather than panicking.
+        assert!(v.element(3, 0).is_none(), "row out-of-bounds");
+        assert!(v.element(0, 4).is_none(), "col out-of-bounds");
+        assert!(v.element(3, 4).is_none(), "both out-of-bounds");
+        assert!(v.row(3).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "row 3 is out of bounds for a matrix with 3 rows")]
+    fn test_element_or_panic_panics_on_row() {
+        let m = create_test_matrix(3, 4);
+        let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
+        v.element_or_panic(3, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "col 4 is out of bounds for a matrix with 4 cols")]
+    fn test_element_or_panic_panics_on_col() {
+        let m = create_test_matrix(3, 4);
+        let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
+        v.element_or_panic(0, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "row 3 is out of bounds for a matrix with 3 rows")]
+    fn test_row_or_panic_panics() {
+        let m = create_test_matrix(3, 4);
+        let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
+        v.row_or_panic(3);
+    }
+
+    #[test]
+    fn test_clone_copy_reborrow() {
+        let m = create_test_matrix(3, 4);
+        let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
+
+        // `Copy`/`Clone` produce an independent handle to the same data.
+        let copied = v;
+        let cloned = Clone::clone(&v);
+        assert_eq!(v.as_ptr(), copied.as_ptr());
+        assert_eq!(v.as_ptr(), cloned.as_ptr());
+
+        // `Reborrow` should yield an equivalent view.
+        let reborrowed = v.reborrow();
+        assert_eq!(reborrowed.as_ptr(), v.as_ptr());
+        assert_eq!(reborrowed.nrows(), v.nrows());
+        assert_eq!(reborrowed.ncols(), v.ncols());
+    }
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Strided<'_, u8>>();
+        assert_send_sync::<Rows<'_, u8>>();
+    }
+
+    #[test]
+    fn test_rows_iterator_properties() {
+        let m = create_test_matrix(4, 3);
+        let v = Strided::try_from_data(&m.as_slice()[1..], m.nrows(), m.ncols() - 1, m.ncols())
+            .unwrap();
+
+        let mut rows = v.rows();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.size_hint(), (4, Some(4)));
+
+        for expected_row in 0..4 {
+            let row = rows.next().unwrap();
+            assert_eq!(row, &m.row(expected_row)[1..]);
+        }
+
+        // Exhausted iterators keep returning `None` (`FusedIterator`).
+        assert_eq!(rows.next(), None);
+        assert_eq!(rows.next(), None);
+        assert_eq!(rows.len(), 0);
+    }
+
+    #[test]
+    fn test_rows_iterator_zero_rows() {
+        let m = create_test_matrix(5, 5);
+        let v = Strided::try_from_data(m.as_slice(), 0, 4, 5).unwrap();
+
+        let mut rows = v.rows();
+        assert_eq!(rows.len(), 0);
+        assert_eq!(rows.next(), None);
+    }
+
+    #[test]
+    fn test_rows_iterator_zero_cols() {
+        let m = create_test_matrix(5, 5);
+        let v = Strided::try_from_data(m.as_slice(), 5, 0, 5).unwrap();
+
+        let rows = v.rows();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.size_hint(), (5, Some(5)));
+
+        let mut count = 0;
+        for r in rows {
+            assert!(r.is_empty());
+            count += 1;
+        }
+
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_rows_iterator_zero_cstride() {
+        let m = create_test_matrix(5, 5);
+        let v = Strided::try_from_data(m.as_slice(), 5, 0, 0).unwrap();
+
+        let rows = v.rows();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.size_hint(), (5, Some(5)));
+
+        let mut count = 0;
+        for r in rows {
+            assert!(r.is_empty());
+            count += 1;
+        }
+
+        assert_eq!(count, 5);
     }
 
     // Test that the contents of `dut` match those in the dense 2d matrix.
-    fn test_indexing(dut: StridedView<'_, usize>, expected: views::MatrixView<'_, usize>) {
+    fn test_indexing(dut: Strided<'_, usize>, expected: views::MatrixView<'_, usize>) {
         assert_eq!(dut.nrows(), expected.nrows());
         assert_eq!(dut.ncols(), expected.ncols());
 
@@ -597,9 +692,19 @@ mod tests {
         // Compare via linear indexing.
         for row in 0..dut.nrows() {
             for col in 0..dut.ncols() {
+                let e = expected[(row, col)];
+
                 assert_eq!(
-                    dut[(row, col)],
-                    expected[(row, col)],
+                    *dut.element_or_panic(row, col),
+                    e,
+                    "failed on (row, col) = ({}, {})",
+                    row,
+                    col
+                );
+
+                assert_eq!(
+                    *dut.element(row, col).unwrap(),
+                    e,
                     "failed on (row, col) = ({}, {})",
                     row,
                     col
@@ -609,11 +714,23 @@ mod tests {
 
         // Compare via row.
         for row in 0..dut.nrows() {
-            assert_eq!(dut.row(row), expected.row(row), "failed on row {}", row);
+            assert_eq!(
+                dut.row_or_panic(row),
+                expected.row(row),
+                "failed on row {}",
+                row
+            );
+
+            assert_eq!(
+                dut.row(row).unwrap(),
+                expected.row(row),
+                "failed on row {}",
+                row
+            );
         }
 
         // Compare via row iterators.
-        assert!(dut.row_iter().eq(expected.row_iter()));
+        assert!(dut.rows().eq(expected.row_iter()));
     }
 
     // Create a base Matrix with the following pattern:
@@ -625,24 +742,21 @@ mod tests {
     // ```
     fn create_test_matrix(nrows: usize, ncols: usize) -> views::Matrix<usize> {
         let mut i = 0;
-        views::Matrix::new(
-            views::Init(|| {
-                let v = i;
-                i += 1;
-                v
-            }),
-            nrows,
-            ncols,
-        )
+        rowmajor::Owned::from_fn(nrows, ncols, || {
+            let v = i;
+            i += 1;
+            v
+        })
+        .unwrap()
     }
 
     #[test]
     fn test_basic_indexing() {
         let m = create_test_matrix(5, 3);
 
-        // First - test a dense StridedView over the entire matrix.
+        // First - test a dense Strided view over the entire matrix.
         let ptr = m.as_ptr();
-        let v = StridedView::try_from(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
+        let v = Strided::try_from_data(m.as_slice(), m.nrows(), m.ncols(), m.ncols()).unwrap();
         assert_eq!(v.as_ptr(), ptr, "base pointer was not preserved");
 
         assert_eq!(v.nrows(), m.nrows());
@@ -651,7 +765,7 @@ mod tests {
         test_indexing(v, m.as_view());
 
         // Now - create a truly strided view over the first two columns.
-        let v = StridedView::try_from(
+        let v = Strided::try_from_data(
             &(m.as_slice()[..(4 * m.ncols() + 2)]),
             m.nrows(),
             2,
@@ -661,7 +775,7 @@ mod tests {
         assert_eq!(v.as_ptr(), ptr, "base pointer was not preserved");
 
         // Create the expected matrix.
-        let mut expected = views::Matrix::new(0, 5, 2);
+        let mut expected = rowmajor::Owned::copied(0, 5, 2);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 expected[(row, col)] = m[(row, col)];
@@ -670,8 +784,8 @@ mod tests {
         test_indexing(v, expected.as_view());
 
         // Create a strided view over the last two columns.
-        let v = StridedView::try_from(&(m.as_slice()[1..]), m.nrows(), 2, m.ncols()).unwrap();
-        let mut expected = views::Matrix::new(0, 5, 2);
+        let v = Strided::try_from_data(&(m.as_slice()[1..]), m.nrows(), 2, m.ncols()).unwrap();
+        let mut expected = rowmajor::Owned::copied(0, 5, 2);
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
                 expected[(row, col)] = m[(row, col + 1)];
@@ -681,108 +795,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mutable_indexing() {
-        // The source matrix.
-        let src = create_test_matrix(5, 4);
-
-        // Initialize using 2d indexing.
-        {
-            let mut dst = views::Matrix::<usize>::new(0, 5, 10);
-
-            let ptr = dst.as_ptr();
-
-            let ncols = src.ncols();
-            let nrows = src.nrows();
-            let cstride = dst.ncols();
-            let mut dst_view =
-                MutStridedView::try_shrink_from_mut(dst.as_mut_slice(), nrows, ncols, cstride)
-                    .unwrap();
-
-            assert_eq!(dst_view.as_ptr(), ptr);
-            assert_eq!(dst_view.as_mut_ptr().cast_const(), ptr);
-            assert_eq!(dst_view.nrows(), nrows);
-            assert_eq!(dst_view.ncols(), ncols);
-            assert_eq!(dst_view.cstride(), cstride);
-
-            // Initialize using linear indexing.
-            for row in 0..dst_view.nrows() {
-                for col in 0..dst_view.ncols() {
-                    dst_view[(row, col)] = src[(row, col)]
-                }
-            }
-
-            // Check equality.
-            test_indexing(dst_view.as_view(), src.as_view());
-        }
-
-        // Initialize using row-wise indexing.
-        {
-            let mut dst = views::Matrix::<usize>::new(0, 5, 10);
-
-            let ptr = dst.as_ptr();
-
-            let ncols = src.ncols();
-            let nrows = src.nrows();
-            let cstride = dst.ncols();
-            let mut dst_view =
-                MutStridedView::try_shrink_from_mut(dst.as_mut_slice(), nrows, ncols, cstride)
-                    .unwrap();
-
-            assert_eq!(dst_view.as_ptr(), ptr);
-            assert_eq!(dst_view.as_mut_ptr().cast_const(), ptr);
-            assert_eq!(dst_view.nrows(), nrows);
-            assert_eq!(dst_view.ncols(), ncols);
-            assert_eq!(dst_view.cstride(), cstride);
-
-            // Initialize by looping over rows.
-            for row in 0..dst_view.nrows() {
-                dst_view.row_mut(row).copy_from_slice(src.row(row))
-            }
-
-            // Check equality.
-            test_indexing(dst_view.as_view(), src.as_view());
-        }
-
-        // Initialize using row-iterator indexing.
-        {
-            let mut dst = views::Matrix::<usize>::new(0, 5, 10);
-
-            let offset = 2;
-            // SAFETY: The underlying allocation is valid for much more than 2 elements.
-            let ptr = unsafe { dst.as_ptr().add(offset) };
-
-            let ncols = src.ncols();
-            let nrows = src.nrows();
-            let cstride = dst.ncols();
-            let mut dst_view = MutStridedView::try_shrink_from_mut(
-                &mut dst.as_mut_slice()[2..],
-                nrows,
-                ncols,
-                cstride,
-            )
-            .unwrap();
-
-            assert_eq!(dst_view.as_ptr(), ptr);
-            assert_eq!(dst_view.as_mut_ptr().cast_const(), ptr);
-            assert_eq!(dst_view.nrows(), nrows);
-            assert_eq!(dst_view.ncols(), ncols);
-            assert_eq!(dst_view.cstride(), cstride);
-
-            // Initialize using row iterators.
-            for (d, s) in std::iter::zip(dst_view.row_iter_mut(), src.row_iter()) {
-                d.copy_from_slice(s)
-            }
-
-            // Check equality.
-            test_indexing(dst_view.as_view(), src.as_view());
-        }
-    }
-
-    #[test]
     fn matrix_conversion() {
         let m = create_test_matrix(3, 4);
         let ptr = m.as_ptr();
-        let v: StridedView<_> = m.as_view().into();
+        let v: Strided<_> = m.as_view().into();
         assert_eq!(v.as_ptr(), ptr);
         test_indexing(v, m.as_view());
     }
@@ -790,186 +806,47 @@ mod tests {
     #[test]
     fn test_zero_sized() {
         let m = create_test_matrix(5, 5);
-        let v = StridedView::try_shrink_from(m.as_slice(), 0, 4, 5).unwrap();
+        let v = Strided::try_from_data(m.as_slice(), 0, 4, 5).unwrap();
 
         assert_eq!(v.nrows(), 0);
         assert_eq!(v.ncols(), 4);
         assert_eq!(v.cstride(), 5);
 
-        let v = StridedView::try_shrink_from(m.as_slice(), 5, 0, 5).unwrap();
+        let v = Strided::try_from_data(m.as_slice(), 5, 0, 5).unwrap();
         assert_eq!(v.nrows(), 5);
         assert_eq!(v.ncols(), 0);
         assert_eq!(v.cstride(), 5);
 
         for row in 0..v.nrows() {
             let empty: &[usize] = &[];
-            assert_eq!(v.row(row), empty);
+            assert_eq!(v.row(row).unwrap(), empty);
         }
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_row_iter_panics() {
-        let m = create_test_matrix(5, 5);
-        let v = StridedView::try_shrink_from(m.as_slice(), 5, 0, 5).unwrap();
-        let _ = v.row_iter();
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_row_iter_mut_panics() {
-        let mut m = create_test_matrix(5, 5);
-        let mut v = MutStridedView::try_shrink_from_mut(m.as_mut_slice(), 5, 0, 5).unwrap();
-        let _ = v.row_iter_mut();
     }
 
     #[test]
     fn test_try_shrink_from() {
         // Exact is okay.
-        let m = views::Matrix::<usize>::new(0, 10, 10);
+        let m = rowmajor::Owned::<usize>::defaulted(10, 10);
         let nrows = m.nrows();
         let ncols = m.ncols();
-        let s = StridedView::try_shrink_from(m.as_slice(), nrows, ncols, ncols).unwrap();
+        let s = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols).unwrap();
         assert_eq!(s.as_slice(), m.as_slice());
 
         // Giving a slice that is too large is okay.
-        let s = StridedView::try_shrink_from(m.as_slice(), nrows, 5, ncols).unwrap();
+        let s = Strided::try_from_data(m.as_slice(), nrows, 5, ncols).unwrap();
         assert_eq!(s.as_ptr(), m.as_ptr());
 
-        // Too small is a problem.
-        let s = StridedView::try_shrink_from(m.as_slice(), nrows, ncols, ncols + 1);
+        // Too small is a problem, and is reported as an `Err`, not a panic.
+        let s = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols + 1);
         assert!(s.is_err());
-        let err = s.unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            expected_error(m.as_slice().len(), nrows, ncols, ncols + 1)
-        );
-        assert_eq!(err.into_inner(), m.as_slice());
     }
 
     #[test]
-    #[should_panic(expected = "cstride must be greater than or equal to ncols")]
-    fn test_try_shink_from_panics() {
-        let m = views::Matrix::<usize>::new(0, 4, 4);
-        let _ = StridedView::try_shrink_from(m.as_slice(), 2, 2, 1);
-    }
-
-    #[test]
-    fn test_try_shrink_from_mut() {
-        // Exact is okay.
-        let mut m = views::Matrix::<usize>::new(0, 10, 10);
-
-        let nrows = m.nrows();
-        let ncols = m.ncols();
-        let ptr = m.as_ptr();
-        let len = m.as_slice().len();
-
-        let s = MutStridedView::try_shrink_from_mut(m.as_mut_slice(), nrows, ncols, ncols).unwrap();
-        assert_eq!(s.as_ptr(), ptr);
-        assert_eq!(s.as_slice().len(), len);
-
-        // Giving a slice that is too large is okay.
-        let s = MutStridedView::try_shrink_from_mut(m.as_mut_slice(), nrows, 5, ncols).unwrap();
-        assert_eq!(s.as_ptr(), ptr);
-
-        // Too small is a problem.
-        let s = MutStridedView::try_shrink_from_mut(m.as_mut_slice(), nrows, ncols, ncols + 1);
-        assert!(s.is_err());
-        let err = s.unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            expected_error(len, nrows, ncols, ncols + 1)
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "cstride must be greater than or equal to ncols")]
-    fn test_try_shink_from_mut_panics() {
-        let mut m = views::Matrix::<usize>::new(0, 4, 4);
-        let _ = MutStridedView::try_shrink_from_mut(m.as_mut_slice(), 2, 2, 1);
-    }
-
-    #[test]
-    fn test_try_from() {
-        // Exact is okay.
-        let m = views::Matrix::<usize>::new(0, 10, 10);
-        let nrows = m.nrows();
-        let ncols = m.ncols();
-        let s = StridedView::try_from(m.as_slice(), nrows, ncols, ncols).unwrap();
-        assert_eq!(s.as_slice(), m.as_slice());
-
-        // Giving a slice that is too large is a problem.
-        let s = StridedView::try_from(m.as_slice(), nrows, 5, ncols);
-        assert!(s.is_err());
-        let err = s.unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            expected_error(m.as_slice().len(), nrows, 5, ncols)
-        );
-
-        // Too small is a problem.
-        let s = StridedView::try_from(m.as_slice(), nrows, ncols, ncols + 1);
-        assert!(s.is_err());
-        let err = s.unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            expected_error(m.as_slice().len(), nrows, ncols, ncols + 1)
-        );
-        assert_eq!(err.into_inner(), m.as_slice());
-    }
-
-    #[test]
-    #[should_panic(expected = "cstride must be greater than or equal to ncols")]
-    fn test_try_frompanics() {
-        let mut m = views::Matrix::<usize>::new(0, 4, 4);
-        let _ = MutStridedView::try_from(m.as_mut_slice(), 2, 2, 1);
-    }
-
-    #[test]
-    #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
-    fn test_get_row_panics() {
-        let m = views::Matrix::<usize>::new(0, 3, 7);
-        let v: StridedView<_> = m.as_view().into();
-        v.row(3);
-    }
-
-    #[test]
-    #[should_panic(expected = "tried to access row 3 of a matrix with 3 rows")]
-    fn test_get_row_mut_panics() {
-        let mut m = views::Matrix::<usize>::new(0, 3, 7);
-        let mut v: MutStridedView<_> = m.as_mut_view().into();
-        v.row_mut(3);
-    }
-
-    #[test]
-    #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
-    fn test_index_panics_row() {
-        let m = views::Matrix::<usize>::new(0, 3, 7);
-        let v: StridedView<_> = m.as_view().into();
-        let _ = v[(3, 2)];
-    }
-
-    #[test]
-    #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
-    fn test_index_panics_col() {
-        let m = views::Matrix::<usize>::new(0, 3, 7);
-        let v: StridedView<_> = m.as_view().into();
-        let _ = v[(2, 7)];
-    }
-
-    #[test]
-    #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
-    fn test_index_mut_panics_row() {
-        let mut m = views::Matrix::<usize>::new(0, 3, 7);
-        let mut v: MutStridedView<_> = m.as_mut_view().into();
-        v[(3, 2)] = 1;
-    }
-
-    #[test]
-    #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
-    fn test_index_mut_panics_col() {
-        let mut m = views::Matrix::<usize>::new(0, 3, 7);
-        let mut v: MutStridedView<_> = m.as_mut_view().into();
-        v[(2, 7)] = 1;
+    fn test_invalid_stride_is_an_error_not_a_panic() {
+        // Constructing a `Strided` with an invalid layout (`cstride < ncols`) returns an
+        // `Err` rather than panicking - only unwrapping the result panics.
+        let m = rowmajor::Owned::<usize>::defaulted(4, 4);
+        let err = Strided::try_from_data(m.as_slice(), 2, 2, 1).unwrap_err();
+        assert!(matches!(err, TryFromError::LayoutError(_)));
     }
 }

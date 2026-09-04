@@ -752,6 +752,15 @@ impl<'a, T> Reborrow<'a> for Ref<'_, T> {
 
 impl_matrix!(T, Ref<'_, T>);
 
+impl<T> PartialEq for Ref<'_, T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.layout() == other.layout() && self.as_slice() == other.as_slice()
+    }
+}
+
 //-----//
 // Mut //
 //-----//
@@ -865,6 +874,26 @@ enum TryFromErrorInner {
     )]
     Mismatch { layout: Layout, len: usize },
 }
+
+////////////////
+// Partial Eq //
+////////////////
+
+macro_rules! partial_eq {
+    ($T:ident, $lhs:ty, $rhs:ty) => {
+        impl<$T> PartialEq<$rhs> for $lhs
+        where
+            $T: PartialEq,
+        {
+            fn eq(&self, rhs: &$rhs) -> bool {
+                self.as_view().eq(&rhs.as_view())
+            }
+        }
+    }
+}
+
+partial_eq!(T, Owned<T>, Owned<T>);
+partial_eq!(T, Mut<'_, T>, Mut<'_, T>);
 
 //-------//
 // Utils //

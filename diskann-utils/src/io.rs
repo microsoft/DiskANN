@@ -16,7 +16,7 @@ use std::io::{Read, Seek, Write};
 use diskann_wide::{LoHi, SplitJoin};
 use thiserror::Error;
 
-use crate::views::rowmajor::{self, MatrixMut, Matrix};
+use crate::views::rowmajor::{self, Matrix, MatrixMut};
 
 /// Read a matrix of `T` from the DiskANN binary format (see [module docs](self)).
 ///
@@ -31,11 +31,13 @@ where
 
     let layout = match rowmajor::Layout::new_for::<T>(npoints, ndims) {
         Ok(layout) => layout,
-        Err(_) => return Err(ReadBinError::Overflow {
-            npoints: metadata.npoints_u32(),
-            ndims: metadata.ndims_u32(),
-            type_size,
-        }),
+        Err(_) => {
+            return Err(ReadBinError::Overflow {
+                npoints: metadata.npoints_u32(),
+                ndims: metadata.ndims_u32(),
+                type_size,
+            })
+        }
     };
 
     let expected_bytes = layout.num_elements() * std::mem::size_of::<T>();
@@ -63,7 +65,10 @@ where
 /// Write a matrix of `T` in the DiskANN binary format (see [module docs](self)).
 ///
 /// Returns the total number of bytes written.
-pub fn write_bin<T>(data: rowmajor::Ref<'_, T>, writer: &mut impl Write) -> Result<usize, SaveBinError>
+pub fn write_bin<T>(
+    data: rowmajor::Ref<'_, T>,
+    writer: &mut impl Write,
+) -> Result<usize, SaveBinError>
 where
     T: bytemuck::Pod,
 {
@@ -215,15 +220,12 @@ mod tests {
     #[test]
     fn round_trip_f32() {
         let mut counter = 1.0f32;
-        let matrix = rowmajor::Owned::<f32>::from_fn(
-            3,
-            4,
-            || {
-                let v = counter;
-                counter += 1.0;
-                v
-            },
-        ).unwrap();
+        let matrix = rowmajor::Owned::<f32>::from_fn(3, 4, || {
+            let v = counter;
+            counter += 1.0;
+            v
+        })
+        .unwrap();
 
         assert_eq!(
             matrix.as_slice(),
