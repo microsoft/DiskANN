@@ -7,7 +7,7 @@
 
 use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDVector, SupportedLaneCount};
 
-/// Default SIMD representation used by every PiPNN numerical stage.
+/// Default SIMD representation used by both PiPNN ranking kernels.
 ///
 /// This alias is the single build-time width selection.
 type DefaultVector<A> = <A as Architecture>::f32x16;
@@ -41,7 +41,7 @@ where
 
 /// PiPNN SIMD representation for one architecture.
 pub(super) trait PiPNNSIMDSchema: Architecture {
-    /// SIMD vector used by every numerical stage.
+    /// SIMD vector used by both ranking kernels.
     type Vector: PiPNNSIMDVector<Arch = Self>;
 }
 

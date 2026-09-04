@@ -14,9 +14,8 @@ use crate::{ANNError, ANNResult};
 use diskann_linalg::Transpose;
 use diskann_utils::views::MatrixView;
 use diskann_vector::{Norm, norm::FastL2NormSquared};
-use diskann_wide::SIMDVector;
 
-use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, simd::PiPNNSIMDSchema};
+use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 
 /// Store leader values with immutable metric data.
 ///
@@ -46,14 +45,11 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     /// Compute one row-major point-to-leader ranking buffer.
     ///
     /// `storage` has `points.nrows() * leader_count` elements.
-    fn compute_distances<A>(
-        arch: A,
+    fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
         storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema;
+    ) -> ANNResult<()>;
 }
 
 /// Compute L2 squared norms with the established sequential reduction order.
@@ -75,28 +71,6 @@ fn cosine_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
         .collect()
 }
 
-/// Copy one leader value into the same column of each point row.
-///
-/// L2 uses this operation to initialize every row with leader squared norms.
-/// Full SIMD groups use dispatched vector stores. The scalar tail copies the rest.
-fn fill_rows<A>(arch: A, rows: &mut [f32], row_values: &[f32])
-where
-    A: PiPNNSIMDSchema,
-{
-    let row_length = row_values.len();
-    let simd_end = row_length - row_length % A::Vector::LANES;
-    for row in rows.chunks_exact_mut(row_length) {
-        for start in (0..simd_end).step_by(A::Vector::LANES) {
-            // SAFETY: both offsets start complete SIMD groups in live slices.
-            unsafe {
-                A::Vector::load_simd(arch, row_values.as_ptr().add(start))
-                    .store_simd(row.as_mut_ptr().add(start));
-            }
-        }
-        row[simd_end..].copy_from_slice(&row_values[simd_end..]);
-    }
-}
-
 impl PartitionMetric for L2 {
     type Leaders<'a> = PartitionLeaders<'a, OnceLock<Vec<f32>>>;
 
@@ -111,20 +85,24 @@ impl PartitionMetric for L2 {
         leaders.values.nrows()
     }
 
-    fn compute_distances<A>(
-        arch: A,
+    fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
         storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    ) -> ANNResult<()> {
         // The point norm is constant across a point row. It cannot change ranking.
         let leader_norms = leaders
             .cache
             .get_or_init(|| l2_squared_norms(leaders.values));
-        arch.run(|| fill_rows(arch, storage, leader_norms));
+        // Initialize each point row before GEMM adds the dot-product term.
+        let leader_count = leader_norms.len();
+        for row in storage.chunks_exact_mut(leader_count) {
+            let mut leader = 0;
+            while leader < leader_count {
+                row[leader] = leader_norms[leader];
+                leader += 1;
+            }
+        }
         diskann_linalg::sgemm(
             Transpose::None,
             Transpose::Ordinary,
@@ -156,15 +134,11 @@ impl PartitionMetric for Cosine {
         leaders.values.nrows()
     }
 
-    fn compute_distances<A>(
-        _arch: A,
+    fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
         storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    ) -> ANNResult<()> {
         diskann_linalg::sgemm(
             Transpose::None,
             Transpose::Ordinary,
@@ -207,15 +181,11 @@ impl PartitionMetric for CosineNormalized {
         leaders.values.nrows()
     }
 
-    fn compute_distances<A>(
-        _arch: A,
+    fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
         storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    ) -> ANNResult<()> {
         diskann_linalg::sgemm(
             Transpose::None,
             Transpose::Ordinary,
@@ -244,15 +214,11 @@ impl PartitionMetric for InnerProduct {
         leaders.values.nrows()
     }
 
-    fn compute_distances<A>(
-        _arch: A,
+    fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
         storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    ) -> ANNResult<()> {
         diskann_linalg::sgemm(
             Transpose::None,
             Transpose::Ordinary,
@@ -274,7 +240,6 @@ impl PartitionMetric for InnerProduct {
 #[allow(clippy::unwrap_used, reason = "test matrices have fixed valid shapes")]
 mod tests {
     use super::*;
-    use diskann_wide::ARCH;
 
     const DIMENSION_COUNT: usize = 2;
     const STALE_DISTANCE: f32 = 99.0;
@@ -291,7 +256,7 @@ mod tests {
         let leaders = M::create_leaders(matrix(&leader, 1));
         let mut storage = [STALE_DISTANCE];
 
-        M::compute_distances(ARCH, matrix(&point, 1), &leaders, &mut storage).unwrap();
+        M::compute_distances(matrix(&point, 1), &leaders, &mut storage).unwrap();
 
         storage[0]
     }
@@ -344,7 +309,7 @@ mod tests {
             let mut distance = [STALE_DISTANCE];
 
             // When
-            L2::compute_distances(ARCH, point_matrix, &leaders, &mut distance).unwrap();
+            L2::compute_distances(point_matrix, &leaders, &mut distance).unwrap();
             let actual = leaders.cache.get().unwrap()[0];
 
             // Then
@@ -425,7 +390,6 @@ mod tests {
             let fresh_leaders = L2::create_leaders(matrix(&leader_values, leader_count));
             let mut discarded_first_output = [STALE_DISTANCE; 2];
             L2::compute_distances(
-                ARCH,
                 matrix(&first_point, 1),
                 &reused_leaders,
                 &mut discarded_first_output,
@@ -436,19 +400,13 @@ mod tests {
 
             // When
             L2::compute_distances(
-                ARCH,
                 matrix(&second_point, 1),
                 &reused_leaders,
                 &mut reused_output,
             )
             .unwrap();
-            L2::compute_distances(
-                ARCH,
-                matrix(&second_point, 1),
-                &fresh_leaders,
-                &mut fresh_output,
-            )
-            .unwrap();
+            L2::compute_distances(matrix(&second_point, 1), &fresh_leaders, &mut fresh_output)
+                .unwrap();
 
             // Then
             assert_eq!(reused_output, expected);
@@ -472,7 +430,6 @@ mod tests {
             let fresh_leaders = Cosine::create_leaders(matrix(&leader_values, leader_count));
             let mut discarded_first_output = [STALE_DISTANCE; 2];
             Cosine::compute_distances(
-                ARCH,
                 matrix(&first_point, 1),
                 &reused_leaders,
                 &mut discarded_first_output,
@@ -483,19 +440,13 @@ mod tests {
 
             // When
             Cosine::compute_distances(
-                ARCH,
                 matrix(&second_point, 1),
                 &reused_leaders,
                 &mut reused_output,
             )
             .unwrap();
-            Cosine::compute_distances(
-                ARCH,
-                matrix(&second_point, 1),
-                &fresh_leaders,
-                &mut fresh_output,
-            )
-            .unwrap();
+            Cosine::compute_distances(matrix(&second_point, 1), &fresh_leaders, &mut fresh_output)
+                .unwrap();
 
             // Then
             assert_eq!(reused_output, expected);

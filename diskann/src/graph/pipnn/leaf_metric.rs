@@ -10,9 +10,8 @@
 
 use crate::{ANNError, ANNResult};
 use diskann_utils::views::MatrixView;
-use diskann_wide::SIMDVector;
 
-use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance, simd::PiPNNSIMDSchema};
+use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 
 /// Fill one flattened lower-triangular ranking buffer.
 ///
@@ -22,56 +21,27 @@ pub(super) trait LeafMetric: Send + Sync + 'static {
     /// Compute ranking distances for all unordered point pairs.
     ///
     /// `storage` has `points.nrows() * points.nrows()` elements.
-    fn compute_distances<A>(
-        arch: A,
-        points: MatrixView<'_, f32>,
-        storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema;
-}
-
-/// Fill each lower-triangle entry with the two endpoint squared norms.
-///
-/// Each SIMD operation copies one full group of norm sums. The scalar loop
-/// copies the remaining entries. The GEMM operation adds the dot-product term.
-fn fill_lower_norm_sums<A>(arch: A, storage: &mut [f32], points: usize, norms: &[f32])
-where
-    A: PiPNNSIMDSchema,
-{
-    for source in 0..points {
-        let row = &mut storage[source * points..source * points + source + 1];
-        let simd_end = row.len() - row.len() % A::Vector::LANES;
-        let source_norm = A::Vector::splat(arch, norms[source]);
-        for target in (0..simd_end).step_by(A::Vector::LANES) {
-            // SAFETY: both offsets start complete SIMD groups in live slices.
-            unsafe {
-                let target_norms = A::Vector::load_simd(arch, norms.as_ptr().add(target));
-                (source_norm + target_norms).store_simd(row.as_mut_ptr().add(target));
-            }
-        }
-        for target in simd_end..row.len() {
-            row[target] = norms[source] + norms[target];
-        }
-    }
+    fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()>;
 }
 
 impl LeafMetric for L2 {
-    fn compute_distances<A>(
-        arch: A,
-        points: MatrixView<'_, f32>,
-        storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
         let point_count = points.nrows();
         // The expanded L2 formula is `||x||² + ||y||² - 2(x·y)`.
         let squared_norms: Vec<f32> = points
             .row_iter()
             .map(|point| point.iter().map(|value| value * value).sum())
             .collect();
-        arch.run(|| fill_lower_norm_sums(arch, storage, point_count, &squared_norms));
+        // Initialize the first two terms before GEMM adds the dot-product term.
+        for source in 0..point_count {
+            let row = &mut storage[source * point_count..source * point_count + source + 1];
+            let source_norm = squared_norms[source];
+            let mut target = 0;
+            while target < row.len() {
+                row[target] = source_norm + squared_norms[target];
+                target += 1;
+            }
+        }
         diskann_linalg::sgemm_aat_lower_add(
             point_count,
             points.ncols(),
@@ -85,14 +55,7 @@ impl LeafMetric for L2 {
 }
 
 impl LeafMetric for Cosine {
-    fn compute_distances<A>(
-        _arch: A,
-        points: MatrixView<'_, f32>,
-        storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
         let point_count = points.nrows();
         // The diagonal supplies each point norm after GEMM computes all dots.
         diskann_linalg::sgemm_aat_lower(
@@ -118,14 +81,7 @@ impl LeafMetric for Cosine {
 }
 
 impl LeafMetric for CosineNormalized {
-    fn compute_distances<A>(
-        _arch: A,
-        points: MatrixView<'_, f32>,
-        storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
         let point_count = points.nrows();
         // The constant in `1 - dot` does not change nearest-first order.
         diskann_linalg::sgemm_aat_lower(
@@ -141,14 +97,7 @@ impl LeafMetric for CosineNormalized {
 }
 
 impl LeafMetric for InnerProduct {
-    fn compute_distances<A>(
-        _arch: A,
-        points: MatrixView<'_, f32>,
-        storage: &mut [f32],
-    ) -> ANNResult<()>
-    where
-        A: PiPNNSIMDSchema,
-    {
+    fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
         let point_count = points.nrows();
         // DiskANN ranks inner products in descending order through `-dot`.
         diskann_linalg::sgemm_aat_lower(
@@ -167,7 +116,6 @@ impl LeafMetric for InnerProduct {
 #[allow(clippy::unwrap_used, reason = "test matrices have fixed valid shapes")]
 mod tests {
     use super::*;
-    use diskann_wide::ARCH;
     use rstest::rstest;
 
     const POINT_COUNT: usize = 2;
@@ -190,7 +138,7 @@ mod tests {
         let points = MatrixView::try_from(&point_values[..], POINT_COUNT, DIMENSION_COUNT).unwrap();
         let mut storage = [STALE_DISTANCE; POINT_COUNT * POINT_COUNT];
 
-        M::compute_distances(ARCH, points, &mut storage).unwrap();
+        M::compute_distances(points, &mut storage).unwrap();
 
         storage[SECOND_POINT * POINT_COUNT + FIRST_POINT]
     }

@@ -110,7 +110,7 @@ where
     if distance_scratch.len() < distance_count {
         distance_scratch.resize(distance_count, 0.0);
     }
-    M::compute_distances(arch, points, &mut distance_scratch[..distance_count])?;
+    M::compute_distances(points, &mut distance_scratch[..distance_count])?;
     rank_leaf_distances(
         arch,
         &distance_scratch[..distance_count],

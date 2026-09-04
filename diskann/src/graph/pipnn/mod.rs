@@ -5,9 +5,8 @@
 
 //! Numerical kernels for PiPNN graph construction.
 //!
-//! Metric modules fill flattened distance buffers. Kernel modules traverse those
-//! buffers and retain nearest neighbors. Callers select architecture `A` and
-//! metric `M` once for each graph build.
+//! Metric modules fill portable distance buffers. Kernel modules use architecture
+//! `A` to traverse those buffers. Callers select metric `M` once per graph build.
 
 #[allow(dead_code)]
 mod leaf_kernel;
