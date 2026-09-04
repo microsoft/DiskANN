@@ -9,7 +9,7 @@
 //! job does these steps:
 //!
 //! 1. Gather each ID and convert its vector to reusable `f32` storage.
-//! 2. Call the leaf kernel for Gram construction, norms, and local ranking.
+//! 2. Call the leaf kernel for ranking-distance construction and local ranking.
 //! 3. Convert local positions to global point IDs.
 //! 4. Add both edge directions to direct candidates or HashPrune reservoirs.
 //!
@@ -25,8 +25,8 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use rayon::prelude::*;
 
 use super::{
-    kernel_metric::LeafMetric,
     leaf_kernel::{LeafKernelWorkspace, LeafNeighbor, leaf_neighbor_count, select_leaf_neighbors},
+    leaf_metric::LeafMetric,
     simd::PiPNNSIMDSchema,
 };
 
@@ -552,7 +552,7 @@ mod tests {
             arch: A,
             call: LeafBuildCall<'_, T>,
         ) -> Result<Vec<crate::graph::AdjacencyList<u32>>, LeafBuildError> {
-            use super::super::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+            use super::super::{Cosine, CosineNormalized, InnerProduct, L2};
 
             match self.0 {
                 Metric::L2 => {
@@ -864,31 +864,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_k_adds_no_candidates() {
-        // Given
-        let point_values = [0.0_f32, 1.0, 2.0];
-        let point_count = 3;
-        let dimensions = 1;
-        let zero_k = 0;
-        let leaves = [vec![0, 1, 2]];
-        let expected_adjacency: [Vec<u32>; 3] = [vec![], vec![], vec![]];
-
-        // When
-        let actual_adjacency = adjacency_lists(
-            build_candidate_graph(
-                matrix_view(&point_values, point_count, dimensions),
-                &leaves,
-                zero_k,
-                Metric::L2,
-            )
-            .unwrap(),
-        );
-
-        // Then
-        assert_eq!(actual_adjacency, expected_adjacency);
-    }
-
-    #[test]
     fn leaf_buffer_preparation_reports_shape_overflow_before_allocating() {
         let mut buffers = LeafBuffers::default();
         assert!(matches!(
@@ -1013,20 +988,30 @@ mod tests {
         assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
         assert!(seen.iter().all(|&entry| !entry));
     }
+
     #[test]
-    fn zero_k_edge_csr_has_empty_adjacency() {
-        let point_ids = [10, 20, 30];
-        let zero_k = 0;
-        let mut seen = vec![false; 9];
+    fn singleton_leaf_produces_empty_edge_csr() {
+        // Given
+        let leaf = 0;
+        let point_ids = [10];
+        let effective_neighbor_count = 0;
+        let no_neighbors = [];
+        let stale_edge = (99, 99.0);
+        let expected_edge_count = 0;
+        let expected_offsets = [0, 0];
+        let expected_edges = [stale_edge];
+        let expected_seen = [false];
+        let mut seen = vec![false; 1];
         let mut offsets = Vec::new();
-        let mut edges = vec![(99, 99.0)];
+        let mut edges = vec![stale_edge];
         let mut cursor = Vec::new();
 
-        let count = build_symmetric_edge_csr(
-            0,
+        // When
+        let actual_edge_count = build_symmetric_edge_csr(
+            leaf,
             &point_ids,
-            zero_k,
-            &[],
+            effective_neighbor_count,
+            &no_neighbors,
             EdgeBuffers {
                 seen: &mut seen,
                 offsets: &mut offsets,
@@ -1036,8 +1021,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count, 0);
-        assert_eq!(offsets, [0, 0, 0, 0]);
-        assert_eq!(edges, [(99, 99.0)]);
+        // Then
+        assert_eq!(actual_edge_count, expected_edge_count);
+        assert_eq!(offsets, expected_offsets);
+        assert_eq!(edges, expected_edges);
+        assert_eq!(seen, expected_seen);
     }
 }

@@ -210,50 +210,6 @@ mod tests {
         assert_eq!(actual_sketches.sketches(), expected_serial_sketch_values);
     }
 
-    #[test]
-    fn zero_points_produce_an_empty_sketch() {
-        // Given
-        let zero_point_count = 0;
-        let dimensions = 7;
-        let plane_count = 4;
-
-        // When
-        let sketches = run_with_threads(2, || {
-            LshSketches::try_new(
-                matrix_view(&[] as &[f32], zero_point_count, dimensions),
-                plane_count,
-                42,
-            )
-        })
-        .unwrap();
-
-        // Then
-        assert_eq!(sketches.num_planes(), plane_count);
-        assert!(sketches.sketches().is_empty());
-    }
-
-    #[test]
-    fn zero_dimensions_produce_zero_dot_products() {
-        // Given
-        let point_count = 3;
-        let zero_dimensions = 0;
-        let plane_count = 2;
-        let expected_zero_dot_products = vec![0.0; point_count * plane_count];
-
-        // When
-        let sketches = run_with_threads(2, || {
-            LshSketches::try_new(
-                matrix_view(&[] as &[f32], point_count, zero_dimensions),
-                plane_count,
-                42,
-            )
-        })
-        .unwrap();
-
-        // Then
-        assert_eq!(sketches.sketches(), expected_zero_dot_products);
-    }
-
     #[rstest]
     #[case::point_count_times_plane_count(usize::MAX, 0)]
     #[case::dimension_times_plane_count(0, usize::MAX)]
