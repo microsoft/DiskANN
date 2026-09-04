@@ -4,7 +4,7 @@
  */
 
 use diskann::ANNError;
-use diskann_utils::{strided};
+use diskann_utils::strided;
 
 use crate::utils::Bridge;
 
@@ -32,7 +32,7 @@ mod tests {
         let x = vec![u8::default(); nrows * ncols];
 
         // Provided the incorrect dimensions.
-        let err = strided::Ref::try_from_data(&x, nrows, ncols + 1, ncols + 1)
+        let err = strided::Strided::try_from_data(&x, nrows, ncols + 1, ncols + 1)
             .bridge_err()
             .unwrap_err();
         let message = format!("{}", err);

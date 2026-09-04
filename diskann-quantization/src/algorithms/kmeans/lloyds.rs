@@ -8,7 +8,7 @@ use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDSumTree
 use super::common::square_norm;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 use diskann_utils::{
-    strided::{self, Strided},
+    strided::Strided,
     views::{Matrix, MatrixView, MutMatrixView},
 };
 
@@ -342,7 +342,7 @@ fn update((d0, i0): (f32s, u32s), (d1, i1): (f32s, u32s)) -> (f32s, u32s) {
 // Update Step //
 /////////////////
 
-fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: strided::Ref<'_, f32>, map: &[u32]) {
+fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: Strided<'_, f32>, map: &[u32]) {
     let mut sums = Matrix::<f64>::new(0.0, centers.nrows(), centers.ncols());
     let mut counts: Vec<u32> = vec![0; centers.nrows()];
     data.rows().zip(map.iter()).for_each(|(row, &center)| {
@@ -370,7 +370,7 @@ fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: strided::Ref<'_, 
 ////////////
 
 pub(crate) fn lloyds_inner(
-    data: strided::Ref<'_, f32>,
+    data: Strided<'_, f32>,
     square_norms: &[f32],
     transpose: BlockTransposedRef<'_, f32, 16>,
     mut centers: MutMatrixView<'_, f32>,

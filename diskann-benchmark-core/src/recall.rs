@@ -9,7 +9,7 @@ use std::{
 };
 
 use diskann_utils::{
-    strided::{self, Strided},
+    strided::Strided,
     views::{Matrix, MatrixView},
 };
 use thiserror::Error;
@@ -145,7 +145,7 @@ pub enum GroundTruthMode {
 /// than `recall_k` candidates.
 pub fn knn<T>(
     groundtruth: &dyn Rows<T>,
-    groundtruth_distances: Option<strided::Ref<'_, f32>>,
+    groundtruth_distances: Option<Strided<'_, f32>>,
     results: &dyn Rows<T>,
     recall_k: usize,
     recall_n: usize,

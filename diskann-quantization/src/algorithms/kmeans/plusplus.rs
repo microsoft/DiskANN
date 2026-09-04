@@ -6,7 +6,7 @@
 use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
-    strided::{self, Strided},
+    strided::Strided,
     views::{MatrixView, MutMatrixView},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
@@ -380,7 +380,7 @@ impl KMeansPlusPlusError {
 
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
     mut points: MutMatrixView<'_, f32>,
-    data: strided::Ref<'_, f32>,
+    data: Strided<'_, f32>,
     transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     rng: &mut dyn RngCore,

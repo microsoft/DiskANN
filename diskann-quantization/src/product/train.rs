@@ -4,7 +4,7 @@
  */
 
 use diskann_utils::{
-    strided::{self, Strided},
+    strided::Strided,
     views::{self, Matrix},
 };
 #[cfg(feature = "rayon")]
@@ -153,7 +153,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // the remaining tasks to exit early.
                 exit_if_canceled()?;
 
-                let view = strided::Ref::try_from_data(
+                let view = Strided::try_from_data(
                     &(data.as_slice()[range.start..]),
                     data.nrows(),
                     range.len(),
