@@ -89,7 +89,7 @@ impl TransposedTable {
             .map(|i| {
                 let range = offsets.at(i);
                 largest = largest.max(range.len());
-                let view = strided::StridedView::try_shrink_from(
+                let view = strided::Ref::try_from_data(
                     &(pivots.as_slice()[range.start..]),
                     pivots.nrows(),
                     range.len(),

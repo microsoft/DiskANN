@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use diskann_utils::strided;
+use diskann_utils::strided::{self, Strided};
 use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 use crate::{
@@ -21,9 +21,9 @@ diskann_wide::alias!(u32s = u32x8);
 /// Error types returned by Chunk construction.
 #[derive(Debug, Clone)]
 pub enum ChunkConstructionError {
-    /// A `StridedView` was provided with a dimension of zero.
+    /// A `strided::Ref` was provided with a dimension of zero.
     DimensionCannotBeZero,
-    /// A `StridedView` was provided with a length of zero.
+    /// A `strided::Ref` was provided with a length of zero.
     LengthCannotBeZero,
 }
 
@@ -220,7 +220,7 @@ impl Chunk {
     ///
     /// 1. `data.ncols() == 0`
     /// 2. `data.nrows() == 0`
-    pub(super) fn new(data: strided::StridedView<'_, f32>) -> Result<Self, ChunkConstructionError> {
+    pub(super) fn new(data: strided::Ref<'_, f32>) -> Result<Self, ChunkConstructionError> {
         // Error handling.
         if data.ncols() == 0 {
             return Err(ChunkConstructionError::DimensionCannotBeZero);
@@ -229,7 +229,7 @@ impl Chunk {
             return Err(ChunkConstructionError::LengthCannotBeZero);
         }
 
-        let square_norms = data.row_iter().map(kmeans::square_norm).collect();
+        let square_norms = data.rows().map(kmeans::square_norm).collect();
         let data = BlockTransposed::<f32, 16>::from_strided(data);
         Ok(Self { data, square_norms })
     }
@@ -346,9 +346,9 @@ impl Chunk {
     ///
     /// This method is generally more efficient to call.
     ///
-    /// **IMPORTANT**: The provided `StridedView` must have a length of `Self::batchsize()`.
+    /// **IMPORTANT**: The provided `strided::Ref` must have a length of `Self::batchsize()`.
     ///
-    /// Providing a `StridedView` as an argument allows the compiler to infer that each
+    /// Providing a `strided::Ref` as an argument allows the compiler to infer that each
     /// row in `x` has a strided offset from the base, allowing for better code generation.
     ///
     /// If the distances between a row in `x` and all centers is not finite, return
@@ -385,7 +385,7 @@ impl Chunk {
     /// inner products.
     pub(super) fn find_closest_batch<T>(
         &self,
-        x: strided::StridedView<'_, T>,
+        x: strided::Ref<'_, T>,
     ) -> [CompressionResult; Self::batchsize()]
     where
         T: Copy + Into<f32>,
@@ -394,7 +394,7 @@ impl Chunk {
         assert_eq!(
             x.nrows(),
             Self::batchsize(),
-            "argument StridedView must have a length of {}",
+            "argument strided::Ref must have a length of {}",
             Self::batchsize()
         );
 
@@ -437,7 +437,7 @@ impl Chunk {
             debug_assert!(k < x.ncols());
 
             // SAFETY:
-            // * `StridedView` indexing: We have checked in Assertion 1 that it is safe
+            // * `strided::Ref` indexing: We have checked in Assertion 1 that it is safe
             //   to index `x` at indices `0, 1, 2, and 3`.
             // * Inner slice indexing: It is the caller's responsibility to ensure that
             //   `k < x.dim()` so that indexing the slices return by `x.get_unchecked` are
@@ -449,19 +449,19 @@ impl Chunk {
                 (
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(0).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(0).get_unchecked(k)),
                     ),
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(1).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(1).get_unchecked(k)),
                     ),
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(2).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(2).get_unchecked(k)),
                     ),
                     f32s::splat(
                         diskann_wide::ARCH,
-                        <T as Into<f32>>::into(*x.get_row_unchecked(3).get_unchecked(k)),
+                        <T as Into<f32>>::into(*x.row_unchecked(3).get_unchecked(k)),
                     ),
                 )
             }
@@ -1198,19 +1198,14 @@ mod tests {
             let query_batch =
                 flatten(&[copy_query(0), copy_query(1), copy_query(2), copy_query(3)]);
 
-            let view = strided::StridedView::try_from(
-                query_batch.as_slice(),
-                Chunk::batchsize(),
-                dim,
-                dim,
-            )
-            .unwrap();
+            let view =
+                strided::Ref::try_from_data(query_batch.as_slice(), Chunk::batchsize(), dim, dim)
+                    .unwrap();
 
             // Make sure that the query batch was constructed correctly.
             assert_eq!(view.nrows(), Chunk::batchsize());
             assert_eq!(view.ncols(), dim);
-            for k in 0..view.nrows() {
-                let row = view.row(k);
+            for (k, row) in view.rows().enumerate() {
                 if k == j {
                     assert_eq!(
                         row, query,
@@ -1261,13 +1256,9 @@ mod tests {
                 maybe_broadcast(3, values[3]),
             ]);
 
-            let view = strided::StridedView::try_from(
-                query_batch.as_slice(),
-                Chunk::batchsize(),
-                dim,
-                dim,
-            )
-            .unwrap();
+            let view =
+                strided::Ref::try_from_data(query_batch.as_slice(), Chunk::batchsize(), dim, dim)
+                    .unwrap();
 
             let closest = chunk.find_closest_batch(view);
             // Lane `j` should not be okay. All other lanes should return the correct
@@ -1299,7 +1290,7 @@ mod tests {
         let mut data_aggregate = create_test_pattern(dim, total);
 
         let data = flatten(&data_aggregate);
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = strided::Ref::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         assert_eq!(chunk.num_centers(), total);
@@ -1309,7 +1300,7 @@ mod tests {
         for row in 0..sliced.nrows() {
             for col in 0..sliced.ncols() {
                 assert_eq!(
-                    sliced[(row, col)],
+                    *sliced.element_or_panic(row, col),
                     chunk.get(row, col),
                     "failed on row {} and col {}",
                     row,
@@ -1383,7 +1374,7 @@ mod tests {
         let last = data_aggregate.last().unwrap().clone();
         data_aggregate[0].clone_from(&last);
         let data = flatten(&data_aggregate);
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = strided::Ref::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         assert_eq!(chunk.num_centers(), total);
@@ -1447,7 +1438,7 @@ mod tests {
     #[test]
     fn test_chunk_construction_error() {
         // No dimensions
-        let chunk = Chunk::new(strided::StridedView::try_from(&[], 3, 0, 0).unwrap());
+        let chunk = Chunk::new(strided::Ref::try_from_data(&[], 3, 0, 0).unwrap());
         let err = chunk.unwrap_err();
         assert!(
             err.to_string()
@@ -1455,7 +1446,7 @@ mod tests {
         );
 
         // No length
-        let chunk = Chunk::new(strided::StridedView::try_from(&[], 0, 10, 10).unwrap());
+        let chunk = Chunk::new(strided::Ref::try_from_data(&[], 0, 10, 10).unwrap());
         let err = chunk.unwrap_err();
         assert!(
             err.to_string()
@@ -1470,7 +1461,7 @@ mod tests {
         let dim = 10;
         let total = 13;
         let data = flatten(&create_test_pattern(dim, total));
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = strided::Ref::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         let query: Vec<f32> = vec![0.0; total];
@@ -1486,12 +1477,12 @@ mod tests {
         let dim = 10;
         let total = 13;
         let data = flatten(&create_test_pattern(dim, total));
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = strided::Ref::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         let query: Vec<f32> = vec![0.0; 4 * total];
         let query_view =
-            strided::StridedView::try_from(query.as_slice(), Chunk::batchsize(), total, total)
+            strided::Ref::try_from_data(query.as_slice(), Chunk::batchsize(), total, total)
                 .unwrap();
 
         // PANICS
@@ -1500,17 +1491,17 @@ mod tests {
 
     // Make sure `find_closest_batch` panics for an incorrect length
     #[test]
-    #[should_panic(expected = "argument StridedView must have a length of")]
+    #[should_panic(expected = "argument strided::Ref must have a length of")]
     fn test_find_closest_batch_panics_on_non_batch_length() {
         let dim = 10;
         let total = 13;
         let data = flatten(&create_test_pattern(dim, total));
-        let sliced = strided::StridedView::try_from(data.as_slice(), total, dim, dim).unwrap();
+        let sliced = strided::Ref::try_from_data(data.as_slice(), total, dim, dim).unwrap();
         let chunk = Chunk::new(sliced).unwrap();
 
         let query: Vec<f32> = vec![0.0; (Chunk::batchsize() + 1) * dim];
         let query_view =
-            strided::StridedView::try_from(query.as_slice(), Chunk::batchsize() + 1, dim, dim)
+            strided::Ref::try_from_data(query.as_slice(), Chunk::batchsize() + 1, dim, dim)
                 .unwrap();
 
         // PANICS

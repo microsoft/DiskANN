@@ -6,7 +6,7 @@
 use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
-    strided::StridedView,
+    strided::{self, Strided},
     views::{MatrixView, MutMatrixView},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
@@ -380,7 +380,7 @@ impl KMeansPlusPlusError {
 
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
     mut points: MutMatrixView<'_, f32>,
-    data: StridedView<'_, f32>,
+    data: strided::Ref<'_, f32>,
     transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     rng: &mut dyn RngCore,
@@ -423,7 +423,7 @@ where
     // Pick the first point randomly.
     let mut previous_square_norm = {
         let i = all_rows.sample(rng);
-        points.row_mut(0).copy_from_slice(data.row(i));
+        points.row_mut(0).copy_from_slice(data.row_or_panic(i));
         picked.insert(i);
         norms[i]
     };
@@ -451,7 +451,9 @@ where
                     if rolling_sum >= threshold && (*d > 0.0) && !picked.contains(&i) {
                         // This point is the winner.
                         // Copy it over and update our scratch variables.
-                        points.row_mut(current).clone_from_slice(data.row(i));
+                        points
+                            .row_mut(current)
+                            .clone_from_slice(data.row_or_panic(i));
                         picked.insert(i);
                         previous_square_norm = norms[i];
                         selected = current + 1;

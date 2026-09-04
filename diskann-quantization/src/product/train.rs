@@ -4,7 +4,7 @@
  */
 
 use diskann_utils::{
-    strided::StridedView,
+    strided::{self, Strided},
     views::{self, Matrix},
 };
 #[cfg(feature = "rayon")]
@@ -153,7 +153,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // the remaining tasks to exit early.
                 exit_if_canceled()?;
 
-                let view = StridedView::try_shrink_from(
+                let view = strided::Ref::try_from_data(
                     &(data.as_slice()[range.start..]),
                     data.nrows(),
                     range.len(),
@@ -163,11 +163,11 @@ impl TrainQuantizer for LightPQTrainingParameters {
                     chunk: i,
                     of: schema.len(),
                     dim: range.len(),
-                    kind: PQTrainingErrorKind::InternalError(Box::new(err.as_static())),
+                    kind: PQTrainingErrorKind::InternalError(Box::new(err)),
                 })?;
 
                 // Allocate scratch data structures.
-                let norms: Vec<f32> = view.row_iter().map(square_norm).collect();
+                let norms: Vec<f32> = view.rows().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
                 let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
 
