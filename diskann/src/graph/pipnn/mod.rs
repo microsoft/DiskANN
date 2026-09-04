@@ -12,9 +12,10 @@
 //! 1. `partitioning` samples leaders and makes overlapping leaves. Each leaf has
 //!    at most `c_max` points.
 //! 2. `leaf_build` computes one ranking-distance buffer for each leaf. It
-//!    selects local neighbors and merges their global point IDs.
-//! 3. `finalization` applies Vamana RobustPrune to each candidate list that is
-//!    longer than the graph degree.
+//!    selects local neighbors. The direct path merges their global point IDs.
+//!    The HashPrune path sends weighted edges to bounded point reservoirs.
+//! 3. `finalization` applies Vamana RobustPrune to direct candidates. It also
+//!    prunes HashPrune candidates when `final_prune` is true.
 //!
 //! `diskann-wide` selects architecture `A` for the ranking kernels. One match
 //! selects metric marker `M`. Metric computation stays architecture-neutral.
@@ -31,10 +32,13 @@
 //! Partition and leaf work use separate reusable buffers. The build consumes
 //! each output before it creates another graph representation.
 
+mod bf16;
 mod finalization;
+mod hash_prune;
 mod leaf_build;
 mod leaf_kernel;
 mod leaf_metric;
+mod lsh;
 mod partition_kernel;
 mod partition_metric;
 mod partitioning;
@@ -231,6 +235,55 @@ impl PiPNNConfig {
     }
 }
 
+/// HashPrune policy for bounded candidate reservoirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashPruneConfig {
+    /// Number of random-hyperplane bits in each relative-direction hash.
+    pub num_hash_planes: usize,
+    /// Maximum number of direction buckets retained for each source point.
+    pub l_max: usize,
+    /// Apply Vamana RobustPrune after reservoir extraction.
+    pub final_prune: bool,
+}
+
+impl HashPruneConfig {
+    /// Check the structural HashPrune limits.
+    pub fn validate(&self) -> ANNResult<()> {
+        if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
+            return Err(config_error(format!(
+                "num_hash_planes ({}) must be in [1, {}]",
+                self.num_hash_planes,
+                lsh::MAX_PLANES
+            )));
+        }
+        if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
+            return Err(config_error(format!(
+                "l_max ({}) must be in [1, {}]",
+                self.l_max,
+                hash_prune::MAX_RESERVOIR_LEN
+            )));
+        }
+        Ok(())
+    }
+
+    /// Check that the reservoir and hash space can hold `degree` neighbors.
+    pub fn validate_for_degree(&self, degree: usize) -> ANNResult<()> {
+        self.validate()?;
+        let hash_capacity = 1usize
+            .checked_shl(self.num_hash_planes as u32)
+            .unwrap_or(usize::MAX);
+        let candidate_capacity = self.l_max.min(hash_capacity);
+        if candidate_capacity < degree {
+            return Err(config_error(format!(
+                "HashPrune capacity min(l_max={}, hash buckets={hash_capacity}) must be at least \
+                 the graph degree ({degree})",
+                self.l_max
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// PiPNN policy and borrowed execution resources for one graph build.
 #[derive(Debug)]
 pub struct PiPNNBuildContext<'a> {
@@ -238,6 +291,7 @@ pub struct PiPNNBuildContext<'a> {
     pub(crate) graph: &'a Config,
     pub(crate) metric: Metric,
     pub(crate) pool: &'a ThreadPool,
+    hash_prune: Option<HashPruneConfig>,
 }
 
 impl<'a> PiPNNBuildContext<'a> {
@@ -261,7 +315,15 @@ impl<'a> PiPNNBuildContext<'a> {
             graph,
             metric,
             pool,
+            hash_prune: None,
         })
+    }
+
+    /// Enable HashPrune candidate merging for this build.
+    pub fn with_hash_prune(mut self, config: HashPruneConfig) -> ANNResult<Self> {
+        config.validate_for_degree(self.graph.pruned_degree().get())?;
+        self.hash_prune = Some(config);
+        Ok(self)
     }
 }
 
@@ -361,8 +423,9 @@ where
 
 /// Run the PiPNN graph pipeline for one selected metric implementation.
 ///
-/// The function builds overlapping leaves, merges direct candidates, and applies
-/// final graph-degree pruning.
+/// The function builds overlapping leaves and runs the configured candidate
+/// merge. It prunes direct candidates to graph degree. It prunes HashPrune
+/// candidates when `final_prune` is true.
 fn build_graph_for<A, M, T>(
     arch: A,
     data: MatrixView<'_, T>,
@@ -376,16 +439,49 @@ where
 {
     let leaves = tracing::info_span!("pipnn.partition")
         .in_scope(|| partitioning::partition::<A, M, T>(arch, data, &context.config))?;
-    // Leaf jobs borrow individual ID lists. This call consumes the leaf vector,
-    // so its complete allocation drops when leaf construction returns.
-    let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
-        leaf_build::build_leaf_candidates::<A, M, T>(arch, data, leaves, context.config.leaf_k)
-            .map_err(ANNError::new)
-    })?;
-    // Finalization consumes each candidate list. It reuses that list's allocation
-    // for the final adjacency when the graph policy permits it.
-    tracing::info_span!("pipnn.finalization")
-        .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+    match &context.hash_prune {
+        None => {
+            // Leaf jobs borrow individual ID lists. This call consumes the leaf
+            // vector, so its allocation drops when leaf construction returns.
+            let candidates = tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::build_leaf_candidates::<A, M, T>(
+                    arch,
+                    data,
+                    leaves,
+                    context.config.leaf_k,
+                )
+                .map_err(ANNError::new)
+            })?;
+            tracing::info_span!("pipnn.finalization")
+                .in_scope(|| finalization::prune_overfull(data, candidates, context.graph, metric))
+        }
+        Some(config) => {
+            // `HashPrune` lives until all leaf jobs finish. A leaf job locks only
+            // one source reservoir at a time.
+            let hash_prune =
+                hash_prune::HashPrune::new(data, config.num_hash_planes, config.l_max, 42)?;
+            // This call consumes the leaves. Each weighted CSR list exists only
+            // during its leaf job. The reservoirs retain the selected edges.
+            tracing::info_span!("pipnn.leaf_build").in_scope(|| {
+                leaf_build::add_hash_prune_candidates::<A, M, T>(
+                    arch,
+                    data,
+                    leaves,
+                    context.config.leaf_k,
+                    &hash_prune,
+                )
+                .map_err(ANNError::new)
+            })?;
+            if config.final_prune {
+                let candidates = hash_prune.into_candidate_lists();
+                tracing::info_span!("pipnn.finalization").in_scope(|| {
+                    finalization::prune_overfull(data, candidates, context.graph, metric)
+                })
+            } else {
+                Ok(hash_prune.into_nearest_lists(context.graph.pruned_degree().get()))
+            }
+        }
+    }
 }
 
 fn effective_metric<T: 'static>(metric: Metric) -> Metric {
@@ -409,25 +505,40 @@ fn config_error(message: impl std::fmt::Display) -> ANNError {
 mod tests {
     use super::*;
     use half::f16;
+    use rstest::rstest;
 
     #[test]
-    fn integer_normalized_cosine_uses_unnormalized_cosine() {
-        for metric in [
+    fn integer_vectors_use_cosine_when_normalized_cosine_is_requested() {
+        assert_eq!(
+            effective_metric::<u8>(Metric::CosineNormalized),
+            Metric::Cosine
+        );
+        assert_eq!(
+            effective_metric::<i8>(Metric::CosineNormalized),
+            Metric::Cosine
+        );
+    }
+
+    #[rstest]
+    fn metric_selection_is_unchanged_for_float_vectors(
+        #[values(
             Metric::L2,
             Metric::Cosine,
             Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            let expected = if metric == Metric::CosineNormalized {
-                Metric::Cosine
-            } else {
-                metric
-            };
-            assert_eq!(effective_metric::<u8>(metric), expected);
-            assert_eq!(effective_metric::<i8>(metric), expected);
-            assert_eq!(effective_metric::<f32>(metric), metric);
-            assert_eq!(effective_metric::<f16>(metric), metric);
-        }
+            Metric::InnerProduct
+        )]
+        metric: Metric,
+    ) {
+        assert_eq!(effective_metric::<f32>(metric), metric);
+        assert_eq!(effective_metric::<f16>(metric), metric);
+    }
+
+    #[rstest]
+    fn integer_vectors_keep_non_normalized_metric_selection(
+        #[values(Metric::L2, Metric::Cosine, Metric::InnerProduct)] metric: Metric,
+    ) {
+        assert_eq!(effective_metric::<u8>(metric), metric);
+        assert_eq!(effective_metric::<i8>(metric), metric);
     }
 }
 #[cfg(test)]
@@ -437,12 +548,13 @@ mod tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod build_graph_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig, build_graph};
+    use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig, build_graph};
     use crate::graph::config::{self, MaxDegree};
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
     use half::f16;
     use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rstest::rstest;
 
     fn pipnn_config() -> PiPNNConfig {
         PiPNNConfig {
@@ -463,15 +575,24 @@ mod build_graph_tests {
         .unwrap()
     }
 
-    fn pool(threads: usize) -> rayon::ThreadPool {
+    fn thread_pool(threads: usize) -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .unwrap()
     }
 
-    fn rows(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
+    fn adjacency_rows(graph: Vec<crate::graph::AdjacencyList<u32>>) -> Vec<Vec<u32>> {
         graph.into_iter().map(Vec::from).collect()
+    }
+
+    fn deterministic_point_values(points: usize, dimensions: usize) -> Vec<f32> {
+        (0..points)
+            .flat_map(|point| {
+                (0..dimensions)
+                    .map(move |dimension| point as f32 + dimension as f32 / dimensions as f32)
+            })
+            .collect()
     }
 
     fn assert_graph_invariants(
@@ -494,34 +615,45 @@ mod build_graph_tests {
     }
 
     #[test]
-    fn builds_a_single_leaf_graph_for_real_dataset_ids() {
-        let data = [0.0_f32, 1.0, 2.0, 3.0];
-        let data = MatrixView::try_from(&data[..], 4, 1).unwrap();
+    fn single_leaf_build_maps_local_neighbors_to_dataset_ids() {
+        // Given
+        let point_values = [0.0_f32, 1.0, 2.0, 3.0];
+        let data = MatrixView::try_from(&point_values[..], 4, 1).unwrap();
         let graph = graph_config(Metric::L2, 2);
-        let pool = pool(2);
+        let pool = thread_pool(2);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let expected_adjacency = [vec![1], vec![0, 2], vec![1, 3], vec![2]];
 
-        let actual = build_graph(data, &context).unwrap();
+        // When
+        let actual_adjacency = adjacency_rows(build_graph(data, &context).unwrap());
 
-        assert_eq!(rows(actual), [vec![1], vec![0, 2], vec![1, 3], vec![2]]);
-
-        let graph = graph_config(Metric::L2, 1);
-        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
-
-        let pruned = build_graph(data, &context).unwrap();
-
-        assert_graph_invariants(&pruned, 4, 1);
-        for (source, neighbors) in pruned.iter().enumerate() {
-            assert_eq!(source.abs_diff(neighbors[0] as usize), 1);
-        }
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
     }
 
     #[test]
-    fn omits_non_rankable_candidates_without_invalid_ids() {
+    fn degree_one_pruning_keeps_adjacent_neighbors_on_a_line() {
+        // Given
+        let point_values = [0.0_f32, 1.0, 2.0, 3.0];
+        let data = MatrixView::try_from(&point_values[..], 4, 1).unwrap();
+        let graph = graph_config(Metric::L2, 1);
+        let pool = thread_pool(2);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let expected_adjacency = [vec![1], vec![2], vec![3], vec![2]];
+
+        // When
+        let actual_adjacency = adjacency_rows(build_graph(data, &context).unwrap());
+
+        // Then
+        assert_eq!(actual_adjacency, expected_adjacency);
+    }
+
+    #[test]
+    fn non_rankable_points_leave_empty_adjacency_without_sentinel_ids() {
         let values = [0.0_f32, 1.0, f32::NAN];
         let data = MatrixView::try_from(&values[..], 3, 1).unwrap();
         let graph = graph_config(Metric::InnerProduct, 2);
-        let pool = pool(1);
+        let pool = thread_pool(1);
         let config = PiPNNConfig {
             c_max: 2,
             c_min: 1,
@@ -531,19 +663,20 @@ mod build_graph_tests {
             replicas: 1,
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::InnerProduct, &pool).unwrap();
+        let expected_rankable_adjacency = [vec![1], vec![0], vec![]];
 
-        let actual = build_graph(data, &context).unwrap();
+        let actual_graph = build_graph(data, &context).unwrap();
 
-        assert_graph_invariants(&actual, 3, 2);
-        assert_eq!(rows(actual), [vec![1], vec![0], vec![]]);
+        assert_graph_invariants(&actual_graph, 3, 2);
+        assert_eq!(adjacency_rows(actual_graph), expected_rankable_adjacency);
     }
 
     #[test]
-    fn prunes_overfull_single_leaf_candidates_to_the_graph_degree() {
+    fn single_leaf_adjacency_is_bounded_by_the_graph_degree() {
         let data = [0.0_f32, 1.0, 2.0, 3.0, 4.0];
         let data = MatrixView::try_from(&data[..], 5, 1).unwrap();
         let graph = graph_config(Metric::L2, 1);
-        let pool = pool(2);
+        let pool = thread_pool(2);
         let config = PiPNNConfig {
             c_max: 5,
             c_min: 1,
@@ -554,60 +687,88 @@ mod build_graph_tests {
         };
         let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
 
-        let actual = build_graph(data, &context).unwrap();
+        let actual_graph = build_graph(data, &context).unwrap();
 
-        assert_graph_invariants(&actual, 5, 1);
-        assert!(actual.iter().all(|row| row.len() == 1));
+        assert_graph_invariants(&actual_graph, 5, 1);
+        assert!(actual_graph.iter().all(|row| row.len() == 1));
     }
 
-    #[test]
-    fn rejects_empty_dataset_dimensions_at_the_public_boundary() {
+    #[rstest]
+    #[case::zero_points(0, 4)]
+    #[case::zero_dimensions(4, 0)]
+    fn empty_dataset_dimension_is_rejected(#[case] point_count: usize, #[case] dimensions: usize) {
+        // Given
         let graph = graph_config(Metric::L2, 2);
-        let pool = pool(1);
+        let pool = thread_pool(1);
         let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let empty_data = MatrixView::try_from(&[] as &[f32], point_count, dimensions).unwrap();
 
-        let no_rows = MatrixView::try_from(&[] as &[f32], 0, 4).unwrap();
-        let no_columns = MatrixView::try_from(&[] as &[f32], 4, 0).unwrap();
+        // When
+        let result = build_graph(empty_data, &context);
 
-        assert!(build_graph(no_rows, &context).is_err());
-        assert!(build_graph(no_columns, &context).is_err());
+        // Then
+        assert!(result.is_err());
     }
 
-    #[test]
-    fn supports_every_source_type_and_metric() {
-        fn build<T: crate::utils::VectorRepr + Send + Sync + 'static>(
-            values: &[T],
-            metric: Metric,
-        ) {
-            let data = MatrixView::try_from(values, 6, 2).unwrap();
-            let graph = graph_config(metric, 2);
-            let pool = pool(2);
-            let context = PiPNNBuildContext::new(pipnn_config(), &graph, metric, &pool).unwrap();
-            let actual = build_graph(data, &context).unwrap();
-            assert_graph_invariants(&actual, 6, 2);
-        }
+    fn assert_graph_build_succeeds<T: crate::utils::VectorRepr + Send + Sync + 'static>(
+        values: &[T],
+        metric: Metric,
+    ) {
+        let data = MatrixView::try_from(values, 6, 2).unwrap();
+        let graph = graph_config(metric, 2);
+        let pool = thread_pool(2);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, metric, &pool).unwrap();
+        let actual_graph = build_graph(data, &context).unwrap();
+        assert_graph_invariants(&actual_graph, 6, 2);
+    }
 
-        let values = [
-            1.0_f32, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0, 0.5, 0.5, -0.5, -0.5,
-        ];
-        for metric in [
+    #[rstest]
+    fn f32_graph_build_succeeds_with_each_metric(
+        #[values(
             Metric::L2,
             Metric::Cosine,
             Metric::CosineNormalized,
-            Metric::InnerProduct,
-        ] {
-            build(&values, metric);
-        }
-        build(&values.map(f16::from_f32), Metric::L2);
-        build(&[1_u8, 0, 0, 1, 2, 0, 0, 2, 1, 1, 2, 2], Metric::L2);
-        build(&[1_i8, 0, 0, 1, -1, 0, 0, -1, 1, 1, -1, -1], Metric::L2);
+            Metric::InnerProduct
+        )]
+        metric: Metric,
+    ) {
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        let unit_vectors = [
+            1.0_f32, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0, diagonal, diagonal, -diagonal, -diagonal,
+        ];
+
+        assert_graph_build_succeeds(&unit_vectors, metric);
     }
 
     #[test]
-    fn integer_normalized_cosine_matches_cosine() {
-        fn assert_match<T: crate::utils::VectorRepr + Send + Sync + 'static>(values: &[T]) {
+    fn f16_graph_build_succeeds_with_l2() {
+        let values = [
+            1.0_f32, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 1.0, 1.0, 2.0, 2.0,
+        ];
+        assert_graph_build_succeeds(&values.map(f16::from_f32), Metric::L2);
+    }
+
+    #[test]
+    fn u8_graph_build_succeeds_with_l2() {
+        let values = [1_u8, 0, 0, 1, 2, 0, 0, 2, 1, 1, 2, 2];
+        assert_graph_build_succeeds(&values, Metric::L2);
+    }
+
+    #[test]
+    fn i8_graph_build_succeeds_with_l2() {
+        let values = [1_i8, 0, 0, 1, -1, 0, 0, -1, 1, 1, -1, -1];
+        assert_graph_build_succeeds(&values, Metric::L2);
+    }
+
+    #[test]
+    fn integer_vector_graphs_match_cosine_when_normalized_cosine_is_requested() {
+        fn assert_integer_graphs_match_cosine<
+            T: crate::utils::VectorRepr + Send + Sync + 'static,
+        >(
+            values: &[T],
+        ) {
             let data = MatrixView::try_from(values, 8, 2).unwrap();
-            let pool = pool(2);
+            let pool = thread_pool(2);
             let build = |metric| {
                 let graph = graph_config(metric, 2);
                 let config = PiPNNConfig {
@@ -619,23 +780,23 @@ mod build_graph_tests {
                     replicas: 1,
                 };
                 let context = PiPNNBuildContext::new(config, &graph, metric, &pool).unwrap();
-                rows(build_graph(data, &context).unwrap())
+                adjacency_rows(build_graph(data, &context).unwrap())
             };
             assert_eq!(build(Metric::CosineNormalized), build(Metric::Cosine));
         }
 
-        assert_match(&[1_u8, 0, 100, 1, 2, 0, 0, 1, 1, 1, 200, 2, 2, 1, 1, 2]);
-        assert_match(&[1_i8, 0, 100, 1, 2, 0, 0, 1, 1, 1, 120, 2, 2, 1, 1, 2]);
+        assert_integer_graphs_match_cosine(&[1_u8, 0, 2, 0, 0, 1, 0, 2, 1, 1, 2, 1, 1, 2, 2, 2]);
+        assert_integer_graphs_match_cosine(&[
+            1_i8, 0, -1, 0, 0, 1, 0, -1, 1, 1, -1, -1, 1, -1, -1, 1,
+        ]);
     }
 
     #[test]
-    fn is_deterministic_for_a_fixed_pool_size() {
-        let data: Vec<f32> = (0..96 * 4)
-            .map(|value| ((value * 17 + 3) % 101) as f32)
-            .collect();
+    fn graph_build_is_deterministic_for_a_fixed_pool_size() {
+        let data = deterministic_point_values(96, 4);
         let data = MatrixView::try_from(&data[..], 96, 4).unwrap();
         let graph = graph_config(Metric::L2, 8);
-        let pool = pool(4);
+        let pool = thread_pool(4);
         let config = PiPNNConfig {
             c_max: 16,
             c_min: 4,
@@ -654,7 +815,7 @@ mod build_graph_tests {
     }
 
     #[test]
-    fn fixed_seed_randomized_sweeps_preserve_graph_invariants() {
+    fn graph_build_preserves_invariants_across_fixed_seed_inputs() {
         let mut rng = StdRng::seed_from_u64(0x857a_d38b_44c2_0f11);
         for case in 0..24 {
             let points = rng.random_range(4..=32);
@@ -667,7 +828,7 @@ mod build_graph_tests {
                 .collect();
             let data = MatrixView::try_from(&values[..], points, dimensions).unwrap();
             let graph = graph_config(Metric::L2, degree);
-            let pool = pool(2);
+            let pool = thread_pool(2);
             let config = PiPNNConfig {
                 c_max,
                 c_min,
@@ -678,10 +839,59 @@ mod build_graph_tests {
             };
             let context = PiPNNBuildContext::new(config, &graph, Metric::L2, &pool).unwrap();
 
-            let actual = build_graph(data, &context)
+            let actual_graph = build_graph(data, &context)
                 .unwrap_or_else(|error| panic!("randomized case {case} failed: {error}"));
-            assert_graph_invariants(&actual, points, degree);
+            assert_graph_invariants(&actual_graph, points, degree);
         }
+    }
+
+    #[test]
+    fn parallel_hash_prune_build_is_set_invariant() {
+        let points = 64;
+        let dimensions = 4;
+        let values = deterministic_point_values(points, dimensions);
+        let data = MatrixView::try_from(values.as_slice(), points, dimensions).unwrap();
+        let graph = graph_config(Metric::L2, 8);
+        let pool = thread_pool(4);
+        let config = PiPNNConfig {
+            c_max: 16,
+            c_min: 4,
+            p_samp: 0.25,
+            fanout: vec![3, 2],
+            leaf_k: 3,
+            replicas: 2,
+        };
+        let hash_prune = HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 16,
+            final_prune: true,
+        };
+        let build = || {
+            let context = PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
+                .unwrap()
+                .with_hash_prune(hash_prune.clone())
+                .unwrap();
+            build_graph(data, &context).unwrap()
+        };
+
+        let first = build();
+        let second = build();
+        let canonicalize = |graph: &[crate::graph::AdjacencyList<u32>]| {
+            graph
+                .iter()
+                .map(|row| {
+                    let mut ids = row.to_vec();
+                    ids.sort_unstable();
+                    ids
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Parallel finalization can order equal candidates differently. Compare
+        // the retained neighbor sets.
+        assert_eq!(canonicalize(&first), canonicalize(&second));
+        assert_graph_invariants(&first, points, 8);
+        assert!(first.iter().any(|row| !row.is_empty()));
     }
 }
 #[cfg(test)]
@@ -691,9 +901,10 @@ mod build_graph_tests {
     reason = "deterministic test fixture construction must abort on invalid setup"
 )]
 mod config_tests {
-    use super::{PiPNNBuildContext, PiPNNConfig};
+    use super::{HashPruneConfig, PiPNNBuildContext, PiPNNConfig};
     use crate::graph::config::{self, MaxDegree};
     use diskann_vector::distance::Metric;
+    use rstest::rstest;
 
     fn pipnn_config() -> PiPNNConfig {
         PiPNNConfig {
@@ -707,93 +918,147 @@ mod config_tests {
     }
 
     fn graph_config(metric: Metric, alpha: f32) -> crate::graph::Config {
-        config::Builder::new_with(64, MaxDegree::same(), 72, metric.into(), |builder| {
+        graph_config_with_degree(metric, alpha, 64)
+    }
+
+    fn graph_config_with_degree(metric: Metric, alpha: f32, degree: usize) -> crate::graph::Config {
+        config::Builder::new_with(degree, MaxDegree::same(), 72, metric.into(), |builder| {
             builder.alpha(alpha);
         })
         .build()
         .unwrap()
     }
 
-    fn pool() -> rayon::ThreadPool {
+    fn two_thread_pool() -> rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .num_threads(2)
             .build()
             .unwrap()
     }
 
-    #[test]
-    fn rejects_each_invalid_algorithm_parameter() {
+    #[rstest]
+    #[case::zero_c_max(PiPNNConfig { c_max: 0, ..pipnn_config() })]
+    #[case::zero_c_min(PiPNNConfig { c_min: 0, ..pipnn_config() })]
+    #[case::c_min_above_c_max(PiPNNConfig { c_min: 513, ..pipnn_config() })]
+    #[case::zero_sampling_probability(PiPNNConfig { p_samp: 0.0, ..pipnn_config() })]
+    #[case::negative_sampling_probability(PiPNNConfig { p_samp: -0.01, ..pipnn_config() })]
+    #[case::sampling_probability_above_one(PiPNNConfig { p_samp: 1.01, ..pipnn_config() })]
+    #[case::nan_sampling_probability(PiPNNConfig { p_samp: f64::NAN, ..pipnn_config() })]
+    #[case::empty_fanout(PiPNNConfig { fanout: Vec::new(), ..pipnn_config() })]
+    #[case::zero_later_fanout(PiPNNConfig { fanout: vec![1, 0], ..pipnn_config() })]
+    #[case::zero_leaf_k(PiPNNConfig { leaf_k: 0, ..pipnn_config() })]
+    #[case::zero_replicas(PiPNNConfig { replicas: 0, ..pipnn_config() })]
+    fn invalid_algorithm_parameter_is_rejected(#[case] invalid_config: PiPNNConfig) {
         let graph = graph_config(Metric::L2, 1.2);
-        let pool = pool();
-        let mut cases = [
-            PiPNNConfig {
-                c_max: 0,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                c_min: 0,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                c_min: 513,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                p_samp: 0.0,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                p_samp: -0.01,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                p_samp: 1.01,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                p_samp: f64::NAN,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                fanout: Vec::new(),
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                fanout: vec![1, 0],
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                leaf_k: 0,
-                ..pipnn_config()
-            },
-            PiPNNConfig {
-                replicas: 0,
-                ..pipnn_config()
-            },
-        ];
+        let pool = two_thread_pool();
 
-        for config in &mut cases {
-            PiPNNBuildContext::new(config.clone(), &graph, Metric::L2, &pool)
-                .expect_err("invalid PiPNN config must be rejected");
-        }
+        PiPNNBuildContext::new(invalid_config, &graph, Metric::L2, &pool)
+            .expect_err("invalid PiPNN config must be rejected");
     }
 
     #[test]
-    fn rejects_graph_policy_for_a_different_metric() {
+    fn graph_policy_for_a_different_metric_is_rejected() {
         let graph = graph_config(Metric::InnerProduct, 1.2);
-        let pool = pool();
+        let pool = two_thread_pool();
 
         let error = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap_err();
 
         assert!(error.to_string().contains("prune kind"));
     }
 
+    #[rstest]
+    #[case::below_one(0.9)]
+    #[case::nan(f32::NAN)]
+    #[case::infinity(f32::INFINITY)]
+    fn build_context_accepts_alpha_allowed_by_graph_config(#[case] alpha: f32) {
+        let pool = two_thread_pool();
+        let graph = graph_config(Metric::L2, alpha);
+
+        PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+    }
+
+    #[rstest]
+    #[case::zero_hash_planes(HashPruneConfig {
+        num_hash_planes: 0,
+        l_max: 64,
+        final_prune: true,
+    })]
+    #[case::too_many_hash_planes(HashPruneConfig {
+        num_hash_planes: 17,
+        l_max: 64,
+        final_prune: true,
+    })]
+    #[case::zero_l_max(HashPruneConfig {
+        num_hash_planes: 8,
+        l_max: 0,
+        final_prune: true,
+    })]
+    #[case::l_max_above_storage_limit(HashPruneConfig {
+        num_hash_planes: 8,
+        l_max: 256,
+        final_prune: true,
+    })]
+    fn invalid_hash_prune_parameter_is_rejected(#[case] invalid_config: HashPruneConfig) {
+        let graph = graph_config(Metric::L2, 1.2);
+        let pool = two_thread_pool();
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+
+        assert!(context.with_hash_prune(invalid_config).is_err());
+    }
+
     #[test]
-    fn does_not_add_alpha_validation_beyond_graph_config() {
-        let pool = pool();
-        for alpha in [0.9, f32::NAN, f32::INFINITY] {
-            let graph = graph_config(Metric::L2, alpha);
-            PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
-        }
+    fn candidate_capacity_below_graph_degree_is_rejected() {
+        let graph = graph_config(Metric::L2, 1.2);
+        let pool = two_thread_pool();
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let below_degree_capacity = HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 63,
+            final_prune: true,
+        };
+
+        assert!(context.with_hash_prune(below_degree_capacity).is_err());
+    }
+
+    #[test]
+    fn candidate_capacity_equal_to_graph_degree_is_accepted() {
+        let graph = graph_config(Metric::L2, 1.2);
+        let pool = two_thread_pool();
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let equal_degree_capacity = HashPruneConfig {
+            num_hash_planes: 8,
+            l_max: 64,
+            final_prune: true,
+        };
+
+        context.with_hash_prune(equal_degree_capacity).unwrap();
+    }
+
+    #[test]
+    fn hash_bucket_capacity_equal_to_graph_degree_is_accepted() {
+        let pool = two_thread_pool();
+        let graph = graph_config_with_degree(Metric::L2, 1.2, 2);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let two_hash_buckets = HashPruneConfig {
+            num_hash_planes: 1,
+            l_max: 64,
+            final_prune: true,
+        };
+
+        context.with_hash_prune(two_hash_buckets).unwrap();
+    }
+
+    #[test]
+    fn hash_bucket_capacity_below_graph_degree_is_rejected() {
+        let pool = two_thread_pool();
+        let graph = graph_config_with_degree(Metric::L2, 1.2, 3);
+        let context = PiPNNBuildContext::new(pipnn_config(), &graph, Metric::L2, &pool).unwrap();
+        let two_hash_buckets = HashPruneConfig {
+            num_hash_planes: 1,
+            l_max: 64,
+            final_prune: true,
+        };
+
+        assert!(context.with_hash_prune(two_hash_buckets).is_err());
     }
 }

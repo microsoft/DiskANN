@@ -11,11 +11,12 @@
 //! 1. Gather each ID and convert its vector to reusable `f32` storage.
 //! 2. Call the leaf kernel for ranking-distance construction and local ranking.
 //! 3. Convert local positions to global point IDs.
-//! 4. Add both edge directions to global candidate lists.
+//! 4. Add both edge directions to direct candidates or HashPrune reservoirs.
 //!
-//! Overlapping leaves run concurrently. A worker locks one destination list only
-//! while it adds one leaf's IDs. Reusable buffers keep their largest allocation.
-//! Each operation uses an explicit active prefix.
+//! Overlapping leaves run concurrently. The direct path locks one destination
+//! list while it adds IDs. The HashPrune path locks one source reservoir while it
+//! adds weighted edges. Reusable buffers keep their largest allocation. Each
+//! operation uses an explicit active prefix.
 
 use parking_lot::Mutex;
 
@@ -29,7 +30,7 @@ use super::{
     simd::PiPNNSIMDSchema,
 };
 
-/// Failure while converting leaves into direct graph candidates.
+/// Failure while converting leaves into graph candidates.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LeafBuildError {
     #[error("leaf {leaf} shape {rows} x {columns} overflows usize")]
@@ -53,18 +54,26 @@ pub(crate) enum LeafBuildError {
         #[source]
         source: crate::ANNError,
     },
+    #[error("leaf {leaf} produced too many directed edges")]
+    TooManyEdges { leaf: usize },
 }
 
 /// Reusable buffers for one Rayon leaf job.
 ///
-/// The numerical vectors keep the largest leaf shape that this job observed.
-/// The job creates local adjacency lists only when the effective `k` is not zero.
+/// The buffers keep the largest leaf shape that this job observed. The direct
+/// path uses `local_adjacency`. The HashPrune path uses the CSR and sketch
+/// buffers.
 #[derive(Default)]
 struct LeafBuffers {
     point_values: Vec<f32>,
     neighbors: Vec<LeafNeighbor>,
     local_adjacency: Vec<Vec<u32>>,
     kernel_workspace: LeafKernelWorkspace,
+    seen_pairs: Vec<bool>,
+    edge_offsets: Vec<u32>,
+    edges: Vec<(u32, f32)>,
+    edge_cursor: Vec<u32>,
+    sketch_scratch: Vec<f32>,
 }
 
 impl LeafBuffers {
@@ -83,6 +92,13 @@ impl LeafBuffers {
                     rows: point_count,
                     columns: dimension_count,
                 })?;
+        point_count
+            .checked_mul(point_count)
+            .ok_or(LeafBuildError::ShapeOverflow {
+                leaf,
+                rows: point_count,
+                columns: point_count,
+            })?;
         let leaf_k = leaf_neighbor_count(point_count, requested_k);
         let neighbor_count =
             point_count
@@ -103,6 +119,11 @@ impl LeafBuffers {
         self.local_adjacency[..point_count]
             .iter_mut()
             .for_each(Vec::clear);
+    }
+
+    fn prepare_seen_pairs(&mut self, point_count: usize) {
+        // `prepare` checked this product for the same leaf shape.
+        grow(&mut self.seen_pairs, point_count * point_count, false);
     }
 }
 
@@ -178,6 +199,56 @@ where
     Ok(candidates.into_lists())
 }
 
+/// Add weighted symmetric leaf edges to HashPrune reservoirs.
+#[allow(clippy::disallowed_methods)] // The supplied pool owns this terminal operation.
+pub(super) fn add_hash_prune_candidates<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    leaves: Vec<Vec<u32>>,
+    requested_k: usize,
+    hash_prune: &super::hash_prune::HashPrune,
+) -> Result<(), LeafBuildError>
+where
+    A: PiPNNSIMDSchema,
+    M: LeafMetric,
+    T: VectorRepr + 'static,
+{
+    leaves.par_iter().enumerate().try_for_each_init(
+        LeafBuffers::default,
+        |buffers, (leaf, point_ids)| {
+            let leaf_k = gather_leaf_neighbors::<A, M, T>(
+                arch,
+                data,
+                leaf,
+                point_ids,
+                requested_k,
+                buffers,
+            )?;
+            let point_count = point_ids.len();
+            buffers.prepare_seen_pairs(point_count);
+            let edge_count = build_symmetric_edge_csr(
+                leaf,
+                point_ids,
+                leaf_k,
+                &buffers.neighbors[..point_count * leaf_k],
+                EdgeBuffers {
+                    seen: &mut buffers.seen_pairs[..point_count * point_count],
+                    offsets: &mut buffers.edge_offsets,
+                    edges: &mut buffers.edges,
+                    cursor: &mut buffers.edge_cursor,
+                },
+            )?;
+            hash_prune.add_leaf_edges(
+                point_ids,
+                &buffers.edge_offsets[..point_count + 1],
+                &buffers.edges[..edge_count],
+                &mut buffers.sketch_scratch,
+            );
+            Ok(())
+        },
+    )
+}
+
 /// Add one leaf's symmetric neighbors to the direct candidate lists.
 ///
 /// Reusable buffers can be longer than this leaf, so all accesses use the current
@@ -197,10 +268,44 @@ where
     M: LeafMetric,
     T: VectorRepr + 'static,
 {
+    let leaf_k =
+        gather_leaf_neighbors::<A, M, T>(arch, data, leaf, point_ids, requested_k, buffers)?;
+    if leaf_k == 0 {
+        return Ok(());
+    }
+    buffers.prepare_local_adjacency(point_ids.len());
+    add_symmetric_neighbors(
+        point_ids,
+        leaf_k,
+        &buffers.neighbors[..point_ids.len() * leaf_k],
+        &mut buffers.local_adjacency[..point_ids.len()],
+    );
+    candidates.add_leaf(point_ids, &buffers.local_adjacency[..point_ids.len()]);
+    Ok(())
+}
+
+/// Select local nearest neighbors for one leaf.
+///
+/// The function gathers leaf IDs into a packed `f32` matrix. The leaf kernel
+/// owns Gram construction, norm preparation, and local ranking. This function
+/// returns the effective neighbor count for graph-edge mapping.
+fn gather_leaf_neighbors<A, M, T>(
+    arch: A,
+    data: MatrixView<'_, T>,
+    leaf: usize,
+    point_ids: &[u32],
+    requested_k: usize,
+    buffers: &mut LeafBuffers,
+) -> Result<usize, LeafBuildError>
+where
+    A: PiPNNSIMDSchema,
+    M: LeafMetric,
+    T: VectorRepr + 'static,
+{
     let (leaf_k, neighbor_value_count) =
         buffers.prepare(leaf, point_ids.len(), data.ncols(), requested_k)?;
     if leaf_k == 0 {
-        return Ok(());
+        return Ok(0);
     }
 
     let point_value_count = point_ids.len() * data.ncols();
@@ -238,18 +343,12 @@ where
     })?;
     select_leaf_neighbors::<A, M>(arch, points, output, &mut buffers.kernel_workspace)
         .map_err(|source| LeafBuildError::Kernel { leaf, source })?;
-
-    buffers.prepare_local_adjacency(point_ids.len());
-    add_symmetric_neighbors(
-        point_ids,
-        leaf_k,
-        &buffers.neighbors[..neighbor_value_count],
-        &mut buffers.local_adjacency[..point_ids.len()],
-    );
-    candidates.add_leaf(point_ids, &buffers.local_adjacency[..point_ids.len()]);
-    Ok(())
+    Ok(leaf_k)
 }
 
+/// Add symmetric dataset IDs from one leaf-kernel result.
+///
+/// The leaf kernel returns only leaf-local positions in `point_ids`.
 fn add_symmetric_neighbors(
     point_ids: &[u32],
     leaf_k: usize,
@@ -272,6 +371,132 @@ fn add_symmetric_neighbors(
     }
 }
 
+struct EdgeBuffers<'a> {
+    seen: &'a mut [bool],
+    offsets: &'a mut Vec<u32>,
+    edges: &'a mut Vec<(u32, f32)>,
+    cursor: &'a mut Vec<u32>,
+}
+
+/// Create directed leaf edges for HashPrune ingestion.
+///
+/// Each selected neighbor pair contributes both directions. Duplicate directions
+/// appear once. Each target is a position in `point_ids`.
+/// Build weighted CSR edges from one leaf-kernel result.
+///
+/// The leaf kernel returns only leaf-local positions in `point_ids`.
+fn build_symmetric_edge_csr(
+    leaf: usize,
+    point_ids: &[u32],
+    leaf_k: usize,
+    neighbors: &[LeafNeighbor],
+    buffers: EdgeBuffers<'_>,
+) -> Result<usize, LeafBuildError> {
+    let EdgeBuffers {
+        seen,
+        offsets,
+        edges,
+        cursor,
+    } = buffers;
+    let point_count = point_ids.len();
+    grow(offsets, point_count + 1, 0);
+    offsets[..point_count + 1].fill(0);
+    if leaf_k == 0 {
+        return Ok(0);
+    }
+
+    // The prior successful write pass left the active `seen` area clear. This
+    // count pass marks each unique directed edge.
+    for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
+        for neighbor in neighbors {
+            if !neighbor.is_assigned() {
+                continue;
+            }
+            let target = neighbor.target as usize;
+            count_directed_edge(leaf, point_count, source, target, seen, offsets)?;
+            count_directed_edge(leaf, point_count, target, source, seen, offsets)?;
+        }
+    }
+    for point in 1..=point_count {
+        offsets[point] = offsets[point]
+            .checked_add(offsets[point - 1])
+            .ok_or(LeafBuildError::TooManyEdges { leaf })?;
+    }
+
+    let edge_count = offsets[point_count] as usize;
+    grow(edges, edge_count, (0, 0.0));
+    grow(cursor, point_count, 0);
+    cursor[..point_count].copy_from_slice(&offsets[..point_count]);
+    let edges = &mut edges[..edge_count];
+    let cursor = &mut cursor[..point_count];
+
+    // This pass visits the same directions as the count pass. The first
+    // occurrence writes its edge and clears its mark for the next leaf.
+    for (source, neighbors) in neighbors.chunks_exact(leaf_k).enumerate() {
+        for neighbor in neighbors {
+            if !neighbor.is_assigned() {
+                continue;
+            }
+            let target = neighbor.target as usize;
+            write_counted_directed_edge(
+                point_count,
+                source,
+                target,
+                neighbor.distance,
+                seen,
+                edges,
+                cursor,
+            );
+            write_counted_directed_edge(
+                point_count,
+                target,
+                source,
+                neighbor.distance,
+                seen,
+                edges,
+                cursor,
+            );
+        }
+    }
+    Ok(edge_count)
+}
+
+fn count_directed_edge(
+    leaf: usize,
+    point_count: usize,
+    source: usize,
+    target: usize,
+    seen: &mut [bool],
+    offsets: &mut [u32],
+) -> Result<(), LeafBuildError> {
+    let seen_entry = &mut seen[source * point_count + target];
+    if !*seen_entry {
+        *seen_entry = true;
+        offsets[source + 1] = offsets[source + 1]
+            .checked_add(1)
+            .ok_or(LeafBuildError::TooManyEdges { leaf })?;
+    }
+    Ok(())
+}
+
+fn write_counted_directed_edge(
+    point_count: usize,
+    source: usize,
+    target: usize,
+    distance: f32,
+    seen: &mut [bool],
+    edges: &mut [(u32, f32)],
+    cursor: &mut [u32],
+) {
+    let seen_entry = &mut seen[source * point_count + target];
+    if *seen_entry {
+        *seen_entry = false;
+        let edge_slot = cursor[source] as usize;
+        edges[edge_slot] = (target as u32, distance);
+        cursor[source] += 1;
+    }
+}
+
 fn grow<T: Clone>(values: &mut Vec<T>, len: usize, value: T) {
     if values.len() < len {
         values.resize(len, value);
@@ -287,10 +512,10 @@ mod tests {
     use rstest::rstest;
     use std::collections::BTreeSet;
 
-    use super::super::simd::PiPNNSIMDSchema;
+    use super::super::{leaf_kernel::LeafNeighbor, simd::PiPNNSIMDSchema};
     use super::{
-        DirectCandidates, LeafBuffers, LeafBuildError, add_symmetric_neighbors,
-        build_leaf_candidates,
+        DirectCandidates, EdgeBuffers, LeafBuffers, LeafBuildError, add_symmetric_neighbors,
+        build_leaf_candidates, build_symmetric_edge_csr,
     };
 
     fn matrix_view<T>(data: &[T], rows: usize, columns: usize) -> MatrixView<'_, T> {
@@ -667,5 +892,139 @@ mod tests {
         let candidates = DirectCandidates::new(2);
         candidates.add_leaf(&[0, 1], &[vec![1, 1], vec![0]]);
         assert_eq!(adjacency_lists(candidates.into_lists()), [vec![1], vec![0]]);
+    }
+
+    #[test]
+    fn symmetric_edge_csr_contains_both_directions_in_source_order() {
+        // Given
+        let point_ids = [10, 20, 30];
+        let neighbors = [
+            LeafNeighbor::new(1, 1.0),
+            LeafNeighbor::new(2, 2.0),
+            LeafNeighbor::new(1, 1.5),
+        ];
+        let expected_edge_count = 4;
+        let expected_offsets = [0, 1, 3, 4];
+        let expected_edges = [(1, 1.0), (0, 1.0), (2, 2.0), (1, 2.0)];
+        let mut seen = vec![false; 9];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+
+        // When
+        let actual_edge_count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            1,
+            &neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        // Then
+        assert_eq!(actual_edge_count, expected_edge_count);
+        assert_eq!(offsets, expected_offsets);
+        assert_eq!(edges, expected_edges);
+    }
+
+    #[test]
+    fn symmetric_edge_csr_omits_unassigned_neighbors() {
+        let point_ids = [10, 20];
+        let neighbors = [LeafNeighbor::new(1, 1.0), LeafNeighbor::default()];
+        let mut seen = vec![false; 4];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+
+        let count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            1,
+            &neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(offsets, [0, 1, 2]);
+        assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
+    }
+
+    #[test]
+    fn symmetric_edge_csr_deduplicates_edges_seen_from_both_endpoints() {
+        let point_ids = [10, 20];
+        let neighbors = [LeafNeighbor::new(1, 1.0), LeafNeighbor::new(0, 1.0)];
+        let mut seen = vec![false; 4];
+        let mut offsets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cursor = Vec::new();
+
+        let count = build_symmetric_edge_csr(
+            0,
+            &point_ids,
+            1,
+            &neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(offsets, [0, 1, 2]);
+        assert_eq!(edges, [(1, 1.0), (0, 1.0)]);
+        assert!(seen.iter().all(|&entry| !entry));
+    }
+
+    #[test]
+    fn singleton_leaf_produces_empty_edge_csr() {
+        // Given
+        let leaf = 0;
+        let point_ids = [10];
+        let effective_neighbor_count = 0;
+        let no_neighbors = [];
+        let stale_edge = (99, 99.0);
+        let expected_edge_count = 0;
+        let expected_offsets = [0, 0];
+        let expected_edges = [stale_edge];
+        let expected_seen = [false];
+        let mut seen = vec![false; 1];
+        let mut offsets = Vec::new();
+        let mut edges = vec![stale_edge];
+        let mut cursor = Vec::new();
+
+        // When
+        let actual_edge_count = build_symmetric_edge_csr(
+            leaf,
+            &point_ids,
+            effective_neighbor_count,
+            &no_neighbors,
+            EdgeBuffers {
+                seen: &mut seen,
+                offsets: &mut offsets,
+                edges: &mut edges,
+                cursor: &mut cursor,
+            },
+        )
+        .unwrap();
+
+        // Then
+        assert_eq!(actual_edge_count, expected_edge_count);
+        assert_eq!(offsets, expected_offsets);
+        assert_eq!(edges, expected_edges);
+        assert_eq!(seen, expected_seen);
     }
 }
