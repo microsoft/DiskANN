@@ -273,6 +273,7 @@ fn test_f32_to_f16_exhaustive<T, U, const N: usize>(
     );
 }
 
+#[cfg(not(miri))]
 #[test]
 fn test_f32_to_f16() {
     let cases = parse_float16_reference_file();
