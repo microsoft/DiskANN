@@ -222,8 +222,8 @@ where
 /// `clippy::type_complexity`'s default threshold.
 type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
 
-/// Encodes whether to accept all candidates or apply a specific predicate.
-/// Used during flat scans and by graph-search post-processors.
+/// Encodes whether to accept all candidates at post-processing time or apply a
+/// specific predicate.
 #[derive(Clone, Copy)]
 pub enum PostprocessStrategy<'a> {
     /// Accept every candidate — no predicate is called.
@@ -240,7 +240,7 @@ where
     // Borrowed from `search_internal` so the strategy can be passed by value
     io_tracker: &'a IOTracker,
     cache_indexed_vectors: bool,
-    /// Applied during flat scans or by the default graph-search post-processor.
+    /// Consumed by the default graph-search post-processor.
     postprocess_filter: PostprocessStrategy<'a>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
@@ -396,8 +396,7 @@ impl<A: Clone + Send, V> search_output_buffer::SearchOutputBuffer<SearchPayload<
 }
 
 fn extend_output<Data, VP, B, I>(
-    cache_indexed_vectors: bool,
-    scratch: &mut DiskSearchScratch<Data, VP>,
+    accessor: &mut DiskAccessor<'_, Data, VP>,
     reranked: I,
     output: &mut B,
 ) -> ANNResult<usize>
@@ -410,7 +409,7 @@ where
         > + Send
         + ?Sized,
 {
-    if !cache_indexed_vectors {
+    if !accessor.cache_indexed_vectors {
         return Ok(output.extend(reranked.into_iter().map(|candidate| {
             let ((id, data), distance) = candidate.as_tuple();
             Neighbor::new((id, data, None), distance)
@@ -423,13 +422,14 @@ where
             break;
         }
         let ((id, data), distance) = candidate.as_tuple();
-        let vector = match scratch
+        let vector = match accessor
+            .scratch
             .distance_cache
             .remove(&id)
             .and_then(|(_, _, vector)| vector)
         {
             Some(vector) => vector,
-            None => Box::from(scratch.vertex_provider.get_vector(&id)?),
+            None => Box::from(accessor.scratch.vertex_provider.get_vector(&id)?),
         };
         count += 1;
         if output
@@ -440,63 +440,6 @@ where
         }
     }
     Ok(count)
-}
-
-fn rerank_and_filter<Data, VP, I, B>(
-    filter: PostprocessStrategy<'_>,
-    provider: &DiskProvider<Data>,
-    scratch: &mut DiskSearchScratch<Data, VP>,
-    query: &[Data::VectorDataType],
-    cache_indexed_vectors: bool,
-    candidates: I,
-    output: &mut B,
-) -> ANNResult<usize>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-    I: Iterator<Item = Neighbor<u32>>,
-    B: search_output_buffer::SearchOutputBuffer<
-            SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
-        > + Send
-        + ?Sized,
-{
-    let mut uncached_ids = Vec::new();
-    let mut reranked: Vec<_> = {
-        let mut process = |id: u32| {
-            if let Some(entry) = scratch.distance_cache.get(&id) {
-                Some(Neighbor::new((id, entry.1), entry.0))
-            } else {
-                uncached_ids.push(id);
-                None
-            }
-        };
-        match filter {
-            PostprocessStrategy::AcceptAll => candidates
-                .map(|candidate| *candidate.id())
-                .filter_map(&mut process)
-                .collect(),
-            PostprocessStrategy::Apply(predicate) => candidates
-                .map(|candidate| *candidate.id())
-                .filter(|id| predicate(id))
-                .filter_map(&mut process)
-                .collect(),
-        }
-    };
-
-    if !uncached_ids.is_empty() {
-        ensure_vertex_loaded(&mut scratch.vertex_provider, &uncached_ids)?;
-        for id in uncached_ids {
-            let vector = scratch.vertex_provider.get_vector(&id)?;
-            let distance = provider
-                .distance_comparer
-                .evaluate_similarity(query, vector);
-            let data = *scratch.vertex_provider.get_associated_data(&id)?;
-            reranked.push(Neighbor::new((id, data), distance));
-        }
-    }
-
-    reranked.sort_unstable_by(neighbor::ord::fast_distance);
-    extend_output(cache_indexed_vectors, scratch, reranked, output)
 }
 
 impl<Data, VP>
@@ -524,15 +467,44 @@ where
             > + Send
             + ?Sized,
     {
-        rerank_and_filter(
-            self.filter,
-            accessor.provider,
-            &mut accessor.scratch,
-            query,
-            accessor.cache_indexed_vectors,
-            candidates,
-            output,
-        )
+        let provider = accessor.provider;
+        let mut uncached_ids = Vec::new();
+        let mut reranked: Vec<_> = {
+            let mut process = |id: u32| {
+                if let Some(entry) = accessor.scratch.distance_cache.get(&id) {
+                    Some(Neighbor::new((id, entry.1), entry.0))
+                } else {
+                    uncached_ids.push(id);
+                    None
+                }
+            };
+            match self.filter {
+                PostprocessStrategy::AcceptAll => candidates
+                    .map(|candidate| *candidate.id())
+                    .filter_map(&mut process)
+                    .collect(),
+                PostprocessStrategy::Apply(predicate) => candidates
+                    .map(|candidate| *candidate.id())
+                    .filter(|id| predicate(id))
+                    .filter_map(&mut process)
+                    .collect(),
+            }
+        };
+
+        if !uncached_ids.is_empty() {
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            for id in uncached_ids {
+                let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
+                let distance = provider
+                    .distance_comparer
+                    .evaluate_similarity(query, vector);
+                let data = *accessor.scratch.vertex_provider.get_associated_data(&id)?;
+                reranked.push(Neighbor::new((id, data), distance));
+            }
+        }
+
+        reranked.sort_unstable_by(neighbor::ord::fast_distance);
+        extend_output(accessor, reranked, output)
     }
 }
 
@@ -606,8 +578,7 @@ where
         )?;
 
         extend_output(
-            accessor.cache_indexed_vectors,
-            &mut accessor.scratch,
+            accessor,
             reranked.into_iter().map(|idx| {
                 let id = candidate_ids[idx];
                 let distance = candidate_distances[idx];
@@ -1199,6 +1170,7 @@ where
         &self,
         strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
         query: &[Data::VectorDataType],
+        vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
         neighbors_before_reranking: usize,
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
@@ -1213,12 +1185,8 @@ where
                 "flat search list size must be greater than zero",
             )
         })?;
-        let flat_scan_filter = match strategy.postprocess_filter {
-            PostprocessStrategy::AcceptAll => None,
-            PostprocessStrategy::Apply(filter) => Some(filter),
-        };
         let mut visitor = DiskAccessor::new(self.index.provider(), query, strategy)?
-            .with_flat_scan_filter(flat_scan_filter);
+            .with_flat_scan_filter(vector_filter);
         let FlatSearchStats { cmps, result_count } = flat_knn_search(
             &mut visitor,
             k,
@@ -1461,14 +1429,13 @@ where
             SearchMode::FlatScan { filter } => {
                 let strategy = self.search_strategy(
                     &io_tracker,
-                    filter
-                        .as_deref()
-                        .map_or(PostprocessStrategy::AcceptAll, PostprocessStrategy::Apply),
+                    PostprocessStrategy::AcceptAll,
                     cache_indexed_vectors,
                 );
                 self.runtime.block_on(self.flat_search(
                     &strategy,
                     query,
+                    filter.as_deref(),
                     l,
                     &mut result_output_buffer,
                 ))?
