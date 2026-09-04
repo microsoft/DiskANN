@@ -4,6 +4,9 @@
 #include "in_mem_graph_store.h"
 #include "utils.h"
 
+#include <cstring>
+#include <vector>
+
 namespace diskann
 {
 
@@ -204,32 +207,82 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
 int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t num_points,
                                 const size_t num_frozen_points, const uint32_t start)
 {
+    // Save graph to disk in batches to avoid the massive syscall overhead of
+    // the original per-node ofstream::write() calls.
+    //
+    // Original: 2 writes/node * ~88M nodes = ~176M syscalls,
+    //           observed throughput ~11 MB/s on 18.7 GB output.
+    // New:      Serialize into 32 MB batches; ~600 syscalls total.
+    //
+    // Byte-for-byte equivalent to the original layout:
+    //   header (24B): [index_size u64][max_observed_degree u32][ep u32][num_frozen u64]
+    //   per node:     [GK u32][neighbors[GK] u32]
+    //   header is back-patched at the end with the true index_size + max_degree.
+
     std::ofstream out;
     open_file_to_write(out, index_path_prefix);
+
+    // Bump the stdio buffer as a safety net in case any write bypasses our batch.
+    constexpr size_t kStdioBufSize = 16 * 1024 * 1024; // 16 MB
+    std::vector<char> stdio_buf(kStdioBufSize);
+    out.rdbuf()->pubsetbuf(stdio_buf.data(), stdio_buf.size());
 
     size_t file_offset = 0;
     out.seekp(file_offset, out.beg);
     size_t index_size = 24;
     uint32_t max_degree = 0;
+
+    // Placeholder header (overwritten at the end).
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&_max_observed_degree, sizeof(uint32_t));
     uint32_t ep_u32 = start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
     out.write((char *)&num_frozen_points, sizeof(size_t));
 
-    // Note: num_points = _nd + _num_frozen_points
+    // Batched write: accumulate 32 MB of node data before hitting the disk.
+    constexpr size_t kBatchSize = 32 * 1024 * 1024; // 32 MB
+    // Worst-case node bytes: (1 header uint32 + max_degree neighbors) * 4 B.
+    // Use a generous cap so we never overshoot the batch by too much.
+    const size_t kMaxNodeBytes = (static_cast<size_t>(_max_observed_degree) + 4) * sizeof(uint32_t);
+    std::vector<char> batch;
+    batch.reserve(kBatchSize + kMaxNodeBytes);
+
+    auto flush_batch = [&]() {
+        if (!batch.empty())
+        {
+            out.write(batch.data(), batch.size());
+            batch.clear();
+        }
+    };
+
     for (uint32_t i = 0; i < num_points; i++)
     {
         uint32_t GK = (uint32_t)_graph[i].size();
-        out.write((char *)&GK, sizeof(uint32_t));
-        out.write((char *)_graph[i].data(), GK * sizeof(uint32_t));
+        size_t node_bytes = sizeof(uint32_t) * (1 + GK);
+
+        // Append GK followed by the neighbor array to the batch buffer.
+        size_t old_size = batch.size();
+        batch.resize(old_size + node_bytes);
+        std::memcpy(batch.data() + old_size, &GK, sizeof(uint32_t));
+        std::memcpy(batch.data() + old_size + sizeof(uint32_t),
+                    _graph[i].data(), GK * sizeof(uint32_t));
+
         max_degree = _graph[i].size() > max_degree ? (uint32_t)_graph[i].size() : max_degree;
-        index_size += (size_t)(sizeof(uint32_t) * (GK + 1));
+        index_size += node_bytes;
+
+        if (batch.size() >= kBatchSize)
+        {
+            flush_batch();
+        }
     }
+    flush_batch();
+
+    // Back-patch the header with the actual index size and max degree.
     out.seekp(file_offset, out.beg);
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&max_degree, sizeof(uint32_t));
     out.close();
+
     return (int)index_size;
 }
 

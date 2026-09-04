@@ -31,7 +31,12 @@ if (NOT Boost_FOUND)
     message(FATAL_ERROR "Couldn't find Boost dependency")
 endif()
 
-set(DISKANN_UNIT_TEST_SOURCES main.cpp index_write_parameters_builder_tests.cpp unified_index_tests.cpp filter_match_proxy_tests.cpp)
+set(DISKANN_UNIT_TEST_SOURCES
+    main.cpp
+    index_write_parameters_builder_tests.cpp
+    unified_index_tests.cpp
+    build_optimization_tests.cpp
+    filter_match_proxy_tests.cpp)
 
 # Link the tests against the static DiskANN core (diskann_s) rather than the
 # DLL, so internal-only symbols don't need to be exported from the DLL just to
@@ -97,4 +102,3 @@ foreach(variant ${INSERT_FAST_SIMD_VARIANTS})
 
     add_test(NAME ${v_target} COMMAND ${v_target})
 endforeach()
-
