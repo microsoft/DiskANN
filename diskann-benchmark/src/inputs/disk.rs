@@ -478,12 +478,12 @@ impl DiskIndexBuild {
                         write_field!(f, "Quantization", format!("sq, nbits {nbits}"))?
                     }
                 }
+                QuantizationType::Spherical(bits) => write_field!(
+                    f,
+                    "Quantization",
+                    format!("spherical, nbits {}", bits.as_usize())
+                )?,
             }
-            QuantizationType::Spherical(bits) => write_field!(
-                f,
-                "Quantization",
-                format!("spherical, nbits {}", bits.as_usize())
-            )?,
         }
         #[cfg(feature = "disk-index")]
         write_field!(f, "Build Algorithm", self.build_algorithm)?;
