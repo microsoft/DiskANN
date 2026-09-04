@@ -214,7 +214,7 @@ impl<'a, T> Strided<'a, T> {
     pub fn as_slice(&self) -> &[T] {
         let layout = self.layout();
 
-        // SAFETY: Constructors verify that the backing memory has a length as least
+        // SAFETY: Constructors verify that the backing memory has a length at least
         // `layout.linear_length()`.
         unsafe { std::slice::from_raw_parts(self.as_ptr(), layout.linear_length()) }
     }
@@ -325,7 +325,7 @@ impl<'a, T> Strided<'a, T> {
     }
 }
 
-/// Errors for [`Strided::new`].
+/// Errors for [`Strided::try_from_data`].
 #[derive(Debug, Error)]
 pub enum TryFromError {
     #[error(transparent)]
