@@ -31,7 +31,6 @@ macros::x86_define_default!(f32x4, _mm_setzero_ps, "sse");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Add, add, _mm_add_ps, "sse");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Sub, sub, _mm_sub_ps, "sse");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Mul, mul, _mm_mul_ps, "sse");
-helpers::unsafe_map_binary_op!(f32x4, std::ops::Div, div, _mm_div_ps, "sse");
 
 impl f32x4 {
     #[inline(always)]
@@ -254,7 +253,6 @@ mod test_x86_f32 {
     test_utils::ops::test_add!(f32x4, 0xcd7a8fea9a3fb727, V3::new_checked_uncached());
     test_utils::ops::test_sub!(f32x4, 0x3f6562c94c923238, V3::new_checked_uncached());
     test_utils::ops::test_mul!(f32x4, 0x07e48666c0fc564c, V3::new_checked_uncached());
-    test_utils::ops::test_div!(f32x4, 0xa0352efeb9bc5ca5, V3::new_checked_uncached());
     test_utils::ops::test_fma!(f32x4, 0xcfde9d031302cf2c, V3::new_checked_uncached());
     test_utils::ops::test_minmax!(f32x4, 0x6d7fc8ed6d852187, V3::new_checked_uncached());
     test_utils::ops::test_abs!(f32x4, 0x8e6d9944c9c43a74, V3::new_checked_uncached());

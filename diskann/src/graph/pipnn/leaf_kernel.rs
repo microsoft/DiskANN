@@ -5,9 +5,8 @@
 
 //! Leaf-local top-k selection from packed `f32` point vectors.
 //!
-//! The kernel computes the lower-triangular Gram matrix and metric-specific
-//! norms. Its ranking loop reads each strict-lower point pair once and updates
-//! both points.
+//! The metric fills a flattened lower-triangular distance buffer. The kernel
+//! reads each strict-lower point pair once and updates both points.
 //!
 //! The output is an `n × k` matrix of sorted [`LeafNeighbor`] values. Each target
 //! is a position in the leaf. Widths 1 through 3 use fixed insertion. Larger
@@ -17,8 +16,7 @@
 //! An unfilled output slot contains [`LeafNeighbor::default`]. All supported
 //! metrics use the same SIMD-group and single-value traversal.
 //!
-//! The caller supplies concrete architecture `A` and metric `M`. The private
-//! dot ranker receives the square matrix created by this module.
+//! The caller supplies concrete architecture `A` and metric `M`.
 //! [`LeafKernelWorkspace`] stores reusable numerical scratch.
 
 use crate::{ANNError, ANNResult};
@@ -26,7 +24,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_wide::{SIMDPartialOrd, SIMDVector};
 
 use super::{
-    kernel_metric::LeafMetric,
+    leaf_metric::LeafMetric,
     simd::{PiPNNSIMDSchema, PiPNNSIMDVector},
 };
 
@@ -42,8 +40,8 @@ pub(super) struct LeafNeighbor {
 impl LeafNeighbor {
     /// Construct a leaf-local neighbor.
     ///
-    /// `target` is a position in the leaf. `distance` is its score relative to
-    /// the source of the output row.
+    /// `target` is a position in the leaf. `distance` is measured from the
+    /// source point of the output row.
     pub(super) const fn new(target: u32, distance: f32) -> Self {
         Self { target, distance }
     }
@@ -63,12 +61,11 @@ impl Default for LeafNeighbor {
 /// Reusable storage for one leaf numerical pipeline.
 #[derive(Debug, Default)]
 pub(super) struct LeafKernelWorkspace {
-    dot_scratch: Vec<f32>,
-    norm_scratch: Vec<f32>,
+    distance_scratch: Vec<f32>,
     worst: Vec<f32>,
 }
 
-/// Validation error returned by the dot-ranking loop.
+/// Validation error returned by the distance-ranking loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(super) enum LeafKernelError {
     /// A source requests more neighbors than the leaf or fixed kernel supports.
@@ -105,58 +102,75 @@ where
     M: LeafMetric,
 {
     let point_count = points.nrows();
-    let dot_count = point_count * point_count;
+    let distance_count = point_count * point_count;
     let LeafKernelWorkspace {
-        dot_scratch,
-        norm_scratch,
+        distance_scratch,
         worst,
     } = workspace;
-    if dot_scratch.len() < dot_count {
-        dot_scratch.resize(dot_count, 0.0);
+    if distance_scratch.len() < distance_count {
+        distance_scratch.resize(distance_count, 0.0);
     }
-    diskann_linalg::sgemm_aat_lower(
+    M::compute_distances(arch, points, &mut distance_scratch[..distance_count])?;
+    rank_leaf_distances(
+        arch,
+        &distance_scratch[..distance_count],
         point_count,
-        points.ncols(),
-        points.as_slice(),
-        &mut dot_scratch[..dot_count],
+        output,
+        worst,
     )
-    .map_err(ANNError::new)?;
-    let dots = MatrixView::try_from(&dot_scratch[..dot_count], point_count, point_count)
-        .map_err(|error| ANNError::new(error.as_static()))?;
-    M::prepare_leaf_norms(dots, norm_scratch);
-    rank_leaf_dots::<A, M>(arch, dots, norm_scratch, output, worst).map_err(ANNError::new)
+    .map_err(ANNError::new)
 }
 
-/// Rank a prepared lower-triangular Gram matrix.
-fn rank_leaf_dots<A, M>(
+/// Rank one flattened lower-triangle buffer.
+///
+/// `distance_flatten` contains `point_count * point_count` elements. The metric
+/// initializes each strict-lower entry. The kernel does not read the upper triangle.
+fn rank_leaf_distances<A>(
     arch: A,
-    input: MatrixView<'_, f32>,
-    norms: &[f32],
+    distance_flatten: &[f32],
+    point_count: usize,
     mut output: MutMatrixView<'_, LeafNeighbor>,
     worst: &mut Vec<f32>,
 ) -> Result<(), LeafKernelError>
 where
     A: PiPNNSIMDSchema,
-    M: LeafMetric,
 {
-    validate_neighbor_count(input, &output)?;
+    validate_neighbor_count(point_count, &output)?;
     let neighbor_count = output.ncols();
     if neighbor_count == 0 {
         return Ok(());
     }
 
-    worst.resize(input.nrows(), f32::INFINITY);
+    worst.resize(point_count, f32::INFINITY);
     output.as_mut_slice().fill(LeafNeighbor::default());
     worst.fill(f32::INFINITY);
 
     match neighbor_count {
-        1 => scan_fixed_width::<A, M, 1>(arch, input, norms, output.as_mut_slice(), worst),
-        2 => scan_fixed_width::<A, M, 2>(arch, input, norms, output.as_mut_slice(), worst),
-        3 => scan_fixed_width::<A, M, 3>(arch, input, norms, output.as_mut_slice(), worst),
-        _ => scan_runtime_width::<A, M>(
+        1 => scan_fixed_width::<A, 1>(
             arch,
-            input,
-            norms,
+            distance_flatten,
+            point_count,
+            output.as_mut_slice(),
+            worst,
+        ),
+        2 => scan_fixed_width::<A, 2>(
+            arch,
+            distance_flatten,
+            point_count,
+            output.as_mut_slice(),
+            worst,
+        ),
+        3 => scan_fixed_width::<A, 3>(
+            arch,
+            distance_flatten,
+            point_count,
+            output.as_mut_slice(),
+            worst,
+        ),
+        _ => scan_runtime_width(
+            arch,
+            distance_flatten,
+            point_count,
             output.as_mut_slice(),
             neighbor_count,
             worst,
@@ -169,10 +183,9 @@ where
 ///
 /// Check the output width against the number of non-self points.
 fn validate_neighbor_count(
-    input: MatrixView<'_, f32>,
+    point_count: usize,
     output: &MutMatrixView<'_, LeafNeighbor>,
 ) -> Result<(), LeafKernelError> {
-    let point_count = input.nrows();
     let maximum_neighbors = point_count.saturating_sub(1);
     let neighbor_count = output.ncols();
     if neighbor_count > maximum_neighbors {
@@ -186,96 +199,101 @@ fn validate_neighbor_count(
 }
 
 /// Select neighbors with a fixed output width.
-fn scan_fixed_width<A, M, const N: usize>(
+fn scan_fixed_width<A, const N: usize>(
     arch: A,
-    input: MatrixView<'_, f32>,
-    norms: &[f32],
+    distance_flatten: &[f32],
+    point_count: usize,
     output: &mut [LeafNeighbor],
     worst: &mut [f32],
 ) where
     A: PiPNNSIMDSchema,
-    M: LeafMetric,
     [LeafNeighbor; N]: SortedInsert<LeafNeighbor>,
 {
     let (rows, _) = output.as_chunks_mut::<N>();
     // Rayon outlines leaf workers. Reapply target features before the SIMD scan.
     arch.run(move || {
-        scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
-            insert_eligible_neighbor(&mut rows[source], target, distance)
-        });
+        scan_point_pairs(
+            arch,
+            distance_flatten,
+            point_count,
+            worst,
+            |source, target, distance| {
+                insert_eligible_neighbor(&mut rows[source], target, distance)
+            },
+        );
     });
 }
 
 /// Select neighbors with a runtime output width.
-fn scan_runtime_width<A, M>(
+fn scan_runtime_width<A>(
     arch: A,
-    input: MatrixView<'_, f32>,
-    norms: &[f32],
+    distance_flatten: &[f32],
+    point_count: usize,
     output: &mut [LeafNeighbor],
     width: usize,
     worst: &mut [f32],
 ) where
     A: PiPNNSIMDSchema,
-    M: LeafMetric,
 {
     // Rayon outlines leaf workers. Reapply target features before the SIMD scan.
     arch.run(move || {
-        scan_point_pairs::<A, M, _>(arch, input, norms, worst, |source, target, distance| {
-            let first = source * width;
-            insert_eligible_neighbor(&mut output[first..first + width], target, distance)
-        });
+        scan_point_pairs(
+            arch,
+            distance_flatten,
+            point_count,
+            worst,
+            |source, target, distance| {
+                let first = source * width;
+                insert_eligible_neighbor(&mut output[first..first + width], target, distance)
+            },
+        );
     });
 }
 
 /// Select neighbors from all unordered point pairs in one leaf.
 ///
 /// The function reads the strict lower triangle once. It offers each distance to
-/// both endpoint lists. SIMD groups and single values preserve pair scan order.
+/// both endpoint lists. SIMD groups and scalar tails preserve pair scan order.
 #[inline(always)]
-fn scan_point_pairs<A, M, I>(
+fn scan_point_pairs<A, I>(
     arch: A,
-    input: MatrixView<'_, f32>,
-    norms: &[f32],
+    distance_flatten: &[f32],
+    point_count: usize,
     worst: &mut [f32],
     mut insert: I,
 ) where
     A: PiPNNSIMDSchema,
-    M: LeafMetric,
     I: FnMut(usize, u32, f32) -> f32,
 {
-    let point_count = input.nrows();
-    let dots = input.as_slice();
     let worst_ptr = worst.as_mut_ptr();
 
     for source in 1..point_count {
         let source_start = source * point_count;
-        let source_simd = M::source_simd(arch, norms, source);
-        let source_single = M::source_single(norms, source);
-        // SAFETY: `rank_leaf_dots` created one threshold for each point.
+        // SAFETY: `rank_leaf_distances` created one threshold for each point.
         let mut source_worst = unsafe { *worst_ptr.add(source) };
         let mut target = 0;
         let simd_prefix = source - source % A::Vector::LANES;
 
         while target < simd_prefix {
             // SAFETY: This complete SIMD group is in the strict-lower prefix.
-            let dot_products =
-                unsafe { A::Vector::load_simd(arch, dots.as_ptr().add(source_start + target)) };
-            let distances = M::distances_simd(arch, norms, source_simd, dot_products, target);
-            let source_eligible = distances.lt_simd(A::Vector::splat(arch, source_worst));
+            let distance_group = unsafe {
+                A::Vector::load_simd(arch, distance_flatten.as_ptr().add(source_start + target))
+            };
+            let source_eligible = distance_group.lt_simd(A::Vector::splat(arch, source_worst));
             // SAFETY: The complete target group is below `source < point_count`.
             let target_worst = unsafe { A::Vector::load_simd(arch, worst_ptr.add(target)) };
-            let target_eligible = distances.lt_simd(target_worst);
+            let target_eligible = distance_group.lt_simd(target_worst);
             let source_bits = A::Vector::active_lanes(source_eligible);
             let target_bits = A::Vector::active_lanes(target_eligible);
 
             if source_bits | target_bits != 0 {
-                let values = distances.to_lane_array();
-                let values = values.as_ref();
+                let distance_lanes = distance_group.to_lane_array();
+                let distance_lanes = distance_lanes.as_ref();
                 let mut source_bits = source_bits;
                 while source_bits != 0 {
                     let lane = source_bits.trailing_zeros() as usize;
                     source_bits &= source_bits - 1;
-                    let distance = values[lane];
+                    let distance = distance_lanes[lane];
                     if distance < source_worst {
                         source_worst = insert(source, (target + lane) as u32, distance);
                     }
@@ -286,7 +304,7 @@ fn scan_point_pairs<A, M, I>(
                     let lane = target_bits.trailing_zeros() as usize;
                     target_bits &= target_bits - 1;
                     let target_source = target + lane;
-                    let new_worst = insert(target_source, source as u32, values[lane]);
+                    let new_worst = insert(target_source, source as u32, distance_lanes[lane]);
                     // SAFETY: `target_source < source < worst.len()`.
                     unsafe { *worst_ptr.add(target_source) = new_worst };
                 }
@@ -296,8 +314,7 @@ fn scan_point_pairs<A, M, I>(
 
         while target < source {
             // SAFETY: The target is in this source's strict-lower prefix.
-            let dot_product = unsafe { *dots.get_unchecked(source_start + target) };
-            let distance = M::distance_single(norms, source_single, dot_product, target);
+            let distance = unsafe { *distance_flatten.get_unchecked(source_start + target) };
             if distance < source_worst {
                 source_worst = insert(source, target as u32, distance);
             }
@@ -403,7 +420,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::kernel_metric::{Cosine, CosineNormalized, InnerProduct, L2};
+    use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2};
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
 
@@ -413,148 +430,48 @@ mod tests {
         use super::*;
         use diskann_wide::arch::{self, Target1};
 
-        struct KernelCall<'a> {
-            input: MatrixView<'a, f32>,
-            norms: &'a [f32],
-            output: MutMatrixView<'a, LeafNeighbor>,
-            workspace: &'a mut LeafKernelWorkspace,
+        pub(super) trait TestMetric {
+            const METRIC: Metric;
         }
 
-        struct DispatchMetric(Metric);
+        impl TestMetric for L2 {
+            const METRIC: Metric = Metric::L2;
+        }
 
-        impl<A> Target1<A, Result<(), LeafKernelError>, KernelCall<'_>> for DispatchMetric
+        impl TestMetric for Cosine {
+            const METRIC: Metric = Metric::Cosine;
+        }
+
+        impl TestMetric for CosineNormalized {
+            const METRIC: Metric = Metric::CosineNormalized;
+        }
+
+        impl TestMetric for InnerProduct {
+            const METRIC: Metric = Metric::InnerProduct;
+        }
+
+        struct KernelCall<'a> {
+            distance_flatten: &'a [f32],
+            point_count: usize,
+            output: MutMatrixView<'a, LeafNeighbor>,
+            worst: &'a mut Vec<f32>,
+        }
+
+        struct RankDistances;
+
+        impl<A> Target1<A, Result<(), LeafKernelError>, KernelCall<'_>> for RankDistances
         where
             A: PiPNNSIMDSchema,
         {
             fn run(self, arch: A, call: KernelCall<'_>) -> Result<(), LeafKernelError> {
-                match self.0 {
-                    Metric::L2 => rank_leaf_dots::<A, L2>(
-                        arch,
-                        call.input,
-                        call.norms,
-                        call.output,
-                        &mut call.workspace.worst,
-                    ),
-                    Metric::Cosine => rank_leaf_dots::<A, Cosine>(
-                        arch,
-                        call.input,
-                        call.norms,
-                        call.output,
-                        &mut call.workspace.worst,
-                    ),
-                    Metric::CosineNormalized => rank_leaf_dots::<A, CosineNormalized>(
-                        arch,
-                        call.input,
-                        call.norms,
-                        call.output,
-                        &mut call.workspace.worst,
-                    ),
-                    Metric::InnerProduct => rank_leaf_dots::<A, InnerProduct>(
-                        arch,
-                        call.input,
-                        call.norms,
-                        call.output,
-                        &mut call.workspace.worst,
-                    ),
-                }
+                rank_leaf_distances(
+                    arch,
+                    call.distance_flatten,
+                    call.point_count,
+                    call.output,
+                    call.worst,
+                )
             }
-        }
-
-        fn lower_gram_view(dots: &[f32], points: usize) -> MatrixView<'_, f32> {
-            MatrixView::try_from(dots, points, points).unwrap()
-        }
-
-        fn metric_norms(metric: Metric, lower_gram: MatrixView<'_, f32>) -> Vec<f32> {
-            fn prepare<M: LeafMetric>(lower_gram: MatrixView<'_, f32>) -> Vec<f32> {
-                let mut norms = Vec::new();
-                M::prepare_leaf_norms(lower_gram, &mut norms);
-                norms
-            }
-
-            match metric {
-                Metric::L2 => prepare::<L2>(lower_gram),
-                Metric::Cosine => prepare::<Cosine>(lower_gram),
-                Metric::CosineNormalized => prepare::<CosineNormalized>(lower_gram),
-                Metric::InnerProduct => prepare::<InnerProduct>(lower_gram),
-            }
-        }
-
-        pub(super) fn with_rank_leaf_dots_fixture<M, F>(
-            dots: &[f32],
-            points: usize,
-            output_width: usize,
-            run: F,
-        ) -> Result<Vec<LeafNeighbor>, LeafKernelError>
-        where
-            M: LeafMetric,
-            F: FnOnce(
-                MatrixView<'_, f32>,
-                &[f32],
-                MutMatrixView<'_, LeafNeighbor>,
-                &mut Vec<f32>,
-            ) -> Result<(), LeafKernelError>,
-        {
-            let input = lower_gram_view(dots, points);
-            let mut norms = Vec::new();
-            M::prepare_leaf_norms(input, &mut norms);
-            let mut output = vec![LeafNeighbor::default(); points * output_width];
-            let output_view =
-                MutMatrixView::try_from(output.as_mut_slice(), points, output_width).unwrap();
-            run(input, &norms, output_view, &mut Vec::new())?;
-            Ok(output)
-        }
-
-        /// Run the production ranker through runtime architecture and metric dispatch.
-        fn run_rank_leaf_dots_with_output_width(
-            metric: Metric,
-            dots: &[f32],
-            points: usize,
-            output_width: usize,
-            workspace: &mut LeafKernelWorkspace,
-        ) -> Result<Vec<LeafNeighbor>, LeafKernelError> {
-            let lower_gram = lower_gram_view(dots, points);
-            let norms = metric_norms(metric, lower_gram);
-            let mut output = vec![LeafNeighbor::default(); points * output_width];
-            arch::dispatch1_no_features(
-                DispatchMetric(metric),
-                KernelCall {
-                    input: lower_gram,
-                    norms: &norms,
-                    output: MutMatrixView::try_from(output.as_mut_slice(), points, output_width)
-                        .unwrap(),
-                    workspace,
-                },
-            )?;
-            Ok(output)
-        }
-
-        fn run_rank_leaf_dots_with_workspace(
-            metric: Metric,
-            dots: &[f32],
-            points: usize,
-            requested_k: usize,
-            workspace: &mut LeafKernelWorkspace,
-        ) -> (usize, Vec<LeafNeighbor>) {
-            let leaf_k = leaf_neighbor_count(points, requested_k);
-            let output =
-                run_rank_leaf_dots_with_output_width(metric, dots, points, leaf_k, workspace)
-                    .expect("valid leaf neighbor width");
-            (leaf_k, output)
-        }
-
-        pub(super) fn run_rank_leaf_dots(
-            metric: Metric,
-            dots: &[f32],
-            points: usize,
-            requested_k: usize,
-        ) -> (usize, Vec<LeafNeighbor>) {
-            run_rank_leaf_dots_with_workspace(
-                metric,
-                dots,
-                points,
-                requested_k,
-                &mut LeafKernelWorkspace::default(),
-            )
         }
 
         fn reference_distance(
@@ -564,8 +481,8 @@ mod tests {
             target_diagonal: f32,
         ) -> f32 {
             match metric {
-                Metric::L2 => ((-2.0_f32).mul_add(dot, source_diagonal) + target_diagonal).max(0.0),
-                Metric::CosineNormalized => 1.0 - dot,
+                Metric::L2 => (-2.0_f32).mul_add(dot, source_diagonal) + target_diagonal,
+                Metric::CosineNormalized => -dot,
                 Metric::InnerProduct => -dot,
                 Metric::Cosine => {
                     let source_norm = source_diagonal.sqrt();
@@ -575,11 +492,89 @@ mod tests {
                     {
                         1.0
                     } else {
-                        let similarity = dot / (source_norm * target_norm);
-                        1.0 - similarity.clamp(-1.0, 1.0)
+                        1.0 - (dot / (source_norm * target_norm)).clamp(-1.0, 1.0)
                     }
                 }
             }
+        }
+
+        fn distance_flatten(metric: Metric, dots: &[f32], points: usize) -> Vec<f32> {
+            let mut distances = vec![0.0; points * points];
+            for source in 0..points {
+                for target in 0..=source {
+                    distances[source * points + target] = reference_distance(
+                        metric,
+                        dots[source * points + target],
+                        dots[source * points + source],
+                        dots[target * points + target],
+                    );
+                }
+            }
+            distances
+        }
+
+        fn rank_with_output_width(
+            metric: Metric,
+            dots: &[f32],
+            points: usize,
+            output_width: usize,
+            workspace: &mut LeafKernelWorkspace,
+        ) -> Result<Vec<LeafNeighbor>, LeafKernelError> {
+            let distance_flatten = distance_flatten(metric, dots, points);
+            let mut output = vec![LeafNeighbor::default(); points * output_width];
+            arch::dispatch1_no_features(
+                RankDistances,
+                KernelCall {
+                    distance_flatten: &distance_flatten,
+                    point_count: points,
+                    output: MutMatrixView::try_from(output.as_mut_slice(), points, output_width)
+                        .unwrap(),
+                    worst: &mut workspace.worst,
+                },
+            )?;
+            Ok(output)
+        }
+
+        pub(super) fn rank_distance_fixture<M: TestMetric>(
+            dots: &[f32],
+            points: usize,
+            output_width: usize,
+        ) -> Result<Vec<LeafNeighbor>, LeafKernelError> {
+            rank_with_output_width(
+                M::METRIC,
+                dots,
+                points,
+                output_width,
+                &mut LeafKernelWorkspace::default(),
+            )
+        }
+
+        fn run_with_workspace(
+            metric: Metric,
+            dots: &[f32],
+            points: usize,
+            requested_k: usize,
+            workspace: &mut LeafKernelWorkspace,
+        ) -> (usize, Vec<LeafNeighbor>) {
+            let leaf_k = leaf_neighbor_count(points, requested_k);
+            let output = rank_with_output_width(metric, dots, points, leaf_k, workspace)
+                .expect("valid leaf neighbor width");
+            (leaf_k, output)
+        }
+
+        pub(super) fn run_rank_leaf_distances(
+            metric: Metric,
+            dots: &[f32],
+            points: usize,
+            requested_k: usize,
+        ) -> (usize, Vec<LeafNeighbor>) {
+            run_with_workspace(
+                metric,
+                dots,
+                points,
+                requested_k,
+                &mut LeafKernelWorkspace::default(),
+            )
         }
 
         pub(super) fn reference_neighbors(
@@ -620,9 +615,6 @@ mod tests {
         }
 
         /// Build a Gram matrix from points on the line `x = 1`.
-        ///
-        /// Normalized cosine receives unit vectors because that metric assumes
-        /// normalized source data. Other metrics receive the original vectors.
         pub(super) fn lane_boundary_gram_from_point_vectors(
             metric: Metric,
             points: usize,
@@ -852,20 +844,6 @@ mod tests {
         use super::leaf_neighbor_count;
 
         #[test]
-        fn returns_zero_when_the_leaf_is_empty() {
-            // Given
-            let point_count = 0;
-            let requested_k = 3;
-            let expected_neighbor_count = 0;
-
-            // When
-            let actual_neighbor_count = leaf_neighbor_count(point_count, requested_k);
-
-            // Then
-            assert_eq!(actual_neighbor_count, expected_neighbor_count);
-        }
-
-        #[test]
         fn returns_zero_when_the_leaf_contains_only_the_source() {
             // Given
             let point_count = 1;
@@ -1013,7 +991,7 @@ mod tests {
         }
     }
 
-    mod rank_leaf_dots_tests {
+    mod rank_leaf_distances_tests {
         use super::test_support::*;
         use super::*;
         use rstest::rstest;
@@ -1052,7 +1030,8 @@ mod tests {
             let expected_neighbors = reference_neighbors(metric, &dots, point_count, requested_k);
 
             // When
-            let actual_neighbors = run_rank_leaf_dots(metric, &dots, point_count, requested_k).1;
+            let actual_neighbors =
+                run_rank_leaf_distances(metric, &dots, point_count, requested_k).1;
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
@@ -1092,21 +1071,7 @@ mod tests {
             let gram = three_unit_point_gram();
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<L2, _>(
-                &gram,
-                3,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, L2>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<L2>(&gram, 3, 1).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
@@ -1123,21 +1088,7 @@ mod tests {
             let gram = three_unit_point_gram();
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<Cosine, _>(
-                &gram,
-                3,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, Cosine>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 3, 1).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
@@ -1147,28 +1098,14 @@ mod tests {
         fn selects_the_highest_dot_product_neighbor_for_each_point_with_normalized_cosine() {
             // Given
             let expected_neighbors = [
-                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ZERO, POINT_TWO)),
-                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
-                LeafNeighbor::new(1, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
+                LeafNeighbor::new(2, -point_dot(POINT_ZERO, POINT_TWO)),
+                LeafNeighbor::new(2, -point_dot(POINT_ONE, POINT_TWO)),
+                LeafNeighbor::new(1, -point_dot(POINT_ONE, POINT_TWO)),
             ];
             let gram = three_unit_point_gram();
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<CosineNormalized, _>(
-                &gram,
-                3,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, CosineNormalized>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<CosineNormalized>(&gram, 3, 1).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
@@ -1185,21 +1122,7 @@ mod tests {
             let gram = three_unit_point_gram();
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<InnerProduct, _>(
-                &gram,
-                3,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, InnerProduct>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<InnerProduct>(&gram, 3, 1).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
@@ -1231,24 +1154,34 @@ mod tests {
             ];
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<L2, _>(
-                &gram,
-                4,
-                2,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, L2>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<L2>(&gram, 4, 2).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors_in_scan_order);
+        }
+
+        #[test]
+        fn finite_negative_l2_ranking_remains_rankable() {
+            // Given
+            let point_count = 2;
+            let nearest_neighbor_count = 1;
+            let self_dot = 1.0_f32;
+            let dot_roundoff = f32::EPSILON;
+            let cross_dot = self_dot + dot_roundoff;
+            let expected_distance = (-2.0_f32).mul_add(cross_dot, self_dot) + self_dot;
+            let gram = [self_dot, cross_dot, cross_dot, self_dot];
+            let expected = [
+                LeafNeighbor::new(1, expected_distance),
+                LeafNeighbor::new(0, expected_distance),
+            ];
+
+            // When
+            let actual =
+                rank_distance_fixture::<L2>(&gram, point_count, nearest_neighbor_count).unwrap();
+
+            // Then
+            assert!(expected_distance < 0.0);
+            assert_eq!(actual, expected);
         }
 
         #[test]
@@ -1260,21 +1193,7 @@ mod tests {
             let gram = [f32::MAX, dot_product, dot_product, f32::MAX];
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<L2, _>(
-                &gram,
-                2,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, L2>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<L2>(&gram, 2, 1).unwrap();
 
             // Then
             assert!(unfused_twice_dot_product.is_infinite());
@@ -1298,7 +1217,7 @@ mod tests {
             gram[16] = dot_product;
 
             // When
-            let actual_neighbors = run_rank_leaf_dots(Metric::L2, &gram, points, 1).1;
+            let actual_neighbors = run_rank_leaf_distances(Metric::L2, &gram, points, 1).1;
 
             // Then
             assert!(unfused_twice_dot_product.is_infinite());
@@ -1323,21 +1242,7 @@ mod tests {
                 [LeafNeighbor::new(1, 1.0), LeafNeighbor::new(2, 1.0)];
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<Cosine, _>(
-                &gram,
-                3,
-                2,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, Cosine>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 3, 2).unwrap();
 
             // Then
             assert_eq!(&actual_neighbors[..2], &expected_zero_norm_neighbors);
@@ -1352,7 +1257,7 @@ mod tests {
             let expected_zero_norm_neighbor = LeafNeighbor::new(0, 1.0);
 
             // When
-            let actual_neighbors = run_rank_leaf_dots(Metric::Cosine, &gram, points, 1).1;
+            let actual_neighbors = run_rank_leaf_distances(Metric::Cosine, &gram, points, 1).1;
 
             // Then
             assert_eq!(actual_neighbors[16], expected_zero_norm_neighbor);
@@ -1368,21 +1273,7 @@ mod tests {
             let expected_one_minus_maximum_similarity = 1.0 - maximum_cosine_similarity;
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<Cosine, _>(
-                &gram,
-                2,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, Cosine>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 2, 1).unwrap();
 
             // Then
             assert_eq!(
@@ -1401,21 +1292,7 @@ mod tests {
             let expected_one_minus_minimum_similarity = 1.0 - minimum_cosine_similarity;
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<Cosine, _>(
-                &gram,
-                2,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, Cosine>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 2, 1).unwrap();
 
             // Then
             assert_eq!(
@@ -1433,21 +1310,7 @@ mod tests {
             let expected_one_minus_zero_similarity = 1.0 - zero_norm_similarity;
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<Cosine, _>(
-                &gram,
-                2,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, Cosine>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 2, 1).unwrap();
 
             // Then
             assert_eq!(
@@ -1467,21 +1330,8 @@ mod tests {
             gram[3] = -f32::MAX;
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<InnerProduct, _>(
-                &gram,
-                points,
-                expected_leaf_k,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, InnerProduct>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors =
+                rank_distance_fixture::<InnerProduct>(&gram, points, expected_leaf_k).unwrap();
 
             // Then
             assert_eq!(
@@ -1497,21 +1347,7 @@ mod tests {
             let expected_unassigned_neighbors = [LeafNeighbor::default(), LeafNeighbor::default()];
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<CosineNormalized, _>(
-                &gram,
-                2,
-                1,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, CosineNormalized>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors = rank_distance_fixture::<CosineNormalized>(&gram, 2, 1).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_unassigned_neighbors);
@@ -1528,21 +1364,8 @@ mod tests {
             let expected_unassigned_neighbor = LeafNeighbor::default();
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<L2, _>(
-                &gram,
-                point_count,
-                requested_k,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, L2>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
+            let actual_neighbors =
+                rank_distance_fixture::<L2>(&gram, point_count, requested_k).unwrap();
 
             // Then
             assert_eq!(
@@ -1554,7 +1377,7 @@ mod tests {
         #[rstest]
         #[case::l2(Metric::L2, 2.0)]
         #[case::cosine(Metric::Cosine, 1.0)]
-        #[case::normalized_cosine(Metric::CosineNormalized, 1.0)]
+        #[case::normalized_cosine(Metric::CosineNormalized, -0.0)]
         #[case::inner_product(Metric::InnerProduct, -0.0)]
         fn simd_nan_distance_cannot_replace_a_finite_neighbor(
             #[case] metric: Metric,
@@ -1568,7 +1391,7 @@ mod tests {
             let expected_finite_neighbor = LeafNeighbor::new(1, expected_distance);
 
             // When
-            let actual_neighbors = run_rank_leaf_dots(metric, &gram, points, 1).1;
+            let actual_neighbors = run_rank_leaf_distances(metric, &gram, points, 1).1;
 
             // Then
             assert_eq!(actual_neighbors[16], expected_finite_neighbor);
@@ -1576,13 +1399,13 @@ mod tests {
 
         #[rstest]
         #[case::l2(Metric::L2, 2.0)]
-        #[case::normalized_cosine(Metric::CosineNormalized, 1.0)]
+        #[case::normalized_cosine(Metric::CosineNormalized, -0.0)]
         #[case::inner_product(Metric::InnerProduct, -0.0)]
         fn simd_positive_infinity_cannot_fill_a_neighbor_slot(
             #[case] metric: Metric,
             #[case] expected_distance: f32,
         ) {
-            // Given: negative-infinite dot products produce positive-infinite scores here.
+            // Given: negative-infinite dot products produce positive-infinite distances here.
             let points = 17;
             let mut gram = gram_with_uniform_self_dots(points, 1.0);
             gram[16 * points] = f32::NEG_INFINITY;
@@ -1590,39 +1413,10 @@ mod tests {
             let expected_finite_neighbor = LeafNeighbor::new(1, expected_distance);
 
             // When
-            let actual_neighbors = run_rank_leaf_dots(metric, &gram, points, 1).1;
+            let actual_neighbors = run_rank_leaf_distances(metric, &gram, points, 1).1;
 
             // Then
             assert_eq!(actual_neighbors[16], expected_finite_neighbor);
-        }
-
-        #[test]
-        fn empty_leaf_has_no_neighbors() {
-            // Given
-            let empty_point_count = 0;
-            let empty_gram = [];
-            let expected_zero_neighbor_width = 0;
-            let expected_no_neighbors: [LeafNeighbor; 0] = [];
-
-            // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<L2, _>(
-                &empty_gram,
-                empty_point_count,
-                expected_zero_neighbor_width,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, L2>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
-
-            // Then
-            assert_eq!(actual_neighbors, expected_no_neighbors);
         }
 
         #[test]
@@ -1634,48 +1428,10 @@ mod tests {
             let expected_no_neighbors: [LeafNeighbor; 0] = [];
 
             // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<Cosine, _>(
+            let actual_neighbors = rank_distance_fixture::<Cosine>(
                 &singleton_gram,
                 singleton_point_count,
                 expected_zero_neighbor_width,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, Cosine>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap();
-
-            // Then
-            assert_eq!(actual_neighbors, expected_no_neighbors);
-        }
-
-        #[test]
-        fn zero_requested_k_has_no_neighbors() {
-            // Given
-            let point_count = 2;
-            let zero_requested_k = 0;
-            let gram = [1.0, 0.0, 0.0, 1.0];
-            let expected_no_neighbors: [LeafNeighbor; 0] = [];
-
-            // When
-            let actual_neighbors = with_rank_leaf_dots_fixture::<InnerProduct, _>(
-                &gram,
-                point_count,
-                zero_requested_k,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, InnerProduct>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
             )
             .unwrap();
 
@@ -1697,21 +1453,9 @@ mod tests {
             };
 
             // When
-            let actual_error = with_rank_leaf_dots_fixture::<L2, _>(
-                &gram,
-                point_count,
-                invalid_neighbor_width,
-                |input, norms, output, farthest_distances| {
-                    rank_leaf_dots::<_, L2>(
-                        diskann_wide::ARCH,
-                        input,
-                        norms,
-                        output,
-                        farthest_distances,
-                    )
-                },
-            )
-            .unwrap_err();
+            let actual_error =
+                rank_distance_fixture::<L2>(&gram, point_count, invalid_neighbor_width)
+                    .unwrap_err();
 
             // Then
             assert_eq!(actual_error, expected_error);

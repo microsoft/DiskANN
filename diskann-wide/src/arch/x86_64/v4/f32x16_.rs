@@ -57,7 +57,6 @@ impl crate::SplitJoin for f32x16 {
 helpers::unsafe_map_binary_op!(f32x16, std::ops::Add, add, _mm512_add_ps, "avx512f");
 helpers::unsafe_map_binary_op!(f32x16, std::ops::Sub, sub, _mm512_sub_ps, "avx512f");
 helpers::unsafe_map_binary_op!(f32x16, std::ops::Mul, mul, _mm512_mul_ps, "avx512f");
-helpers::unsafe_map_binary_op!(f32x16, std::ops::Div, div, _mm512_div_ps, "avx512f");
 
 impl f32x16 {
     #[inline(always)]
@@ -241,7 +240,6 @@ mod test_x86_f32 {
     test_utils::ops::test_add!(f32x16, 0xa8989b97ca888d11, V4::new_checked_uncached());
     test_utils::ops::test_sub!(f32x16, 0xb2554fc13fdc1182, V4::new_checked_uncached());
     test_utils::ops::test_mul!(f32x16, 0x23becaa968b0cd71, V4::new_checked_uncached());
-    test_utils::ops::test_div!(f32x16, 0x6fd16af08fa1f498, V4::new_checked_uncached());
     test_utils::ops::test_fma!(f32x16, 0x32a814070a93df4e, V4::new_checked_uncached());
     test_utils::ops::test_minmax!(f32x16, 0x6d7fc8ed6d852187, V4::new_checked_uncached());
     test_utils::ops::test_abs!(f32x16, 0x6799e60873a2efe2, V4::new_checked_uncached());

@@ -31,7 +31,6 @@ macros::aarch64_define_loadstore!(f32x2, vld1_f32, internal::load_first::f32x2, 
 helpers::unsafe_map_binary_op!(f32x2, std::ops::Add, add, vadd_f32, "neon");
 helpers::unsafe_map_binary_op!(f32x2, std::ops::Sub, sub, vsub_f32, "neon");
 helpers::unsafe_map_binary_op!(f32x2, std::ops::Mul, mul, vmul_f32, "neon");
-helpers::unsafe_map_binary_op!(f32x2, std::ops::Div, div, vdiv_f32, "neon");
 macros::aarch64_define_fma!(f32x2, vfma_f32);
 
 macros::aarch64_define_cmp!(
@@ -91,7 +90,6 @@ mod tests {
     test_utils::ops::test_add!(f32x2, 0xcd7a8fea9a3fb727, test_neon());
     test_utils::ops::test_sub!(f32x2, 0x3f6562c94c923238, test_neon());
     test_utils::ops::test_mul!(f32x2, 0x07e48666c0fc564c, test_neon());
-    test_utils::ops::test_div!(f32x2, 0xa0352efeb9bc5ca5, test_neon());
     test_utils::ops::test_fma!(f32x2, 0xcfde9d031302cf2c, test_neon());
 
     test_utils::ops::test_cmp!(f32x2, 0xc4f468b224622326, test_neon());

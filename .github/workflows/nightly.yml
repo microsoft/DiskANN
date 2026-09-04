@@ -140,10 +140,11 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
         run: |
-          cargo +nightly miri test --locked -p diskann-wide --lib div_
           cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::kernel_metric
+            graph::pipnn::leaf_metric
           cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::leaf_kernel::tests::rank_leaf_dots_tests
+            graph::pipnn::partition_metric
           cargo +nightly miri test --locked -p diskann --features pipnn --lib \
-            graph::pipnn::partition_kernel::tests::rank_leader_dots_tests
+            graph::pipnn::leaf_kernel::tests::rank_leaf_distances_tests
+          cargo +nightly miri test --locked -p diskann --features pipnn --lib \
+            graph::pipnn::partition_kernel::tests::rank_leader_distances_tests

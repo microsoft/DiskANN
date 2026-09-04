@@ -32,7 +32,6 @@ macros::aarch64_splitjoin!(f32x4, f32x2, vget_low_f32, vget_high_f32, vcombine_f
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Add, add, vaddq_f32, "neon");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Sub, sub, vsubq_f32, "neon");
 helpers::unsafe_map_binary_op!(f32x4, std::ops::Mul, mul, vmulq_f32, "neon");
-helpers::unsafe_map_binary_op!(f32x4, std::ops::Div, div, vdivq_f32, "neon");
 helpers::unsafe_map_unary_op!(f32x4, SIMDAbs, abs_simd, vabsq_f32, "neon");
 macros::aarch64_define_fma!(f32x4, vfmaq_f32);
 
@@ -188,7 +187,6 @@ mod tests {
     test_utils::ops::test_add!(f32x4, 0xcd7a8fea9a3fb727, test_neon());
     test_utils::ops::test_sub!(f32x4, 0x3f6562c94c923238, test_neon());
     test_utils::ops::test_mul!(f32x4, 0x07e48666c0fc564c, test_neon());
-    test_utils::ops::test_div!(f32x4, 0xa0352efeb9bc5ca5, test_neon());
     test_utils::ops::test_fma!(f32x4, 0xcfde9d031302cf2c, test_neon());
     test_utils::ops::test_abs!(f32x4, 0xb8f702ba85375041, test_neon());
     test_utils::ops::test_minmax!(f32x4, 0x6d7fc8ed6d852187, test_neon());

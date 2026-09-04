@@ -53,14 +53,28 @@ pub(super) fn sgemm_impl(
     faer::linalg::matmul::matmul(c, beta, a, b, alpha, Par::Seq)
 }
 
-/// Compute the lower triangle of `A * Aᵀ` with Faer.
+/// Replace the lower triangle of `C` with `alpha * A * Aᵀ`.
+pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, alpha: f32, a: &[f32], c: &mut [f32]) {
+    sgemm_aat_lower_operation(faer::Accum::Replace, m, k, alpha, a, c);
+}
+
+/// Add the lower triangle of `alpha * A * Aᵀ` to `C`.
+pub(super) fn sgemm_aat_lower_add_impl(m: usize, k: usize, alpha: f32, a: &[f32], c: &mut [f32]) {
+    sgemm_aat_lower_operation(faer::Accum::Add, m, k, alpha, a, c);
+}
+
+/// Apply one lower-triangle accumulation mode.
 ///
-/// Leaf selection reads each symmetric pair once. It does not read the upper
-/// triangle. `BlockStructure::TriangularLower` prevents writes to that triangle.
-///
-/// `sgemm_aat_lower` checks both slice lengths and both size products. Therefore,
-/// the Faer matrix views stay inside their backing slices.
-pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, a: &[f32], c: &mut [f32]) {
+/// The public wrapper validates both matrix shapes. Faer writes the diagonal
+/// and lower triangle. Faer does not read or write the upper triangle.
+fn sgemm_aat_lower_operation(
+    accumulation: faer::Accum,
+    m: usize,
+    k: usize,
+    alpha: f32,
+    a: &[f32],
+    c: &mut [f32],
+) {
     use faer::linalg::matmul::triangular::{matmul, BlockStructure};
 
     let a = faer::mat::MatRef::from_row_major_slice(a, m, k);
@@ -70,12 +84,12 @@ pub(super) fn sgemm_aat_lower_impl(m: usize, k: usize, a: &[f32], c: &mut [f32])
     matmul(
         c,
         BlockStructure::TriangularLower,
-        faer::Accum::Replace,
+        accumulation,
         a,
         BlockStructure::Rectangular,
         at,
         BlockStructure::Rectangular,
-        1.0,
+        alpha,
         Par::Seq,
     );
 }
