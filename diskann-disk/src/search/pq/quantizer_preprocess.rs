@@ -6,9 +6,9 @@
 use diskann::ANNResult;
 use diskann_vector::distance::Metric;
 
-use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_providers::model::compute_pq_distance;
 use diskann_providers::utils::BridgeErr;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use super::{PQData, PQScratch};
 

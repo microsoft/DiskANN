@@ -31,7 +31,7 @@ use diskann_tools::utils::{
     init_subscriber, write_ground_truth, CMDResult, CMDToolError, DataType,
 };
 use diskann_utils::io::read_bin;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use rayon::prelude::*;
 
@@ -44,8 +44,8 @@ trait GroundtruthDistance: Send + Sync {
 }
 
 struct MatrixDistance<'a, V: VectorRepr + Send + Sync> {
-    dataset: &'a Matrix<V>,
-    queries: &'a Matrix<V>,
+    dataset: &'a rowmajor::Owned<V>,
+    queries: &'a rowmajor::Owned<V>,
     distance_fn: V::Distance,
 }
 

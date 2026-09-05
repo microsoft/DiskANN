@@ -5,7 +5,7 @@
 
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::StorageReadProvider;
-use diskann_utils::io::read_bin;
+use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
 use rand::Rng;
 
 use crate::utils::{CMDResult, CMDToolError};

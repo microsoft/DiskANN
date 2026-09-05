@@ -5,7 +5,7 @@
 
 use std::{ops::Range, path::Path, sync::Arc};
 
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use crate::{recall, streaming};
 
@@ -16,8 +16,8 @@ type LoadGroundtruth<I> = dyn FnMut(&Path) -> anyhow::Result<Box<dyn recall::Row
 /// An adaptor to execute a [`super::RunBook`] out of a set data set and queries.
 pub struct WithData<T, I, Inner> {
     inner: Inner,
-    dataset: Matrix<T>,
-    queries: Arc<Matrix<T>>,
+    dataset: rowmajor::Owned<T>,
+    queries: Arc<rowmajor::Owned<T>>,
     load_groundtruth: Box<LoadGroundtruth<I>>,
 }
 
@@ -28,8 +28,8 @@ impl<T, I, Inner> WithData<T, I, Inner> {
     /// for a given path.
     pub fn new(
         inner: Inner,
-        dataset: Matrix<T>,
-        queries: Arc<Matrix<T>>,
+        dataset: rowmajor::Owned<T>,
+        queries: Arc<rowmajor::Owned<T>>,
         load_groundtruth: impl FnMut(&Path) -> anyhow::Result<Box<dyn recall::Rows<I>>> + 'static,
     ) -> Self {
         Self {
@@ -55,12 +55,12 @@ where
 {
     /// A tuple consisting of the queries for search as well as the corresponding
     /// groundtruth (as [`recall::Rows`]).
-    type Search<'a> = (Arc<Matrix<T>>, &'a dyn recall::Rows<I>);
+    type Search<'a> = (Arc<rowmajor::Owned<T>>, &'a dyn recall::Rows<I>);
 
     /// A tuple consisting of the data to insert as well as the external IDs (stored
     /// as `usize`) for the data. It is assumed that the length of the IDs range matches
     /// the number of rows in the data matrix.
-    type Insert<'a> = (MatrixView<'a, T>, Range<usize>);
+    type Insert<'a> = (rowmajor::Ref<'a, T>, Range<usize>);
 
     /// The external IDs (stored as `usize`) to delete.
     type Delete<'a> = Range<usize>;
@@ -68,7 +68,7 @@ where
     /// A tuple consisting of the data to replace as well as the external IDs (stored
     /// as `usize`) for the data. It is assumed that the length of the IDs range matches
     /// the number of rows in the data matrix.
-    type Replace<'a> = (MatrixView<'a, T>, Range<usize>);
+    type Replace<'a> = (rowmajor::Ref<'a, T>, Range<usize>);
     type Maintain<'a> = ();
 }
 

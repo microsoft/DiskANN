@@ -20,7 +20,7 @@ use diskann_providers::utils::{
 };
 use diskann_utils::{
     io::{read_bin, Metadata},
-    views::Matrix,
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
@@ -285,7 +285,7 @@ pub fn compute_range_ground_truth_from_datafiles<
 pub fn compute_range_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, V, A>,
-    queries: &Matrix<V>,
+    queries: &rowmajor::Owned<V>,
     radius: f32,
     query_bitmaps: Option<Vec<BitSet>>,
 ) -> CMDResult<Vec<Vec<Neighbor<u32>>>>
@@ -579,7 +579,7 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 ///
 /// * `distance_function` - e.g. L2
 /// * `dataset_iter` - The iterator over the dataset vectors and associated data.
-/// * `queries` - Query vectors as a row-major `Matrix` of shape `num_queries × query_dim`.
+/// * `queries` - Query vectors as a row-major matrix of shape `num_queries × query_dim`.
 ///   `query_dim` is inferred from `queries.ncols()`.
 /// * `recall_at` - The number of neighbors to compute for each query.
 /// * `insert_iter` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
@@ -589,7 +589,7 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 pub fn compute_ground_truth_from_data<V, A, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, V, A>,
-    queries: &Matrix<V>,
+    queries: &rowmajor::Owned<V>,
     recall_at: u32,
     insert_iter: Option<VectorDataIterator<VectorReader, V, A>>,
     skip_base: Option<usize>,
@@ -696,8 +696,8 @@ where
 pub fn compute_multivec_ground_truth_from_data<T>(
     distance_function: Metric,
     aggregation_method: MultivecAggregationMethod,
-    base_vectors: Vec<Matrix<T>>,
-    queries: Vec<Matrix<T>>,
+    base_vectors: Vec<rowmajor::Owned<T>>,
+    queries: Vec<rowmajor::Owned<T>>,
     query_dim: usize,
     recall_at: u32,
     query_bitmaps: Option<Vec<BitSet>>,

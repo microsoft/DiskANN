@@ -10,7 +10,10 @@ use diskann::{
     graph::{self, ext::labeled, glue, search::AdaptiveL},
     provider,
 };
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::search::{self, Search, graph::KnnParams, graph::Strategy};
 
@@ -30,7 +33,7 @@ where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
-    queries: Arc<Matrix<T>>,
+    queries: Arc<rowmajor::Owned<T>>,
     strategy: Strategy<S>,
     labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
     adaptive_l: Option<AdaptiveL>,
@@ -61,7 +64,7 @@ where
     ///    `queries`.
     pub fn new(
         index: Arc<graph::DiskANNIndex<DP>>,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         strategy: Strategy<S>,
         labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
         adaptive_l: Option<AdaptiveL>,
@@ -156,6 +159,7 @@ mod tests {
 
     use crate::recall::GroundTruthMode;
     use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     // A simple [`QueryLabelProvider`] that rejects odd indices.
     #[derive(Debug)]
@@ -173,7 +177,7 @@ mod tests {
 
         let index = search::graph::test_grid_provider();
 
-        let mut queries = Matrix::new(0.0f32, 5, index.provider().dim());
+        let mut queries = rowmajor::Owned::defaulted(5, index.provider().dim()).unwrap();
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -273,7 +277,7 @@ mod tests {
     #[test]
     fn test_inline_error() {
         let index = search::graph::test_grid_provider();
-        let queries = Arc::new(Matrix::new(0.0f32, 2, index.provider().dim()));
+        let queries = Arc::new(rowmajor::Owned::<f32>::defaulted(2, index.provider().dim()).unwrap());
 
         let labels: Arc<[_]> = (0..queries.nrows() + 1)
             .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
