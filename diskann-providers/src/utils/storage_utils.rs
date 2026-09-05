@@ -13,7 +13,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::ANNResult;
 use diskann_utils::{
     io::{Metadata, ReadBinError, SaveBinError, read_bin, write_bin},
-    views::{Matrix, MatrixView},
+    views::{rowmajor::{self, Matrix}},
 };
 
 /// Load a list of vector ids from the stream.
@@ -40,14 +40,14 @@ pub fn load_vector_ids<Reader: Read>(reader: &mut Reader) -> std::io::Result<(us
 pub fn read_bin_from<T: Pod>(
     reader: &mut (impl Read + Seek),
     offset: usize,
-) -> Result<Matrix<T>, ReadBinError> {
+) -> Result<rowmajor::Owned<T>, ReadBinError> {
     reader.seek(std::io::SeekFrom::Start(offset as u64))?;
     read_bin(reader)
 }
 
 /// Write a matrix at the given byte offset.
 pub fn write_bin_from<T: Pod>(
-    data: MatrixView<'_, T>,
+    data: rowmajor::Ref<'_, T>,
     writer: &mut (impl Write + Seek),
     offset: usize,
 ) -> Result<usize, SaveBinError> {
@@ -141,7 +141,7 @@ mod storage_util_test {
         let file_name = "/read_bin_from";
         let data = vec![0u64, 1u64, 2u64];
         let storage_provider = VirtualStorageProvider::new_memory();
-        let view = MatrixView::column_vector(data.as_slice());
+        let view = rowmajor::Ref::column_vector(data.as_slice());
         let bytes_written = write_bin_from(
             view,
             &mut storage_provider.create_for_write(file_name).unwrap(),
@@ -162,7 +162,7 @@ mod storage_util_test {
         let file_name = "/read_bin_from_offset_test";
         let data = vec![0u64, 1u64, 2u64];
         let storage_provider = VirtualStorageProvider::new_memory();
-        let view = MatrixView::column_vector(data.as_slice());
+        let view = rowmajor::Ref::column_vector(data.as_slice());
         let bytes_written = write_bin_from(
             view,
             &mut storage_provider.create_for_write(file_name).unwrap(),
@@ -227,7 +227,7 @@ mod storage_util_test {
         let num_pts = data.len();
         let dims = 1;
         let mut file = tempfile().unwrap();
-        let view = MatrixView::column_vector(data.as_slice());
+        let view = rowmajor::Ref::column_vector(data.as_slice());
         let bytes_written = write_bin_from(view, &mut file, 0).unwrap();
         assert_eq!(bytes_written, 32);
 

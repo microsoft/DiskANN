@@ -887,7 +887,7 @@ mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::utils::ONE;
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::MatrixView;
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 
@@ -905,7 +905,7 @@ mod tests {
 
     fn make_store(metric: Metric) -> SQStore<NBITS> {
         let quantizer = ScalarQuantizationParameters::default()
-            .train(MatrixView::try_from(&DATA, NPTS, DIM).unwrap());
+            .train(rowmajor::Ref::try_from_data(&DATA, NPTS, DIM).unwrap());
         SQStore::new(quantizer, /* capacity */ 5, metric, None)
     }
 

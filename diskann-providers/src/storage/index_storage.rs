@@ -223,7 +223,7 @@ mod tests {
         provider::SetElement,
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{test_data_root, views::MatrixView};
+    use diskann_utils::{test_data_root, views::rowmajor::{self, Matrix, MatrixMut}};
     use diskann_vector::distance::Metric;
 
     use super::*;
@@ -239,7 +239,7 @@ mod tests {
     async fn build_index<DP, S>(
         index: &Arc<DiskANNIndex<DP>>,
         strategy: S,
-        data: MatrixView<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
     ) where
         DP: DataProvider<ExternalId = u32> + for<'a> SetElement<&'a [f32]>,
         DP::Context: Default,

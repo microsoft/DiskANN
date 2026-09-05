@@ -10,7 +10,7 @@ use diskann::{
     graph::{Config, DiskANNIndex},
     utils::VectorRepr,
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
 
 use crate::model::{
     self,
@@ -59,7 +59,7 @@ pub(crate) fn simplified_builder(
 }
 
 pub fn train_pq(
-    data: diskann_utils::views::MatrixView<f32>,
+    data: rowmajor::Ref<'_, f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
     pool: crate::utils::RayonThreadPoolRef<'_>,
@@ -180,7 +180,7 @@ pub(crate) mod tests {
         utils::{IntoUsize, ONE},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::{test_data_root, views::Matrix};
+    use diskann_utils::{test_data_root, views::rowmajor::MatrixMut};
     use diskann_vector::{
         DistanceFunction, PureDistanceFunction,
         distance::{Metric, SquaredL2},
@@ -214,7 +214,7 @@ pub(crate) mod tests {
 
     /// Convert an iterator of vectors into a single Matrix. All elements in `data` must
     /// have the same length, otherwise this function panics.
-    pub(crate) fn squish<'a, To, T, Itr>(data: Itr, dim: usize) -> diskann_utils::views::Matrix<To>
+    pub(crate) fn squish<'a, To, T, Itr>(data: Itr, dim: usize) -> rowmajor::Owned<To>
     where
         To: Clone + Default,
         T: Clone + Into<To> + 'a,
@@ -222,7 +222,7 @@ pub(crate) mod tests {
     {
         // Assume that all the vectors in `data` have the same length.
         // If they don't, `copy_from_slice` will panic, so we're double checking.
-        let mut mat = diskann_utils::views::Matrix::new(To::default(), data.len(), dim);
+        let mut mat = rowmajor::Owned::defaulted(data.len(), dim).unwrap();
         std::iter::zip(mat.row_iter_mut(), data).for_each(|(output, input)| {
             assert_eq!(
                 input.len(),
@@ -278,7 +278,7 @@ pub(crate) mod tests {
             .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
     }
 
-    fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
+    fn grid_to_vecs<T: Clone>(matrix: &rowmajor::Owned<T>) -> Vec<Vec<T>> {
         (0..matrix.nrows())
             .map(|i| matrix.row(i).to_vec())
             .collect()
@@ -621,7 +621,7 @@ pub(crate) mod tests {
         //
         // So, when we compute the corpus used during groundtruth generation, we take all
         // but this last point.
-        let corpus: diskann_utils::views::Matrix<f32> =
+        let corpus: rowmajor::Owned<f32> =
             squish(vectors.iter().take(num_points), dim);
 
         let mut paged_tests = Vec::new();
@@ -698,7 +698,7 @@ pub(crate) mod tests {
         ]);
 
         // A matrix view of all vectors (including the start point at the end).
-        let matrix: Matrix<T> = squish::<T, T, _>(vectors.iter(), dim);
+        let matrix: rowmajor::Owned<T> = squish::<T, T, _>(vectors.iter(), dim);
 
         let table = train_pq(
             matrix.map(|i| (*i).into()).as_view(),
@@ -762,14 +762,14 @@ pub(crate) mod tests {
                 .window_iter(chunk_size)
                 .enumerate()
             {
-                let batch_data = Arc::new(batch_data.to_owned());
+                let batch_data = Arc::new(batch_data.to_rowmajor_owned());
                 let start = batch * chunk_size;
                 let batch_ids: Arc<[u32]> = (start..start + batch_data.nrows())
                     .map(|i| i as u32)
                     .collect();
 
                 index
-                    .multi_insert::<_, Matrix<T>>(FullPrecision, &ctx, batch_data, batch_ids)
+                    .multi_insert::<_, rowmajor::Owned<T>>(FullPrecision, &ctx, batch_data, batch_ids)
                     .await
                     .unwrap();
             }
@@ -781,11 +781,11 @@ pub(crate) mod tests {
         {
             let index = init_index();
             let ctx = Default::default();
-            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
+            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_rowmajor_owned());
             let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
             index
-                .multi_insert::<_, Matrix<T>>(hybrid, &ctx, batch, batch_ids)
+                .multi_insert::<_, rowmajor::Owned<T>>(hybrid, &ctx, batch, batch_ids)
                 .await
                 .unwrap();
 
@@ -875,7 +875,7 @@ pub(crate) mod tests {
 
         let data = T::generate_spherical(num, dim, radius, rng);
         let table = {
-            let train_data: diskann_utils::views::Matrix<f32> = squish(data.iter(), dim);
+            let train_data: rowmajor::Owned<f32> = squish(data.iter(), dim);
             train_pq(
                 train_data.as_view(),
                 2.min(dim),
@@ -1066,7 +1066,7 @@ pub(crate) mod tests {
 
         let beta = 0.5;
 
-        let corpus: diskann_utils::views::Matrix<f32> =
+        let corpus: rowmajor::Owned<f32> =
             squish(vectors.iter().take(num_points), dim);
         let query = vec![grid_size as f32; dim];
 
@@ -1387,7 +1387,7 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
     ) where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -1481,7 +1481,7 @@ pub(crate) mod tests {
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -1591,10 +1591,10 @@ pub(crate) mod tests {
         file: &str,
         create_fn: C,
         build_fn: B,
-    ) -> (Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>)
+    ) -> (Arc<DiskANNIndex<DP>>, Arc<rowmajor::Owned<f32>>)
     where
-        C: FnOnce(Arc<Matrix<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
-        B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>),
+        C: FnOnce(Arc<rowmajor::Owned<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
+        B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<rowmajor::Owned<f32>>),
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + for<'a> diskann::provider::SetElement<&'a [f32]>,
     {
@@ -1612,7 +1612,7 @@ pub(crate) mod tests {
         (index, data)
     }
 
-    async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<Matrix<f32>>)
+    async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<rowmajor::Owned<f32>>)
     where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + for<'a> diskann::provider::SetElement<&'a [f32]>,
@@ -1639,7 +1639,7 @@ pub(crate) mod tests {
                     batchsize: NonZeroUsize::new(1).unwrap(),
                 };
 
-                let create_fn = |data: Arc<Matrix<f32>>, start_point: &[f32]| {
+                let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
                     let quantizer = ScalarQuantizationParameters::default().train(data.as_view());
                     let (config, params) =
                         parameters.materialize(data.nrows(), data.ncols()).unwrap();
@@ -1744,7 +1744,7 @@ pub(crate) mod tests {
                     batchsize: NonZeroUsize::new(1).unwrap(),
                 };
 
-                let create_fn = |data: Arc<Matrix<f32>>, start_point: &[f32]| {
+                let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
                     let quantizer = ScalarQuantizationParameters::default().train(data.as_view());
                     let (config, params) =
                         parameters.materialize(data.nrows(), data.ncols()).unwrap();
@@ -1837,7 +1837,7 @@ pub(crate) mod tests {
 
         let rng = &mut create_rnd_from_seed_in_tests(0x56870bccb0c44b66);
 
-        let create_fn = |data: Arc<Matrix<f32>>, start_point: &[f32]| {
+        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
             let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                 data.as_view(),
                 diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
@@ -1867,7 +1867,7 @@ pub(crate) mod tests {
             index
         };
 
-        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<Matrix<f32>>| {
+        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<rowmajor::Owned<f32>>| {
             let ctx = &DefaultContext;
             let strategy = inmem::spherical::Quantized::build();
             for (i, vector) in data.row_iter().enumerate() {
@@ -1950,7 +1950,7 @@ pub(crate) mod tests {
         let ctx = &DefaultContext;
         let rng = &mut create_rnd_from_seed_in_tests(0x56870bccb0c44b66);
 
-        let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
+        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_points: &[f32]| {
             let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                 data.as_view(),
                 diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
@@ -1981,7 +1981,7 @@ pub(crate) mod tests {
             Arc::new(index)
         };
 
-        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<Matrix<f32>>| {
+        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<rowmajor::Owned<f32>>| {
             let ctx = &DefaultContext;
             let strategy = inmem::spherical::Quantized::build();
             for (i, vector) in data.row_iter().enumerate() {
@@ -2060,7 +2060,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_sift_pq_only_build_and_search(#[case] metric: Metric, #[case] file: &str) {
         let ctx = &DefaultContext;
-        let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
+        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_points: &[f32]| {
             let pq_table = train_pq(
                 data.as_view(),
                 32,
@@ -2203,13 +2203,13 @@ pub(crate) mod tests {
         parameters: InitParams,
         file: &str,
         start_strategy: StartPointStrategy,
-        train_data: diskann_utils::views::MatrixView<'_, f32>,
+        train_data: rowmajor::Ref<'_, f32>,
     ) where
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
             + for<'a> SetElement<&'a [f32]>
             + SetStartPoints<[f32]>,
         S: for<'a> InsertStrategy<'a, DefaultProvider<U, V, D>, &'a [f32]>
-            + MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>>
+            + MultiInsertStrategy<DefaultProvider<U, V, D>, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -2217,7 +2217,7 @@ pub(crate) mod tests {
 
         let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
-        let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
+        let start_vectors: rowmajor::Owned<f32> = start_strategy.compute(train_data).unwrap();
 
         index
             .provider()
@@ -2235,7 +2235,7 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let mut vectors = Matrix::new(0.0f32, data.len(), start_vectors.ncols());
+                let mut vectors = rowmajor::Owned::defaulted(data.len(), start_vectors.ncols()).unwrap();
                 let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
                     .map(|(dst, (v, _))| {
                         dst.copy_from_slice(v);
@@ -2259,10 +2259,10 @@ pub(crate) mod tests {
         file: &str,
         num_pq_chunks: usize,
         startpoint: StartPointStrategy,
-    ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
+    ) -> (Arc<TestIndex>, rowmajor::Owned<f32>)
     where
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
@@ -2309,7 +2309,7 @@ pub(crate) mod tests {
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> SearchStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -2409,7 +2409,7 @@ pub(crate) mod tests {
         S: for<'a> InsertStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> SearchStrategy<'a, TestProvider, &'a [f32]>
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + MultiInsertStrategy<TestProvider, rowmajor::Owned<f32>>
             + Clone,
     {
         let ctx = &DefaultContext;
@@ -2657,7 +2657,7 @@ pub(crate) mod tests {
         // Randomize the vectors
         let rng = &mut create_rnd_from_seed_in_tests(0x7dc205fcda38d3a3);
         indices.shuffle(rng);
-        let mut queries = diskann_utils::views::Matrix::new(0.0, data.nrows(), data.ncols());
+        let mut queries = rowmajor::Owned::defaulted(data.nrows(), data.ncols()).unwrap();
         std::iter::zip(queries.row_iter_mut(), indices.iter()).for_each(|(row, i)| {
             row.copy_from_slice(data.row(*i));
         });

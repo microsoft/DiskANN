@@ -23,7 +23,7 @@ use diskann::{
 };
 
 use diskann_utils::future::AsyncFriendly;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
@@ -434,7 +434,7 @@ where
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
         let candidate_count = candidates.len();
         let store: &FullPrecisionStore<f32> = accessor.as_full_precision();
-        let mut vectors = Matrix::new(0.0f32, candidate_count, query.len());
+        let mut vectors = rowmajor::Owned::defaulted(candidate_count, query.len()).unwrap();
         let mut ids = Vec::with_capacity(candidate_count);
         let mut distances = Vec::with_capacity(candidate_count);
 
@@ -448,7 +448,7 @@ where
         }
 
         let indices = match determinant_diversity(
-            vectors.as_mut_view(),
+            vectors.as_view_mut(),
             &distances,
             query,
             candidate_count,

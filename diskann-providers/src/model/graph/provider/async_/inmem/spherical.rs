@@ -690,7 +690,7 @@ mod tests {
         alloc::GlobalAllocator,
         spherical::{SphericalQuantizer, SupportedMetric},
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use diskann_vector::{
         DistanceFunction, PreprocessedDistanceFunction, PureDistanceFunction,
         distance::{InnerProduct, Metric, SquaredL2},
@@ -705,7 +705,7 @@ mod tests {
     ////////////////
 
     fn make_store<const NBITS: usize>(
-        data: MatrixView<f32>,
+        data: rowmajor::Ref<'_, f32>,
         metric: SupportedMetric,
         rng: &mut StdRng,
     ) -> SphericalStore
@@ -732,12 +732,12 @@ mod tests {
         )
     }
 
-    fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> Matrix<f32> {
-        Matrix::new(
-            diskann_utils::views::Init(|| StandardNormal {}.sample(rng)),
+    fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> rowmajor::Owned<f32> {
+        rowmajor::Owned::from_fn(
             nrows,
             ncols,
-        )
+            || StandardNormal {}.sample(rng),
+        ).unwrap()
     }
 
     #[test]
@@ -1018,7 +1018,7 @@ mod tests {
         assert!(matches!(err, RQError::CompressionError(..)));
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -1150,6 +1150,6 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 }
