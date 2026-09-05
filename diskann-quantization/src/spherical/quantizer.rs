@@ -2278,7 +2278,7 @@ mod tests {
 
     #[test]
     fn err_dim_cannot_be_zero() {
-        let data = rowmajor::Owned::<f32>::defaulted(10, 0).unwrap();
+        let data = rowmajor::Owned::<f32>::from_default(10, 0).unwrap();
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2296,7 +2296,7 @@ mod tests {
 
     #[test]
     fn err_norm_must_be_positive() {
-        let data = rowmajor::Owned::<f32>::defaulted(10, 10).unwrap();
+        let data = rowmajor::Owned::<f32>::from_default(10, 10).unwrap();
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let err = SphericalQuantizer::train(
             data.as_view(),
@@ -2314,7 +2314,7 @@ mod tests {
 
     #[test]
     fn err_norm_cannot_be_infinity() {
-        let mut data = rowmajor::Owned::<f32>::defaulted(10, 10).unwrap();
+        let mut data = rowmajor::Owned::<f32>::from_default(10, 10).unwrap();
         *data.element_mut(2, 5) = f32::INFINITY;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
@@ -2334,7 +2334,7 @@ mod tests {
 
     #[test]
     fn err_reciprocal_norm_cannot_be_infinity() {
-        let mut data = rowmajor::Owned::<f32>::defaulted(10, 10).unwrap();
+        let mut data = rowmajor::Owned::<f32>::from_default(10, 10).unwrap();
         *data.element_mut(2, 5) = 2.93863e-39;
 
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);

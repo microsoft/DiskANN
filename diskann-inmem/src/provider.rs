@@ -100,7 +100,7 @@ where
     {
         let start_points: Vec<_> = start_points.into_iter().collect();
         let bytes = layers::Layer::bytes(&layer);
-        let mut data = rowmajor::Owned::defaulted(start_points.len(), bytes.value()).unwrap();
+        let mut data = rowmajor::Owned::from_default(start_points.len(), bytes.value()).unwrap();
 
         for (row, point) in std::iter::zip(data.row_iter_mut(), start_points) {
             layers::Set::set(&layer, point, row)?;

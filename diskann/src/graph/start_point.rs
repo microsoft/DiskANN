@@ -102,7 +102,7 @@ impl StartPointStrategy {
                     rand::seq::index::sample(&mut rng, train_data.nrows(), nsamples.get());
 
                 let mut points =
-                    rowmajor::Owned::defaulted(nsamples.get(), train_data.ncols()).unwrap();
+                    rowmajor::Owned::from_default(nsamples.get(), train_data.ncols()).unwrap();
                 std::iter::zip(points.row_iter_mut(), indices).for_each(|(dst, src)| {
                     dst.copy_from_slice(train_data.row(src));
                 });
@@ -119,7 +119,7 @@ impl StartPointStrategy {
             } => {
                 let mut rng = StdRng::seed_from_u64(*seed);
                 let dim = train_data.ncols();
-                let mut points = rowmajor::Owned::defaulted(nsamples.get(), dim).unwrap();
+                let mut points = rowmajor::Owned::from_default(nsamples.get(), dim).unwrap();
                 points.row_iter_mut().for_each(|row| {
                     row.copy_from_slice(&WithApproximateNorm::with_approximate_norm(
                         dim, *norm, &mut rng,

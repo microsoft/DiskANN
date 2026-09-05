@@ -84,7 +84,7 @@ pub(super) fn create_pivot_tables(
     schema: ChunkOffsets,
     num_centers: usize,
 ) -> (rowmajor::Owned<f32>, ChunkOffsets) {
-    let mut pivots = rowmajor::Owned::<f32>::defaulted(num_centers, schema.dim()).unwrap();
+    let mut pivots = rowmajor::Owned::<f32>::from_default(num_centers, schema.dim()).unwrap();
 
     (0..schema.len()).for_each(|chunk| {
         let range = schema.at(chunk);
@@ -126,8 +126,8 @@ pub(super) fn create_dataset<R: Rng>(
     num_data: usize,
     rng: &mut R,
 ) -> (rowmajor::Owned<f32>, rowmajor::Owned<usize>) {
-    let mut data = rowmajor::Owned::<f32>::defaulted(num_data, schema.dim()).unwrap();
-    let mut expected = rowmajor::Owned::<usize>::defaulted(num_data, schema.len()).unwrap();
+    let mut data = rowmajor::Owned::<f32>::from_default(num_data, schema.dim()).unwrap();
+    let mut expected = rowmajor::Owned::<usize>::from_default(num_data, schema.len()).unwrap();
 
     let dist = Uniform::new(0, num_centers).unwrap();
     for row_index in 0..data.nrows() {
@@ -171,7 +171,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 
     // Set up `ncenters > 256`.
     {
-        let pivots = rowmajor::Owned::defaulted(257, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(257, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
         let input = vec![f32::default(); dim];
@@ -193,7 +193,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 
     // Setup input dim not equal to expected.
     {
-        let pivots = rowmajor::Owned::defaulted(10, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(10, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
         let input = vec![f32::default(); dim - 1];
@@ -215,7 +215,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 
     // Setup output dim not equal to expected.
     {
-        let pivots = rowmajor::Owned::defaulted(10, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(10, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
         let input = vec![f32::default(); dim];
@@ -308,10 +308,10 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Set up `ncenters > 256`.
     {
-        let pivots = rowmajor::Owned::defaulted(257, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(257, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
-        let input = rowmajor::Owned::defaulted(batchsize, dim).unwrap();
+        let input = rowmajor::Owned::from_default(batchsize, dim).unwrap();
         let mut output = rowmajor::Owned::copied(u8::MAX, batchsize, num_chunks).unwrap();
         let result = table.compress_into(input.as_view(), output.as_view_mut());
         assert!(result.is_err());
@@ -330,10 +330,10 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Setup input dim not equal to expected.
     {
-        let pivots = rowmajor::Owned::defaulted(10, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(10, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
-        let input = rowmajor::Owned::defaulted(batchsize, dim - 1).unwrap();
+        let input = rowmajor::Owned::from_default(batchsize, dim - 1).unwrap();
         let mut output = rowmajor::Owned::copied(u8::MAX, batchsize, num_chunks).unwrap();
         let result = table.compress_into(input.as_view(), output.as_view_mut());
         assert!(result.is_err());
@@ -352,10 +352,10 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Setup output dim not equal to expected.
     {
-        let pivots = rowmajor::Owned::defaulted(10, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(10, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
-        let input = rowmajor::Owned::defaulted(batchsize, dim).unwrap();
+        let input = rowmajor::Owned::from_default(batchsize, dim).unwrap();
         let mut output = rowmajor::Owned::copied(u8::MAX, batchsize, num_chunks - 1).unwrap();
         let result = table.compress_into(input.as_view(), output.as_view_mut());
 
@@ -379,10 +379,10 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
 
     // Num rows are different.
     {
-        let pivots = rowmajor::Owned::defaulted(10, dim).unwrap();
+        let pivots = rowmajor::Owned::from_default(10, dim).unwrap();
         let table = build(pivots, offsets.clone());
 
-        let input = rowmajor::Owned::defaulted(batchsize, dim).unwrap();
+        let input = rowmajor::Owned::from_default(batchsize, dim).unwrap();
         let mut output = rowmajor::Owned::copied(u8::MAX, batchsize - 1, num_chunks).unwrap();
         let result = table.compress_into(input.as_view(), output.as_view_mut());
 
@@ -416,8 +416,8 @@ pub(super) fn check_pqtable_batch_compression_errors<T>(
         let table = build(pivots, o);
 
         let num_points = 15;
-        let mut buf = rowmajor::Owned::<f32>::defaulted(num_points, offsets.dim()).unwrap();
-        let mut output = rowmajor::Owned::<u8>::defaulted(num_points, offsets.len()).unwrap();
+        let mut buf = rowmajor::Owned::<f32>::from_default(num_points, offsets.dim()).unwrap();
+        let mut output = rowmajor::Owned::<u8>::from_default(num_points, offsets.len()).unwrap();
 
         fn clear<T: Default>(mut x: rowmajor::Mut<'_, T>) {
             x.as_mut_slice().iter_mut().for_each(|i| *i = T::default());

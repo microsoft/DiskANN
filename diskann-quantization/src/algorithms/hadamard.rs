@@ -399,7 +399,7 @@ mod tests {
         } else {
             let half = dim / 2;
             let sub = hadamard_by_sylvester(half);
-            let mut m = rowmajor::Owned::<f32>::defaulted(dim, dim).unwrap();
+            let mut m = rowmajor::Owned::<f32>::from_default(dim, dim).unwrap();
 
             for c in 0..m.ncols() {
                 for r in 0..m.nrows() {
@@ -425,7 +425,7 @@ mod tests {
     // A naive reference implementation.
     fn matmul(a: rowmajor::Ref<'_, f32>, b: rowmajor::Ref<'_, f32>) -> rowmajor::Owned<f32> {
         assert_eq!(a.ncols(), b.nrows());
-        let mut c = rowmajor::Owned::defaulted(a.nrows(), b.ncols()).unwrap();
+        let mut c = rowmajor::Owned::from_default(a.nrows(), b.ncols()).unwrap();
 
         for i in 0..c.nrows() {
             for j in 0..c.ncols() {

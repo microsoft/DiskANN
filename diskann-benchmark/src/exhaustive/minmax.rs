@@ -392,7 +392,7 @@ mod imp {
             // The APIs below should correctly handle these variables.
             let output_dim = quantizer.output_dim();
             let bytes = Data::<NBITS>::canonical_bytes(output_dim);
-            let mut data = rowmajor::Owned::defaulted(input.nrows(), bytes).unwrap();
+            let mut data = rowmajor::Owned::from_default(input.nrows(), bytes).unwrap();
 
             // Compress the data.
             //

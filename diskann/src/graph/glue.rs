@@ -97,11 +97,7 @@
 
 use std::{future::Future, sync::Arc};
 
-use diskann_utils::{
-    Reborrow,
-    future::SendFuture,
-    views::rowmajor::{self, Matrix},
-};
+use diskann_utils::{Reborrow, future::SendFuture, views::rowmajor::Matrix};
 use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 

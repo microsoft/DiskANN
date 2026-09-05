@@ -219,7 +219,7 @@ mod tests {
     // disagree.
     #[test]
     fn error_on_mismatch_dim() {
-        let pivots = rowmajor::Owned::defaulted(3, 5).unwrap();
+        let pivots = rowmajor::Owned::from_default(3, 5).unwrap();
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 6])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "dimensions are not equal");
@@ -232,7 +232,7 @@ mod tests {
     // Test that the table constructor errors when there are no pivots.
     #[test]
     fn error_on_no_pivots() {
-        let pivots = rowmajor::Owned::defaulted(0, 5).unwrap();
+        let pivots = rowmajor::Owned::from_default(0, 5).unwrap();
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 2, 5])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "pivots is empty");
@@ -321,7 +321,7 @@ mod tests {
 
         // Set up `ncenters > 256`.
         {
-            let pivots = views::rowmajor::Owned::defaulted(257, dim).unwrap();
+            let pivots = views::rowmajor::Owned::from_default(257, dim).unwrap();
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];
@@ -340,7 +340,7 @@ mod tests {
 
         // Setup input dim not equal to expected.
         {
-            let pivots = views::rowmajor::Owned::defaulted(10, dim).unwrap();
+            let pivots = views::rowmajor::Owned::from_default(10, dim).unwrap();
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim - 1];
@@ -359,7 +359,7 @@ mod tests {
 
         // Setup output dim not equal to expected.
         {
-            let pivots = views::rowmajor::Owned::defaulted(10, dim).unwrap();
+            let pivots = views::rowmajor::Owned::from_default(10, dim).unwrap();
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];

@@ -140,7 +140,7 @@ mod tests {
 
     fn test_compression_impl(len: usize, rng: &mut StdRng) {
         let mut domain = [-10, -1, 0, 1, 10];
-        let mut test_pattern = rowmajor::Owned::<i32>::defaulted(domain.len(), len).unwrap();
+        let mut test_pattern = rowmajor::Owned::<i32>::from_default(domain.len(), len).unwrap();
 
         // Fill the test patterns randomly.
         for col in 0..len {

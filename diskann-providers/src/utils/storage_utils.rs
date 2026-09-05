@@ -13,7 +13,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::ANNResult;
 use diskann_utils::{
     io::{Metadata, ReadBinError, SaveBinError, read_bin, write_bin},
-    views::rowmajor::{self, Matrix},
+    views::rowmajor,
 };
 
 /// Load a list of vector ids from the stream.
@@ -108,6 +108,7 @@ pub fn save_data_in_base_dimensions<T: Default + Copy + bytemuck::Pod, Writer: W
 mod storage_util_test {
     use crate::storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider};
     use byteorder::{LittleEndian, WriteBytesExt};
+    use diskann_utils::views::rowmajor::Matrix;
     use std::io::SeekFrom;
     use tempfile::tempfile;
 

@@ -554,7 +554,7 @@ where
         ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
 
         let mut candidate_vectors =
-            rowmajor::Owned::defaulted(candidate_ids.len(), query_f32.len()).unwrap();
+            rowmajor::Owned::from_default(candidate_ids.len(), query_f32.len()).unwrap();
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = Vec::with_capacity(candidate_ids.len());
 

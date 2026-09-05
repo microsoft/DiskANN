@@ -611,14 +611,14 @@ mod tests {
             dim
         );
 
-        let mut data = rowmajor::Owned::<f32>::defaulted(num_points, dim).unwrap();
+        let mut data = rowmajor::Owned::<f32>::from_default(num_points, dim).unwrap();
         set_default_values(data.as_view_mut());
 
         let square_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
 
         // The sample points we are computing the distances against.
         let num_samples = 3;
-        let mut samples = rowmajor::Owned::<f32>::defaulted(num_samples, dim).unwrap();
+        let mut samples = rowmajor::Owned::<f32>::from_default(num_samples, dim).unwrap();
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
         let transpose = BlockTransposed::<f32, N>::from_matrix_view(data.as_view());
@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(values.len(), ndata);
 
         values.shuffle(rng);
-        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+        let mut data = rowmajor::Owned::from_default(ndata, dim).unwrap();
         for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
             r.fill(*v);
         }
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(values.len(), ndata);
 
         values.shuffle(rng);
-        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+        let mut data = rowmajor::Owned::from_default(ndata, dim).unwrap();
         for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
             r.fill(*v);
         }
@@ -870,8 +870,8 @@ mod tests {
     // Failure modes
     #[test]
     fn fail_empty_dataset() {
-        let data = rowmajor::Owned::defaulted(0, 5).unwrap();
-        let mut centers = rowmajor::Owned::defaulted(10, data.ncols()).unwrap();
+        let data = rowmajor::Owned::from_default(0, 5).unwrap();
+        let mut centers = rowmajor::Owned::from_default(10, data.ncols()).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0xa9eae150d30845a1);
 
@@ -891,8 +891,8 @@ mod tests {
 
     #[test]
     fn both_empty_is_okay() {
-        let data = rowmajor::Owned::defaulted(0, 5).unwrap();
-        let mut centers = rowmajor::Owned::defaulted(0, data.ncols()).unwrap();
+        let data = rowmajor::Owned::from_default(0, 5).unwrap();
+        let mut centers = rowmajor::Owned::from_default(0, data.ncols()).unwrap();
         let mut rng = StdRng::seed_from_u64(0x6f7031afd9b5aa18);
         let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
@@ -907,7 +907,7 @@ mod tests {
         let ncenters = 10;
         let dim = 5;
 
-        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+        let mut data = rowmajor::Owned::from_default(ndata, dim).unwrap();
         set_default_values(data.as_view_mut());
         let mut centers = rowmajor::Owned::copied(f32::INFINITY, ncenters, data.ncols()).unwrap();
 
@@ -945,7 +945,7 @@ mod tests {
         assert!(values.len() >= ndata);
 
         values.shuffle(&mut rng);
-        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+        let mut data = rowmajor::Owned::from_default(ndata, dim).unwrap();
         for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
             r.fill(*v);
         }
@@ -967,12 +967,12 @@ mod tests {
 
     #[test]
     fn fail_intinity_check() {
-        let mut data = rowmajor::Owned::defaulted(10, 1).unwrap();
+        let mut data = rowmajor::Owned::from_default(10, 1).unwrap();
         set_default_values(data.as_view_mut());
 
         // A very large value that will overflow to infinity when computing the norm.
         *data.element_mut(6, 0) = -3.4028235e38;
-        let mut centers = rowmajor::Owned::defaulted(2, 1).unwrap();
+        let mut centers = rowmajor::Owned::from_default(2, 1).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0xc0449b2aa4e12f05);
 
@@ -989,12 +989,12 @@ mod tests {
 
     #[test]
     fn fail_nan_check() {
-        let mut data = rowmajor::Owned::defaulted(10, 1).unwrap();
+        let mut data = rowmajor::Owned::from_default(10, 1).unwrap();
         set_default_values(data.as_view_mut());
 
         // A very large value that will overflow to infinity when computing the norm.
         *data.element_mut(6, 0) = f32::NAN;
-        let mut centers = rowmajor::Owned::defaulted(2, 1).unwrap();
+        let mut centers = rowmajor::Owned::from_default(2, 1).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0x55808c6c728c8473);
 
@@ -1019,7 +1019,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints];
-        let data = rowmajor::Owned::defaulted(npoints, dim).unwrap();
+        let data = rowmajor::Owned::from_default(npoints, dim).unwrap();
         let norms = vec![0.0; npoints];
         let this = vec![0.0; dim + 1]; // Incorrect
         let this_square_norm = 0.0;
@@ -1038,7 +1038,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints + 1]; // Incorrect
-        let data = rowmajor::Owned::defaulted(npoints, dim).unwrap();
+        let data = rowmajor::Owned::from_default(npoints, dim).unwrap();
         let norms = vec![0.0; npoints];
         let this = vec![0.0; dim];
         let this_square_norm = 0.0;
@@ -1057,7 +1057,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints];
-        let data = rowmajor::Owned::defaulted(npoints, dim).unwrap();
+        let data = rowmajor::Owned::from_default(npoints, dim).unwrap();
         let norms = vec![0.0; npoints + 1]; // Incorrect
         let this = vec![0.0; dim];
         let this_square_norm = 0.0;
@@ -1079,8 +1079,8 @@ mod tests {
         expected = "centers output matrix should have the same dimensionality as the dataset"
     )]
     fn kmeans_plusplus_into_panics_dim_mismatch() {
-        let mut centers = rowmajor::Owned::defaulted(2, 10).unwrap();
-        let data = rowmajor::Owned::defaulted(2, 9).unwrap();
+        let mut centers = rowmajor::Owned::from_default(2, 10).unwrap();
+        let data = rowmajor::Owned::from_default(2, 9).unwrap();
         kmeans_plusplus_into(
             centers.as_view_mut(),
             data.as_view(),

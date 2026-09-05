@@ -243,11 +243,11 @@ mod tests {
     #[test]
     fn test_f32() {
         // No Rows
-        let x = rowmajor::Owned::<f32>::defaulted(0, 10).unwrap();
+        let x = rowmajor::Owned::<f32>::from_default(0, 10).unwrap();
         assert_eq!(f32::compute_medoid(x.as_view()), vec![0.0; x.ncols()]);
 
         // No Cols
-        let x = rowmajor::Owned::<f32>::defaulted(10, 0).unwrap();
+        let x = rowmajor::Owned::<f32>::from_default(10, 0).unwrap();
         assert_eq!(f32::compute_medoid(x.as_view()), Vec::<f32>::new());
 
         let mut rng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -268,14 +268,14 @@ mod tests {
     #[test]
     fn test_f16() {
         // No Rows
-        let x = rowmajor::Owned::<f16>::defaulted(0, 10).unwrap();
+        let x = rowmajor::Owned::<f16>::from_default(0, 10).unwrap();
         assert_eq!(
             f16::compute_medoid(x.as_view()),
             vec![f16::default(); x.ncols()]
         );
 
         // No Cols
-        let x = rowmajor::Owned::<f16>::defaulted(10, 0).unwrap();
+        let x = rowmajor::Owned::<f16>::from_default(10, 0).unwrap();
         assert_eq!(f16::compute_medoid(x.as_view()), Vec::<f16>::new());
 
         let mut rng = StdRng::seed_from_u64(0x88e2f7096fc9b90e);
@@ -291,7 +291,8 @@ mod tests {
 
         // Example dataset
         let (data, expected) = example_dataset();
-        let mut data_f16 = rowmajor::Owned::<f16>::defaulted(data.nrows(), data.ncols()).unwrap();
+        let mut data_f16 =
+            rowmajor::Owned::<f16>::from_default(data.nrows(), data.ncols()).unwrap();
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
 
         let mut expected_f16 = vec![f16::default(); expected.len()];
@@ -319,11 +320,11 @@ mod tests {
     #[test]
     fn test_u8() {
         // No Rows
-        let x = rowmajor::Owned::<u8>::defaulted(0, 10).unwrap();
+        let x = rowmajor::Owned::<u8>::from_default(0, 10).unwrap();
         assert_eq!(u8::compute_medoid(x.as_view()), vec![0u8; x.ncols()]);
 
         // No Cols
-        let x = rowmajor::Owned::<u8>::defaulted(10, 0).unwrap();
+        let x = rowmajor::Owned::<u8>::from_default(10, 0).unwrap();
         assert_eq!(u8::compute_medoid(x.as_view()), Vec::<u8>::new());
         let mut rng = StdRng::seed_from_u64(0x8f2f5fa0b5161acf);
 
@@ -359,11 +360,11 @@ mod tests {
     #[test]
     fn test_i8() {
         // No Rows
-        let x = rowmajor::Owned::<i8>::defaulted(0, 10).unwrap();
+        let x = rowmajor::Owned::<i8>::from_default(0, 10).unwrap();
         assert_eq!(i8::compute_medoid(x.as_view()), vec![0i8; x.ncols()]);
 
         // No Cols
-        let x = rowmajor::Owned::<i8>::defaulted(10, 0).unwrap();
+        let x = rowmajor::Owned::<i8>::from_default(10, 0).unwrap();
         assert_eq!(i8::compute_medoid(x.as_view()), Vec::<i8>::new());
 
         let mut rng = StdRng::seed_from_u64(0x8f2f5fa0b5161acf);

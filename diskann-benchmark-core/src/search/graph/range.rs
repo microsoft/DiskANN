@@ -246,7 +246,7 @@ mod tests {
     fn test_range() {
         let index = search::graph::test_grid_provider();
 
-        let mut queries = rowmajor::Owned::defaulted(5, index.provider().dim()).unwrap();
+        let mut queries = rowmajor::Owned::from_default(5, index.provider().dim()).unwrap();
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -330,7 +330,7 @@ mod tests {
         let index = search::graph::test_grid_provider();
 
         let queries =
-            Arc::new(rowmajor::Owned::<f32>::defaulted(2, index.provider().dim()).unwrap());
+            Arc::new(rowmajor::Owned::<f32>::from_default(2, index.provider().dim()).unwrap());
         let strategy = provider::Strategy::new();
 
         let err = Range::new(index, queries.clone(), Strategy::collection([strategy])).unwrap_err();

@@ -37,22 +37,22 @@ where
 
     let dst = match target {
         DataType::F32 => {
-            let mut dst = rowmajor::Owned::<f32>::defaulted(data.nrows(), data.ncols()).unwrap();
+            let mut dst = rowmajor::Owned::<f32>::from_default(data.nrows(), data.ncols()).unwrap();
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::F16 => {
-            let mut dst = rowmajor::Owned::<f16>::defaulted(data.nrows(), data.ncols()).unwrap();
+            let mut dst = rowmajor::Owned::<f16>::from_default(data.nrows(), data.ncols()).unwrap();
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::U8 => {
-            let mut dst = rowmajor::Owned::<u8>::defaulted(data.nrows(), data.ncols()).unwrap();
+            let mut dst = rowmajor::Owned::<u8>::from_default(data.nrows(), data.ncols()).unwrap();
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }
         DataType::I8 => {
-            let mut dst = rowmajor::Owned::<i8>::defaulted(data.nrows(), data.ncols()).unwrap();
+            let mut dst = rowmajor::Owned::<i8>::from_default(data.nrows(), data.ncols()).unwrap();
             SliceMut::from(dst.as_mut_slice()).convert_lossless(data.as_slice())?;
             Dataset::from(dst)
         }

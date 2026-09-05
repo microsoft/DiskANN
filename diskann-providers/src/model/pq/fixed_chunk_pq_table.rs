@@ -11,7 +11,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     lazy_format,
-    views::rowmajor::{self, Matrix, MatrixMut},
+    views::rowmajor::{self, Matrix},
 };
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;

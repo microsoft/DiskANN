@@ -923,7 +923,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use crate::graph::workingset::View as WorkingSetView;
 

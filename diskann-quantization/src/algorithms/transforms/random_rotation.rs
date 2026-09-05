@@ -103,7 +103,7 @@ impl RandomRotation {
                 let indices = rand::seq::index::sample(rng, dim, target_dim);
                 let scaling = (dim as f32 / target_dim as f32).sqrt();
 
-                let mut transform = rowmajor::Owned::defaulted(target_dim, dim).unwrap();
+                let mut transform = rowmajor::Owned::from_default(target_dim, dim).unwrap();
                 std::iter::zip(transform.row_iter_mut(), indices.iter()).for_each(|(ro, ri)| {
                     std::iter::zip(ro.iter_mut(), initial.row(ri).iter()).for_each(|(o, i)| {
                         *o = scaling * (*i);
@@ -112,7 +112,7 @@ impl RandomRotation {
                 transform
             }
             std::cmp::Ordering::Greater => {
-                let mut transform = rowmajor::Owned::defaulted(target_dim, dim).unwrap();
+                let mut transform = rowmajor::Owned::from_default(target_dim, dim).unwrap();
                 std::iter::zip(transform.row_iter_mut(), initial.row_iter())
                     .for_each(|(o, i)| o.copy_from_slice(&i[..dim]));
                 transform

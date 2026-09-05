@@ -59,7 +59,7 @@ impl Store {
                 .expect("`freelist_recycle_capacity` must be non-zero"),
             );
 
-        let data = rowmajor::Owned::defaulted(1, config.entry_bytes).unwrap();
+        let data = rowmajor::Owned::from_default(1, config.entry_bytes).unwrap();
         let store =
             store::Store::new(store_config, data.as_view()).expect("failed to construct store");
         Self { store }

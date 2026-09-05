@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_try_from_data_errors() {
-        let m = rowmajor::Owned::<usize>::defaulted(10, 10).unwrap();
+        let m = rowmajor::Owned::<usize>::from_default(10, 10).unwrap();
         let nrows = m.nrows();
         let ncols = m.ncols();
 
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn test_try_shrink_from() {
         // Exact is okay.
-        let m = rowmajor::Owned::<usize>::defaulted(10, 10).unwrap();
+        let m = rowmajor::Owned::<usize>::from_default(10, 10).unwrap();
         let nrows = m.nrows();
         let ncols = m.ncols();
         let s = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols).unwrap();
@@ -847,7 +847,7 @@ mod tests {
     fn test_invalid_stride_is_an_error_not_a_panic() {
         // Constructing a `Strided` with an invalid layout (`cstride < ncols`) returns an
         // `Err` rather than panicking - only unwrapping the result panics.
-        let m = rowmajor::Owned::<usize>::defaulted(4, 4).unwrap();
+        let m = rowmajor::Owned::<usize>::from_default(4, 4).unwrap();
         let err = Strided::try_from_data(m.as_slice(), 2, 2, 1).unwrap_err();
         assert!(matches!(err, TryFromError::LayoutError(_)));
     }

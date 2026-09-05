@@ -7,7 +7,7 @@
 
 use std::{io::Write, num::NonZeroUsize};
 
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::simd;
 use diskann_wide::Architecture;
 use half::f16;

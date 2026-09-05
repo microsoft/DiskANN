@@ -169,7 +169,7 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
         })
         .collect();
 
-    let mut data = rowmajor::Owned::<f32>::defaulted(nrows, ncols).unwrap();
+    let mut data = rowmajor::Owned::<f32>::from_default(nrows, ncols).unwrap();
     for col in 0..ncols {
         offsets.shuffle(rng);
         for row in 0..nrows {

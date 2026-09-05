@@ -173,7 +173,7 @@ mod tests {
 
         let index = search::graph::test_grid_provider();
 
-        let mut queries = rowmajor::Owned::defaulted(5, index.provider().dim()).unwrap();
+        let mut queries = rowmajor::Owned::from_default(5, index.provider().dim()).unwrap();
         queries.row_mut(0).copy_from_slice(&[0.0, 0.0, 0.0, 0.0]);
         queries.row_mut(1).copy_from_slice(&[4.0, 0.0, 0.0, 0.0]);
         queries.row_mut(2).copy_from_slice(&[0.0, 4.0, 0.0, 0.0]);
@@ -271,7 +271,7 @@ mod tests {
     fn test_multihop_error() {
         let index = search::graph::test_grid_provider();
         let queries =
-            Arc::new(rowmajor::Owned::<f32>::defaulted(2, index.provider().dim()).unwrap());
+            Arc::new(rowmajor::Owned::<f32>::from_default(2, index.provider().dim()).unwrap());
 
         let labels: Arc<[_]> = (0..queries.nrows() + 1)
             .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })

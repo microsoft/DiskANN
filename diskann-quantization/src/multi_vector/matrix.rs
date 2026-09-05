@@ -1933,8 +1933,8 @@ mod tests {
         assert!(filled.rows().flatten().all(|s| s == "x"));
 
         // NewOwned<Defaulted> (Clone + Default).
-        let defaulted = Mat::new(repr, Defaulted).unwrap();
-        assert!(defaulted.rows().flatten().all(String::is_empty));
+        let from_default = Mat::new(repr, Defaulted).unwrap();
+        assert!(from_default.rows().flatten().all(String::is_empty));
 
         // from_fn.
         let mut counter = 0usize;

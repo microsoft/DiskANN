@@ -1269,7 +1269,7 @@ mod tests {
 
     #[test]
     fn clone_has_independent_backing_allocation() {
-        let mut data = rowmajor::Owned::defaulted(5, 3).unwrap();
+        let mut data = rowmajor::Owned::from_default(5, 3).unwrap();
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1327,7 +1327,7 @@ mod tests {
 
         // ── Construction ─────────────────────────────────────────
 
-        let mut data = rowmajor::Owned::defaulted(nrows, ncols).unwrap();
+        let mut data = rowmajor::Owned::from_default(nrows, ncols).unwrap();
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
@@ -1883,7 +1883,7 @@ mod tests {
         ncols: usize,
         gen_element: fn(usize) -> T,
     ) {
-        let mut data = rowmajor::Owned::defaulted(nrows, ncols).unwrap();
+        let mut data = rowmajor::Owned::from_default(nrows, ncols).unwrap();
         data.as_mut_slice()
             .iter_mut()
             .enumerate()

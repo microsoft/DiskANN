@@ -25,12 +25,12 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
         let nrows = data.nrows();
         let ncols = data.ncols();
         if nrows == 0 || ncols == 0 {
-            return rowmajor::Owned::defaulted(num_samples, ncols).unwrap();
+            return rowmajor::Owned::from_default(num_samples, ncols).unwrap();
         }
 
         let seed = seed.unwrap_or(0xaf2f5fa0b5161acf);
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut result = rowmajor::Owned::defaulted(num_samples, ncols).unwrap();
+        let mut result = rowmajor::Owned::from_default(num_samples, ncols).unwrap();
 
         // sample a random partitions down the diagonal
         for (s, res) in result.row_iter_mut().enumerate() {
@@ -180,17 +180,17 @@ mod tests {
         StandardUniform: Distribution<T>,
     {
         // No Rows
-        let x = rowmajor::Owned::<T>::defaulted(0, 10).unwrap();
+        let x = rowmajor::Owned::<T>::from_default(0, 10).unwrap();
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            rowmajor::Owned::<T>::defaulted(1, x.ncols()).unwrap()
+            rowmajor::Owned::<T>::from_default(1, x.ncols()).unwrap()
         );
 
         // No Cols
-        let x = rowmajor::Owned::<T>::defaulted(1, 0).unwrap();
+        let x = rowmajor::Owned::<T>::from_default(1, 0).unwrap();
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
-            rowmajor::Owned::<T>::defaulted(1, x.ncols()).unwrap()
+            rowmajor::Owned::<T>::from_default(1, x.ncols()).unwrap()
         );
 
         let mut rng: StdRng = StdRng::seed_from_u64(0xaf2f5fa0b5161acf);
@@ -237,7 +237,8 @@ mod tests {
     #[test]
     fn test_f16() {
         let data = example_dataset();
-        let mut data_f16 = rowmajor::Owned::<f16>::defaulted(data.nrows(), data.ncols()).unwrap();
+        let mut data_f16 =
+            rowmajor::Owned::<f16>::from_default(data.nrows(), data.ncols()).unwrap();
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
         test_for_type(data_f16);
     }

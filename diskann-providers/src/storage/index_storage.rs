@@ -225,7 +225,7 @@ mod tests {
     };
     use diskann_utils::{
         test_data_root,
-        views::rowmajor::{self, Matrix, MatrixMut},
+        views::rowmajor::{self, Matrix},
     };
     use diskann_vector::distance::Metric;
 

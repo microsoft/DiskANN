@@ -13,7 +13,7 @@ use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_utils::{
     io::Metadata,
     lazy_format,
-    views::rowmajor::{self, Matrix, MatrixMut},
+    views::rowmajor::{self, MatrixMut},
 };
 
 /// Read metadata of data file.
@@ -93,7 +93,7 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
     let mut all_vectors: Vec<rowmajor::Owned<T>> = Vec::with_capacity(num_points);
 
     for &length in &vec_lengths {
-        let mut vectors = rowmajor::Owned::<T>::defaulted(length as usize, dimension).unwrap();
+        let mut vectors = rowmajor::Owned::<T>::from_default(length as usize, dimension).unwrap();
         reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(
             vectors.as_mut_slice(),
         ))?;
@@ -107,6 +107,7 @@ pub fn load_multivec_bin<T: Copy + bytemuck::Pod + Default, StorageReader: Stora
 #[cfg(test)]
 mod file_util_test {
     use crate::storage::{StorageWriteProvider, VirtualStorageProvider};
+    use diskann_utils::views::rowmajor::Matrix;
     use vfs::{FileSystem, MemoryFS};
 
     use super::*;

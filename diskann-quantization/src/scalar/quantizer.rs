@@ -38,11 +38,14 @@ use crate::{
 ///         CompensatedIP, CompensatedSquaredL2,
 ///     }
 /// };
-/// use diskann_utils::{views::Matrix, Reborrow, ReborrowMut};
+/// use diskann_utils::{
+///     Reborrow, ReborrowMut,
+///     views::rowmajor::{self, Matrix, MatrixMut},
+/// };
 /// use diskann_vector::DistanceFunction;
 ///
 /// // A small training set consisting of two 5-dimensional vectors.
-/// let mut data = Matrix::<f32>::new(0.0, 2, 5);
+/// let mut data = rowmajor::Owned::<f32>::from_default(2, 5).unwrap();
 /// data.row_mut(0).copy_from_slice(&[-1.0, -1.0, -1.0, -1.0, -1.0]);
 /// data.row_mut(1).copy_from_slice(&[1.0, 1.0, 1.0, 1.0, 1.0]);
 ///
@@ -610,7 +613,7 @@ mod tests {
             // Push one more to have one point above `range_max`.
             base.push(i);
 
-            let mut output = rowmajor::Owned::defaulted(base.len(), dim).unwrap();
+            let mut output = rowmajor::Owned::from_default(base.len(), dim).unwrap();
             (0..dim).for_each(|j| {
                 base.shuffle(rng);
                 for (i, b) in base.iter().enumerate() {

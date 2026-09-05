@@ -1510,7 +1510,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 5 must be less than 5")]
     fn get_panics_on_row() {
-        let data = rowmajor::Owned::defaulted(5, 10).unwrap();
+        let data = rowmajor::Owned::from_default(5, 10).unwrap();
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(5, 1);
     }
@@ -1518,7 +1518,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "col 5 must be less than 5")]
     fn get_panics_on_col() {
-        let data = rowmajor::Owned::defaulted(10, 5).unwrap();
+        let data = rowmajor::Owned::from_default(10, 5).unwrap();
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         chunk.get(1, 5);
     }
@@ -1587,7 +1587,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_from() {
-        let data = rowmajor::Owned::<f32>::defaulted(5, 10).unwrap();
+        let data = rowmajor::Owned::<f32>::from_default(5, 10).unwrap();
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);
@@ -1601,7 +1601,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_process_into_panics_on_into() {
-        let data = rowmajor::Owned::<f32>::defaulted(5, 10).unwrap();
+        let data = rowmajor::Owned::<f32>::from_default(5, 10).unwrap();
         let chunk = Chunk::new(data.as_view().into()).unwrap();
         assert_eq!(chunk.dimension(), 10);
         assert_eq!(chunk.num_centers(), 5);

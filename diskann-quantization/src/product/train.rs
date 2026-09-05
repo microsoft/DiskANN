@@ -48,7 +48,7 @@ fn flatten<T: Copy + Default>(
     ncenters: usize,
     dim: usize,
 ) -> rowmajor::Owned<T> {
-    let mut flattened = rowmajor::Owned::defaulted(ncenters, dim).unwrap();
+    let mut flattened = rowmajor::Owned::from_default(ncenters, dim).unwrap();
     let mut col_start = 0;
     for matrix in pivots {
         assert_eq!(matrix.nrows(), flattened.nrows());
@@ -174,7 +174,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 let norms: Vec<f32> = view.rows().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
                 let mut centers =
-                    rowmajor::Owned::defaulted(trainer.ncenters, range.len()).unwrap();
+                    rowmajor::Owned::from_default(trainer.ncenters, range.len()).unwrap();
 
                 // Construct the random number generator seeded by the PQ chunk.
                 let mut rng = rng_builder.build_boxed_rng(i);
@@ -308,7 +308,7 @@ mod tests {
         let matrices: Vec<rowmajor::Owned<usize>> =
             std::iter::zip(sub_dims.iter(), prefix_sum.iter())
                 .map(|(&this_dim, &offset)| {
-                    let mut m = rowmajor::Owned::defaulted(nrows, this_dim).unwrap();
+                    let mut m = rowmajor::Owned::from_default(nrows, this_dim).unwrap();
                     for r in 0..nrows {
                         for c in 0..this_dim {
                             *m.element_mut(r, c) = dim * r + offset + c;
@@ -364,8 +364,8 @@ mod tests {
                 .map(|chunk| {
                     let dim = schema.at(chunk).len();
 
-                    let mut initial = rowmajor::Owned::defaulted(ndata, dim).unwrap();
-                    let mut centers = rowmajor::Owned::defaulted(self.nclusters, 1).unwrap();
+                    let mut initial = rowmajor::Owned::from_default(ndata, dim).unwrap();
+                    let mut centers = rowmajor::Owned::from_default(self.nclusters, 1).unwrap();
 
                     // The starting offset for clusters.
                     let offset = offsets_distribution.sample(rng);
@@ -386,7 +386,7 @@ mod tests {
 
                     // Shuffle the dataset.
                     indices.shuffle(rng);
-                    let mut piece = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+                    let mut piece = rowmajor::Owned::from_default(ndata, dim).unwrap();
                     for (dst, src) in indices.iter().enumerate() {
                         piece.row_mut(dst).copy_from_slice(initial.row(*src));
                     }

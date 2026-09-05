@@ -334,7 +334,7 @@ mod imp {
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
             let mut data =
-                rowmajor::Owned::defaulted(input.nrows(), quantizer.get_num_chunks()).unwrap();
+                rowmajor::Owned::from_default(input.nrows(), quantizer.get_num_chunks()).unwrap();
 
             // Compress the data.
             #[allow(clippy::disallowed_methods)]

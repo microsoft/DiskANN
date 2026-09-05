@@ -12,9 +12,13 @@ use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSlice, P
 use crate::{Reborrow, ReborrowMut};
 
 pub unsafe trait Matrix {
+    /// The type of the element stored in the matrix.
     type Element;
 
+    /// Return the base pointer for the matrix.
     fn as_nonnull(&self) -> NonNull<Self::Element>;
+
+    /// Return the [`Layout`] for the matrix.
     fn layout(&self) -> Layout;
 
     //----------//
@@ -165,11 +169,7 @@ pub unsafe trait Matrix {
     ///
     /// It is possible for yielded sub-matrices to have fewer than `batchsize` rows if the
     /// number of rows in the parent matrix is not evenly divisible by `batchsize`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `batchsize = 0`.
-    fn window_iter(&self, batchsize: usize) -> Windows<'_, Self::Element> {
+    fn window_iter(&self, batchsize: NonZeroUsize) -> Windows<'_, Self::Element> {
         Windows::new(self.as_view(), batchsize)
     }
 
@@ -641,8 +641,7 @@ impl<'a, T> Iterator for RowsMut<'a, T> {
     type Item = &'a mut [T];
     fn next(&mut self) -> Option<&'a mut [T]> {
         self.remaining.checked_sub(1).map(|remaining| {
-            let item =
-                unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.ncols) };
+            let item = unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.ncols) };
             self.remaining = remaining;
             self.ptr = unsafe { self.ptr.add(self.ncols) };
             item
@@ -662,13 +661,13 @@ impl<T> std::iter::FusedIterator for RowsMut<'_, T> {}
 pub struct Windows<'a, T> {
     ptr: NonNull<T>,
     remaining: usize,
-    batchsize: usize,
+    batchsize: NonZeroUsize,
     ncols: usize,
     _lifetime: PhantomData<&'a [T]>,
 }
 
 impl<'a, T> Windows<'a, T> {
-    fn new(m: Ref<'a, T>, batchsize: usize) -> Self {
+    fn new(m: Ref<'a, T>, batchsize: NonZeroUsize) -> Self {
         let layout = m.layout();
         Self {
             ptr: m.as_nonnull(),
@@ -689,7 +688,7 @@ impl<'a, T> Iterator for Windows<'a, T> {
         if self.remaining == 0 {
             None
         } else {
-            let next_remaining = self.remaining.saturating_sub(self.batchsize);
+            let next_remaining = self.remaining.saturating_sub(self.batchsize.get());
             let nrows = self.remaining - next_remaining;
 
             let window = unsafe {
@@ -714,16 +713,6 @@ impl<'a, T> Iterator for Windows<'a, T> {
 
 impl<T> ExactSizeIterator for Windows<'_, T> {}
 impl<T> std::iter::FusedIterator for Windows<'_, T> {}
-
-// An iterator over rows in a matrix. See: [`Matrix::window_iter`].
-#[derive(Debug)]
-pub struct WindowsMut<'a, T> {
-    ptr: NonNull<T>,
-    remaining: usize,
-    batchsize: usize,
-    ncols: usize,
-    _lifetime: PhantomData<&'a mut [T]>,
-}
 
 //-------//
 // Owned //
@@ -787,14 +776,14 @@ impl<T> Owned<T> {
         Self::cloned_layout(element, layout)
     }
 
-    pub fn defaulted(nrows: usize, ncols: usize) -> Result<Self, LayoutError>
+    pub fn from_default(nrows: usize, ncols: usize) -> Result<Self, LayoutError>
     where
         T: Default,
     {
         Self::from_fn(nrows, ncols, Default::default)
     }
 
-    pub fn defaulted_layout(layout: Layout) -> Self
+    pub fn from_default_layout(layout: Layout) -> Self
     where
         T: Default,
     {
@@ -1251,7 +1240,7 @@ mod tests {
 
         // Window Iters.
         let batchsize = 2;
-        m.window_iter(batchsize)
+        m.window_iter(NonZeroUsize::new(batchsize).unwrap())
             .enumerate()
             .for_each(|(i, submatrix)| {
                 assert_eq!(submatrix.nrows(), batchsize);
@@ -1271,7 +1260,7 @@ mod tests {
         // Try again, but with a batch size of 3 to ensure that we correctly handle cases
         // where the last block is under-sized.
         let batchsize = 3;
-        m.window_iter(batchsize)
+        m.window_iter(NonZeroUsize::new(batchsize).unwrap())
             .enumerate()
             .for_each(|(i, submatrix)| {
                 if i == 0 {

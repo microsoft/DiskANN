@@ -114,7 +114,9 @@ impl PQStorage {
         let centroid_bytes = match centroid {
             Some(centroid) => write_bin(rowmajor::Ref::column_vector(centroid), writer)?,
             None => write_bin(
-                rowmajor::Owned::<f32>::defaulted(dim, 1).unwrap().as_view(),
+                rowmajor::Owned::<f32>::from_default(dim, 1)
+                    .unwrap()
+                    .as_view(),
                 writer,
             )?,
         };

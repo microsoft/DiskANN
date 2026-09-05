@@ -51,7 +51,8 @@ where
     Q: QuantStore + Sync,
     C: CreateQuantComputer<Q> + Sync,
 {
-    let mut output = rowmajor::Owned::<u32>::defaulted(queries.nrows(), results_per_query).unwrap();
+    let mut output =
+        rowmajor::Owned::<u32>::from_default(queries.nrows(), results_per_query).unwrap();
 
     struct Times {
         preprocess: MicroSeconds,

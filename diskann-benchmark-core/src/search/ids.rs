@@ -231,7 +231,7 @@ where
                 len,
                 num_ids,
             } => {
-                let mut dst = rowmajor::Owned::defaulted(len, num_ids).unwrap();
+                let mut dst = rowmajor::Owned::from_default(len, num_ids).unwrap();
                 let mut lengths = Vec::with_capacity(len);
 
                 let mut output_row = 0;
@@ -279,7 +279,7 @@ mod tests {
         let nrows = data.len();
         let ncols = data.iter().map(|v| v.len()).max().unwrap_or(0);
 
-        let mut matrix = rowmajor::Owned::defaulted(nrows, ncols).unwrap();
+        let mut matrix = rowmajor::Owned::from_default(nrows, ncols).unwrap();
         let mut lengths = Vec::with_capacity(nrows);
 
         for (row, row_data) in std::iter::zip(matrix.row_iter_mut(), data.iter()) {
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_bounded_new_valid() {
-        let matrix = rowmajor::Owned::<u32>::defaulted(3, 5).unwrap();
+        let matrix = rowmajor::Owned::<u32>::from_default(3, 5).unwrap();
         let lengths = vec![2, 3, 1];
         let bounded = Bounded::new(matrix, lengths);
 
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_bounded_length_clamping() {
-        let matrix = rowmajor::Owned::defaulted(3, 3).unwrap();
+        let matrix = rowmajor::Owned::from_default(3, 3).unwrap();
         let lengths = vec![2, 3, 5]; // Last length exceeds number of columns
         let bounded = Bounded::new(matrix, lengths);
 
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "an internal invariant was not upheld")]
     fn test_bounded_new_mismatched_lengths() {
-        let matrix = rowmajor::Owned::<u32>::defaulted(3, 5).unwrap();
+        let matrix = rowmajor::Owned::<u32>::from_default(3, 5).unwrap();
         let lengths = vec![2, 3]; // Only 2 lengths for 3 rows
         Bounded::new(matrix, lengths);
     }

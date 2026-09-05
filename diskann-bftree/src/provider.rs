@@ -2114,7 +2114,7 @@ mod tests {
     use diskann_providers::storage::FileStorageProvider;
 
     fn create_quant_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, QuantVectorProvider>>> {
-        let start_point = rowmajor::Owned::defaulted(1, 5).unwrap();
+        let start_point = rowmajor::Owned::from_default(1, 5).unwrap();
         let dim = 5;
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
@@ -2194,7 +2194,7 @@ mod tests {
     /// that the `BfTreeProvider<_, _, u64>` path is functional and not merely compilable.
     #[tokio::test]
     async fn test_quantized_index_search_u64_ids() {
-        let start_point = rowmajor::Owned::defaulted(1, 5).unwrap();
+        let start_point = rowmajor::Owned::from_default(1, 5).unwrap();
         let dim = 5;
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
@@ -2276,7 +2276,7 @@ mod tests {
     /// full data/quant/neighbor/search stack keys on the complete 8-byte id.
     #[tokio::test]
     async fn test_quantized_index_search_u64_high_ids() {
-        let start_point = rowmajor::Owned::defaulted(1, 5).unwrap();
+        let start_point = rowmajor::Owned::from_default(1, 5).unwrap();
         let dim = 5;
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
@@ -2470,7 +2470,7 @@ mod tests {
     }
 
     fn create_full_precision_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, NoStore>>> {
-        let start_point = rowmajor::Owned::defaulted(1, 5).unwrap();
+        let start_point = rowmajor::Owned::from_default(1, 5).unwrap();
         let logical_max_degree = 6;
         let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
@@ -2627,7 +2627,7 @@ mod tests {
             let logical_max_degree = 32usize;
             let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
             let metric = Metric::L2;
-            let start_point = rowmajor::Owned::defaulted(1, DIM).unwrap();
+            let start_point = rowmajor::Owned::from_default(1, DIM).unwrap();
 
             let provider: BfTreeProvider<f32, NoStore, I> = BfTreeProvider::new(
                 BfTreeProviderParameters {
@@ -2904,7 +2904,7 @@ mod tests {
 
         let num_start_points = 2;
         let dim = 3;
-        let start_points = rowmajor::Owned::defaulted(num_start_points, dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points, dim).unwrap();
 
         let provider = BfTreeProvider::<f32, _>::new(
             BfTreeProviderParameters {
@@ -3041,7 +3041,7 @@ mod tests {
             use_snapshot: true,
         };
 
-        let start_points = rowmajor::Owned::defaulted(num_start_points.into(), dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points.into(), dim).unwrap();
 
         // Create provider
         let provider =
@@ -3173,7 +3173,7 @@ mod tests {
             use_snapshot: true,
         };
 
-        let start_points = rowmajor::Owned::defaulted(num_start_points.into(), dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points.into(), dim).unwrap();
         // Create provider with quantization
         let provider = BfTreeProvider::<f32, QuantVectorProvider>::new(
             params.clone(),
@@ -3292,7 +3292,7 @@ mod tests {
         let mut neighbor_config = Config::default();
         neighbor_config.use_snapshot(true);
 
-        let start_points = rowmajor::Owned::defaulted(num_start_points.into(), dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points.into(), dim).unwrap();
         // In-memory config (no file path needed)
         let provider = BfTreeProvider::<f32, NoStore>::new(
             BfTreeProviderParameters {
@@ -3407,7 +3407,7 @@ mod tests {
         let mut quant_config = Config::default();
         quant_config.use_snapshot(true);
 
-        let start_points = rowmajor::Owned::defaulted(num_start_points.into(), dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points.into(), dim).unwrap();
         let provider = BfTreeProvider::<f32, QuantVectorProvider>::new(
             BfTreeProviderParameters {
                 max_points: num_points,
@@ -3598,7 +3598,7 @@ mod tests {
             use_snapshot: true,
         };
 
-        let start_points = rowmajor::Owned::defaulted(num_start_points.into(), dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points.into(), dim).unwrap();
         let provider =
             BfTreeProvider::<f32, NoStore, u64>::new(params, start_points.as_view(), NoStore)
                 .unwrap();
@@ -3661,7 +3661,7 @@ mod tests {
     async fn test_new_rejects_capacity_exceeding_id_type() {
         let dim = 4usize;
         let num_start_points = NonZeroUsize::new(1).unwrap();
-        let start_points = rowmajor::Owned::defaulted(num_start_points.into(), dim).unwrap();
+        let start_points = rowmajor::Owned::from_default(num_start_points.into(), dim).unwrap();
 
         let params = BfTreeProviderParameters {
             // Largest index would be u32::MAX + 1, which a u32 id cannot hold.
