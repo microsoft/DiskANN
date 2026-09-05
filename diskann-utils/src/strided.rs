@@ -451,6 +451,8 @@ impl<T> std::iter::FusedIterator for Rows<'_, T> {}
 mod tests {
     use super::*;
 
+    use crate::views::rowmajor::MatrixMut;
+
     #[test]
     fn test_linear_length() {
         // If the number of rows is zero - the output should always be zero.
@@ -525,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_try_from_data_errors() {
-        let m = rowmajor::Owned::<usize>::defaulted(10, 10);
+        let m = rowmajor::Owned::<usize>::defaulted(10, 10).unwrap();
         let nrows = m.nrows();
         let ncols = m.ncols();
 
@@ -678,7 +680,7 @@ mod tests {
     }
 
     // Test that the contents of `dut` match those in the dense 2d matrix.
-    fn test_indexing(dut: Strided<'_, usize>, expected: views::MatrixView<'_, usize>) {
+    fn test_indexing(dut: Strided<'_, usize>, expected: rowmajor::Ref<'_, usize>) {
         assert_eq!(dut.nrows(), expected.nrows());
         assert_eq!(dut.ncols(), expected.ncols());
 
@@ -692,7 +694,7 @@ mod tests {
         // Compare via linear indexing.
         for row in 0..dut.nrows() {
             for col in 0..dut.ncols() {
-                let e = expected[(row, col)];
+                let e = *expected.element(row, col);
 
                 assert_eq!(
                     *dut.element_or_panic(row, col),
@@ -740,7 +742,7 @@ mod tests {
     // 2*ncols 2*ncols+1 2*ncols+2 ... 3*ncols-1
     // ...
     // ```
-    fn create_test_matrix(nrows: usize, ncols: usize) -> views::Matrix<usize> {
+    fn create_test_matrix(nrows: usize, ncols: usize) -> rowmajor::Owned<usize> {
         let mut i = 0;
         rowmajor::Owned::from_fn(nrows, ncols, || {
             let v = i;
@@ -775,20 +777,20 @@ mod tests {
         assert_eq!(v.as_ptr(), ptr, "base pointer was not preserved");
 
         // Create the expected matrix.
-        let mut expected = rowmajor::Owned::copied(0, 5, 2);
+        let mut expected = rowmajor::Owned::copied(0, 5, 2).unwrap();
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
-                expected[(row, col)] = m[(row, col)];
+                *expected.element_mut(row, col) = *m.element(row, col);
             }
         }
         test_indexing(v, expected.as_view());
 
         // Create a strided view over the last two columns.
         let v = Strided::try_from_data(&(m.as_slice()[1..]), m.nrows(), 2, m.ncols()).unwrap();
-        let mut expected = rowmajor::Owned::copied(0, 5, 2);
+        let mut expected = rowmajor::Owned::copied(0, 5, 2).unwrap();
         for row in 0..expected.nrows() {
             for col in 0..expected.ncols() {
-                expected[(row, col)] = m[(row, col + 1)];
+                *expected.element_mut(row, col) = *m.element(row, col + 1);
             }
         }
         test_indexing(v, expected.as_view());
@@ -826,7 +828,7 @@ mod tests {
     #[test]
     fn test_try_shrink_from() {
         // Exact is okay.
-        let m = rowmajor::Owned::<usize>::defaulted(10, 10);
+        let m = rowmajor::Owned::<usize>::defaulted(10, 10).unwrap();
         let nrows = m.nrows();
         let ncols = m.ncols();
         let s = Strided::try_from_data(m.as_slice(), nrows, ncols, ncols).unwrap();
@@ -845,7 +847,7 @@ mod tests {
     fn test_invalid_stride_is_an_error_not_a_panic() {
         // Constructing a `Strided` with an invalid layout (`cstride < ncols`) returns an
         // `Err` rather than panicking - only unwrapping the result panics.
-        let m = rowmajor::Owned::<usize>::defaulted(4, 4);
+        let m = rowmajor::Owned::<usize>::defaulted(4, 4).unwrap();
         let err = Strided::try_from_data(m.as_slice(), 2, 2, 1).unwrap_err();
         assert!(matches!(err, TryFromError::LayoutError(_)));
     }

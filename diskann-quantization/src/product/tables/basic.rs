@@ -5,7 +5,10 @@
 
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
-use diskann_utils::views::{DenseData, MatrixBase, MatrixView};
+use diskann_utils::views::{
+    DenseData,
+    rowmajor::{self, Matrix},
+};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
 
@@ -24,21 +27,21 @@ use thiserror::Error;
 ///
 /// * `offsets.dim() == pivots.nrows()`: The dimensionality of the two must agree.
 #[derive(Debug, Clone)]
-pub struct BasicTableBase<T, U>
+pub struct BasicTableBase<M, U>
 where
-    T: DenseData<Elem = f32>,
+    M: Matrix<Element = f32>,
     U: DenseData<Elem = usize>,
 {
-    pivots: MatrixBase<T>,
+    pivots: M,
     offsets: ChunkOffsetsBase<U>,
 }
 
 /// A `BasicTableBase` that owns its contents.
-pub type BasicTable = BasicTableBase<Box<[f32]>, Box<[usize]>>;
+pub type BasicTable = BasicTableBase<rowmajor::Owned<f32>, Box<[usize]>>;
 
 /// A `BasicTableBase` that references its contents. Construction of such a table will
 /// not result in a memory allocation.
-pub type BasicTableView<'a> = BasicTableBase<&'a [f32], &'a [usize]>;
+pub type BasicTableView<'a> = BasicTableBase<rowmajor::Ref<'a, f32>, &'a [usize]>;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -52,9 +55,9 @@ pub enum BasicTableError {
     PivotsEmpty,
 }
 
-impl<T, U> BasicTableBase<T, U>
+impl<M, U> BasicTableBase<M, U>
 where
-    T: DenseData<Elem = f32>,
+    M: Matrix<Element = f32>,
     U: DenseData<Elem = usize>,
 {
     /// Construct a new `BasicTableBase` over the pivot table and offsets.
@@ -62,10 +65,7 @@ where
     /// # Error
     ///
     /// Returns an error if `pivots.ncols() != offsets.dim()` or if `pivots.nrows() == 0`.
-    pub fn new(
-        pivots: MatrixBase<T>,
-        offsets: ChunkOffsetsBase<U>,
-    ) -> Result<Self, BasicTableError> {
+    pub fn new(pivots: M, offsets: ChunkOffsetsBase<U>) -> Result<Self, BasicTableError> {
         let pivot_dim = pivots.ncols();
         let offsets_dim = offsets.dim();
 
@@ -82,7 +82,7 @@ where
     }
 
     /// Return a view over the pivot table.
-    pub fn view_pivots(&self) -> MatrixView<'_, f32> {
+    pub fn view_pivots(&self) -> rowmajor::Ref<'_, f32> {
         self.pivots.as_view()
     }
 
@@ -120,9 +120,9 @@ pub enum TableCompressionError {
     InfinityOrNaN(usize),
 }
 
-impl<T, U> CompressInto<&[f32], &mut [u8]> for BasicTableBase<T, U>
+impl<M, U> CompressInto<&[f32], &mut [u8]> for BasicTableBase<M, U>
 where
-    T: DenseData<Elem = f32>,
+    M: Matrix<Element = f32>,
     U: DenseData<Elem = usize>,
 {
     type Error = TableCompressionError;

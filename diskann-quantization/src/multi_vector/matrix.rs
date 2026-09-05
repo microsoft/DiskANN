@@ -29,7 +29,7 @@
 
 use std::{alloc::Layout, iter::FusedIterator, marker::PhantomData, ptr::NonNull};
 
-use diskann_utils::{Reborrow, ReborrowMut, views::MatrixView};
+use diskann_utils::{Reborrow, ReborrowMut, views::rowmajor};
 use thiserror::Error;
 
 use crate::utils;
@@ -751,9 +751,9 @@ impl<T> Mat<Standard<T>> {
         self.as_view().as_slice()
     }
 
-    /// Return a [`MatrixView`] over the backing data.
+    /// Return a [`rowmajor::Ref`] over the backing data.
     #[inline]
-    pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
+    pub fn as_matrix_view(&self) -> rowmajor::Ref<'_, T> {
         self.as_view().as_matrix_view()
     }
 }
@@ -883,13 +883,13 @@ impl<'a, T> MatRef<'a, Standard<T>> {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
     }
 
-    /// Return a [`MatrixView`] over the backing data.
+    /// Return a [`rowmajor::Ref`] over the backing data.
     #[allow(clippy::expect_used)]
     #[inline]
-    pub fn as_matrix_view(&self) -> MatrixView<'a, T> {
+    pub fn as_matrix_view(&self) -> rowmajor::Ref<'a, T> {
         // `Standard::new` validates that `nrows * ncols` does not overflow,
         // so `try_from` is infallible here.
-        MatrixView::try_from(self.as_slice(), self.num_vectors(), self.vector_dim())
+        rowmajor::Ref::try_from_data(self.as_slice(), self.num_vectors(), self.vector_dim())
             .expect("Standard<T> has valid dimensions")
     }
 }
@@ -1111,9 +1111,9 @@ impl<'a, T> MatMut<'a, Standard<T>> {
         self.as_view().as_slice()
     }
 
-    /// Return a [`MatrixView`] over the backing data.
+    /// Return a [`rowmajor::Ref`] over the backing data.
     #[inline]
-    pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
+    pub fn as_matrix_view(&self) -> rowmajor::Ref<'_, T> {
         self.as_view().as_matrix_view()
     }
 }

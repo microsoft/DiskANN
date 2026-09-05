@@ -13,7 +13,7 @@ use crate::{
 };
 use diskann_utils::{
     strided::Strided,
-    views::{self, MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use thiserror::Error;
 
@@ -71,7 +71,7 @@ impl TransposedTable {
     /// * `pivots.nrows() == 0`: The pivot table cannot be empty.
     #[allow(clippy::expect_used)]
     pub fn from_parts(
-        pivots: views::MatrixView<f32>,
+        pivots: rowmajor::Ref<'_, f32>,
         offsets: ChunkOffsets,
     ) -> Result<Self, TransposedTableError> {
         let pivot_dim = pivots.ncols();
@@ -154,7 +154,7 @@ impl TransposedTable {
     #[allow(clippy::expect_used)]
     pub fn compress_batch<T, F, DelegateError>(
         &self,
-        data: views::MatrixView<'_, T>,
+        data: rowmajor::Ref<'_, T>,
         mut compression_delegate: F,
     ) -> Result<(), CompressError<DelegateError>>
     where
@@ -187,7 +187,7 @@ impl TransposedTable {
             let range = self.offsets.at(i);
             if let Some(chunk_dim) = NonZeroUsize::new(range.len()) {
                 // Construct a view for the packing buffer for this chunk.
-                let mut packing_view = views::MutMatrixView::try_from(
+                let mut packing_view = rowmajor::Mut::try_from_data(
                     &mut packing_buffer[..SUB_BATCH_SIZE * chunk_dim.get()],
                     SUB_BATCH_SIZE,
                     chunk_dim.get(),
@@ -282,7 +282,7 @@ impl TransposedTable {
     /// * `query.len() != self.dim()`.
     /// * `partisl.nrows() != self.nchunks()`.
     /// * `partisl.ncols() != self.ncenters()`.
-    pub fn process_into<T>(&self, query: &[f32], mut partials: MutMatrixView<'_, f32>)
+    pub fn process_into<T>(&self, query: &[f32], mut partials: rowmajor::Mut<'_, f32>)
     where
         T: pivots::ProcessInto,
     {
@@ -422,7 +422,7 @@ pub enum TableBatchCompressionError {
     InfinityOrNaN(usize, usize),
 }
 
-impl<T> CompressInto<MatrixView<'_, T>, MutMatrixView<'_, u8>> for TransposedTable
+impl<T> CompressInto<rowmajor::Ref<'_, T>, rowmajor::Mut<'_, u8>> for TransposedTable
 where
     T: Copy + Into<f32>,
 {
@@ -464,8 +464,8 @@ where
     /// This function is single-threaded.
     fn compress_into(
         &self,
-        from: MatrixView<'_, T>,
-        mut to: MutMatrixView<'_, u8>,
+        from: rowmajor::Ref<'_, T>,
+        mut to: rowmajor::Mut<'_, u8>,
     ) -> Result<(), Self::Error> {
         if self.ncenters() > 256 {
             return Err(Self::Error::CannotCompressToByte(self.ncenters()));
@@ -491,7 +491,7 @@ where
         let result = self.compress_batch(
             from,
             |RowChunk { row, chunk }, result| -> Result<(), PassThrough> {
-                result.map(|v| to[(row, chunk)] = v as u8, || PassThrough)
+                result.map(|v| *to.element_mut(row, chunk) = v as u8, || PassThrough)
             },
         );
 

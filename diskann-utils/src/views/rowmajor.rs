@@ -889,7 +889,7 @@ macro_rules! partial_eq {
                 self.as_view().eq(&rhs.as_view())
             }
         }
-    }
+    };
 }
 
 partial_eq!(T, Owned<T>, Owned<T>);

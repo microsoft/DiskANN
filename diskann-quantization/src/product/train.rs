@@ -5,7 +5,7 @@
 
 use diskann_utils::{
     strided::Strided,
-    views::{self, Matrix},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 #[cfg(feature = "rayon")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -40,11 +40,15 @@ impl LightPQTrainingParameters {
 pub struct SimplePivots {
     dim: usize,
     ncenters: usize,
-    pivots: Vec<Matrix<f32>>,
+    pivots: Vec<rowmajor::Owned<f32>>,
 }
 
-fn flatten<T: Copy + Default>(pivots: &[Matrix<T>], ncenters: usize, dim: usize) -> Matrix<T> {
-    let mut flattened = Matrix::new(T::default(), ncenters, dim);
+fn flatten<T: Copy + Default>(
+    pivots: &[rowmajor::Owned<T>],
+    ncenters: usize,
+    dim: usize,
+) -> rowmajor::Owned<T> {
+    let mut flattened = rowmajor::Owned::defaulted(ncenters, dim).unwrap();
     let mut col_start = 0;
     for matrix in pivots {
         assert_eq!(matrix.nrows(), flattened.nrows());
@@ -59,7 +63,7 @@ fn flatten<T: Copy + Default>(pivots: &[Matrix<T>], ncenters: usize, dim: usize)
 
 impl SimplePivots {
     /// Return the selected pivots for each chunk.
-    pub fn pivots(&self) -> &[Matrix<f32>] {
+    pub fn pivots(&self) -> &[rowmajor::Owned<f32>] {
         &self.pivots
     }
 
@@ -77,7 +81,7 @@ pub trait TrainQuantizer {
 
     fn train<R, C>(
         &self,
-        data: views::MatrixView<f32>,
+        data: rowmajor::Ref<'_, f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -108,7 +112,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
     /// * `NaN` or infinities are observed during the training process.
     fn train<R, C>(
         &self,
-        data: views::MatrixView<f32>,
+        data: rowmajor::Ref<'_, f32>,
         schema: crate::views::ChunkOffsetsView<'_>,
         parallelism: Parallelism,
         rng_builder: &R,
@@ -123,7 +127,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
         #[inline(never)]
         fn train(
             trainer: &LightPQTrainingParameters,
-            data: views::MatrixView<f32>,
+            data: rowmajor::Ref<'_, f32>,
             schema: crate::views::ChunkOffsetsView<'_>,
             parallelism: Parallelism,
             rng_builder: &(dyn BoxedRngBuilder<usize> + Sync),
@@ -132,7 +136,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
             // Make sure we're provided sane values for our schema.
             assert_eq!(data.ncols(), schema.dim());
 
-            let thunk = |i| -> Result<Matrix<f32>, PQTrainingError> {
+            let thunk = |i| -> Result<rowmajor::Owned<f32>, PQTrainingError> {
                 let range = schema.at(i);
 
                 // Check for cancelation.
@@ -169,14 +173,15 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.rows().map(square_norm).collect();
                 let transpose = BlockTransposed::<f32, 16>::from_strided(view);
-                let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
+                let mut centers =
+                    rowmajor::Owned::defaulted(trainer.ncenters, range.len()).unwrap();
 
                 // Construct the random number generator seeded by the PQ chunk.
                 let mut rng = rng_builder.build_boxed_rng(i);
 
                 // Initialization
                 kmeans::plusplus::kmeans_plusplus_into_inner(
-                    centers.as_mut_view(),
+                    centers.as_view_mut(),
                     view,
                     transpose.as_view(),
                     &norms,
@@ -204,7 +209,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                     view,
                     &norms,
                     transpose.as_view(),
-                    centers.as_mut_view(),
+                    centers.as_view_mut(),
                     trainer.lloyds_reps,
                 );
                 Ok(centers)
@@ -300,17 +305,18 @@ mod tests {
         let dim: usize = sub_dims.iter().sum();
 
         // Create the sub matrices.
-        let matrices: Vec<Matrix<usize>> = std::iter::zip(sub_dims.iter(), prefix_sum.iter())
-            .map(|(&this_dim, &offset)| {
-                let mut m = Matrix::new(0, nrows, this_dim);
-                for r in 0..nrows {
-                    for c in 0..this_dim {
-                        m[(r, c)] = dim * r + offset + c;
+        let matrices: Vec<rowmajor::Owned<usize>> =
+            std::iter::zip(sub_dims.iter(), prefix_sum.iter())
+                .map(|(&this_dim, &offset)| {
+                    let mut m = rowmajor::Owned::defaulted(nrows, this_dim).unwrap();
+                    for r in 0..nrows {
+                        for c in 0..this_dim {
+                            m[(r, c)] = dim * r + offset + c;
+                        }
                     }
-                }
-                m
-            })
-            .collect();
+                    m
+                })
+                .collect();
 
         let flattened = flatten(&matrices, nrows, dim);
         // Check that the output is correct.
@@ -326,9 +332,9 @@ mod tests {
     }
 
     struct ClusteredDataset {
-        data: Matrix<f32>,
+        data: rowmajor::Owned<f32>,
         // The pre-configured center point for the manufactured clusters.
-        centers: Matrix<f32>,
+        centers: rowmajor::Owned<f32>,
     }
 
     impl DatasetBuilder {
@@ -358,8 +364,8 @@ mod tests {
                 .map(|chunk| {
                     let dim = schema.at(chunk).len();
 
-                    let mut initial = Matrix::new(0.0, ndata, dim);
-                    let mut centers = Matrix::new(0.0, self.nclusters, 1);
+                    let mut initial = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+                    let mut centers = rowmajor::Owned::defaulted(self.nclusters, 1).unwrap();
 
                     // The starting offset for clusters.
                     let offset = offsets_distribution.sample(rng);

@@ -9,7 +9,7 @@ use super::common::square_norm;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 use diskann_utils::{
     strided::Strided,
-    views::{Matrix, MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 
 ////////////////////////////////
@@ -28,7 +28,7 @@ diskann_wide::alias!(u32s = u32x8);
 pub fn distances_in_place(
     dataset: BlockTransposedRef<'_, f32, 16>,
     data_norms: &[f32],
-    centers: MatrixView<'_, f32>,
+    centers: rowmajor::Ref<'_, f32>,
     center_norms: &[f32],
     nearest: &mut [u32],
 ) -> f32 {
@@ -94,11 +94,11 @@ pub fn distances_in_place(
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
             let c0 = f32s::splat(diskann_wide::ARCH, unsafe {
-                *centers.get_unchecked(center_row_start, dim)
+                *centers.element_unchecked(center_row_start, dim)
             });
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
             let c1 = f32s::splat(diskann_wide::ARCH, unsafe {
-                *centers.get_unchecked(center_row_start + 1, dim)
+                *centers.element_unchecked(center_row_start + 1, dim)
             });
 
             s00 = c0.mul_add_simd(d0, s00);
@@ -134,7 +134,7 @@ pub fn distances_in_place(
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
             let c0 = f32s::splat(diskann_wide::ARCH, unsafe {
-                *centers.get_unchecked(center_row_start, dim)
+                *centers.element_unchecked(center_row_start, dim)
             });
 
             s00 = c0.mul_add_simd(d0, s00);
@@ -342,8 +342,8 @@ fn update((d0, i0): (f32s, u32s), (d1, i1): (f32s, u32s)) -> (f32s, u32s) {
 // Update Step //
 /////////////////
 
-fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: Strided<'_, f32>, map: &[u32]) {
-    let mut sums = Matrix::<f64>::new(0.0, centers.nrows(), centers.ncols());
+fn update_centroids(mut centers: rowmajor::Mut<'_, f32>, data: Strided<'_, f32>, map: &[u32]) {
+    let mut sums = rowmajor::Owned::<f64>::defaulted_layout(centers.layout());
     let mut counts: Vec<u32> = vec![0; centers.nrows()];
     data.rows().zip(map.iter()).for_each(|(row, &center)| {
         counts[center as usize] += 1;
@@ -373,7 +373,7 @@ pub(crate) fn lloyds_inner(
     data: Strided<'_, f32>,
     square_norms: &[f32],
     transpose: BlockTransposedRef<'_, f32, 16>,
-    mut centers: MutMatrixView<'_, f32>,
+    mut centers: rowmajor::Mut<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
     // Check our requirements.
@@ -413,7 +413,7 @@ pub(crate) fn lloyds_inner(
             &center_square_norms,
             &mut assignments,
         );
-        update_centroids(centers.as_mut_view(), data, &assignments);
+        update_centroids(centers.as_view_mut(), data, &assignments);
         if i != max_reps - 1 {
             std::iter::zip(center_square_norms.iter_mut(), centers.row_iter()).for_each(
                 |(c, center)| {
@@ -439,8 +439,8 @@ pub(crate) fn lloyds_inner(
 /// Panics if `data.ncols() != centers.ncols()`. The data and centers must have the same
 /// dimension.
 pub fn lloyds(
-    data: MatrixView<'_, f32>,
-    centers: MutMatrixView<'_, f32>,
+    data: rowmajor::Ref<'_, f32>,
+    centers: rowmajor::Mut<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
     assert_eq!(
@@ -464,7 +464,6 @@ pub fn lloyds(
 mod tests {
     #[cfg(not(miri))]
     use diskann_utils::lazy_format;
-    use diskann_utils::views::Matrix;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
     #[cfg(not(miri))]
@@ -680,7 +679,7 @@ mod tests {
             // Run 2 iteration of lloyds.
             // The second iteration ensures that we recompute norms properly.
             let lloyds_iter = 2;
-            let (assignments, loss) = lloyds(data.as_view(), centers.as_mut_view(), lloyds_iter);
+            let (assignments, loss) = lloyds(data.as_view(), centers.as_view_mut(), lloyds_iter);
 
             // Make sure all the assignments are returned correctly.
             assert_eq!(assignments.len(), values.len());
@@ -830,7 +829,7 @@ mod tests {
             data.as_view().into(),
             &square_norms,
             BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
-            centers.as_mut_view(),
+            centers.as_view_mut(),
             1,
         );
     }
@@ -846,7 +845,7 @@ mod tests {
             data.as_view().into(),
             &square_norms,
             BlockTransposed::<f32, 16>::from_matrix_view(data_incorrect.as_view()).as_view(),
-            centers.as_mut_view(),
+            centers.as_view_mut(),
             1,
         );
     }
@@ -862,7 +861,7 @@ mod tests {
             data.as_view().into(),
             &square_norms,
             BlockTransposed::<f32, 16>::from_matrix_view(data_incorrect.as_view()).as_view(), // Incorrect
-            centers.as_mut_view(),
+            centers.as_view_mut(),
             1,
         );
     }
@@ -877,7 +876,7 @@ mod tests {
             data.as_view().into(),
             &square_norms,
             BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
-            centers.as_mut_view(),
+            centers.as_view_mut(),
             1,
         );
     }
@@ -891,6 +890,6 @@ mod tests {
     fn lloyds_panics_dim_mismatch() {
         let data = Matrix::new(0.0, 5, 8);
         let mut centers = Matrix::new(0.0, 5, 8 + 1); // Incorrect
-        lloyds(data.as_view(), centers.as_mut_view(), 1);
+        lloyds(data.as_view(), centers.as_view_mut(), 1);
     }
 }

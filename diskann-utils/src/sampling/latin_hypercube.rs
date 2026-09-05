@@ -24,10 +24,8 @@ impl<T: Sized + Copy + Default> SampleLatinHyperCube for T {
     ) -> rowmajor::Owned<Self> {
         let nrows = data.nrows();
         let ncols = data.ncols();
-        if ncols == 0 {
-            return rowmajor::Owned::defaulted_layout(rowmajor::Layout::row_vector(num_samples));
-        } else if nrows == 0 {
-            return rowmajor::Owned::defaulted_layout(rowmajor::Layout::column_vector(ncols));
+        if nrows == 0 || ncols == 0 {
+            return rowmajor::Owned::defaulted(num_samples, ncols).unwrap();
         }
 
         let seed = seed.unwrap_or(0xaf2f5fa0b5161acf);
@@ -188,7 +186,7 @@ mod tests {
             rowmajor::Owned::<T>::defaulted(1, x.ncols()).unwrap()
         );
 
-        // No Cols0
+        // No Cols
         let x = rowmajor::Owned::<T>::defaulted(1, 0).unwrap();
         assert_eq!(
             T::sample_latin_hypercube(x.as_view(), 1, None),
@@ -239,7 +237,7 @@ mod tests {
     #[test]
     fn test_f16() {
         let data = example_dataset();
-        let mut data_f16 = rowmajor::Owned::<f16>::defaulted(data.nrows(), data.ncols());
+        let mut data_f16 = rowmajor::Owned::<f16>::defaulted(data.nrows(), data.ncols()).unwrap();
         data_f16.as_mut_slice().cast_from_slice(data.as_slice());
         test_for_type(data_f16);
     }

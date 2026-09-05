@@ -7,7 +7,7 @@ use std::{collections::HashSet, fmt};
 
 use diskann_utils::{
     strided::Strided,
-    views::{MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 use rand::{
@@ -379,7 +379,7 @@ impl KMeansPlusPlusError {
 }
 
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
-    mut points: MutMatrixView<'_, f32>,
+    mut points: rowmajor::Mut<'_, f32>,
     data: Strided<'_, f32>,
     transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
@@ -500,8 +500,8 @@ where
 }
 
 pub fn kmeans_plusplus_into(
-    centers: MutMatrixView<'_, f32>,
-    data: MatrixView<'_, f32>,
+    centers: rowmajor::Mut<'_, f32>,
+    data: rowmajor::Ref<'_, f32>,
     rng: &mut dyn RngCore,
 ) -> Result<(), KMeansPlusPlusError> {
     assert_eq!(
@@ -523,7 +523,7 @@ pub fn kmeans_plusplus_into(
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views::Matrix};
+    use diskann_utils::lazy_format;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 

@@ -5,7 +5,10 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{ReborrowMut, views::MatrixView};
+use diskann_utils::{
+    ReborrowMut,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{
     MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
@@ -228,7 +231,7 @@ where
     /// If argument `pre_scale` is given, then all vectors compressed by this quantizer will
     /// first be scaled by this value. Note that if given, `pre_scale` **must** be positive.
     pub fn train<T, R>(
-        data: MatrixView<T>,
+        data: rowmajor::Ref<'_, T>,
         transform: TransformKind,
         metric: SupportedMetric,
         pre_scale: PreScale,
@@ -243,7 +246,7 @@ where
         // cut down on excess monomorphization.
         #[inline(never)]
         fn train<T, A>(
-            data: MatrixView<T>,
+            data: rowmajor::Ref<'_, T>,
             transform: TransformKind,
             metric: SupportedMetric,
             pre_scale: PreScale,
@@ -1223,10 +1226,7 @@ mod tests {
 
     use std::fmt::Display;
 
-    use diskann_utils::{
-        ReborrowMut, lazy_format,
-        views::{self, Matrix},
-    };
+    use diskann_utils::{ReborrowMut, lazy_format};
     use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
     use rand::{

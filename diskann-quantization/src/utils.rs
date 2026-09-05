@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 
 use thiserror::Error;
 
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 /// Specify featres and config flags that will be propagated to `docsrs` config.
 macro_rules! features {
@@ -106,7 +106,7 @@ where
 pub(crate) struct CannotBeEmpty;
 
 /// Compute the mean of each column in `data` as well as the average norm.
-pub(crate) fn compute_means_and_average_norm<T>(data: MatrixView<T>) -> (Vec<f64>, f64)
+pub(crate) fn compute_means_and_average_norm<T>(data: rowmajor::Ref<'_, T>) -> (Vec<f64>, f64)
 where
     T: Into<f64> + Copy,
 {
@@ -141,7 +141,9 @@ where
 }
 
 /// Compute the mean of each column in `data` as well as the average norm.
-pub(crate) fn compute_normalized_means<T>(data: MatrixView<T>) -> Result<Vec<f64>, CannotBeEmpty>
+pub(crate) fn compute_normalized_means<T>(
+    data: rowmajor::Ref<'_, T>,
+) -> Result<Vec<f64>, CannotBeEmpty>
 where
     T: Into<f64> + Copy,
 {
@@ -177,7 +179,7 @@ where
     Ok(means)
 }
 
-pub(crate) fn compute_variances<T>(data: MatrixView<T>, means: &[f64]) -> Vec<f64>
+pub(crate) fn compute_variances<T>(data: rowmajor::Ref<'_, T>, means: &[f64]) -> Vec<f64>
 where
     T: Into<f64> + Copy,
 {
@@ -205,7 +207,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::Matrix;
     use diskann_vector::{Norm, norm::FastL2Norm};
     use rand::{SeedableRng, rngs::StdRng};
 
