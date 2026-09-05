@@ -20,6 +20,8 @@ use crate::multi_vector::MatRef;
 pub(crate) enum APacking {
     RowMajor,
     Grouped4,
+    #[cfg(target_arch = "x86_64")]
+    Grouped8,
 }
 
 #[derive(Debug)]
@@ -41,6 +43,8 @@ impl<const MR: usize> PackedMinMax8<MR> {
         let block_stride = match packing {
             APacking::RowMajor => dim * MR,
             APacking::Grouped4 => dim.div_ceil(4) * 4 * MR,
+            #[cfg(target_arch = "x86_64")]
+            APacking::Grouped8 => dim.div_ceil(8) * 8 * MR,
         };
         let mut values = vec![0; nrows.div_ceil(MR) * block_stride];
         let mut scale = vec![0.0; padded_rows];
@@ -62,6 +66,12 @@ impl<const MR: usize> PackedMinMax8<MR> {
                         let chunk = k / 4;
                         let offset = k % 4;
                         block * block_stride + chunk * MR * 4 + lane * 4 + offset
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    APacking::Grouped8 => {
+                        let chunk = k / 8;
+                        let offset = k % 8;
+                        block * block_stride + chunk * MR * 8 + lane * 8 + offset
                     }
                 };
                 // SAFETY: `k` is bounded by the common intrinsic dimension.
@@ -301,21 +311,26 @@ macro_rules! micro_kernel {
             impl driver::MicroKernel for MicroKernel<'_, $arch, $mr, $nr> {
                 #[inline(always)]
                 fn micro_kernel(&mut self) {
-                    // SAFETY: `Driver` and `BPanel` retain the complete A and B
-                    // spans required by the architecture-specific micro-kernel.
-                    unsafe {
-                        $function(
-                            self.arch,
-                            self.a_values,
-                            self.a_scale,
-                            self.a_bias,
-                            self.a_scaled_sum,
-                            &self.b,
-                            self.c,
-                            self.k.value().get(),
-                            self.valid_rows,
-                        )
-                    }
+                    self.arch.run_inline(
+                        #[inline]
+                        || {
+                            // SAFETY: `Driver` and `BPanel` retain the complete A and B
+                            // spans required by the architecture-specific micro-kernel.
+                            unsafe {
+                                $function(
+                                    self.arch,
+                                    self.a_values,
+                                    self.a_scale,
+                                    self.a_bias,
+                                    self.a_scaled_sum,
+                                    &self.b,
+                                    self.c,
+                                    self.k.value().get(),
+                                    self.valid_rows,
+                                )
+                            }
+                        },
+                    )
                 }
             }
         )+
@@ -369,6 +384,7 @@ trait ExtraWide<const MR: usize>: Architecture + Copy {
         + std::ops::Mul<Output = Self::Float>;
 
     const HALF_ROWS: usize;
+    const DIMENSIONS: usize;
 
     /// # Safety
     ///
@@ -402,18 +418,18 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
 {
     debug_assert_eq!(MR, 2 * W::HALF_ROWS);
 
-    // SAFETY: A is padded to complete groups of four, and every `Slice` operation
+    // SAFETY: A is padded to complete dimension groups, and every `Slice` operation
     // retains debug bounds until the final SIMD load.
     unsafe {
         let has_hi = valid_rows > W::HALF_ROWS;
         let mut lo = [W::Accumulator::default(wide); NR];
         let mut hi = [W::Accumulator::default(wide); NR];
 
-        for chunk in 0..k / 4 {
+        for chunk in 0..k / W::DIMENSIONS {
             let a_panel = a_values
-                .add(Elements::new(chunk * MR * 4))
-                .truncate(Elements::new(MR * 4));
-            let half_bytes = W::HALF_ROWS * 4;
+                .add(Elements::new(chunk * MR * W::DIMENSIONS))
+                .truncate(Elements::new(MR * W::DIMENSIONS));
+            let half_bytes = W::HALF_ROWS * W::DIMENSIONS;
             let a_lo = W::A::load_simd(wide, a_panel.truncate(Elements::new(half_bytes)).as_ptr());
             let a_hi = if has_hi {
                 Some(W::A::load_simd(
@@ -428,7 +444,11 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
             };
 
             for (j, accumulator) in lo.iter_mut().enumerate() {
-                let b_panel = wide.unpack_b(b.values[j], chunk * 2, 4);
+                let b_panel = wide.unpack_b(
+                    b.values[j],
+                    chunk * W::DIMENSIONS.div_ceil(2),
+                    W::DIMENSIONS,
+                );
                 *accumulator = wide.dot(*accumulator, a_lo, b_panel);
                 if let Some(a_hi) = a_hi {
                     hi[j] = wide.dot(hi[j], a_hi, b_panel);
@@ -436,13 +456,13 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
             }
         }
 
-        let remainder = k % 4;
+        let remainder = k % W::DIMENSIONS;
         if remainder != 0 {
-            let chunk = k / 4;
+            let chunk = k / W::DIMENSIONS;
             let a_panel = a_values
-                .add(Elements::new(chunk * MR * 4))
-                .truncate(Elements::new(MR * 4));
-            let half_bytes = W::HALF_ROWS * 4;
+                .add(Elements::new(chunk * MR * W::DIMENSIONS))
+                .truncate(Elements::new(MR * W::DIMENSIONS));
+            let half_bytes = W::HALF_ROWS * W::DIMENSIONS;
             let a_lo = W::A::load_simd(wide, a_panel.truncate(Elements::new(half_bytes)).as_ptr());
             let a_hi = if has_hi {
                 Some(W::A::load_simd(
@@ -456,7 +476,8 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
                 None
             };
             for (j, accumulator) in lo.iter_mut().enumerate() {
-                let b_panel = wide.unpack_b(b.values[j], chunk * 2, remainder);
+                let b_panel =
+                    wide.unpack_b(b.values[j], chunk * W::DIMENSIONS.div_ceil(2), remainder);
                 *accumulator = wide.dot(*accumulator, a_lo, b_panel);
                 if let Some(a_hi) = a_hi {
                     hi[j] = wide.dot(hi[j], a_hi, b_panel);
@@ -559,6 +580,36 @@ mod x86_64 {
     use diskann_wide::SIMDVector;
     use diskann_wide::arch::x86_64::{V3, V4};
 
+    #[inline(always)]
+    unsafe fn unpack_full_u4_avx2(
+        values: Slice<'_, u8>,
+        byte_offset: usize,
+    ) -> std::arch::x86_64::__m256i {
+        use std::arch::x86_64::{
+            _mm256_and_si256, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_srli_epi16,
+            _mm256_unpacklo_epi8,
+        };
+
+        // SAFETY: A full group contains two packed MinMax4 bytes.
+        let packed = unsafe {
+            values
+                .add(Elements::new(byte_offset))
+                .truncate(Elements::new(2))
+        };
+        // SAFETY: `packed` tracks exactly two bytes.
+        let first = unsafe { *packed.as_unit().as_ref() };
+        // SAFETY: The second byte is within the tracked two-byte span.
+        let second = unsafe { *packed.add(Elements::new(1)).as_unit().as_ref() };
+        // SAFETY: V3 and V4 both provide AVX2.
+        unsafe {
+            let packed = _mm256_set1_epi16(i16::from_le_bytes([first, second]));
+            let mask = _mm256_set1_epi8(0x0f);
+            let low = _mm256_and_si256(packed, mask);
+            let high = _mm256_and_si256(_mm256_srli_epi16::<4>(packed), mask);
+            _mm256_unpacklo_epi8(low, high)
+        }
+    }
+
     panel_kernel!(V3, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
     panel_kernel!(V4, 16, 8, [1, 2, 3, 4, 5, 6, 7]);
 
@@ -569,6 +620,7 @@ mod x86_64 {
         type Float = <V3 as Architecture>::f32x8;
 
         const HALF_ROWS: usize = 8;
+        const DIMENSIONS: usize = 4;
 
         unsafe fn unpack_b(
             self,
@@ -578,6 +630,13 @@ mod x86_64 {
         ) -> Self::B {
             diskann_wide::alias!(i8s = <V3>::i8x32);
             diskann_wide::alias!(u32s = <V3>::u32x8);
+
+            if dimensions == 4 && !cfg!(miri) {
+                // SAFETY: Four dimensions occupy two packed bytes, and V3 provides AVX2.
+                return i8s::from_underlying(self, unsafe {
+                    unpack_full_u4_avx2(values, byte_offset)
+                });
+            }
 
             let expanded = if dimensions == 4 {
                 // SAFETY: Four dimensions occupy two packed bytes.
@@ -626,12 +685,13 @@ mod x86_64 {
     }
 
     impl ExtraWide<16> for V4 {
-        type A = <V4 as Architecture>::u8x32;
-        type B = <V4 as Architecture>::i8x32;
-        type Accumulator = <V4 as Architecture>::i32x8;
+        type A = <V4 as Architecture>::u8x64;
+        type B = <V4 as Architecture>::i8x64;
+        type Accumulator = <V4 as Architecture>::i32x16;
         type Float = <V4 as Architecture>::f32x8;
 
         const HALF_ROWS: usize = 8;
+        const DIMENSIONS: usize = 8;
 
         unsafe fn unpack_b(
             self,
@@ -639,21 +699,66 @@ mod x86_64 {
             byte_offset: usize,
             dimensions: usize,
         ) -> Self::B {
-            diskann_wide::alias!(i8s = <V4>::i8x32);
-            diskann_wide::alias!(u32s = <V4>::u32x8);
+            diskann_wide::alias!(i8s = <V4>::i8x64);
 
-            let expanded = if dimensions == 4 {
-                // SAFETY: Four dimensions occupy two packed bytes.
-                unsafe { expand_full_u4(values, byte_offset / 2) }
-            } else {
-                // SAFETY: Inherited from the trait contract.
-                unsafe { expand_tail_u4(values, byte_offset, dimensions) }
-            };
-            if cfg!(miri) {
-                let bytes = expanded.to_le_bytes();
-                i8s::from_array(self, core::array::from_fn(|i| bytes[i % 4] as i8))
-            } else {
-                i8s::from_underlying(self, u32s::splat(self, expanded).to_underlying())
+            #[cfg(miri)]
+            {
+                let byte_count = dimensions.div_ceil(2);
+                // SAFETY: The caller guarantees a valid packed B group.
+                let packed = unsafe {
+                    values
+                        .add(Elements::new(byte_offset))
+                        .truncate(Elements::new(byte_count))
+                        .as_std_slice(byte_count)
+                };
+                i8s::from_array(
+                    self,
+                    core::array::from_fn(|i| {
+                        let dimension = i % 8;
+                        if dimension >= dimensions {
+                            0
+                        } else {
+                            let value = packed[dimension / 2];
+                            if dimension.is_multiple_of(2) {
+                                (value & 0x0f) as i8
+                            } else {
+                                (value >> 4) as i8
+                            }
+                        }
+                    }),
+                )
+            }
+
+            #[cfg(not(miri))]
+            {
+                use std::arch::x86_64::{_mm512_set1_epi64, _pdep_u64};
+
+                let byte_count = dimensions.div_ceil(2);
+                // SAFETY: The caller guarantees a valid packed B group.
+                let packed = unsafe {
+                    values
+                        .add(Elements::new(byte_offset))
+                        .truncate(Elements::new(byte_count))
+                };
+                let source = if dimensions == 8 {
+                    // SAFETY: A full group tracks four bytes and the load is unaligned.
+                    u32::from_le(unsafe { packed.as_ptr().cast::<u32>().read_unaligned() })
+                } else {
+                    let mut source = 0_u32;
+                    for index in 0..byte_count {
+                        // SAFETY: `index` is within the tracked packed group.
+                        let value = unsafe { *packed.add(Elements::new(index)).as_unit().as_ref() };
+                        source |= u32::from(value) << (8 * index);
+                    }
+                    source
+                };
+                // SAFETY: V4 provides BMI2 and AVX-512F.
+                let expanded = unsafe { _pdep_u64(u64::from(source), 0x0f0f_0f0f_0f0f_0f0f) };
+                i8s::from_underlying(
+                    self,
+                    // SAFETY: V4 provides AVX-512F.
+                    unsafe { _mm512_set1_epi64(expanded as i64) },
+                )
             }
         }
 
@@ -663,7 +768,33 @@ mod x86_64 {
         }
 
         fn to_float(self, accumulator: Self::Accumulator) -> Self::Float {
-            Self::Float::from_array(self, accumulator.to_array().map(|x| (x as u32) as f32))
+            diskann_wide::alias!(f32s = <V4>::f32x8);
+
+            #[cfg(miri)]
+            {
+                let values = accumulator.to_array();
+                f32s::from_array(
+                    self,
+                    core::array::from_fn(|i| {
+                        values[2 * i].wrapping_add(values[2 * i + 1]) as u32 as f32
+                    }),
+                )
+            }
+
+            #[cfg(not(miri))]
+            {
+                use std::arch::x86_64::{
+                    _mm512_add_epi32, _mm512_cvtepi64_epi32, _mm512_srli_epi64,
+                };
+                diskann_wide::alias!(i32s8 = <V4>::i32x8);
+
+                let value = accumulator.to_underlying();
+                // SAFETY: V4 provides AVX-512F and AVX-512DQ.
+                let pairs = unsafe { _mm512_add_epi32(value, _mm512_srli_epi64::<32>(value)) };
+                // SAFETY: V4 provides AVX-512F and AVX-512DQ.
+                let reduced = i32s8::from_underlying(self, unsafe { _mm512_cvtepi64_epi32(pairs) });
+                f32s::from_array(self, reduced.to_array().map(|x| (x as u32) as f32))
+            }
         }
     }
 
@@ -739,6 +870,7 @@ mod aarch64 {
         type Float = <Neon as Architecture>::f32x4;
 
         const HALF_ROWS: usize = 4;
+        const DIMENSIONS: usize = 4;
 
         unsafe fn unpack_b(
             self,

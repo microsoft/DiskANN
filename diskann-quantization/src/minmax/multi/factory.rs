@@ -110,7 +110,7 @@ impl_builder!(Neon, 8, 8, APacking::Grouped4);
 #[cfg(target_arch = "x86_64")]
 impl_builder!(V3, 16, 8, APacking::Grouped4);
 #[cfg(target_arch = "x86_64")]
-impl_builder!(V4, 16, 8, APacking::Grouped4);
+impl_builder!(V4, 16, 8, APacking::Grouped8);
 
 /// Build a tiled MinMax8-query by MinMax4-document MaxSim kernel.
 ///
