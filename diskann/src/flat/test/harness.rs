@@ -11,6 +11,7 @@
 use std::{convert::Infallible, num::NonZeroUsize};
 
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
+use diskann_utils::views::rowmajor::Matrix;
 
 use crate::{
     ANNResult,

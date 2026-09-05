@@ -262,7 +262,7 @@ convert_error!(TryFromIntError);
 convert_error!(TryFromSliceError);
 convert_error!(diskann_utils::io::ReadBinError);
 convert_error!(diskann_utils::io::SaveBinError);
-convert_error!(diskann_utils::views::TryFromErrorLight);
+convert_error!(diskann_utils::views::rowmajor::TryFromErrorLight);
 
 // Convert from `mpsc::SendError` to `ANNError`
 impl<T> From<mpsc::SendError<T>> for ANNError
@@ -286,12 +286,12 @@ where
     }
 }
 
-impl<T> From<diskann_utils::views::TryFromError<T>> for ANNError
+impl<T> From<diskann_utils::views::rowmajor::TryFromError<T>> for ANNError
 where
     T: diskann_utils::views::DenseData,
 {
     #[track_caller]
-    fn from(err: diskann_utils::views::TryFromError<T>) -> Self {
+    fn from(err: diskann_utils::views::rowmajor::TryFromError<T>) -> Self {
         Self::from(err.as_static())
     }
 }

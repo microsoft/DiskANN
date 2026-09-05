@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use diskann_utils::{
     sampling::WithApproximateNorm,
-    views::{Matrix, MatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 
 /// 'StartPointStrategy' is an enum that represents the different strategies to select
@@ -80,7 +80,10 @@ impl StartPointStrategy {
         }
     }
 
-    pub fn compute<T>(&self, train_data: MatrixView<'_, T>) -> Result<Matrix<T>, StartPointError>
+    pub fn compute<T>(
+        &self,
+        train_data: rowmajor::Ref<'_, T>,
+    ) -> Result<rowmajor::Owned<T>, StartPointError>
     where
         T: Copy + SampleableForStart,
     {
@@ -98,14 +101,15 @@ impl StartPointStrategy {
                 let indices =
                     rand::seq::index::sample(&mut rng, train_data.nrows(), nsamples.get());
 
-                let mut points = Matrix::new(T::default(), nsamples.get(), train_data.ncols());
+                let mut points =
+                    rowmajor::Owned::defaulted(nsamples.get(), train_data.ncols()).unwrap();
                 std::iter::zip(points.row_iter_mut(), indices).for_each(|(dst, src)| {
                     dst.copy_from_slice(train_data.row(src));
                 });
 
                 Ok(points)
             }
-            StartPointStrategy::Medoid => Ok(Matrix::row_vector(
+            StartPointStrategy::Medoid => Ok(rowmajor::Owned::row_vector(
                 T::compute_medoid(train_data.as_view()).into(),
             )),
             StartPointStrategy::RandomVectors {
@@ -115,7 +119,7 @@ impl StartPointStrategy {
             } => {
                 let mut rng = StdRng::seed_from_u64(*seed);
                 let dim = train_data.ncols();
-                let mut points = Matrix::new(T::default(), nsamples.get(), dim);
+                let mut points = rowmajor::Owned::defaulted(nsamples.get(), dim).unwrap();
                 points.row_iter_mut().for_each(|row| {
                     row.copy_from_slice(&WithApproximateNorm::with_approximate_norm(
                         dim, *norm, &mut rng,
@@ -130,7 +134,7 @@ impl StartPointStrategy {
                 Some(*seed),
             )),
             StartPointStrategy::FirstVector => match train_data.get_row(0) {
-                Some(row) => Ok(Matrix::row_vector(row.into())),
+                Some(row) => Ok(rowmajor::Owned::row_vector(row.into())),
                 None => Err(StartPointError::NotEnoughTrainingData {
                     requested: 1,
                     found: 0,
@@ -262,7 +266,7 @@ mod tests {
         let data = vec![
             1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ];
-        let matrix = Matrix::try_from(data.into(), 4, 3).unwrap();
+        let matrix = rowmajor::Owned::try_from_data(data.into(), 4, 3).unwrap();
         let strategy = StartPointStrategy::FirstVector;
         let start_points = strategy.compute(matrix.as_view()).unwrap();
         assert_eq!(start_points.nrows(), 1);
@@ -275,7 +279,7 @@ mod tests {
         let data = vec![
             1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ];
-        let matrix = Matrix::try_from(data.into(), 4, 3).unwrap();
+        let matrix = rowmajor::Owned::try_from_data(data.into(), 4, 3).unwrap();
         let strategy = StartPointStrategy::Medoid;
         let start_points = strategy.compute(matrix.as_view()).unwrap();
         assert_eq!(start_points.nrows(), 1);
@@ -289,7 +293,7 @@ mod tests {
         let data = vec![
             1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ];
-        let matrix = Matrix::try_from(data.into(), 4, 3).unwrap();
+        let matrix = rowmajor::Owned::try_from_data(data.into(), 4, 3).unwrap();
         let strategy = StartPointStrategy::RandomVectors {
             norm: 5.0,
             nsamples: NonZeroUsize::new(2).unwrap(),
@@ -310,7 +314,7 @@ mod tests {
         let data = vec![
             1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ];
-        let matrix = Matrix::try_from(data.into(), 4, 3).unwrap();
+        let matrix = rowmajor::Owned::try_from_data(data.into(), 4, 3).unwrap();
         let strategy = StartPointStrategy::RandomSamples {
             nsamples: NonZeroUsize::new(2).unwrap(),
             seed: 42,
@@ -329,7 +333,7 @@ mod tests {
         let data = vec![
             1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ];
-        let matrix = Matrix::try_from(data.into(), 4, 3).unwrap();
+        let matrix = rowmajor::Owned::try_from_data(data.into(), 4, 3).unwrap();
         let strategy = StartPointStrategy::LatinHyperCube {
             nsamples: NonZeroUsize::new(2).unwrap(),
             seed: 42,

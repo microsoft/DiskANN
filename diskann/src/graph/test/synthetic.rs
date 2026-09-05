@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{Init, Matrix};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use crate::graph::AdjacencyList;
 
@@ -29,7 +29,7 @@ impl Grid {
     /// Return the generated grid with `f32` elements.
     ///
     /// See [`Self::data_as`] for documentation on the order of generation.
-    pub fn data(self, size: usize) -> Matrix<f32> {
+    pub fn data(self, size: usize) -> rowmajor::Owned<f32> {
         Self::data_as(self, size, |i: usize| i as f32)
     }
 
@@ -99,24 +99,24 @@ impl Grid {
     ///
     /// // etc.
     /// ```
-    pub fn data_as<F, R>(self, size: usize, mut f: F) -> Matrix<R>
+    pub fn data_as<F, R>(self, size: usize, mut f: F) -> rowmajor::Owned<R>
     where
         F: FnMut(usize) -> R,
     {
         match self {
             Self::One => {
                 let mut i = 0;
-                let init = Init(|| {
+                rowmajor::Owned::from_fn(size, 1, || {
                     let this = f(i);
                     i += 1;
                     this
-                });
-                Matrix::new(init, size, 1)
+                }).unwrap()
             }
             Self::Two => {
                 let mut v = [0; 2];
                 let mut i = 0;
-                let init = Init(|| {
+
+                rowmajor::Owned::from_fn(size.pow(self.dim().into()), 2, || {
                     let value = f(v[i]);
                     i += 1;
                     if i == 2 {
@@ -124,9 +124,7 @@ impl Grid {
                         increment(&mut v, size);
                     }
                     value
-                });
-
-                Matrix::new(init, size.pow(self.dim().into()), 2)
+                }).unwrap()
             }
             Self::Three => {
                 // The whole we do with the array here is to avoid a `Default` bound on `R`
@@ -135,7 +133,8 @@ impl Grid {
                 // Is it overkill? Yes. Is it fun? Also yes!
                 let mut v = [0; 3];
                 let mut i = 0;
-                let init = Init(|| {
+
+                rowmajor::Owned::from_fn(size.pow(self.dim().into()), 3, || {
                     let value = f(v[i]);
                     i += 1;
                     if i == 3 {
@@ -143,14 +142,13 @@ impl Grid {
                         increment(&mut v, size);
                     }
                     value
-                });
-
-                Matrix::new(init, size.pow(self.dim().into()), 3)
+                }).unwrap()
             }
             Self::Four => {
                 let mut v = [0; 4];
                 let mut i = 0;
-                let init = Init(|| {
+
+                rowmajor::Owned::from_fn(size.pow(self.dim().into()), 4, || {
                     let value = f(v[i]);
                     i += 1;
                     if i == 4 {
@@ -158,9 +156,7 @@ impl Grid {
                         increment(&mut v, size);
                     }
                     value
-                });
-
-                Matrix::new(init, size.pow(self.dim().into()), 4)
+                }).unwrap()
             }
         }
     }
@@ -379,7 +375,7 @@ pub(super) struct Setup {
     start_id: u32,
     start_neighbors: AdjacencyList<u32>,
 
-    data: Matrix<f32>,
+    data: rowmajor::Owned<f32>,
     neighbors: Vec<AdjacencyList<u32>>,
 }
 

@@ -13,7 +13,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -1336,7 +1336,7 @@ impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
     }
 }
 
-impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
+impl glue::MultiInsertStrategy<Provider, rowmajor::Owned<f32>> for Strategy {
     type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
     type FinishError = Infallible;
     type PruneStrategy = Self;
@@ -1350,7 +1350,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
         &self,
         _provider: &Provider,
         _ctx: &Context,
-        batch: &Arc<Matrix<f32>>,
+        batch: &Arc<rowmajor::Owned<f32>>,
         ids: Itr,
     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where

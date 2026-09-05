@@ -18,7 +18,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
 
 use crate::{
@@ -120,7 +120,7 @@ fn build_index(
 /// to `true` (A) builds the same graph and (B) results in fewer `get_vector` calls.
 fn run_build(
     index: &Arc<DiskANNIndex<test_provider::Provider>>,
-    data: MatrixView<'_, f32>,
+    data: rowmajor::Ref<'_, f32>,
     batchsize: Option<NonZeroUsize>,
     working_set_reuse: bool,
     runtime: &tokio::runtime::Runtime,
@@ -140,7 +140,7 @@ fn run_build(
             let mut start = 0;
             while start < data.nrows() {
                 let stop = (start + batchsize.get()).min(data.nrows());
-                let batch = Arc::new(data.subview(start..stop).unwrap().to_owned());
+                let batch = Arc::new(data.subview(start..stop).unwrap().to_rowmajor_owned());
                 runtime
                     .block_on(index.multi_insert::<test_provider::Strategy, _>(
                         strategy.clone(),

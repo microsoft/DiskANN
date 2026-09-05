@@ -97,7 +97,11 @@
 
 use std::{future::Future, sync::Arc};
 
-use diskann_utils::{Reborrow, future::SendFuture};
+use diskann_utils::{
+    Reborrow,
+    future::SendFuture,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 
@@ -1051,7 +1055,7 @@ pub trait Batch: Send + Sync + 'static {
     }
 }
 
-impl<T: Send + Sync + 'static> Batch for diskann_utils::views::Matrix<T> {
+impl<T: Send + Sync + 'static> Batch for diskann_utils::views::rowmajor::Owned<T> {
     type Element<'a> = &'a [T];
 
     fn len(&self) -> usize {

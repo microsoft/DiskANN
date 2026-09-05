@@ -182,7 +182,7 @@ pub unsafe trait Matrix {
     }
 
     /// Return an [`Owned`] with the same shape as `self` and cloned contents.
-    fn to_owned(&self) -> Owned<Self::Element>
+    fn to_rowmajor_owned(&self) -> Owned<Self::Element>
     where
         Self::Element: Clone,
     {
@@ -1491,12 +1491,12 @@ mod tests {
     }
 
     #[test]
-    fn test_to_owned() {
+    fn test_to_rowmajor_owned() {
         let data = make_test_matrix();
         let view = Ref::try_from_data(data.as_slice(), 4, 3).unwrap();
 
-        // Test to_owned creates a proper clone
-        let owned = Matrix::to_owned(&view);
+        // Test to_rowmajor_owned creates a proper clone
+        let owned = Matrix::to_rowmajor_owned(&view);
         assert_eq!(owned.nrows(), view.nrows());
         assert_eq!(owned.ncols(), view.ncols());
         assert_eq!(owned.as_slice(), view.as_slice());

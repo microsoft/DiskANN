@@ -11,7 +11,10 @@ use std::{
     future::Future,
 };
 
-use diskann_utils::{future::SendFuture, views::Matrix};
+use diskann_utils::{
+    future::SendFuture,
+    views::rowmajor::{self, Matrix},
+};
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -43,7 +46,7 @@ convert_error!(ProviderError);
 /// In-memory test provider for flat search.
 #[derive(Debug)]
 pub struct Provider {
-    items: Matrix<f32>,
+    items: rowmajor::Owned<f32>,
     get_element: Counter,
 }
 
@@ -53,7 +56,7 @@ impl Provider {
     /// # Errors
     ///
     /// Returns an error if the matrix is empty or has zero-width columns.
-    pub fn new(items: Matrix<f32>) -> Result<Self, ProviderError> {
+    pub fn new(items: rowmajor::Owned<f32>) -> Result<Self, ProviderError> {
         if items.nrows() == 0 {
             return Err(ProviderError::Empty);
         }
@@ -97,7 +100,7 @@ impl Provider {
     }
 
     /// Expose the items for brute force.
-    pub fn items(&self) -> &Matrix<f32> {
+    pub fn items(&self) -> &rowmajor::Owned<f32> {
         &self.items
     }
 }

@@ -2394,10 +2394,7 @@ mod tests {
     fn compression_errors_data() {
         let mut rng = StdRng::seed_from_u64(0xe3e9f42ed9f15883);
         let data =
-            rowmajor::Owned::<f32>::from_fn(
-                16, 12,
-                || StandardNormal {}.sample(&mut rng),
-            ).unwrap();
+            rowmajor::Owned::<f32>::from_fn(16, 12, || StandardNormal {}.sample(&mut rng)).unwrap();
 
         let quantizer = SphericalQuantizer::train(
             data.as_view(),
