@@ -18,6 +18,10 @@ where
 
     /// Compute one MaxSim distance for every query vector.
     ///
+    /// Overwrites all scores on each call. Empty documents produce [`f32::MAX`];
+    /// nonempty documents with zero-dimensional vectors produce zero.
+    /// NaN pairwise distances are ignored, matching [`f32::min`].
+    ///
     /// # Errors
     ///
     /// * [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
