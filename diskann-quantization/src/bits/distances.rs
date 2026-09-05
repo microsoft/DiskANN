@@ -111,7 +111,8 @@ use diskann_vector::PureDistanceFunction;
 use diskann_wide::{ARCH, Architecture, arch::Target2};
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::{
-    SIMDCast, SIMDDotProduct, SIMDMulAdd, SIMDReinterpret, SIMDSumTree, SIMDVector,
+    SIMDCast, SIMDDotProduct, SIMDMulAdd, SIMDReinterpret, SIMDSaturatingPairwiseDotProduct,
+    SIMDSumTree, SIMDVector,
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -1776,13 +1777,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
-        use std::arch::x86_64::_mm256_maddubs_epi16;
-
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+        diskann_wide::alias!(i8s_32 = <diskann_wide::arch::x86_64::V3>::i8x32);
         diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
 
         let px: *const u8 = x.as_ptr();
@@ -1803,10 +1803,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut acc = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
-                // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
-                i16s::from_underlying(arch, unsafe {
-                    _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
-                })
+                let y: i8s_32 = y.reinterpret_simd();
+                i16s::saturating_pairwise_dot_product(x, y)
             };
 
             let ones = i16s::splat(arch, 1);
@@ -1912,13 +1910,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         y: USlice<'_, 2>,
     ) -> MathematicalResult<u32> {
         use diskann_wide::SplitJoin;
-        use std::arch::x86_64::_mm256_maddubs_epi16;
-
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+        diskann_wide::alias!(i8s_32 = <diskann_wide::arch::x86_64::V3>::i8x32);
         diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
 
         let px: *const u8 = x.as_ptr();
@@ -1933,10 +1930,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut acc = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
-                // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
-                i16s::from_underlying(arch, unsafe {
-                    _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
-                })
+                let y: i8s_32 = y.reinterpret_simd();
+                i16s::saturating_pairwise_dot_product(x, y)
             };
 
             #[inline(always)]

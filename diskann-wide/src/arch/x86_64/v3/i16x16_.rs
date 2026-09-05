@@ -13,14 +13,17 @@ use crate::{
             V3,
             common::AllOnes,
             macros::{self, X86Default, X86LoadStore, X86Splat},
-            v3::i16x8,
+            v3::{i8x32, i16x8, u8x32},
         },
     },
     bitmask::BitMask,
     constant::Const,
     emulated::Emulated,
     helpers,
-    traits::{AsSIMD, SIMDAbs, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
+    traits::{
+        AsSIMD, SIMDAbs, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+        SIMDSaturatingPairwiseDotProduct, SIMDVector,
+    },
 };
 
 ///////////////////
@@ -43,6 +46,24 @@ macros::x86_zipunzip!(
     _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15),
     _mm_setr_epi8(0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15)
 );
+
+impl SIMDSaturatingPairwiseDotProduct<u8x32, i8x32> for i16x16 {
+    #[inline(always)]
+    fn saturating_pairwise_dot_product(left: u8x32, right: i8x32) -> Self {
+        let arch = left.arch();
+        debug_assert_eq!(arch, right.arch());
+        if cfg!(miri) {
+            Emulated::saturating_pairwise_dot_product(left.emulated(), right.emulated())
+                .as_simd(arch)
+        } else {
+            Self::from_underlying(
+                arch,
+                // SAFETY: V3 provides AVX2.
+                unsafe { _mm256_maddubs_epi16(left.to_underlying(), right.to_underlying()) },
+            )
+        }
+    }
+}
 
 helpers::unsafe_map_binary_op!(i16x16, std::ops::Add, add, _mm256_add_epi16, "avx2");
 helpers::unsafe_map_binary_op!(i16x16, std::ops::Sub, sub, _mm256_sub_epi16, "avx2");
@@ -175,7 +196,7 @@ impl X86LoadStore for i16x16 {
 #[cfg(test)]
 mod test_x86_i16 {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{SIMDReinterpret, SIMDVector, reference::ReferenceScalarOps, test_utils};
 
     // Test loading logic - ensure that no out of bounds accesses are made.
     // In particular, this is meant to be run under `Miri` to ensure that our guarantees
@@ -199,6 +220,24 @@ mod test_x86_i16 {
     fn test_constructors() {
         if let Some(arch) = V3::new_checked_uncached() {
             test_utils::ops::test_splat::<i16, 16, i16x16>(arch);
+        }
+    }
+
+    #[test]
+    fn test_saturating_pairwise_dot_product() {
+        if let Some(arch) = V3::new_checked_uncached() {
+            let left = u8x32::from_array(arch, [u8::MAX; 32]);
+            let right = i8x32::from_array(
+                arch,
+                core::array::from_fn(|i| if i / 2 % 2 == 0 { i8::MAX } else { i8::MIN }),
+            );
+            let actual = i16x16::saturating_pairwise_dot_product(left, right).to_array();
+            let expected = core::array::from_fn(|i| if i % 2 == 0 { i16::MAX } else { i16::MIN });
+            assert_eq!(actual, expected);
+
+            let bits: i8x32 = u8x32::from_array(arch, [15; 32]).reinterpret_simd();
+            let actual = i16x16::saturating_pairwise_dot_product(left, bits).to_array();
+            assert_eq!(actual, [7_650; 16]);
         }
     }
 
