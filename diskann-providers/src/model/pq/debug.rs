@@ -4,7 +4,7 @@
  */
 
 use diskann::utils::IntoUsize;
-use diskann_utils::views::{rowmajor::{self, Matrix}};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 
 pub struct MismatchRecord {

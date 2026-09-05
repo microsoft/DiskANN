@@ -18,7 +18,10 @@ use diskann_providers::{
     },
 };
 use diskann_quantization::spherical::DataRef;
-use diskann_utils::io::read_bin;
+use diskann_utils::{
+    io::read_bin,
+    views::rowmajor::{Matrix, MatrixMut},
+};
 use rand::seq::SliceRandom;
 use tracing::info;
 

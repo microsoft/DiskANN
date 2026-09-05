@@ -244,14 +244,11 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
     // Create training data with spread-out values.
     let nrows = 8;
     let mut counter = 0.0f32;
-    let data = rowmajor::Owned::from_fn(
-        nrows,
-        dim,
-        move || {
-            counter += 0.5;
-            counter
-        },
-    ).unwrap();
+    let data = rowmajor::Owned::from_fn(nrows, dim, move || {
+        counter += 0.5;
+        counter
+    })
+    .unwrap();
 
     let mut rng = StdRng::seed_from_u64(42);
     let quantizer = SphericalQuantizer::train(

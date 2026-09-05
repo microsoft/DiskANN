@@ -11,7 +11,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     lazy_format,
-    views::{rowmajor::{self, Matrix, MatrixMut}},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
@@ -497,7 +497,8 @@ fn pq_dist_lookup(
         );
     }
 
-    let coordinates = rowmajor::Ref::<u8>::try_from_data(pq_coordinates, n_pts, pq_nchunks).bridge_err()?;
+    let coordinates =
+        rowmajor::Ref::<u8>::try_from_data(pq_coordinates, n_pts, pq_nchunks).bridge_err()?;
     let distances = rowmajor::Ref::try_from_data(
         &pq_dists[..NUM_PQ_CENTROIDS * pq_nchunks],
         pq_nchunks,
@@ -832,9 +833,12 @@ mod fixed_chunk_pq_table_test {
 
         // Calculate the expected output naively
         let pq_data = rowmajor::Ref::try_from_data(&pq_data, n_pts, num_pq_chunks).unwrap();
-        let distances =
-            rowmajor::Ref::try_from_data(&query_centroid_l2_distance, num_pq_chunks, NUM_PQ_CENTROIDS)
-                .unwrap();
+        let distances = rowmajor::Ref::try_from_data(
+            &query_centroid_l2_distance,
+            num_pq_chunks,
+            NUM_PQ_CENTROIDS,
+        )
+        .unwrap();
         let mut expected_pd_distance = vec![0.0; n_nbrs];
         expected_pd_distance
             .iter_mut()

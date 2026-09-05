@@ -733,11 +733,7 @@ mod tests {
     }
 
     fn dataset(nrows: usize, ncols: usize, rng: &mut StdRng) -> rowmajor::Owned<f32> {
-        rowmajor::Owned::from_fn(
-            nrows,
-            ncols,
-            || StandardNormal {}.sample(rng),
-        ).unwrap()
+        rowmajor::Owned::from_fn(nrows, ncols, || StandardNormal {}.sample(rng)).unwrap()
     }
 
     #[test]

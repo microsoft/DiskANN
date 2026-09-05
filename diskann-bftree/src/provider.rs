@@ -735,7 +735,8 @@ pub trait StartPoint<T> {
     /// This method is internal and should not be called directly by users.
     /// Use `BfTreeProvider::new` instead.
     #[doc(hidden)]
-    fn set_start_points(&self, hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()>;
+    fn set_start_points(&self, hidden: Hidden, start_points: rowmajor::Ref<'_, T>)
+        -> ANNResult<()>;
 }
 
 ////////////////////
@@ -751,7 +752,11 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
-    fn set_start_points(&self, _hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()> {
+    fn set_start_points(
+        &self,
+        _hidden: Hidden,
+        start_points: rowmajor::Ref<'_, T>,
+    ) -> ANNResult<()> {
         let start_point_ids: Vec<I> = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::message(format!(
@@ -783,7 +788,11 @@ where
     T: VectorRepr,
     I: BfTreeId,
 {
-    fn set_start_points(&self, _hidden: Hidden, start_points: rowmajor::Ref<'_, T>) -> ANNResult<()> {
+    fn set_start_points(
+        &self,
+        _hidden: Hidden,
+        start_points: rowmajor::Ref<'_, T>,
+    ) -> ANNResult<()> {
         let start_point_ids: Vec<I> = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::message(format!(
@@ -2365,23 +2374,20 @@ mod tests {
         let index = create_quant_index();
         let ctx = &DefaultContext;
 
-        let data = rowmajor::Owned::from_fn(
-            15,
-            5,
-            {
-                let mut row = 0usize;
-                let mut col = 0usize;
-                move || {
-                    let val = row as f32;
-                    col += 1;
-                    if col == 5 {
-                        col = 0;
-                        row += 1;
-                    }
-                    val
+        let data = rowmajor::Owned::from_fn(15, 5, {
+            let mut row = 0usize;
+            let mut col = 0usize;
+            move || {
+                let val = row as f32;
+                col += 1;
+                if col == 5 {
+                    col = 0;
+                    row += 1;
                 }
-            },
-        ).unwrap();
+                val
+            }
+        })
+        .unwrap();
         let ids: Arc<[u32]> = (0u32..15).collect::<Vec<_>>().into();
         let batch: Arc<rowmajor::Owned<f32>> = Arc::new(data);
         index

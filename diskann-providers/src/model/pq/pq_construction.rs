@@ -25,7 +25,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{rowmajor::{self, Matrix, MatrixMut}},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
@@ -293,7 +293,7 @@ pub fn move_train_data_by_centroid(
 /// # Panics
 ///
 /// Panics if `y.len() != x.ncols()`.
-pub fn accum_row_inplace<T>(mut x:rowmajor::Mut<'_, T>, y: &[T])
+pub fn accum_row_inplace<T>(mut x: rowmajor::Mut<'_, T>, y: &[T])
 where
     T: Copy + std::ops::AddAssign,
 {
@@ -426,7 +426,8 @@ where
         let mut compressed_block =
             rowmajor::Mut::try_from_data(&mut block_compressed_base, cur_block_size, num_pq_chunks)
                 .bridge_err()?;
-        let base_block = rowmajor::Ref::try_from_data(block_data, cur_block_size, full_dim).bridge_err()?;
+        let base_block =
+            rowmajor::Ref::try_from_data(block_data, cur_block_size, full_dim).bridge_err()?;
 
         base_block
             .par_window_iter(BATCH_SIZE)
@@ -886,10 +887,12 @@ mod pq_test {
         .unwrap();
 
         let membuf_view =
-            rowmajor::Ref::try_from_data(membuf_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
+            rowmajor::Ref::try_from_data(membuf_pq_data.as_slice(), num_train, num_pq_chunks)
+                .unwrap();
 
         let original_view =
-            rowmajor::Ref::try_from_data(original_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
+            rowmajor::Ref::try_from_data(original_pq_data.as_slice(), num_train, num_pq_chunks)
+                .unwrap();
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
@@ -900,7 +903,8 @@ mod pq_test {
         .unwrap();
         let offset_view = chunk_offsets.as_view();
         let full_data =
-            rowmajor::Ref::try_from_data(full_data_vector.as_slice(), num_train, train_dim).unwrap();
+            rowmajor::Ref::try_from_data(full_data_vector.as_slice(), num_train, train_dim)
+                .unwrap();
         let pivot_view = table.view_pivots();
         let centroid = vec![0.0; train_dim];
 

@@ -7,8 +7,8 @@
 
 use std::{iter, sync::Arc};
 
-use diskann_vector::distance::Metric;
 use diskann_utils::views::rowmajor::Matrix;
+use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{

@@ -13,7 +13,7 @@ use diskann_providers::{
     utils::RayonThreadPoolRef,
 };
 use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
-use diskann_utils::views::MatrixBase;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::distance::Metric;
 use tracing::info;
 
@@ -143,8 +143,8 @@ where
 
     fn compress(
         &self,
-        vector: MatrixBase<&[f32]>,
-        output: MatrixBase<&mut [u8]>,
+        vector: rowmajor::Ref<'_, f32>,
+        output: rowmajor::Mut<'_, u8>,
     ) -> Result<(), diskann::ANNError> {
         self.table
             .compress_into(vector, output)
@@ -172,7 +172,7 @@ mod pq_generation_tests {
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,
-        views::{MatrixView, MutMatrixView},
+        views::rowmajor::{self, Matrix},
     };
     use diskann_vector::distance::Metric;
     use rstest::rstest;
@@ -239,7 +239,7 @@ mod pq_generation_tests {
         let mut train_data: Vec<f32> = VALIDATION_DATA.to_vec();
 
         write_bin(
-            MatrixView::try_from(train_data.as_slice(), ndata, dim).unwrap(),
+            rowmajor::Ref::try_from_data(train_data.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
         )
         .unwrap();
@@ -326,7 +326,7 @@ mod pq_generation_tests {
         let mut compressed_mat = vec![0_u8; num_chunks * npts];
         let result = compressor.unwrap().compress(
             data_matrix.as_view(),
-            MutMatrixView::try_from(&mut compressed_mat, npts, num_chunks).unwrap(),
+            rowmajor::Mut::try_from_data(&mut compressed_mat, npts, num_chunks).unwrap(),
         );
         assert!(result.is_ok());
 

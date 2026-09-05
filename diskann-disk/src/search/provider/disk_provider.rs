@@ -39,7 +39,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     object_pool::{ObjectPool, PoolOption, TryAsPooled},
-    views::Matrix,
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
@@ -553,7 +553,8 @@ where
 
         ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
 
-        let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
+        let mut candidate_vectors =
+            rowmajor::Owned::defaulted(candidate_ids.len(), query_f32.len()).unwrap();
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = Vec::with_capacity(candidate_ids.len());
 
@@ -573,7 +574,7 @@ where
         }
 
         let reranked = determinant_diversity(
-            candidate_vectors.as_mut_view(),
+            candidate_vectors.as_view_mut(),
             &candidate_distances,
             &query_f32,
             usize::MAX,
@@ -1504,7 +1505,7 @@ mod disk_provider_tests {
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
     use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
-    use diskann_utils::{io::read_bin, test_data_root, views::Matrix};
+    use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
@@ -1796,7 +1797,7 @@ mod disk_provider_tests {
     fn load_source_data<StorageReader: StorageReadProvider>(
         storage_provider: &StorageReader,
         path: &str,
-    ) -> Matrix<f32> {
+    ) -> rowmajor::Owned<f32> {
         read_bin(&mut storage_provider.open_reader(path).unwrap()).unwrap()
     }
 
@@ -1805,7 +1806,7 @@ mod disk_provider_tests {
         expected_result_count: u32,
         expected_io_operations: u32,
         expected_results: impl IntoIterator<Item = (u32, f32)>,
-        source: Option<&Matrix<f32>>,
+        source: Option<&rowmajor::Owned<f32>>,
         vector_dimension: usize,
     ) {
         assert_eq!(indexed.stats.result_count, expected_result_count);
@@ -1830,7 +1831,7 @@ mod disk_provider_tests {
     fn assert_indexed_search_results_match(
         result: &SearchResult<()>,
         indexed: &SearchResultWithVectors<(), f32>,
-        source: &Matrix<f32>,
+        source: &rowmajor::Owned<f32>,
     ) {
         assert_indexed_results_match(
             indexed,

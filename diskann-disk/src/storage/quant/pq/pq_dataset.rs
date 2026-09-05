@@ -8,7 +8,7 @@ use core::fmt::Debug;
 use diskann::ANNResult;
 use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::{error::Format, product::TransposedTable};
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use crate::error::{diskann_error, ErrorKind};
 
@@ -18,13 +18,13 @@ pub struct PQData {
     pq_pivot_table: TransposedTable,
 
     // pq compressed vectors, shape `num_points × num_pq_chunks`.
-    pq_compressed_data: Matrix<u8>,
+    pq_compressed_data: rowmajor::Owned<u8>,
 }
 
 impl PQData {
     pub fn new(
         pq_pivot_table: FixedChunkPQTable,
-        pq_compressed_data: Matrix<u8>,
+        pq_compressed_data: rowmajor::Owned<u8>,
     ) -> ANNResult<Self> {
         let pq_pivot_table = TransposedTable::from_parts(
             pq_pivot_table.view_pivots(),
@@ -59,7 +59,7 @@ impl PQData {
     }
 
     /// Get pq_compressed_data
-    pub fn pq_compressed_data(&self) -> &Matrix<u8> {
+    pub fn pq_compressed_data(&self) -> &rowmajor::Owned<u8> {
         &self.pq_compressed_data
     }
 
@@ -84,8 +84,9 @@ mod tests {
 
         let pq_pivot_table =
             FixedChunkPQTable::new(dim, Box::new([0.0, 0.0, 1.0, 1.0]), Box::new([0, 2])).unwrap();
-        let pq_compressed_data = Matrix::try_from(Box::new([123u8, 111, 255]) as Box<[u8]>, 3, 1)
-            .expect("valid matrix shape");
+        let pq_compressed_data =
+            rowmajor::Owned::try_from_data(Box::new([123u8, 111, 255]) as Box<[u8]>, 3, 1)
+                .expect("valid matrix shape");
 
         PQData::new(pq_pivot_table, pq_compressed_data)
     }

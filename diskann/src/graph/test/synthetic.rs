@@ -110,7 +110,8 @@ impl Grid {
                     let this = f(i);
                     i += 1;
                     this
-                }).unwrap()
+                })
+                .unwrap()
             }
             Self::Two => {
                 let mut v = [0; 2];
@@ -124,7 +125,8 @@ impl Grid {
                         increment(&mut v, size);
                     }
                     value
-                }).unwrap()
+                })
+                .unwrap()
             }
             Self::Three => {
                 // The whole we do with the array here is to avoid a `Default` bound on `R`
@@ -142,7 +144,8 @@ impl Grid {
                         increment(&mut v, size);
                     }
                     value
-                }).unwrap()
+                })
+                .unwrap()
             }
             Self::Four => {
                 let mut v = [0; 4];
@@ -156,7 +159,8 @@ impl Grid {
                         increment(&mut v, size);
                     }
                     value
-                }).unwrap()
+                })
+                .unwrap()
             }
         }
     }

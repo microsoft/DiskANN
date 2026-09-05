@@ -10,7 +10,10 @@ use diskann::{
     graph::{Config, DiskANNIndex},
     utils::VectorRepr,
 };
-use diskann_utils::{future::AsyncFriendly, views::rowmajor::{self, Matrix}};
+use diskann_utils::{
+    future::AsyncFriendly,
+    views::rowmajor::{self, Matrix},
+};
 
 use crate::model::{
     self,
@@ -621,8 +624,7 @@ pub(crate) mod tests {
         //
         // So, when we compute the corpus used during groundtruth generation, we take all
         // but this last point.
-        let corpus: rowmajor::Owned<f32> =
-            squish(vectors.iter().take(num_points), dim);
+        let corpus: rowmajor::Owned<f32> = squish(vectors.iter().take(num_points), dim);
 
         let mut paged_tests = Vec::new();
 
@@ -769,7 +771,12 @@ pub(crate) mod tests {
                     .collect();
 
                 index
-                    .multi_insert::<_, rowmajor::Owned<T>>(FullPrecision, &ctx, batch_data, batch_ids)
+                    .multi_insert::<_, rowmajor::Owned<T>>(
+                        FullPrecision,
+                        &ctx,
+                        batch_data,
+                        batch_ids,
+                    )
                     .await
                     .unwrap();
             }
@@ -1066,8 +1073,7 @@ pub(crate) mod tests {
 
         let beta = 0.5;
 
-        let corpus: rowmajor::Owned<f32> =
-            squish(vectors.iter().take(num_points), dim);
+        let corpus: rowmajor::Owned<f32> = squish(vectors.iter().take(num_points), dim);
         let query = vec![grid_size as f32; dim];
 
         // The strategy we use here for checking is that we pull in a lot of neighbors and
@@ -1612,8 +1618,10 @@ pub(crate) mod tests {
         (index, data)
     }
 
-    async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<rowmajor::Owned<f32>>)
-    where
+    async fn build_using_single_insert<DP>(
+        index: Arc<DiskANNIndex<DP>>,
+        data: Arc<rowmajor::Owned<f32>>,
+    ) where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + for<'a> diskann::provider::SetElement<&'a [f32]>,
         Quantized: for<'a> InsertStrategy<'a, DP, &'a [f32]> + Clone + Send + Sync,
@@ -2235,7 +2243,8 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let mut vectors = rowmajor::Owned::defaulted(data.len(), start_vectors.ncols()).unwrap();
+                let mut vectors =
+                    rowmajor::Owned::defaulted(data.len(), start_vectors.ncols()).unwrap();
                 let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
                     .map(|(dst, (v, _))| {
                         dst.copy_from_slice(v);

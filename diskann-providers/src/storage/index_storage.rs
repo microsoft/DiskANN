@@ -223,7 +223,10 @@ mod tests {
         provider::SetElement,
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{test_data_root, views::rowmajor::{self, Matrix, MatrixMut}};
+    use diskann_utils::{
+        test_data_root,
+        views::rowmajor::{self, Matrix, MatrixMut},
+    };
     use diskann_vector::distance::Metric;
 
     use super::*;

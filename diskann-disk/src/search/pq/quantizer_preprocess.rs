@@ -6,6 +6,7 @@
 use diskann::ANNResult;
 use diskann_vector::distance::Metric;
 
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_providers::model::compute_pq_distance;
 use diskann_providers::utils::BridgeErr;
 
@@ -22,7 +23,7 @@ pub fn quantizer_preprocess(
 ) -> ANNResult<()> {
     let table = pq_data.pq_table();
     let expected_len = table.ncenters() * table.nchunks();
-    let dst = diskann_utils::views::MutMatrixView::try_from(
+    let dst = rowmajor::Mut::try_from_data(
         &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
         table.nchunks(),
         table.ncenters(),

@@ -12,7 +12,7 @@ use diskann::{
 use diskann_quantization::{product::BasicTable, views::ChunkOffsetsBase};
 use diskann_utils::{
     io::{Metadata, read_bin, write_bin},
-    views::{rowmajor::{self, Matrix, MatrixMut}},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::Rng;
 use tracing::info;
@@ -113,7 +113,10 @@ impl PQStorage {
         // Write the centroid of PQ centroid vectors
         let centroid_bytes = match centroid {
             Some(centroid) => write_bin(rowmajor::Ref::column_vector(centroid), writer)?,
-            None => write_bin(rowmajor::Owned::<f32>::defaulted(dim, 1).unwrap().as_view(), writer)?,
+            None => write_bin(
+                rowmajor::Owned::<f32>::defaulted(dim, 1).unwrap().as_view(),
+                writer,
+            )?,
         };
         cumul_bytes[2] = cumul_bytes[1] + centroid_bytes;
 
@@ -215,7 +218,11 @@ impl PQStorage {
         &self,
         pq_pivots: &str,
         storage_provider: &Storage,
-    ) -> ANNResult<(rowmajor::Owned<f32>, rowmajor::Owned<f32>, rowmajor::Owned<usize>)> {
+    ) -> ANNResult<(
+        rowmajor::Owned<f32>,
+        rowmajor::Owned<f32>,
+        rowmajor::Owned<usize>,
+    )> {
         if !storage_provider.exists(pq_pivots) {
             return Err(ANNError::message(format!(
                 "ERROR: PQ k-means pivot file not found: {pq_pivots}."
@@ -511,7 +518,11 @@ mod pq_storage_tests {
 
             let centroid = [0.0, 0.0];
             cumul_bytes[2] = cumul_bytes[1]
-                + write_bin(rowmajor::Ref::column_vector(centroid.as_slice()), &mut writer).unwrap();
+                + write_bin(
+                    rowmajor::Ref::column_vector(centroid.as_slice()),
+                    &mut writer,
+                )
+                .unwrap();
 
             let chunk_offsets = [0_u32, 2_u32];
             cumul_bytes[3] = cumul_bytes[2]
@@ -568,7 +579,11 @@ mod pq_storage_tests {
         {
             let mut writer = storage_provider.create_for_write(pivot_path).unwrap();
             let offsets = [METADATA_SIZE as u64, 0, 0];
-            write_bin(rowmajor::Ref::column_vector(offsets.as_slice()), &mut writer).unwrap();
+            write_bin(
+                rowmajor::Ref::column_vector(offsets.as_slice()),
+                &mut writer,
+            )
+            .unwrap();
         }
 
         assert!(

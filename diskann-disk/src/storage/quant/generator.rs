@@ -14,7 +14,10 @@ use diskann_providers::{
     storage::{StorageReadProvider, StorageWriteProvider},
     utils::{load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef},
 };
-use diskann_utils::{io::Metadata, views};
+use diskann_utils::{
+    io::Metadata,
+    views::rowmajor::{self, Matrix, MatrixMut},
+};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
@@ -150,16 +153,16 @@ where
             // process `BATCH_SIZE` many dataset vectors at a time.
             const BATCH_SIZE: usize = 128;
 
-            // Wrap the data in `MatrixViews` so we do not need to manually construct view
+            // Wrap the data in `rowmajor::Mut` so we do not need to manually construct view
             // in the compression loop.
-            let mut compressed_block = views::MutMatrixView::try_from(
+            let mut compressed_block = rowmajor::Mut::try_from_data(
                 block_compressed_base,
                 cur_block_size,
                 compressed_size,
             )
             .bridge_err()?;
             let base_block =
-                views::MatrixView::try_from(&block_data, cur_block_size, full_dim).bridge_err()?;
+                rowmajor::Ref::try_from_data(&block_data, cur_block_size, full_dim).bridge_err()?;
             base_block
                 .par_window_iter(BATCH_SIZE)
                 .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
@@ -196,10 +199,7 @@ mod generator_tests {
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::create_thread_pool_for_test;
-    use diskann_utils::{
-        io::{write_bin, Metadata},
-        views::MatrixView,
-    };
+    use diskann_utils::io::{write_bin, Metadata};
     use rstest::rstest;
     use vfs::{FileSystem, MemoryFS};
 
@@ -225,8 +225,8 @@ mod generator_tests {
 
         fn compress(
             &self,
-            _vector: views::MatrixView<f32>,
-            mut output: views::MutMatrixView<u8>,
+            _vector: rowmajor::Ref<'_, f32>,
+            mut output: rowmajor::Mut<'_, u8>,
         ) -> ANNResult<()> {
             output
                 .row_iter_mut()
@@ -267,7 +267,7 @@ mod generator_tests {
 
         // Setup test data
         let data = create_test_data(num_points, dim);
-        let view = MatrixView::try_from(data.as_slice(), num_points, dim).unwrap();
+        let view = rowmajor::Ref::try_from_data(data.as_slice(), num_points, dim).unwrap();
         write_bin(
             view,
             &mut storage_provider.create_for_write(data_path.as_str())?,
