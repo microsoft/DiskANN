@@ -9,9 +9,7 @@ use diskann::{
     utils::{VectorRepr, ONE},
 };
 use diskann_benchmark_core::{
-    self as benchmark_core,
-    recall::{GroundTruthMode},
-    streaming::executors::bigann,
+    self as benchmark_core, recall::GroundTruthMode, streaming::executors::bigann,
 };
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},

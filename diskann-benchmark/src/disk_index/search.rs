@@ -181,7 +181,8 @@ where
     let mut logger = PerfLogger::new("search_disk_index", true);
 
     // Load the query file
-    let queries: rowmajor::Owned<T> = datafiles::load_dataset(datafiles::BinFile(&search_params.queries))?;
+    let queries: rowmajor::Owned<T> =
+        datafiles::load_dataset(datafiles::BinFile(&search_params.queries))?;
     let num_queries = queries.nrows();
 
     // Load the vector filters

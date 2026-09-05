@@ -52,7 +52,11 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     /// Each row of the matrix will be a vector.
     /// Returns a lock guard for purposes of synchronization; after the guard is released, the
     /// quantizer will be accessible to all threads.
-    fn train(&self, metric: Metric, data: rowmajor::Ref<'_, f32>) -> Result<(), GarnetQuantizerError>;
+    fn train(
+        &self,
+        metric: Metric,
+        data: rowmajor::Ref<'_, f32>,
+    ) -> Result<(), GarnetQuantizerError>;
     /// Quantize a vector
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError>;
     /// Returns a distance computer for comparing quantized vectors
@@ -282,7 +286,11 @@ impl GarnetQuantizer for MinMax8Bit {
         true
     }
 
-    fn train(&self, _metric: Metric, _data: rowmajor::Ref<'_, f32>) -> Result<(), GarnetQuantizerError> {
+    fn train(
+        &self,
+        _metric: Metric,
+        _data: rowmajor::Ref<'_, f32>,
+    ) -> Result<(), GarnetQuantizerError> {
         Ok(())
     }
 
@@ -369,6 +377,7 @@ impl DynQueryComputer for MinMax8BitQueryComputer {
 
 #[cfg(test)]
 mod tests {
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
     use crate::quantization::{GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit};

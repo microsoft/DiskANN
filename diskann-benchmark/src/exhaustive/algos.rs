@@ -4,8 +4,8 @@
  */
 
 use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_benchmark_runner::utils::MicroSeconds;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::PreprocessedDistanceFunction;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 
@@ -51,8 +51,7 @@ where
     Q: QuantStore + Sync,
     C: CreateQuantComputer<Q> + Sync,
 {
-    let mut output =
-        rowmajor::Owned::<u32>::defaulted(queries.nrows(), results_per_query).unwrap();
+    let mut output = rowmajor::Owned::<u32>::defaulted(queries.nrows(), results_per_query).unwrap();
 
     struct Times {
         preprocess: MicroSeconds,

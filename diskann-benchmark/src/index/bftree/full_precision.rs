@@ -15,11 +15,11 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_utils::views::rowmajor::Matrix;
 use diskann_providers::{
     model::graph::provider::async_::common::FullPrecision,
     storage::{FileStorageProvider, SaveWith},
 };
+use diskann_utils::views::rowmajor::Matrix;
 
 use crate::{
     index::{

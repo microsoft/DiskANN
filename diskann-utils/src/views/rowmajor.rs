@@ -86,8 +86,8 @@ pub unsafe trait Matrix {
     /// Return a iterator over all rows in the matrix.
     ///
     /// Rows are yielded sequentially beginning with row 0.
-    fn row_iter(&self) -> impl ExactSizeIterator<Item = &[Self::Element]> {
-        self.as_slice().chunks_exact(self.ncols())
+    fn row_iter(&self) -> Rows<'_, Self::Element> {
+        Rows::new(self.as_view())
     }
 
     /// Returns a reference to an element without boundschecking.
@@ -169,16 +169,8 @@ pub unsafe trait Matrix {
     /// # Panics
     ///
     /// Panics if `batchsize = 0`.
-    fn window_iter(&self, batchsize: usize) -> impl Iterator<Item = Ref<'_, Self::Element>> {
-        assert!(batchsize != 0, "window_iter batchsize cannot be zero");
-        let ncols = self.ncols();
-        self.as_slice().chunks(ncols * batchsize).map(move |data| {
-            let blobsize = data.len();
-            let nrows = blobsize / ncols;
-            assert_eq!(blobsize % ncols, 0);
-
-            unsafe { Ref::from_data_unchecked(data, Layout::new_unchecked(nrows, ncols)) }
-        })
+    fn window_iter(&self, batchsize: usize) -> Windows<'_, Self::Element> {
+        Windows::new(self.as_view(), batchsize)
     }
 
     /// Return an [`Owned`] with the same shape as `self` and cloned contents.
@@ -310,9 +302,8 @@ pub unsafe trait MatrixMut: Matrix {
     /// Return a mutable iterator over all rows in the matrix.
     ///
     /// Rows are yielded sequentially beginning with row 0.
-    fn row_iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut [Self::Element]> {
-        let ncols = self.ncols();
-        self.as_mut_slice().chunks_exact_mut(ncols)
+    fn row_iter_mut(&mut self) -> RowsMut<'_, Self::Element> {
+        RowsMut::new(self.as_view_mut())
     }
 
     /// Returns a mutable reference to an element without boundschecking.
@@ -573,6 +564,166 @@ impl std::fmt::Display for LayoutError {
 }
 
 impl std::error::Error for LayoutError {}
+
+///////////////
+// Iterators //
+///////////////
+
+// An iterator over rows in a matrix. See: [`Matrix::row_iter`].
+#[derive(Debug)]
+pub struct Rows<'a, T> {
+    ptr: NonNull<T>,
+    remaining: usize,
+    ncols: usize,
+    _lifetime: PhantomData<&'a [T]>,
+}
+
+impl<'a, T> Rows<'a, T> {
+    fn new(m: Ref<'a, T>) -> Self {
+        let layout = m.layout();
+        Self {
+            ptr: m.as_nonnull(),
+            remaining: layout.nrows(),
+            ncols: layout.ncols(),
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+unsafe impl<T> Send for Rows<'_, T> where T: Sync {}
+unsafe impl<T> Sync for Rows<'_, T> where T: Sync {}
+
+impl<'a, T> Iterator for Rows<'a, T> {
+    type Item = &'a [T];
+    fn next(&mut self) -> Option<&'a [T]> {
+        self.remaining.checked_sub(1).map(|remaining| {
+            let item =
+                unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast_const(), self.ncols) };
+            self.remaining = remaining;
+            self.ptr = unsafe { self.ptr.add(self.ncols) };
+            item
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for Rows<'_, T> {}
+impl<T> std::iter::FusedIterator for Rows<'_, T> {}
+
+// An iterator over mutable rows in a matrix. See: [`Matrix::row_iter_mut`].
+#[derive(Debug)]
+pub struct RowsMut<'a, T> {
+    ptr: NonNull<T>,
+    remaining: usize,
+    ncols: usize,
+    _lifetime: PhantomData<&'a mut [T]>,
+}
+
+impl<'a, T> RowsMut<'a, T> {
+    fn new(m: Mut<'a, T>) -> Self {
+        let layout = m.layout();
+        Self {
+            ptr: m.as_nonnull(),
+            remaining: layout.nrows(),
+            ncols: layout.ncols(),
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+unsafe impl<T> Send for RowsMut<'_, T> where T: Sync {}
+unsafe impl<T> Sync for RowsMut<'_, T> where T: Sync {}
+
+impl<'a, T> Iterator for RowsMut<'a, T> {
+    type Item = &'a mut [T];
+    fn next(&mut self) -> Option<&'a mut [T]> {
+        self.remaining.checked_sub(1).map(|remaining| {
+            let item =
+                unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.ncols) };
+            self.remaining = remaining;
+            self.ptr = unsafe { self.ptr.add(self.ncols) };
+            item
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for RowsMut<'_, T> {}
+impl<T> std::iter::FusedIterator for RowsMut<'_, T> {}
+
+// An iterator over rows in a matrix. See: [`Matrix::window_iter`].
+#[derive(Debug)]
+pub struct Windows<'a, T> {
+    ptr: NonNull<T>,
+    remaining: usize,
+    batchsize: usize,
+    ncols: usize,
+    _lifetime: PhantomData<&'a [T]>,
+}
+
+impl<'a, T> Windows<'a, T> {
+    fn new(m: Ref<'a, T>, batchsize: usize) -> Self {
+        let layout = m.layout();
+        Self {
+            ptr: m.as_nonnull(),
+            remaining: layout.nrows(),
+            batchsize,
+            ncols: layout.ncols(),
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+unsafe impl<T> Send for Windows<'_, T> where T: Sync {}
+unsafe impl<T> Sync for Windows<'_, T> where T: Sync {}
+
+impl<'a, T> Iterator for Windows<'a, T> {
+    type Item = Ref<'a, T>;
+    fn next(&mut self) -> Option<Ref<'a, T>> {
+        if self.remaining == 0 {
+            None
+        } else {
+            let next_remaining = self.remaining.saturating_sub(self.batchsize);
+            let nrows = self.remaining - next_remaining;
+
+            let window = unsafe {
+                Ref {
+                    ptr: self.ptr,
+                    layout: Layout::new_unchecked(nrows, self.ncols),
+                    _lifetime: PhantomData,
+                }
+            };
+
+            self.ptr = unsafe { self.ptr.add(nrows * self.ncols) };
+            self.remaining = next_remaining;
+
+            Some(window)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for Windows<'_, T> {}
+impl<T> std::iter::FusedIterator for Windows<'_, T> {}
+
+// An iterator over rows in a matrix. See: [`Matrix::window_iter`].
+#[derive(Debug)]
+pub struct WindowsMut<'a, T> {
+    ptr: NonNull<T>,
+    remaining: usize,
+    batchsize: usize,
+    ncols: usize,
+    _lifetime: PhantomData<&'a mut [T]>,
+}
 
 //-------//
 // Owned //

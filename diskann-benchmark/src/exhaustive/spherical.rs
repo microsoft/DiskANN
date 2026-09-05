@@ -43,7 +43,6 @@ mod imp {
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
-    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_providers::model::graph::provider::async_::distances::UnwrapErr;
     use diskann_quantization::{
         alloc::{GlobalAllocator, ScopedAllocator},
@@ -51,6 +50,7 @@ mod imp {
         spherical::{DataMut, SphericalQuantizer},
         CompressIntoWith,
     };
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use indicatif::{ProgressBar, ProgressStyle};
     use rand::SeedableRng;
     use rayon::iter::{IndexedParallelIterator, ParallelIterator};

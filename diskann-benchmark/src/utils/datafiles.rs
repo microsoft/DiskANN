@@ -44,7 +44,10 @@ pub(crate) trait ConvertingLoad: Sized {
         feature = "minmax-quantization",
         feature = "product-quantization"
     ))]
-    fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<rowmajor::Owned<Self>>;
+    fn converting_load(
+        path: BinFile<'_>,
+        data_type: DataType,
+    ) -> anyhow::Result<rowmajor::Owned<Self>>;
 }
 
 impl ConvertingLoad for f32 {
@@ -69,7 +72,10 @@ impl ConvertingLoad for f32 {
         feature = "minmax-quantization",
         feature = "product-quantization"
     ))]
-    fn converting_load(path: BinFile<'_>, data_type: DataType) -> anyhow::Result<rowmajor::Owned<f32>> {
+    fn converting_load(
+        path: BinFile<'_>,
+        data_type: DataType,
+    ) -> anyhow::Result<rowmajor::Owned<f32>> {
         #[inline(never)]
         fn convert<T, U>(from: diskann_utils::views::rowmajor::Ref<T>) -> rowmajor::Owned<U>
         where
@@ -95,7 +101,10 @@ impl ConvertingLoad for f32 {
 }
 
 /// Load a groundtruth set from disk and return the  result as a row-major matrix.
-pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::Result<rowmajor::Owned<u32>> {
+pub(crate) fn load_groundtruth(
+    path: BinFile<'_>,
+    k: Option<usize>,
+) -> anyhow::Result<rowmajor::Owned<u32>> {
     let provider = diskann_providers::storage::FileStorageProvider;
     let mut file = provider
         .open_reader(&path.0.to_string_lossy())

@@ -447,9 +447,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let filtered_range = phase.as_filtered_range()?;
 
-            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &filtered_range.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&filtered_range.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&filtered_range.groundtruth))?;
@@ -504,9 +504,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let betafilter = phase.as_topk_beta_filter()?;
 
-            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &betafilter.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&betafilter.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&betafilter.groundtruth))?;
@@ -559,9 +559,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let multihop = phase.as_topk_multihop_filter()?;
 
-            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &multihop.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&multihop.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
@@ -613,9 +613,9 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let inline = phase.as_topk_inline_filter()?;
 
-            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &inline.queries,
-            ))?);
+            let queries: Arc<rowmajor::Owned<f32>> = Arc::new(datafiles::load_dataset(
+                datafiles::BinFile(&inline.queries),
+            )?);
 
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;

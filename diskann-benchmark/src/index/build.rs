@@ -22,7 +22,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{rowmajor::{self, Matrix, MatrixMut}},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;

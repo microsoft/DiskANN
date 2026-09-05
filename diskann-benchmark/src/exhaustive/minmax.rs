@@ -54,7 +54,10 @@ mod imp {
         num::Positive,
         AsFunctor, CompressInto,
     };
-    use diskann_utils::{Reborrow, ReborrowMut, views::rowmajor::{self, Matrix, MatrixMut}};
+    use diskann_utils::{
+        views::rowmajor::{self, Matrix, MatrixMut},
+        Reborrow, ReborrowMut,
+    };
     use diskann_vector::{PreprocessedDistanceFunction, PureDistanceFunction};
     use indicatif::{ProgressBar, ProgressStyle};
     use rand::{rngs::StdRng, SeedableRng};

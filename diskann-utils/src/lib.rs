@@ -46,3 +46,19 @@ pub fn test_data_directory() -> &'static str {
 pub fn test_data_root() -> std::path::PathBuf {
     workspace_root().join(test_data_directory())
 }
+
+// Test function
+
+pub fn test_function(x: views::rowmajor::Ref<'_, u32>) -> u32 {
+    use views::rowmajor::Matrix;
+
+    let mut sum = 0;
+    for w in x.window_iter(10) {
+        for r in w.row_iter() {
+            for i in r.iter() {
+                sum += *i;
+            }
+        }
+    }
+    sum
+}

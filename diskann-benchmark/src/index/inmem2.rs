@@ -508,9 +508,9 @@ where
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
-        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
         let max_k = input.search.maximum_recall_k();
         let groundtruth = datafiles::load_groundtruth(
             datafiles::BinFile(&input.search.groundtruth),
@@ -833,10 +833,11 @@ where
         let max_points = runbook.max_points();
 
         // Load the dataset (consumed by `WithData`) and queries.
-        let dataset: rowmajor::Owned<T> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
-        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-            &input.search.queries,
-        ))?);
+        let dataset: rowmajor::Owned<T> =
+            datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&input.search.queries),
+        )?);
         let dim = dataset.ncols();
 
         // Compute the medoid of the dataset as the single start point.
