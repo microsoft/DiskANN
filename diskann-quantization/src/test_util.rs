@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{
     distr::{Distribution, Uniform},
     rngs::StdRng,
@@ -105,7 +105,7 @@ pub(crate) fn compute_absolute_error(got: f32, expected: f32) -> f32 {
 }
 
 pub(crate) struct TestProblem {
-    pub(crate) data: Matrix<f32>,
+    pub(crate) data: rowmajor::Owned<f32>,
     pub(crate) means: Vec<f64>,
     pub(crate) variances: Vec<f64>,
     pub(crate) mean_norm: f64,
@@ -169,11 +169,11 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
         })
         .collect();
 
-    let mut data = Matrix::<f32>::new(0.0, nrows, ncols);
+    let mut data = rowmajor::Owned::<f32>::defaulted(nrows, ncols).unwrap();
     for col in 0..ncols {
         offsets.shuffle(rng);
         for row in 0..nrows {
-            data[(row, col)] = means[col] + scales[col] * offsets[row];
+            *data.element_mut(row, col) = means[col] + scales[col] * offsets[row];
         }
     }
 

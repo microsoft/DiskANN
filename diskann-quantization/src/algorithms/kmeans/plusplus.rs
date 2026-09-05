@@ -530,14 +530,14 @@ mod tests {
     use super::*;
     use crate::utils;
 
-    fn is_in(needle: &[f32], haystack: MatrixView<'_, f32>) -> bool {
+    fn is_in(needle: &[f32], haystack: rowmajor::Ref<'_, f32>) -> bool {
         assert_eq!(needle.len(), haystack.ncols());
         haystack.row_iter().any(|row| row == needle)
     }
 
     fn check_post_conditions(
-        centers: MatrixView<'_, f32>,
-        data: MatrixView<'_, f32>,
+        centers: rowmajor::Ref<'_, f32>,
+        data: rowmajor::Ref<'_, f32>,
         err: &KMeansPlusPlusError,
     ) {
         assert_eq!(err.expected, centers.nrows());
@@ -583,7 +583,7 @@ mod tests {
     /// ...
     /// K-1, K,   K+1, K+3 ... N+K-2
     /// ```
-    fn set_default_values(mut x: MutMatrixView<'_, f32>) {
+    fn set_default_values(mut x: rowmajor::Mut<'_, f32>) {
         for (i, row) in x.row_iter_mut().enumerate() {
             for (j, r) in row.iter_mut().enumerate() {
                 *r = (i + j) as f32;
@@ -611,14 +611,14 @@ mod tests {
             dim
         );
 
-        let mut data = Matrix::<f32>::new(0.0, num_points, dim);
-        set_default_values(data.as_mut_view());
+        let mut data = rowmajor::Owned::<f32>::defaulted(num_points, dim).unwrap();
+        set_default_values(data.as_view_mut());
 
         let square_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
 
         // The sample points we are computing the distances against.
         let num_samples = 3;
-        let mut samples = Matrix::<f32>::new(0.0, num_samples, dim);
+        let mut samples = rowmajor::Owned::<f32>::defaulted(num_samples, dim).unwrap();
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
         let transpose = BlockTransposed::<f32, N>::from_matrix_view(data.as_view());
@@ -727,13 +727,13 @@ mod tests {
         assert_eq!(values.len(), ndata);
 
         values.shuffle(rng);
-        let mut data = Matrix::new(0.0, ndata, dim);
+        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
         for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
             r.fill(*v);
         }
 
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, dim);
-        kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), rng).unwrap();
+        let mut centers = rowmajor::Owned::copied(f32::INFINITY, ncenters, dim).unwrap();
+        kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), rng).unwrap();
 
         // Make sure that each value was selected for a center.
         let mut seen = HashSet::<usize>::new();
@@ -805,13 +805,13 @@ mod tests {
         assert_eq!(values.len(), ndata);
 
         values.shuffle(rng);
-        let mut data = Matrix::new(0.0, ndata, dim);
+        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
         for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
             r.fill(*v);
         }
 
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, dim);
-        kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), rng).unwrap();
+        let mut centers = rowmajor::Owned::copied(f32::INFINITY, ncenters, dim).unwrap();
+        kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), rng).unwrap();
 
         // Make sure that each value was selected for a center.
         let mut seen = HashSet::<usize>::new();
@@ -870,12 +870,12 @@ mod tests {
     // Failure modes
     #[test]
     fn fail_empty_dataset() {
-        let data = Matrix::new(0.0, 0, 5);
-        let mut centers = Matrix::new(0.0, 10, data.ncols());
+        let data = rowmajor::Owned::defaulted(0, 5).unwrap();
+        let mut centers = rowmajor::Owned::defaulted(10, data.ncols()).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0xa9eae150d30845a1);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_err(),
             "kmeans++ on an empty dataset with non-empty centers should be an error"
@@ -891,10 +891,10 @@ mod tests {
 
     #[test]
     fn both_empty_is_okay() {
-        let data = Matrix::new(0.0, 0, 5);
-        let mut centers = Matrix::new(0.0, 0, data.ncols());
+        let data = rowmajor::Owned::defaulted(0, 5).unwrap();
+        let mut centers = rowmajor::Owned::defaulted(0, data.ncols()).unwrap();
         let mut rng = StdRng::seed_from_u64(0x6f7031afd9b5aa18);
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_ok(),
             "selecting 0 points from an empty dataset is okay"
@@ -907,13 +907,13 @@ mod tests {
         let ncenters = 10;
         let dim = 5;
 
-        let mut data = Matrix::new(0.0, ndata, dim);
-        set_default_values(data.as_mut_view());
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, data.ncols());
+        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
+        set_default_values(data.as_view_mut());
+        let mut centers = rowmajor::Owned::copied(f32::INFINITY, ncenters, data.ncols()).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0xa9eae150d30845a1);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_err(),
             "kmeans++ on an empty dataset with non-empty centers should be an error"
@@ -945,13 +945,13 @@ mod tests {
         assert!(values.len() >= ndata);
 
         values.shuffle(&mut rng);
-        let mut data = Matrix::new(0.0, ndata, dim);
+        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
         for (r, v) in std::iter::zip(data.row_iter_mut(), values.iter()) {
             r.fill(*v);
         }
 
-        let mut centers = Matrix::new(f32::INFINITY, ncenters, dim);
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let mut centers = rowmajor::Owned::copied(f32::INFINITY, ncenters, dim).unwrap();
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(
             result.is_err(),
             "dataset should not have enough unique points"
@@ -967,16 +967,16 @@ mod tests {
 
     #[test]
     fn fail_intinity_check() {
-        let mut data = Matrix::new(0.0, 10, 1);
-        set_default_values(data.as_mut_view());
+        let mut data = rowmajor::Owned::defaulted(10, 1).unwrap();
+        set_default_values(data.as_view_mut());
 
         // A very large value that will overflow to infinity when computing the norm.
-        data[(6, 0)] = -3.4028235e38;
-        let mut centers = Matrix::new(0.0, 2, 1);
+        *data.element_mut(6, 0) = -3.4028235e38;
+        let mut centers = rowmajor::Owned::defaulted(2, 1).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0xc0449b2aa4e12f05);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(result.is_err(), "result should complain about infinity");
         let err = result.unwrap_err();
         assert_eq!(err.selected, 1);
@@ -989,16 +989,16 @@ mod tests {
 
     #[test]
     fn fail_nan_check() {
-        let mut data = Matrix::new(0.0, 10, 1);
-        set_default_values(data.as_mut_view());
+        let mut data = rowmajor::Owned::defaulted(10, 1).unwrap();
+        set_default_values(data.as_view_mut());
 
         // A very large value that will overflow to infinity when computing the norm.
-        data[(6, 0)] = f32::NAN;
-        let mut centers = Matrix::new(0.0, 2, 1);
+        *data.element_mut(6, 0) = f32::NAN;
+        let mut centers = rowmajor::Owned::defaulted(2, 1).unwrap();
 
         let mut rng = StdRng::seed_from_u64(0x55808c6c728c8473);
 
-        let result = kmeans_plusplus_into(centers.as_mut_view(), data.as_view(), &mut rng);
+        let result = kmeans_plusplus_into(centers.as_view_mut(), data.as_view(), &mut rng);
         assert!(result.is_err(), "result should complain about NaN");
         let err = result.unwrap_err();
         assert_eq!(err.selected, 1);
@@ -1019,7 +1019,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints];
-        let data = Matrix::new(0.0, npoints, dim);
+        let data = rowmajor::Owned::defaulted(npoints, dim).unwrap();
         let norms = vec![0.0; npoints];
         let this = vec![0.0; dim + 1]; // Incorrect
         let this_square_norm = 0.0;
@@ -1038,7 +1038,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints + 1]; // Incorrect
-        let data = Matrix::new(0.0, npoints, dim);
+        let data = rowmajor::Owned::defaulted(npoints, dim).unwrap();
         let norms = vec![0.0; npoints];
         let this = vec![0.0; dim];
         let this_square_norm = 0.0;
@@ -1057,7 +1057,7 @@ mod tests {
         let npoints = 5;
         let dim = 8;
         let mut square_distances = vec![0.0; npoints];
-        let data = Matrix::new(0.0, npoints, dim);
+        let data = rowmajor::Owned::defaulted(npoints, dim).unwrap();
         let norms = vec![0.0; npoints + 1]; // Incorrect
         let this = vec![0.0; dim];
         let this_square_norm = 0.0;
@@ -1079,10 +1079,10 @@ mod tests {
         expected = "centers output matrix should have the same dimensionality as the dataset"
     )]
     fn kmeans_plusplus_into_panics_dim_mismatch() {
-        let mut centers = Matrix::new(0.0, 2, 10);
-        let data = Matrix::new(0.0, 2, 9);
+        let mut centers = rowmajor::Owned::defaulted(2, 10).unwrap();
+        let data = rowmajor::Owned::defaulted(2, 9).unwrap();
         kmeans_plusplus_into(
-            centers.as_mut_view(),
+            centers.as_view_mut(),
             data.as_view(),
             &mut rand::rngs::ThreadRng::default(),
         )

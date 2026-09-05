@@ -493,8 +493,8 @@ mod tests {
     ) {
         let context = lazy_format!("ncenters = {}, ndata = {}, dim = {}", ncenters, ndata, dim,);
 
-        let mut centers = Matrix::new(0.0, ncenters, dim);
-        let mut data = Matrix::new(0.0, ndata, dim);
+        let mut centers = rowmajor::Owned::defaulted(ncenters, dim).unwrap();
+        let mut data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
 
         // A list of random "nice" offsets that get applied to each center and data point
         // to ensure proper visitation during computation.
@@ -582,8 +582,8 @@ mod tests {
     // We do not perform any value-dependent control-flow for memory accesses.
     // Therefore, the miri tests don't require any setup (this helps everything run faseter).
     fn test_miri_distances_in_place_impl(ndata: usize, ncenters: usize, dim: usize) {
-        let centers = Matrix::new(0.0, ncenters, dim);
-        let data = Matrix::new(0.0, ndata, dim);
+        let centers = rowmajor::Owned::defaulted(ncenters, dim).unwrap();
+        let data = rowmajor::Owned::defaulted(ndata, dim).unwrap();
         let data_norms = vec![0.0; ndata];
         let center_norms = vec![0.0; ncenters];
         let mut nearest = vec![0; ndata];
@@ -657,8 +657,9 @@ mod tests {
             .collect();
 
         let mut center_order: Vec<usize> = (0..setup.ncenters).collect();
-        let mut data = Matrix::new(0.0, setup.ncenters * setup.data_per_center, setup.ndim);
-        let mut centers = Matrix::new(0.0, setup.ncenters, setup.ndim);
+        let mut data =
+            rowmajor::Owned::defaulted(setup.ncenters * setup.data_per_center, setup.ndim).unwrap();
+        let mut centers = rowmajor::Owned::defaulted(setup.ncenters, setup.ndim).unwrap();
 
         for trial in 0..setup.ntrials {
             values.shuffle(rng);
@@ -750,9 +751,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "dataset and data norms should have the same length")]
     fn distances_in_place_panics_data_norms() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
         let data_norms = vec![0.0; data.nrows() + 1]; // Incorrect
-        let centers = Matrix::new(0.0, 2, 8);
+        let centers = rowmajor::Owned::defaulted(2, 8).unwrap();
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
@@ -767,9 +768,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "dataset and centers should have the same dimension")]
     fn distances_in_place_panics_different_dim() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
         let data_norms = vec![0.0; data.nrows()];
-        let centers = Matrix::new(0.0, 2, 9); // Incorrect
+        let centers = rowmajor::Owned::defaulted(2, 9).unwrap(); // Incorrect
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
@@ -784,9 +785,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "centers and center norms should have the same length")]
     fn distances_in_place_panics_center_norms() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
         let data_norms = vec![0.0; data.nrows()];
-        let centers = Matrix::new(0.0, 2, 8);
+        let centers = rowmajor::Owned::defaulted(2, 8).unwrap();
         let center_norms = vec![0.0; centers.nrows() + 1]; // Incorrect
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
@@ -801,9 +802,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "dataset and nearest-buffer should have the same length")]
     fn distances_in_place_panics_nearest() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
         let data_norms = vec![0.0; data.nrows()];
-        let centers = Matrix::new(0.0, 2, 8);
+        let centers = rowmajor::Owned::defaulted(2, 8).unwrap();
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows() + 1]; // Incorrect
         distances_in_place(
@@ -822,9 +823,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and norms should have the same length")]
     fn lloyds_inner_panics_norms_length() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
         let square_norms = vec![0.0; data.nrows() + 1]; // Incorrect
-        let mut centers = Matrix::new(0.0, 2, 8);
+        let mut centers = rowmajor::Owned::defaulted(2, 8).unwrap();
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -837,10 +838,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and transpose should have the same length")]
     fn lloyds_inner_panics_transpose_length() {
-        let data = Matrix::new(0.0, 5, 8);
-        let data_incorrect = Matrix::new(0.0, 5 + 1, 8); // Incorrect
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
+        let data_incorrect = rowmajor::Owned::defaulted(5 + 1, 8).unwrap(); // Incorrect
         let square_norms = vec![0.0; data.nrows()];
-        let mut centers = Matrix::new(0.0, 2, 8);
+        let mut centers = rowmajor::Owned::defaulted(2, 8).unwrap();
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -853,10 +854,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and transpose should have the same dimensions")]
     fn lloyds_inner_panics_transpose_dim() {
-        let data = Matrix::new(0.0, 5, 8);
-        let data_incorrect = Matrix::new(0.0, 5, 8 + 1); // Incorrect
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
+        let data_incorrect = rowmajor::Owned::defaulted(5, 8 + 1).unwrap(); // Incorrect
         let square_norms = vec![0.0; data.nrows()];
-        let mut centers = Matrix::new(0.0, 2, 8);
+        let mut centers = rowmajor::Owned::defaulted(2, 8).unwrap();
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -869,9 +870,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and centers should have the same dimensions")]
     fn lloyds_inner_panics_centers_dim() {
-        let data = Matrix::new(0.0, 5, 8);
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
         let square_norms = vec![0.0; data.nrows()];
-        let mut centers = Matrix::new(0.0, 2, 8 + 1); // Incorrect
+        let mut centers = rowmajor::Owned::defaulted(2, 8 + 1).unwrap(); // Incorrect
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
@@ -888,8 +889,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "data and centers must have the same dimension")]
     fn lloyds_panics_dim_mismatch() {
-        let data = Matrix::new(0.0, 5, 8);
-        let mut centers = Matrix::new(0.0, 5, 8 + 1); // Incorrect
+        let data = rowmajor::Owned::defaulted(5, 8).unwrap();
+        let mut centers = rowmajor::Owned::defaulted(5, 8 + 1).unwrap(); // Incorrect
         lloyds(data.as_view(), centers.as_view_mut(), 1);
     }
 }

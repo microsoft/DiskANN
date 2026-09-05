@@ -219,7 +219,7 @@ mod tests {
     // disagree.
     #[test]
     fn error_on_mismatch_dim() {
-        let pivots = views::Matrix::new(0.0, 3, 5);
+        let pivots = rowmajor::Owned::defaulted(3, 5).unwrap();
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 6])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "dimensions are not equal");
@@ -232,7 +232,7 @@ mod tests {
     // Test that the table constructor errors when there are no pivots.
     #[test]
     fn error_on_no_pivots() {
-        let pivots = views::Matrix::new(0.0, 0, 5);
+        let pivots = rowmajor::Owned::defaulted(0, 5).unwrap();
         let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 2, 5])).unwrap();
         let result = BasicTable::new(pivots, offsets);
         assert!(result.is_err(), "pivots is empty");
@@ -244,11 +244,10 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xd96bac968083ec29);
         for dim in [5, 10, 12] {
             for total in [1, 2, 3] {
-                let pivots = views::Matrix::new(
-                    views::Init(|| -> f32 { StandardUniform {}.sample(&mut rng) }),
-                    total,
-                    dim,
-                );
+                let pivots = rowmajor::Owned::from_fn(total, dim, || -> f32 {
+                    StandardUniform {}.sample(&mut rng)
+                })
+                .unwrap();
                 let offsets = crate::views::ChunkOffsets::new(Box::new([0, 1, 3, dim])).unwrap();
 
                 let table = BasicTable::new(pivots.clone(), offsets.clone()).unwrap();
@@ -322,7 +321,7 @@ mod tests {
 
         // Set up `ncenters > 256`.
         {
-            let pivots = views::Matrix::new(0.0, 257, dim);
+            let pivots = views::rowmajor::Owned::defaulted(257, dim).unwrap();
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];
@@ -341,7 +340,7 @@ mod tests {
 
         // Setup input dim not equal to expected.
         {
-            let pivots = views::Matrix::new(0.0, 10, dim);
+            let pivots = views::rowmajor::Owned::defaulted(10, dim).unwrap();
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim - 1];
@@ -360,7 +359,7 @@ mod tests {
 
         // Setup output dim not equal to expected.
         {
-            let pivots = views::Matrix::new(0.0, 10, dim);
+            let pivots = views::rowmajor::Owned::defaulted(10, dim).unwrap();
             let table = BasicTable::new(pivots, offsets.clone()).unwrap();
 
             let input = vec![f32::default(); dim];
@@ -385,7 +384,9 @@ mod tests {
     #[test]
     fn test_table_single_compression_errors() {
         check_pqtable_single_compression_errors(
-            &|pivots: views::Matrix<f32>, offsets| BasicTable::new(pivots, offsets).unwrap(),
+            &|pivots: views::rowmajor::Owned<f32>, offsets| {
+                BasicTable::new(pivots, offsets).unwrap()
+            },
             &"BasicTable",
         )
     }

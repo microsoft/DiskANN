@@ -2086,7 +2086,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -2155,7 +2155,7 @@ mod tests {
     }
 
     #[inline(never)]
-    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: MatrixView<f32>) {
+    fn test_plan(plan: &dyn Quantizer, nbits: usize, dataset: rowmajor::Ref<'_, f32>) {
         // Perform the bit-specific test.
         if nbits == 1 {
             test_plan_1_bit(plan);
@@ -2375,7 +2375,7 @@ mod tests {
         }
     }
 
-    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, Matrix<f32>)
+    fn make_impl<const NBITS: usize>(metric: SupportedMetric) -> (Impl<NBITS>, rowmajor::Owned<f32>)
     where
         Impl<NBITS>: Constructible,
     {
@@ -2469,7 +2469,7 @@ mod tests {
         test_plan(&plan, 8, data.as_view());
     }
 
-    fn test_dataset() -> Matrix<f32> {
+    fn test_dataset() -> rowmajor::Owned<f32> {
         let data = vec![
             0.28657,
             -0.0318168,
@@ -2601,7 +2601,7 @@ mod tests {
             -0.324718, // row 15
         ];
 
-        Matrix::try_from(data.into(), 16, 8).unwrap()
+        rowmajor::Owned::try_from_data(data.into(), 16, 8).unwrap()
     }
 
     #[cfg(feature = "flatbuffers")]
@@ -2618,7 +2618,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             deserialized: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<'_, f32>,
+            dataset: rowmajor::Ref<'_, f32>,
         ) {
             let scoped_global = ScopedAllocator::global();
 
@@ -2740,7 +2740,7 @@ mod tests {
         fn test_plan_serialization(
             quantizer: &dyn Quantizer,
             nbits: usize,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<'_, f32>,
         ) {
             let global = GlobalAllocator;
 
@@ -3160,7 +3160,10 @@ mod tests {
         // Helpers //
         /////////////
 
-        fn compress_dataset(quantizer: &dyn Quantizer, dataset: MatrixView<f32>) -> Vec<Vec<u8>> {
+        fn compress_dataset(
+            quantizer: &dyn Quantizer,
+            dataset: rowmajor::Ref<'_, f32>,
+        ) -> Vec<Vec<u8>> {
             let scoped_global = ScopedAllocator::global();
             let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
             dataset
@@ -3177,7 +3180,7 @@ mod tests {
 
         fn compute_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<'_, f32>,
             compressed: &[Vec<u8>],
             allow_rescale: bool,
         ) -> Vec<LayoutDistances> {
@@ -3218,7 +3221,7 @@ mod tests {
         /// per-layout query distances.
         fn assert_layout_distances(
             quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<'_, f32>,
             compressed: &[Vec<u8>],
             expected: &[LayoutDistances],
             allow_rescale: bool,
@@ -3269,7 +3272,7 @@ mod tests {
             quantizer: &dyn Quantizer,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<'_, f32>,
         ) -> Baseline {
             let compressed_vectors = compress_dataset(quantizer, dataset);
 
@@ -3388,7 +3391,7 @@ mod tests {
 
         fn check_baseline(
             baseline: &Baseline,
-            dataset: MatrixView<f32>,
+            dataset: rowmajor::Ref<'_, f32>,
             expected_transform: DataTransform,
             expected_pre_scale: ScaleConfig,
         ) {
@@ -3506,7 +3509,7 @@ mod tests {
             metric: SupportedMetric,
             transform: DataTransform,
             pre_scale: ScaleConfig,
-        ) -> (Impl<NBITS>, Matrix<f32>)
+        ) -> (Impl<NBITS>, rowmajor::Owned<f32>)
         where
             Impl<NBITS>: Constructible,
         {

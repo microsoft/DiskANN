@@ -207,6 +207,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use diskann_utils::views::rowmajor::MatrixMut;
     use diskann_vector::{Norm, norm::FastL2Norm};
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -318,12 +319,12 @@ mod tests {
     #[test]
     fn test_normalized_means_corner_cases() {
         // If the input data has no columns, the returned vector should be empty.
-        let data = Matrix::new(1.0f32, 10, 0);
+        let data = rowmajor::Owned::copied(1.0f32, 10, 0).unwrap();
         let means = compute_normalized_means(data.as_view()).unwrap();
         assert!(means.is_empty());
 
         // If the data has no rows, an error should be returned.
-        let data = Matrix::new(1.0f32, 0, 10);
+        let data = rowmajor::Owned::copied(1.0f32, 0, 10).unwrap();
         let _: CannotBeEmpty = compute_normalized_means(data.as_view()).unwrap_err();
     }
 

@@ -106,6 +106,7 @@ impl Default for ScalarQuantizationParameters {
 
 #[cfg(test)]
 mod tests {
+    use diskann_utils::views::rowmajor::Matrix;
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;

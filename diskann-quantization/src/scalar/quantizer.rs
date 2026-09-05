@@ -459,7 +459,10 @@ pub enum SQComparisonError {
 mod tests {
     use std::collections::HashSet;
 
-    use diskann_utils::{ReborrowMut, views};
+    use diskann_utils::{
+        ReborrowMut,
+        views::rowmajor::{self, Matrix, MatrixMut},
+    };
 
     use rand::{
         SeedableRng,
@@ -593,7 +596,7 @@ mod tests {
         // Create a shuffled matrix of offset values for each dimension. This ensure that
         // each dimension covers the target dynamic range, but in a different order so
         // we can rule out cross-coupling of dimensions.
-        let dim_offsets: views::Matrix<f32> = {
+        let dim_offsets: rowmajor::Owned<f32> = {
             let range_min = -min_encodable - 3.0 * scale;
             let range_max = max_encodable + 3.0 * scale;
             let mut base: Vec<f32> = Vec::new();
@@ -607,11 +610,11 @@ mod tests {
             // Push one more to have one point above `range_max`.
             base.push(i);
 
-            let mut output = views::Matrix::new(0.0, base.len(), dim);
+            let mut output = rowmajor::Owned::defaulted(base.len(), dim).unwrap();
             (0..dim).for_each(|j| {
                 base.shuffle(rng);
                 for (i, b) in base.iter().enumerate() {
-                    output[(i, j)] = *b;
+                    *output.element_mut(i, j) = *b;
                 }
             });
             output
