@@ -649,6 +649,16 @@ pub trait SIMDDotProduct<L: SIMDVector, R: SIMDVector = L> {
     fn dot_simd(self, left: L, right: R) -> Self;
 }
 
+/// Multiply lanes, sum adjacent pairs, and saturate each sum to the destination lane type.
+///
+/// This models instructions such as `_mm256_maddubs_epi16`, whose intermediate result is
+/// intentionally narrower than the inputs' full dot-product range.
+pub trait SIMDSaturatingPairwiseDotProduct<L: SIMDVector, R: SIMDVector = L>: SIMDVector {
+    /// Multiply corresponding lanes in `left` and `right`, then return the saturated sum of
+    /// each adjacent pair.
+    fn saturating_pairwise_dot_product(left: L, right: R) -> Self;
+}
+
 /// Perform a bit-cast from one SIMD type to another.
 pub trait SIMDReinterpret<To: SIMDVector>: SIMDVector {
     fn reinterpret_simd(self) -> To;
