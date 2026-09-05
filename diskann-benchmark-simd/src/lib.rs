@@ -754,11 +754,10 @@ impl<Q, D> Data<Q, D> {
         let query: Box<[Q]> = (0..run.dim.get())
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
-        let data = rowmajor::Owned::<D>::from_fn(
-            run.num_points.get(),
-            run.dim.get(),
-            || StandardUniform.sample(&mut rng),
-        ).unwrap();
+        let data = rowmajor::Owned::<D>::from_fn(run.num_points.get(), run.dim.get(), || {
+            StandardUniform.sample(&mut rng)
+        })
+        .unwrap();
 
         Self { query, data }
     }

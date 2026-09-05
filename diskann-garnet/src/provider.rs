@@ -24,10 +24,9 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_quantization::alloc::{AllocatorError, Poly};
-use diskann_utils::views::Matrix;
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
-    views::MatrixView,
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use diskann_vector::{
     DistanceFunction, PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric,
@@ -508,7 +507,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         };
 
         let rows = quantizer.required_vectors();
-        let mut data = Matrix::<T>::new(T::default(), rows, self.dim);
+        let mut data = rowmajor::Owned::<T>::defaulted(rows, self.dim).unwrap();
         let mut row_idx = 0usize;
 
         if self
@@ -558,7 +557,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             Ok(v) => v,
             Err(_) => return false,
         };
-        let view = match MatrixView::try_from(&*converted, view.nrows(), view.ncols()) {
+        let view = match rowmajor::Ref::try_from_data(&*converted, view.nrows(), view.ncols()) {
             Ok(v) => v,
             Err(_) => return false,
         };

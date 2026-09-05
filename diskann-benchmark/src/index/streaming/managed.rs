@@ -11,7 +11,7 @@ use diskann_benchmark_core::{
     streaming::{self, executors},
 };
 use diskann_benchmark_runner::{timed, utils::MicroSeconds};
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::utils::streaming::TagSlotManager;
 
@@ -45,15 +45,15 @@ pub(crate) trait ManagedStream<T> {
     /// See: [`streaming::Stream::search`].
     fn search(
         &self,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         groundtruth: &dyn Rows<u32>,
     ) -> anyhow::Result<Self::Output>;
 
     /// See: [`streaming::Stream::insert`].
-    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output>;
+    fn insert(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output>;
 
     /// See: [`streaming::Stream::replace`].
-    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output>;
+    fn replace(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output>;
 
     /// See: [`streaming::Stream::delete`].
     fn delete(&self, slots: &[u32]) -> anyhow::Result<Self::Output>;
@@ -101,7 +101,7 @@ where
 
     fn search(
         &mut self,
-        (queries, groundtruth): (Arc<Matrix<T>>, &dyn Rows<u32>),
+        (queries, groundtruth): (Arc<rowmajor::Owned<T>>, &dyn Rows<u32>),
     ) -> anyhow::Result<Self::Output> {
         // Translate the groundtruth to the appropriate internal IDs.
         let (overhead, _): (_, ()) = timed! {
@@ -125,7 +125,7 @@ where
 
     fn insert(
         &mut self,
-        (data, tags): (MatrixView<'_, T>, Range<usize>),
+        (data, tags): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         let (overhead_get, slots) = timed!(self.book_keeping.get_n_empty_slots(tags.len())?);
         let output = self.stream.insert(data, &slots)?;
@@ -136,7 +136,7 @@ where
 
     fn replace(
         &mut self,
-        (data, tags): (MatrixView<'_, T>, Range<usize>),
+        (data, tags): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         let (overhead, slots) = timed!(self.book_keeping.find_slots_by_tags(tags)?);
         self.stream

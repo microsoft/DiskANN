@@ -12,7 +12,7 @@ use diskann::graph::{DiskANNIndex, InplaceDeleteMethod};
 use diskann::utils::ONE;
 use diskann_benchmark_core as benchmark_core;
 use diskann_benchmark_core::{
-    recall::{GroundTruthMode, Rows},
+    recall::{GroundTruthMode},
     streaming::executors::bigann,
 };
 use diskann_benchmark_runner::{
@@ -30,7 +30,7 @@ use diskann_quantization::spherical::{
     iface::{self as spherical_iface, Quantizer},
     SphericalQuantizer,
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use rand::SeedableRng;
 
 use crate::{
@@ -73,10 +73,10 @@ struct BfTreeSQStream {
 }
 
 impl BfTreeSQStream {
-    fn insert_(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<BuildStats> {
+    fn insert_(&self, data: rowmajor::Ref<'_, f32>, slots: &[u32]) -> anyhow::Result<BuildStats> {
         let runner = benchmark_core::build::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             Quantized,
             benchmark_core::build::ids::Slice::new(slots.into()),
         );
@@ -96,8 +96,8 @@ impl ManagedStream<f32> for BfTreeSQStream {
 
     fn search(
         &self,
-        queries: Arc<Matrix<f32>>,
-        groundtruth: &dyn Rows<u32>,
+        queries: Arc<rowmajor::Owned<f32>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<u32>,
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
             self.index.clone(),
@@ -115,11 +115,11 @@ impl ManagedStream<f32> for BfTreeSQStream {
         Ok(StreamStats::Search(results))
     }
 
-    fn insert(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn insert(&self, data: rowmajor::Ref<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Insert(self.insert_(data, slots)?))
     }
 
-    fn replace(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn replace(&self, data: rowmajor::Ref<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Replace(self.insert_(data, slots)?))
     }
 

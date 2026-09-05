@@ -12,7 +12,7 @@ use diskann_quantization::{
         iface::{self, Opaque, OpaqueMut, Quantizer},
     },
 };
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -52,7 +52,7 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     /// Each row of the matrix will be a vector.
     /// Returns a lock guard for purposes of synchronization; after the guard is released, the
     /// quantizer will be accessible to all threads.
-    fn train(&self, metric: Metric, data: MatrixView<f32>) -> Result<(), GarnetQuantizerError>;
+    fn train(&self, metric: Metric, data: rowmajor::Ref<'_, f32>) -> Result<(), GarnetQuantizerError>;
     /// Quantize a vector
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError>;
     /// Returns a distance computer for comparing quantized vectors
@@ -110,7 +110,7 @@ impl GarnetQuantizer for Spherical1Bit {
     fn train(
         &self,
         metric_type: Metric,
-        data: MatrixView<f32>,
+        data: rowmajor::Ref<'_, f32>,
     ) -> Result<(), GarnetQuantizerError> {
         let mut rng = rand::rng();
         let quantizer = SphericalQuantizer::train(
@@ -282,7 +282,7 @@ impl GarnetQuantizer for MinMax8Bit {
         true
     }
 
-    fn train(&self, _metric: Metric, _data: MatrixView<f32>) -> Result<(), GarnetQuantizerError> {
+    fn train(&self, _metric: Metric, _data: rowmajor::Ref<'_, f32>) -> Result<(), GarnetQuantizerError> {
         Ok(())
     }
 
@@ -369,7 +369,6 @@ impl DynQueryComputer for MinMax8BitQueryComputer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::views::Matrix;
     use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
     use crate::quantization::{GarnetQuantizer, GarnetQuantizerError, MinMax8Bit, Spherical1Bit};
@@ -398,7 +397,7 @@ mod tests {
             Err(GarnetQuantizerError::NoQuantizer)
         ));
 
-        let mut test_data = Matrix::new(0.0f32, 1000, 2);
+        let mut test_data = rowmajor::Owned::defaulted(1000, 2).unwrap();
         for i in 0..1000 {
             test_data
                 .row_mut(i)
@@ -436,7 +435,7 @@ mod tests {
         let test_v = [0.5f32, 0.5];
         let mut test_q = vec![0u8; quantizer.bytes()];
 
-        let mut test_data = Matrix::new(0.0f32, 1, 2);
+        let mut test_data = rowmajor::Owned::defaulted(1, 2).unwrap();
         test_data.row_mut(0).copy_from_slice(&[1.0f32, 1.0]);
 
         // Training is a no-op, but succeeds.

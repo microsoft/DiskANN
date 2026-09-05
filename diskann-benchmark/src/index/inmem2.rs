@@ -32,7 +32,7 @@ use diskann_inmem::{
     layers::{Full, FullPrecision},
     Provider, Strategy,
 };
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
@@ -462,7 +462,7 @@ where
         writeln!(output, "{input}\n")?;
 
         // Load data.
-        let data: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+        let data: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.data.data,
         ))?);
 
@@ -508,7 +508,7 @@ where
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
-        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.search.queries,
         ))?);
         let max_k = input.search.maximum_recall_k();
@@ -833,8 +833,8 @@ where
         let max_points = runbook.max_points();
 
         // Load the dataset (consumed by `WithData`) and queries.
-        let dataset: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
-        let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+        let dataset: rowmajor::Owned<T> = datafiles::load_dataset(datafiles::BinFile(&input.data.data))?;
+        let queries: Arc<rowmajor::Owned<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
             &input.search.queries,
         ))?);
         let dim = dataset.ncols();
@@ -924,7 +924,7 @@ where
 {
     fn insert_(
         &mut self,
-        data: MatrixView<'_, T>,
+        data: rowmajor::Ref<'_, T>,
         ids: Range<usize>,
     ) -> anyhow::Result<BuildStats> {
         anyhow::ensure!(
@@ -936,7 +936,7 @@ where
 
         let runner = build_core::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             Strategy,
             build_core::ids::Range::<u32>::new(ids.start as u32..ids.end as u32),
         );
@@ -959,7 +959,7 @@ where
 
     fn search(
         &mut self,
-        (queries, groundtruth): (Arc<Matrix<T>>, &dyn recall::Rows<u32>),
+        (queries, groundtruth): (Arc<rowmajor::Owned<T>>, &dyn recall::Rows<u32>),
     ) -> anyhow::Result<Self::Output> {
         let knn = benchmark_core::search::graph::KNN::new(
             self.index.clone(),
@@ -980,7 +980,7 @@ where
 
     fn insert(
         &mut self,
-        (data, ids): (MatrixView<'_, T>, Range<usize>),
+        (data, ids): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         self.insert_(data, ids).map(StreamStats::Insert)
     }
@@ -1008,7 +1008,7 @@ where
 
     fn replace(
         &mut self,
-        (data, ids): (MatrixView<'_, T>, Range<usize>),
+        (data, ids): (rowmajor::Ref<'_, T>, Range<usize>),
     ) -> anyhow::Result<Self::Output> {
         use diskann::provider::Delete;
 

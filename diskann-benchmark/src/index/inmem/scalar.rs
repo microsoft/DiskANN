@@ -69,7 +69,7 @@ mod imp {
             graph::provider::async_::{common, inmem},
         },
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use crate::{
         index::{
@@ -235,7 +235,7 @@ mod imp {
                             (Arc::new(index), None::<BuildStats>, MicroSeconds::new(0))
                         }
                         IndexSource::Build(build) => {
-                            let data: Arc<Matrix<$T>> =
+                            let data: Arc<rowmajor::Owned<$T>> =
                                 Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                         let start = std::time::Instant::now();
@@ -246,7 +246,7 @@ mod imp {
                             )?,
                         )
                         .train(data.as_view());
-                                            let create_index = |data_view: MatrixView<$T>| {
+                                            let create_index = |data_view: rowmajor::Ref<$T>| {
                         let index = diskann_async::new_quant_index::<$T, _, _>(
                             input.try_as_config()?.build()?,
                             input

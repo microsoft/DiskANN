@@ -19,7 +19,7 @@ use diskann_providers::model::graph::provider::async_::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::{rowmajor::{self, Matrix, MatrixMut}},
 };
 
 use super::{
@@ -64,10 +64,10 @@ where
     T: VectorRepr,
 {
     // Common code-path for both inserts and replace.
-    fn insert_(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
+    fn insert_(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
         let runner = diskann_benchmark_core::build::graph::SingleInsert::new(
             self.index.clone(),
-            Arc::new(data.to_owned()),
+            Arc::new(data.to_rowmajor_owned()),
             common::FullPrecision,
             diskann_benchmark_core::build::ids::Slice::new(slots.into()),
         );
@@ -90,7 +90,7 @@ where
 
     fn search(
         &self,
-        queries: Arc<Matrix<T>>,
+        queries: Arc<rowmajor::Owned<T>>,
         groundtruth: &dyn Rows<u32>,
     ) -> anyhow::Result<Self::Output> {
         let knn = diskann_benchmark_core::search::graph::KNN::new(
@@ -109,11 +109,11 @@ where
         Ok(StreamStats::Search(results))
     }
 
-    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn insert(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Insert(self.insert_(data, slots)?))
     }
 
-    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
+    fn replace(&self, data: rowmajor::Ref<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Replace(self.insert_(data, slots)?))
     }
 

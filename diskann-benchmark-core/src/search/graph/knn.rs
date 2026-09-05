@@ -538,7 +538,8 @@ mod tests {
     fn test_knn_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(rowmajor::Owned::<f32>::defaulted(1, index.provider().dim()).unwrap());
+        let queries =
+            Arc::new(rowmajor::Owned::<f32>::defaulted(1, index.provider().dim()).unwrap());
         let strategy = provider::Strategy::new();
 
         let err = KNN::new(

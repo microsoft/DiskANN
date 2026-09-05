@@ -4,6 +4,7 @@
  */
 
 use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_vector::PreprocessedDistanceFunction;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
@@ -33,7 +34,7 @@ where
 
 #[derive(Debug, Clone)]
 pub(super) struct LinearSearch {
-    pub(super) ids: diskann_utils::views::Matrix<u32>,
+    pub(super) ids: rowmajor::Owned<u32>,
     pub(super) preprocess: Vec<MicroSeconds>,
     pub(super) search: Vec<MicroSeconds>,
     pub(super) total: MicroSeconds,
@@ -41,7 +42,7 @@ pub(super) struct LinearSearch {
 
 pub(super) fn linear_search<Q, C>(
     store: &Q,
-    queries: diskann_utils::views::MatrixView<f32>,
+    queries: rowmajor::Ref<'_, f32>,
     builder: &C,
     results_per_query: usize,
     progress: &indicatif::ProgressBar,
@@ -51,7 +52,7 @@ where
     C: CreateQuantComputer<Q> + Sync,
 {
     let mut output =
-        diskann_utils::views::Matrix::<u32>::new(u32::MAX, queries.nrows(), results_per_query);
+        rowmajor::Owned::<u32>::defaulted(queries.nrows(), results_per_query).unwrap();
 
     struct Times {
         preprocess: MicroSeconds,

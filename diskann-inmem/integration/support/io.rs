@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::{io::read_bin, views::rowmajor::{self, Matrix, MatrixMut}};
+use diskann_utils::{
+    io::read_bin,
+    views::rowmajor::{self, Matrix, MatrixMut},
+};
 use half::f16;
 
 use super::datatype::{DataType, Dataset, Preprocess, SliceMut};

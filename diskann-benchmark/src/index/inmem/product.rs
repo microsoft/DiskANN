@@ -49,7 +49,7 @@ mod imp {
             IndexConfiguration,
         },
     };
-    use diskann_utils::views::{Matrix, MatrixView};
+    use diskann_utils::views::rowmajor::{self, Matrix};
 
     use diskann_benchmark_runner::{
         benchmark::{MatchContext, Score},
@@ -172,12 +172,12 @@ mod imp {
                     (Arc::new(index), None::<BuildStats>, MicroSeconds::new(0))
                 }
                 IndexSource::Build(build) => {
-                    let data: Arc<Matrix<T>> =
+                    let data: Arc<rowmajor::Owned<T>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
                     let table = {
-                        let train_data = Matrix::try_from(
+                        let train_data = rowmajor::Owned::try_from_data(
                             (&*T::as_f32(data.as_slice())?).into(),
                             data.nrows(),
                             data.ncols(),
@@ -192,7 +192,7 @@ mod imp {
                         )?
                     };
 
-                    let create_index = |data_view: MatrixView<T>| {
+                    let create_index = |data_view: rowmajor::Ref<'_, T>| {
                         let index = diskann_async::new_quant_index::<T, _, _>(
                             input.try_as_config()?.build()?,
                             input.inmem_parameters(data_view.nrows(), data_view.ncols())?,

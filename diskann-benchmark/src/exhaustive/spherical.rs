@@ -43,6 +43,7 @@ mod imp {
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
+    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
     use diskann_providers::model::graph::provider::async_::distances::UnwrapErr;
     use diskann_quantization::{
         alloc::{GlobalAllocator, ScopedAllocator},
@@ -394,7 +395,7 @@ mod imp {
     pub(super) struct Store<const NBITS: usize> {
         // The number of bytes to take from each row.
         bytes: usize,
-        data: diskann_utils::views::Matrix<u8>,
+        data: rowmajor::Owned<u8>,
         plan: diskann_quantization::spherical::iface::Impl<NBITS>,
     }
 
@@ -405,7 +406,7 @@ mod imp {
             for<'a> CompressIntoWith<&'a [f32], DataMut<'a, NBITS>, ScopedAllocator<'a>>,
     {
         fn new(
-            input: diskann_utils::views::MatrixView<f32>,
+            input: rowmajor::Ref<'_, f32>,
             plan: diskann_quantization::spherical::iface::Impl<NBITS>,
             progress: &ProgressBar,
         ) -> anyhow::Result<Self> {
@@ -416,7 +417,7 @@ mod imp {
             let output_dim = plan.quantizer().output_dim();
             let bytes =
                 diskann_quantization::spherical::DataRef::<NBITS>::canonical_bytes(output_dim);
-            let mut data = diskann_utils::views::Matrix::new(0, input.nrows(), bytes);
+            let mut data = rowmajor::Owned::defaulted(input.nrows(), bytes).unwrap();
 
             // Compress the data.
             #[allow(clippy::disallowed_methods)]

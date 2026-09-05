@@ -24,7 +24,7 @@ use diskann_benchmark_runner::{
     utils::{datatype::AsDataType, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Registry,
 };
-use diskann_utils::{future::SendFuture, views::Matrix};
+use diskann_utils::{future::SendFuture, views::rowmajor::{self, Matrix, MatrixMut}};
 use diskann_vector::{distance::Metric, PreprocessedDistanceFunction};
 use half::f16;
 use serde::Serialize;
@@ -54,7 +54,7 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 
 /// A minimal in-memory provider for flat search benchmarks.
 struct InMemProvider<T> {
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
 }
 
 struct Flat<T> {
@@ -102,7 +102,7 @@ where
 
         // Load dataset
         writeln!(output, "Loading dataset...")?;
-        let data: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data))?;
+        let data: rowmajor::Owned<T> = datafiles::load_dataset(datafiles::BinFile(&input.data))?;
         let nrows = data.nrows();
         let ncols = data.ncols();
         anyhow::ensure!(
@@ -118,7 +118,7 @@ where
         let provider = InMemProvider { data: data.clone() };
 
         // Load queries and groundtruth
-        let queries: Matrix<T> =
+        let queries: rowmajor::Owned<T> =
             datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?;
         let groundtruth = datafiles::load_groundtruth(
             datafiles::BinFile(&input.search.groundtruth),
@@ -184,7 +184,7 @@ where
 
 /// The visitor that iterates over all vectors in the provider.
 struct Visitor<'a, T: VectorRepr> {
-    data: &'a Matrix<T>,
+    data: &'a rowmajor::Owned<T>,
     computer: T::QueryDistance,
 }
 
@@ -225,7 +225,7 @@ impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
 /// Wraps a flat-search provider and queries to implement [`search::Search`].
 struct Searcher<T: VectorRepr> {
     provider: InMemProvider<T>,
-    queries: Matrix<T>,
+    queries: rowmajor::Owned<T>,
     metric: Metric,
 }
 
@@ -284,12 +284,12 @@ where
 
 /// Aggregates results from multiple flat search runs, computing recall metrics.
 struct Aggregator<'a> {
-    groundtruth: &'a Matrix<u32>,
+    groundtruth: &'a rowmajor::Owned<u32>,
     recall_k: usize,
 }
 
 impl<'a> Aggregator<'a> {
-    fn new(groundtruth: &'a Matrix<u32>, recall_k: usize) -> Self {
+    fn new(groundtruth: &'a rowmajor::Owned<u32>, recall_k: usize) -> Self {
         Self {
             groundtruth,
             recall_k,

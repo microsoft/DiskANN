@@ -22,7 +22,7 @@ use diskann_providers::{
 };
 use diskann_utils::{
     future::AsyncFriendly,
-    views::{Matrix, MatrixView},
+    views::{rowmajor::{self, Matrix, MatrixMut}},
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
@@ -35,7 +35,7 @@ use crate::inputs::graph_index::IndexBuild;
 
 pub(crate) fn set_start_points<DP, T>(
     provider: &DP,
-    data: MatrixView<'_, T>,
+    data: rowmajor::Ref<'_, T>,
     start_strategy: StartPointStrategy,
 ) -> ANNResult<()>
 where
@@ -53,7 +53,7 @@ where
 pub(crate) fn single_or_multi_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>
@@ -109,7 +109,7 @@ where
 pub(crate) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
     strategy: S,
-    data: Arc<Matrix<T>>,
+    data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
     output: &mut dyn Output,
 ) -> anyhow::Result<BuildStats>

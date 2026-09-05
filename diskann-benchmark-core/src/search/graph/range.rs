@@ -329,7 +329,8 @@ mod tests {
     fn test_range_error() {
         let index = search::graph::test_grid_provider();
 
-        let queries = Arc::new(rowmajor::Owned::<f32>::defaulted(2, index.provider().dim()).unwrap());
+        let queries =
+            Arc::new(rowmajor::Owned::<f32>::defaulted(2, index.provider().dim()).unwrap());
         let strategy = provider::Strategy::new();
 
         let err = Range::new(index, queries.clone(), Strategy::collection([strategy])).unwrap_err();
