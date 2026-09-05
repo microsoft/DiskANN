@@ -5,7 +5,7 @@
 
 use diskann_utils::{
     sampling::medoid::ComputeMedoid,
-    views::{Matrix, MatrixView, MutMatrixView},
+    views::rowmajor::{self, Matrix, MatrixMut},
 };
 use half::f16;
 use serde::{Deserialize, Serialize};
@@ -222,10 +222,10 @@ impl<'a> SliceMut<'a> {
 
 #[derive(Debug)]
 pub(crate) enum Dataset {
-    F32(Matrix<f32>),
-    F16(Matrix<f16>),
-    U8(Matrix<u8>),
-    I8(Matrix<i8>),
+    F32(rowmajor::Owned<f32>),
+    F16(rowmajor::Owned<f16>),
+    U8(rowmajor::Owned<u8>),
+    I8(rowmajor::Owned<i8>),
 }
 
 impl Dataset {
@@ -261,10 +261,10 @@ impl Dataset {
 
     pub(crate) fn preprocess(&mut self, op: &Preprocess) {
         match self {
-            Self::F32(m) => op.apply(m.as_mut_view()),
-            Self::F16(m) => op.apply(m.as_mut_view()),
-            Self::U8(m) => op.apply(m.as_mut_view()),
-            Self::I8(m) => op.apply(m.as_mut_view()),
+            Self::F32(m) => op.apply(m.as_view_mut()),
+            Self::F16(m) => op.apply(m.as_view_mut()),
+            Self::U8(m) => op.apply(m.as_view_mut()),
+            Self::I8(m) => op.apply(m.as_view_mut()),
         }
     }
 }
@@ -281,11 +281,11 @@ pub(crate) enum Preprocess {
 }
 
 trait Apply<T> {
-    fn apply(&self, m: MutMatrixView<'_, T>);
+    fn apply(&self, m: rowmajor::Mut<'_, T>);
 }
 
 impl Apply<f32> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, f32>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, f32>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v *= 0.5),
             Self::Floor => m.as_mut_slice().iter_mut().for_each(|v| *v = v.floor()),
@@ -294,7 +294,7 @@ impl Apply<f32> for Preprocess {
 }
 
 impl Apply<f16> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, f16>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, f16>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| {
                 *v = f16::from_f32(f32::from(*v) * 0.5);
@@ -307,7 +307,7 @@ impl Apply<f16> for Preprocess {
 }
 
 impl Apply<u8> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, u8>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, u8>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v /= 2),
             Self::Floor => {}
@@ -316,7 +316,7 @@ impl Apply<u8> for Preprocess {
 }
 
 impl Apply<i8> for Preprocess {
-    fn apply(&self, mut m: MutMatrixView<'_, i8>) {
+    fn apply(&self, mut m: rowmajor::Mut<'_, i8>) {
         match self {
             Self::Halve => m.as_mut_slice().iter_mut().for_each(|v| *v /= 2),
             Self::Floor => {}
@@ -330,10 +330,10 @@ impl Apply<i8> for Preprocess {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DatasetView<'a> {
-    F32(MatrixView<'a, f32>),
-    F16(MatrixView<'a, f16>),
-    U8(MatrixView<'a, u8>),
-    I8(MatrixView<'a, i8>),
+    F32(rowmajor::Ref<'a, f32>),
+    F16(rowmajor::Ref<'a, f16>),
+    U8(rowmajor::Ref<'a, u8>),
+    I8(rowmajor::Ref<'a, i8>),
 }
 
 impl<'a> DatasetView<'a> {
@@ -375,10 +375,10 @@ impl<'a> DatasetView<'a> {
 
     pub(crate) fn medoid(&self) -> Dataset {
         match self {
-            Self::F32(v) => Matrix::row_vector(Box::from(f32::compute_medoid(*v))).into(),
-            Self::F16(v) => Matrix::row_vector(Box::from(f16::compute_medoid(*v))).into(),
-            Self::U8(v) => Matrix::row_vector(Box::from(u8::compute_medoid(*v))).into(),
-            Self::I8(v) => Matrix::row_vector(Box::from(i8::compute_medoid(*v))).into(),
+            Self::F32(v) => rowmajor::Owned::row_vector(Box::from(f32::compute_medoid(*v))).into(),
+            Self::F16(v) => rowmajor::Owned::row_vector(Box::from(f16::compute_medoid(*v))).into(),
+            Self::U8(v) => rowmajor::Owned::row_vector(Box::from(u8::compute_medoid(*v))).into(),
+            Self::I8(v) => rowmajor::Owned::row_vector(Box::from(i8::compute_medoid(*v))).into(),
         }
     }
 
@@ -440,8 +440,8 @@ macro_rules! define {
             }
         }
 
-        impl From<Matrix<$T>> for Dataset {
-            fn from(m: Matrix<$T>) -> Self {
+        impl From<rowmajor::Owned<$T>> for Dataset {
+            fn from(m: rowmajor::Owned<$T>) -> Self {
                 Self::$variant(m)
             }
         }
@@ -461,11 +461,11 @@ define!(i8, I8);
 mod tests {
     use super::*;
 
-    fn matrix<T>(data: &[T], nrows: usize, ncols: usize) -> Matrix<T>
+    fn matrix<T>(data: &[T], nrows: usize, ncols: usize) -> rowmajor::Owned<T>
     where
         T: Copy,
     {
-        Matrix::try_from(Box::from(data), nrows, ncols).unwrap()
+        rowmajor::Owned::try_from_data(Box::from(data), nrows, ncols).unwrap()
     }
 
     //----------//

@@ -13,7 +13,7 @@ use diskann_benchmark_runner::{
     files::InputFile,
     utils::fmt::Indent,
 };
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::distance::Metric;
 use half::f16;
 use serde::{Deserialize, Serialize};
@@ -223,7 +223,7 @@ impl Data {
 struct Bundle {
     data: Dataset,
     queries: Dataset,
-    groundtruth: Matrix<u64>,
+    groundtruth: rowmajor::Owned<u64>,
 }
 
 #[derive(Debug)]

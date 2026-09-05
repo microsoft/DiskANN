@@ -10,7 +10,7 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use crate::{num::Bytes, store};
 
@@ -59,7 +59,7 @@ impl Store {
                 .expect("`freelist_recycle_capacity` must be non-zero"),
             );
 
-        let data = Matrix::new(0u8, 1, config.entry_bytes);
+        let data = rowmajor::Owned::defaulted(1, config.entry_bytes).unwrap();
         let store =
             store::Store::new(store_config, data.as_view()).expect("failed to construct store");
         Self { store }

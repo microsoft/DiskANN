@@ -58,7 +58,7 @@ use std::{
 };
 
 use diskann::utils::IntoUsize;
-use diskann_utils::views::MatrixView;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use thiserror::Error;
 
 use crate::{
@@ -173,7 +173,7 @@ impl Store {
         // entries: usize,
         // bytes: Bytes,
         // max_neighbors: usize,
-        init: MatrixView<'_, u8>,
+        init: rowmajor::Ref<'_, u8>,
     ) -> Result<Self, StoreError> {
         let Config {
             entries,
@@ -801,12 +801,12 @@ impl Drop for Slot<'_> {
 mod tests {
     use super::*;
 
-    use diskann_utils::views::Matrix;
+    use diskann_utils::views::rowmajor::MatrixMut;
 
     // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
     // zeroed frozen points. The frozen points occupy the highest slot indices.
     fn store(entries: usize, entry_bytes: usize, frozen: usize) -> Result<Store, StoreError> {
-        let mut data = Matrix::new(0u8, frozen, entry_bytes);
+        let mut data = rowmajor::Owned::defaulted(frozen, entry_bytes).unwrap();
         let mut base = 0u8;
         for row in data.row_iter_mut() {
             row.fill(base);
@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn new_rejects_mismatched_frozen_dim() {
         // Frozen point has 8 columns but the store is asked for 16-byte entries.
-        let data = Matrix::new(0u8, 1, 8);
+        let data = rowmajor::Owned::defaulted(1, 8).unwrap();
         let err = Store::new(Config::new(4, Bytes::new(16), 0), data.as_view()).unwrap_err();
         assert!(matches!(
             err.0,
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn new_rejects_total_slot_overflow() {
         // `entries` alone fits in u32, but `entries + frozen` overflows it.
-        let data = Matrix::new(0u8, 1, 8);
+        let data = rowmajor::Owned::defaulted(1, 8).unwrap();
         let err = Store::new(
             Config::new(u32::MAX as usize, Bytes::new(8), 0),
             data.as_view(),
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn new_rejects_too_many_neighbors() {
-        let data = Matrix::new(0u8, 1, 8);
+        let data = rowmajor::Owned::defaulted(1, 8).unwrap();
         let err = Store::new(
             Config::new(4, Bytes::new(8), u32::MAX.into_usize() + 1),
             data.as_view(),

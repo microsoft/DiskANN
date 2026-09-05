@@ -7,7 +7,7 @@
 
 use std::{io::Write, num::NonZeroUsize};
 
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::distance::simd;
 use diskann_wide::Architecture;
 use half::f16;
@@ -713,7 +713,7 @@ impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
     }
 }
 
-fn run_loops<Q, D, F>(query: &[Q], data: MatrixView<D>, run: &Run, f: F) -> RunResult
+fn run_loops<Q, D, F>(query: &[Q], data: rowmajor::Ref<'_, D>, run: &Run, f: F) -> RunResult
 where
     F: Fn(&[Q], &[D]) -> f32,
 {
@@ -741,7 +741,7 @@ where
 
 struct Data<Q, D> {
     query: Box<[Q]>,
-    data: Matrix<D>,
+    data: rowmajor::Owned<D>,
 }
 
 impl<Q, D> Data<Q, D> {
@@ -754,11 +754,11 @@ impl<Q, D> Data<Q, D> {
         let query: Box<[Q]> = (0..run.dim.get())
             .map(|_| StandardUniform.sample(&mut rng))
             .collect();
-        let data = Matrix::<D>::new(
-            diskann_utils::views::Init(|| StandardUniform.sample(&mut rng)),
+        let data = rowmajor::Owned::<D>::from_fn(
             run.num_points.get(),
             run.dim.get(),
-        );
+            || StandardUniform.sample(&mut rng),
+        ).unwrap();
 
         Self { query, data }
     }

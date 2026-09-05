@@ -6,7 +6,7 @@
 use diskann::graph::search::Knn;
 use diskann_benchmark_core::recall::{RecallMetrics, Rows};
 use diskann_benchmark_runner::utils::fmt::KeyValue;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -44,7 +44,7 @@ pub(super) fn knn(
         groundtruth.nrows(),
     );
 
-    let mut ids = Matrix::new(u64::MAX, queries.nrows(), k);
+    let mut ids = rowmajor::Owned::copied(u64::MAX, queries.nrows(), k)?;
 
     let before = index.counters();
     let mut misc = KnnSearch::new();
