@@ -13,7 +13,7 @@ use diskann_benchmark_runner::{
     files::InputFile,
     utils::fmt::Indent,
 };
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::distance::Metric;
 use half::f16;
 use serde::{Deserialize, Serialize};

@@ -20,7 +20,7 @@ use diskann_providers::{
 use diskann_quantization::spherical::DataRef;
 use diskann_utils::{
     io::read_bin,
-    views::rowmajor::{Matrix, MatrixMut},
+    views::rowmajor::Matrix,
 };
 use rand::seq::SliceRandom;
 use tracing::info;

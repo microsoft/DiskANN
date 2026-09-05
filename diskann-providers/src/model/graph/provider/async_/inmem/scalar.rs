@@ -887,7 +887,7 @@ mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::utils::ONE;
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::rowmajor::{self, Matrix};
+    use diskann_utils::views::rowmajor;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
 

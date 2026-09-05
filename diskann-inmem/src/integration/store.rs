@@ -10,7 +10,7 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::{num::Bytes, store};
 

@@ -13,7 +13,7 @@ use diskann_providers::{
     utils::RayonThreadPoolRef,
 };
 use diskann_quantization::{error::Format, product::TransposedTable, CompressInto};
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self};
 use diskann_vector::distance::Metric;
 use tracing::info;
 

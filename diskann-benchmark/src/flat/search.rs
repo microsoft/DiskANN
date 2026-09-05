@@ -26,7 +26,7 @@ use diskann_benchmark_runner::{
 };
 use diskann_utils::{
     future::SendFuture,
-    views::rowmajor::{self, Matrix, MatrixMut},
+    views::rowmajor::{self, Matrix},
 };
 use diskann_vector::{distance::Metric, PreprocessedDistanceFunction};
 use half::f16;

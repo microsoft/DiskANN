@@ -5,7 +5,7 @@
 
 use diskann_utils::{
     io::read_bin,
-    views::rowmajor::{self, Matrix, MatrixMut},
+    views::rowmajor::{self, MatrixMut},
 };
 use half::f16;
 

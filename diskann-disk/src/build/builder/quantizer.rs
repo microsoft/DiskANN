@@ -21,7 +21,7 @@ use diskann_quantization::{
     scalar::train::ScalarQuantizationParameters,
     spherical::{PreScale, SphericalQuantizer, SupportedMetric},
 };
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self};
 use tracing::info;
 
 use crate::{

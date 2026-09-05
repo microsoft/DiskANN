@@ -238,7 +238,7 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
         alloc::poly,
         spherical::{iface, PreScale, SphericalQuantizer, SupportedMetric},
     };
-    use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+    use diskann_utils::views::rowmajor::{self, Matrix};
     use rand::{rngs::StdRng, SeedableRng};
 
     // Create training data with spread-out values.

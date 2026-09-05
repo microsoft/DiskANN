@@ -8,7 +8,7 @@ use core::fmt::Debug;
 use diskann::ANNResult;
 use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::{error::Format, product::TransposedTable};
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self, Matrix};
 
 use crate::error::{diskann_error, ErrorKind};
 
