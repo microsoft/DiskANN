@@ -508,7 +508,7 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
             similarity_lo = similarity_lo + a_sum_lo * doc_bias;
             similarity_lo = similarity_lo + doc_sum * a_bias_lo;
             similarity_lo = similarity_lo + (a_bias_lo * doc_bias) * dim;
-            score_lo = score_lo.min_simd(zero - similarity_lo);
+            score_lo = score_lo.min_simd_standard(zero - similarity_lo);
 
             if let Some(score_hi) = score_hi.as_mut() {
                 let raw_hi = wide.to_float(hi[j]);
@@ -516,7 +516,7 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
                 similarity_hi = similarity_hi + a_sum_hi * doc_bias;
                 similarity_hi = similarity_hi + doc_sum * a_bias_hi;
                 similarity_hi = similarity_hi + (a_bias_hi * doc_bias) * dim;
-                *score_hi = score_hi.min_simd(zero - similarity_hi);
+                *score_hi = score_hi.min_simd_standard(zero - similarity_hi);
             }
         }
 
@@ -582,13 +582,14 @@ mod x86_64 {
 
     #[inline(always)]
     unsafe fn unpack_full_u4_avx2(
+        arch: V3,
         values: Slice<'_, u8>,
         byte_offset: usize,
-    ) -> std::arch::x86_64::__m256i {
-        use std::arch::x86_64::{
-            _mm256_and_si256, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_srli_epi16,
-            _mm256_unpacklo_epi8,
-        };
+    ) -> <V3 as Architecture>::i8x32 {
+        // wide does not expose 16-bit logical shifts or this byte interleave.
+        use std::arch::x86_64::{_mm256_srli_epi16, _mm256_unpacklo_epi8};
+        diskann_wide::alias!(i16s = <V3>::i16x16);
+        diskann_wide::alias!(i8s = <V3>::i8x32);
 
         // SAFETY: A full group contains two packed MinMax4 bytes.
         let packed = unsafe {
@@ -600,13 +601,16 @@ mod x86_64 {
         let first = unsafe { *packed.as_unit().as_ref() };
         // SAFETY: The second byte is within the tracked two-byte span.
         let second = unsafe { *packed.add(Elements::new(1)).as_unit().as_ref() };
-        // SAFETY: V3 and V4 both provide AVX2.
+        let packed = i16s::splat(arch, i16::from_le_bytes([first, second])).to_underlying();
+        let mask = i8s::splat(arch, 0x0f);
+        let low = i8s::from_underlying(arch, packed) & mask;
+        // SAFETY: V3 provides AVX2.
         unsafe {
-            let packed = _mm256_set1_epi16(i16::from_le_bytes([first, second]));
-            let mask = _mm256_set1_epi8(0x0f);
-            let low = _mm256_and_si256(packed, mask);
-            let high = _mm256_and_si256(_mm256_srli_epi16::<4>(packed), mask);
-            _mm256_unpacklo_epi8(low, high)
+            let high = i8s::from_underlying(arch, _mm256_srli_epi16::<4>(packed)) & mask;
+            i8s::from_underlying(
+                arch,
+                _mm256_unpacklo_epi8(low.to_underlying(), high.to_underlying()),
+            )
         }
     }
 
@@ -633,9 +637,7 @@ mod x86_64 {
 
             if dimensions == 4 && !cfg!(miri) {
                 // SAFETY: Four dimensions occupy two packed bytes, and V3 provides AVX2.
-                return i8s::from_underlying(self, unsafe {
-                    unpack_full_u4_avx2(values, byte_offset)
-                });
+                return unsafe { unpack_full_u4_avx2(self, values, byte_offset) };
             }
 
             let expanded = if dimensions == 4 {
@@ -655,6 +657,7 @@ mod x86_64 {
 
         fn dot(self, accumulator: Self::Accumulator, a: Self::A, b: Self::B) -> Self::Accumulator {
             use diskann_wide::SIMDDotProduct;
+            // wide exposes the i16 dot product, but not the mixed-byte pair product.
             use std::arch::x86_64::_mm256_maddubs_epi16;
             diskann_wide::alias!(i16s = <V3>::i16x16);
 
@@ -731,7 +734,8 @@ mod x86_64 {
 
             #[cfg(not(miri))]
             {
-                use std::arch::x86_64::{_mm512_set1_epi64, _pdep_u64};
+                use std::arch::x86_64::_pdep_u64;
+                diskann_wide::alias!(u64s = <V4>::u64x8);
 
                 let byte_count = dimensions.div_ceil(2);
                 // SAFETY: The caller guarantees a valid packed B group.
@@ -752,13 +756,9 @@ mod x86_64 {
                     }
                     source
                 };
-                // SAFETY: V4 provides BMI2 and AVX-512F.
+                // SAFETY: V4 provides BMI2; wide has no bit-deposit operation.
                 let expanded = unsafe { _pdep_u64(u64::from(source), 0x0f0f_0f0f_0f0f_0f0f) };
-                i8s::from_underlying(
-                    self,
-                    // SAFETY: V4 provides AVX-512F.
-                    unsafe { _mm512_set1_epi64(expanded as i64) },
-                )
+                i8s::from_underlying(self, u64s::splat(self, expanded).to_underlying())
             }
         }
 
@@ -783,16 +783,17 @@ mod x86_64 {
 
             #[cfg(not(miri))]
             {
-                use std::arch::x86_64::{
-                    _mm512_add_epi32, _mm512_cvtepi64_epi32, _mm512_srli_epi64,
-                };
+                use std::arch::x86_64::_mm512_cvtepi64_epi32;
                 diskann_wide::alias!(i32s8 = <V4>::i32x8);
+                diskann_wide::alias!(u64s = <V4>::u64x8);
 
-                let value = accumulator.to_underlying();
-                // SAFETY: V4 provides AVX-512F and AVX-512DQ.
-                let pairs = unsafe { _mm512_add_epi32(value, _mm512_srli_epi64::<32>(value)) };
-                // SAFETY: V4 provides AVX-512F and AVX-512DQ.
-                let reduced = i32s8::from_underlying(self, unsafe { _mm512_cvtepi64_epi32(pairs) });
+                let upper = u64s::from_underlying(self, accumulator.to_underlying()) >> 32;
+                let pairs =
+                    accumulator + Self::Accumulator::from_underlying(self, upper.to_underlying());
+                // SAFETY: V4 provides AVX-512F; wide has no u64-to-u32 lane narrowing.
+                let reduced = i32s8::from_underlying(self, unsafe {
+                    _mm512_cvtepi64_epi32(pairs.to_underlying())
+                });
                 f32s::from_array(self, reduced.to_array().map(|x| (x as u32) as f32))
             }
         }
@@ -892,4 +893,126 @@ mod aarch64 {
     }
 
     micro_kernel!(Neon, 8, micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
+}
+
+#[cfg(test)]
+mod tests {
+    use diskann_utils::ReborrowMut;
+
+    use super::*;
+    use crate::multi_vector::{Defaulted, Mat};
+
+    fn check_packing<const MR: usize>(packing: APacking, group: Option<usize>) {
+        for nrows in [0, 1, MR - 1, MR, MR + 1] {
+            for dim in [0, 1, 3, 4, 5, 7, 8, 9] {
+                let mut query = Mat::new(MinMaxMeta::<8>::new(nrows, dim), Defaulted).unwrap();
+                for (i, mut row) in query.reborrow_mut().rows_mut().enumerate() {
+                    row.set_meta(MinMaxCompensation {
+                        a: (i + 1) as f32,
+                        b: -((i + 2) as f32),
+                        n: (i + 3) as f32,
+                        dim: dim as u32,
+                        ..Default::default()
+                    });
+                    for k in 0..dim {
+                        row.vector_mut()
+                            .set(k, ((i * 17 + k) % 256) as i64)
+                            .unwrap();
+                    }
+                }
+
+                let packed = PackedMinMax8::<MR>::new(query.as_view(), packing);
+                assert_eq!(packed.nrows(), nrows);
+                assert_eq!(packed.dim(), dim);
+                let group = group.unwrap_or(dim.max(1));
+                let blocks = nrows.div_ceil(MR);
+                assert_eq!(packed.block_stride, dim.div_ceil(group) * group * MR);
+
+                let mut expected = Vec::new();
+                for block in 0..blocks {
+                    for chunk in 0..dim.div_ceil(group) {
+                        for lane in 0..MR {
+                            for offset in 0..group {
+                                let row = block * MR + lane;
+                                let k = chunk * group + offset;
+                                expected.push(if row < nrows && k < dim {
+                                    ((row * 17 + k) % 256) as u8
+                                } else {
+                                    0
+                                });
+                            }
+                        }
+                    }
+                }
+                assert_eq!(packed.values, expected, "{packing:?}: ({nrows}, {dim})");
+                for (values, offset, sign) in [
+                    (&packed.scale, 1, 1.0),
+                    (&packed.bias, 2, -1.0),
+                    (&packed.scaled_sum, 3, 1.0),
+                ] {
+                    assert_eq!(values.len(), blocks * MR);
+                    for (i, &value) in values.iter().enumerate() {
+                        assert_eq!(
+                            value,
+                            if i < nrows {
+                                sign * (i + offset) as f32
+                            } else {
+                                0.0
+                            },
+                            "{packing:?}: metadata row {i} for ({nrows}, {dim})",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn row_major_packing() {
+        check_packing::<8>(APacking::RowMajor, None);
+    }
+
+    #[test]
+    fn grouped4_packing() {
+        check_packing::<8>(APacking::Grouped4, Some(4));
+        check_packing::<16>(APacking::Grouped4, Some(4));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn grouped8_packing() {
+        check_packing::<16>(APacking::Grouped8, Some(8));
+    }
+
+    #[test]
+    fn expands_full_u4_groups() {
+        for first in 0..=u8::MAX {
+            for second in [0, 0x0f, 0xf0, 0xff] {
+                let packed = [0xab, 0xcd, first, second];
+                // SAFETY: The second chunk contains two packed bytes.
+                let expanded = unsafe { expand_full_u4(Slice::new(&packed), 1) };
+                assert_eq!(
+                    expanded.to_le_bytes(),
+                    [first & 0x0f, first >> 4, second & 0x0f, second >> 4],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expands_u4_tails_without_padding_nibbles() {
+        let packed = [0x21, 0xf3, 0x21, 0xf3];
+        for byte_offset in [0, 2] {
+            for (remainder, expected) in [
+                (1_usize, [1, 0, 0, 0]),
+                (2, [1, 2, 0, 0]),
+                (3, [1, 2, 3, 0]),
+            ] {
+                let values = Slice::new(&packed[..byte_offset + remainder.div_ceil(2)]);
+                // SAFETY: The tracked span contains exactly the packed tail bytes.
+                let expanded = unsafe { expand_tail_u4(values, byte_offset, remainder) };
+                assert_eq!(expanded.to_le_bytes(), expected);
+            }
+        }
+    }
 }
