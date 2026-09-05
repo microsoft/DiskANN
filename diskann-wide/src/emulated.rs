@@ -13,8 +13,8 @@ use super::{
     reference::{ReferenceAbs, ReferenceCast, ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
     traits::{
         ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
-        SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret,
-        SIMDSaturatingPairwiseDotProduct, SIMDSelect, SIMDSumTree, SIMDVector,
+        SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSumTree,
+        SIMDVector,
     },
 };
 
@@ -507,23 +507,6 @@ impl_simd_dot_product_iu8_to_i32!(4, 16);
 impl_simd_dot_product_iu8_to_i32!(8, 32);
 impl_simd_dot_product_iu8_to_i32!(16, 64);
 
-impl<A> SIMDSaturatingPairwiseDotProduct<Emulated<u8, 32, A>, Emulated<i8, 32, A>>
-    for Emulated<i16, 16, A>
-where
-    A: arch::Sealed,
-{
-    fn saturating_pairwise_dot_product(
-        left: Emulated<u8, 32, A>,
-        right: Emulated<i8, 32, A>,
-    ) -> Self {
-        Self::from_arch_fn(left.1, |i| {
-            let x0 = i32::from(left.0[2 * i]) * i32::from(right.0[2 * i]);
-            let x1 = i32::from(left.0[2 * i + 1]) * i32::from(right.0[2 * i + 1]);
-            (x0 + x1).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
-        })
-    }
-}
-
 ////////////
 // Select //
 ////////////
@@ -641,9 +624,6 @@ macro_rules! impl_little_endian_transmute_cast {
 
 impl_little_endian_transmute_cast!(<u32, 8> => <i16, 16>);
 impl_little_endian_transmute_cast!(<u32, 16> => <i16, 32>);
-impl_little_endian_transmute_cast!(<u32, 4> => <u8, 16>);
-impl_little_endian_transmute_cast!(<u32, 8> => <i8, 32>);
-impl_little_endian_transmute_cast!(<u8, 32> => <i8, 32>);
 
 impl_little_endian_transmute_cast!(<i16, 8> => <u8, 16>);
 impl_little_endian_transmute_cast!(<u8, 16> => <i16, 8>);
