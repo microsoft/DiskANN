@@ -4,8 +4,8 @@
  */
 
 use crate::{
-    Emulated, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret,
-    SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
+    Emulated, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect,
+    SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
 // AArch64 masks
@@ -75,22 +75,6 @@ impl SIMDSelect<u32x4> for mask32x4 {
     fn select(self, x: u32x4, y: u32x4) -> u32x4 {
         // SAFETY: Allowed by the `Neon` architecture.
         u32x4(unsafe { vbslq_u32(self.0, x.0, y.0) })
-    }
-}
-
-impl SIMDReinterpret<u8x16> for u32x4 {
-    #[inline(always)]
-    fn reinterpret_simd(self) -> u8x16 {
-        if cfg!(miri) {
-            use crate::AsSIMD;
-            self.emulated().reinterpret_simd().as_simd(self.arch())
-        } else {
-            u8x16::from_underlying(
-                self.arch(),
-                // SAFETY: Reinterpreting a vector does not change its bits.
-                unsafe { vreinterpretq_u8_u32(self.to_underlying()) },
-            )
-        }
     }
 }
 

@@ -144,8 +144,8 @@ pub use reference::{cast_f16_to_f32, cast_f32_to_f16};
 mod traits;
 pub use traits::{
     AsSIMD, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDFloat, SIMDMask, SIMDMinMax, SIMDMulAdd,
-    SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSaturatingPairwiseDotProduct,
-    SIMDSelect, SIMDSigned, SIMDSumTree, SIMDUnsigned, SIMDVector, ZipUnzip,
+    SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSigned,
+    SIMDSumTree, SIMDUnsigned, SIMDVector, ZipUnzip,
 };
 
 mod splitjoin;

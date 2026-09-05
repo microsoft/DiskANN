@@ -576,7 +576,6 @@ mod x86_64 {
             byte_offset: usize,
             dimensions: usize,
         ) -> Self::B {
-            use diskann_wide::SIMDReinterpret;
             diskann_wide::alias!(i8s = <V3>::i8x32);
             diskann_wide::alias!(u32s = <V3>::u32x8);
 
@@ -587,48 +586,42 @@ mod x86_64 {
                 // SAFETY: Inherited from the trait contract.
                 unsafe { expand_tail_u4(values, byte_offset, dimensions) }
             };
-            let b_panel: i8s = u32s::splat(self, expanded).reinterpret_simd();
-            b_panel
+            if cfg!(miri) {
+                let bytes = expanded.to_le_bytes();
+                i8s::from_array(self, core::array::from_fn(|i| bytes[i % 4] as i8))
+            } else {
+                i8s::from_underlying(self, u32s::splat(self, expanded).to_underlying())
+            }
         }
 
         fn dot(self, accumulator: Self::Accumulator, a: Self::A, b: Self::B) -> Self::Accumulator {
-            use diskann_wide::{SIMDDotProduct, SIMDSaturatingPairwiseDotProduct};
+            use diskann_wide::SIMDDotProduct;
+            use std::arch::x86_64::_mm256_maddubs_epi16;
             diskann_wide::alias!(i16s = <V3>::i16x16);
 
-            let products = i16s::saturating_pairwise_dot_product(a, b);
+            let products = if cfg!(miri) {
+                let a = a.to_array();
+                let b = b.to_array();
+                i16s::from_array(
+                    self,
+                    core::array::from_fn(|i| {
+                        let x0 = i32::from(a[2 * i]) * i32::from(b[2 * i]);
+                        let x1 = i32::from(a[2 * i + 1]) * i32::from(b[2 * i + 1]);
+                        (x0 + x1).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+                    }),
+                )
+            } else {
+                i16s::from_underlying(
+                    self,
+                    // SAFETY: V3 provides AVX2.
+                    unsafe { _mm256_maddubs_epi16(a.to_underlying(), b.to_underlying()) },
+                )
+            };
             accumulator.dot_simd(products, i16s::splat(self, 1))
         }
 
         fn to_float(self, accumulator: Self::Accumulator) -> Self::Float {
             Self::Float::from_array(self, accumulator.to_array().map(|x| (x as u32) as f32))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn v3_micro_kernel<const NR: usize>(
-        arch: V3,
-        a_values: Slice<'_, u8>,
-        a_scale: &[f32; 16],
-        a_bias: &[f32; 16],
-        a_scaled_sum: &[f32; 16],
-        b: &BPanel<'_, NR>,
-        scores: &mut [f32; 16],
-        k: usize,
-        valid_rows: usize,
-    ) {
-        // SAFETY: Inherited from the architecture-specific micro-kernel wrapper.
-        unsafe {
-            micro_kernel(
-                arch,
-                a_values,
-                a_scale,
-                a_bias,
-                a_scaled_sum,
-                b,
-                scores,
-                k,
-                valid_rows,
-            )
         }
     }
 
@@ -646,7 +639,6 @@ mod x86_64 {
             byte_offset: usize,
             dimensions: usize,
         ) -> Self::B {
-            use diskann_wide::SIMDReinterpret;
             diskann_wide::alias!(i8s = <V4>::i8x32);
             diskann_wide::alias!(u32s = <V4>::u32x8);
 
@@ -657,8 +649,12 @@ mod x86_64 {
                 // SAFETY: Inherited from the trait contract.
                 unsafe { expand_tail_u4(values, byte_offset, dimensions) }
             };
-            let b_panel: i8s = u32s::splat(self, expanded).reinterpret_simd();
-            b_panel
+            if cfg!(miri) {
+                let bytes = expanded.to_le_bytes();
+                i8s::from_array(self, core::array::from_fn(|i| bytes[i % 4] as i8))
+            } else {
+                i8s::from_underlying(self, u32s::splat(self, expanded).to_underlying())
+            }
         }
 
         fn dot(self, accumulator: Self::Accumulator, a: Self::A, b: Self::B) -> Self::Accumulator {
@@ -671,36 +667,8 @@ mod x86_64 {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn v4_micro_kernel<const NR: usize>(
-        arch: V4,
-        a_values: Slice<'_, u8>,
-        a_scale: &[f32; 16],
-        a_bias: &[f32; 16],
-        a_scaled_sum: &[f32; 16],
-        b: &BPanel<'_, NR>,
-        scores: &mut [f32; 16],
-        k: usize,
-        valid_rows: usize,
-    ) {
-        // SAFETY: Inherited from the architecture-specific micro-kernel wrapper.
-        unsafe {
-            micro_kernel(
-                arch,
-                a_values,
-                a_scale,
-                a_bias,
-                a_scaled_sum,
-                b,
-                scores,
-                k,
-                valid_rows,
-            )
-        }
-    }
-
-    micro_kernel!(V3, 16, v3_micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
-    micro_kernel!(V4, 16, v4_micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
+    micro_kernel!(V3, 16, micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
+    micro_kernel!(V4, 16, micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -719,7 +687,6 @@ mod aarch64 {
         byte_offset: usize,
         dimensions: usize,
     ) -> <Neon as Architecture>::u8x16 {
-        use diskann_wide::SIMDReinterpret;
         diskann_wide::alias!(u32s = <Neon>::u32x4);
         diskann_wide::alias!(u8s = <Neon>::u8x16);
 
@@ -730,8 +697,20 @@ mod aarch64 {
             // SAFETY: The caller guarantees a valid final partial group.
             unsafe { expand_tail_u4(values, byte_offset, dimensions) }
         };
-        let b_panel: u8s = u32s::splat(arch, expanded).reinterpret_simd();
-        b_panel
+        if cfg!(miri) {
+            let bytes = expanded.to_le_bytes();
+            u8s::from_array(arch, core::array::from_fn(|i| bytes[i % 4]))
+        } else {
+            u8s::from_underlying(
+                arch,
+                // SAFETY: Reinterpreting a vector does not change its bits.
+                unsafe {
+                    std::arch::aarch64::vreinterpretq_u8_u32(
+                        u32s::splat(arch, expanded).to_underlying(),
+                    )
+                },
+            )
+        }
     }
 
     #[inline(always)]
@@ -780,33 +759,5 @@ mod aarch64 {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn neon_micro_kernel<const NR: usize>(
-        arch: Neon,
-        a_values: Slice<'_, u8>,
-        a_scale: &[f32; 8],
-        a_bias: &[f32; 8],
-        a_scaled_sum: &[f32; 8],
-        b: &BPanel<'_, NR>,
-        scores: &mut [f32; 8],
-        k: usize,
-        valid_rows: usize,
-    ) {
-        // SAFETY: Inherited from the architecture-specific micro-kernel wrapper.
-        unsafe {
-            micro_kernel(
-                arch,
-                a_values,
-                a_scale,
-                a_bias,
-                a_scaled_sum,
-                b,
-                scores,
-                k,
-                valid_rows,
-            )
-        }
-    }
-
-    micro_kernel!(Neon, 8, neon_micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
+    micro_kernel!(Neon, 8, micro_kernel, {8, 7, 6, 5, 4, 3, 2, 1});
 }
