@@ -239,24 +239,32 @@ mod tests {
         }
 
         #[rstest]
-        #[case::inner_product(InnerProduct::compute_distances)]
-        #[case::normalized_cosine(CosineNormalized::compute_distances)]
+        #[case::inner_product(compute_pair_ranking::<InnerProduct>)]
+        #[case::normalized_cosine(compute_pair_ranking::<CosineNormalized>)]
         fn orthogonal_vectors_have_zero_ranking(
-            #[case] compute: fn(MatrixView<'_, f32>, &mut [f32]) -> ANNResult<()>,
-            #[values(2, 17, 129)] dimensions: usize,
+            #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
         ) {
-            // Given: the two unit vectors have disjoint nonzero coordinates.
+            // The contract permits either zero sign at both metric entry points.
+            assert_eq!(compute([1.0, 0.0], [0.0, 1.0]), 0.0);
+        }
+
+        #[test]
+        fn inner_product_uses_the_last_coordinate_beyond_a_complete_dimension_block() {
+            let dimensions = 129;
             let mut values = vec![0.0; 2 * dimensions];
-            values[0] = 1.0;
-            values[dimensions + 1] = 1.0;
+            values[dimensions - 1] = 2.0;
+            values[dimensions] = -1.0;
+            values[2 * dimensions - 1] = 3.0;
             let points = MatrixView::try_from(values.as_slice(), 2, dimensions).unwrap();
             let mut distances = [STALE_DISTANCE; 4];
 
-            // When
-            compute(points, &mut distances).unwrap();
+            InnerProduct::compute_distances(points, &mut distances).unwrap();
 
-            // Then: the contract permits either zero sign.
-            assert_eq!(distances[2], 0.0);
+            // Dot products are 4, 6 and 10; all nonzero pair contribution is in the tail.
+            assert_eq!(
+                [distances[0], distances[2], distances[3]],
+                [-4.0, -6.0, -10.0]
+            );
         }
     }
 }

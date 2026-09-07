@@ -372,89 +372,33 @@ mod tests {
         }
 
         #[test]
-        fn reused_l2_leaders_match_fresh_leaders_for_a_new_point_stripe() {
-            // Given
+        fn l2_reinitializes_every_output_row_for_a_new_point_stripe() {
             let leader_values = [3.0_f32, 4.0, 0.0, 2.0];
-            let leader_count = leader_values.len() / DIMENSION_COUNT;
-            let first_point = [1.0_f32, 0.0];
-            let second_point = [0.0_f32, 1.0];
-            let first_leader_squared_norm =
-                leader_values[0].mul_add(leader_values[0], leader_values[1] * leader_values[1]);
-            let second_leader_squared_norm =
-                leader_values[2].mul_add(leader_values[2], leader_values[3] * leader_values[3]);
-            let first_dot =
-                second_point[0].mul_add(leader_values[0], second_point[1] * leader_values[1]);
-            let second_dot =
-                second_point[0].mul_add(leader_values[2], second_point[1] * leader_values[3]);
-            let expected = [
-                (-2.0_f32).mul_add(first_dot, first_leader_squared_norm),
-                (-2.0_f32).mul_add(second_dot, second_leader_squared_norm),
-            ];
-            let reused_leaders = L2::create_leaders(matrix(&leader_values, leader_count));
-            let fresh_leaders = L2::create_leaders(matrix(&leader_values, leader_count));
-            let mut discarded_first_output = [STALE_DISTANCE; 2];
-            L2::compute_distances(
-                matrix(&first_point, 1),
-                &reused_leaders,
-                &mut discarded_first_output,
-            )
-            .unwrap();
-            let mut reused_output = [STALE_DISTANCE; 2];
-            let mut fresh_output = [STALE_DISTANCE; 2];
+            let leaders = L2::create_leaders(matrix(&leader_values, 2));
+            let mut output = [STALE_DISTANCE; 4];
 
-            // When
-            L2::compute_distances(
-                matrix(&second_point, 1),
-                &reused_leaders,
-                &mut reused_output,
-            )
-            .unwrap();
-            L2::compute_distances(matrix(&second_point, 1), &fresh_leaders, &mut fresh_output)
+            // Leader norms are 25 and 4; each entry is norm - 2 * dot.
+            L2::compute_distances(matrix(&[1.0, 0.0, 0.0, 1.0], 2), &leaders, &mut output).unwrap();
+            assert_eq!(output, [19.0, 4.0, 17.0, 0.0]);
+
+            L2::compute_distances(matrix(&[2.0, 1.0, -1.0, 2.0], 2), &leaders, &mut output)
                 .unwrap();
-
-            // Then
-            assert_eq!(reused_output, expected);
-            assert_eq!(fresh_output, expected);
+            assert_eq!(output, [5.0, 0.0, 15.0, -4.0]);
         }
 
         #[test]
-        fn reused_cosine_leaders_match_fresh_leaders_for_a_new_point_stripe() {
-            // Given
+        fn cosine_overwrites_output_for_a_new_point_stripe() {
             let leader_values = [1.0_f32, 0.0, 0.0, 2.0];
-            let leader_count = leader_values.len() / DIMENSION_COUNT;
-            let first_point = [1.0_f32, 0.0];
-            let second_point = [0.0_f32, 1.0];
-            let orthogonal_similarity = 0.0_f32;
-            let equal_direction_similarity = 1.0_f32;
-            let expected = [
-                1.0 - orthogonal_similarity,
-                1.0 - equal_direction_similarity,
-            ];
-            let reused_leaders = Cosine::create_leaders(matrix(&leader_values, leader_count));
-            let fresh_leaders = Cosine::create_leaders(matrix(&leader_values, leader_count));
-            let mut discarded_first_output = [STALE_DISTANCE; 2];
-            Cosine::compute_distances(
-                matrix(&first_point, 1),
-                &reused_leaders,
-                &mut discarded_first_output,
-            )
-            .unwrap();
-            let mut reused_output = [STALE_DISTANCE; 2];
-            let mut fresh_output = [STALE_DISTANCE; 2];
+            let leaders = Cosine::create_leaders(matrix(&leader_values, 2));
+            let mut output = [STALE_DISTANCE; 4];
 
-            // When
-            Cosine::compute_distances(
-                matrix(&second_point, 1),
-                &reused_leaders,
-                &mut reused_output,
-            )
-            .unwrap();
-            Cosine::compute_distances(matrix(&second_point, 1), &fresh_leaders, &mut fresh_output)
+            Cosine::compute_distances(matrix(&[1.0, 0.0, 0.0, 3.0], 2), &leaders, &mut output)
                 .unwrap();
+            assert_eq!(output, [0.0, 1.0, 1.0, 0.0]);
 
-            // Then
-            assert_eq!(reused_output, expected);
-            assert_eq!(fresh_output, expected);
+            Cosine::compute_distances(matrix(&[0.0, 4.0, -2.0, 0.0], 2), &leaders, &mut output)
+                .unwrap();
+            assert_eq!(output, [1.0, 0.0, 2.0, 1.0]);
         }
     }
 }

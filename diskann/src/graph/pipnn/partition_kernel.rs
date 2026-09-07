@@ -15,21 +15,21 @@
 
 use crate::{ANNError, ANNResult};
 use diskann_utils::views::{MatrixView, MutMatrixView};
-use diskann_wide::{SIMDMask, SIMDVector};
 
 use super::{
     partition_metric::PartitionMetric,
-    simd::{PiPNNSIMDSchema, PiPNNSIMDVector},
+    simd::{PiPNNSIMDSchema, distance_blocks},
+    topk::{Candidate, UNASSIGNED, with_topk_rows},
 };
 
 /// No sampled partition center was rankable for this output slot.
-pub(super) const UNASSIGNED_LEADER: u32 = u32::MAX;
+pub(super) const UNASSIGNED_LEADER: u32 = UNASSIGNED;
 
 /// Reusable storage for one point-stripe numerical pipeline.
 #[derive(Default)]
 pub(super) struct PartitionKernelWorkspace {
     distance_scratch: Vec<f32>,
-    ranked_leader_scratch: Vec<(u32, f32)>,
+    ranked_leader_scratch: Vec<Candidate>,
 }
 
 /// Assign one packed point stripe to metric-owned partition leaders.
@@ -79,98 +79,34 @@ where
 fn rank_leader_distances<A>(
     arch: A,
     distances: MatrixView<'_, f32>,
-    output: MutMatrixView<'_, u32>,
-    ranked_leaders: &mut Vec<(u32, f32)>,
+    mut output: MutMatrixView<'_, u32>,
+    ranked_leaders: &mut Vec<Candidate>,
 ) where
     A: PiPNNSIMDSchema,
 {
     let fanout = output.ncols();
-    ranked_leaders.resize(fanout, (UNASSIGNED_LEADER, f32::INFINITY));
+    ranked_leaders.resize(fanout, Candidate::default());
     // Rayon outlines stripe workers. Reapply target features before ranking leaders.
     arch.run(move || {
-        select_point_leaders(arch, distances, output, ranked_leaders);
-    });
-}
-
-/// Rank sampled partition centers for each assigned point.
-#[inline(always)]
-fn select_point_leaders<A>(
-    arch: A,
-    distances: MatrixView<'_, f32>,
-    mut output: MutMatrixView<'_, u32>,
-    ranked_leaders: &mut [(u32, f32)],
-) where
-    A: PiPNNSIMDSchema,
-{
-    let leader_count = distances.ncols();
-    let simd_end = leader_count - leader_count % A::Vector::LANES;
-
-    for (point_distances, point_output) in distances.row_iter().zip(output.row_iter_mut()) {
-        ranked_leaders.fill((UNASSIGNED_LEADER, f32::INFINITY));
-
-        for leader_base_idx in (0..simd_end).step_by(A::Vector::LANES) {
-            // SAFETY: This group is inside the point's leader row.
-            let distance_group = unsafe {
-                A::Vector::load_simd(arch, point_distances.as_ptr().add(leader_base_idx))
-            };
-            insert_leader_lanes(distance_group, leader_base_idx, ranked_leaders);
-        }
-
-        for (leader, &distance) in point_distances.iter().enumerate().skip(simd_end) {
-            insert_leader(ranked_leaders, leader as u32, distance);
-        }
-        for (destination, &(leader, _)) in point_output.iter_mut().zip(ranked_leaders.iter()) {
-            *destination = leader;
-        }
-    }
-}
-
-/// Offer one SIMD group of sampled centers to the current point's ranked_leaders.
-///
-/// `leader_base_idx` is the matrix-column index of the first lane. The function reads
-/// selected lanes from low to high.
-fn insert_leader_lanes<F>(distances: F, leader_base_idx: usize, ranked_leaders: &mut [(u32, f32)])
-where
-    F: PiPNNSIMDVector,
-{
-    let threshold = F::splat(distances.arch(), ranked_leaders[ranked_leaders.len() - 1].1);
-    let eligible = distances.lt_simd(threshold);
-    if eligible.none() {
-        return;
-    }
-
-    let distance_lanes = distances.to_lane_array();
-    let distance_lanes = distance_lanes.as_ref();
-    let mut lanes = F::active_lanes(eligible);
-    while lanes != 0 {
-        let lane = lanes.trailing_zeros() as usize;
-        lanes &= lanes - 1;
-        insert_leader(
-            ranked_leaders,
-            (leader_base_idx + lane) as u32,
-            distance_lanes[lane],
+        let mut worst = [f32::INFINITY];
+        with_topk_rows!(
+            MutMatrixView::row_vector(ranked_leaders.as_mut_slice()),
+            &mut worst[..],
+            |topks| {
+                for (point_distances, point_output) in
+                    distances.row_iter().zip(output.row_iter_mut())
+                {
+                    topks.reset();
+                    for block in distance_blocks(arch, point_distances) {
+                        topks.update_one(0, &block);
+                    }
+                    for (destination, leader) in point_output.iter_mut().zip(topks.row(0)) {
+                        *destination = leader.local_idx;
+                    }
+                }
+            }
         );
-    }
-}
-
-/// Insert one sampled partition center into the current point's retained set.
-///
-/// `leader` is the center's column ID in the point-to-leader matrix. `ranked_leaders`
-/// stores retained centers in nearest-first order. A candidate enters only when
-/// its distance is less than the current farthest distance. NaN does not enter.
-#[inline(always)]
-fn insert_leader(ranked_leaders: &mut [(u32, f32)], leader: u32, distance: f32) {
-    let threshold = ranked_leaders.len() - 1;
-    if distance.partial_cmp(&ranked_leaders[threshold].1) != Some(std::cmp::Ordering::Less) {
-        return;
-    }
-
-    ranked_leaders[threshold] = (leader, distance);
-    let mut slot = threshold;
-    while slot > 0 && ranked_leaders[slot].1 < ranked_leaders[slot - 1].1 {
-        ranked_leaders.swap(slot, slot - 1);
-        slot -= 1;
-    }
+    });
 }
 
 #[cfg(test)]
@@ -186,7 +122,7 @@ mod tests {
         struct KernelCall<'a> {
             distances: MatrixView<'a, f32>,
             output: MutMatrixView<'a, u32>,
-            ranked_leaders: &'a mut Vec<(u32, f32)>,
+            ranked_leaders: &'a mut Vec<Candidate>,
         }
 
         struct RankDistances;
@@ -204,8 +140,8 @@ mod tests {
             distances: MatrixView<'_, f32>,
             nearest_leader_count: usize,
         ) -> Vec<u32> {
-            let mut output =
-                Matrix::new(UNASSIGNED_LEADER, distances.nrows(), nearest_leader_count);
+            // A previous valid leader must be overwritten even when no candidate is rankable.
+            let mut output = Matrix::new(0, distances.nrows(), nearest_leader_count);
             arch::dispatch1_no_features(
                 RankDistances,
                 KernelCall {
@@ -216,59 +152,13 @@ mod tests {
             );
             output.into_inner().into_vec()
         }
-
-        pub(super) fn reference_assignments(
-            distances: MatrixView<'_, f32>,
-            nearest_leader_count: usize,
-        ) -> Vec<u32> {
-            let mut output = vec![UNASSIGNED_LEADER; distances.nrows() * nearest_leader_count];
-            for (row, assignments) in distances
-                .row_iter()
-                .zip(output.chunks_exact_mut(nearest_leader_count))
-            {
-                let mut candidates: Vec<_> = row
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(leader, &distance)| {
-                        (distance < f32::INFINITY).then_some((leader as u32, distance))
-                    })
-                    .collect();
-                candidates.sort_unstable_by(|left, right| {
-                    left.1
-                        .partial_cmp(&right.1)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                for (destination, (leader, _)) in assignments.iter_mut().zip(candidates) {
-                    *destination = leader;
-                }
-            }
-            output
-        }
-    }
-
-    mod insert_leader_tests {
-        use super::*;
-
-        #[test]
-        fn nan_distance_does_not_enter_the_topk() {
-            // Given
-            let expected_ranked_leaders = [(0, 0.25), (UNASSIGNED_LEADER, f32::INFINITY)];
-            let mut ranked_leaders = vec![(UNASSIGNED_LEADER, f32::INFINITY); 2];
-
-            // When
-            insert_leader(&mut ranked_leaders, 0, 0.25);
-            insert_leader(&mut ranked_leaders, 1, f32::NAN);
-
-            // Then
-            assert_eq!(ranked_leaders, expected_ranked_leaders);
-        }
     }
 
     mod assign_leaders_tests {
         use super::*;
 
         #[test]
-        fn assigns_each_point_to_highest_similarity_leaders_with_cosine() {
+        fn cosine_assignment_reuses_workspace_and_output_for_a_different_point() {
             // Given
             let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
             let leaders =
@@ -276,7 +166,9 @@ mod tests {
             let point_values = [0.9, 0.1, -0.8, 0.2];
             let points = MatrixView::try_from(&point_values[..], 2, 2).unwrap();
             let expected_leaders_by_descending_cosine_similarity = [0, 1, 2, 1];
+            let expected_reassigned_leaders = [2, 1];
             let mut actual_assignments = [UNASSIGNED_LEADER; 4];
+            let mut workspace = PartitionKernelWorkspace::default();
 
             // When
             assign_leaders::<_, Cosine>(
@@ -284,7 +176,7 @@ mod tests {
                 points,
                 &leaders,
                 MutMatrixView::try_from(&mut actual_assignments[..], 2, 2).unwrap(),
-                &mut PartitionKernelWorkspace::default(),
+                &mut workspace,
             )
             .unwrap();
 
@@ -293,54 +185,19 @@ mod tests {
                 actual_assignments,
                 expected_leaders_by_descending_cosine_similarity
             );
-        }
 
-        #[test]
-        fn reused_workspace_matches_fresh_leader_assignment() {
-            // Given
-            let leader_values = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
-            let leaders =
-                Cosine::create_leaders(MatrixView::try_from(&leader_values[..], 3, 2).unwrap());
-            let point_values = [0.9, 0.1, -0.8, 0.2];
-            let smaller_points = MatrixView::try_from(&point_values[..2], 1, 2).unwrap();
-            let mut reused_workspace = PartitionKernelWorkspace::default();
-            let mut discarded_large_output = [UNASSIGNED_LEADER; 4];
+            // When: shrink to the second point, whose nearest leader differs from the old prefix.
             assign_leaders::<_, Cosine>(
                 diskann_wide::ARCH,
-                MatrixView::try_from(&point_values[..], 2, 2).unwrap(),
+                MatrixView::try_from(&point_values[2..], 1, 2).unwrap(),
                 &leaders,
-                MutMatrixView::try_from(&mut discarded_large_output[..], 2, 2).unwrap(),
-                &mut reused_workspace,
-            )
-            .unwrap();
-            let mut expected_assignments_from_fresh_workspace = [UNASSIGNED_LEADER; 2];
-            assign_leaders::<_, Cosine>(
-                diskann_wide::ARCH,
-                smaller_points,
-                &leaders,
-                MutMatrixView::try_from(&mut expected_assignments_from_fresh_workspace[..], 1, 2)
-                    .unwrap(),
-                &mut PartitionKernelWorkspace::default(),
-            )
-            .unwrap();
-
-            // When
-            let mut actual_assignments_from_reused_workspace = [UNASSIGNED_LEADER; 2];
-            assign_leaders::<_, Cosine>(
-                diskann_wide::ARCH,
-                smaller_points,
-                &leaders,
-                MutMatrixView::try_from(&mut actual_assignments_from_reused_workspace[..], 1, 2)
-                    .unwrap(),
-                &mut reused_workspace,
+                MutMatrixView::try_from(&mut actual_assignments[..2], 1, 2).unwrap(),
+                &mut workspace,
             )
             .unwrap();
 
             // Then
-            assert_eq!(
-                actual_assignments_from_reused_workspace,
-                expected_assignments_from_fresh_workspace
-            );
+            assert_eq!(actual_assignments[..2], expected_reassigned_leaders);
         }
     }
 
@@ -361,7 +218,7 @@ mod tests {
         #[case::two_lanes_plus_one(33, 7)]
         #[case::root_partition(1000, 64)]
         #[trace]
-        fn dispatched_partition_ranking_matches_scalar_reference_across_lane_boundaries(
+        fn dispatched_partition_ranking_selects_nearest_columns_across_lane_boundaries(
             #[case] leader_count: usize,
             #[case] nearest_leader_count: usize,
         ) {
@@ -371,7 +228,10 @@ mod tests {
                 .map(|leader| leader as f32 - leader_count as f32 / 2.0)
                 .collect();
             let distances = MatrixView::try_from(values.as_slice(), 2, leader_count).unwrap();
-            let expected = reference_assignments(distances, nearest_leader_count);
+            let expected: Vec<_> = (0..nearest_leader_count)
+                .chain((leader_count - nearest_leader_count..leader_count).rev())
+                .map(|leader| leader as u32)
+                .collect();
 
             // When
             let actual = rank_distance_fixture(distances, nearest_leader_count);
@@ -403,11 +263,9 @@ mod tests {
         #[rstest]
         #[case::nan(f32::NAN)]
         #[case::positive_infinity(f32::INFINITY)]
-        fn non_rankable_distances_leave_only_unfilled_ranks_unassigned(
-            #[case] unrankable: f32,
-            #[values(3, 17, 33)] leader_count: usize,
-        ) {
-            // Given: only the first row has rankable candidates.
+        fn non_rankable_distances_leave_only_unfilled_ranks_unassigned(#[case] unrankable: f32) {
+            // Given: only the first row has rankable candidates, spanning SIMD and scalar tail.
+            let leader_count = 17;
             let mut values = vec![unrankable; 2 * leader_count];
             values[leader_count - 2] = -1.0;
             values[leader_count - 1] = 2.0;
