@@ -4305,6 +4305,17 @@ mod tests {
                             &mut rng,
                         );
                     }
+                    #[cfg(target_arch = "aarch64")]
+                    if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                        fuzz_heterogeneous_ip::<$M>(
+                            MAX_DIM,
+                            TRIALS_PER_DIM,
+                            $max_val,
+                            &|x, y| arch.run2(InnerProduct, x, y),
+                            "neon",
+                            &mut rng,
+                        );
+                    }
                 }
 
                 #[test]
@@ -4318,11 +4329,23 @@ mod tests {
                             arch.run2(InnerProduct, x, y)
                         });
                     }
+                    #[cfg(target_arch = "aarch64")]
+                    if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                        het_test_max_values::<$M>($max_val, "neon", &|x, y| {
+                            arch.run2(InnerProduct, x, y)
+                        });
+                    }
                 }
 
                 #[test]
                 fn known_answers() {
                     het_test_known_answers::<$M>($max_val, &|x, y| InnerProduct::evaluate(x, y));
+                    #[cfg(target_arch = "aarch64")]
+                    if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                        het_test_known_answers::<$M>($max_val, &|x, y| {
+                            arch.run2(InnerProduct, x, y)
+                        });
+                    }
                 }
 
                 #[test]
@@ -4330,6 +4353,12 @@ mod tests {
                     het_test_edge_cases::<$M>($max_val, $block_size, &|x, y| {
                         InnerProduct::evaluate(x, y)
                     });
+                    #[cfg(target_arch = "aarch64")]
+                    if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                        het_test_edge_cases::<$M>($max_val, $block_size, &|x, y| {
+                            arch.run2(InnerProduct, x, y)
+                        });
+                    }
                 }
             }
         };
