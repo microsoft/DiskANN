@@ -19,7 +19,7 @@
       }
     },
     {
-      "type": "store-stress-invasive",
+      "type": "store-stress-intrusive",
       "content": {
         "entry_bytes": 128,
         "setup": {

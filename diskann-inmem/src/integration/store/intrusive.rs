@@ -26,9 +26,9 @@ pub struct Config {
 }
 
 boilerplate!(
-    store::invasive::Invasive => Store,
-    for<'a> store::invasive::Reader<'a> => Reader,
-    for<'a> store::invasive::Slot<'a> => Writer,
+    store::intrusive::Intrusive => Store,
+    for<'a> store::intrusive::Reader<'a> => Reader,
+    for<'a> store::intrusive::Slot<'a> => Writer,
 );
 
 impl Store {
@@ -55,7 +55,7 @@ impl Store {
             .expect("`freelist_recycle_capacity` must be non-zero"),
         );
 
-        let slots_config = store::invasive::Invasive::config(Bytes::new(config.entry_bytes));
+        let slots_config = store::intrusive::Intrusive::config(Bytes::new(config.entry_bytes));
         let store = store::Store::new(store_layout, store_config, slots_config)
             .expect("failed to construct store");
 

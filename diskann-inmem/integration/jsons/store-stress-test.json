@@ -2,7 +2,7 @@
   "search_directories": [],
   "jobs": [
     {
-      "type": "store-stress-invasive",
+      "type": "store-stress-intrusive",
       "content": {
         "entry_bytes": 64,
         "setup": {

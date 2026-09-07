@@ -7,7 +7,7 @@
 //! mechanisms to drive larger concurrency tests.
 
 pub mod checked;
-pub mod invasive;
+pub mod intrusive;
 
 /// These implementations have a similar structure. A [`boilerplate`] macro is used to ensure
 /// the capabilities exposed are mostly the same.

@@ -6,11 +6,11 @@
 use std::{collections::HashMap, io::Write, sync::atomic::Ordering::Relaxed};
 
 use diskann_benchmark_runner as dbr;
-use diskann_inmem::integration::store::invasive;
+use diskann_inmem::integration::store::intrusive;
 use serde::{Deserialize, Serialize};
 
 pub(super) fn register(registry: &mut dbr::Registry) -> Result<(), dbr::RegistryError> {
-    registry.register("invasive-store-stress-test", Stress)
+    registry.register("intrusive-store-stress-test", Stress)
 }
 
 /// Configuration for a [`Stress`] run.
@@ -42,7 +42,7 @@ impl dbr::Input for Input {
     type Raw = Self;
 
     fn tag() -> &'static str {
-        "store-stress-invasive"
+        "store-stress-intrusive"
     }
 
     fn from_raw(raw: Self::Raw, _checker: &mut dbr::Checker) -> anyhow::Result<Self> {
@@ -90,7 +90,7 @@ impl dbr::Benchmark for Stress {
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "concurrency stress test for the invasive in-memory store"
+            "concurrency stress test for the intrusive in-memory store"
         )
     }
 
@@ -100,7 +100,7 @@ impl dbr::Benchmark for Stress {
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
     ) -> anyhow::Result<Self::Output> {
-        let config = invasive::Config {
+        let config = intrusive::Config {
             capacity: input.setup.capacity,
             entry_bytes: input.entry_bytes,
             epoch_guard_slots: input.setup.epoch_guard_slots,
@@ -108,7 +108,7 @@ impl dbr::Benchmark for Stress {
         };
 
         writeln!(output, "{}", input)?;
-        let stats = super::run_benchmark(invasive::Store::new(config), &input.setup)?;
+        let stats = super::run_benchmark(intrusive::Store::new(config), &input.setup)?;
         writeln!(output, "{}", stats)?;
         Ok(stats)
     }
@@ -144,12 +144,12 @@ fn read_stamp(buf: &[u8]) -> Result<u64, ()> {
     Ok(first)
 }
 
-impl super::Testable for invasive::Store {
-    type Writer<'a> = invasive::Writer<'a>;
+impl super::Testable for intrusive::Store {
+    type Writer<'a> = intrusive::Writer<'a>;
     type ReaderState<'a> = ReaderState<'a>;
 
     fn writer(&self) -> Option<Self::Writer<'_>> {
-        <invasive::Store>::acquire(self)
+        <intrusive::Store>::acquire(self)
     }
 
     fn reader_state<'a>(
@@ -166,23 +166,23 @@ impl super::Testable for invasive::Store {
     }
 
     fn retire(&self, i: usize) -> bool {
-        <invasive::Store>::retire(self, i)
+        <intrusive::Store>::retire(self, i)
     }
 
     fn reclaim(&self) -> Option<usize> {
-        <invasive::Store>::reclaim(self)
+        <intrusive::Store>::reclaim(self)
     }
 
     fn readable_slots(&self) -> usize {
-        <invasive::Store>::readable_slots(self)
+        <intrusive::Store>::readable_slots(self)
     }
 
     fn writable_slots(&self) -> usize {
-        <invasive::Store>::writable_slots(self)
+        <intrusive::Store>::writable_slots(self)
     }
 }
 
-impl super::Writer for invasive::Writer<'_> {
+impl super::Writer for intrusive::Writer<'_> {
     fn write(mut self, stamp: u64) {
         write_stamp(self.as_mut_slice(), stamp);
         self.publish();
@@ -191,9 +191,9 @@ impl super::Writer for invasive::Writer<'_> {
 
 #[derive(Debug)]
 pub(super) struct ReaderState<'a> {
-    store: &'a invasive::Store,
+    store: &'a intrusive::Store,
     observed: HashMap<usize, SlotObservations>,
-    shared: &'a super::Shared<invasive::Store>,
+    shared: &'a super::Shared<intrusive::Store>,
 }
 
 impl super::ReaderState for ReaderState<'_> {
@@ -220,9 +220,9 @@ impl super::ReaderState for ReaderState<'_> {
 
 #[derive(Debug)]
 pub(super) struct Reader<'a> {
-    reader: invasive::Reader<'a>,
+    reader: intrusive::Reader<'a>,
     observed: &'a mut HashMap<usize, SlotObservations>,
-    shared: &'a super::Shared<invasive::Store>,
+    shared: &'a super::Shared<intrusive::Store>,
 }
 
 impl super::Reader for Reader<'_> {

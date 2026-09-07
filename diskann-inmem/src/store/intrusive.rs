@@ -3,14 +3,14 @@
  * Licensed under the MIT license.
  */
 
-//! A [`slots::Slots`] that maintains an invasive slot state where the data in each slot is
+//! A [`slots::Slots`] that maintains an intrusive slot state where the data in each slot is
 //! a contiguous slice of memory.
 //!
 //! Slot state is stored as an [`AtomicTag`] immediately after the slot data.
 //!
 //! ## Lifecycle Details
 //!
-//! Lifecycle details are relatively straightforward. The invasive [`AtomicTag`] mostly
+//! Lifecycle details are relatively straightforward. The intrusive [`AtomicTag`] mostly
 //! follows the transitions made by the [`Store`]. A [`Reader`] checks the tag for
 //! readability before creating a shared reference to the data payload.
 //!
@@ -30,7 +30,7 @@
 //!
 //! ## Safety
 //!
-//! The safety of this module depends on [`Invasive`] being embedded in a [`Store`] that
+//! The safety of this module depends on [`Intrusive`] being embedded in a [`Store`] that
 //! observes the slot lifecycle. Every lifecycle operation requires a [`Lifecycle`] token,
 //! which is constructible only by the parent store module. The unsafe [`slots::Slots`]
 //! methods additionally rely on [`Store`] to satisfy their documented state and exclusivity
@@ -49,7 +49,7 @@ use crate::{
     tag::{AtomicTag, Tag},
 };
 
-/// A [`slots::SlotsConfig`] for [`Invasive`].
+/// A [`slots::SlotsConfig`] for [`Intrusive`].
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
     /// The number of bytes held in each slot.
@@ -57,29 +57,29 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    /// Create a new [`Config`] for [`Invasive`] reserving `bytes` bytes for each slot.
+    /// Create a new [`Config`] for [`Intrusive`] reserving `bytes` bytes for each slot.
     pub(crate) fn new(bytes: Bytes) -> Self {
         Self { bytes }
     }
 
-    /// Build an [`Invasive`] store holding `id_limit` slots.
-    pub(crate) fn build(self, id_limit: IdLimit) -> Result<Invasive, InvasiveError> {
+    /// Build an [`Intrusive`] store holding `id_limit` slots.
+    pub(crate) fn build(self, id_limit: IdLimit) -> Result<Intrusive, IntrusiveError> {
         let Self { bytes } = self;
-        Invasive::new(id_limit, bytes)
+        Intrusive::new(id_limit, bytes)
     }
 }
 
 impl slots::SlotsConfig for Config {
-    type Slots = Invasive;
-    type Error = InvasiveError;
-    fn build(self, id_limit: IdLimit) -> Result<Invasive, InvasiveError> {
+    type Slots = Intrusive;
+    type Error = IntrusiveError;
+    fn build(self, id_limit: IdLimit) -> Result<Intrusive, IntrusiveError> {
         <Config>::build(self, id_limit)
     }
 }
 
-/// The invasive store where concurrency tags are stored inline just after the data.
+/// The intrusive store where concurrency tags are stored inline just after the data.
 #[derive(Debug)]
-pub(crate) struct Invasive {
+pub(crate) struct Intrusive {
     // The inline tags are `AtomicTag`s stored after the data.
     buffer: Buffer,
 
@@ -88,7 +88,7 @@ pub(crate) struct Invasive {
     unpadded: Bytes,
 }
 
-impl Invasive {
+impl Intrusive {
     /// Construct the [`Config`] for [`Self`].
     ///
     /// See also: [`Config::new`].
@@ -96,23 +96,23 @@ impl Invasive {
         Config::new(bytes)
     }
 
-    /// Create a new [`Invasive`] with capacity for `id_limit` slots of `bytes`.
+    /// Create a new [`Intrusive`] with capacity for `id_limit` slots of `bytes`.
     ///
     /// # Errors
     ///
     /// Returns an error if the internal buffer allocation exceeds `isize::MAX` or
-    /// computation of the padded, invasive bytes exceeds `usize::MAX`.
-    pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Result<Self, InvasiveError> {
+    /// computation of the padded, intrusive bytes exceeds `usize::MAX`.
+    pub(crate) fn new(id_limit: IdLimit, bytes: Bytes) -> Result<Self, IntrusiveError> {
         let Some(unpadded) = bytes.checked_add(AtomicTag::SIZE) else {
-            return Err(InvasiveError::bytes_overflowed());
+            return Err(IntrusiveError::bytes_overflowed());
         };
         let Some(padded_bytes) = unpadded.checked_next_multiple_of(Bytes::CACHELINE) else {
-            return Err(InvasiveError::bytes_overflowed());
+            return Err(IntrusiveError::bytes_overflowed());
         };
 
         let buffer = match Buffer::new(id_limit.as_usize(), padded_bytes, Align::_128) {
             Ok(buffer) => buffer,
-            Err(err) => return Err(InvasiveError::buffer_error(err)),
+            Err(err) => return Err(IntrusiveError::buffer_error(err)),
         };
 
         Ok(Self { buffer, unpadded })
@@ -120,7 +120,7 @@ impl Invasive {
 
     /// Return the [`IdLimit`] for this store.
     pub(crate) fn id_limit(&self) -> IdLimit {
-        // The numeric cast is safe because `Invasive::new` takes an `IdLimit` in its
+        // The numeric cast is safe because `Intrusive::new` takes an `IdLimit` in its
         // constructor, and thus `self.buffer.len()` cannot exceed `u32::MAX`.
         IdLimit::new(self.buffer.len() as u32)
     }
@@ -174,31 +174,31 @@ impl Invasive {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(crate) struct InvasiveError(InvasiveErrorInner);
+pub(crate) struct IntrusiveError(IntrusiveErrorInner);
 
-impl InvasiveError {
+impl IntrusiveError {
     fn bytes_overflowed() -> Self {
-        Self(InvasiveErrorInner::BytesOverflowed)
+        Self(IntrusiveErrorInner::BytesOverflowed)
     }
 
     fn buffer_error(err: BufferError) -> Self {
-        Self(InvasiveErrorInner::BufferError(err))
+        Self(IntrusiveErrorInner::BufferError(err))
     }
 }
 
 #[derive(Debug, Error)]
-enum InvasiveErrorInner {
+enum IntrusiveErrorInner {
     #[error("computation of the bytes per slot overflowed")]
     BytesOverflowed,
     #[error(transparent)]
     BufferError(BufferError),
 }
 
-impl slots::Slots for Invasive {
+impl slots::Slots for Intrusive {
     type Slot<'a> = Slot<'a>;
 
     fn id_limit(&self) -> IdLimit {
-        <Invasive>::id_limit(self)
+        <Intrusive>::id_limit(self)
     }
 
     #[expect(clippy::panic, reason = "out-of-bounds is a hard program bug")]
@@ -240,7 +240,7 @@ impl slots::Slots for Invasive {
     }
 }
 
-/// A reader into an [`Invasive`] store.
+/// A reader into an [`Intrusive`] store.
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
@@ -275,7 +275,7 @@ impl<'a> Reader<'a> {
     #[inline]
     #[must_use = "this function has no side-effects"]
     pub(crate) fn id_limit(&self) -> IdLimit {
-        // Like `Invasive::id_limit`, the numeric cast is safe because by construction,
+        // Like `Intrusive::id_limit`, the numeric cast is safe because by construction,
         // the underlying buffer is limited to `u32::MAX`.
         IdLimit::new(self.buffer.len() as u32)
     }
@@ -356,7 +356,7 @@ impl<'a> Reader<'a> {
 
     /// Return the raw data slice for index `i` without any race guarantees.
     ///
-    /// This includes both the data **and** the invasive tag.
+    /// This includes both the data **and** the intrusive tag.
     ///
     /// # Safety
     ///
@@ -381,7 +381,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// A [`slots::Slot`] for [`Invasive`].
+/// A [`slots::Slot`] for [`Intrusive`].
 #[derive(Debug)]
 pub(crate) struct Slot<'a> {
     // NOTE: `tag` and `data` must belong to the same slot.
@@ -393,7 +393,7 @@ impl<'a> Slot<'a> {
     /// Return the data within this slot as a mutable slice.
     ///
     /// The length of this slice is guaranteed to be the number of bytes passed to
-    /// [`Invasive::new`] or [`Config::new`].
+    /// [`Intrusive::new`] or [`Config::new`].
     pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
         // SAFETY: Users of the `slots::Slot` are obligated to ensure exclusivity.
         //
@@ -439,7 +439,7 @@ mod tests {
         entries: usize,
         entry_bytes: usize,
         frozen: usize,
-    ) -> Result<Store<Invasive>, store::StoreError> {
+    ) -> Result<Store<Intrusive>, store::StoreError> {
         let store = Store::new(
             store::Layout::new(
                 Capacity::new(entries),
@@ -473,7 +473,7 @@ mod tests {
         // Writable slots are [0, 4); frozen points occupy [4, 6).
         assert_eq!(s.frozen(), 4..6);
 
-        let reader = Invasive::reader(&s).unwrap();
+        let reader = Intrusive::reader(&s).unwrap();
         for i in 0..4 {
             assert!(!s.can_read_approximate(i).unwrap());
             assert!(!reader.can_read(i).unwrap());
@@ -501,7 +501,7 @@ mod tests {
     fn acquire_write_publish_read_roundtrip() {
         let s = store(4, 8, 1).unwrap();
 
-        let reader = Invasive::reader(&s).expect("reader guard available");
+        let reader = Intrusive::reader(&s).expect("reader guard available");
 
         let idx = {
             let mut slot = s.acquire().expect("a fresh store has free slots");
@@ -525,7 +525,7 @@ mod tests {
     fn unpublished_slots_are_immediately_available() {
         let s = store(4, 8, 1).unwrap();
 
-        let reader = Invasive::reader(&s).expect("reader guard available");
+        let reader = Intrusive::reader(&s).expect("reader guard available");
 
         let idx = {
             let mut slot = s.acquire().expect("a fresh store has free slots");
@@ -599,7 +599,7 @@ mod tests {
         assert!(s.retire(idx).is_ok());
 
         // A reader opened after retirement must not observe the retired slot.
-        let reader = Invasive::reader(&s).unwrap();
+        let reader = Intrusive::reader(&s).unwrap();
         assert_eq!(reader.read(idx), None);
         assert_eq!(reader.can_read(idx), Some(false));
 

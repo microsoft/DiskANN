@@ -15,8 +15,8 @@ mod internal_docs {
     //! ## Reading
     //!
     //! A [`Store`] provides no direct way of reading data. Instead, the [`slots::Slots`] is
-    //! responsible for exposing an appropriate reader (e.g., [`invasive::Invasive::reader`]) in
-    //! accordance with its lifecycle implementation. [`Store::guard`] can be used for
+    //! responsible for exposing an appropriate reader (e.g., [`intrusive::Intrusive::reader`])
+    //! in accordance with its lifecycle implementation. [`Store::guard`] can be used for
     //! this purpose by acquiring an [`epoch::Guard`] for a [`Store`].
     //!
     //! ## Writing
@@ -81,7 +81,7 @@ use crate::{
     tag::{AtomicTag, Tag},
 };
 
-pub(crate) mod invasive;
+pub(crate) mod intrusive;
 pub(crate) mod slots;
 
 #[cfg(any(test, feature = "integration-test"))]

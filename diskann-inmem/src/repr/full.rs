@@ -61,7 +61,7 @@ use crate::{
     repr,
     store::{
         self, Store,
-        invasive::{self, Invasive},
+        intrusive::{self, Intrusive},
     },
     tag::AtomicTag,
 };
@@ -217,7 +217,7 @@ pub struct Full<T>
 where
     T: 'static,
 {
-    store: Store<Invasive>,
+    store: Store<Intrusive>,
     metric: Metric,
     lookahead: Option<NonZeroUsize>,
     _type: PhantomData<T>,
@@ -259,8 +259,8 @@ where
         } = config;
 
         let bytes = Bytes::new(start_points.ncols() * std::mem::size_of::<T>());
-        let invasive = Invasive::config(bytes);
-        let store = Store::new(layout, store, invasive)?;
+        let intrusive = Intrusive::config(bytes);
+        let store = Store::new(layout, store, intrusive)?;
 
         // Initialize start points.
         for (i, row) in std::iter::zip(store.frozen(), start_points.row_iter()) {
@@ -317,8 +317,8 @@ where
         }
     }
 
-    fn reader(&self) -> Result<invasive::Reader<'_>, epoch::Unavailable> {
-        Invasive::reader(&self.store)
+    fn reader(&self) -> Result<intrusive::Reader<'_>, epoch::Unavailable> {
+        Intrusive::reader(&self.store)
     }
 }
 
@@ -391,11 +391,11 @@ where
 /// A [`repr::Guard`] for [`Full`].
 #[derive(Debug)]
 pub struct Guard<'a> {
-    slot: store::Slot<'a, invasive::Slot<'a>>,
+    slot: store::Slot<'a, intrusive::Slot<'a>>,
 }
 
 impl<'a> Guard<'a> {
-    fn new(slot: store::Slot<'a, invasive::Slot<'a>>) -> Self {
+    fn new(slot: store::Slot<'a, intrusive::Slot<'a>>) -> Self {
         Self { slot }
     }
 }
@@ -462,7 +462,7 @@ impl<T> std::ops::Deref for Calf<'_, T> {
 #[derive(Debug)]
 struct IntoExpandBeam<'a, T, U> {
     query: Calf<'a, T>,
-    reader: store::invasive::Reader<'a>,
+    reader: store::intrusive::Reader<'a>,
     lookahead: Option<NonZeroUsize>,
     _data: PhantomData<U>,
 }
@@ -532,7 +532,7 @@ struct ExpandBeam<'a, P, T, U, D> {
     // The original query.
     query: Calf<'a, T>,
     // A reader into a representation's store.
-    reader: store::invasive::Reader<'a>,
+    reader: store::intrusive::Reader<'a>,
     // The prefetch lookahead.
     lookahead: Option<NonZeroUsize>,
     // The type of the data prefetcher.
@@ -602,7 +602,7 @@ impl<'a, P, T, U, D> ExpandBeam<'a, P, T, U, D> {
 
 // SAFETY: Our implementation of `repr::ExpandBeam::id_limit` is consistent with our
 // `repr::ExpandBeam::expand_beam` implementation. They are both dependent on
-// `invasive::Reader`'s internal bounds.
+// `intrusive::Reader`'s internal bounds.
 unsafe impl<P, T, U, D> repr::ExpandBeam for ExpandBeam<'_, P, T, U, D>
 where
     P: Prefetch,
@@ -715,13 +715,13 @@ struct Prune<'a, T, D> {
     // Buffered data to prune over.
     buffer: Vec<UnalignedSlice<'a, T>>,
     // A reader into a representation's store.
-    reader: store::invasive::Reader<'a>,
+    reader: store::intrusive::Reader<'a>,
     // The distance implementation used for pruning.
     distance: D,
 }
 
 impl<'a, T, D> Prune<'a, T, D> {
-    fn new(reader: store::invasive::Reader<'a>, distance: D) -> Self {
+    fn new(reader: store::intrusive::Reader<'a>, distance: D) -> Self {
         // This should be ensured at construction time
         debug_assert!(
             reader

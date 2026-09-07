@@ -43,10 +43,10 @@ const READER_PASSES: usize = 4;
 const RECLAIM_EVERY: u64 = 16;
 
 mod checked;
-mod invasive;
+mod intrusive;
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-    invasive::register(registry)?;
+    intrusive::register(registry)?;
     checked::register(registry)?;
 
     Ok(())
