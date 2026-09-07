@@ -218,11 +218,11 @@ where
 /// Borrowed predicate used internally by the disk search pipeline.
 /// Spelled out here to keep the field/parameter signatures under
 /// `clippy::type_complexity`'s default threshold.
-type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
+type IdFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
 
 /// Encodes whether to accept all candidates at rerank time or apply a
 /// specific predicate. Used by `RerankAndFilter` and
-/// `DeterminantDiversityAndFilter` instead of `Option<PostprocessFilter>`
+/// `DeterminantDiversityAndFilter` instead of `Option<IdFilter>`
 /// so call sites are self-documenting without relying on comments to
 /// explain what `None` means.
 #[derive(Clone, Copy)]
@@ -231,7 +231,7 @@ pub enum PostprocessStrategy<'a> {
     /// (filtered at scan time) and `InlineFilter` (filtered at visit time).
     AcceptAll,
     /// Apply the given predicate; non-matching candidates are dropped.
-    Apply(PostprocessFilter<'a>),
+    Apply(IdFilter<'a>),
 }
 
 pub struct DiskSearchStrategy<'a, Data, ProviderFactory>
@@ -779,7 +779,7 @@ where
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
     query: &'a [Data::VectorDataType],
     cache_indexed_vectors: bool,
-    flat_scan_filter: Option<PostprocessFilter<'a>>,
+    flat_scan_filter: Option<IdFilter<'a>>,
 }
 
 impl<Data, VP> DiskAccessor<'_, Data, VP>
@@ -960,7 +960,7 @@ where
         })
     }
 
-    fn with_flat_scan_filter(mut self, filter: Option<PostprocessFilter<'a>>) -> Self {
+    fn with_flat_scan_filter(mut self, filter: Option<IdFilter<'a>>) -> Self {
         self.flat_scan_filter = filter;
         self
     }
