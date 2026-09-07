@@ -5,7 +5,7 @@
 
 //! Leaf-local top-k selection from packed `f32` point vectors.
 //!
-//! The metric fills a flattened lower-triangular distance buffer. The kernel
+//! The metric fills the lower triangle of a distance matrix. The kernel
 //! reads each strict-lower point pair once and updates both points.
 //!
 //! The output is an `n × k` matrix of sorted [`LeafNeighbor`] values. Each target
@@ -114,26 +114,24 @@ where
     if distance_scratch.len() < distance_count {
         distance_scratch.resize(distance_count, 0.0);
     }
-    M::compute_distances(points, &mut distance_scratch[..distance_count])?;
-    rank_leaf_distances(
-        arch,
-        &distance_scratch[..distance_count],
+    let mut distances = MutMatrixView::try_from(
+        &mut distance_scratch[..distance_count],
         point_count,
-        output,
-        worst,
-    );
+        point_count,
+    )
+    .map_err(|error| ANNError::new(error.as_static()))?;
+    M::compute_distances(points, distances.as_mut_slice())?;
+    rank_leaf_distances(arch, distances.as_view(), output, worst);
     Ok(())
 }
 
-/// Rank one flattened lower-triangle buffer.
+/// Rank the lower triangle of a square distance matrix.
 ///
-/// `distance_flatten` contains `point_count * point_count` elements. The metric
-/// initializes each strict-lower entry. The kernel does not read the upper triangle.
+/// The metric initializes each strict-lower entry. The kernel does not read the upper triangle.
 /// The caller validates the output width against the non-self point count.
 fn rank_leaf_distances<A>(
     arch: A,
-    distance_flatten: &[f32],
-    point_count: usize,
+    distances: MatrixView<'_, f32>,
     mut output: MutMatrixView<'_, LeafNeighbor>,
     worst: &mut Vec<f32>,
 ) where
@@ -144,40 +142,15 @@ fn rank_leaf_distances<A>(
         return;
     }
 
-    worst.resize(point_count, f32::INFINITY);
+    worst.resize(distances.nrows(), f32::INFINITY);
     output.as_mut_slice().fill(LeafNeighbor::default());
     worst.fill(f32::INFINITY);
 
     match neighbor_count {
-        1 => scan_fixed_width::<A, 1>(
-            arch,
-            distance_flatten,
-            point_count,
-            output.as_mut_slice(),
-            worst,
-        ),
-        2 => scan_fixed_width::<A, 2>(
-            arch,
-            distance_flatten,
-            point_count,
-            output.as_mut_slice(),
-            worst,
-        ),
-        3 => scan_fixed_width::<A, 3>(
-            arch,
-            distance_flatten,
-            point_count,
-            output.as_mut_slice(),
-            worst,
-        ),
-        _ => scan_runtime_width(
-            arch,
-            distance_flatten,
-            point_count,
-            output.as_mut_slice(),
-            neighbor_count,
-            worst,
-        ),
+        1 => scan_fixed_width::<A, 1>(arch, distances, output.as_mut_slice(), worst),
+        2 => scan_fixed_width::<A, 2>(arch, distances, output.as_mut_slice(), worst),
+        3 => scan_fixed_width::<A, 3>(arch, distances, output.as_mut_slice(), worst),
+        _ => scan_runtime_width(arch, distances, output, worst),
     }
 }
 
@@ -201,8 +174,7 @@ fn validate_neighbor_count(
 /// Select neighbors with a fixed output width.
 fn scan_fixed_width<A, const N: usize>(
     arch: A,
-    distance_flatten: &[f32],
-    point_count: usize,
+    distances: MatrixView<'_, f32>,
     output: &mut [LeafNeighbor],
     worst: &mut [f32],
 ) where
@@ -214,11 +186,10 @@ fn scan_fixed_width<A, const N: usize>(
     arch.run(move || {
         scan_point_pairs(
             arch,
-            distance_flatten,
-            point_count,
+            distances,
             worst,
-            |source, target, distance| {
-                rows[source].insert_eligible(LeafNeighbor::new(target, distance))
+            |source_idx, target_idx, distance| {
+                rows[source_idx].insert_eligible(LeafNeighbor::new(target_idx, distance))
             },
         );
     });
@@ -227,10 +198,8 @@ fn scan_fixed_width<A, const N: usize>(
 /// Select neighbors with a runtime output width.
 fn scan_runtime_width<A>(
     arch: A,
-    distance_flatten: &[f32],
-    point_count: usize,
-    output: &mut [LeafNeighbor],
-    width: usize,
+    distances: MatrixView<'_, f32>,
+    mut output: MutMatrixView<'_, LeafNeighbor>,
     worst: &mut [f32],
 ) where
     A: PiPNNSIMDSchema,
@@ -239,12 +208,12 @@ fn scan_runtime_width<A>(
     arch.run(move || {
         scan_point_pairs(
             arch,
-            distance_flatten,
-            point_count,
+            distances,
             worst,
-            |source, target, distance| {
-                let first = source * width;
-                output[first..first + width].insert_eligible(LeafNeighbor::new(target, distance))
+            |source_idx, target_idx, distance| {
+                output
+                    .row_mut(source_idx)
+                    .insert_eligible(LeafNeighbor::new(target_idx, distance))
             },
         );
     });
@@ -255,33 +224,26 @@ fn scan_runtime_width<A>(
 /// The function reads the strict lower triangle once. It offers each distance to
 /// both endpoint lists.
 #[inline(always)]
-fn scan_point_pairs<A, I>(
-    arch: A,
-    distance_flatten: &[f32],
-    point_count: usize,
-    worst: &mut [f32],
-    mut insert: I,
-) where
+fn scan_point_pairs<A, I>(arch: A, distances: MatrixView<'_, f32>, worst: &mut [f32], mut insert: I)
+where
     A: PiPNNSIMDSchema,
     I: FnMut(usize, u32, f32) -> f32,
 {
     let worst_ptr = worst.as_mut_ptr();
 
-    for source in 1..point_count {
-        let source_start = source * point_count;
+    for source_idx in 1..distances.nrows() {
+        let source_distances = &distances.row(source_idx)[..source_idx];
         // SAFETY: `rank_leaf_distances` created one threshold for each point.
-        let mut source_worst = unsafe { *worst_ptr.add(source) };
-        let mut target = 0;
-        let simd_prefix = source - source % A::Vector::LANES;
+        let mut source_worst = unsafe { *worst_ptr.add(source_idx) };
+        let simd_end = source_distances.len() - source_distances.len() % A::Vector::LANES;
 
-        while target < simd_prefix {
+        for target_idx in (0..simd_end).step_by(A::Vector::LANES) {
             // SAFETY: This complete SIMD group is in the strict-lower prefix.
-            let distance_group = unsafe {
-                A::Vector::load_simd(arch, distance_flatten.as_ptr().add(source_start + target))
-            };
+            let distance_group =
+                unsafe { A::Vector::load_simd(arch, source_distances.as_ptr().add(target_idx)) };
             let source_eligible = distance_group.lt_simd(A::Vector::splat(arch, source_worst));
-            // SAFETY: The complete target group is below `source < point_count`.
-            let target_worst = unsafe { A::Vector::load_simd(arch, worst_ptr.add(target)) };
+            // SAFETY: The complete target group is below `source_idx < worst.len()`.
+            let target_worst = unsafe { A::Vector::load_simd(arch, worst_ptr.add(target_idx)) };
             let target_eligible = distance_group.lt_simd(target_worst);
             let source_bits = A::Vector::active_lanes(source_eligible);
             let target_bits = A::Vector::active_lanes(target_eligible);
@@ -295,7 +257,7 @@ fn scan_point_pairs<A, I>(
                     source_bits &= source_bits - 1;
                     let distance = distance_lanes[lane];
                     if distance < source_worst {
-                        source_worst = insert(source, (target + lane) as u32, distance);
+                        source_worst = insert(source_idx, (target_idx + lane) as u32, distance);
                     }
                 }
 
@@ -303,32 +265,28 @@ fn scan_point_pairs<A, I>(
                 while target_bits != 0 {
                     let lane = target_bits.trailing_zeros() as usize;
                     target_bits &= target_bits - 1;
-                    let target_source = target + lane;
-                    let new_worst = insert(target_source, source as u32, distance_lanes[lane]);
-                    // SAFETY: `target_source < source < worst.len()`.
-                    unsafe { *worst_ptr.add(target_source) = new_worst };
+                    let candidate_idx = target_idx + lane;
+                    let new_worst = insert(candidate_idx, source_idx as u32, distance_lanes[lane]);
+                    // SAFETY: `candidate_idx < source_idx < worst.len()`.
+                    unsafe { *worst_ptr.add(candidate_idx) = new_worst };
                 }
             }
-            target += A::Vector::LANES;
         }
 
-        while target < source {
-            // SAFETY: The target is in this source's strict-lower prefix.
-            let distance = unsafe { *distance_flatten.get_unchecked(source_start + target) };
+        for (target_idx, &distance) in source_distances.iter().enumerate().skip(simd_end) {
             if distance < source_worst {
-                source_worst = insert(source, target as u32, distance);
+                source_worst = insert(source_idx, target_idx as u32, distance);
             }
-            // SAFETY: `target < source < worst.len()`.
-            let target_worst = unsafe { *worst_ptr.add(target) };
+            // SAFETY: `target_idx < source_idx < worst.len()`.
+            let target_worst = unsafe { *worst_ptr.add(target_idx) };
             if distance < target_worst {
-                let new_worst = insert(target, source as u32, distance);
-                // SAFETY: `target < source < worst.len()`.
-                unsafe { *worst_ptr.add(target) = new_worst };
+                let new_worst = insert(target_idx, source_idx as u32, distance);
+                // SAFETY: `target_idx < source_idx < worst.len()`.
+                unsafe { *worst_ptr.add(target_idx) = new_worst };
             }
-            target += 1;
         }
-        // SAFETY: `source < worst.len()`.
-        unsafe { *worst_ptr.add(source) = source_worst };
+        // SAFETY: `source_idx < worst.len()`.
+        unsafe { *worst_ptr.add(source_idx) = source_worst };
     }
 }
 
@@ -410,8 +368,7 @@ mod tests {
         use diskann_wide::arch::{self, Target1};
 
         struct KernelCall<'a> {
-            distance_flatten: &'a [f32],
-            point_count: usize,
+            distances: MatrixView<'a, f32>,
             output: MutMatrixView<'a, LeafNeighbor>,
             worst: &'a mut Vec<f32>,
         }
@@ -423,13 +380,7 @@ mod tests {
             A: PiPNNSIMDSchema,
         {
             fn run(self, arch: A, call: KernelCall<'_>) {
-                rank_leaf_distances(
-                    arch,
-                    call.distance_flatten,
-                    call.point_count,
-                    call.output,
-                    call.worst,
-                );
+                rank_leaf_distances(arch, call.distances, call.output, call.worst);
             }
         }
 
@@ -442,8 +393,7 @@ mod tests {
             arch::dispatch1_no_features(
                 RankDistances,
                 KernelCall {
-                    distance_flatten: distances,
-                    point_count: points,
+                    distances: MatrixView::try_from(distances, points, points).unwrap(),
                     output: MutMatrixView::try_from(output.as_mut_slice(), points, output_width)
                         .unwrap(),
                     worst: &mut Vec::new(),

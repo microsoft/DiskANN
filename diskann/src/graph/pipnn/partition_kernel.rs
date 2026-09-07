@@ -13,7 +13,7 @@
 //! leaders. Equal distances can select either leader. NaN is not rankable. An
 //! unfilled output slot contains [`UNASSIGNED_LEADER`].
 
-use crate::ANNResult;
+use crate::{ANNError, ANNResult};
 use diskann_utils::views::{MatrixView, MutMatrixView};
 use diskann_wide::{SIMDMask, SIMDVector};
 
@@ -62,27 +62,23 @@ where
         distance_scratch.resize(distance_count, 0.0);
     }
     M::compute_distances(points, leaders, &mut distance_scratch[..distance_count])?;
-    rank_leader_distances(
-        arch,
+    let distances = MatrixView::try_from(
         &distance_scratch[..distance_count],
         point_count,
         leader_count,
-        output,
-        ranked_leader_scratch,
-    );
+    )
+    .map_err(|error| ANNError::new(error.as_static()))?;
+    rank_leader_distances(arch, distances, output, ranked_leader_scratch);
     Ok(())
 }
 
 /// Rank final point-to-leader distances.
 ///
-/// `distance_flatten` contains `point_count * leader_count` elements. Each row
-/// stores all leader distances for one point. The caller supplies at least one
-/// point and one output column.
+/// Each distance row stores all leader distances for one point. The caller
+/// supplies at least one point, one leader, and one output column.
 fn rank_leader_distances<A>(
     arch: A,
-    distance_flatten: &[f32],
-    point_count: usize,
-    leader_count: usize,
+    distances: MatrixView<'_, f32>,
     output: MutMatrixView<'_, u32>,
     ranked_leaders: &mut Vec<(u32, f32)>,
 ) where
@@ -92,14 +88,7 @@ fn rank_leader_distances<A>(
     ranked_leaders.resize(fanout, (UNASSIGNED_LEADER, f32::INFINITY));
     // Rayon outlines stripe workers. Reapply target features before ranking leaders.
     arch.run(move || {
-        select_point_leaders(
-            arch,
-            distance_flatten,
-            point_count,
-            leader_count,
-            output,
-            ranked_leaders,
-        );
+        select_point_leaders(arch, distances, output, ranked_leaders);
     });
 }
 
@@ -107,35 +96,27 @@ fn rank_leader_distances<A>(
 #[inline(always)]
 fn select_point_leaders<A>(
     arch: A,
-    distance_flatten: &[f32],
-    point_count: usize,
-    leader_count: usize,
+    distances: MatrixView<'_, f32>,
     mut output: MutMatrixView<'_, u32>,
     ranked_leaders: &mut [(u32, f32)],
 ) where
     A: PiPNNSIMDSchema,
 {
-    let fanout = output.ncols();
+    let leader_count = distances.ncols();
+    let simd_end = leader_count - leader_count % A::Vector::LANES;
 
-    for (point, point_output) in output
-        .as_mut_slice()
-        .chunks_exact_mut(fanout)
-        .take(point_count)
-        .enumerate()
-    {
-        let row_start = point * leader_count;
-        let point_distances = &distance_flatten[row_start..row_start + leader_count];
+    for (point_distances, point_output) in distances.row_iter().zip(output.row_iter_mut()) {
         ranked_leaders.fill((UNASSIGNED_LEADER, f32::INFINITY));
-        let simd_prefix = leader_count - leader_count % A::Vector::LANES;
 
-        for first_leader in (0..simd_prefix).step_by(A::Vector::LANES) {
+        for leader_base_idx in (0..simd_end).step_by(A::Vector::LANES) {
             // SAFETY: This group is inside the point's leader row.
-            let distance_group =
-                unsafe { A::Vector::load_simd(arch, point_distances.as_ptr().add(first_leader)) };
-            insert_leader_lanes(distance_group, first_leader, ranked_leaders);
+            let distance_group = unsafe {
+                A::Vector::load_simd(arch, point_distances.as_ptr().add(leader_base_idx))
+            };
+            insert_leader_lanes(distance_group, leader_base_idx, ranked_leaders);
         }
 
-        for (leader, &distance) in point_distances.iter().enumerate().skip(simd_prefix) {
+        for (leader, &distance) in point_distances.iter().enumerate().skip(simd_end) {
             insert_leader(ranked_leaders, leader as u32, distance);
         }
         for (destination, &(leader, _)) in point_output.iter_mut().zip(ranked_leaders.iter()) {
@@ -146,9 +127,9 @@ fn select_point_leaders<A>(
 
 /// Offer one SIMD group of sampled centers to the current point's ranked_leaders.
 ///
-/// `first_leader` is the matrix-column ID of the first lane. The function reads
+/// `leader_base_idx` is the matrix-column index of the first lane. The function reads
 /// selected lanes from low to high.
-fn insert_leader_lanes<F>(distances: F, first_leader: usize, ranked_leaders: &mut [(u32, f32)])
+fn insert_leader_lanes<F>(distances: F, leader_base_idx: usize, ranked_leaders: &mut [(u32, f32)])
 where
     F: PiPNNSIMDVector,
 {
@@ -166,7 +147,7 @@ where
         lanes &= lanes - 1;
         insert_leader(
             ranked_leaders,
-            (first_leader + lane) as u32,
+            (leader_base_idx + lane) as u32,
             distance_lanes[lane],
         );
     }
@@ -203,9 +184,7 @@ mod tests {
         use diskann_wide::arch::{self, Target1};
 
         struct KernelCall<'a> {
-            distance_flatten: &'a [f32],
-            point_count: usize,
-            leader_count: usize,
+            distances: MatrixView<'a, f32>,
             output: MutMatrixView<'a, u32>,
             ranked_leaders: &'a mut Vec<(u32, f32)>,
         }
@@ -217,14 +196,7 @@ mod tests {
             A: PiPNNSIMDSchema,
         {
             fn run(self, arch: A, call: KernelCall<'_>) {
-                rank_leader_distances(
-                    arch,
-                    call.distance_flatten,
-                    call.point_count,
-                    call.leader_count,
-                    call.output,
-                    call.ranked_leaders,
-                );
+                rank_leader_distances(arch, call.distances, call.output, call.ranked_leaders);
             }
         }
 
@@ -237,9 +209,7 @@ mod tests {
             arch::dispatch1_no_features(
                 RankDistances,
                 KernelCall {
-                    distance_flatten: distances.as_slice(),
-                    point_count: distances.nrows(),
-                    leader_count: distances.ncols(),
+                    distances,
                     output: output.as_mut_view(),
                     ranked_leaders: &mut Vec::new(),
                 },
