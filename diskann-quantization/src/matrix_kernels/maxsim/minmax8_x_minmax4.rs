@@ -40,12 +40,13 @@ impl<const MR: usize> PackedMinMax8<MR> {
         let nrows = a.num_vectors();
         let dim = a.repr().intrinsic_dim();
         let padded_rows = nrows.div_ceil(MR) * MR;
-        let block_stride = match packing {
-            APacking::RowMajor => dim * MR,
-            APacking::Grouped4 => dim.div_ceil(4) * 4 * MR,
+        let group = match packing {
+            APacking::RowMajor => dim.max(1),
+            APacking::Grouped4 => 4,
             #[cfg(target_arch = "x86_64")]
-            APacking::Grouped8 => dim.div_ceil(8) * 8 * MR,
+            APacking::Grouped8 => 8,
         };
+        let block_stride = dim.div_ceil(group) * group * MR;
         let mut values = vec![0; nrows.div_ceil(MR) * block_stride];
         let mut scale = vec![0.0; padded_rows];
         let mut bias = vec![0.0; padded_rows];
@@ -59,23 +60,13 @@ impl<const MR: usize> PackedMinMax8<MR> {
             let block = row_index / MR;
             let lane = row_index % MR;
             let vector = row.vector();
-            for k in 0..dim {
-                let index = match packing {
-                    APacking::RowMajor => block * block_stride + lane * dim + k,
-                    APacking::Grouped4 => {
-                        let chunk = k / 4;
-                        let offset = k % 4;
-                        block * block_stride + chunk * MR * 4 + lane * 4 + offset
-                    }
-                    #[cfg(target_arch = "x86_64")]
-                    APacking::Grouped8 => {
-                        let chunk = k / 8;
-                        let offset = k % 8;
-                        block * block_stride + chunk * MR * 8 + lane * 8 + offset
-                    }
-                };
-                // SAFETY: `k` is bounded by the common intrinsic dimension.
-                values[index] = unsafe { vector.get_unchecked(k) } as u8;
+            let panel = &mut values[block * block_stride..][..block_stride];
+            for (src, dst) in vector
+                .as_slice()
+                .chunks(group)
+                .zip(panel.chunks_exact_mut(MR * group))
+            {
+                dst[lane * group..][..src.len()].copy_from_slice(src);
             }
         }
 
@@ -146,7 +137,6 @@ where
         self.arch.run(
             #[inline]
             || {
-                self.c.fill(f32::MAX);
                 let all_a_values = Slice::new(&self.a.values);
 
                 for block in 0..self.a.nrows.div_ceil(MR) {
@@ -169,10 +159,6 @@ where
                         )
                     };
 
-                    let c = util::LoadStore::<f32, MR>::load(
-                        self.arch,
-                        &self.c[a_base..][..valid_rows],
-                    );
                     let mut panel = PanelKernel {
                         arch: self.arch,
                         a_values,
@@ -180,7 +166,7 @@ where
                         a_bias,
                         a_scaled_sum,
                         b: self.b,
-                        c,
+                        c: [f32::MAX; MR],
                         k: self.k,
                         valid_rows,
                     };
@@ -266,9 +252,11 @@ struct BPanel<'a, const N: usize> {
 impl<'a, const N: usize> BPanel<'a, N> {
     #[inline(always)]
     fn new(b: MatRef<'a, MinMaxMeta<4>>, start: usize, k: usize) -> Self {
+        let mut meta = [MinMaxCompensation::default(); N];
         let values = core::array::from_fn(|j| {
             // SAFETY: Panel dispatch ensures `start + j < b.num_vectors()`.
             let row = unsafe { b.get_row_unchecked(start + j) };
+            meta[j] = row.meta();
             let vector = row.vector();
             // SAFETY: The row owns `ceil(k / 2)` densely packed MinMax4 bytes for lifetime
             // `'a`; the `MatRef` retains that allocation for the returned panel.
@@ -279,12 +267,6 @@ impl<'a, const N: usize> BPanel<'a, N> {
                 )
             }
         });
-        let mut meta = [MinMaxCompensation::default(); N];
-        for (j, value) in meta.iter_mut().enumerate() {
-            // SAFETY: Panel dispatch ensures `start + j < b.num_vectors()`.
-            let row = unsafe { b.get_row_unchecked(start + j) };
-            *value = row.meta();
-        }
         Self { values, meta }
     }
 }
@@ -373,10 +355,10 @@ unsafe fn expand_tail_u4(values: Slice<'_, u8>, byte_offset: usize, remainder: u
     ])
 }
 
-trait ExtraWide<const MR: usize>: Architecture + Copy {
+trait ExtraWide<const MR: usize>: Architecture {
     type A: SIMDVector<Arch = Self, Scalar = u8>;
     type B: Copy;
-    type Accumulator: SIMDVector<Arch = Self> + Copy;
+    type Accumulator: SIMDVector<Arch = Self>;
     type Float: SIMDVector<Arch = Self, Scalar = f32>
         + SIMDMinMax
         + std::ops::Add<Output = Self::Float>
@@ -398,6 +380,7 @@ trait ExtraWide<const MR: usize>: Architecture + Copy {
 
     fn dot(self, accumulator: Self::Accumulator, a: Self::A, b: Self::B) -> Self::Accumulator;
 
+    /// Convert unsigned dot-product sums to floats, combining lane groups if needed.
     fn to_float(self, accumulator: Self::Accumulator) -> Self::Float;
 }
 
@@ -495,14 +478,13 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
         let mut score_hi =
             has_hi.then(|| W::Float::load_simd(wide, scores.as_ptr().add(W::HALF_ROWS)));
         let zero = W::Float::default(wide);
+        let dim = W::Float::splat(wide, k as f32);
 
-        for (j, accumulator) in lo.iter().copied().enumerate() {
-            let doc = b.meta[j];
-            let raw_lo = wide.to_float(accumulator);
+        for ((lo, hi), doc) in lo.into_iter().zip(hi).zip(&b.meta) {
+            let raw_lo = wide.to_float(lo);
             let doc_scale = W::Float::splat(wide, doc.a);
             let doc_bias = W::Float::splat(wide, doc.b);
             let doc_sum = W::Float::splat(wide, doc.n);
-            let dim = W::Float::splat(wide, k as f32);
 
             let mut similarity_lo = (a_scale_lo * doc_scale) * raw_lo;
             similarity_lo = similarity_lo + a_sum_lo * doc_bias;
@@ -511,7 +493,7 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
             score_lo = score_lo.min_simd_standard(zero - similarity_lo);
 
             if let Some(score_hi) = score_hi.as_mut() {
-                let raw_hi = wide.to_float(hi[j]);
+                let raw_hi = wide.to_float(hi);
                 let mut similarity_hi = (a_scale_hi * doc_scale) * raw_hi;
                 similarity_hi = similarity_hi + a_sum_hi * doc_bias;
                 similarity_hi = similarity_hi + doc_sum * a_bias_hi;
@@ -904,7 +886,7 @@ mod tests {
 
     fn check_packing<const MR: usize>(packing: APacking, group: Option<usize>) {
         for nrows in [0, 1, MR - 1, MR, MR + 1] {
-            for dim in [0, 1, 3, 4, 5, 7, 8, 9] {
+            for dim in 0..=9 {
                 let mut query = Mat::new(MinMaxMeta::<8>::new(nrows, dim), Defaulted).unwrap();
                 for (i, mut row) in query.reborrow_mut().rows_mut().enumerate() {
                     row.set_meta(MinMaxCompensation {

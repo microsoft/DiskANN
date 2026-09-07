@@ -256,7 +256,11 @@ mod tests {
         ]
         .into_iter()
         .chain((1..=16).flat_map(|doc_rows| (1..=17).map(move |dim| (17, doc_rows, dim))))
-        {
+        .chain((1..=33).flat_map(|query_rows| {
+            [1, 7, 8, 9, 15, 16, 17]
+                .into_iter()
+                .map(move |doc_rows| (query_rows, doc_rows, 9))
+        })) {
             let query_values: Vec<f32> = (0..query_rows * dim)
                 .map(|i| ((i * 17 + 3) % 101) as f32 / 13.0 - 4.0)
                 .collect();
