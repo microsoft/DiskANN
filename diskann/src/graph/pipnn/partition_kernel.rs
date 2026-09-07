@@ -10,7 +10,7 @@
 //! leader-column IDs for partition scatter.
 //!
 //! L2 omits the assigned point's norm because it is constant across all sampled
-//! leaders. Equal distances keep sampled-leader order. NaN is not rankable. An
+//! leaders. Equal distances can select either leader. NaN is not rankable. An
 //! unfilled output slot contains [`UNASSIGNED_LEADER`].
 
 use crate::ANNResult;
@@ -146,8 +146,8 @@ fn select_point_leaders<A>(
 
 /// Offer one SIMD group of sampled centers to the current point's ranked_leaders.
 ///
-/// `first_leader` is the matrix-column ID of the first lane. Lanes enter in
-/// sampled-leader order, which preserves tie order.
+/// `first_leader` is the matrix-column ID of the first lane. The function reads
+/// selected lanes from low to high.
 fn insert_leader_lanes<F>(distances: F, first_leader: usize, ranked_leaders: &mut [(u32, f32)])
 where
     F: PiPNNSIMDVector,
@@ -175,8 +175,8 @@ where
 /// Insert one sampled partition center into the current point's retained set.
 ///
 /// `leader` is the center's column ID in the point-to-leader matrix. `ranked_leaders`
-/// stores retained centers in nearest-first order. Equal distances and NaN do not
-/// enter, so sampled-leader order resolves ties.
+/// stores retained centers in nearest-first order. A candidate enters only when
+/// its distance is less than the current farthest distance. NaN does not enter.
 #[inline(always)]
 fn insert_leader(ranked_leaders: &mut [(u32, f32)], leader: u32, distance: f32) {
     let threshold = ranked_leaders.len() - 1;
@@ -197,18 +197,10 @@ mod tests {
     use super::*;
     use crate::graph::pipnn::Cosine;
     use diskann_utils::views::{Matrix, MatrixView, MutMatrixView};
-    use diskann_vector::distance::Metric;
 
     mod test_support {
         use super::*;
         use diskann_wide::arch::{self, Target1};
-
-        #[derive(Clone, Copy)]
-        pub(super) struct DotFixture<'a> {
-            dots: MatrixView<'a, f32>,
-            point_norms: &'a [f32],
-            leader_norms: &'a [f32],
-        }
 
         struct KernelCall<'a> {
             distance_flatten: &'a [f32],
@@ -236,68 +228,18 @@ mod tests {
             }
         }
 
-        pub(super) fn partition_input<'a>(
-            dots: &'a [f32],
-            point_count: usize,
-            leader_count: usize,
-            point_norms: &'a [f32],
-            leader_norms: &'a [f32],
-        ) -> DotFixture<'a> {
-            DotFixture {
-                dots: MatrixView::try_from(dots, point_count, leader_count).unwrap(),
-                point_norms,
-                leader_norms,
-            }
-        }
-
-        fn reference_distance(metric: Metric, dot: f32, point_norm: f32, leader_norm: f32) -> f32 {
-            match metric {
-                Metric::L2 => (-2.0_f32).mul_add(dot, leader_norm),
-                Metric::CosineNormalized => -dot,
-                Metric::InnerProduct => -dot,
-                Metric::Cosine => {
-                    if point_norm < f32::MIN_POSITIVE.sqrt()
-                        || leader_norm < f32::MIN_POSITIVE.sqrt()
-                    {
-                        1.0
-                    } else {
-                        1.0 - (dot / (point_norm * leader_norm)).clamp(-1.0, 1.0)
-                    }
-                }
-            }
-        }
-
-        fn distance_flatten(metric: Metric, input: DotFixture<'_>) -> Vec<f32> {
-            input
-                .dots
-                .row_iter()
-                .enumerate()
-                .flat_map(|(point, dots)| {
-                    dots.iter().enumerate().map(move |(leader, &dot)| {
-                        reference_distance(
-                            metric,
-                            dot,
-                            input.point_norms.get(point).copied().unwrap_or(0.0),
-                            input.leader_norms.get(leader).copied().unwrap_or(0.0),
-                        )
-                    })
-                })
-                .collect()
-        }
-
         pub(super) fn rank_distance_fixture(
-            metric: Metric,
-            input: DotFixture<'_>,
+            distances: MatrixView<'_, f32>,
             nearest_leader_count: usize,
         ) -> Vec<u32> {
-            let distance_flatten = distance_flatten(metric, input);
-            let mut output = Matrix::new(u32::MAX, input.dots.nrows(), nearest_leader_count);
+            let mut output =
+                Matrix::new(UNASSIGNED_LEADER, distances.nrows(), nearest_leader_count);
             arch::dispatch1_no_features(
                 RankDistances,
                 KernelCall {
-                    distance_flatten: &distance_flatten,
-                    point_count: input.dots.nrows(),
-                    leader_count: input.dots.ncols(),
+                    distance_flatten: distances.as_slice(),
+                    point_count: distances.nrows(),
+                    leader_count: distances.ncols(),
                     output: output.as_mut_view(),
                     ranked_leaders: &mut Vec::new(),
                 },
@@ -306,105 +248,36 @@ mod tests {
         }
 
         pub(super) fn reference_assignments(
-            metric: Metric,
-            input: DotFixture<'_>,
+            distances: MatrixView<'_, f32>,
             nearest_leader_count: usize,
         ) -> Vec<u32> {
-            let mut output = vec![UNASSIGNED_LEADER; input.dots.nrows() * nearest_leader_count];
-            for (point, (dots, assignments)) in input
-                .dots
+            let mut output = vec![UNASSIGNED_LEADER; distances.nrows() * nearest_leader_count];
+            for (row, assignments) in distances
                 .row_iter()
                 .zip(output.chunks_exact_mut(nearest_leader_count))
-                .enumerate()
             {
-                let point_norm = input.point_norms.get(point).copied().unwrap_or(0.0);
-                let mut candidates: Vec<_> = dots
+                let mut candidates: Vec<_> = row
                     .iter()
                     .enumerate()
-                    .filter_map(|(leader, &dot)| {
-                        let leader_norm = input.leader_norms.get(leader).copied().unwrap_or(0.0);
-                        let distance = reference_distance(metric, dot, point_norm, leader_norm);
-                        (distance.partial_cmp(&f32::INFINITY) == Some(std::cmp::Ordering::Less))
-                            .then_some((leader as u32, distance))
+                    .filter_map(|(leader, &distance)| {
+                        (distance < f32::INFINITY).then_some((leader as u32, distance))
                     })
                     .collect();
-                candidates.sort_by(|left, right| left.1.total_cmp(&right.1));
+                candidates.sort_unstable_by(|left, right| {
+                    left.1
+                        .partial_cmp(&right.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 for (destination, (leader, _)) in assignments.iter_mut().zip(candidates) {
                     *destination = leader;
                 }
             }
             output
         }
-
-        /// Build ranking input from two axis points and leaders between those axes.
-        pub(super) fn lane_boundary_input_from_point_and_leader_vectors(
-            metric: Metric,
-            leader_count: usize,
-        ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-            let points = [[1.0_f32, 0.0], [0.0, 1.0]];
-            let denominator = (leader_count + 1) as f32;
-            let leaders: Vec<_> = (0..leader_count)
-                .map(|leader| {
-                    let second_component = (leader + 1) as f32 / denominator;
-                    let vector = [1.0 - second_component, second_component];
-                    if metric == Metric::CosineNormalized {
-                        let norm = vector[0].hypot(vector[1]);
-                        [vector[0] / norm, vector[1] / norm]
-                    } else {
-                        vector
-                    }
-                })
-                .collect();
-            let dots = points
-                .iter()
-                .flat_map(|point| {
-                    leaders
-                        .iter()
-                        .map(|leader| point[0] * leader[0] + point[1] * leader[1])
-                })
-                .collect();
-            let point_norms = if metric == Metric::Cosine {
-                points
-                    .iter()
-                    .map(|point| point[0].hypot(point[1]))
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let leader_norms = match metric {
-                Metric::L2 => leaders
-                    .iter()
-                    .map(|leader| leader[0] * leader[0] + leader[1] * leader[1])
-                    .collect(),
-                Metric::Cosine => leaders
-                    .iter()
-                    .map(|leader| leader[0].hypot(leader[1]))
-                    .collect(),
-                Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
-            };
-            (dots, point_norms, leader_norms)
-        }
     }
 
     mod insert_leader_tests {
         use super::*;
-
-        #[test]
-        fn topk_keeps_nearest_first_order_and_scan_order_ties() {
-            // Given
-            let expected_ranked_leaders = [(1, 1.0), (4, 1.0), (3, 2.0), (2, 3.0)];
-            let mut ranked_leaders = vec![(UNASSIGNED_LEADER, f32::INFINITY); 4];
-
-            // When
-            insert_leader(&mut ranked_leaders, 0, 4.0);
-            insert_leader(&mut ranked_leaders, 1, 1.0);
-            insert_leader(&mut ranked_leaders, 2, 3.0);
-            insert_leader(&mut ranked_leaders, 3, 2.0);
-            insert_leader(&mut ranked_leaders, 4, 1.0);
-
-            // Then
-            assert_eq!(ranked_leaders, expected_ranked_leaders);
-        }
 
         #[test]
         fn nan_distance_does_not_enter_the_topk() {
@@ -512,175 +385,95 @@ mod tests {
         #[case::lane_minus_one(15, 3)]
         #[case::one_complete_lane(16, 3)]
         #[case::lane_plus_one(17, 4)]
+        #[case::all_leaders(17, 17)]
         #[case::two_lanes_minus_one(31, 7)]
         #[case::two_complete_lanes(32, 7)]
         #[case::two_lanes_plus_one(33, 7)]
+        #[case::root_partition(1000, 64)]
         #[trace]
         fn dispatched_partition_ranking_matches_scalar_reference_across_lane_boundaries(
-            #[values(
-                Metric::L2,
-                Metric::Cosine,
-                Metric::CosineNormalized,
-                Metric::InnerProduct
-            )]
-            metric: Metric,
             #[case] leader_count: usize,
             #[case] nearest_leader_count: usize,
         ) {
-            // Given
-            let (dots, point_norms, leader_norms) =
-                lane_boundary_input_from_point_and_leader_vectors(metric, leader_count);
-            let input = partition_input(&dots, 2, leader_count, &point_norms, &leader_norms);
-            let expected_assignments = reference_assignments(metric, input, nearest_leader_count);
+            // Given: unique distances increase in one row and decrease in the other.
+            let values: Vec<_> = (0..leader_count)
+                .chain((0..leader_count).rev())
+                .map(|leader| leader as f32 - leader_count as f32 / 2.0)
+                .collect();
+            let distances = MatrixView::try_from(values.as_slice(), 2, leader_count).unwrap();
+            let expected = reference_assignments(distances, nearest_leader_count);
 
             // When
-            let actual_assignments = rank_distance_fixture(metric, input, nearest_leader_count);
+            let actual = rank_distance_fixture(distances, nearest_leader_count);
 
             // Then
-            assert_eq!(actual_assignments, expected_assignments);
+            assert_eq!(actual, expected);
+        }
+
+        #[rstest]
+        #[case::scalar(4)]
+        #[case::simd_with_tail(17)]
+        fn nearer_leader_displaces_one_of_the_tied_candidates(#[case] leader_count: usize) {
+            // Given
+            let nearest_leader = leader_count - 1;
+            let mut values = vec![1.0; leader_count];
+            values[nearest_leader] = 0.0;
+            let distances = MatrixView::try_from(values.as_slice(), 1, leader_count).unwrap();
+
+            // When
+            let actual = rank_distance_fixture(distances, 3);
+
+            // Then: the remaining two slots can contain any distinct tied leaders.
+            assert_eq!(actual[0], nearest_leader as u32);
+            assert!(actual[1] < nearest_leader as u32);
+            assert!(actual[2] < nearest_leader as u32);
+            assert_ne!(actual[1], actual[2]);
+        }
+
+        #[rstest]
+        #[case::nan(f32::NAN)]
+        #[case::positive_infinity(f32::INFINITY)]
+        fn non_rankable_distances_leave_only_unfilled_ranks_unassigned(
+            #[case] unrankable: f32,
+            #[values(3, 17, 33)] leader_count: usize,
+        ) {
+            // Given: only the first row has rankable candidates.
+            let mut values = vec![unrankable; 2 * leader_count];
+            values[leader_count - 2] = -1.0;
+            values[leader_count - 1] = 2.0;
+            let distances = MatrixView::try_from(values.as_slice(), 2, leader_count).unwrap();
+            let expected = [
+                (leader_count - 2) as u32,
+                (leader_count - 1) as u32,
+                UNASSIGNED_LEADER,
+                UNASSIGNED_LEADER,
+                UNASSIGNED_LEADER,
+                UNASSIGNED_LEADER,
+            ];
+
+            // When
+            let actual = rank_distance_fixture(distances, 3);
+
+            // Then
+            assert_eq!(actual, expected);
         }
 
         #[test]
-        fn equal_distances_keep_sampled_leader_order_with_l2() {
-            // Given
-            let point_count = 1;
-            let leader_count = 4;
-            let nearest_leader_count = 2;
-            let dots = [0.0, 0.0, 0.0, 0.0];
-            let leader_squared_norms = [1.0, 1.0, 1.0, 1.0];
-            let expected_sampled_leader_order = [0, 1];
-
-            let input =
-                partition_input(&dots, point_count, leader_count, &[], &leader_squared_norms);
+        fn negative_infinity_and_f32_max_remain_rankable() {
+            // Given: the smallest distance is in the scalar tail.
+            let mut values = [f32::NAN; 17];
+            values[0] = f32::MAX;
+            values[1] = 0.0;
+            values[2] = -f32::EPSILON;
+            values[16] = f32::NEG_INFINITY;
+            let distances = MatrixView::try_from(&values[..], 1, values.len()).unwrap();
+            let expected = [16, 2, 1, 0];
 
             // When
-            let actual_assignments = rank_distance_fixture(Metric::L2, input, nearest_leader_count);
+            let actual = rank_distance_fixture(distances, 4);
 
             // Then
-            assert_eq!(actual_assignments, expected_sampled_leader_order);
-        }
-
-        #[test]
-        fn zero_norm_keeps_sampled_leader_order_with_cosine() {
-            // Given
-            let point_count = 1;
-            let leader_count = 2;
-            let nearest_leader_count = 2;
-            let dots = [0.0, 0.0];
-            let point_norms = [0.0];
-            let leader_norms = [1.0, 1.0];
-            let expected_sampled_leader_order = [0, 1];
-
-            let input = partition_input(
-                &dots,
-                point_count,
-                leader_count,
-                &point_norms,
-                &leader_norms,
-            );
-
-            // When
-            let actual_assignments =
-                rank_distance_fixture(Metric::Cosine, input, nearest_leader_count);
-
-            // Then
-            assert_eq!(actual_assignments, expected_sampled_leader_order);
-        }
-
-        #[test]
-        fn zero_point_norm_keeps_first_leader_in_a_complete_simd_group_with_cosine() {
-            // Given
-            let point_count = 1;
-            let leader_count = 17;
-            let nearest_leader_count = 1;
-            let dots = [0.0; 17];
-            let point_norms = [0.0];
-            let leader_norms = [1.0; 17];
-            let expected_first_leader = [0];
-
-            // When
-            let actual_assignment = rank_distance_fixture(
-                Metric::Cosine,
-                partition_input(
-                    &dots,
-                    point_count,
-                    leader_count,
-                    &point_norms,
-                    &leader_norms,
-                ),
-                nearest_leader_count,
-            );
-
-            // Then
-            assert_eq!(actual_assignment, expected_first_leader);
-        }
-
-        #[test]
-        fn f32_max_distance_is_still_rankable() {
-            // Given
-            let point_count = 1;
-            let leader_count = 8;
-            let nearest_leader_count = leader_count;
-            let maximum_rankable_distance = f32::MAX;
-            let dot_product_that_produces_it = -maximum_rankable_distance;
-            let mut dots = [0.0; 8];
-            dots[7] = dot_product_that_produces_it;
-            let expected_all_leaders_in_scan_order = [0, 1, 2, 3, 4, 5, 6, 7];
-
-            let input = partition_input(&dots, point_count, leader_count, &[], &[]);
-
-            // When
-            let actual_assignments =
-                rank_distance_fixture(Metric::InnerProduct, input, nearest_leader_count);
-
-            // Then
-            assert_eq!(actual_assignments, expected_all_leaders_in_scan_order);
-        }
-
-        #[test]
-        fn nan_leader_does_not_displace_finite_leaders_with_inner_product() {
-            // Given
-            let point_count = 1;
-            let leader_count = 3;
-            let nearest_leader_count = 2;
-            let dots = [f32::NAN, 3.0, 2.0];
-            let expected_finite_leaders = [1, 2];
-
-            let input = partition_input(&dots, point_count, leader_count, &[], &[]);
-
-            // When
-            let actual_assignments =
-                rank_distance_fixture(Metric::InnerProduct, input, nearest_leader_count);
-
-            // Then
-            assert_eq!(actual_assignments, expected_finite_leaders);
-        }
-
-        #[test]
-        fn nan_leader_does_not_displace_finite_leaders_with_cosine() {
-            // Given
-            let point_count = 1;
-            let leader_count = 3;
-            let nearest_leader_count = 2;
-            let dots = [f32::NAN, 0.75, 0.5];
-            let point_norms = [1.0];
-            let leader_norms = [1.0; 3];
-            let expected_finite_leaders = [1, 2];
-
-            let input = partition_input(
-                &dots,
-                point_count,
-                leader_count,
-                &point_norms,
-                &leader_norms,
-            );
-
-            // When
-            let actual_assignments =
-                rank_distance_fixture(Metric::Cosine, input, nearest_leader_count);
-
-            // Then
-            assert_eq!(actual_assignments, expected_finite_leaders);
+            assert_eq!(actual, expected);
         }
     }
 }

@@ -12,7 +12,7 @@
 //! is a position in the leaf. Widths 1 through 3 use fixed insertion. Larger
 //! widths use the runtime insertion loop.
 //!
-//! Strict comparisons keep scan order for equal distances. They do not rank NaN.
+//! Equal distances can select either candidate. The kernel does not rank NaN.
 //! An unfilled output slot contains [`LeafNeighbor::default`]. All supported
 //! metrics use the same SIMD-group and single-value traversal.
 //!
@@ -207,7 +207,7 @@ fn scan_fixed_width<A, const N: usize>(
     worst: &mut [f32],
 ) where
     A: PiPNNSIMDSchema,
-    [LeafNeighbor; N]: SortedInsert<LeafNeighbor>,
+    [LeafNeighbor; N]: NeighborInsert,
 {
     let (rows, _) = output.as_chunks_mut::<N>();
     // Rayon outlines leaf workers. Reapply target features before the SIMD scan.
@@ -253,7 +253,7 @@ fn scan_runtime_width<A>(
 /// Select neighbors from all unordered point pairs in one leaf.
 ///
 /// The function reads the strict lower triangle once. It offers each distance to
-/// both endpoint lists. SIMD groups and scalar tails preserve pair scan order.
+/// both endpoint lists.
 #[inline(always)]
 fn scan_point_pairs<A, I>(
     arch: A,
@@ -332,69 +332,67 @@ fn scan_point_pairs<A, I>(
     }
 }
 
-/// Insert one value that the caller has already found eligible.
+/// Insert a neighbor that is closer than the current farthest neighbor.
 ///
-/// The caller must prove that `value` precedes the current last retained value.
-/// This method intentionally does not repeat that check. A caller that violates
-/// the precondition replaces a valid retained value and corrupts the top-k set.
-/// The return value is the new last retained value.
-trait SortedInsert<T: Copy> {
-    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T;
+/// The pair scan checks eligibility before insertion. The retained neighbors
+/// stay in distance order. The result is the new farthest neighbor.
+trait NeighborInsert {
+    fn insert_eligible(&mut self, candidate: LeafNeighbor) -> LeafNeighbor;
 }
 
-impl<T: Copy> SortedInsert<T> for [T; 1] {
+impl NeighborInsert for [LeafNeighbor; 1] {
     #[inline(always)]
-    fn insert_eligible_sorted_by(&mut self, value: T, _precedes: impl Fn(T, T) -> bool) -> T {
-        self[0] = value;
-        value
+    fn insert_eligible(&mut self, candidate: LeafNeighbor) -> LeafNeighbor {
+        self[0] = candidate;
+        candidate
     }
 }
 
-impl<T: Copy> SortedInsert<T> for [T; 2] {
+impl NeighborInsert for [LeafNeighbor; 2] {
     #[inline(always)]
-    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible(&mut self, candidate: LeafNeighbor) -> LeafNeighbor {
         let first = self[0];
-        if precedes(value, first) {
-            self[0] = value;
+        if candidate.distance < first.distance {
+            self[0] = candidate;
             self[1] = first;
             first
         } else {
-            self[1] = value;
-            value
+            self[1] = candidate;
+            candidate
         }
     }
 }
 
-impl<T: Copy> SortedInsert<T> for [T; 3] {
+impl NeighborInsert for [LeafNeighbor; 3] {
     #[inline(always)]
-    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible(&mut self, candidate: LeafNeighbor) -> LeafNeighbor {
         let (first, second) = (self[0], self[1]);
-        if precedes(value, first) {
-            self[0] = value;
+        if candidate.distance < first.distance {
+            self[0] = candidate;
             self[1] = first;
             self[2] = second;
             second
-        } else if precedes(value, second) {
-            self[1] = value;
+        } else if candidate.distance < second.distance {
+            self[1] = candidate;
             self[2] = second;
             second
         } else {
-            self[2] = value;
-            value
+            self[2] = candidate;
+            candidate
         }
     }
 }
 
-impl<T: Copy> SortedInsert<T> for [T] {
+impl NeighborInsert for [LeafNeighbor] {
     #[inline(always)]
-    fn insert_eligible_sorted_by(&mut self, value: T, precedes: impl Fn(T, T) -> bool) -> T {
+    fn insert_eligible(&mut self, candidate: LeafNeighbor) -> LeafNeighbor {
         let last = self.len() - 1;
         let mut slot = last;
-        while slot > 0 && precedes(value, self[slot - 1]) {
+        while slot > 0 && candidate.distance < self[slot - 1].distance {
             self[slot] = self[slot - 1];
             slot -= 1;
         }
-        self[slot] = value;
+        self[slot] = candidate;
         self[last]
     }
 }
@@ -407,48 +405,24 @@ impl<T: Copy> SortedInsert<T> for [T] {
 #[inline(always)]
 fn insert_eligible_neighbor<R>(neighbors: &mut R, target: u32, distance: f32) -> f32
 where
-    R: SortedInsert<LeafNeighbor> + ?Sized,
+    R: NeighborInsert + ?Sized,
 {
     neighbors
-        .insert_eligible_sorted_by(
-            LeafNeighbor::new(target, distance),
-            |candidate, retained| candidate.distance < retained.distance,
-        )
+        .insert_eligible(LeafNeighbor::new(target, distance))
         .distance
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::pipnn::{Cosine, CosineNormalized, InnerProduct, L2};
+    use crate::graph::pipnn::L2;
     use diskann_utils::views::{MatrixView, MutMatrixView};
-    use diskann_vector::distance::Metric;
 
     mod test_support {
         use std::cmp::Ordering;
 
         use super::*;
         use diskann_wide::arch::{self, Target1};
-
-        pub(super) trait TestMetric {
-            const METRIC: Metric;
-        }
-
-        impl TestMetric for L2 {
-            const METRIC: Metric = Metric::L2;
-        }
-
-        impl TestMetric for Cosine {
-            const METRIC: Metric = Metric::Cosine;
-        }
-
-        impl TestMetric for CosineNormalized {
-            const METRIC: Metric = Metric::CosineNormalized;
-        }
-
-        impl TestMetric for InnerProduct {
-            const METRIC: Metric = Metric::InnerProduct;
-        }
 
         struct KernelCall<'a> {
             distance_flatten: &'a [f32],
@@ -474,180 +448,68 @@ mod tests {
             }
         }
 
-        fn reference_distance(
-            metric: Metric,
-            dot: f32,
-            source_diagonal: f32,
-            target_diagonal: f32,
-        ) -> f32 {
-            match metric {
-                Metric::L2 => (-2.0_f32).mul_add(dot, source_diagonal) + target_diagonal,
-                Metric::CosineNormalized => -dot,
-                Metric::InnerProduct => -dot,
-                Metric::Cosine => {
-                    let source_norm = source_diagonal.sqrt();
-                    let target_norm = target_diagonal.sqrt();
-                    if source_norm < f32::MIN_POSITIVE.sqrt()
-                        || target_norm < f32::MIN_POSITIVE.sqrt()
-                    {
-                        1.0
-                    } else {
-                        1.0 - (dot / (source_norm * target_norm)).clamp(-1.0, 1.0)
-                    }
-                }
-            }
-        }
-
-        fn distance_flatten(metric: Metric, dots: &[f32], points: usize) -> Vec<f32> {
-            let mut distances = vec![0.0; points * points];
-            for source in 0..points {
-                for target in 0..=source {
-                    distances[source * points + target] = reference_distance(
-                        metric,
-                        dots[source * points + target],
-                        dots[source * points + source],
-                        dots[target * points + target],
-                    );
-                }
-            }
-            distances
-        }
-
-        fn rank_with_output_width(
-            metric: Metric,
-            dots: &[f32],
+        pub(super) fn rank_distance_fixture(
+            distances: &[f32],
             points: usize,
             output_width: usize,
-            workspace: &mut LeafKernelWorkspace,
         ) -> Result<Vec<LeafNeighbor>, LeafKernelError> {
-            let distance_flatten = distance_flatten(metric, dots, points);
             let mut output = vec![LeafNeighbor::default(); points * output_width];
             arch::dispatch1_no_features(
                 RankDistances,
                 KernelCall {
-                    distance_flatten: &distance_flatten,
+                    distance_flatten: distances,
                     point_count: points,
                     output: MutMatrixView::try_from(output.as_mut_slice(), points, output_width)
                         .unwrap(),
-                    worst: &mut workspace.worst,
+                    worst: &mut Vec::new(),
                 },
             )?;
             Ok(output)
         }
 
-        pub(super) fn rank_distance_fixture<M: TestMetric>(
-            dots: &[f32],
-            points: usize,
-            output_width: usize,
-        ) -> Result<Vec<LeafNeighbor>, LeafKernelError> {
-            rank_with_output_width(
-                M::METRIC,
-                dots,
-                points,
-                output_width,
-                &mut LeafKernelWorkspace::default(),
-            )
-        }
-
-        fn run_with_workspace(
-            metric: Metric,
-            dots: &[f32],
-            points: usize,
-            requested_k: usize,
-            workspace: &mut LeafKernelWorkspace,
-        ) -> (usize, Vec<LeafNeighbor>) {
-            let leaf_k = leaf_neighbor_count(points, requested_k);
-            let output = rank_with_output_width(metric, dots, points, leaf_k, workspace)
-                .expect("valid leaf neighbor width");
-            (leaf_k, output)
-        }
-
-        pub(super) fn run_rank_leaf_distances(
-            metric: Metric,
-            dots: &[f32],
-            points: usize,
-            requested_k: usize,
-        ) -> (usize, Vec<LeafNeighbor>) {
-            run_with_workspace(
-                metric,
-                dots,
-                points,
-                requested_k,
-                &mut LeafKernelWorkspace::default(),
-            )
-        }
-
         pub(super) fn reference_neighbors(
-            metric: Metric,
-            dots: &[f32],
+            distances: &[f32],
             points: usize,
-            requested_k: usize,
+            width: usize,
         ) -> Vec<LeafNeighbor> {
-            let leaf_k = requested_k.min(points.saturating_sub(1));
-            let mut output = vec![LeafNeighbor::default(); points * leaf_k];
+            let mut output = vec![LeafNeighbor::default(); points * width];
             for source in 0..points {
                 let mut candidates = Vec::with_capacity(points.saturating_sub(1));
                 for target in 0..points {
                     if source == target {
                         continue;
                     }
-                    let (row, column) = if source > target {
-                        (source, target)
-                    } else {
-                        (target, source)
-                    };
-                    let distance = reference_distance(
-                        metric,
-                        dots[row * points + column],
-                        dots[source * points + source],
-                        dots[target * points + target],
-                    );
-                    if distance.partial_cmp(&f32::INFINITY) == Some(Ordering::Less) {
+                    let row = source.max(target);
+                    let column = source.min(target);
+                    let distance = distances[row * points + column];
+                    if distance < f32::INFINITY {
                         candidates.push(LeafNeighbor::new(target as u32, distance));
                     }
                 }
-                candidates.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-                let retained = candidates.len().min(leaf_k);
-                output[source * leaf_k..source * leaf_k + retained]
+                candidates.sort_unstable_by(|left, right| {
+                    left.distance
+                        .partial_cmp(&right.distance)
+                        .unwrap_or(Ordering::Equal)
+                });
+                let retained = candidates.len().min(width);
+                output[source * width..source * width + retained]
                     .copy_from_slice(&candidates[..retained]);
             }
             output
         }
 
-        /// Build a Gram matrix from points on the line `x = 1`.
-        pub(super) fn lane_boundary_gram_from_point_vectors(
-            metric: Metric,
-            points: usize,
-        ) -> Vec<f32> {
-            let denominator = (points + 1) as f32;
-            let point_vectors: Vec<_> = (0..points)
-                .map(|point| {
-                    let vector = [1.0, (point + 1) as f32 / denominator];
-                    if metric == Metric::CosineNormalized {
-                        let norm = vector[0].hypot(vector[1]);
-                        [vector[0] / norm, vector[1] / norm]
-                    } else {
-                        vector
-                    }
-                })
-                .collect();
-            let mut gram = vec![0.0; points * points];
-            for source in 0..points {
-                for target in 0..points {
-                    gram[source * points + target] = point_vectors[source][0]
-                        * point_vectors[target][0]
-                        + point_vectors[source][1] * point_vectors[target][1];
+        /// Give each pair a unique distance, with alternating signs in each row.
+        pub(super) fn lower_triangle_distances(points: usize) -> Vec<f32> {
+            // NaN in unused entries detects reads of the diagonal or upper triangle.
+            let mut distances = vec![f32::NAN; points * points];
+            for source in 1..points {
+                for target in 0..source {
+                    let distance = (source * points + target + 1) as f32;
+                    distances[source * points + target] =
+                        if target % 2 == 0 { -distance } else { distance };
                 }
             }
-            gram
-        }
-
-        pub(super) fn gram_with_uniform_self_dots(points: usize, self_dot: f32) -> Vec<f32> {
-            let mut gram = vec![0.0; points * points];
-            for point in 0..points {
-                gram[point * points + point] = self_dot;
-            }
-            gram
+            distances
         }
     }
 
@@ -817,27 +679,6 @@ mod tests {
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
         }
-
-        #[test]
-        fn equal_distance_candidate_stays_after_the_existing_neighbor() {
-            // Given
-            let nearest = LeafNeighbor::new(1, 1.0);
-            let existing_tie = LeafNeighbor::new(2, 2.0);
-            let farthest = LeafNeighbor::new(3, 4.0);
-            let tied_candidate = LeafNeighbor::new(4, 2.0);
-            let expected_neighbors = [nearest, existing_tie, tied_candidate];
-            let mut actual_neighbors = [nearest, existing_tie, farthest];
-
-            // When
-            insert_eligible_neighbor(
-                &mut actual_neighbors,
-                tied_candidate.target,
-                tied_candidate.distance,
-            );
-
-            // Then
-            assert_eq!(actual_neighbors, expected_neighbors);
-        }
     }
 
     mod leaf_neighbor_count_tests {
@@ -999,24 +840,20 @@ mod tests {
         #[rstest]
         #[case::two_points_fixed_one(2, 1)]
         #[case::scalar_fixed_two(7, 2)]
-        #[case::lane_minus_one_fixed_three(15, 3)]
-        #[case::one_complete_lane_fixed_three(16, 3)]
-        #[case::lane_plus_one_runtime_width(17, 4)]
-        #[case::two_lanes_minus_one_runtime_width(31, 7)]
-        #[case::two_complete_lanes_runtime_width(32, 7)]
-        #[case::two_lanes_plus_one_runtime_width(33, 7)]
-        #[case::four_complete_lanes_runtime_width(64, 7)]
-        #[case::sixteen_complete_lanes_runtime_width(256, 7)]
+        #[case::lane_minus_one_fixed_three(16, 3)]
+        #[case::one_complete_lane_fixed_one(17, 1)]
+        #[case::one_complete_lane_fixed_two(17, 2)]
+        #[case::one_complete_lane_fixed_three(17, 3)]
+        #[case::lane_plus_one_runtime_width(18, 4)]
+        #[case::all_non_self_neighbors(17, 16)]
+        #[case::two_lanes_minus_one_runtime_width(32, 7)]
+        #[case::two_complete_lanes_runtime_width(33, 7)]
+        #[case::two_lanes_plus_one_runtime_width(34, 7)]
+        #[case::four_complete_lanes_runtime_width(65, 7)]
+        #[case::sixteen_complete_lanes_runtime_width(257, 7)]
         #[case::maximum_leaf_size_runtime_width(512, 7)]
         #[trace]
         fn dispatched_leaf_ranking_matches_scalar_reference_across_lane_boundaries(
-            #[values(
-                Metric::L2,
-                Metric::Cosine,
-                Metric::CosineNormalized,
-                Metric::InnerProduct
-            )]
-            metric: Metric,
             #[case] point_count: usize,
             #[case] requested_k: usize,
         ) {
@@ -1025,418 +862,166 @@ mod tests {
                 return;
             }
 
-            // Given
-            let dots = lane_boundary_gram_from_point_vectors(metric, point_count);
-            let expected_neighbors = reference_neighbors(metric, &dots, point_count, requested_k);
+            // Given: the last source row has `point_count - 1` distances.
+            let distances = lower_triangle_distances(point_count);
+            let expected_neighbors = reference_neighbors(&distances, point_count, requested_k);
 
             // When
             let actual_neighbors =
-                run_rank_leaf_distances(metric, &dots, point_count, requested_k).1;
-
-            // Then
-            assert_eq!(actual_neighbors, expected_neighbors);
-        }
-
-        const POINT_ZERO: [f32; 2] = [1.0, 0.0];
-        const POINT_ONE: [f32; 2] = [0.0, 1.0];
-        const POINT_TWO: [f32; 2] = [0.6, 0.8];
-
-        fn point_dot(left: [f32; 2], right: [f32; 2]) -> f32 {
-            left[0] * right[0] + left[1] * right[1]
-        }
-
-        fn three_unit_point_gram() -> [f32; 9] {
-            let points = [POINT_ZERO, POINT_ONE, POINT_TWO];
-            std::array::from_fn(|index| {
-                let source = index / points.len();
-                let target = index % points.len();
-                point_dot(points[source], points[target])
-            })
-        }
-
-        #[test]
-        fn selects_the_smallest_squared_distance_neighbor_for_each_point_with_l2() {
-            // Given
-            let point_zero_two_distance = point_dot(POINT_ZERO, POINT_ZERO)
-                + point_dot(POINT_TWO, POINT_TWO)
-                - 2.0 * point_dot(POINT_ZERO, POINT_TWO);
-            let point_one_two_distance = point_dot(POINT_ONE, POINT_ONE)
-                + point_dot(POINT_TWO, POINT_TWO)
-                - 2.0 * point_dot(POINT_ONE, POINT_TWO);
-            let expected_neighbors = [
-                LeafNeighbor::new(2, point_zero_two_distance),
-                LeafNeighbor::new(2, point_one_two_distance),
-                LeafNeighbor::new(1, point_one_two_distance),
-            ];
-            let gram = three_unit_point_gram();
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<L2>(&gram, 3, 1).unwrap();
+                rank_distance_fixture(&distances, point_count, requested_k).unwrap();
 
             // Then
             assert_eq!(actual_neighbors, expected_neighbors);
         }
 
         #[test]
-        fn selects_the_highest_similarity_neighbor_for_each_point_with_cosine() {
+        fn only_the_lower_triangle_supplies_neighbor_distances() {
             // Given
-            let expected_neighbors = [
-                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ZERO, POINT_TWO)),
-                LeafNeighbor::new(2, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
-                LeafNeighbor::new(1, 1.0 - point_dot(POINT_ONE, POINT_TWO)),
-            ];
-            let gram = three_unit_point_gram();
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 3, 1).unwrap();
-
-            // Then
-            assert_eq!(actual_neighbors, expected_neighbors);
-        }
-
-        #[test]
-        fn selects_the_highest_dot_product_neighbor_for_each_point_with_normalized_cosine() {
-            // Given
-            let expected_neighbors = [
-                LeafNeighbor::new(2, -point_dot(POINT_ZERO, POINT_TWO)),
-                LeafNeighbor::new(2, -point_dot(POINT_ONE, POINT_TWO)),
-                LeafNeighbor::new(1, -point_dot(POINT_ONE, POINT_TWO)),
-            ];
-            let gram = three_unit_point_gram();
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<CosineNormalized>(&gram, 3, 1).unwrap();
-
-            // Then
-            assert_eq!(actual_neighbors, expected_neighbors);
-        }
-
-        #[test]
-        fn selects_the_highest_dot_product_neighbor_for_each_point_with_inner_product() {
-            // Given
-            let expected_neighbors = [
-                LeafNeighbor::new(2, -point_dot(POINT_ZERO, POINT_TWO)),
-                LeafNeighbor::new(2, -point_dot(POINT_ONE, POINT_TWO)),
-                LeafNeighbor::new(1, -point_dot(POINT_ONE, POINT_TWO)),
-            ];
-            let gram = three_unit_point_gram();
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<InnerProduct>(&gram, 3, 1).unwrap();
-
-            // Then
-            assert_eq!(actual_neighbors, expected_neighbors);
-        }
-
-        #[test]
-        fn equal_distances_keep_target_scan_order_with_l2() {
-            // Given
-            let unit_squared_norm = 1.0;
-            let tied_dot_product = 0.0;
-            let expected_tied_distance = 2.0 * unit_squared_norm - 2.0 * tied_dot_product;
-            // This is the Gram matrix of four orthogonal unit vectors.
             #[rustfmt::skip]
-            let gram = [
-                unit_squared_norm, tied_dot_product,  tied_dot_product,  tied_dot_product,
-                tied_dot_product,  unit_squared_norm, tied_dot_product,  tied_dot_product,
-                tied_dot_product,  tied_dot_product,  unit_squared_norm, tied_dot_product,
-                tied_dot_product,  tied_dot_product,  tied_dot_product,  unit_squared_norm,
+            let distances = [
+                f32::NAN, f32::NAN, f32::NAN,
+                3.0,      f32::NAN, f32::NAN,
+                1.0,      2.0,      f32::NAN,
             ];
-            let expected_neighbors_in_scan_order = [
-                LeafNeighbor::new(1, expected_tied_distance),
-                LeafNeighbor::new(2, expected_tied_distance),
-                LeafNeighbor::new(0, expected_tied_distance),
-                LeafNeighbor::new(2, expected_tied_distance),
-                LeafNeighbor::new(0, expected_tied_distance),
-                LeafNeighbor::new(1, expected_tied_distance),
-                LeafNeighbor::new(0, expected_tied_distance),
-                LeafNeighbor::new(1, expected_tied_distance),
+            let expected_neighbors = [
+                LeafNeighbor::new(2, 1.0),
+                LeafNeighbor::new(2, 2.0),
+                LeafNeighbor::new(0, 1.0),
             ];
 
             // When
-            let actual_neighbors = rank_distance_fixture::<L2>(&gram, 4, 2).unwrap();
+            let actual_neighbors = rank_distance_fixture(&distances, 3, 1).unwrap();
 
             // Then
-            assert_eq!(actual_neighbors, expected_neighbors_in_scan_order);
+            assert_eq!(actual_neighbors, expected_neighbors);
         }
 
-        #[test]
-        fn finite_negative_l2_ranking_remains_rankable() {
+        #[rstest]
+        #[case::finite_negative(-f32::EPSILON)]
+        #[case::negative_infinity(f32::NEG_INFINITY)]
+        fn negative_distances_remain_rankable(#[case] distance: f32) {
             // Given
-            let point_count = 2;
-            let nearest_neighbor_count = 1;
-            let self_dot = 1.0_f32;
-            let dot_roundoff = f32::EPSILON;
-            let cross_dot = self_dot + dot_roundoff;
-            let expected_distance = (-2.0_f32).mul_add(cross_dot, self_dot) + self_dot;
-            let gram = [self_dot, cross_dot, cross_dot, self_dot];
+            let distances = [f32::NAN, f32::NAN, distance, f32::NAN];
             let expected = [
-                LeafNeighbor::new(1, expected_distance),
-                LeafNeighbor::new(0, expected_distance),
+                LeafNeighbor::new(1, distance),
+                LeafNeighbor::new(0, distance),
             ];
 
             // When
-            let actual =
-                rank_distance_fixture::<L2>(&gram, point_count, nearest_neighbor_count).unwrap();
+            let actual = rank_distance_fixture(&distances, 2, 1).unwrap();
 
             // Then
-            assert!(expected_distance < 0.0);
             assert_eq!(actual, expected);
         }
 
         #[test]
-        fn scalar_distance_stays_finite_when_twice_the_dot_product_overflows_with_l2() {
-            // Given
-            let dot_product = f32::from_bits(f32::MAX.to_bits() - 1);
-            let unfused_twice_dot_product = 2.0 * dot_product;
-            let expected_fused_distance = (-2.0_f32).mul_add(dot_product, f32::MAX) + f32::MAX;
-            let gram = [f32::MAX, dot_product, dot_product, f32::MAX];
+        fn tied_distances_fill_capacity_with_distinct_non_self_neighbors() {
+            // Given: each point has three equally distant candidates for two slots.
+            let point_count = 4;
+            let width = 2;
+            let distances = [1.0; 16];
 
             // When
-            let actual_neighbors = rank_distance_fixture::<L2>(&gram, 2, 1).unwrap();
+            let actual = rank_distance_fixture(&distances, point_count, width).unwrap();
 
-            // Then
-            assert!(unfused_twice_dot_product.is_infinite());
-            assert!(expected_fused_distance.is_finite() && expected_fused_distance > 0.0);
-            assert_eq!(
-                actual_neighbors[0].distance.to_bits(),
-                expected_fused_distance.to_bits()
-            );
-        }
-
-        #[test]
-        fn simd_distance_stays_finite_when_twice_the_dot_product_overflows_with_l2() {
-            // Given
-            let dot_product = f32::from_bits(f32::MAX.to_bits() - 1);
-            let unfused_twice_dot_product = 2.0 * dot_product;
-            let expected_fused_distance = (-2.0_f32).mul_add(dot_product, f32::MAX) + f32::MAX;
-            let expected_simd_neighbor_target = 0;
-            let points = 17;
-            let mut gram = gram_with_uniform_self_dots(points, f32::MAX);
-            gram[16 * points] = dot_product;
-            gram[16] = dot_product;
-
-            // When
-            let actual_neighbors = run_rank_leaf_distances(Metric::L2, &gram, points, 1).1;
-
-            // Then
-            assert!(unfused_twice_dot_product.is_infinite());
-            assert_eq!(actual_neighbors[16].target, expected_simd_neighbor_target);
-            assert_eq!(
-                actual_neighbors[16].distance.to_bits(),
-                expected_fused_distance.to_bits()
-            );
-        }
-
-        #[test]
-        fn zero_norm_produces_unit_distance_with_cosine() {
-            // Given
-            // This is the Gram matrix of one zero vector and two orthogonal unit vectors.
-            #[rustfmt::skip]
-            let gram = [
-                0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0,
-            ];
-            let expected_zero_norm_neighbors =
-                [LeafNeighbor::new(1, 1.0), LeafNeighbor::new(2, 1.0)];
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 3, 2).unwrap();
-
-            // Then
-            assert_eq!(&actual_neighbors[..2], &expected_zero_norm_neighbors);
-        }
-
-        #[test]
-        fn zero_target_norm_remains_rankable_in_a_complete_simd_group_with_cosine() {
-            // Given
-            let points = 17;
-            let mut gram = gram_with_uniform_self_dots(points, 1.0);
-            gram[0] = 0.0;
-            let expected_zero_norm_neighbor = LeafNeighbor::new(0, 1.0);
-
-            // When
-            let actual_neighbors = run_rank_leaf_distances(Metric::Cosine, &gram, points, 1).1;
-
-            // Then
-            assert_eq!(actual_neighbors[16], expected_zero_norm_neighbor);
-        }
-
-        #[test]
-        fn similarity_above_one_clamps_to_zero_distance_with_cosine() {
-            // Given
-            // A small excess models dot-product roundoff above cosine similarity one.
-            let rounded_dot_product = 1.000_001;
-            let gram = [1.0, rounded_dot_product, rounded_dot_product, 1.0];
-            let maximum_cosine_similarity = 1.0;
-            let expected_one_minus_maximum_similarity = 1.0 - maximum_cosine_similarity;
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 2, 1).unwrap();
-
-            // Then
-            assert_eq!(
-                actual_neighbors[0].distance,
-                expected_one_minus_maximum_similarity
-            );
-        }
-
-        #[test]
-        fn similarity_below_negative_one_clamps_to_distance_two_with_cosine() {
-            // Given
-            // A small excess models dot-product roundoff below cosine similarity minus one.
-            let rounded_dot_product = -1.000_001;
-            let gram = [1.0, rounded_dot_product, rounded_dot_product, 1.0];
-            let minimum_cosine_similarity = -1.0;
-            let expected_one_minus_minimum_similarity = 1.0 - minimum_cosine_similarity;
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 2, 1).unwrap();
-
-            // Then
-            assert_eq!(
-                actual_neighbors[0].distance,
-                expected_one_minus_minimum_similarity
-            );
-        }
-
-        #[test]
-        fn subnormal_norm_is_treated_as_zero_with_cosine() {
-            // Given
-            let subnormal_self_dot = f32::MIN_POSITIVE / 2.0;
-            let gram = [subnormal_self_dot, 0.0, 0.0, 1.0];
-            let zero_norm_similarity = 0.0;
-            let expected_one_minus_zero_similarity = 1.0 - zero_norm_similarity;
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<Cosine>(&gram, 2, 1).unwrap();
-
-            // Then
-            assert_eq!(
-                actual_neighbors[0].distance,
-                expected_one_minus_zero_similarity
-            );
+            // Then: any two candidates are valid; no tie order is required.
+            for (source, neighbors) in actual.chunks_exact(width).enumerate() {
+                assert_eq!(neighbors[0].distance, 1.0);
+                assert_eq!(neighbors[1].distance, 1.0);
+                assert_ne!(neighbors[0].target, neighbors[1].target);
+                for neighbor in neighbors {
+                    assert!(neighbor.target < point_count as u32);
+                    assert_ne!(neighbor.target, source as u32);
+                }
+            }
         }
 
         #[test]
         fn f32_max_distance_is_still_a_rankable_neighbor() {
             // Given
-            let points = 4;
-            let expected_leaf_k = 3;
+            let point_count = 4;
+            let width = 3;
+            let source = 3;
+            let mut distances = [1.0; 16];
+            distances[source * point_count] = f32::MAX;
             let expected_last_neighbor = LeafNeighbor::new(0, f32::MAX);
-            let mut gram = gram_with_uniform_self_dots(points, f32::MAX);
-            gram[3 * points] = -f32::MAX;
-            gram[3] = -f32::MAX;
 
             // When
-            let actual_neighbors =
-                rank_distance_fixture::<InnerProduct>(&gram, points, expected_leaf_k).unwrap();
+            let actual = rank_distance_fixture(&distances, point_count, width).unwrap();
 
             // Then
-            assert_eq!(
-                actual_neighbors[3 * expected_leaf_k + expected_leaf_k - 1],
-                expected_last_neighbor
-            );
-        }
-
-        #[test]
-        fn scalar_nan_distance_leaves_the_neighbor_slot_unassigned() {
-            // Given
-            let gram = [1.0, f32::NAN, f32::NAN, 1.0];
-            let expected_unassigned_neighbors = [LeafNeighbor::default(), LeafNeighbor::default()];
-
-            // When
-            let actual_neighbors = rank_distance_fixture::<CosineNormalized>(&gram, 2, 1).unwrap();
-
-            // Then
-            assert_eq!(actual_neighbors, expected_unassigned_neighbors);
-        }
-
-        #[test]
-        fn complete_simd_group_without_eligible_distances_leaves_source_unassigned_with_l2() {
-            // Given
-            let point_count = 17;
-            let source = 16;
-            let requested_k = 1;
-            let mut gram = gram_with_uniform_self_dots(point_count, 1.0);
-            gram[source * point_count..source * point_count + source].fill(f32::NEG_INFINITY);
-            let expected_unassigned_neighbor = LeafNeighbor::default();
-
-            // When
-            let actual_neighbors =
-                rank_distance_fixture::<L2>(&gram, point_count, requested_k).unwrap();
-
-            // Then
-            assert_eq!(
-                actual_neighbors[source * requested_k],
-                expected_unassigned_neighbor
-            );
+            assert_eq!(actual[source * width + width - 1], expected_last_neighbor);
         }
 
         #[rstest]
-        #[case::l2(Metric::L2, 2.0)]
-        #[case::cosine(Metric::Cosine, 1.0)]
-        #[case::normalized_cosine(Metric::CosineNormalized, -0.0)]
-        #[case::inner_product(Metric::InnerProduct, -0.0)]
-        fn simd_nan_distance_cannot_replace_a_finite_neighbor(
-            #[case] metric: Metric,
-            #[case] expected_distance: f32,
+        #[case::nan(f32::NAN)]
+        #[case::positive_infinity(f32::INFINITY)]
+        fn non_rankable_distances_leave_neighbor_slots_unassigned(
+            #[case] distance: f32,
+            #[values(2, 17, 18)] point_count: usize,
         ) {
             // Given
-            let points = 17;
-            let mut gram = gram_with_uniform_self_dots(points, 1.0);
-            gram[16 * points] = f32::NAN;
-            gram[16] = f32::NAN;
-            let expected_finite_neighbor = LeafNeighbor::new(1, expected_distance);
+            let distances = vec![distance; point_count * point_count];
+            let expected = vec![LeafNeighbor::default(); point_count];
 
             // When
-            let actual_neighbors = run_rank_leaf_distances(metric, &gram, points, 1).1;
+            let actual = rank_distance_fixture(&distances, point_count, 1).unwrap();
 
             // Then
-            assert_eq!(actual_neighbors[16], expected_finite_neighbor);
+            assert_eq!(actual, expected);
         }
 
         #[rstest]
-        #[case::l2(Metric::L2, 2.0)]
-        #[case::normalized_cosine(Metric::CosineNormalized, -0.0)]
-        #[case::inner_product(Metric::InnerProduct, -0.0)]
-        fn simd_positive_infinity_cannot_fill_a_neighbor_slot(
-            #[case] metric: Metric,
-            #[case] expected_distance: f32,
+        #[case::nan(f32::NAN)]
+        #[case::positive_infinity(f32::INFINITY)]
+        fn non_rankable_candidates_cannot_replace_finite_neighbors(
+            #[case] distance: f32,
+            #[values(17, 18)] point_count: usize,
         ) {
-            // Given: negative-infinite dot products produce positive-infinite distances here.
-            let points = 17;
-            let mut gram = gram_with_uniform_self_dots(points, 1.0);
-            gram[16 * points] = f32::NEG_INFINITY;
-            gram[16] = f32::NEG_INFINITY;
-            let expected_finite_neighbor = LeafNeighbor::new(1, expected_distance);
+            // Given: the last candidate is in a full SIMD group or its scalar tail.
+            let source = point_count - 1;
+            let invalid_target = source - 1;
+            let mut distances = vec![1.0; point_count * point_count];
+            distances[source * point_count + invalid_target] = distance;
 
             // When
-            let actual_neighbors = run_rank_leaf_distances(metric, &gram, points, 1).1;
+            let actual = rank_distance_fixture(&distances, point_count, 1).unwrap();
 
             // Then
-            assert_eq!(actual_neighbors[16], expected_finite_neighbor);
+            assert!(actual[source].target < invalid_target as u32);
+            assert_eq!(actual[source].distance, 1.0);
+        }
+
+        #[test]
+        fn scalar_tail_updates_both_endpoints_after_a_rejected_simd_group() {
+            // Given: the final pair is the only rankable pair in the leaf.
+            let point_count = 18;
+            let source = 17;
+            let target = 16;
+            let mut distances = vec![f32::INFINITY; point_count * point_count];
+            distances[source * point_count + target] = -1.0;
+            let mut expected = vec![LeafNeighbor::default(); point_count];
+            expected[source] = LeafNeighbor::new(target as u32, -1.0);
+            expected[target] = LeafNeighbor::new(source as u32, -1.0);
+
+            // When
+            let actual = rank_distance_fixture(&distances, point_count, 1).unwrap();
+
+            // Then
+            assert_eq!(actual, expected);
         }
 
         #[test]
         fn singleton_leaf_has_no_neighbors() {
             // Given
-            let singleton_point_count = 1;
-            let singleton_gram = [4.0];
-            let expected_zero_neighbor_width = 0;
-            let expected_no_neighbors: [LeafNeighbor; 0] = [];
+            let distances = [f32::NAN];
+            let expected: [LeafNeighbor; 0] = [];
 
             // When
-            let actual_neighbors = rank_distance_fixture::<Cosine>(
-                &singleton_gram,
-                singleton_point_count,
-                expected_zero_neighbor_width,
-            )
-            .unwrap();
+            let actual = rank_distance_fixture(&distances, 1, 0).unwrap();
 
             // Then
-            assert_eq!(actual_neighbors, expected_no_neighbors);
+            assert_eq!(actual, expected);
         }
 
         #[test]
@@ -1444,18 +1029,16 @@ mod tests {
             // Given
             let point_count = 3;
             let invalid_neighbor_width = point_count;
-            let maximum_non_self_width = point_count - 1;
-            let gram = [0.0; 9];
+            let distances = [0.0; 9];
             let expected_error = LeafKernelError::InvalidNeighborCount {
                 points: point_count,
                 neighbors: invalid_neighbor_width,
-                maximum: maximum_non_self_width,
+                maximum: point_count - 1,
             };
 
             // When
             let actual_error =
-                rank_distance_fixture::<L2>(&gram, point_count, invalid_neighbor_width)
-                    .unwrap_err();
+                rank_distance_fixture(&distances, point_count, invalid_neighbor_width).unwrap_err();
 
             // Then
             assert_eq!(actual_error, expected_error);

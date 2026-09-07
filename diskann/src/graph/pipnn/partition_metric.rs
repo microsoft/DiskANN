@@ -8,8 +8,6 @@
 //! A ranking distance preserves nearest-first order. One leader set serves all
 //! point stripes in a partition split.
 
-use std::sync::OnceLock;
-
 use crate::{ANNError, ANNResult};
 use diskann_linalg::Transpose;
 use diskann_utils::views::MatrixView;
@@ -19,11 +17,11 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 
 /// Store leader values with immutable metric data.
 ///
-/// The metric selects `Cache`. An L2 cache stores squared norms. A cosine cache
-/// stores norms. `OnceLock` lets concurrent point stripes initialize data once.
-pub(super) struct PartitionLeaders<'a, Cache> {
+/// L2 stores squared norms. Cosine stores norms. Construction computes them once
+/// before point stripes share the leader set. Other metrics need no norms.
+pub(super) struct PartitionLeaders<'a, Norms> {
     values: MatrixView<'a, f32>,
-    cache: Cache,
+    norms: Norms,
 }
 
 /// Fill one flattened point-to-leader ranking buffer.
@@ -45,6 +43,7 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     /// Compute one row-major point-to-leader ranking buffer.
     ///
     /// `storage` has `points.nrows() * leader_count` elements.
+    /// A zero distance can have either sign. Equal distances can select either leader.
     fn compute_distances(
         points: MatrixView<'_, f32>,
         leaders: &Self::Leaders<'_>,
@@ -52,10 +51,9 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
     ) -> ANNResult<()>;
 }
 
-/// Compute L2 squared norms with the established sequential reduction order.
+/// Compute L2 squared norms with sequential accumulation.
 ///
-/// Small rounding differences can change a leader tie. Keep this order equal to
-/// the pre-GEMM implementation.
+/// This order fixes rounding of the leader term before GEMM adds the dot term.
 fn l2_squared_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
     vectors
         .row_iter()
@@ -72,12 +70,12 @@ fn cosine_norms(vectors: MatrixView<'_, f32>) -> Vec<f32> {
 }
 
 impl PartitionMetric for L2 {
-    type Leaders<'a> = PartitionLeaders<'a, OnceLock<Vec<f32>>>;
+    type Leaders<'a> = PartitionLeaders<'a, Vec<f32>>;
 
     fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
         PartitionLeaders {
             values,
-            cache: OnceLock::new(),
+            norms: l2_squared_norms(values),
         }
     }
 
@@ -91,9 +89,7 @@ impl PartitionMetric for L2 {
         storage: &mut [f32],
     ) -> ANNResult<()> {
         // The point norm is constant across a point row. It cannot change ranking.
-        let leader_norms = leaders
-            .cache
-            .get_or_init(|| l2_squared_norms(leaders.values));
+        let leader_norms = &leaders.norms;
         // Initialize each point row before GEMM adds the dot-product term.
         let leader_count = leader_norms.len();
         for row in storage.chunks_exact_mut(leader_count) {
@@ -121,12 +117,12 @@ impl PartitionMetric for L2 {
 }
 
 impl PartitionMetric for Cosine {
-    type Leaders<'a> = PartitionLeaders<'a, OnceLock<Vec<f32>>>;
+    type Leaders<'a> = PartitionLeaders<'a, Vec<f32>>;
 
     fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
         PartitionLeaders {
             values,
-            cache: OnceLock::new(),
+            norms: cosine_norms(values),
         }
     }
 
@@ -153,7 +149,7 @@ impl PartitionMetric for Cosine {
         )
         .map_err(ANNError::new)?;
         let point_norms = cosine_norms(points);
-        let leader_norms = leaders.cache.get_or_init(|| cosine_norms(leaders.values));
+        let leader_norms = &leaders.norms;
         let leader_count = leaders.values.nrows();
         // Convert each dot to cosine distance. Reuse leader norms across stripes.
         for (row, &point_norm) in storage
@@ -174,7 +170,7 @@ impl PartitionMetric for CosineNormalized {
     type Leaders<'a> = PartitionLeaders<'a, ()>;
 
     fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
-        PartitionLeaders { values, cache: () }
+        PartitionLeaders { values, norms: () }
     }
 
     fn leader_count(leaders: &Self::Leaders<'_>) -> usize {
@@ -204,14 +200,14 @@ impl PartitionMetric for CosineNormalized {
 }
 
 impl PartitionMetric for InnerProduct {
-    type Leaders<'a> = PartitionLeaders<'a, ()>;
+    type Leaders<'a> = <CosineNormalized as PartitionMetric>::Leaders<'a>;
 
     fn create_leaders<'a>(values: MatrixView<'a, f32>) -> Self::Leaders<'a> {
-        PartitionLeaders { values, cache: () }
+        CosineNormalized::create_leaders(values)
     }
 
     fn leader_count(leaders: &Self::Leaders<'_>) -> usize {
-        leaders.values.nrows()
+        CosineNormalized::leader_count(leaders)
     }
 
     fn compute_distances(
@@ -219,20 +215,7 @@ impl PartitionMetric for InnerProduct {
         leaders: &Self::Leaders<'_>,
         storage: &mut [f32],
     ) -> ANNResult<()> {
-        diskann_linalg::sgemm(
-            Transpose::None,
-            Transpose::Ordinary,
-            points.nrows(),
-            leaders.values.nrows(),
-            points.ncols(),
-            -1.0,
-            points.as_slice(),
-            leaders.values.as_slice(),
-            None,
-            storage,
-        )
-        .map_err(ANNError::new)?;
-        Ok(())
+        CosineNormalized::compute_distances(points, leaders, storage)
     }
 }
 
@@ -261,6 +244,26 @@ mod tests {
         storage[0]
     }
 
+    mod create_leaders_tests {
+        use super::*;
+
+        #[test]
+        fn l2_leader_norms_preserve_the_sequential_reduction_order() {
+            // Given: each small square is half an ULP at the first squared norm.
+            // Each sequential addition rounds back to that norm.
+            let mut values = [1.0_f32; 129];
+            values[0] = 4096.0;
+            let expected_squared_norm = 16_777_216.0_f32;
+            let matrix = MatrixView::try_from(&values[..], 1, values.len()).unwrap();
+
+            // When
+            let leaders = L2::create_leaders(matrix);
+
+            // Then
+            assert_eq!(leaders.norms, [expected_squared_norm]);
+        }
+    }
+
     mod compute_distances_tests {
         use super::*;
 
@@ -281,43 +284,6 @@ mod tests {
         }
 
         #[test]
-        fn l2_leader_cache_preserves_the_sequential_reduction_order() {
-            fn next_regression_value(state: &mut u64) -> f32 {
-                *state ^= *state << 13;
-                *state ^= *state >> 7;
-                *state ^= *state << 17;
-                (((*state >> 40) as f32 / 8_388_608.0) - 1.0) * 1_000.0
-            }
-
-            // Given
-            const DIMENSIONS: usize = 129;
-            const REGRESSION_SEED: u64 = 0x3a85_f952_c718_6e49;
-            let mut state = REGRESSION_SEED;
-            let _point_values: Vec<f32> = (0..DIMENSIONS)
-                .map(|_| next_regression_value(&mut state))
-                .collect();
-            let leader_values: Vec<f32> = (0..DIMENSIONS)
-                .map(|_| next_regression_value(&mut state))
-                .collect();
-            let expected: f32 = leader_values.iter().map(|value| value * value).sum();
-            let reassociated = FastL2NormSquared.evaluate(leader_values.as_slice());
-            let leader_matrix =
-                MatrixView::try_from(leader_values.as_slice(), 1, DIMENSIONS).unwrap();
-            let leaders = L2::create_leaders(leader_matrix);
-            let zero_point = vec![0.0_f32; DIMENSIONS];
-            let point_matrix = MatrixView::try_from(zero_point.as_slice(), 1, DIMENSIONS).unwrap();
-            let mut distance = [STALE_DISTANCE];
-
-            // When
-            L2::compute_distances(point_matrix, &leaders, &mut distance).unwrap();
-            let actual = leaders.cache.get().unwrap()[0];
-
-            // Then
-            assert_ne!(expected.to_bits(), reassociated.to_bits());
-            assert_eq!(actual.to_bits(), expected.to_bits());
-        }
-
-        #[test]
         fn cosine_ranking_equals_one_minus_normalized_similarity() {
             // Given
             let point = [2.0_f32, 0.0];
@@ -335,6 +301,44 @@ mod tests {
                 (actual - expected).abs() <= FLOAT_TOLERANCE,
                 "actual {actual} differs from expected {expected}"
             );
+        }
+
+        #[rstest::rstest]
+        #[case::zero_point([0.0, 0.0], [1.0, 0.0])]
+        #[case::zero_leader([1.0, 0.0], [0.0, 0.0])]
+        #[case::subnormal_point([f32::MIN_POSITIVE.sqrt() / 2.0, 0.0], [1.0, 0.0])]
+        #[case::subnormal_leader([1.0, 0.0], [f32::MIN_POSITIVE.sqrt() / 2.0, 0.0])]
+        fn small_norm_produces_unit_cosine_ranking(
+            #[case] point: [f32; DIMENSION_COUNT],
+            #[case] leader: [f32; DIMENSION_COUNT],
+        ) {
+            // Given: a zero or subnormal norm represents zero similarity.
+            let expected = 1.0;
+
+            // When
+            let actual = compute_one_ranking::<Cosine>(point, leader);
+
+            // Then
+            assert_eq!(actual, expected);
+        }
+
+        #[rstest::rstest]
+        #[case::l2(compute_one_ranking::<L2>)]
+        #[case::cosine(compute_one_ranking::<Cosine>)]
+        #[case::normalized_cosine(compute_one_ranking::<CosineNormalized>)]
+        #[case::inner_product(compute_one_ranking::<InnerProduct>)]
+        fn nan_coordinate_produces_nan_ranking(
+            #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
+        ) {
+            // Given: neither vector has zero norm.
+            let point = [f32::NAN, 1.0];
+            let leader = [1.0, 0.0];
+
+            // When
+            let actual = compute(point, leader);
+
+            // Then
+            assert!(actual.is_nan());
         }
 
         #[test]

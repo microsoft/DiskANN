@@ -17,6 +17,7 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 ///
 /// An implementation initializes the diagonal and lower triangle. The upper
 /// triangle stays unspecified. The input matrix has one point in each row.
+/// A zero distance can have either sign. Equal distances can select either candidate.
 pub(super) trait LeafMetric: Send + Sync + 'static {
     /// Compute ranking distances for all unordered point pairs.
     ///
@@ -98,17 +99,8 @@ impl LeafMetric for CosineNormalized {
 
 impl LeafMetric for InnerProduct {
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
-        let point_count = points.nrows();
-        // DiskANN ranks inner products in descending order through `-dot`.
-        diskann_linalg::sgemm_aat_lower(
-            point_count,
-            points.ncols(),
-            -1.0,
-            points.as_slice(),
-            storage,
-        )
-        .map_err(ANNError::new)?;
-        Ok(())
+        // Both metrics rank with `-dot`. Their graph-pruning policies stay separate.
+        CosineNormalized::compute_distances(points, storage)
     }
 }
 
@@ -182,16 +174,16 @@ mod tests {
             );
         }
 
-        #[test]
-        fn cosine_ranking_is_one_when_one_point_has_zero_norm() {
-            // Given
-            let zero_point = [0.0_f32, 0.0];
+        #[rstest]
+        #[case::zero([0.0, 0.0])]
+        #[case::subnormal([f32::MIN_POSITIVE.sqrt() / 2.0, 0.0])]
+        fn small_norm_produces_unit_cosine_ranking(#[case] small_point: [f32; DIMENSION_COUNT]) {
+            // Given: a zero or subnormal norm represents zero similarity.
             let unit_point = [1.0_f32, 0.0];
-            let zero_similarity = 0.0_f32;
-            let expected = 1.0 - zero_similarity;
+            let expected = 1.0;
 
             // When
-            let actual = compute_pair_ranking::<Cosine>(zero_point, unit_point);
+            let actual = compute_pair_ranking::<Cosine>(small_point, unit_point);
 
             // Then
             assert_eq!(actual, expected);
@@ -228,21 +220,43 @@ mod tests {
         }
 
         #[rstest]
-        #[case::positive_zero(0.0)]
-        #[case::negative_zero(-0.0)]
-        #[trace]
-        fn inner_product_ranking_matches_negated_scalar_dot_bits(#[case] zero_coordinate: f32) {
-            // Given
-            let first_point = [zero_coordinate, 0.0];
-            let second_point = [1.0_f32, 0.0];
-            let dot = first_point[0].mul_add(second_point[0], first_point[1] * second_point[1]);
-            let expected = -dot;
+        #[case::l2(compute_pair_ranking::<L2>)]
+        #[case::cosine(compute_pair_ranking::<Cosine>)]
+        #[case::normalized_cosine(compute_pair_ranking::<CosineNormalized>)]
+        #[case::inner_product(compute_pair_ranking::<InnerProduct>)]
+        fn nan_coordinate_produces_nan_ranking(
+            #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
+        ) {
+            // Given: neither vector has zero norm.
+            let first_point = [f32::NAN, 1.0];
+            let second_point = [1.0, 0.0];
 
             // When
-            let actual = compute_pair_ranking::<InnerProduct>(first_point, second_point);
+            let actual = compute(first_point, second_point);
 
             // Then
-            assert_eq!(actual.to_bits(), expected.to_bits());
+            assert!(actual.is_nan());
+        }
+
+        #[rstest]
+        #[case::inner_product(InnerProduct::compute_distances)]
+        #[case::normalized_cosine(CosineNormalized::compute_distances)]
+        fn orthogonal_vectors_have_zero_ranking(
+            #[case] compute: fn(MatrixView<'_, f32>, &mut [f32]) -> ANNResult<()>,
+            #[values(2, 17, 129)] dimensions: usize,
+        ) {
+            // Given: the two unit vectors have disjoint nonzero coordinates.
+            let mut values = vec![0.0; 2 * dimensions];
+            values[0] = 1.0;
+            values[dimensions + 1] = 1.0;
+            let points = MatrixView::try_from(values.as_slice(), 2, dimensions).unwrap();
+            let mut distances = [STALE_DISTANCE; 4];
+
+            // When
+            compute(points, &mut distances).unwrap();
+
+            // Then: the contract permits either zero sign.
+            assert_eq!(distances[2], 0.0);
         }
     }
 }
