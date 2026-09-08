@@ -42,10 +42,15 @@ impl Default for Candidate {
 // Private dispatch tag; callers supply only the result shape.
 pub(super) const RUNTIME_WIDTH: usize = 0;
 
-/// Run an operation with the top-k implementation selected once from its row width.
+/// Select the top-k implementation once from the row width.
 ///
-/// The body expands at the call site, preserving static specialization without
-/// a callback in the inner loop. Like an ordinary block, return and ? affect the caller.
+/// For widths one to three, `row_mut` exposes a row with a compile-time length.
+/// After inlining, the compiler can unroll the insertion loop and remove bounds checks.
+/// Other widths use the same insertion loop with a runtime row length.
+///
+/// Each branch selects a different `TopKRows<K>` type.
+/// Use a code block to keep that type through the candidate loops without a callback.
+/// Like an ordinary block, `return` and `?` affect the caller.
 macro_rules! with_topk_rows {
     ($rows:expr, $worst:expr, |$topks:ident| $body:block) => {{
         let rows = $rows;
@@ -116,8 +121,7 @@ impl<'a, const K: usize> TopKRows<'a, K> {
     #[inline(always)]
     pub(super) fn insert(&mut self, row_idx: usize, candidate: Candidate) {
         if candidate.distance < self.worst[row_idx] {
-            self.worst[row_idx] =
-                insert_eligible::<K>(row_mut::<K>(&mut self.rows, row_idx), candidate);
+            self.worst[row_idx] = insert_eligible(row_mut::<K>(&mut self.rows, row_idx), candidate);
         }
     }
 
@@ -148,7 +152,7 @@ impl<'a, const K: usize> TopKRows<'a, K> {
                     eligible &= eligible - 1;
                     // Earlier candidates in this same block can lower the threshold.
                     if lanes[lane] < worst {
-                        worst = insert_eligible::<K>(
+                        worst = insert_eligible(
                             row,
                             Candidate::new((first_idx + lane) as u32, lanes[lane]),
                         );
@@ -183,7 +187,7 @@ impl<'a, const K: usize> TopKRows<'a, K> {
                     let lane = eligible.trailing_zeros() as usize;
                     eligible &= eligible - 1;
                     // Each lane updates a different row once; its threshold is still current.
-                    thresholds[lane] = insert_eligible::<K>(
+                    thresholds[lane] = insert_eligible(
                         row_mut::<K>(&mut self.rows, first_idx + lane),
                         Candidate::new(candidate_idx, lanes[lane]),
                     );
@@ -193,7 +197,7 @@ impl<'a, const K: usize> TopKRows<'a, K> {
     }
 }
 
-/// Keep fixed-width row addressing visible to the compiler as well as fixed-width insertion.
+/// Preserve fixed row lengths for inlined candidate insertion.
 #[inline(always)]
 fn row_mut<'a, const K: usize>(
     rows: &'a mut MutMatrixView<'_, Candidate>,
@@ -207,96 +211,80 @@ fn row_mut<'a, const K: usize>(
     }
 }
 
-/// Insert after checking the current threshold; keep the small-capacity specializations.
+/// Insert after the threshold check; keep candidates in nearest-first order.
 #[inline(always)]
-fn insert_eligible<const K: usize>(row: &mut [Candidate], candidate: Candidate) -> f32 {
-    match K {
-        1 => {
-            row[0] = candidate;
-            candidate.distance
-        }
-        2 => {
-            let first = row[0];
-            if candidate.distance < first.distance {
-                row[0] = candidate;
-                row[1] = first;
-                first.distance
-            } else {
-                row[1] = candidate;
-                candidate.distance
-            }
-        }
-        3 => {
-            let (first, second) = (row[0], row[1]);
-            if candidate.distance < first.distance {
-                row[0] = candidate;
-                row[1] = first;
-                row[2] = second;
-                second.distance
-            } else if candidate.distance < second.distance {
-                row[1] = candidate;
-                row[2] = second;
-                second.distance
-            } else {
-                row[2] = candidate;
-                candidate.distance
-            }
-        }
-        _ => {
-            let last = row.len() - 1;
-            let mut slot = last;
-            while slot > 0 && candidate.distance < row[slot - 1].distance {
-                row[slot] = row[slot - 1];
-                slot -= 1;
-            }
-            row[slot] = candidate;
-            row[last].distance
-        }
+fn insert_eligible(row: &mut [Candidate], candidate: Candidate) -> f32 {
+    let last = row.len() - 1;
+    let mut slot = last;
+    while slot > 0 && candidate.distance < row[slot - 1].distance {
+        row[slot] = row[slot - 1];
+        slot -= 1;
     }
+    row[slot] = candidate;
+    row[last].distance
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    mod insert_tests {
+    mod insert_eligible_tests {
         use super::*;
         use rstest::rstest;
 
         #[rstest]
-        #[case::one(&[(1, 4.0)], (2, 2.0), &[(2, 2.0)])]
-        #[case::two_front(&[(1, 1.0), (2, 3.0)], (3, 0.5), &[(3, 0.5), (1, 1.0)])]
-        #[case::two_back(&[(1, 1.0), (2, 3.0)], (3, 2.0), &[(1, 1.0), (3, 2.0)])]
-        #[case::three_front(&[(1, 1.0), (2, 2.0), (3, 4.0)], (4, 0.5), &[(4, 0.5), (1, 1.0), (2, 2.0)])]
-        #[case::three_middle(&[(1, 1.0), (2, 2.0), (3, 4.0)], (4, 1.5), &[(1, 1.0), (4, 1.5), (2, 2.0)])]
-        #[case::three_back(&[(1, 1.0), (2, 2.0), (3, 4.0)], (4, 3.0), &[(1, 1.0), (2, 2.0), (4, 3.0)])]
-        #[case::runtime_middle(&[(1, 1.0), (2, 2.0), (3, 3.0), (4, 5.0)], (5, 2.5), &[(1, 1.0), (2, 2.0), (5, 2.5), (3, 3.0)])]
-        fn insertion_preserves_nearest_order_and_threshold(
+        #[case::singleton(&[(1, 4.0)], (2, 2.0), &[(2, 2.0)])]
+        #[case::no_shift(&[(1, 1.0), (2, 2.0), (3, 4.0)], (4, 3.0), &[(1, 1.0), (2, 2.0), (4, 3.0)])]
+        #[case::one_shift(&[(1, 1.0), (2, 2.0), (3, 4.0)], (4, 1.5), &[(1, 1.0), (4, 1.5), (2, 2.0)])]
+        #[case::multiple_shifts(&[(1, 1.0), (2, 2.0), (3, 3.0), (4, 5.0)], (5, 0.5), &[(5, 0.5), (1, 1.0), (2, 2.0), (3, 3.0)])]
+        #[case::negative_infinity(&[(1, -1.0), (2, 1.0), (UNASSIGNED, f32::INFINITY)], (3, f32::NEG_INFINITY), &[(3, f32::NEG_INFINITY), (1, -1.0), (2, 1.0)])]
+        #[case::positive_zero(&[(1, 1.0)], (2, 0.0), &[(2, 0.0)])]
+        #[case::negative_zero(&[(1, 1.0)], (2, -0.0), &[(2, -0.0)])]
+        fn insertion_keeps_nearest_candidates_and_returns_threshold(
             #[case] initial: &[(u32, f32)],
             #[case] candidate: (u32, f32),
             #[case] expected: &[(u32, f32)],
         ) {
+            // Given
+            let expected_threshold = expected.last().unwrap().1.to_bits();
             let expected: Vec<_> = expected
+                .iter()
+                .map(|&(idx, distance)| (idx, distance.to_bits()))
+                .collect();
+            let mut row: Vec<_> = initial
                 .iter()
                 .map(|&(idx, distance)| Candidate::new(idx, distance))
                 .collect();
-            let mut output = vec![Candidate::default(); initial.len()];
-            let mut worst = [f32::INFINITY];
 
-            with_topk_rows!(
-                MutMatrixView::row_vector(output.as_mut_slice()),
-                &mut worst[..],
-                |topk| {
-                    for &(idx, distance) in initial {
-                        topk.insert(0, Candidate::new(idx, distance));
-                    }
-                    topk.insert(0, Candidate::new(candidate.0, candidate.1));
+            // When
+            let threshold = insert_eligible(&mut row, Candidate::new(candidate.0, candidate.1));
 
-                    assert_eq!(topk.row(0), expected);
-                    assert_eq!(topk.worst[0], expected.last().unwrap().distance);
-                }
-            );
+            // Then
+            let actual: Vec<_> = row
+                .iter()
+                .map(|candidate| (candidate.local_idx, candidate.distance.to_bits()))
+                .collect();
+            assert_eq!(actual, expected);
+            assert_eq!(threshold.to_bits(), expected_threshold);
         }
+    }
+
+    #[test]
+    fn reset_clears_rows_and_thresholds() {
+        // Given
+        let mut output = [Candidate::new(10, -1.0), Candidate::new(11, 2.0)];
+        let mut worst = [-1.0, 2.0];
+        let mut topk = TopKRows::<1> {
+            rows: MutMatrixView::try_from(&mut output[..], 2, 1).unwrap(),
+            worst: &mut worst,
+        };
+
+        // When
+        topk.reset();
+
+        // Then
+        assert_eq!(topk.rows.as_slice(), [Candidate::default(); 2]);
+        assert_eq!(topk.worst, [f32::INFINITY; 2]);
     }
 
     mod update_tests {
@@ -408,40 +396,18 @@ mod tests {
             assert!(topk.worst.iter().all(|&worst| worst == f32::INFINITY));
         }
 
-        #[test]
-        fn middle_insertions_keep_nearest_candidates_and_reset_clears_state() {
-            let mut output = [Candidate::default(); 3];
-            let mut worst = [f32::INFINITY];
-            let mut topk = TopKRows::<RUNTIME_WIDTH>::new(
-                MutMatrixView::row_vector(&mut output[..]),
-                &mut worst,
-            );
-            for (idx, distance) in [0.0, 4.0, 6.0, 2.0, 3.0].into_iter().enumerate() {
-                topk.insert(0, Candidate::new(idx as u32, distance));
-            }
-            assert_eq!(
-                topk.row(0),
-                [
-                    Candidate::new(0, 0.0),
-                    Candidate::new(3, 2.0),
-                    Candidate::new(4, 3.0)
-                ]
-            );
-            assert_eq!(topk.worst, [3.0]);
-
-            topk.reset();
-
-            assert_eq!(topk.row(0), [Candidate::default(); 3]);
-            assert_eq!(topk.worst, [f32::INFINITY]);
-        }
-
         #[rstest]
         #[case::empty(0)]
         #[case::lane_minus_one(15)]
         #[case::one_lane(16)]
         #[case::lane_with_tail(17)]
         #[case::two_lanes_with_tail(33)]
-        fn shared_block_updates_match_scalar_insertion(#[case] count: usize) {
+        #[trace]
+        fn shared_block_updates_match_runtime_scalar_insertion(
+            #[case] count: usize,
+            #[values(1, 2, 3, 4)] width: usize,
+        ) {
+            // Given
             let rows = count + 1;
             let source_idx = count;
             let distances: Vec<_> = (0..count)
@@ -450,34 +416,39 @@ mod tests {
                     if idx % 2 == 0 { -distance } else { distance }
                 })
                 .collect();
-            let mut actual_rows = vec![Candidate::default(); rows * 3];
+            let mut actual_rows = vec![Candidate::default(); rows * width];
             let mut expected_rows = actual_rows.clone();
             let mut actual_worst = vec![f32::INFINITY; rows];
             let mut expected_worst = actual_worst.clone();
-            let mut actual = TopKRows::<3>::new(
-                MutMatrixView::try_from(actual_rows.as_mut_slice(), rows, 3).unwrap(),
-                &mut actual_worst,
-            );
-            let mut expected = TopKRows::<3>::new(
-                MutMatrixView::try_from(expected_rows.as_mut_slice(), rows, 3).unwrap(),
+            let mut expected = TopKRows::<RUNTIME_WIDTH>::new(
+                MutMatrixView::try_from(expected_rows.as_mut_slice(), rows, width).unwrap(),
                 &mut expected_worst,
             );
-            actual.insert(source_idx, Candidate::new(90, 0.0));
             expected.insert(source_idx, Candidate::new(90, 0.0));
-            actual.insert(0, Candidate::new(91, -4.0));
             expected.insert(0, Candidate::new(91, -4.0));
-
-            for block in distance_blocks(diskann_wide::ARCH, &distances) {
-                actual.update_one(source_idx, &block);
-                actual.update_many(42, &block);
-            }
             for (idx, &distance) in distances.iter().enumerate() {
                 expected.insert(source_idx, Candidate::new(idx as u32, distance));
                 expected.insert(idx, Candidate::new(42, distance));
             }
 
-            assert_eq!(actual.rows.as_slice(), expected.rows.as_slice());
-            assert_eq!(actual.worst, expected.worst);
+            with_topk_rows!(
+                MutMatrixView::try_from(actual_rows.as_mut_slice(), rows, width).unwrap(),
+                &mut actual_worst[..],
+                |actual| {
+                    actual.insert(source_idx, Candidate::new(90, 0.0));
+                    actual.insert(0, Candidate::new(91, -4.0));
+
+                    // When
+                    for block in distance_blocks(diskann_wide::ARCH, &distances) {
+                        actual.update_one(source_idx, &block);
+                        actual.update_many(42, &block);
+                    }
+
+                    // Then
+                    assert_eq!(actual.rows.as_slice(), expected.rows.as_slice());
+                    assert_eq!(actual.worst, expected.worst);
+                }
+            );
         }
     }
 }
