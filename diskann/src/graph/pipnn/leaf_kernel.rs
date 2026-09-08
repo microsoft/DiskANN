@@ -13,8 +13,8 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 
 use super::{
     leaf_metric::LeafMetric,
-    simd::{PiPNNSIMDSchema, distance_blocks},
-    topk::{Candidate, with_topk_rows},
+    simd::PiPNNSIMDSchema,
+    topk::{Candidate, distance_blocks, with_topk_rows},
 };
 
 /// Reusable storage for one leaf numerical pipeline.

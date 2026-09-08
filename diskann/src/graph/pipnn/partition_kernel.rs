@@ -14,8 +14,8 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 
 use super::{
     partition_metric::PartitionMetric,
-    simd::{PiPNNSIMDSchema, distance_blocks},
-    topk::{Candidate, UNASSIGNED, with_topk_rows},
+    simd::PiPNNSIMDSchema,
+    topk::{Candidate, UNASSIGNED, distance_blocks, with_topk_rows},
 };
 
 /// No sampled partition center was rankable for this output slot.

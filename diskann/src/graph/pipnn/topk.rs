@@ -7,8 +7,54 @@
 //! Updates allocate no storage. NaN and positive infinity are not retained.
 
 use diskann_utils::views::MutMatrixView;
+use diskann_wide::SIMDVector;
 
-use super::simd::{DistanceBlock, PiPNNSIMDVector};
+use super::simd::{PiPNNSIMDSchema, PiPNNSIMDVector};
+
+/// One group of distances and their column indexes in the supplied slice.
+#[derive(Clone, Copy)]
+pub(super) enum DistanceBlock<'a, F: PiPNNSIMDVector> {
+    Simd {
+        first_idx: usize,
+        values: F,
+        lanes: &'a [f32],
+    },
+    Scalar {
+        idx: usize,
+        distance: f32,
+    },
+}
+
+/// Iterate over distance groups without a callback on the ranking hot path.
+///
+/// Scalar lanes borrow the input slice, so sharing a block across updates needs
+/// no temporary array. Tail entries follow in column order. The caller keeps the
+/// selected architecture's execution scope active.
+#[inline(always)]
+pub(super) fn distance_blocks<A: PiPNNSIMDSchema>(
+    arch: A,
+    distances: &[f32],
+) -> impl Iterator<Item = DistanceBlock<'_, A::Vector>> {
+    let simd_end = distances.len() - distances.len() % A::Vector::LANES;
+    distances[..simd_end]
+        .chunks_exact(A::Vector::LANES)
+        .enumerate()
+        .map(move |(group, lanes)| DistanceBlock::Simd {
+            first_idx: group * A::Vector::LANES,
+            // SAFETY: chunks_exact yields one complete SIMD group.
+            values: unsafe { A::Vector::load_simd(arch, lanes.as_ptr()) },
+            lanes,
+        })
+        .chain(
+            distances[simd_end..]
+                .iter()
+                .enumerate()
+                .map(move |(tail, &distance)| DistanceBlock::Scalar {
+                    idx: simd_end + tail,
+                    distance,
+                }),
+        )
+}
 
 /// An output slot with no assigned candidate.
 pub(super) const UNASSIGNED: u32 = u32::MAX;
@@ -289,7 +335,7 @@ mod tests {
 
     mod update_tests {
         use super::*;
-        use crate::graph::pipnn::simd::distance_blocks;
+        use crate::graph::pipnn::topk::distance_blocks;
         use rstest::rstest;
 
         #[test]
