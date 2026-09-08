@@ -20,8 +20,9 @@
 //! This seems like an odd distinction to make, but it's how the hardware intrinsics behave
 //! and the mixture of up-or-down rounding can avoid introducing systematic bias into the
 //! conversion.
-//!
-//! # Input File
+
+// Miri takes forever
+#![cfg(not(miri))]
 
 use std::{
     fs::File,
@@ -144,7 +145,6 @@ fn test_f16_to_f32_exhaustive<T, U, const N: usize>(
 diskann_wide::alias!(f32x8);
 diskann_wide::alias!(f16x8);
 
-#[cfg(not(miri))]
 #[test]
 fn test_f16_to_f32() {
     let cases = parse_float16_reference_file();
@@ -273,7 +273,6 @@ fn test_f32_to_f16_exhaustive<T, U, const N: usize>(
     );
 }
 
-#[cfg(not(miri))]
 #[test]
 fn test_f32_to_f16() {
     let cases = parse_float16_reference_file();

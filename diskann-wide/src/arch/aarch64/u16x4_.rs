@@ -18,9 +18,9 @@ use super::{
 // AArch64 intrinsics
 use std::arch::aarch64::*;
 
-///////////////////
-// 16-bit signed //
-///////////////////
+/////////////////////
+// 16-bit unsigned //
+/////////////////////
 
 macros::aarch64_define_register!(u16x4, uint16x4_t, mask16x4, u16, 4, Neon);
 macros::aarch64_define_splat!(u16x4, vmov_n_u16);
