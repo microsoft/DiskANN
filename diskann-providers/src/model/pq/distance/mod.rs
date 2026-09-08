@@ -72,7 +72,7 @@ mod tests {
         let mut shared = Shared::<'static, &'static str>::Arc(s.clone());
         assert_is_async_friendly(&shared);
 
-        assert_eq!(shared.as_ptr(), s.as_ptr());
+        assert_matches!(&shared, Shared::Arc(arc) if Arc::ptr_eq(arc, &s));
         assert_eq!(*s, "a string");
 
         let static_str = &"a static str";
