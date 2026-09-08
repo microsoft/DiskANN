@@ -48,7 +48,7 @@ where
 {
     /// Load up to the first `src.len()` and return the results in an array.
     ///
-    /// The remaining items items should be left in a default state.
+    /// The remaining items should be left in a default state.
     fn load(self, src: &[T]) -> [T; N];
 
     /// Store the first up-to `dst.len()` items in `v` into `dst`.
