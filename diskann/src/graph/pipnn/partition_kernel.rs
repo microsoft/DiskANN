@@ -39,7 +39,8 @@ pub(super) struct PartitionKernelWorkspace {
 ///
 /// # Errors
 ///
-/// Returns an error for invalid GEMM input.
+/// Returns an error for invalid GEMM input or an output row count different from
+/// the point count. A row-count mismatch leaves output and workspace unchanged.
 pub(super) fn assign_leaders<A, M>(
     arch: A,
     points: MatrixView<'_, f32>,
@@ -52,6 +53,12 @@ where
     M: PartitionMetric,
 {
     let point_count = points.nrows();
+    if output.nrows() != point_count {
+        return Err(ANNError::message(format!(
+            "invalid partition output row count {} for {point_count} points",
+            output.nrows()
+        )));
+    }
     let leader_count = M::leader_count(leaders);
     let distance_count = point_count * leader_count;
     let PartitionKernelWorkspace {
@@ -61,14 +68,13 @@ where
     if distance_scratch.len() < distance_count {
         distance_scratch.resize(distance_count, 0.0);
     }
-    M::compute_distances(points, leaders, &mut distance_scratch[..distance_count])?;
-    let distances = MatrixView::try_from(
-        &distance_scratch[..distance_count],
+    let mut distances = MutMatrixView::try_from(
+        &mut distance_scratch[..distance_count],
         point_count,
         leader_count,
-    )
-    .map_err(|error| ANNError::new(error.as_static()))?;
-    rank_leader_distances(arch, distances, output, ranked_leader_scratch);
+    )?;
+    M::compute_distances(points, leaders, distances.as_mut_view())?;
+    rank_leader_distances(arch, distances.as_view(), output, ranked_leader_scratch);
     Ok(())
 }
 
@@ -156,6 +162,38 @@ mod tests {
 
     mod assign_leaders_tests {
         use super::*;
+
+        #[rstest::rstest]
+        #[case::missing_row(2)]
+        #[case::extra_row(4)]
+        fn invalid_output_rows_leave_buffers_unchanged(#[case] rows: usize) {
+            let values = [1.0_f32, 2.0, 3.0];
+            let points = MatrixView::try_from(&values[..], 3, 1).unwrap();
+            let leaders = Cosine::create_leaders(points);
+            let expected_output = vec![42; rows];
+            let mut output = expected_output.clone();
+            let expected_ranked = [Candidate::new(7, -1.0)];
+            let mut workspace = PartitionKernelWorkspace {
+                distance_scratch: vec![99.0],
+                ranked_leader_scratch: expected_ranked.to_vec(),
+            };
+
+            let error = assign_leaders::<_, Cosine>(
+                diskann_wide::ARCH,
+                points,
+                &leaders,
+                MutMatrixView::try_from(output.as_mut_slice(), rows, 1).unwrap(),
+                &mut workspace,
+            )
+            .unwrap_err();
+
+            assert!(error.to_string().contains(&format!(
+                "invalid partition output row count {rows} for 3 points"
+            )));
+            assert_eq!(output, expected_output);
+            assert_eq!(workspace.distance_scratch, [99.0]);
+            assert_eq!(workspace.ranked_leader_scratch, expected_ranked);
+        }
 
         #[test]
         fn cosine_assignment_reuses_workspace_and_output_for_a_different_point() {

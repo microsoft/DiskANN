@@ -24,9 +24,12 @@ pub(super) struct LeafKernelWorkspace {
     worst: Vec<f32>,
 }
 
-/// Invalid output width for leaf-neighbor selection.
+/// Invalid output shape for leaf-neighbor selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(super) enum LeafKernelError {
+    /// The output must contain one row per input point.
+    #[error("invalid leaf output row count {rows} for {points} points")]
+    InvalidOutputRows { points: usize, rows: usize },
     /// A source requests more neighbors than the leaf has other points.
     #[error("invalid leaf neighbor count {neighbors} for {points} points; maximum is {maximum}")]
     InvalidNeighborCount {
@@ -54,8 +57,8 @@ pub(super) fn leaf_neighbor_count(points: usize, requested_k: usize) -> usize {
 ///
 /// # Errors
 ///
-/// Returns an error for invalid linear-algebra input or output width.
-/// Invalid output widths leave the output and workspace unchanged.
+/// Returns an error for invalid linear-algebra input or output shape.
+/// Invalid output shapes leave the output and workspace unchanged.
 pub(super) fn select_leaf_neighbors<A, M>(
     arch: A,
     points: MatrixView<'_, f32>,
@@ -67,7 +70,7 @@ where
     M: LeafMetric,
 {
     let point_count = points.nrows();
-    validate_neighbor_count(point_count, &output).map_err(ANNError::new)?;
+    validate_output(point_count, &output).map_err(ANNError::new)?;
     let distance_count = point_count * point_count;
     let LeafKernelWorkspace {
         distance_scratch,
@@ -80,8 +83,7 @@ where
         &mut distance_scratch[..distance_count],
         point_count,
         point_count,
-    )
-    .map_err(|error| ANNError::new(error.as_static()))?;
+    )?;
     M::compute_distances(points, distances.as_mut_slice())?;
     rank_leaf_distances(arch, distances.as_view(), output, worst);
     Ok(())
@@ -114,11 +116,17 @@ fn rank_leaf_distances<A>(
     });
 }
 
-/// Check the output width against the number of non-self points.
-fn validate_neighbor_count(
+/// Check for one output row per point and a valid non-self neighbor count.
+fn validate_output(
     point_count: usize,
     output: &MutMatrixView<'_, Candidate>,
 ) -> Result<(), LeafKernelError> {
+    if output.nrows() != point_count {
+        return Err(LeafKernelError::InvalidOutputRows {
+            points: point_count,
+            rows: output.nrows(),
+        });
+    }
     let maximum_neighbors = point_count.saturating_sub(1);
     let neighbor_count = output.ncols();
     if neighbor_count > maximum_neighbors {
@@ -243,6 +251,35 @@ mod tests {
 
     mod select_leaf_neighbors_tests {
         use super::*;
+
+        #[rstest::rstest]
+        #[case::missing_row(2)]
+        #[case::extra_row(4)]
+        fn invalid_output_rows_leave_buffers_unchanged(#[case] rows: usize) {
+            let values = [0.0_f32, 1.0, 3.0];
+            let expected_output = vec![Candidate::new(42, -1.0); rows];
+            let mut output = expected_output.clone();
+            let mut workspace = LeafKernelWorkspace {
+                distance_scratch: vec![99.0],
+                worst: vec![7.0],
+            };
+
+            let error = select_leaf_neighbors::<_, L2>(
+                diskann_wide::ARCH,
+                MatrixView::try_from(&values[..], 3, 1).unwrap(),
+                MutMatrixView::try_from(output.as_mut_slice(), rows, 1).unwrap(),
+                &mut workspace,
+            )
+            .unwrap_err();
+
+            assert_eq!(
+                error.downcast_ref::<LeafKernelError>(),
+                Some(&LeafKernelError::InvalidOutputRows { points: 3, rows })
+            );
+            assert_eq!(output, expected_output);
+            assert_eq!(workspace.distance_scratch, [99.0]);
+            assert_eq!(workspace.worst, [7.0]);
+        }
 
         #[test]
         fn invalid_neighbor_width_leaves_buffers_unchanged() {

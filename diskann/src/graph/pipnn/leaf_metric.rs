@@ -86,12 +86,10 @@ impl LeafMetric for Cosine {
     }
 }
 
-impl LeafMetric for CosineNormalized {
+impl LeafMetric for InnerProduct {
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
-        let point_count = points.nrows();
-        // The constant in `1 - dot` does not change nearest-first order.
         diskann_linalg::sgemm_aat_lower(
-            point_count,
+            points.nrows(),
             points.ncols(),
             -1.0,
             points.as_slice(),
@@ -102,15 +100,14 @@ impl LeafMetric for CosineNormalized {
     }
 }
 
-impl LeafMetric for InnerProduct {
+impl LeafMetric for CosineNormalized {
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()> {
-        // Both metrics rank with `-dot`. Their graph-pruning policies stay separate.
-        CosineNormalized::compute_distances(points, storage)
+        // The constant in `1 - dot` does not change nearest-first order.
+        InnerProduct::compute_distances(points, storage)
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test matrices have fixed valid shapes")]
 mod tests {
     use super::*;
     use rstest::rstest;
