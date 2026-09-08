@@ -599,10 +599,20 @@ struct Solver<'a, O: SymmetricOperator + ?Sized> {
     rng: Rng,
     apps: usize,
     iters: usize,
-    conv: usize,
+    converged: usize,
+    locked: usize,
     abs: f32,
     rel: f32,
 }
+
+fn block_aligned_locked_prefix(converged: usize, wanted: usize, block_size: usize) -> usize {
+    if converged == wanted {
+        wanted
+    } else {
+        converged / block_size * block_size
+    }
+}
+
 impl<'a, O: SymmetricOperator + ?Sized> Solver<'a, O> {
     fn apply<F>(
         &mut self,
@@ -621,7 +631,7 @@ impl<'a, O: SymmetricOperator + ?Sized> Solver<'a, O> {
                     name: "operator block",
                 })?;
         let mut a = vec![0.; len];
-        let mut y = a.clone();
+        let mut y = vec![0.; len];
         for i in 0..x.nrows() {
             for j in 0..x.ncols() {
                 a[i * x.ncols() + j] = x[(i, j)]
@@ -649,7 +659,7 @@ impl<'a, O: SymmetricOperator + ?Sized> Solver<'a, O> {
             .unwrap_or(usize::MAX),
             iteration: self.iters,
             max_iterations: self.p.max_iterations,
-            converged: self.conv,
+            converged: self.converged,
             wanted: self.p.wanted,
             max_absolute_residual: self.abs,
             max_relative_residual: self.rel,
@@ -728,22 +738,24 @@ impl<'a, O: SymmetricOperator + ?Sized> Solver<'a, O> {
         let b = self.p.block_size;
         let w = self.p.wanted;
         let c = self.h.ncols();
+        debug_assert!(self.locked.is_multiple_of(b));
+        debug_assert!(self.locked <= w);
         let subm = self
             .h
             .as_ref()
-            .submatrix(self.conv, self.conv, c - self.conv, c - self.conv)
+            .submatrix(self.locked, self.locked, c - self.locked, c - self.locked)
             .to_owned();
         finite(subm.as_ref(), "projected matrix")
             .map_err(|_| BlockKrylovSchurError::NonFinite("projected matrix"))?;
         let (e, u) = eig(subm.as_ref()).map_err(|_| BlockKrylovSchurError::ProjectedEvd)?;
         let start = self.v.as_ref().subcols(self.v.ncols() - b, b).to_owned();
-        let keep = self.v.as_ref().subcols(0, self.conv).to_owned();
+        let keep = self.v.as_ref().subcols(0, self.locked).to_owned();
         let mid = self
             .v
             .as_ref()
-            .subcols(self.conv, self.v.ncols() - b - self.conv)
+            .subcols(self.locked, self.v.ncols() - b - self.locked)
             .to_owned();
-        let proj = mm(mid.as_ref(), u.as_ref().subcols(0, w - self.conv));
+        let proj = mm(mid.as_ref(), u.as_ref().subcols(0, w - self.locked));
         self.v = hcat(hcat(keep.as_ref(), proj.as_ref()).as_ref(), start.as_ref());
         let bottom = self
             .h
@@ -753,27 +765,27 @@ impl<'a, O: SymmetricOperator + ?Sized> Solver<'a, O> {
         let coup = mm(
             bottom.as_ref(),
             u.as_ref()
-                .submatrix(u.nrows() - b, 0, b, w - self.conv)
+                .submatrix(u.nrows() - b, 0, b, w - self.locked)
                 .to_owned()
                 .as_ref(),
         );
         let mut next = self.h.clone();
-        if self.conv > 0 {
+        if self.locked > 0 {
             let top = self
                 .h
                 .as_ref()
-                .submatrix(0, self.conv, self.conv, c - self.conv)
+                .submatrix(0, self.locked, self.locked, c - self.locked)
                 .to_owned();
             let rotated = mm(top.as_ref(), u.as_ref());
-            put(&mut next, 0, self.conv, rotated.as_ref());
+            put(&mut next, 0, self.locked, rotated.as_ref());
         }
         put(
             &mut next,
-            self.conv,
-            self.conv,
-            diag(&e[..w - self.conv]).as_ref(),
+            self.locked,
+            self.locked,
+            diag(&e[..w - self.locked]).as_ref(),
         );
-        put(&mut next, w, self.conv, coup.as_ref());
+        put(&mut next, w, self.locked, coup.as_ref());
         self.h = next.submatrix(0, 0, w + b, w).to_owned();
         Ok(())
     }
@@ -814,7 +826,8 @@ where
         rng: Rng::new(p.seed),
         apps: 0,
         iters: 0,
-        conv: 0,
+        converged: 0,
+        locked: 0,
         abs: f32::INFINITY,
         rel: f32::INFINITY,
     };
@@ -843,7 +856,8 @@ where
                 first = j
             }
         }
-        s.conv = first;
+        s.converged = first;
+        s.locked = block_aligned_locked_prefix(first, p.wanted, p.block_size);
         cb(BlockKrylovSchurProgress {
             block_operator_applications: s.apps,
             max_block_operator_applications: max,
@@ -886,7 +900,7 @@ where
         eigenvalues,
         eigenvectors: out,
         status,
-        converged: s.conv,
+        converged: s.converged,
         iterations: s.iters,
         block_operator_applications: s.apps,
     })
@@ -1214,6 +1228,39 @@ mod tests {
             block_krylov_schur_eigenpairs(&op, &p()),
             Err(BlockKrylovSchurError::NumericalBreakdown(_))
         ));
+    }
+
+    #[test]
+    fn partial_convergence_locks_only_complete_blocks() {
+        let params = BlockKrylovSchurParams {
+            wanted: 4,
+            ncv: 6,
+            block_size: 2,
+            max_iterations: 2,
+            absolute_tolerance: 0.0,
+            relative_tolerance: 1e-3,
+            seed: 17,
+        };
+        let mut solver = Solver {
+            op: &FixedDim(8),
+            n: 8,
+            p: params,
+            v: Mat::from_fn(8, 6, |i, j| if i == j { 1.0 } else { 0.0 }),
+            h: Mat::from_fn(6, 4, |i, j| if i == j { (4 - i) as f32 } else { 0.0 }),
+            rng: Rng::new(params.seed),
+            apps: 0,
+            iters: 1,
+            converged: 3,
+            locked: block_aligned_locked_prefix(3, params.wanted, params.block_size),
+            abs: 0.0,
+            rel: 0.0,
+        };
+
+        assert_eq!(solver.converged, 3);
+        assert_eq!(solver.locked, 2);
+        solver.truncate().unwrap();
+        assert_eq!(solver.h.nrows(), params.wanted + params.block_size);
+        assert_eq!(solver.h.ncols(), params.wanted);
     }
 
     #[test]
