@@ -8,7 +8,7 @@ use diskann_utils::Reborrow;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{QueryComputer, dynamic::VTable};
+use super::{QueryComputer, Shared, dynamic::VTable};
 use crate::model::FixedChunkPQTable;
 
 pub trait PQVersion: Eq + Copy {}
@@ -94,15 +94,15 @@ where
 {
     /// Only one table is present with an associated version.
     One {
-        table: &'a FixedChunkPQTable,
+        table: Shared<'a, FixedChunkPQTable>,
         version: I,
     },
     /// Two tables are present, an incoming "new" table and an outgoing "old" table.
     /// The versions of these tables are recorded respectively in `new_version` and
     /// `old_version`.
     Two {
-        new: &'a FixedChunkPQTable,
-        old: &'a FixedChunkPQTable,
+        new: Shared<'a, FixedChunkPQTable>,
+        old: Shared<'a, FixedChunkPQTable>,
         new_version: I,
         old_version: I,
     },
@@ -117,7 +117,7 @@ where
     I: PQVersion,
 {
     /// Construct a new `MultiTable` containing a single `FixedChunkPQTable`.
-    pub fn one(table: &'a FixedChunkPQTable, version: I) -> Self {
+    pub fn one(table: Shared<'a, FixedChunkPQTable>, version: I) -> Self {
         Self::One { table, version }
     }
 
@@ -125,8 +125,8 @@ where
     ///
     /// Returns an `Err` if the two provided versions are equal.
     pub fn two(
-        new: &'a FixedChunkPQTable,
-        old: &'a FixedChunkPQTable,
+        new: Shared<'a, FixedChunkPQTable>,
+        old: Shared<'a, FixedChunkPQTable>,
         new_version: I,
         old_version: I,
     ) -> Result<Self, EqualVersionsError> {
@@ -517,7 +517,7 @@ mod tests {
         let new = test_utils::seed_pivot_table(config);
         let old = test_utils::seed_pivot_table(config);
 
-        let result = MultiTable::two(&new, &old, 0, 0);
+        let result = MultiTable::two(Shared::Ref(&new), Shared::Ref(&old), 0, 0);
         assert!(
             matches!(result, Err(EqualVersionsError)),
             "MultiTable should now allow construction of the Two variant with equal versions"
@@ -622,7 +622,7 @@ mod tests {
 
         let version: usize = 0x625b215f82f38008;
 
-        let multi_table = MultiTable::one(&table, version);
+        let multi_table = MultiTable::one(Shared::Ref(&table), version);
         let (n, o) = multi_table.versions();
         assert_eq!(*n, version);
         assert!(o.is_none());
@@ -794,7 +794,13 @@ mod tests {
         let new_version: usize = 0x5a2b92a731766613;
         let old_version: usize = 0x2fab58c9c8b73841;
 
-        let multi_table = MultiTable::two(&new, &old, new_version, old_version).unwrap();
+        let multi_table = MultiTable::two(
+            Shared::Ref(&new),
+            Shared::Ref(&old),
+            new_version,
+            old_version,
+        )
+        .unwrap();
         let (n, o) = multi_table.versions();
         assert_eq!(*n, new_version);
         assert_eq!(*o.unwrap(), old_version);
@@ -912,7 +918,7 @@ mod tests {
         };
 
         let create = |version: usize, query: &[f32]| {
-            let schema = MultiTable::one(&table, version);
+            let schema = MultiTable::one(Shared::Ref(&table), version);
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
         test_query_computer_multi_with_one(
@@ -1037,7 +1043,13 @@ mod tests {
         let num_trials = 20;
 
         let create = |new_version: usize, old_version: usize, query: &[f32]| {
-            let schema = MultiTable::two(&new, &old, new_version, old_version).unwrap();
+            let schema = MultiTable::two(
+                Shared::Ref(&new),
+                Shared::Ref(&old),
+                new_version,
+                old_version,
+            )
+            .unwrap();
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
 

@@ -10,7 +10,7 @@ use diskann_utils::{lazy_format, object_pool::ObjectPool};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 // Concrete implementations
-use super::{cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
+use super::{Shared, cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
 use crate::model::pq::fixed_chunk_pq_table::FixedChunkPQTable;
 
 /// A quantized computation that works for multiple distance functions.
@@ -62,7 +62,7 @@ impl<'a> QueryComputer<'a> {
     /// Even though PQ does not necessarily preserve the norms of compressed vectors, using L2
     /// for Cosine Normalized seems to work well enough in practice to work as a temporary fix.
     pub fn new(
-        table: &'a FixedChunkPQTable,
+        table: Shared<'a, FixedChunkPQTable>,
         metric: Metric,
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
@@ -146,7 +146,7 @@ impl VTable {
 /// Internally, a mini v-table is kept to invoke the correct distance function.
 #[derive(Debug)]
 pub struct DistanceComputer<'a> {
-    table: &'a FixedChunkPQTable,
+    table: Shared<'a, FixedChunkPQTable>,
     vtable: VTable,
 }
 
@@ -164,7 +164,7 @@ impl<'a> DistanceComputer<'a> {
     /// * `Metric::Cosine`
     /// * `Metric::CosineNormalized`
     ///
-    pub fn new(table: &'a FixedChunkPQTable, distance: Metric) -> Self {
+    pub fn new(table: Shared<'a, FixedChunkPQTable>, distance: Metric) -> Self {
         Self {
             table,
             vtable: VTable::new(distance),
@@ -191,7 +191,7 @@ impl DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<'_> {
             "{}",
             INVALID_PQ_DIMENSION
         );
-        (self.vtable.distance_fn)(self.table, fp, q)
+        (self.vtable.distance_fn)(&self.table, fp, q)
     }
 }
 
@@ -202,7 +202,7 @@ impl DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<'_> {
         let num_pq_chunks = self.table.get_num_chunks();
         assert_eq!(q0.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
         assert_eq!(q1.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
-        (self.vtable.distance_fn_qq)(self.table, q0, q1)
+        (self.vtable.distance_fn_qq)(&self.table, q0, q1)
     }
 }
 
@@ -265,7 +265,7 @@ mod tests {
 
                     test_utils::test_l2_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
-                            QueryComputer::new(table, Metric::L2, query, None).unwrap()
+                            QueryComputer::new(Shared::Ref(table), Metric::L2, query, None).unwrap()
                         },
                         &table,
                         num_trials,
@@ -276,7 +276,7 @@ mod tests {
 
                     test_utils::test_l2_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::L2),
+                            table: DistanceComputer::new(Shared::Ref(table), Metric::L2),
                             query: query.to_vec(),
                         },
                         &table,
@@ -321,7 +321,13 @@ mod tests {
 
                     test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
-                            QueryComputer::new(table, Metric::InnerProduct, query, None).unwrap()
+                            QueryComputer::new(
+                                Shared::Ref(table),
+                                Metric::InnerProduct,
+                                query,
+                                None,
+                            )
+                            .unwrap()
                         },
                         &table,
                         num_trials,
@@ -332,7 +338,7 @@ mod tests {
 
                     test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::InnerProduct),
+                            table: DistanceComputer::new(Shared::Ref(table), Metric::InnerProduct),
                             query: query.to_vec(),
                         },
                         &table,
@@ -376,7 +382,8 @@ mod tests {
 
                     test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
-                            QueryComputer::new(table, Metric::Cosine, query, None).unwrap()
+                            QueryComputer::new(Shared::Ref(table), Metric::Cosine, query, None)
+                                .unwrap()
                         },
                         &table,
                         num_trials,
@@ -387,7 +394,7 @@ mod tests {
 
                     test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::Cosine),
+                            table: DistanceComputer::new(Shared::Ref(table), Metric::Cosine),
                             query: query.to_vec(),
                         },
                         &table,
@@ -443,18 +450,18 @@ mod tests {
                 config.start_value,
             );
 
-            let squared_l2 = DistanceComputer::new(&table, Metric::L2);
+            let squared_l2 = DistanceComputer::new(Shared::Ref(&table), Metric::L2);
             let expected: f32 = SquaredL2::evaluate(&*v0, &*v1);
             assert_eq!(squared_l2.evaluate_similarity(&*code0, &*code1), expected);
 
-            let inner_product = DistanceComputer::new(&table, Metric::InnerProduct);
+            let inner_product = DistanceComputer::new(Shared::Ref(&table), Metric::InnerProduct);
             let expected: f32 = InnerProduct::evaluate(&*v0, &*v1);
             assert_eq!(
                 inner_product.evaluate_similarity(&*code0, &*code1),
                 expected,
             );
 
-            let cosine = DistanceComputer::new(&table, Metric::Cosine);
+            let cosine = DistanceComputer::new(Shared::Ref(&table), Metric::Cosine);
             let sim: f32 = cosine.evaluate_similarity(&*code0, &*code1);
             assert!(0.0 <= sim);
             assert!(sim <= 2.0);
@@ -465,7 +472,8 @@ mod tests {
             normalize(&mut v0);
             normalize(&mut v1);
 
-            let cosine_normalized = DistanceComputer::new(&table, Metric::CosineNormalized);
+            let cosine_normalized =
+                DistanceComputer::new(Shared::Ref(&table), Metric::CosineNormalized);
             let expected: f32 = CosineNormalized::evaluate(&*v0, &*v1);
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),
@@ -485,7 +493,8 @@ mod tests {
         };
         let table = test_utils::seed_pivot_table(config);
         let short_query = vec![0.0f32; config.dim - 1];
-        let _ = QueryComputer::new(&table, Metric::L2, &short_query, None).unwrap_err();
+        let _ =
+            QueryComputer::new(Shared::Ref(&table), Metric::L2, &short_query, None).unwrap_err();
     }
 
     #[test]
@@ -498,7 +507,7 @@ mod tests {
             start_value: 0.0,
         };
         let table = test_utils::seed_pivot_table(config);
-        let computer = DistanceComputer::new(&table, Metric::L2);
+        let computer = DistanceComputer::new(Shared::Ref(&table), Metric::L2);
         let short_fp = vec![0.0f32; config.dim - 1];
         let code = vec![0u8; config.pq_chunks];
         let _ = computer.evaluate_similarity(short_fp.as_slice(), code.as_slice());
