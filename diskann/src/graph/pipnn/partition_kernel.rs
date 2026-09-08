@@ -5,13 +5,9 @@
 
 //! Select partition centers for PiPNN point assignment.
 //!
-//! A leader is a sampled dataset point that represents one child partition.
-//! The metric builds final point-to-leader distances. The kernel returns nearest
-//! leader-column IDs for partition scatter.
-//!
-//! L2 omits the assigned point's norm because it is constant across all sampled
-//! leaders. Equal distances can select either leader. NaN is not rankable. An
-//! unfilled output slot contains [`UNASSIGNED_LEADER`].
+//! [`assign_leaders`] computes point-to-leader ranking values and selects the
+//! nearest leader-column IDs for partition scatter. Each sampled leader
+//! represents one child partition.
 
 use crate::{ANNError, ANNResult};
 use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -33,6 +29,10 @@ pub(super) struct PartitionKernelWorkspace {
 }
 
 /// Assign one packed point stripe to metric-owned partition leaders.
+///
+/// Each output row contains leader-column IDs ordered by increasing ranking
+/// value. Equal values can select either leader. NaN and positive infinity are
+/// not retained.
 ///
 /// A point can have fewer assignments than the output width. Each remaining
 /// slot contains [`UNASSIGNED_LEADER`].

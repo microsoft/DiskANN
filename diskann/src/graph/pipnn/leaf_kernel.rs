@@ -5,18 +5,8 @@
 
 //! Leaf-local top-k selection from packed `f32` point vectors.
 //!
-//! The metric fills the lower triangle of a distance matrix. The kernel
-//! reads each strict-lower point pair once and updates both points.
-//!
-//! The output is an `n × k` matrix of sorted [`Candidate`] values. Each target
-//! is a position in the leaf.
-//!
-//! Equal distances can select either candidate. The kernel does not rank NaN.
-//! An unfilled output slot contains [`Candidate::default`]. All supported
-//! metrics use the same SIMD-group and single-value traversal.
-//!
-//! The caller supplies concrete architecture `A` and metric `M`.
-//! [`LeafKernelWorkspace`] stores reusable numerical scratch.
+//! [`select_leaf_neighbors`] asks the metric to fill a lower-triangle ranking
+//! buffer. It scans each point pair once and updates both points' neighbor lists.
 
 use crate::{ANNError, ANNResult};
 use diskann_utils::views::{MatrixView, MutMatrixView};
@@ -56,6 +46,11 @@ pub(super) fn leaf_neighbor_count(points: usize, requested_k: usize) -> usize {
 }
 
 /// Compute local nearest neighbors for one packed leaf matrix.
+///
+/// `output` contains one row per point, ordered by increasing ranking distance.
+/// Candidate IDs are positions in the leaf. Equal distances can select either
+/// candidate. NaN and positive infinity are not retained; unfilled slots contain
+/// [`Candidate::default`].
 ///
 /// # Errors
 ///

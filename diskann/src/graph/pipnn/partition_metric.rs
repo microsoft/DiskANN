@@ -42,6 +42,10 @@ pub(super) trait PartitionMetric: Send + Sync + 'static {
 
     /// Compute one row-major point-to-leader ranking buffer.
     ///
+    /// Values preserve nearest-first order. L2 omits the point's squared norm,
+    /// which is constant across its row. Normalized cosine and inner product
+    /// return `-dot`; cosine returns `1 - similarity`.
+    ///
     /// `storage` has `points.nrows() * leader_count` elements.
     /// A zero distance can have either sign. Equal distances can select either leader.
     fn compute_distances(

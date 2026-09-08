@@ -21,6 +21,11 @@ use super::{Cosine, CosineNormalized, InnerProduct, L2, cosine_distance};
 pub(super) trait LeafMetric: Send + Sync + 'static {
     /// Compute ranking distances for all unordered point pairs.
     ///
+    /// Values preserve nearest-first order, but need not equal metric distances.
+    /// L2 returns squared distances. Normalized cosine and inner product return
+    /// `-dot`, omitting the constant in normalized cosine's `1 - dot`.
+    /// Cosine returns `1 - similarity`.
+    ///
     /// `storage` has `points.nrows() * points.nrows()` elements.
     fn compute_distances(points: MatrixView<'_, f32>, storage: &mut [f32]) -> ANNResult<()>;
 }
