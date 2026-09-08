@@ -7,16 +7,16 @@
 //! Updates allocate no storage. NaN and positive infinity are not retained.
 
 use diskann_utils::views::MutMatrixView;
-use diskann_wide::SIMDVector;
+use diskann_wide::{SIMDPartialOrd, SIMDVector};
 
-use super::simd::{PiPNNSIMDSchema, PiPNNSIMDVector};
+use super::simd::PiPNNSIMDSchema;
 
 /// One group of distances and their column indexes in the supplied slice.
 #[derive(Clone, Copy)]
-pub(super) enum DistanceBlock<'a, F: PiPNNSIMDVector> {
+pub(super) enum DistanceBlock<'a, A: PiPNNSIMDSchema> {
     Simd {
         first_idx: usize,
-        values: F,
+        values: A::Vector,
         lanes: &'a [f32],
     },
     Scalar {
@@ -34,12 +34,12 @@ pub(super) enum DistanceBlock<'a, F: PiPNNSIMDVector> {
 pub(super) fn distance_blocks<A: PiPNNSIMDSchema>(
     arch: A,
     distances: &[f32],
-) -> impl Iterator<Item = DistanceBlock<'_, A::Vector>> {
+) -> impl Iterator<Item = DistanceBlock<'_, A>> {
     let simd_end = distances.len() - distances.len() % A::Vector::LANES;
     distances[..simd_end]
         .chunks_exact(A::Vector::LANES)
         .enumerate()
-        .map(move |(group, lanes)| DistanceBlock::Simd {
+        .map(move |(group, lanes)| DistanceBlock::<A>::Simd {
             first_idx: group * A::Vector::LANES,
             // SAFETY: chunks_exact yields one complete SIMD group.
             values: unsafe { A::Vector::load_simd(arch, lanes.as_ptr()) },
@@ -173,10 +173,10 @@ impl<'a, const K: usize> TopKRows<'a, K> {
 
     /// Offer the block's candidates to one row using their slice-column indexes.
     #[inline(always)]
-    pub(super) fn update_one<F: PiPNNSIMDVector>(
+    pub(super) fn update_one<A: PiPNNSIMDSchema>(
         &mut self,
         row_idx: usize,
-        block: &DistanceBlock<'_, F>,
+        block: &DistanceBlock<'_, A>,
     ) {
         match *block {
             DistanceBlock::Scalar { idx, distance } => {
@@ -188,7 +188,8 @@ impl<'a, const K: usize> TopKRows<'a, K> {
                 lanes,
             } => {
                 let mut worst = self.worst[row_idx];
-                let mut eligible = F::active_lanes(values.lt_simd(F::splat(values.arch(), worst)));
+                let mut eligible =
+                    A::active_lanes(values.lt_simd(A::Vector::splat(values.arch(), worst)));
                 if eligible == 0 {
                     return;
                 }
@@ -211,10 +212,10 @@ impl<'a, const K: usize> TopKRows<'a, K> {
 
     /// Offer one candidate to each row identified by the block's slice-column indexes.
     #[inline(always)]
-    pub(super) fn update_many<F: PiPNNSIMDVector>(
+    pub(super) fn update_many<A: PiPNNSIMDSchema>(
         &mut self,
         candidate_idx: u32,
-        block: &DistanceBlock<'_, F>,
+        block: &DistanceBlock<'_, A>,
     ) {
         match *block {
             DistanceBlock::Scalar { idx, distance } => {
@@ -225,10 +226,10 @@ impl<'a, const K: usize> TopKRows<'a, K> {
                 values,
                 lanes,
             } => {
-                let thresholds = &mut self.worst[first_idx..][..F::LANES];
+                let thresholds = &mut self.worst[first_idx..][..A::Vector::LANES];
                 // SAFETY: the slice above has one threshold for every SIMD lane.
-                let worst = unsafe { F::load_simd(values.arch(), thresholds.as_ptr()) };
-                let mut eligible = F::active_lanes(values.lt_simd(worst));
+                let worst = unsafe { A::Vector::load_simd(values.arch(), thresholds.as_ptr()) };
+                let mut eligible = A::active_lanes(values.lt_simd(worst));
                 while eligible != 0 {
                     let lane = eligible.trailing_zeros() as usize;
                     eligible &= eligible - 1;

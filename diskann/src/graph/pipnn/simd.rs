@@ -5,41 +5,34 @@
 
 //! SIMD schema for PiPNN numerical kernels.
 
-use diskann_wide::{Architecture, Const, SIMDFloat, SIMDMask, SIMDVector, SupportedLaneCount};
+use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDVector};
 
 /// Default SIMD representation used by both PiPNN ranking kernels.
 ///
 /// This alias is the single build-time width selection.
 type DefaultVector<A> = <A as Architecture>::f32x16;
 
-/// Operations required by PiPNN SIMD vectors.
-pub(super) trait PiPNNSIMDVector: SIMDVector<Scalar = f32> + SIMDFloat {
-    /// Return one bit for each selected lane.
-    fn active_lanes(mask: Self::Mask) -> u64;
-}
-
-impl<F, const N: usize> PiPNNSIMDVector for F
-where
-    F: SIMDVector<Scalar = f32, ConstLanes = Const<N>> + SIMDFloat,
-    Const<N>: SupportedLaneCount,
-    u64: From<<<F::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    #[inline(always)]
-    fn active_lanes(mask: Self::Mask) -> u64 {
-        u64::from(mask.bitmask().to_underlying())
-    }
-}
-
 /// PiPNN SIMD representation for one architecture.
 pub(super) trait PiPNNSIMDSchema: Architecture {
     /// SIMD vector used by both ranking kernels.
-    type Vector: PiPNNSIMDVector<Arch = Self>;
+    type Vector: SIMDVector<Arch = Self, Scalar = f32> + SIMDFloat;
+
+    /// Return one bit for each selected lane.
+    fn active_lanes(mask: <Self::Vector as SIMDVector>::Mask) -> u64;
 }
 
 impl<A> PiPNNSIMDSchema for A
 where
     A: Architecture,
-    DefaultVector<A>: PiPNNSIMDVector<Arch = A>,
+    DefaultVector<A>: SIMDVector<Arch = A, Scalar = f32> + SIMDFloat,
+    u64: From<
+        <<<DefaultVector<A> as SIMDVector>::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying,
+    >,
 {
     type Vector = DefaultVector<A>;
+
+    #[inline(always)]
+    fn active_lanes(mask: <Self::Vector as SIMDVector>::Mask) -> u64 {
+        u64::from(mask.bitmask().to_underlying())
+    }
 }
