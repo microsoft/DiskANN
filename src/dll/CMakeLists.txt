@@ -5,6 +5,7 @@ add_library(${PROJECT_NAME} SHARED dllmain.cpp
     ../abstract_data_store.cpp ../abstract_index.cpp ../ann_exception.cpp
     ../color_helper.cpp ../color_info.cpp ../disk_utils.cpp ../distance.cpp
     ../filter_match_proxy.cpp ../filter_utils.cpp
+    ../graph_delta_codec.cpp
     ../in_mem_data_store.cpp ../in_mem_graph_reformat_store.cpp ../in_mem_graph_store.cpp
     ../in_mem_reorder_data_store.cpp ../in_mem_static_graph_reformat.cpp ../in_mem_static_graph_store.cpp
     ../index.cpp ../index_factory.cpp ../integer_label_vector.cpp

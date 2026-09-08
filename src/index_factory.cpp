@@ -112,6 +112,10 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const Gra
         return std::make_unique<InMemGraphReformatStore>(size, reserve_graph_degree);
     case GraphStoreStrategy::REFORMAT_STATICMEMORY:
         return std::make_unique<InMemStaticGraphReformatStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::STREAM_VBYTE_STATICMEMORY:
+        return std::make_unique<InMemStaticGraphStore>(size, reserve_graph_degree, true);
+    case GraphStoreStrategy::REFORMAT_STREAM_VBYTE_STATICMEMORY:
+        return std::make_unique<InMemStaticGraphReformatStore>(size, reserve_graph_degree, true);
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
     }

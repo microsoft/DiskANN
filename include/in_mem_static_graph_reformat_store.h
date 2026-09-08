@@ -7,8 +7,9 @@ namespace diskann
 class InMemStaticGraphReformatStore : public InMemStaticGraphStore
 {
 public:
-    InMemStaticGraphReformatStore(const size_t total_pts, const size_t reserve_graph_degree)
-        : InMemStaticGraphStore(total_pts, reserve_graph_degree)
+    InMemStaticGraphReformatStore(const size_t total_pts, const size_t reserve_graph_degree,
+        bool enable_stream_vbyte = false)
+        : InMemStaticGraphStore(total_pts, reserve_graph_degree, enable_stream_vbyte)
     {
     }
 

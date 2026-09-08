@@ -45,17 +45,29 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
 
     diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
 
-    _node_index.resize(num_points + 1);
-    in.read((char*)_node_index.data(), _node_index.size() * sizeof(size_t));
+    std::vector<size_t> raw_node_index(num_points + 1);
+    in.read((char*)raw_node_index.data(), raw_node_index.size() * sizeof(size_t));
 
-    _graph_size = _node_index[num_points] * sizeof(std::uint32_t);
-    
-    size_t total_neighbors = _node_index[num_points];
-    // add one more slot than actually need to avoid read invaild address
-    // while the last point is no neighbor
-    _graph.resize(total_neighbors + 1);
-    in.read((char*)_graph.data(), _graph_size);
+    const size_t total_neighbors = raw_node_index[num_points];
+    const size_t raw_graph_size = total_neighbors * sizeof(std::uint32_t);
+    std::vector<uint32_t> raw_graph(total_neighbors + 1);
+    in.read((char*)raw_graph.data(), raw_graph_size);
     in.close();
+
+    if (_enable_stream_vbyte)
+    {
+        build_stream_vbyte_graph(num_points, [&](size_t node) {
+            const size_t start_offset = raw_node_index[node];
+            return NeighborList(
+                raw_graph.data() + start_offset,
+                raw_node_index[node + 1] - start_offset);
+        });
+    }
+    else
+    {
+        _storage = RawGraphStorage{std::move(raw_node_index), std::move(raw_graph)};
+        _graph_size = raw_graph_size;
+    }
     
     diskann::cout << "done. Index has " << num_points << " nodes and " << total_neighbors << " out-edges, _start is set to " << start
         << std::endl;

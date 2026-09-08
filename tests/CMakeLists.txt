@@ -32,6 +32,7 @@ if (NOT Boost_FOUND)
 endif()
 
 set(DISKANN_UNIT_TEST_SOURCES main.cpp index_write_parameters_builder_tests.cpp unified_index_tests.cpp filter_match_proxy_tests.cpp)
+list(APPEND DISKANN_UNIT_TEST_SOURCES graph_delta_codec_tests.cpp in_mem_delta_graph_store_tests.cpp)
 
 # Link the tests against the static DiskANN core (diskann_s) rather than the
 # DLL, so internal-only symbols don't need to be exported from the DLL just to
@@ -97,4 +98,3 @@ foreach(variant ${INSERT_FAST_SIMD_VARIANTS})
 
     add_test(NAME ${v_target} COMMAND ${v_target})
 endforeach()
-

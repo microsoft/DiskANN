@@ -2,13 +2,19 @@
 // Licensed under the MIT license.
 
 #include "in_mem_static_graph_store.h"
+#include "graph_delta_codec.h"
 #include "utils.h"
+
+#include <limits>
+#include <type_traits>
 
 namespace diskann
 {
 
-InMemStaticGraphStore::InMemStaticGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
-    : AbstractGraphStore(total_pts, reserve_graph_degree)
+InMemStaticGraphStore::InMemStaticGraphStore(const size_t total_pts, const size_t reserve_graph_degree,
+    bool enable_stream_vbyte)
+    : AbstractGraphStore(total_pts, reserve_graph_degree),
+      _enable_stream_vbyte(enable_stream_vbyte)
 {    
 }
 
@@ -20,12 +26,91 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load(const std::st
 
 const NeighborList InMemStaticGraphStore::get_neighbours(const location_t i) const
 {
-    assert(i < _node_index.size() - 1);
-    size_t start_index = _node_index[i];
-    size_t end_index = _node_index[i + 1];
-    size_t size = end_index - start_index;
-    const location_t* neighbor_start = _graph.data() + start_index;
-    return NeighborList(neighbor_start, size);
+    if (const auto* compressed = std::get_if<StreamVByteGraphStorage>(&_storage))
+    {
+        assert(i < compressed->_node_count);
+        const auto [start_index, end_index] = std::visit(
+            [i](const auto& offsets) {
+                return std::make_pair(static_cast<size_t>(offsets[i]), static_cast<size_t>(offsets[i + 1]));
+            },
+            compressed->_offsets);
+        thread_local std::vector<uint32_t> decoded_neighbors;
+        decoded_neighbors.resize(_max_observed_degree);
+        const size_t degree = decode_stream_vbyte_node(
+            compressed->_data.data() + start_index,
+            end_index - start_index,
+            compressed->_node_count,
+            compressed->_first_id_bytes,
+            compressed->_degree_bytes,
+            decoded_neighbors.data(),
+            decoded_neighbors.size());
+        decoded_neighbors.resize(degree);
+        return NeighborList(decoded_neighbors.data(), decoded_neighbors.size());
+    }
+    else
+    {
+        const auto& raw = std::get<RawGraphStorage>(_storage);
+        assert(i + size_t{1} < raw._node_index.size());
+        size_t start_index = raw._node_index[i];
+        size_t end_index = raw._node_index[i + 1];
+        size_t size = end_index - start_index;
+        const location_t* neighbor_start = raw._graph.data() + start_index;
+        return NeighborList(neighbor_start, size);
+    }
+}
+
+void InMemStaticGraphStore::build_stream_vbyte_graph(
+    size_t node_count,
+    const std::function<NeighborList(size_t)>& neighbor_provider)
+{
+    StreamVByteGraphStorage compressed;
+    compressed._first_id_bytes = graph_id_bytes(node_count);
+    compressed._degree_bytes = graph_degree_bytes(_max_observed_degree);
+    compressed._node_count = node_count;
+
+    size_t compressed_size = 0;
+    std::vector<uint32_t> sorted_neighbors;
+    for (size_t node = 0; node < node_count; ++node)
+    {
+        const NeighborList neighbors = neighbor_provider(node);
+        const auto encoding = prepare_stream_vbyte_node(
+            neighbors, node_count, compressed._first_id_bytes, compressed._degree_bytes, sorted_neighbors);
+        compressed_size += encoding.encoded_size;
+    }
+
+    compressed._data.resize(compressed_size);
+    if (compressed_size > std::numeric_limits<uint32_t>::max())
+        compressed._offsets.emplace<std::vector<uint64_t>>();
+
+    std::visit(
+        [&](auto& offsets) {
+            using Offset = typename std::decay_t<decltype(offsets)>::value_type;
+            offsets.resize(node_count + 1);
+            size_t position = 0;
+            for (size_t node = 0; node < node_count; ++node)
+            {
+                offsets[node] = static_cast<Offset>(position);
+                const NeighborList neighbors = neighbor_provider(node);
+                const auto encoding = prepare_stream_vbyte_node(
+                    neighbors, node_count, compressed._first_id_bytes, compressed._degree_bytes, sorted_neighbors);
+                encode_stream_vbyte_node(
+                    sorted_neighbors,
+                    encoding,
+                    compressed._first_id_bytes,
+                    compressed._degree_bytes,
+                    compressed._data.data() + position,
+                    encoding.encoded_size);
+                position += encoding.encoded_size;
+            }
+            offsets[node_count] = static_cast<Offset>(position);
+        },
+        compressed._offsets);
+
+    const size_t offset_bytes = std::visit(
+        [](const auto& entries) { return entries.capacity() * sizeof(entries[0]); },
+        compressed._offsets);
+    _graph_size = offset_bytes + compressed._data.capacity() * sizeof(uint8_t);
+    _storage = std::move(compressed);
 }
 
 #ifdef EXEC_ENV_OLS
@@ -91,7 +176,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
 #endif
 
 std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const std::string& filename,
-    size_t expected_num_points)
+    size_t /*expected_num_points*/)
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
@@ -131,6 +216,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
         uint32_t k;
         memcpy((char*)&k, buffer.data() + cur_index, sizeof(uint32_t));
         cur_index += sizeof(uint32_t);
+        _max_range_of_graph = std::max(_max_range_of_graph, static_cast<size_t>(k));
         size_t neighbor_size = k * sizeof(uint32_t);
         if (cur_index + neighbor_size > graph_size)
         {
@@ -142,47 +228,63 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
         ++nodes_read;
     }
 
-    // resize graph
-    _node_index.resize(nodes_read + 1);
-    _node_index[0] = 0;
-    // add one more slot than actually need to avoid read invaild address
-    // while the last point is no neighbor
-    _graph.resize(cc + 1); 
-
-    // second round to insert graph data
-    nodes_read = 0;
-    cur_index = 0;
-    while (cur_index + sizeof(uint32_t) <= graph_size)
+    if (_enable_stream_vbyte)
     {
-        uint32_t k;
-        memcpy((char*)&k, buffer.data() + cur_index, sizeof(uint32_t));
-        cur_index += sizeof(uint32_t);
-        size_t neighbor_size = k * sizeof(uint32_t);
-        if (cur_index + neighbor_size > graph_size)
-        {
-            break;
-        }
-
-        size_t offset = _node_index[nodes_read];
-        std::uint32_t* neighborPtr = &_graph[offset];
-
-        memcpy(neighborPtr, buffer.data() + cur_index, neighbor_size);
-        _node_index[nodes_read + 1] = offset + k;
-
-        cur_index += neighbor_size;
-
-        if (nodes_read % 10000000 == 0)
-            std::cout << "." << std::flush;
-
-        ++nodes_read;
-
-        if (k > _max_range_of_graph)
-        {
-            _max_range_of_graph = k;
-        }
+        size_t record_offset = 0;
+        build_stream_vbyte_graph(nodes_read, [&](size_t node) {
+            // The builder visits nodes in order twice; restart the cursor for each pass.
+            if (node == 0)
+                record_offset = 0;
+            uint32_t degree = 0;
+            memcpy(&degree, buffer.data() + record_offset, sizeof(uint32_t));
+            const size_t neighbors_offset = record_offset + sizeof(uint32_t);
+            record_offset = neighbors_offset + static_cast<size_t>(degree) * sizeof(uint32_t);
+            return NeighborList(
+                reinterpret_cast<const uint32_t*>(
+                    buffer.data() + neighbors_offset),
+                degree);
+        });
     }
+    else
+    {
+        RawGraphStorage raw;
+        raw._node_index.resize(nodes_read + 1);
+        raw._node_index[0] = 0;
+        // add one more slot than actually need to avoid read invaild address
+        // while the last point is no neighbor
+        raw._graph.resize(cc + 1);
 
-    _graph_size = cc * sizeof(uint32_t);
+        // second round to insert graph data
+        nodes_read = 0;
+        cur_index = 0;
+        while (cur_index + sizeof(uint32_t) <= graph_size)
+        {
+            uint32_t k;
+            memcpy((char*)&k, buffer.data() + cur_index, sizeof(uint32_t));
+            cur_index += sizeof(uint32_t);
+            size_t neighbor_size = k * sizeof(uint32_t);
+            if (cur_index + neighbor_size > graph_size)
+            {
+                break;
+            }
+
+            size_t offset = raw._node_index[nodes_read];
+            std::uint32_t* neighborPtr = &raw._graph[offset];
+
+            memcpy(neighborPtr, buffer.data() + cur_index, neighbor_size);
+            raw._node_index[nodes_read + 1] = offset + k;
+
+            cur_index += neighbor_size;
+
+            if (nodes_read % 10000000 == 0)
+                std::cout << "." << std::flush;
+
+            ++nodes_read;
+        }
+
+        _graph_size = cc * sizeof(uint32_t);
+        _storage = std::move(raw);
+    }
     diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
         << std::endl;
     return std::make_tuple(nodes_read, start, file_frozen_pts);
