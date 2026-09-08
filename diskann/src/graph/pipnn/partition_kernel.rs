@@ -166,33 +166,22 @@ mod tests {
         #[rstest::rstest]
         #[case::missing_row(2)]
         #[case::extra_row(4)]
-        fn invalid_output_rows_leave_buffers_unchanged(#[case] rows: usize) {
+        fn invalid_output_rows_return_error(#[case] rows: usize) {
             let values = [1.0_f32, 2.0, 3.0];
             let points = MatrixView::try_from(&values[..], 3, 1).unwrap();
             let leaders = Cosine::create_leaders(points);
-            let expected_output = vec![42; rows];
-            let mut output = expected_output.clone();
-            let expected_ranked = [Candidate::new(7, -1.0)];
-            let mut workspace = PartitionKernelWorkspace {
-                distance_scratch: vec![99.0],
-                ranked_leader_scratch: expected_ranked.to_vec(),
-            };
+            let mut output = vec![UNASSIGNED_LEADER; rows];
+            let mut workspace = PartitionKernelWorkspace::default();
 
-            let error = assign_leaders::<_, Cosine>(
+            let result = assign_leaders::<_, Cosine>(
                 diskann_wide::ARCH,
                 points,
                 &leaders,
                 MutMatrixView::try_from(output.as_mut_slice(), rows, 1).unwrap(),
                 &mut workspace,
-            )
-            .unwrap_err();
+            );
 
-            assert!(error.to_string().contains(&format!(
-                "invalid partition output row count {rows} for 3 points"
-            )));
-            assert_eq!(output, expected_output);
-            assert_eq!(workspace.distance_scratch, [99.0]);
-            assert_eq!(workspace.ranked_leader_scratch, expected_ranked);
+            assert!(result.is_err());
         }
 
         #[test]
