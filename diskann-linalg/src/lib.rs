@@ -9,6 +9,8 @@ use std::fmt;
 
 pub mod common;
 pub use common::Transpose;
+/// Block Krylov-Schur eigensolver and built-in row-major operators.
+pub mod block_krylov_schur;
 
 mod faer;
 use faer::{random_distance_preserving_matrix_impl, sgemm_impl, svd_into_impl};
