@@ -71,6 +71,9 @@ pub(crate) trait DynIndex: Send + Sync {
     /// Return an approximate count of vectors in the index
     fn approximate_count(&self) -> u64;
 
+    /// Return the maximum degree of the index graph
+    fn max_degree(&self) -> usize;
+
     /// Set a start point if one doesn't already exist.
     /// If there is already a start point, this is a no-op.
     fn maybe_set_start_point(&self, context: &Context, data: &[u8]) -> ANNResult<()>;
@@ -101,6 +104,11 @@ pub(crate) trait DynIndex: Send + Sync {
 
     /// Returns the neighbors of and distances from the target vector
     fn neighbors(&self, context: &Context, id: &GarnetId) -> ANNResult<Vec<Neighbor<GarnetId>>>;
+
+    /// Log a message to Garnet. The context term can be used to scope the log
+    /// message to an area (e.g. `Term::Quantized` for quantization related
+    /// messages).
+    fn log(&self, context: &Context, msg: &str);
 }
 
 impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
@@ -194,6 +202,10 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         self.inner.provider().max_internal_id() as u64
     }
 
+    fn max_degree(&self) -> usize {
+        self.inner.provider().max_degree()
+    }
+
     fn maybe_set_start_point(&self, context: &Context, data: &[u8]) -> ANNResult<()> {
         self.inner
             .provider()
@@ -235,5 +247,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
 
     fn neighbors(&self, context: &Context, id: &GarnetId) -> ANNResult<Vec<Neighbor<GarnetId>>> {
         self.inner.provider().neighbors(context, id)
+    }
+
+    fn log(&self, context: &Context, msg: &str) {
+        self.inner.provider().log(context, msg);
     }
 }
