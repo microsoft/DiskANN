@@ -1,0 +1,12 @@
+{
+  "search_directories": [],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "phantom-input",
+      "content": {
+        "value": 42
+      }
+    }
+  ]
+}

@@ -3,14 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use diskann::ANNResult;
 use diskann_utils::object_pool::{self, ObjectPool, PoolOption};
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::common::get_lookup_table_size;
-use crate::model::pq::fixed_chunk_pq_table::{FixedChunkPQTable, pq_dist_lookup_single};
+use crate::model::pq::{
+    distance::Shared,
+    fixed_chunk_pq_table::{FixedChunkPQTable, pq_dist_lookup_single},
+};
 
 ////////
 // IP //
@@ -18,10 +21,7 @@ use crate::model::pq::fixed_chunk_pq_table::{FixedChunkPQTable, pq_dist_lookup_s
 
 /// A `PreprocessedDistanceFunction` for Inner Product.
 #[derive(Debug)]
-pub struct TableIP<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+pub struct TableIP<'a> {
     /// Pre-computed inner-products between a query and the pivots.
     /// This table is laid out in row major order like
     /// ```ignore
@@ -41,16 +41,13 @@ where
     num_centers: usize,
 
     /// The parent table for the pivots and other meta-data regarding the PQ Schema.
-    parent: T,
+    parent: Shared<'a, FixedChunkPQTable>,
 }
 
-impl<T> TableIP<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl<'a> TableIP<'a> {
     /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
     pub(crate) fn new(
-        parent: T,
+        parent: Shared<'a, FixedChunkPQTable>,
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> ANNResult<Self> {
@@ -59,7 +56,10 @@ where
         Ok(object)
     }
 
-    fn new_unpopulated(parent: T, pool: Option<Arc<ObjectPool<Vec<f32>>>>) -> Self {
+    fn new_unpopulated(
+        parent: Shared<'a, FixedChunkPQTable>,
+        pool: Option<Arc<ObjectPool<Vec<f32>>>>,
+    ) -> Self {
         let vec_size = get_lookup_table_size(&parent);
         Self {
             lookup_table: match pool {
@@ -98,10 +98,7 @@ where
     }
 }
 
-impl<T> PreprocessedDistanceFunction<&[u8], f32> for TableIP<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
+impl PreprocessedDistanceFunction<&[u8], f32> for TableIP<'_> {
     fn evaluate_similarity(&self, changing: &[u8]) -> f32 {
         self.evaluate(changing)
     }
@@ -141,7 +138,7 @@ mod tests {
                     // Basic `TableIP`
                     test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
-                            TableIP::new(table, query, None).unwrap()
+                            TableIP::new(Shared::Ref(table), query, None).unwrap()
                         },
                         &table,
                         num_trials,
@@ -166,7 +163,7 @@ mod tests {
 
         let table = test_utils::seed_pivot_table(config);
         let query = vec![0.0; config.dim];
-        let computer = TableIP::new(&table, &query, None).unwrap();
+        let computer = TableIP::new(Shared::Ref(&table), &query, None).unwrap();
 
         let code = vec![0, 0, 0, 0];
         computer.evaluate_similarity(&code);
@@ -184,7 +181,7 @@ mod tests {
 
         let table = test_utils::seed_pivot_table(config);
         let query = vec![0.0; config.dim];
-        let computer = TableIP::new(&table, &query, None).unwrap();
+        let computer = TableIP::new(Shared::Ref(&table), &query, None).unwrap();
 
         // Entry `4` is out-of-bounds.
         let code = vec![0, 4, 0];

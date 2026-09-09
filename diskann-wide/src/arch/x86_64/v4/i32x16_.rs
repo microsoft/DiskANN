@@ -16,7 +16,10 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDSelect, SIMDSumTree, SIMDVector},
+    traits::{
+        SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMulAdd, SIMDPopcount, SIMDSelect, SIMDSumTree,
+        SIMDVector,
+    },
 };
 
 /////
@@ -32,6 +35,13 @@ helpers::unsafe_map_binary_op!(i32x16, std::ops::Add, add, _mm512_add_epi32, "av
 helpers::unsafe_map_binary_op!(i32x16, std::ops::Sub, sub, _mm512_sub_epi32, "avx512f");
 helpers::unsafe_map_binary_op!(i32x16, std::ops::Mul, mul, _mm512_mullo_epi32, "avx512f");
 helpers::unsafe_map_unary_op!(i32x16, SIMDAbs, abs_simd, _mm512_abs_epi32, "avx512f");
+helpers::unsafe_map_unary_op!(
+    i32x16,
+    SIMDPopcount,
+    popcount_simd,
+    _mm512_popcnt_epi32,
+    "avx512vpopcntdq"
+);
 
 helpers::unsafe_map_binary_op!(
     i32x16,
@@ -170,6 +180,7 @@ mod test_x86_i32 {
 
     // Bit ops
     test_utils::ops::test_bitops!(i32x16, 0xc5f7d8d8df0b7b6c, V4::new_checked_uncached());
+    test_utils::ops::test_popcount!(i32x16, 0xc8068253462939e5, V4::new_checked_uncached());
 
     // Dot Products
     test_utils::dot_product::test_dot_product!(

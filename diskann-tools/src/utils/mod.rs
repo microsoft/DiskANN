@@ -5,9 +5,6 @@
 pub mod search_index_utils;
 pub use search_index_utils::*;
 
-pub mod graph_data_types;
-pub use graph_data_types::*;
-
 pub mod data_type;
 pub use data_type::*;
 
@@ -24,12 +21,6 @@ pub use ground_truth::*;
 // pub mod range_search_disk_index;
 // pub use range_search_disk_index::*;
 
-pub mod search_disk_index;
-pub use search_disk_index::*;
-
-pub mod build_disk_index;
-pub use build_disk_index::*;
-
 pub mod build_pq;
 pub use build_pq::*;
 
@@ -38,9 +29,6 @@ pub use generate_synthetic_labels_utils::*;
 
 pub mod gen_associated_data_from_range;
 pub use gen_associated_data_from_range::*;
-
-pub mod test_utils;
-pub use test_utils::*;
 
 pub type CMDResult<T> = Result<T, CMDToolError>;
 

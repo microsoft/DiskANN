@@ -2,7 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
+use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::utils::{gen_random_slice, RayonThreadPoolRef, READ_WRITE_BLOCK_SIZE};
 
@@ -12,6 +12,7 @@ use tracing::info;
 
 use crate::{
     disk_index_build_parameter::BYTES_IN_GB,
+    error::{diskann_error, ErrorKind},
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
 };
 
@@ -254,7 +255,8 @@ where
     let num_points = dataset_reader.read_u32()?;
     let base_dim = dataset_reader.read_u32()?;
     if base_dim != dim as u32 {
-        return Err(ANNError::log_index_error(
+        return Err(diskann_error!(
+            ErrorKind::IndexError,
             "dimensions dont match for train set and base set",
         ));
     }
@@ -543,6 +545,58 @@ mod partition_test {
         let mut buffer = vec![];
         file.read_to_end(&mut buffer).unwrap();
         buffer
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_minimum_clamp() {
+        // When total RAM fits well within budget, should clamp to minimum of 3
+        let count = estimate_initial_partition_count(
+            100,                       // total_points
+            10,                        // dimension
+            1,                         // k_base
+            1_000_000.0,               // ram_budget_in_bytes
+            &|n, _d| n as f64 * 100.0, // total_ram = 100 * 100 = 10_000 << 1_000_000 => clamp to 3
+        );
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_odd_rounding() {
+        // Even partition count should be bumped to odd
+        let count = estimate_initial_partition_count(
+            1000,
+            128,
+            1,
+            1000.0,                  // budget
+            &|n, _d| n as f64 * 4.0, // total_ram = 4000, ratio = 4 => ceil = 4 (even) => 5
+        );
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_large_ratio() {
+        // Odd result that is >= 3 should be returned as-is
+        let count = estimate_initial_partition_count(
+            1000,
+            128,
+            1,
+            1000.0,                  // budget
+            &|n, _d| n as f64 * 7.0, // total_ram = 7000, ratio = 7 => odd, >= 3
+        );
+        assert_eq!(count, 7);
+    }
+
+    #[test]
+    fn test_estimate_initial_partition_count_k_base_multiplier() {
+        // k_base multiplies total_points in the estimator call
+        let count = estimate_initial_partition_count(
+            100,
+            10,
+            3,                       // k_base
+            100.0,                   // budget
+            &|n, _d| n as f64 * 1.0, // n = total_points * k_base = 300, total_ram = 300, ratio = 3
+        );
+        assert_eq!(count, 3);
     }
 
     #[test]

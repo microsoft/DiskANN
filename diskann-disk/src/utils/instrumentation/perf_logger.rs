@@ -12,7 +12,7 @@ use opentelemetry::{
 };
 use tracing::info;
 
-use diskann_providers::utils::Timer;
+use super::Timer;
 
 /// Target for logging latency events.
 pub const LATENCY_LOG_TARGET: &str = "latency_event";
@@ -125,15 +125,6 @@ impl PerfLoggerInner {
     /// # Arguments
     ///
     /// * `checkpoint` - A string slice that holds the name of the checkpoint.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use diskann_disk::utils::instrumentation::PerfLogger;
-    ///
-    /// let mut logger = PerfLogger::new("Scenario".to_string(), true);
-    /// logger.log_checkpoint("Checkpoint1");
-    /// ```
     fn log_checkpoint<T: fmt::Display>(&mut self, checkpoint: T) {
         info!( target: LATENCY_LOG_TARGET,
             "Time for {} [Checkpoint: {}] completed: {:.3} seconds, {:.3}B cycles, {:.3}% CPU time, peak memory {:.3} GBs",

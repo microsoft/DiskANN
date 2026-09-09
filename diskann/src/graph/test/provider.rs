@@ -18,7 +18,7 @@ use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult, default_post_processor,
+    ANNResult, convert_error, default_post_processor,
     error::ranked::ErrorExt,
     error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
     graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
@@ -27,6 +27,9 @@ use crate::{
     provider,
     utils::VectorRepr,
 };
+
+#[cfg(any(test, feature = "testing"))]
+use crate::ANNError;
 
 /// A starting point for graph search algorithms.
 ///
@@ -173,12 +176,7 @@ pub enum ConfigError {
     MaxDegreeCannotBeZero,
 }
 
-impl From<ConfigError> for ANNError {
-    #[track_caller]
-    fn from(err: ConfigError) -> Self {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(ConfigError);
 
 /// A test data provider for validating DiskANN API guarantees.
 ///
@@ -457,7 +455,7 @@ impl Provider {
                 neighbors.overwrite_trusted(&v.neighbors);
                 Ok(())
             }
-            None => Err(ANNError::opaque(AccessedInvalidId(id))),
+            None => Err(ANNError::new(AccessedInvalidId(id))),
         }
     }
 
@@ -665,13 +663,7 @@ pub enum InvalidId {
 }
 
 crate::always_escalate!(InvalidId);
-
-impl From<InvalidId> for ANNError {
-    #[track_caller]
-    fn from(err: InvalidId) -> ANNError {
-        ANNError::opaque(err)
-    }
-}
+convert_error!(InvalidId);
 
 impl provider::DataProvider for Provider {
     type Context = Context;
@@ -774,13 +766,7 @@ impl provider::SetElement<&[f32]> for Provider {
         }
 
         crate::always_escalate!(SetError);
-
-        impl From<SetError> for ANNError {
-            #[track_caller]
-            fn from(err: SetError) -> Self {
-                Self::new(crate::ANNErrorKind::IndexError, err)
-            }
-        }
+        convert_error!(SetError);
 
         // Ensure that the assigned vector has the correct length.
         if element.len() != self.dim() {
@@ -810,13 +796,7 @@ impl provider::SetElement<&[f32]> for Provider {
 pub struct AccessedInvalidId(u32);
 
 crate::always_escalate!(AccessedInvalidId);
-
-impl From<AccessedInvalidId> for ANNError {
-    #[track_caller]
-    fn from(err: AccessedInvalidId) -> Self {
-        Self::opaque(err)
-    }
-}
+convert_error!(AccessedInvalidId);
 
 /// A transient error from the test accessor — the ID exists but the retrieval
 /// temporarily failed. Must be acknowledged or escalated before being dropped.
@@ -975,7 +955,7 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
                     Ok(())
                 }
             }
-            None => Err(ANNError::opaque(AccessedInvalidId(id))),
+            None => Err(ANNError::new(AccessedInvalidId(id))),
         }
     }
 
@@ -1002,7 +982,7 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
                     Ok(())
                 }
             }
-            None => Err(ANNError::opaque(AccessedInvalidId(id))),
+            None => Err(ANNError::new(AccessedInvalidId(id))),
         }
     }
 }
@@ -1195,12 +1175,7 @@ pub struct DimMismatch {
     expected: usize,
 }
 
-impl From<DimMismatch> for ANNError {
-    #[track_caller]
-    fn from(mismatch: DimMismatch) -> Self {
-        ANNError::opaque(mismatch)
-    }
-}
+convert_error!(DimMismatch);
 
 impl provider::HasId for Accessor<'_> {
     type Id = u32;
@@ -1437,7 +1412,7 @@ impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for Filt
         next.post_process(
             accessor,
             query,
-            candidates.filter(|n| !provider.is_deleted(n.id).unwrap_or(true)),
+            candidates.filter(|n| !provider.is_deleted(*n.id()).unwrap_or(true)),
             output,
         )
     }

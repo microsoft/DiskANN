@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Computes relative contrast for vector search datasets.
+
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::utils::random;
@@ -15,7 +17,9 @@ use diskann_vector::Half;
 ///
 /// Description:
 /// This program calculates the relative contrast based on the provided inputs.
-///  (More details is in https://www.ee.columbia.edu/~jh2700/ICML_NNSDifficulty.pdf)
+///  (More details are in the [relative contrast paper].)
+///
+/// [relative contrast paper]: https://www.ee.columbia.edu/~jh2700/ICML_NNSDifficulty.pdf
 /// The required inputs include:
 /// - Raw vector dataset
 /// - Query vector dataset

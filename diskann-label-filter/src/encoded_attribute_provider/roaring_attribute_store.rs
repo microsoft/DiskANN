@@ -13,7 +13,7 @@ use crate::{
 };
 use diskann::{
     utils::{IntoUsize, VectorId},
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNResult,
 };
 use diskann_utils::future::AsyncFriendly;
 use std::sync::{Arc, RwLock};
@@ -77,18 +77,14 @@ where
         let mut deleted = true;
 
         // Acquire locks in consistent order: index first, then inv_index
-        let mut index_guard = self.index.write().map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::LockPoisonError,
-                "Failed to acquire write lock on index",
-            )
-        })?;
-        let mut inv_index_guard = self.inv_index.write().map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::LockPoisonError,
-                "Failed to acquire write lock on inv_index",
-            )
-        })?;
+        let mut index_guard = self
+            .index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on index"))?;
+        let mut inv_index_guard = self
+            .inv_index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on inv_index"))?;
 
         let existing_set = match index_guard.get(vec_id)? {
             Some(set) => set,
@@ -107,7 +103,6 @@ where
         }
         if !deleted {
             return Err(ANNError::message(
-                ANNErrorKind::IndexError,
                 "Failed to delete id from the inverted index.",
             ));
         }
@@ -117,20 +112,15 @@ where
         if deleted {
             Ok(true)
         } else {
-            Err(ANNError::message(
-                ANNErrorKind::IndexError,
-                "Failed to delete id from the index.",
-            ))
+            Err(ANNError::message("Failed to delete id from the index."))
         }
     }
 
     fn id_exists(&self, vec_id: &IT) -> ANNResult<bool> {
-        let index_guard = self.index.read().map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::LockPoisonError,
-                "Failed to acquire read lock on the label index.",
-            )
-        })?;
+        let index_guard = self
+            .index
+            .read()
+            .map_err(|_| ANNError::message("Failed to acquire read lock on the label index."))?;
         index_guard.exists(vec_id)
     }
 
@@ -143,30 +133,23 @@ where
         //For now, we assume that it is an error if a point has zero attributes.
         if attributes.is_empty() {
             return Err(ANNError::message(
-                ANNErrorKind::Opaque,
                 "A vector must have atleast one attribute.",
             ));
         }
 
         // Acquire locks in consistent order: attribute_map, index, inv_index
-        let mut attr_map_guard = self.attribute_map.write().map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::LockPoisonError,
-                "Failed to acquire write lock on attribute_map",
-            )
-        })?;
-        let mut index_guard = self.index.write().map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::LockPoisonError,
-                "Failed to acquire write lock on index",
-            )
-        })?;
-        let mut inv_index_guard = self.inv_index.write().map_err(|_| {
-            ANNError::message(
-                ANNErrorKind::LockPoisonError,
-                "Failed to acquire write lock on inv_index",
-            )
-        })?;
+        let mut attr_map_guard = self
+            .attribute_map
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on attribute_map"))?;
+        let mut index_guard = self
+            .index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on index"))?;
+        let mut inv_index_guard = self
+            .inv_index
+            .write()
+            .map_err(|_| ANNError::message("Failed to acquire write lock on inv_index"))?;
 
         // Update the inverted index.
         // Delete all instances of id from the inv_index for the old labels.

@@ -9,12 +9,15 @@
 //! [`DataProvider`](diskann::provider::DataProvider) trait, enabling indexes that can
 //! transparently spill to disk for datasets larger than available memory.
 
+pub mod id;
 pub mod neighbors;
 pub mod provider;
 pub mod quant;
 pub mod vectors;
 
 mod locks;
+
+pub use id::BfTreeId;
 
 // Accessors
 pub use provider::{
@@ -48,7 +51,7 @@ impl From<ConfigError> for ANNError {
     #[track_caller]
     #[inline(never)]
     fn from(error: ConfigError) -> ANNError {
-        ANNError::new(diskann::ANNErrorKind::IndexError, error)
+        ANNError::new(error)
     }
 }
 
@@ -90,7 +93,7 @@ impl TransientError<ANNError> for VectorUnavailable {
     where
         D: std::fmt::Display,
     {
-        ANNError::log_index_error(format!("{self}, escalated: {why}"))
+        ANNError::message(format!("{self}, escalated: {why}"))
     }
 }
 
@@ -107,7 +110,7 @@ pub(crate) fn validate_record_size(
     let required = key_size + value_size;
     let configured_max = config.get_cb_max_record_size();
     if required > configured_max {
-        return Err(ANNError::log_index_error(format!(
+        return Err(ANNError::message(format!(
             "{provider_name}: cb_max_record_size ({configured_max}) is too small; \
              a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
              increase cb_max_record_size to at least {required}"
@@ -214,6 +217,6 @@ impl std::error::Error for InsertError {}
 impl From<InsertError> for ANNError {
     #[track_caller]
     fn from(error: InsertError) -> Self {
-        ANNError::new(diskann::ANNErrorKind::IndexError, error)
+        ANNError::new(error)
     }
 }

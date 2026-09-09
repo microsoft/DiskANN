@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Linear algebra operations used by DiskANN.
+
 use std::fmt;
 
 pub mod common;
@@ -88,11 +90,11 @@ mod reference;
 /// implicit row-major matrix `c` as the destination.
 ///
 /// Performs one of the following operations:
-/// ```ignore
+/// ```text
 /// 1. c = [beta * c] + alpha * a * b
 /// 2. c = [beta * c] + alpha * a' * b
 /// 3. c = [beta * c] + alpha * a * b'
-/// 3. c = [beta * c] + alpha * a' * b'
+/// 4. c = [beta * c] + alpha * a' * b'
 /// ```
 /// Where `x'` indicates the ordinary transpose of `x`.
 ///
@@ -220,7 +222,7 @@ pub fn sgemm(
 /// 1. Due to the contract offered by `lapacke`, callers of this function must assume that
 ///    the contents of `a` are left in an undefined state after this function.
 ///
-///    See: https://netlib.org/lapack/explore-html//df/d22/group__gesdd_gab9ffdde22b38f0cc442e44cbea23818f.html
+///    See: <https://netlib.org/lapack/explore-html//df/d22/group__gesdd_gab9ffdde22b38f0cc442e44cbea23818f.html>
 ///
 /// 2. Similar to #1, the restriction that `vt` is transposed is a lapack byproduct.
 ///

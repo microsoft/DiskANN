@@ -12,15 +12,15 @@ use bytemuck::{cast_slice, cast_slice_mut};
 use diskann::{
     graph::AdjacencyList,
     provider::{self, HasId},
-    utils::{IntoUsize, VectorId},
     ANNError, ANNResult,
 };
 
 use super::ConfigError;
+use crate::id::BfTreeId;
 use crate::locks::StripedLocks;
 use crate::{bftree_insert, TestCallCount};
 
-pub struct NeighborProvider<I: VectorId + IntoUsize> {
+pub struct NeighborProvider<I: BfTreeId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
     #[allow(dead_code)]
@@ -28,15 +28,18 @@ pub struct NeighborProvider<I: VectorId + IntoUsize> {
     _phantom: PhantomData<I>,
 }
 
-impl<I: VectorId + IntoUsize> HasId for NeighborProvider<I> {
+impl<I: BfTreeId> HasId for NeighborProvider<I> {
     type Id = I;
 }
 
-impl<I: VectorId + IntoUsize> NeighborProvider<I> {
+impl<I: BfTreeId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly.
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
-        let key_size = std::mem::size_of::<u32>();
-        let value_size = (max_degree as usize + 1) * std::mem::size_of::<u32>();
+        // Records are keyed by an `I`-width id and store a `dim`-cell `I`-width value
+        // (`dim == max_degree + 1`), so size the validation by the actual id width
+        // rather than assuming `u32`.
+        let key_size = std::mem::size_of::<I>();
+        let value_size = (max_degree as usize + 1) * std::mem::size_of::<I>();
         crate::validate_record_size("neighbor_provider", &config, key_size, value_size)?;
 
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
@@ -45,7 +48,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     }
 
     fn new(max_degree: u32, adjacency_list_index: BfTree) -> ANNResult<Self> {
-        let dim = 1 + max_degree.into_usize();
+        let dim = 1 + max_degree as usize;
 
         Ok(Self {
             adjacency_list_index,
@@ -83,6 +86,11 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     /// Retrieve the neighbor list of a vector.
     ///
     /// Does not acquire any lock. Callers must ensure appropriate synchronization.
+    ///
+    /// `neighbors` is cleared first upon each invocation. A vector with no
+    /// stored neighbor list yet (bf-tree `NotFound`) yields an empty list rather
+    /// than an error, so neighbor lists are created lazily on first write.
+    /// Involves one data copy, from the bf-tree into `neighbors`.
     pub fn get_neighbors(&self, vector_id: I, neighbors: &mut AdjacencyList<I>) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
@@ -117,7 +125,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
                 if read_size > 0 {
                     // A retrieved neighbor list should be exactly dim length
                     if read_size as usize != self.dim * std::mem::size_of::<I>() {
-                        return Err(ANNError::log_index_error(
+                        return Err(ANNError::message(
                             "Retrieved neighbor list is not expected length = max degree + 1",
                         ));
                     }
@@ -130,7 +138,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
 
                     // The specified list length must be smaller than the retrieved data length
                     if count > self.max_degree() {
-                        return Err(ANNError::log_index_error(
+                        return Err(ANNError::message(
                             "Size of retrieved neighbor list is shorter than the stored neighbor count",
                         ));
                     }
@@ -139,19 +147,25 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
                 }
             }
             bf_tree::LeafReadResult::Deleted => {
-                return Err(ANNError::log_index_error(
+                return Err(ANNError::message(
                     "The bf-tree entry for the vector is marked as deleted",
                 ));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(ANNError::log_index_error(
+                return Err(ANNError::message(
                     "The bf-tree entry for the vector key is marked as invalid",
                 ));
             }
             bf_tree::LeafReadResult::NotFound => {
-                return Err(ANNError::log_index_error(
-                    "The bf-tree entry for the vector key is marked as not found",
-                ));
+                // The vertex has no stored neighbor list yet. bf-tree natively
+                // distinguishes "absent" from "present but empty", so treat
+                // absence as an empty adjacency list rather than an error. This
+                // lets neighbor lists be created lazily on first write, avoiding
+                // an O(max_points) eager initialization at construction.
+                //
+                // `guard` is dropped at the end of this match without `finish`,
+                // which clears `neighbors` to the empty list (identical to the
+                // `Found(0)` case above).
             }
         };
 
@@ -185,9 +199,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         self.num_get_calls.increment();
 
         if buf.len() < self.dim {
-            return Err(ANNError::log_index_error(
-                "The provided buffer is not long enough",
-            ));
+            return Err(ANNError::message("The provided buffer is not long enough"));
         }
 
         // Serialize the value into the reusable buffer.
@@ -216,7 +228,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     ///  - Buffer length (in `I` cells) is smaller than `max_degree() + 1`
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [I]) -> ANNResult<()> {
         if neighbors.len() > self.dim - 1 {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "The provided neighbor list is longer than the max degree",
             ));
         };
@@ -277,7 +289,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
 
 pub struct NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     provider: &'a NeighborProvider<I>,
     locks: &'a StripedLocks,
@@ -286,28 +298,28 @@ where
 
 impl<'a, I> NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     pub fn write_neighbors(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         self.provider.set_neighbors(id, neighbors, &mut self.buf)
     }
     pub fn write_append(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         self.provider.append_vector(id, neighbors, &mut self.buf)
     }
 }
 
 impl<'a, I> HasId for NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     type Id = I;
 }
 
 impl<'a, I> provider::NeighborAccessor for NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     fn get_neighbors(
         &mut self,
@@ -320,14 +332,14 @@ where
 
 impl<'a, I> provider::NeighborAccessorMut for NeighborAccessor<'a, I>
 where
-    I: VectorId + IntoUsize,
+    I: BfTreeId,
 {
     fn set_neighbors(
         &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         std::future::ready(self.provider.set_neighbors(id, neighbors, &mut self.buf))
     }
     fn append_vector(
@@ -335,7 +347,7 @@ where
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.lock(id.into_usize());
+        let _guard = self.locks.lock(id.as_index());
         std::future::ready(self.provider.append_vector(id, neighbors, &mut self.buf))
     }
 }
@@ -407,6 +419,42 @@ mod tests {
         }
     }
 
+    /// Exercise the `u64` id path beyond the `u32` range: vertex ids and neighbor
+    /// values above `u32::MAX` must round-trip, and ids that share their low 32 bits
+    /// must not collide (proving the bf-tree key uses the full 8-byte width).
+    #[tokio::test]
+    async fn test_u64_high_bit_ids() {
+        let locks = Arc::new(StripedLocks::new());
+        let neighbor_provider =
+            NeighborProvider::<u64>::new_with_config(6, Config::default()).unwrap();
+        let mut scratch = neighbor_provider.scratch(&locks);
+
+        let high: u64 = (u32::MAX as u64) + 1;
+        let big_id: u64 = high + 7;
+        let big_neighbors: Vec<u64> = vec![high, high + 1, u64::MAX, 3];
+        scratch.write_neighbors(big_id, &big_neighbors).unwrap();
+
+        let mut result = AdjacencyList::with_capacity(10);
+        neighbor_provider
+            .get_neighbors(big_id, &mut result)
+            .unwrap();
+        assert_eq!(&*big_neighbors, &*result);
+
+        // `low` and `low | (1 << 32)` share their low 32 bits; with an 8-byte key they
+        // are distinct entries. A truncating 4-byte key would alias them.
+        let low: u64 = 1;
+        let aliased: u64 = low | (1u64 << 32);
+        scratch.write_neighbors(low, &[10, 11]).unwrap();
+        scratch.write_neighbors(aliased, &[20, 21]).unwrap();
+
+        neighbor_provider.get_neighbors(low, &mut result).unwrap();
+        assert_eq!(&[10u64, 11], &*result);
+        neighbor_provider
+            .get_neighbors(aliased, &mut result)
+            .unwrap();
+        assert_eq!(&[20u64, 21], &*result);
+    }
+
     /// Test corner cases of appending to neighbor list
     #[tokio::test]
     async fn test_neighbor_accessors() {
@@ -454,6 +502,70 @@ mod tests {
 
         neighbor_provider.delete_vector(1).unwrap();
         assert!(neighbor_provider.get_neighbors(1, &mut result).is_err());
+    }
+
+    /// Lazy init: reading ids that were never written must yield an empty list
+    /// rather than erroring or panicking. This hammers a wide sweep of unwritten
+    /// ids (including some interleaved with written ones) to confirm the
+    /// `NotFound` -> empty mapping holds and never crashes.
+    #[test]
+    fn test_get_unwritten_ids_returns_empty() {
+        let locks = Arc::new(StripedLocks::new());
+        let neighbor_provider = new_provider(64);
+        let mut scratch = neighbor_provider.scratch(&locks);
+
+        // Write neighbor lists for a sparse set of ids, leaving large gaps.
+        let written: [u32; 3] = [10, 1_000, 100_000];
+        for &id in &written {
+            scratch.write_neighbors(id, &[1, 2, 3]).unwrap();
+        }
+
+        let mut result = AdjacencyList::with_capacity(64);
+
+        // Sweep a wide id range, including the written ids and the gaps between
+        // and beyond them. The buffer is reused across calls to confirm it is
+        // cleared on every read.
+        for id in 0u32..200_000 {
+            neighbor_provider.get_neighbors(id, &mut result).unwrap();
+            if written.contains(&id) {
+                assert_eq!(&[1, 2, 3], &*result, "written id {id} lost its list");
+            } else {
+                assert!(result.is_empty(), "unwritten id {id} should be empty");
+            }
+        }
+
+        // Ids far beyond anything ever written are still just empty, not errors.
+        for id in [u32::MAX - 1, u32::MAX] {
+            neighbor_provider.get_neighbors(id, &mut result).unwrap();
+            assert!(result.is_empty());
+        }
+    }
+
+    /// Lazy init under concurrency: many threads simultaneously hammering reads
+    /// of never-written ids must all observe empty lists with no panics, lost
+    /// updates, or errors.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_reads_of_unwritten_ids() {
+        let neighbor_provider = new_shared_provider(64);
+        let num_threads = stress_thread_count();
+
+        let mut set = JoinSet::new();
+        for t in 0..num_threads {
+            let neighbor_provider = Arc::clone(&neighbor_provider);
+            set.spawn(async move {
+                let mut result = AdjacencyList::with_capacity(64);
+                // Overlapping id ranges across threads to maximize contention on
+                // the shared bf-tree read path for absent keys.
+                for id in (t * 1_000)..(t * 1_000 + 10_000) {
+                    neighbor_provider.get_neighbors(id, &mut result).unwrap();
+                    assert!(result.is_empty());
+                }
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            res.unwrap();
+        }
     }
 
     /// Test the interleaved and parallel traversal of the Bf-Tree

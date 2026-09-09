@@ -46,9 +46,11 @@ jobs:
           - dataset: wikipedia-100K
             config: wikipedia-100K-disk-index.json
             archive: wikipedia-100K.tar.gz
+            sha256: 5b312d186773c549e6132483b148a22b2421140f1a8d9fcd6230c4e019405027
           - dataset: openai-100K
             config: openai-100K-disk-index.json
             archive: openai-100K.tar.gz
+            sha256: b6887d9a31e9ce035665e3df385db37866116a7b7effc1cbaded239956fec113
 
     steps:
       # Kept inline because this must run before checkout, but local action.yml
@@ -66,7 +68,7 @@ jobs:
           ln -s /mnt/nvme/baseline baseline
 
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           path: diskann_rust
@@ -77,6 +79,7 @@ jobs:
         with:
           dataset: ${{ matrix.dataset }}
           archive: ${{ matrix.archive }}
+          sha256: ${{ matrix.sha256 }}
           extract-to: diskann_rust/target/tmp
 
       # A/A: build once, run twice (identical code — only detecting environment noise)
@@ -109,7 +112,7 @@ jobs:
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: aa-results-${{ matrix.dataset }}
@@ -129,7 +132,7 @@ jobs:
     steps:
       - name: Check recent failure rate
         id: check-rate
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const { data: runs } = await github.rest.actions.listWorkflowRuns({
@@ -151,7 +154,7 @@ jobs:
 
       - name: Create GitHub issue for A/A failure
         if: steps.check-rate.outputs.should_notify == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const date = new Date().toISOString().split('T')[0];

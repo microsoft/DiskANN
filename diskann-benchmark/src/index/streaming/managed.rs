@@ -39,7 +39,7 @@ pub(crate) enum SlotReclaim {
 ///
 /// This trait is purposely kept dyn-compatible to help with compile times somewhat.
 pub(crate) trait ManagedStream<T> {
-    /// See: [`steraming::Stream::Output`].
+    /// See: [`streaming::Stream::Output`].
     type Output;
 
     /// See: [`streaming::Stream::search`].
@@ -174,7 +174,7 @@ where
     }
 }
 
-/// A [`Stream::Output`] wrapper for [`Managed`] that includes the time spent doing
+/// A [`streaming::Stream::Output`] wrapper for [`Managed`] that includes the time spent doing
 /// operations in the [`TagSlotManager`].
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct Stats<T> {

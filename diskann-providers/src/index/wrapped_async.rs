@@ -129,7 +129,7 @@ where
     /// Load a prebuilt index from storage with its own multi-threaded `tokio::runtime::Runtime`.
     ///
     /// This is the synchronous equivalent of
-    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`].
     /// A default multi-threaded runtime is created and owned by `Self`.
     /// For a single-threaded runtime use [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime),
     /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
@@ -150,7 +150,7 @@ where
     /// Load a prebuilt index from storage with its own single-threaded `tokio::runtime::Runtime`.
     ///
     /// This is the synchronous equivalent of
-    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`].
     /// A default current-thread runtime is created and owned by `Self`.
     /// For a multi-threaded runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime),
     /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
@@ -171,7 +171,7 @@ where
     /// Load a prebuilt index from storage using a provided `tokio::runtime::Handle`.
     ///
     /// This is the synchronous equivalent of
-    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`].
     /// The `tokio::runtime::Runtime` is owned externally and we just keep a `Handle` to it.
     /// For an owned runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime)
     /// or [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime).
@@ -534,7 +534,7 @@ where
 
 pub mod noawait {
     //! Implementations of a synchronous wrapper around [`diskann::graph::DiskANNIndex`] that
-    //! assume the [`Accessor`] and associated implementations never truly `await` and are
+    //! assume the [`SearchAccessor`] and associated implementations never truly `await` and are
     //! in fact synchronous.
     //!
     //! With this assumption, we can perform lighter-weight communication with the index
@@ -551,7 +551,7 @@ pub mod noawait {
         task::{Context, Poll, Waker},
     };
 
-    use diskann::{ANNErrorKind, utils::VectorId};
+    use diskann::utils::VectorId;
     use thiserror::Error;
 
     type Input = Rc<RefCell<Option<usize>>>;
@@ -622,7 +622,6 @@ pub mod noawait {
                 Some(input) => input.replace(Some(k)),
                 None => {
                     return Err(ANNError::message(
-                        ANNErrorKind::Opaque,
                         "paged searcher errored and is no longer runnable",
                     ));
                 }
@@ -654,13 +653,7 @@ pub mod noawait {
         MissingOutput,
     }
 
-    impl From<InternalInvariantViolated> for ANNError {
-        #[track_caller]
-        #[cold]
-        fn from(err: InternalInvariantViolated) -> Self {
-            Self::new(ANNErrorKind::Opaque, err)
-        }
-    }
+    diskann::convert_error!(InternalInvariantViolated);
 }
 
 #[cfg(test)]
@@ -775,7 +768,7 @@ mod tests {
         let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
         let query = train_data.row(0);
-        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let kind = graph::search::Knn::new_default(search_l).unwrap();
         let stats = loaded
             .search(kind, &FullPrecision, &DefaultContext, query, &mut output)
             .unwrap();
@@ -836,16 +829,17 @@ mod tests {
 
                 for neighbor in v {
                     assert_ne!(
-                        neighbor.id,
+                        *neighbor.id(),
                         u32::MAX,
                         "paged search should not return start point",
                     );
                     assert_eq!(
-                        neighbor.id, i,
+                        *neighbor.id(),
+                        i,
                         "monotonicity should at least hold for the 1d grid"
                     );
                     assert_eq!(
-                        neighbor.distance,
+                        *neighbor.distance(),
                         (i as f32) * (i as f32),
                         "distance was computed incorrectly!",
                     );

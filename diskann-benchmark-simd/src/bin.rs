@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! Command-line runner for DiskANN SIMD benchmarks.
+
 use diskann_benchmark_runner::{output, App, Output, Registry};
 use diskann_benchmark_simd::register;
 

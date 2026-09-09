@@ -3,9 +3,12 @@
  * Licensed under the MIT license.
  */
 
+//! Command-line benchmarks for DiskANN.
+
 mod disk_index;
 mod exhaustive;
 mod filters;
+mod flat;
 mod index;
 mod inputs;
 mod multi_vector;
@@ -50,6 +53,7 @@ impl Cli {
         let mut registry = runner::Registry::new();
         exhaustive::register_benchmarks(&mut registry)?;
         disk_index::register_benchmarks(&mut registry)?;
+        flat::register_benchmarks(&mut registry)?;
         index::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
@@ -136,7 +140,7 @@ mod tests {
 
     use diskann_benchmark_runner::{app::Commands, output::Memory};
     use diskann_providers::storage::FileStorageProvider;
-    use diskann_tools::utils::{compute_ground_truth_from_datafiles, GraphDataF32Vector};
+    use diskann_tools::utils::compute_ground_truth_from_datafiles;
     use diskann_vector::distance::Metric;
 
     // Add these structs to deserialize the benchmark results
@@ -270,7 +274,7 @@ mod tests {
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("graph-index.json");
+        let input_path = tempdir.path().join("input.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");
@@ -305,6 +309,16 @@ mod tests {
     #[test]
     fn graph_index_integration() {
         let raw = value_from_file(&example_directory().join("graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    /////////////////////////
+    //    Flat Search      //
+    /////////////////////////
+
+    #[test]
+    fn flat_search_integration() {
+        let raw = value_from_file(&example_directory().join("flat-index.json"));
         run_integration_test(raw);
     }
 
@@ -501,7 +515,7 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"minmax-quantization\" feature"));
+        assert!(output.contains("feature \"minmax-quantization\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.
@@ -568,7 +582,7 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"scalar-quantization\" feature"));
+        assert!(output.contains("feature \"scalar-quantization\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.
@@ -639,7 +653,7 @@ mod tests {
 
         let output = String::from_utf8(output.into_inner()).unwrap();
         println!("output = {}", output);
-        assert!(output.contains("\"spherical-quantization\" feature"));
+        assert!(output.contains("feature \"spherical-quantization\""));
 
         // The output file should not have been created because we failed the test.
         assert!(!output_path.exists());
@@ -688,6 +702,22 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    fn graph_index_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-range.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_filter_range_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-filter-range.json"));
+        run_integration_test(raw);
+    }
+
     /// Filtered disk search end-to-end: drives the disk-index backend through
     /// `disk-index-filter.json`
     #[test]
@@ -733,7 +763,7 @@ mod tests {
 
         let disk_index_search_path = root_directory().join("test_data/disk_index_search");
 
-        let result = compute_ground_truth_from_datafiles::<GraphDataF32Vector, FileStorageProvider>(
+        let result = compute_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
             &storage_provider,
             Metric::L2, // distance function
             disk_index_search_path
@@ -901,7 +931,7 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"product-quantization\" feature"));
+        assert!(output.contains("feature \"product-quantization\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.
@@ -965,7 +995,7 @@ mod tests {
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("\"multi-vector\" feature"));
+        assert!(output.contains("feature \"multi-vector\""));
         println!("output = {}", output);
 
         // The output file should not have been created because we failed the test.

@@ -15,7 +15,9 @@ use crate::{
     },
     constant::Const,
     helpers,
-    traits::{AsSIMD, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
+    traits::{
+        AsSIMD, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
+    },
 };
 
 /////
@@ -142,6 +144,22 @@ impl SIMDPartialOrd for u64x4 {
     }
 }
 
+impl SIMDSumTree for u64x4 {
+    #[inline(always)]
+    fn sum_tree(self) -> u64 {
+        let x = self.to_underlying();
+        // SAFETY: The AVX2 and SSE2 intrinsics used here are implied by V3.
+        unsafe {
+            let hi = _mm256_extracti128_si256(x, 1);
+            let lo = _mm256_castsi256_si128(x);
+            let sum_dual = _mm_add_epi64(lo, hi);
+            let sum_hi = _mm_unpackhi_epi64(sum_dual, sum_dual);
+            let sum = _mm_add_epi64(sum_dual, sum_hi);
+            _mm_cvtsi128_si64(sum) as u64
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -182,6 +200,8 @@ mod test_x86_u64 {
 
     test_utils::ops::test_cmp!(u64x4, 0x0beda0dd5141ec40, V3::new_checked_uncached());
     test_utils::ops::test_splitjoin!(u64x4 => u64x2, 0xb151fcd6141b10c9, V3::new_checked_uncached());
+
+    test_utils::ops::test_sumtree!(u64x4, 0x529c27f62ea171ec, V3::new_checked_uncached());
 
     // Bit ops
     test_utils::ops::test_bitops!(u64x4, 0xb1ac2e16327a8d5e, V3::new_checked_uncached());

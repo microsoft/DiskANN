@@ -21,8 +21,6 @@ rand.workspace = true
 rayon.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
-opentelemetry = { workspace = true, optional = true }
-diskann-platform = { workspace = true }
 diskann-vector = { workspace = true }
 rand_distr.workspace = true
 cfg-if.workspace = true
@@ -59,7 +57,6 @@ targets = [
 
 [features]
 default = []
-perf_test = ["dep:opentelemetry"]
 testing = ["dep:tempfile"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 virtual_storage = ["dep:vfs"]

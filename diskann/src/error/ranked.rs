@@ -144,7 +144,7 @@ pub trait TransientError<T>: Sized + std::fmt::Debug + Send + Sync {
 /// failures. The [`RankedError`] allows DiskANN algorithmic logic to determine whether
 /// an error can be suppressed safely or needs to be escalated.
 ///
-/// * See also: [`always_escalate!`], [`ErrorExt`].
+/// * See also: [`crate::always_escalate!`], [`ErrorExt`].
 pub trait ToRanked {
     type Transient: TransientError<Self::Error>;
     type Error: Into<ANNError> + std::fmt::Debug + Send + Sync;
@@ -200,7 +200,7 @@ where
 /// A zero-sized type that is unconstructable.
 ///
 /// This is used as the [`TransientError`] type for error types using the
-/// [`always_escalate!`] macro to opt-out of transient error handling.
+/// [`crate::always_escalate!`] macro to opt-out of transient error handling.
 #[derive(Debug)]
 pub enum NeverTransient {}
 
@@ -455,12 +455,7 @@ mod tests {
     #[error("generic error message: {0}")]
     struct AlwaysEscalate(usize);
 
-    impl From<AlwaysEscalate> for ANNError {
-        fn from(value: AlwaysEscalate) -> ANNError {
-            ANNError::log_index_error(value)
-        }
-    }
-
+    crate::convert_error!(AlwaysEscalate);
     always_escalate!(AlwaysEscalate);
 
     #[test]
@@ -559,8 +554,8 @@ mod tests {
 
     impl From<Disarmed<'_>> for ANNError {
         #[track_caller]
-        fn from(value: Disarmed<'_>) -> ANNError {
-            ANNError::log_index_error(&value)
+        fn from(err: Disarmed<'_>) -> Self {
+            Self::message(err.to_string())
         }
     }
 
@@ -842,7 +837,7 @@ mod tests {
         // We can't actually construct an Infallible value to test this directly since it's unconstructable
         // But we can verify the From implementation exists by checking the type constraint
         fn _test_infallible_into_ann_error(_: Infallible) -> ANNError {
-            ANNError::log_index_error("This should never be called")
+            ANNError::message("This should never be called")
         }
     }
 }

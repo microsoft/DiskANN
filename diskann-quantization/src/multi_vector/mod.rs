@@ -62,5 +62,5 @@ pub use distance::{
 };
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
-    Repr, ReprMut, ReprOwned, SliceError, Standard,
+    Repr, ReprMut, ReprOwned, RowsMut, SliceError, Standard,
 };

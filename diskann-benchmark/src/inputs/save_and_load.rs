@@ -21,12 +21,8 @@ pub fn get_graph_num_frozen_points(
     file.read_exact(&mut usize_buffer)?;
     let file_frozen_pts = usize::from_le_bytes(usize_buffer);
 
-    NonZeroUsize::new(file_frozen_pts).ok_or_else(|| {
-        ANNError::log_index_config_error(
-            "num_frozen_pts".to_string(),
-            "num_frozen_pts is zero in saved file".to_string(),
-        )
-    })
+    NonZeroUsize::new(file_frozen_pts)
+        .ok_or_else(|| ANNError::message("num_frozen_pts is zero in saved file"))
 }
 
 pub fn get_graph_max_observed_degree(

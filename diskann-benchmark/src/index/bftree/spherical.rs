@@ -7,9 +7,8 @@ use std::{io::Write, sync::Arc};
 
 use diskann::graph::DiskANNIndex;
 use diskann_benchmark_runner::{
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{MatchContext, Score},
     output::Output,
-    utils::datatype::AsDataType,
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
@@ -82,58 +81,41 @@ impl Benchmark for BfTreeSpherical {
     type Input = BfTreeSphericalBuild;
     type Output = BuildResult;
 
-    fn try_match(&self, input: &BfTreeSphericalBuild) -> Result<MatchScore, FailureScore> {
-        let mut failure_score: Option<u32> = None;
+    fn try_match(&self, input: &BfTreeSphericalBuild, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
 
-        if let Err(s) = utils::match_data_type::<f32>(input.data_type()) {
-            failure_score = Some(s.0);
-        }
+        utils::match_data_type::<f32>(&mut score, input.data_type());
+
         if !matches!(input.num_bits().get(), 1 | 2 | 4) {
-            *failure_score.get_or_insert(0) += 1;
+            score.fail(
+                1,
+                &format_args!(
+                    "Only 1, 2, or 4 bits are supported, instead got \"{}\"",
+                    input.num_bits(),
+                ),
+            );
         }
         if !self.search.is_match(input.search_phase()) {
-            *failure_score.get_or_insert(0) += 1;
+            score.fail(
+                1,
+                &format_args!(
+                    "Unsupported search phase: \"{}\" - expected one of {}",
+                    input.search_phase().kind(),
+                    self.search.format_kinds(),
+                ),
+            );
         }
 
-        match failure_score {
-            None => Ok(MatchScore(0)),
-            Some(score) => Err(FailureScore(score)),
-        }
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&BfTreeSphericalBuild>,
-    ) -> std::fmt::Result {
-        match input {
-            None => {
-                writeln!(
-                    f,
-                    "- BfTree Index Build and Search using spherical quantization"
-                )?;
-                writeln!(f, "- Requires `float32` data")?;
-                writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
-            }
-            Some(input) => {
-                if !f32::is_match(input.data_type()) {
-                    writeln!(
-                        f,
-                        "- Only `float32` data type is supported. Instead, got {}",
-                        input.data_type()
-                    )?;
-                }
-
-                if !self.search.is_match(input.search_phase()) {
-                    writeln!(
-                        f,
-                        "- Unsupported search phase: \"{}\" - expected one of {}",
-                        input.search_phase().kind(),
-                        self.search.format_kinds(),
-                    )?;
-                }
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "- BfTree Index Build and Search using spherical quantization"
+        )?;
+        writeln!(f, "- Requires `float32` data")?;
+        writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
         Ok(())
     }
 

@@ -5,7 +5,7 @@
 
 //! # Provided Executors.
 //!
-//! Built-in implementations of [`Executor`] for common streaming inputs.
+//! Built-in implementations of [`crate::streaming::Executor`] for common streaming inputs.
 
 #[cfg(feature = "bigann")]
 #[cfg_attr(docsrs, doc(cfg(feature = "bigann")))]

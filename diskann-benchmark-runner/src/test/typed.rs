@@ -8,7 +8,7 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    benchmark::{MatchContext, PassFail, Regression, Score},
     utils::datatype::{AsDataType, DataType},
     Benchmark, Checker, Checkpoint, Input, Output,
 };
@@ -130,25 +130,18 @@ where
     type Input = TypeInput;
     type Output = String;
 
-    fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &TypeInput, context: &MatchContext) -> Score {
         // Try to match based on data type.
         // Add a small penalty so `ExactTypeBench` can be more specific if it hits.
         if T::is_match(input.data_type) {
-            Ok(MatchScore(10))
+            context.success(10)
         } else {
-            Err(FailureScore(1000))
+            context.fail(1000, &T::describe(input.data_type))
         }
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&TypeInput>,
-    ) -> std::fmt::Result {
-        match input {
-            None => write!(f, "{}", T::DATA_TYPE),
-            Some(input) => write!(f, "{}", T::describe(input.data_type)),
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", T::DATA_TYPE)
     }
 
     fn run(
@@ -207,46 +200,25 @@ where
     type Input = TypeInput;
     type Output = String;
 
-    fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
-        if input.dim == N {
-            if T::is_match(input.data_type) {
-                Ok(MatchScore(0))
-            } else {
-                Err(FailureScore(1000))
-            }
+    fn try_match(&self, input: &TypeInput, context: &MatchContext) -> Score {
+        let mut score = if T::is_match(input.data_type) {
+            context.success(0)
         } else {
-            Err(FailureScore(1000))
+            context.fail(1000, &T::describe(input.data_type))
+        };
+
+        if input.dim != N {
+            score.fail(
+                10,
+                &format_args!("expected dim={}, but found dim={}", N, input.dim),
+            );
         }
+
+        score
     }
 
-    fn description(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&TypeInput>,
-    ) -> std::fmt::Result {
-        match input {
-            None => {
-                write!(f, "{}, dim={}", T::DATA_TYPE, N)
-            }
-            Some(input) => {
-                let type_description = T::describe(input.data_type);
-                let dim_ok = input.dim == N;
-                match (type_description.is_match(), dim_ok) {
-                    (true, true) => write!(f, "successful match"),
-                    (false, true) => write!(f, "{}", type_description),
-                    (true, false) => {
-                        write!(f, "expected dim={}, but found dim={}", N, input.dim)
-                    }
-                    (false, false) => {
-                        write!(
-                            f,
-                            "{}; expected dim={}, but found dim={}",
-                            type_description, N, input.dim
-                        )
-                    }
-                }
-            }
-        }
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}, dim={}", T::DATA_TYPE, N)
     }
 
     fn run(
@@ -288,5 +260,33 @@ where
             "exact match dim={} type={}",
             N, input.data_type
         )))
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::benchmark::TestScore;
+
+    #[test]
+    fn test_try_match() {
+        let bench = ExactTypeBench::<f32, 1000>::new();
+        match MatchContext::test(&bench, &TypeInput::new(DataType::Float32, 1000)) {
+            TestScore::Success(v) => assert_eq!(v, 0),
+            _ => panic!("assumed success"),
+        };
+
+        match MatchContext::test(&bench, &TypeInput::new(DataType::Float16, 1000)) {
+            TestScore::Failure { score, reasons } => {
+                assert_eq!(score, 1000);
+                assert_eq!(reasons.unwrap().len(), 1);
+            }
+            _ => panic!("assumed failure"),
+        };
     }
 }

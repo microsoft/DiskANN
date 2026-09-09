@@ -10,7 +10,8 @@ use std::marker::PhantomData;
 use crate::{AccessError, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
 use bytemuck::cast_slice;
-use diskann::{error::RankedError, utils::VectorRepr, ANNError, ANNErrorKind, ANNResult};
+use diskann::{error::RankedError, utils::VectorRepr, ANNError, ANNResult};
+use diskann_utils::lazy_format;
 use thiserror::Error;
 
 use super::ConfigError;
@@ -95,11 +96,14 @@ impl<T: VectorRepr> VectorProvider<T> {
     /// Return a vector of vector Ids of the starting points
     ///
     #[inline(always)]
-    pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
+    pub fn starting_points<I: crate::BfTreeId>(&self) -> ANNResult<Vec<I>> {
         (self.max_vectors..self.total())
             .map(|i| {
-                u32::try_from(i).map_err(|_| {
-                    ANNError::log_index_error(format_args!("start point id {i} exceeds u32::MAX"))
+                I::try_from_index(i).ok_or_else(|| {
+                    ANNError::message(lazy_format!(
+                        move,
+                        "start point id {i} exceeds the id type's maximum"
+                    ))
                 })
             })
             .collect()
@@ -124,12 +128,12 @@ impl<T: VectorRepr> VectorProvider<T> {
     #[inline(always)]
     pub(crate) fn set_vector_sync(&self, i: usize, v: &[T]) -> ANNResult<()> {
         if v.len() != self.dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
         if i >= self.total() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector id is out of boundary in the dataset.",
             ));
         }
@@ -149,10 +153,10 @@ impl<T: VectorRepr> VectorProvider<T> {
             #[error("expected a buffer with dim {0}, instead got {1}")]
             struct WrongDim(usize, usize);
 
-            return Err(RankedError::Error(ANNError::new(
-                ANNErrorKind::IndexError,
-                WrongDim(self.dim(), buffer.len()),
-            )));
+            return Err(RankedError::Error(ANNError::new(WrongDim(
+                self.dim(),
+                buffer.len(),
+            ))));
         }
 
         self.num_get_calls.increment();
@@ -163,7 +167,8 @@ impl<T: VectorRepr> VectorProvider<T> {
             bf_tree::LeafReadResult::Found(read_size) => {
                 let vector_size = std::mem::size_of::<T>() * self.dim;
                 if read_size as usize != vector_size {
-                    return Err(RankedError::Error(ANNError::log_index_error(format!(
+                    return Err(RankedError::Error(ANNError::message(lazy_format!(
+                        move,
                         "The bf-tree entry for vector id {} is marked as found but has size {} instead of the expected size {}",
                         i, read_size, vector_size,
                     ))));
@@ -176,7 +181,8 @@ impl<T: VectorRepr> VectorProvider<T> {
                 }));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(RankedError::Error(ANNError::log_index_error(format!(
+                return Err(RankedError::Error(ANNError::message(lazy_format!(
+                    move,
                     "The bf-tree entry for vector id {} is marked as invalid",
                     i
                 ))));

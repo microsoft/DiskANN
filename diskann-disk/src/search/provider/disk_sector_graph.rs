@@ -7,12 +7,13 @@
 //! Sector graph
 use std::ops::Deref;
 
-use diskann::{ANNError, ANNResult};
+use diskann::ANNResult;
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{
     data_model::GraphHeader,
-    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
+    error::{diskann_error, ErrorKind},
+    search::provider::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
 };
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
@@ -78,7 +79,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
                 AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
-            .map_err(ANNError::log_index_error)?,
+            .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?,
             cur_sector_idx: 0,
             num_nodes_per_sector,
             node_len,
@@ -97,7 +98,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
                 AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
-            .map_err(ANNError::log_index_error)?;
+            .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
         }
         Ok(())
     }
@@ -112,19 +113,22 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     pub fn read_graph(&mut self, sectors_to_fetch: &[u64]) -> ANNResult<()> {
         let cur_sector_idx_usize: usize = self.cur_sector_idx.try_into()?;
         if sectors_to_fetch.len() > self.max_n_batch_sector_read - cur_sector_idx_usize {
-            return Err(ANNError::log_index_error(format_args!(
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "Trying to read too many sectors. number of sectors to read: {}, max number of sectors can read: {}",
                 sectors_to_fetch.len(),
                 self.max_n_batch_sector_read - cur_sector_idx_usize,
-            )));
+            ));
         }
 
         let len_per_node = self.num_sectors_per_node * self.block_size;
         if len_per_node == 0 {
-            return Err(ANNError::log_index_error(format_args!(
+            return Err(diskann_error!(
+                ErrorKind::IndexError,
                 "len_per_node is 0 (num_sectors_per_node={}, block_size={})",
-                self.num_sectors_per_node, self.block_size,
-            )));
+                self.num_sectors_per_node,
+                self.block_size,
+            ));
         }
         let range = cur_sector_idx_usize * len_per_node
             ..(cur_sector_idx_usize + sectors_to_fetch.len()) * len_per_node;
@@ -180,8 +184,8 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     #[inline]
     /// Gets the index for the sector that contains the node with the given vertex_id
     pub fn node_sector_index(&self, vertex_id: u32) -> u64 {
-        1 + if self.num_nodes_per_sector > 0 {
-            vertex_id as u64 / self.num_nodes_per_sector
+        1 + if let Some(r) = (vertex_id as u64).checked_div(self.num_nodes_per_sector) {
+            r
         } else {
             vertex_id as u64 * self.num_sectors_per_node as u64
         }
@@ -198,13 +202,15 @@ impl<AlignedReaderType: AlignedFileReader> Deref for DiskSectorGraph<AlignedRead
 
 #[cfg(test)]
 mod disk_sector_graph_test {
-    use crate::utils::aligned_file_reader::{
-        traits::AlignedReaderFactory, AlignedFileReaderFactory,
-    };
     use diskann_utils::test_data_root;
 
     use super::*;
-    use crate::data_model::{GraphLayoutVersion, GraphMetadata};
+    use crate::{
+        data_model::{GraphLayoutVersion, GraphMetadata},
+        search::provider::aligned_file_reader::{
+            traits::AlignedReaderFactory, AlignedFileReaderFactory,
+        },
+    };
 
     fn test_index_path() -> String {
         test_data_root()
@@ -372,5 +378,49 @@ mod disk_sector_graph_test {
         let graph = test_initialize_disk_sector_graph(1, 1, reader);
         let data = &graph;
         assert_eq!(data.len(), 512);
+    }
+
+    #[test]
+    fn test_reconfigure_grows_buffer() {
+        let reader = AlignedFileReaderFactory::new(test_index_path())
+            .build()
+            .unwrap();
+        let mut graph = test_initialize_disk_sector_graph(2, 1, reader);
+        assert_eq!(graph.max_n_batch_sector_read, 4);
+
+        // Reconfigure to larger batch — buffer must grow beyond initial 512 bytes
+        graph.reconfigure(16).unwrap();
+        assert_eq!(graph.max_n_batch_sector_read, 16);
+        assert_eq!(graph.sectors_data.len(), 16 * 64);
+    }
+
+    #[test]
+    fn test_reconfigure_noop_for_smaller_size() {
+        let reader = AlignedFileReaderFactory::new(test_index_path())
+            .build()
+            .unwrap();
+        let mut graph = test_initialize_disk_sector_graph(2, 1, reader);
+        let original_len = graph.sectors_data.len();
+
+        // Reconfigure with same or smaller size should be a no-op
+        graph.reconfigure(4).unwrap();
+        assert_eq!(graph.max_n_batch_sector_read, 4);
+        assert_eq!(graph.sectors_data.len(), original_len);
+
+        graph.reconfigure(2).unwrap();
+        assert_eq!(graph.max_n_batch_sector_read, 4);
+        assert_eq!(graph.sectors_data.len(), original_len);
+    }
+
+    #[test]
+    fn test_new_disk_sector_graph_zero_block_size_defaults() {
+        let metadata = GraphMetadata::new(1000, 32, 500, 32, 2, 20, 50, 1024, 256);
+        // block_size = 0 should fall back to DEFAULT_DISK_SECTOR_LEN regardless of version
+        let header = GraphHeader::new(metadata, 0, GraphLayoutVersion::new(1, 0));
+        let reader = AlignedFileReaderFactory::new(test_index_path())
+            .build()
+            .unwrap();
+        let graph = DiskSectorGraph::new(reader, &header, 2).unwrap();
+        assert_eq!(graph.block_size, DEFAULT_DISK_SECTOR_LEN);
     }
 }

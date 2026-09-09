@@ -80,7 +80,8 @@ where
 
             let search = start.elapsed().into();
 
-            std::iter::zip(o.iter_mut(), queue.iter()).for_each(|(o, neighbor)| *o = neighbor.id);
+            std::iter::zip(o.iter_mut(), queue.iter())
+                .for_each(|(o, neighbor)| *o = *neighbor.id());
             progress.inc(1);
             Ok(Times { preprocess, search })
         })

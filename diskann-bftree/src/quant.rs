@@ -14,6 +14,7 @@ use diskann_quantization::{
         DistanceComputer, Opaque, OpaqueMut, Quantizer, QueryComputer, QueryLayout,
     },
 };
+use diskann_utils::lazy_format;
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::ConfigError;
@@ -25,7 +26,7 @@ impl QuantQueryComputer {
     pub(crate) fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
         match self.0.evaluate_similarity(Opaque::new(x)) {
             Ok(distance) => Ok(distance),
-            Err(err) => Err(ANNError::new(diskann::ANNErrorKind::IndexError, err)),
+            Err(err) => Err(ANNError::new(err)),
         }
     }
 }
@@ -102,7 +103,7 @@ impl QuantVectorProvider {
                 GlobalAllocator,
                 ScopedAllocator::global(),
             )
-            .map_err(|e| ANNError::log_sq_error(e))?;
+            .map_err(ANNError::new)?;
         Ok(QuantQueryComputer(inner))
     }
 
@@ -110,11 +111,10 @@ impl QuantVectorProvider {
     pub fn distance_computer(&self) -> ANNResult<DistanceComputer> {
         self.quantizer
             .distance_computer(GlobalAllocator)
-            .map_err(|e| ANNError::log_sq_error(e))
+            .map_err(ANNError::new)
     }
 
     pub(crate) fn get_vector_into(&self, i: usize, buffer: &mut [u8]) -> Result<(), AccessError> {
-        use diskann::ANNErrorKind;
         use thiserror::Error;
 
         let expected = self.quantizer.bytes();
@@ -123,17 +123,18 @@ impl QuantVectorProvider {
             #[error("expected a buffer with dim {0}, instead got {1}")]
             struct WrongDim(usize, usize);
 
-            return Err(AccessError::Error(ANNError::new(
-                ANNErrorKind::IndexError,
-                WrongDim(expected, buffer.len()),
-            )));
+            return Err(AccessError::Error(ANNError::new(WrongDim(
+                expected,
+                buffer.len(),
+            ))));
         }
 
         self.num_get_calls.increment();
         match self.quant_vector_index.read(bytemuck::bytes_of(&i), buffer) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 if read_size as usize != expected {
-                    return Err(AccessError::Error(ANNError::log_index_error(format!(
+                    return Err(AccessError::Error(ANNError::message(lazy_format!(
+                        move,
                         "The bf-tree entry for vector id {} is marked as found but has size {} instead of the expected size {}",
                         i, read_size, expected,
                     ))));
@@ -146,7 +147,8 @@ impl QuantVectorProvider {
                 }));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(AccessError::Error(ANNError::log_index_error(format!(
+                return Err(AccessError::Error(ANNError::message(lazy_format!(
+                    move,
                     "The bf-tree entry for vector id {} is marked as invalid",
                     i,
                 ))));
@@ -183,8 +185,8 @@ impl QuantVectorProvider {
         let vf32: &[f32] = &T::as_f32(v).into_ann_result()?;
 
         if vf32.len() != self.full_dim() {
-            return Err(ANNError::log_dimension_mismatch_error(
-                "Vector f32 dimension is not equal to the expected dimension.".to_string(),
+            return Err(ANNError::message(
+                "Vector f32 dimension is not equal to the expected dimension.",
             ));
         }
 
@@ -199,7 +201,7 @@ impl QuantVectorProvider {
                 OpaqueMut::new(quant_vector),
                 ScopedAllocator::global(),
             )
-            .map_err(|e| ANNError::log_sq_error(e))?;
+            .map_err(ANNError::new)?;
 
         bftree_insert(&self.quant_vector_index, key, quant_vector)?;
 
@@ -214,7 +216,7 @@ impl QuantVectorProvider {
     #[cfg(test)]
     pub(crate) fn set_quant_vector(&self, i: usize, v: &[u8]) -> ANNResult<()> {
         if v.len() != self.quantizer.bytes() {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "Vector dimension is not equal to the expected dimension.",
             ));
         }
@@ -275,7 +277,6 @@ pub(crate) fn create_test_quantizer(dim: usize) -> Poly<dyn Quantizer> {
 mod tests {
     use std::sync::Arc;
 
-    use diskann::ANNErrorKind;
     use diskann_quantization::spherical::iface::Opaque;
     use diskann_vector::DistanceFunction;
     use tokio::task::JoinSet;
@@ -293,16 +294,13 @@ mod tests {
         let provider = QuantVectorProvider::new_with_config(quantizer, bf_tree_config).unwrap();
 
         // try to set an out of bounds vector
-        let result = provider.set_quant_vector(20, &[]).unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let _ = provider.set_quant_vector(20, &[]).unwrap_err();
 
         // try to set an out of bounds vector via set_vector_sync
-        let result = provider.set_vector_sync::<f32>(20, &[]).unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::DimensionMismatchError);
+        let _ = provider.set_vector_sync::<f32>(20, &[]).unwrap_err();
 
         // try to set a quant vector with the wrong dimension
-        let result = provider.set_quant_vector(0, &[]).unwrap_err();
-        assert_eq!(result.kind(), ANNErrorKind::IndexError);
+        let _ = provider.set_quant_vector(0, &[]).unwrap_err();
 
         // verify expected quant vector byte count
         assert_eq!(quant_bytes, provider.quantizer.bytes());

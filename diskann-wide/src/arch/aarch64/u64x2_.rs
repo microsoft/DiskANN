@@ -8,7 +8,7 @@ use crate::{
     arch::Scalar,
     constant::Const,
     helpers,
-    traits::{SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
+    traits::{SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector},
 };
 
 // AArch64 masks
@@ -89,6 +89,18 @@ macros::aarch64_define_bitops!(
     (u64, i64, vmovq_n_s64),
 );
 
+impl SIMDSumTree for u64x2 {
+    #[inline(always)]
+    fn sum_tree(self) -> u64 {
+        if cfg!(miri) {
+            self.emulated().sum_tree()
+        } else {
+            // SAFETY: Allowed by the `Neon` architecture.
+            unsafe { vaddvq_u64(self.0) }
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -127,6 +139,8 @@ mod tests {
     test_utils::ops::test_fma!(u64x2, 0x28540d9936a9e803, test_neon());
 
     test_utils::ops::test_cmp!(u64x2, 0xfae27072c6b70885, test_neon());
+
+    test_utils::ops::test_sumtree!(u64x2, 0xe1dc2d07ae014508, test_neon());
 
     // Bit ops
     test_utils::ops::test_bitops!(u64x2, 0xbe927713ea310164, test_neon());

@@ -19,8 +19,7 @@ use std::borrow::Cow;
 ///
 /// ## Type parameters
 /// - `IdType`: identifier type for the point, typically a vector id.
-///   Must satisfy [`VectorId`], [`PrimInt`], and [`NumCast`] so it can
-///   interoperate with the indexing layer.
+///   Must satisfy [`VectorId`] so it can interoperate with the indexing layer.
 ///
 /// ## Associated types
 /// - `AttributeType`: type of the individual labels (e.g. `u32` or `String`).

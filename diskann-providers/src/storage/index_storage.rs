@@ -9,7 +9,7 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult, graph::DiskANNIndex, provider::DataProvider, utils::VectorRepr,
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, lazy_format};
 
 use super::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
 use crate::model::{
@@ -197,7 +197,8 @@ fn get_and_validate_single_starting_point<U, V, D>(
 
     let num_starting_points = start_ids.len();
     if num_starting_points > 1 {
-        return Err(ANNError::log_index_error(format_args!(
+        return Err(ANNError::message(lazy_format!(
+            move,
             "ERROR: Save index does not support multiple starting points. Found {} starting points.",
             num_starting_points
         )));
@@ -206,7 +207,7 @@ fn get_and_validate_single_starting_point<U, V, D>(
     start_ids
         .first()
         .cloned()
-        .ok_or_else(|| ANNError::log_index_error("ERROR: No starting points found"))
+        .ok_or_else(|| ANNError::message("ERROR: No starting points found"))
 }
 ///////////
 // Tests //

@@ -22,7 +22,7 @@
         },
         "search_phase": {
           "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "groundtruth": "disk_index_10pts_idx_uint32_exact_ground_truth.bin",
           "search_list": [10, 20, 40],
           "beam_width": 4,
           "recall_at": 10,

@@ -28,7 +28,7 @@ pub struct InputFile {
 }
 
 impl InputFile {
-    /// Create a new new input file from the path-like `path``
+    /// Create a new input file from the path-like `path`.
     pub fn new<P>(path: P) -> Self
     where
         PathBuf: From<P>,
@@ -59,6 +59,12 @@ impl std::ops::Deref for InputFile {
     type Target = Path;
     fn deref(&self) -> &Self::Target {
         &self.path
+    }
+}
+
+impl std::fmt::Display for InputFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display())
     }
 }
 

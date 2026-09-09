@@ -136,7 +136,7 @@ where
     T: VectorRepr,
 {
     let metadata = load_metadata_from_file(provider, path).map_err(|err| {
-        ANNError::log_index_error(format_args!(
+        ANNError::message(format!(
             "failed to load data file \"{}\" due to the following error: {}",
             path, err
         ))
@@ -195,7 +195,7 @@ where
 
         let len = slice.len();
         if len != dim {
-            return Err(ANNError::log_index_error(
+            return Err(ANNError::message(
                 "data provider returned a vector with a dimension other than advertised",
             ));
         }

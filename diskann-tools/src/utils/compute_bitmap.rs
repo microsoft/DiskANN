@@ -79,7 +79,7 @@ impl QueryAccelerator for InvertedIndexAccelerator {
 
     fn universe(&self) -> BitSet {
         let mut result = BitSet::new();
-        for (_, bits) in self.map.iter() {
+        for bits in self.map.values() {
             result.extend(bits);
         }
         result
@@ -121,7 +121,7 @@ impl QueryAccelerator for BTreeAccelerator {
 
     fn universe(&self) -> BitSet {
         let mut result = BitSet::new();
-        for (_, ids) in self.map.iter() {
+        for ids in self.map.values() {
             result.extend(ids.iter().cloned());
         }
         result

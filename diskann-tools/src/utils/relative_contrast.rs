@@ -113,7 +113,6 @@ mod relative_contrast_tests {
 
     use super::*;
     use crate::utils::ground_truth::compute_ground_truth_from_datafiles;
-    use diskann_disk::data_model::AdHoc;
     use diskann_vector::Half;
 
     /// Test for compute_relative_contrast function with random data
@@ -166,7 +165,7 @@ mod relative_contrast_tests {
         // Generate ground truth file using compute_ground_truth_from_datafiles
         let gt_file_path = "/ground_truth.bin";
         let recall_at = 5;
-        compute_ground_truth_from_datafiles::<AdHoc<Half>, _>(
+        compute_ground_truth_from_datafiles::<Half, (), _>(
             &storage_provider,
             Metric::L2,
             base_file_path,
@@ -245,7 +244,7 @@ mod relative_contrast_tests {
         // Generate ground truth file using compute_ground_truth_from_datafiles
         let gt_file_path = "/ground_truth.bin";
         let recall_at = 3;
-        compute_ground_truth_from_datafiles::<AdHoc<Half>, _>(
+        compute_ground_truth_from_datafiles::<Half, (), _>(
             &storage_provider,
             Metric::L2,
             base_file_path,

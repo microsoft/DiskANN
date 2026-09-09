@@ -1,0 +1,53 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use std::sync::Arc;
+
+use diskann::ANNResult;
+use diskann_providers::storage::VirtualStorageProvider;
+use vfs::{FileSystem, MemoryFS};
+
+use crate::search::provider::aligned_file_reader::{
+    reader::StorageProviderAlignedFileReader, traits::AlignedReaderFactory,
+};
+
+pub struct VirtualAlignedReaderFactory<P: FileSystem = MemoryFS> {
+    pub file_path: String,
+    // Use Arc instead of reference because async searcher interfaces require 'static bounds
+    // for proper lifetime management in async futures
+    pub storage_provider: Arc<VirtualStorageProvider<P>>,
+}
+
+impl<P: FileSystem> AlignedReaderFactory for VirtualAlignedReaderFactory<P> {
+    type AlignedReaderType = StorageProviderAlignedFileReader;
+
+    fn build(&self) -> ANNResult<Self::AlignedReaderType> {
+        StorageProviderAlignedFileReader::new(&*self.storage_provider, self.file_path.as_str())
+    }
+}
+
+impl<P: FileSystem> VirtualAlignedReaderFactory<P> {
+    pub fn new(file_path: String, storage_provider: Arc<VirtualStorageProvider<P>>) -> Self {
+        Self {
+            file_path,
+            storage_provider,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_aligned_reader_factory_new() {
+        let fs = Arc::new(VirtualStorageProvider::new_memory());
+        let path = "/test.bin".to_string();
+        let factory = VirtualAlignedReaderFactory::new(path.clone(), fs.clone());
+
+        assert_eq!(factory.file_path, path);
+        assert!(Arc::ptr_eq(&factory.storage_provider, &fs));
+    }
+}

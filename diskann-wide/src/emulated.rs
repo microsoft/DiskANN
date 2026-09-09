@@ -10,10 +10,11 @@ use super::{
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
-    reference::{ReferenceAbs, ReferenceCast, ReferenceScalarOps, ReferenceShifts, TreeReduce},
+    reference::{ReferenceAbs, ReferenceCast, ReferenceIntegerOps, ReferenceScalarOps, TreeReduce},
     traits::{
         ArrayType, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd,
-        SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret, SIMDSelect, SIMDSumTree, SIMDVector,
+        SIMDPartialEq, SIMDPartialOrd, SIMDPopcount, SIMDReinterpret, SIMDSelect, SIMDSumTree,
+        SIMDVector,
     },
 };
 
@@ -237,6 +238,16 @@ where
     }
 }
 
+impl<T, const N: usize, A> SIMDPopcount for Emulated<T, N, A>
+where
+    T: ReferenceIntegerOps,
+{
+    #[inline(always)]
+    fn popcount_simd(self) -> Self {
+        Self::from_arch_fn(self.1, |i| self.0[i].expected_popcount_())
+    }
+}
+
 /// SIMDPartialEq
 impl<T, const N: usize, A> SIMDPartialEq for Emulated<T, N, A>
 where
@@ -328,7 +339,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shl for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -339,7 +350,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shl<T> for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -350,7 +361,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shr for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -361,7 +372,7 @@ where
 
 impl<T, const N: usize, A> std::ops::Shr<T> for Emulated<T, N, A>
 where
-    T: ReferenceShifts,
+    T: ReferenceIntegerOps,
 {
     type Output = Self;
     #[inline(always)]
@@ -544,6 +555,8 @@ macro_rules! impl_sumtree {
 impl_sumtree!(f32, 1, 2, 4, 8, 16);
 impl_sumtree!(i32, 4, 8, 16);
 impl_sumtree!(u32, 4, 8, 16);
+impl_sumtree!(i64, 2, 4, 8);
+impl_sumtree!(u64, 2, 4, 8);
 
 ////////////////
 // Conversion //
@@ -690,6 +703,7 @@ impl_splitjoin!(u8, 64 => 32);
 impl_splitjoin!(u32, 8 => 4);
 impl_splitjoin!(u32, 16 => 8);
 impl_splitjoin!(u64, 4 => 2);
+impl_splitjoin!(u64, 8 => 4);
 
 impl_splitjoin!(f32, 16 => 8);
 impl_splitjoin!(f32, 8 => 4);
@@ -872,11 +886,13 @@ mod test_emulated {
             test_emulated!($type, $N);
 
             test_utils::ops::test_bitops!(Emulated<$type, $N>, 0x14fc7841e66bd162, SC);
+            test_utils::ops::test_popcount!(Emulated<$type, $N>, 0x78d19fb8aac40131, SC);
         };
         (signed, $type:ty, $N:literal) => {
             test_emulated!($type, $N);
 
             test_utils::ops::test_bitops!(Emulated<$type, $N>, 0x850435f89f86f3b0, SC);
+            test_utils::ops::test_popcount!(Emulated<$type, $N>, 0x904e10c5fd2d4380, SC);
             test_utils::ops::test_abs!(Emulated<$type, $N>, 0x1842a2b86dfd9ecb, SC);
         };
     }
@@ -956,6 +972,83 @@ mod test_emulated {
         (Emulated<u8, 64>, Emulated<u8, 64>) => Emulated<u32, 16>, 0x3001f05604e96289, SC
     );
 
+    // split/join
+    test_utils::ops::test_splitjoin!(
+        Emulated<i8, 32> => Emulated<i8, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i8, 64> => Emulated<i8, 32>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i16, 16> => Emulated<i16, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i16, 32> => Emulated<i16, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i32, 8> => Emulated<i32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<i32, 16> => Emulated<i32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u8, 32> => Emulated<u8, 16>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u8, 64> => Emulated<u8, 32>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u32, 8> => Emulated<u32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u32, 16> => Emulated<u32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u64, 4> => Emulated<u64, 2>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<u64, 8> => Emulated<u64, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f32, 8> => Emulated<f32, 4>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f32, 16> => Emulated<f32, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+    test_utils::ops::test_splitjoin!(
+        Emulated<f16, 16> => Emulated<f16, 8>,
+        0xb151fcd6141b10c9,
+        SC
+    );
+
     // reductions
     test_utils::ops::test_sumtree!(Emulated<f32, 1>, 0x410bad8207a8ccfc, SC);
     test_utils::ops::test_sumtree!(Emulated<f32, 2>, 0xf2fc4e4bbd193493, SC);
@@ -970,6 +1063,14 @@ mod test_emulated {
     test_utils::ops::test_sumtree!(Emulated<u32, 4>, 0x5e4cffc86a21e90d, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 8>, 0xf43f19adb43bc611, SC);
     test_utils::ops::test_sumtree!(Emulated<u32, 16>, 0xa43dfe10aa9de860, SC);
+
+    test_utils::ops::test_sumtree!(Emulated<i64, 2>, 0xbef8abe303356cc3, SC);
+    test_utils::ops::test_sumtree!(Emulated<i64, 4>, 0x9aef214494ff5cd2, SC);
+    test_utils::ops::test_sumtree!(Emulated<i64, 8>, 0x7f6ba325baf079b3, SC);
+
+    test_utils::ops::test_sumtree!(Emulated<u64, 2>, 0xe1dc2d07ae014508, SC);
+    test_utils::ops::test_sumtree!(Emulated<u64, 4>, 0x529c27f62ea171ec, SC);
+    test_utils::ops::test_sumtree!(Emulated<u64, 8>, 0x7f6ba325baf079b3, SC);
 
     /////////////////
     // conversions //

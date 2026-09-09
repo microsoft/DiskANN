@@ -74,7 +74,7 @@ pub trait ExecutionContext: Send + Sync + Clone + 'static {
     /// Provide a customization point for tasks spawned while under this context.
     ///
     /// The future `f` is a Future that DiskANN intends to spawn as a task using an spawn
-    /// method such as `tokio::spawn`. `DiskANN will pass this Future through this function
+    /// method such as `tokio::spawn`. DiskANN will pass this future through this function
     /// before creating the task.
     ///
     /// This allows the `ExecutionContext` to nest that Future inside another Future if desired.

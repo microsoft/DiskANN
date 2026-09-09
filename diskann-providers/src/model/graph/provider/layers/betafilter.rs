@@ -35,8 +35,7 @@ use diskann::{
 /// to encourage exploration of vectors satisfying the predicate.
 ///
 /// See Also:
-/// * [`BetaAccessor`]: For the [`Accessor`] derived from this strategy.
-/// * [`BetaComputer`]: For [`PreprocessedDistanceFunction`] support for beta filtering.
+/// * [`BetaAccessor`]: The [`glue::SearchAccessor`] derived from this strategy.
 #[derive(Debug, Clone)]
 pub struct BetaFilter<Strategy, I> {
     /// The inner strategy to use.
@@ -99,7 +98,7 @@ where
 /// This works by modifying the `Element` obtained using the inner accessor into a tuple
 /// that propagates the vector ID.
 ///
-/// The [`BetaComputer`] then uses this ID to consult the filter predicate and adjust the
+/// The [`BetaAccessor`] then uses this ID to consult the filter predicate and adjust the
 /// distance accordingly.
 impl<'a, Provider, Strategy, T, I> SearchStrategy<'a, Provider, T> for BetaFilter<Strategy, I>
 where
@@ -113,7 +112,7 @@ where
 
     type SearchAccessorError = Strategy::SearchAccessorError;
 
-    /// Compose the [`BetaAccessor`] with the inner search strategy's [`Accessor`].
+    /// Compose the [`BetaAccessor`] with the inner strategy's [`glue::SearchAccessor`].
     fn search_accessor(
         &'a self,
         provider: &'a Provider,
@@ -130,8 +129,8 @@ where
     }
 }
 
-/// [`DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
-/// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
+/// [`glue::DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
+/// wrapping the inner strategy's processor with [`Unwrap`] via [`glue::Pipeline`].
 impl<'a, Provider, Strategy, T, I, O> glue::DefaultPostProcessor<'a, Provider, T, O>
     for BetaFilter<Strategy, I>
 where
@@ -151,7 +150,7 @@ where
 // Helpers //
 /////////////
 
-/// An [`Accessor`] that composes with an `Inner` accessor to provide beta-filtering.
+/// A [`glue::SearchAccessor`] that composes with an `Inner` accessor to provide beta-filtering.
 pub struct BetaAccessor<Inner>
 where
     Inner: HasId,

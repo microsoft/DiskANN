@@ -30,6 +30,7 @@ use diskann_quantization::{
         MinMaxCosineNormalized, MinMaxIP, MinMaxL2Squared,
     },
 };
+use diskann_utils::lazy_format;
 use diskann_vector::{PureDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -54,7 +55,8 @@ pub enum MMConvertError {
 
 impl From<MMConvertError> for ANNError {
     fn from(value: MMConvertError) -> Self {
-        ANNError::log_index_error(format_args!(
+        ANNError::message(lazy_format!(
+            move,
             "Unable to convert MinMaxElement slice, error : {:?}",
             value
         ))
@@ -250,7 +252,8 @@ where
     /// This function fails when:
     /// - The input slice contains invalid MinMax metadata ([`MetaParseError`])
     /// - The data format is not canonical ([`NotCanonical`])
-    /// - The destination buffer size doesn't match the original vector dimension ([`WrongLength`])
+    /// - The destination buffer size doesn't match the original vector dimension
+    ///   ([`MMConvertError::WrongLength`])
     /// - The decompression process encounters corrupted data ([`DecompressError`])
     fn as_f32_into(src: &[Self], dst: &mut [f32]) -> Result<(), Self::Error> {
         let data_ref = Self::from_raw(src)?;
@@ -337,7 +340,7 @@ where
 // Distances //
 ///////////////
 
-/// A function pointer wrapper for [`MinMax`] distances.
+/// A function pointer wrapper for [`MinMaxElement`] distances.
 #[derive(Debug)]
 pub struct FnPtr<T>(fn(&[T], &[T]) -> f32);
 
