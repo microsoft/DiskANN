@@ -1587,6 +1587,11 @@ mod disk_provider_tests {
     const TEST_PQ_COMPRESSED: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_pq_compressed.bin";
 
+    // These SIFT squared-L2 distances are around 256_000, where one f32 ULP is
+    // 0.015625. Allow one ULP for architecture-dependent SIMD accumulation;
+    // an absolute tolerance of 1e-4 would require identical f32 results.
+    const SIFT_DISTANCE_ABS_TOLERANCE: f32 = 0.02;
+
     #[test]
     fn test_disk_search_k10_l20_single_or_multi_thread_100dim() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
@@ -2666,19 +2671,14 @@ mod disk_provider_tests {
         #[case] expected_distances: Vec<f32>,
         #[case] check_indexed_vectors: bool,
     ) {
-        // Exact distances can vary slightly depending on the architecture used
-        // to compute distances due to different unrolling strategies and SIMD widthd.
-        //
-        // This parameter allows for a small margin when matching distances.
         let check_distances = |got: &[f32], expected: &[f32]| -> bool {
-            const ABS_TOLERANCE: f32 = 0.02;
             assert_eq!(got.len(), expected.len());
             for (i, (g, e)) in std::iter::zip(got.iter(), expected.iter()).enumerate() {
-                if (g - e).abs() > ABS_TOLERANCE {
+                if (g - e).abs() > SIFT_DISTANCE_ABS_TOLERANCE {
                     panic!(
                         "distances differ at position {} by more than {}\n\n\
                          got: {:?}\nexpected: {:?}",
-                        i, ABS_TOLERANCE, got, expected,
+                        i, SIFT_DISTANCE_ABS_TOLERANCE, got, expected,
                     );
                 }
             }
@@ -2820,7 +2820,7 @@ mod disk_provider_tests {
                 "flat baseline ID mismatch at result {index}",
             );
             assert!(
-                (actual.distance - expected_distance).abs() <= 0.02,
+                (actual.distance - expected_distance).abs() <= SIFT_DISTANCE_ABS_TOLERANCE,
                 "flat baseline distance mismatch at result {index}: expected \
                  {expected_distance}, got {}",
                 actual.distance,
