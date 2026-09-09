@@ -231,11 +231,11 @@ where
         &index_reader,
         vertex_provider_factory,
         search_params.distance.into(),
-        None,
     )?;
 
     logger.log_checkpoint("index_loaded");
 
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
@@ -278,13 +278,13 @@ where
                     search_params.post_processor.as_ref(),
                 );
 
-                match searcher.search(
+                match runtime.block_on(searcher.search(
                     q,
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
                     mode,
-                ) {
+                )) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
                         let base_count = (search_result.stats.result_count as usize)
