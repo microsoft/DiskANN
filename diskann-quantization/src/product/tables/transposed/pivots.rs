@@ -146,7 +146,7 @@ impl CompressionResult {
 ///
 /// Now, the actual groupsize is dependent on the hardware being used, but this explanation
 /// describes the gist of what this class is trying to accomplish.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Chunk {
     /// The data actually underlying the blocked representation.
     data: BlockTransposed<f32, 16>,

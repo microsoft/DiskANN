@@ -5,6 +5,7 @@
 
 mod basic;
 mod transposed;
+pub mod padded;
 
 #[cfg(test)]
 pub(super) mod test;
@@ -16,3 +17,4 @@ pub(super) mod test;
 // Error types
 pub use basic::{BasicTable, BasicTableBase, BasicTableView, TableCompressionError};
 pub use transposed::TransposedTable;
+pub use padded::PaddedTable;
