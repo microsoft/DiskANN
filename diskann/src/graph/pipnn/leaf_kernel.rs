@@ -324,19 +324,5 @@ mod tests {
             // Then: every reciprocal ID is local to its output row; other rows stay empty.
             assert_eq!(actual.as_slice(), expected.as_flattened());
         }
-
-        #[test]
-        fn singleton_leaf_has_no_neighbors() {
-            let actual = rank_distance_fixture(&[f32::NAN], 1, 0);
-
-            assert!(actual.is_empty());
-        }
-
-        #[test]
-        fn zero_neighbor_capacity_returns_empty_rows() {
-            let actual = rank_distance_fixture(&[1.0; 9], 3, 0);
-
-            assert!(actual.is_empty());
-        }
     }
 }

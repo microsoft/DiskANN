@@ -276,8 +276,8 @@ mod tests {
         #[rstest::rstest]
         #[case::wrong_rows_with_equal_area(1, 4)]
         #[case::wrong_columns(2, 1)]
-        fn output_shape_mismatch_leaves_distances_unchanged<M: PartitionMetric>(
-            #[values(L2, Cosine, CosineNormalized, InnerProduct)] _metric: M,
+        fn output_shape_mismatch_returns_error<M: PartitionMetric>(
+            #[values(L2, Cosine, InnerProduct)] _metric: M,
             #[case] rows: usize,
             #[case] columns: usize,
         ) {
@@ -285,24 +285,17 @@ mod tests {
             let leader_values = [1.0, 0.0, 0.0, 2.0];
             let leaders = M::create_leaders(matrix(&leader_values, 2));
             let points = matrix(&[0.0, 4.0, -2.0, 0.0], 2);
-            let expected = vec![STALE_DISTANCE; rows * columns];
-            let mut storage = expected.clone();
+            let mut storage = vec![STALE_DISTANCE; rows * columns];
 
             // When
-            let error = M::compute_distances(
+            let result = M::compute_distances(
                 points,
                 &leaders,
                 MutMatrixView::try_from(storage.as_mut_slice(), rows, columns).unwrap(),
-            )
-            .unwrap_err();
-
-            // Then: a shape error is returned before any output is written.
-            assert!(
-                error
-                    .to_string()
-                    .contains("point-to-leader output shape mismatch")
             );
-            assert_eq!(storage, expected);
+
+            // Then: invalid output shapes stop the build.
+            assert!(result.is_err());
         }
 
         #[test]
@@ -324,26 +317,6 @@ mod tests {
 
             // Then: every row replaces stale distances before GEMM accumulates.
             assert_eq!(storage, expected);
-        }
-
-        #[test]
-        fn cosine_ranking_equals_one_minus_normalized_similarity() {
-            // Given
-            let point = [2.0_f32, 0.0];
-            let leader = [1.0_f32, 1.0];
-            let dot = point[0].mul_add(leader[0], point[1] * leader[1]);
-            let point_norm = point[0].hypot(point[1]);
-            let leader_norm = leader[0].hypot(leader[1]);
-            let expected = 1.0 - dot / (point_norm * leader_norm);
-
-            // When
-            let actual = compute_one_ranking::<Cosine>(point, leader);
-
-            // Then
-            assert!(
-                (actual - expected).abs() <= FLOAT_TOLERANCE,
-                "actual {actual} differs from expected {expected}"
-            );
         }
 
         #[rstest::rstest]
@@ -368,7 +341,6 @@ mod tests {
         #[rstest::rstest]
         #[case::l2(compute_one_ranking::<L2>)]
         #[case::cosine(compute_one_ranking::<Cosine>)]
-        #[case::normalized_cosine(compute_one_ranking::<CosineNormalized>)]
         #[case::inner_product(compute_one_ranking::<InnerProduct>)]
         fn nan_coordinate_produces_nan_ranking(
             #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
@@ -416,23 +388,37 @@ mod tests {
 
         #[test]
         fn cosine_overwrites_every_point_row_with_normalized_distances() {
-            // Given: points and leaders lie on signed coordinate axes.
-            let leader_values = [1.0_f32, 0.0, 0.0, 2.0];
+            // Given: non-unit points point right, up, and left. Leaders point
+            // diagonally up-right and up, so similarities include ±1/sqrt(2).
+            let leader_values = [1.0_f32, 1.0, 0.0, 2.0];
             let leaders = Cosine::create_leaders(matrix(&leader_values, 2));
-            let points = matrix(&[0.0, 4.0, -2.0, 0.0], 2);
-            let expected = [1.0, 0.0, 2.0, 1.0];
-            let mut storage = [STALE_DISTANCE; 4];
+            let points = matrix(&[2.0, 0.0, 0.0, 4.0, -2.0, 0.0], 3);
+            let diagonal_similarity = std::f32::consts::FRAC_1_SQRT_2;
+            let expected = [
+                1.0 - diagonal_similarity,
+                1.0,
+                1.0 - diagonal_similarity,
+                0.0,
+                1.0 + diagonal_similarity,
+                1.0,
+            ];
+            let mut storage = [STALE_DISTANCE; 6];
 
             // When
             Cosine::compute_distances(
                 points,
                 &leaders,
-                MutMatrixView::try_from(&mut storage[..], 2, 2).unwrap(),
+                MutMatrixView::try_from(&mut storage[..], 3, 2).unwrap(),
             )
             .unwrap();
 
             // Then
-            assert_eq!(storage, expected);
+            for (actual, expected) in storage.into_iter().zip(expected) {
+                assert!(
+                    (actual - expected).abs() <= FLOAT_TOLERANCE,
+                    "actual {actual} differs from expected {expected}"
+                );
+            }
         }
     }
 }

@@ -448,7 +448,7 @@ mod tests {
         }
 
         #[rstest]
-        #[case::unrankable(&[f32::NAN, f32::INFINITY], [Candidate::default(); 2])]
+        #[case::unrankable(&[f32::NAN, f32::INFINITY, f32::INFINITY], [Candidate::default(); 2])]
         #[case::partly_filled(
             &[f32::NAN, f32::INFINITY, 9.0],
             [Candidate::new(2, 9.0), Candidate::default()]
@@ -461,7 +461,7 @@ mod tests {
             let mut thresholds = [f32::INFINITY];
             let mut topk =
                 TopK::<2>::new(MutMatrixView::row_vector(&mut output[..]), &mut thresholds);
-            topk.replace_topk(diskann_wide::ARCH, 0, &[3.0, 1.0]);
+            topk.replace_topk(diskann_wide::ARCH, 0, &[3.0, 1.0, 2.0]);
 
             arch::dispatch1_no_features(ReplaceRow, (&mut topk, 0, distances));
 

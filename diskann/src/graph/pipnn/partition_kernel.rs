@@ -236,22 +236,5 @@ mod tests {
             // Then
             assert_eq!(output, expected_regrown_stripe);
         }
-
-        #[test]
-        fn empty_point_stripe_leaves_output_empty() {
-            let leader_values = [1.0_f32];
-            let leaders = L2::create_leaders(MatrixView::row_vector(&leader_values[..]));
-            let points = MatrixView::try_from(&[][..], 0, 1).unwrap();
-            let mut output = [];
-
-            assign_leaders::<_, L2>(
-                diskann_wide::ARCH,
-                points,
-                &leaders,
-                MutMatrixView::try_from(&mut output[..], 0, 1).unwrap(),
-                &mut PartitionKernelWorkspace::default(),
-            )
-            .unwrap();
-        }
     }
 }

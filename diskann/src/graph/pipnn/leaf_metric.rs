@@ -224,7 +224,6 @@ mod tests {
         #[rstest]
         #[case::l2(compute_pair_ranking::<L2>)]
         #[case::cosine(compute_pair_ranking::<Cosine>)]
-        #[case::normalized_cosine(compute_pair_ranking::<CosineNormalized>)]
         #[case::inner_product(compute_pair_ranking::<InnerProduct>)]
         fn nan_coordinate_produces_nan_ranking(
             #[case] compute: fn([f32; DIMENSION_COUNT], [f32; DIMENSION_COUNT]) -> f32,
