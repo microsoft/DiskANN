@@ -87,19 +87,14 @@ fn rank_leader_distances<A: PiPNNSIMDSchema>(
 ) {
     candidates.resize(output.ncols(), Candidate::default());
     arch.run(move || {
-        let mut worst = [f32::INFINITY];
-        with_topk!(
-            MutMatrixView::row_vector(candidates.as_mut_slice()),
-            &mut worst,
-            |topk| {
-                for (distances, output) in distances.row_iter().zip(output.row_iter_mut()) {
-                    topk.replace_topk(arch, 0, distances);
-                    for (destination, candidate) in output.iter_mut().zip(topk.candidates(0)) {
-                        *destination = candidate.local_idx;
-                    }
+        with_topk!(output.ncols(), |topk| {
+            for (distances, output) in distances.row_iter().zip(output.row_iter_mut()) {
+                topk.select_topk(arch, distances, candidates.as_mut_slice());
+                for (destination, candidate) in output.iter_mut().zip(candidates.iter()) {
+                    *destination = candidate.local_idx;
                 }
             }
-        );
+        });
     });
 }
 
