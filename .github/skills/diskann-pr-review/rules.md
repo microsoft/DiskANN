@@ -32,9 +32,9 @@ stay independently checkable.
 
 ### private-fields-invariants `BLOCK`
 
-**Struct fields stay private; invariants live in constructors.**
-Public fields silently void every check the constructor performs, and the invariant can never be
-reinstated without a breaking change.
+**Struct fields with invariants stay private and live in constructors.**
+Public fields with invariants silently void every check the constructor performs, and the invariant can never be
+reinstated without a breaking change. Keep these private.
 
 > "A `pub` field for `knn` undoes the validation check in the constructor." — #1151, @hildebrandmw
 >
@@ -43,9 +43,9 @@ reinstated without a breaking change.
 
 ### no-duplicate-abstraction `MAJOR`
 
-**Don't duplicate an abstraction across index types.**
-When a second index type (flat, graph, disk) needs behavior the first already has, the answer is a
-shared trait — not a parallel implementation. This is one of the most consistent structural
+**Don't duplicate an abstraction across types.**
+When a second type (e.g. flat index, graph index, disk index) needs behavior the first already has, the answer is a
+shared trait / abstraction — not a parallel implementation. This is one of the most consistent structural
 objections in the repo.
 
 > "One big concern I have is that this does not really share much with the existing graph code. Even
@@ -64,13 +64,14 @@ mental models.
 ### question-new-crates `MAJOR`
 
 **Question new top-level crates.**
-Prefer a feature-gated module inside an existing crate. Crate proliferation hurts discoverability
-and build times.
+New top-level crates should be added with great care. When adding new features to the repo consider the following mental 
+model on where they should be placed: 
+1. Can the feature be added without a feature gate and without significantly impacting (1) transitive dependencies, (2) compile times, (3) API surface? If so, do that.
+2. If a feature benefits greatly from existing internals and is cleanly additive, use a feature gate.
+3. Make new crates as a last resort.
 
 > "How many top-level crates do we actually want to have here? If we end up with 10–20
 > diskann-benchmark-* crates, is that going to be a problem?" — #1027, @arrayka
-
-Related: internal crates should be `publish = false`.
 
 ### move-up-tier-not-dep-down `MAJOR`
 
@@ -91,8 +92,8 @@ of `diskann-benchmark-runner`, `diskann-benchmark-core` (`diskann` itself is all
 
 ### no-module-name-in-type `NIT`
 
-**Don't repeat the module name in the type name.**
-`flat::SearchStrategy`, not `flat::FlatSearchStrategy`.
+**Try not to repeat the module name in the type name.**
+Reconsider using module names as part of the identity of a type, e.g. `flat::SearchStrategy`, not `flat::FlatSearchStrategy`.
 
 > "In general, I'm not a fan of prefixing everything with `Flat`. We already have the `flat` module so
 > `flat::SearchStrategy` reads fine to me…" — #983, @hildebrandmw
@@ -187,25 +188,10 @@ Inversions are easy to introduce across functions and invisible locally.
 > after the write lock for `next_id` is held, but earlier in the code, `refill_fast_free_list` goes
 > `max_block` -> `next_id` in the other direction." — #1050, @hildebrandmw
 
-### document-benign-races `MAJOR`
-
-**Document benign races explicitly, with the reasoning.**
-Accepted races are fine. Undocumented ones are not — the next reader cannot tell the difference
-between "considered and accepted" and "not noticed."
-
-> "Mark and I considered the races that were left and convinced ourselves that they result in benign
-> issues which we accept as part of not stopping the world for mutation in the index." — #1146,
-> @metajack
-
-For epoch-based reclamation, state the yield requirement so long-running readers are catchable in
-review:
-
-> "Based on discussion, readers have to yield for epoch to transition. Request updating comments for
-> copilot/reviewers to catch long running readers." — #1206, @harsha-simhadri
 
 ### validate-at-construction `MAJOR`
 
-**Validate at construction, not lazily at use.**
+**Validate at construction, not lazily at use. Encode validated values as types that have already been checked.**
 > "This really should have been a construction invariant on the pq-scratch" — #1097, @hildebrandmw
 
 ### fail-at-load-time `MAJOR`
@@ -222,7 +208,7 @@ A benchmark that only discovers an unsupported ISA after starting has wasted the
 ### checked-conversions `MAJOR`
 
 **Prefer checked conversions to `as`.**
-Silent truncation is a recurring source of ID-space bugs.
+Silent truncation is a recurring source of ID-space bugs. Treat narrowing as conversions with great skepticism.
 
 > "Made the conversion fallible, thanks for flagging." — #1145, @hildebrandmw
 
@@ -235,6 +221,22 @@ Silent truncation is a recurring source of ID-space bugs.
 ---
 
 ## 3. Unsafe code
+### unsafe-code-should-be-tested-with-miri `MAJOR` 
+
+**All unsafe code should be miri tested.** 
+Unsafe code should be tested under cargo miri thoroughly to make sure there is no UB. 
+
+### invariants-for-unsafe-should-be-checked `MAJOR` 
+
+**Invariants that unsafe code relies on should be explicitly checked in some way and should not be implicit.**
+More specifically, on invariants:
+- Invariants can rely on known and documented properties of concrete types (e.g. slices don't lie about their length)
+- Invariants can rely on properties established locally (e.g. via assert! or other check)
+- Invariants may not rely on unchecked properties of an argument or between arguments of a safe function that only exist as part of the function contract. Either check the property, make the property inherent to the argument type, or make the function unsafe.
+- Invariants must not depend on generic arguments implementing safe traits responsibly. Assume pathological cases exist. For example:
+     - T: Deref<Target = &[f32]>: Unsafe code cannot rely on the same slice being returned on every deref for a generic T.
+     - ExactSizeIterator: Implementations can by incorrect and the trait explicitly documents this.
+Either restructure the code to remove this dependence or make the necessary trait unsafe. 
 
 ### safety-comment-required `BLOCK`
 
@@ -283,15 +285,6 @@ Maintainers also ask for end-to-end recall validation on real datasets for algor
 
 > "Could you please run on a few medium size datasets and check recall before merging." — #1010,
 > @harsha-simhadri
-
-### watch-monomorphization `MAJOR`
-
-**Watch monomorphization and code bloat.**
-Generic explosion is treated as a real cost, not a theoretical one. CI has an LLVM IR bloat
-regression check (#1083).
-
-> "it very carefully minimizes monomorphizations to help keep compile times under control." — #1011,
-> @hildebrandmw
 
 ### no-large-stack-allocations `MAJOR`
 
@@ -469,17 +462,14 @@ Coverage percentage is not proof. Verify the branch/heuristic under test is reac
 > that a single run with 8 threads might not be enough to surface non-determinism reliably." — #1158,
 > @harsha-simhadri
 
+### invest-in-test-infra `MAJOR` 
+Instead of repeating yourself in unit/integration testing, build clean, reproducible test infra. 
+
 ### test-unhappy-and-legacy-paths `MAJOR`
 
 **Test unhappy paths and legacy/compat paths.**
 > "Many of the built-in impls are not tested for round trippability, and this `load_legacy` path is
 > completely uncovered. Please add tests for the unhappy paths as well." — #1188, @hildebrandmw
-
-### smoke-test-new-public-api `MAJOR`
-
-**New public methods get at least a smoke test.**
-> "Do you mind adding a simple test that calls this method to slightly decrease the chance of
-> accidental removal?" — #1240, @hildebrandmw
 
 ### no-deleting-tests `BLOCK`
 
@@ -491,12 +481,12 @@ removed without a stated, strong reason."
 
 **Explicit non-goals.**
 Per AGENTS.md — **do not** request tests for derived traits (`Clone`, `Debug`, `PartialEq`) or for
-enums without explicit functionality. And duplication inside unit tests is acceptable:
+enums without explicit functionality. And some duplication inside unit tests is acceptable:
 
 > "I generally agree with DRY… However, in unit tests, it can make tests harder to read… For small,
 > simple tests like these, it's fine to allow some code duplication" — #847, @arrayka
 
-### no-dead-code-in-tests `MAJOR`
+### no-dead-code-in-tests `MINOR`
 
 **`#[allow(dead_code)]` in tests is a smell.**
 Either the helper is used (write the test) or it isn't (delete it).
@@ -507,7 +497,7 @@ Either the helper is used (write the test) or it isn't (delete it).
 
 ## 7. Documentation & naming
 
-### docs-never-restate-signature `MAJOR`
+### docs-never-restate-signature `MINOR`
 
 **Less is more — never restate the signature.**
 > "I experimented with stripping down the documentation, particularly when it simply restates the
@@ -532,21 +522,6 @@ Contrastive docs rot as soon as the other implementation changes.
 **Wrap identifiers in backticks in prose.**
 > "Please wrap variable identifiers in backticks." — #1069, @hildebrandmw
 
-### names-match-vocabulary `MAJOR`
-
-**Names should match the library's existing vocabulary.**
-> "The general vocabulary of this library would call this `NeighborAccessor`." — #1106, @hildebrandmw
-
-> "`impl glue::FilteredAccessor for FilteredAccessor` is confusing. What about naming the struct
-> `LabelFilteredAccessor`…?" — #1141, @arrayka
-
-### valid-intra-doc-links `NIT`
-
-**Keep intra-doc links valid.**
-> "Run `cargo rustdoc --package diskann-bf_tree -- -D rustdoc::broken-intra-doc-links` to help find
-> outdated intra-doc links." — #1020, @hildebrandmw
-
----
 
 ## 8. PR hygiene & process
 
@@ -560,15 +535,7 @@ Contrastive docs rot as soon as the other implementation changes.
 Also complete the checklist in [PULL_REQUEST_TEMPLATE.md](../../PULL_REQUEST_TEMPLATE.md): release-
 note-worthy title, new dependencies, API modifications, backward compatibility, docs impact.
 
-### rfc-for-significant-change `MAJOR`
-
-**RFC required for architecturally significant change.**
-Per [rfcs/README.md](../../../rfcs/README.md): new crates, cross-crate traits/abstractions, new
-distance functions / storage layouts / index formats, and backward-compat-affecting changes. The PR
-*is* the RFC; merging is acceptance; tag with the `RFC` label; filename is the zero-padded PR number.
-Not required for single-crate API additions, bug fixes, internal refactors, or docs.
-
-### new-dependencies-justified `BLOCK`
+### new-dependencies-justified `MAJOR`
 
 **New dependencies need justification.**
 From [.github/copilot-instructions.md](../../copilot-instructions.md) — plus watch for transitive
@@ -579,24 +546,10 @@ bloat and build-time impact.
 >
 > "Don't pull `rayon` as a dependency of `diskann`." — #1024, @hildebrandmw
 
-### gate-experimental-work `MAJOR`
-
-**Gate experimental work behind a feature flag.**
-A recurring unblocking pattern: ship early behind `experimental`, gate the new dependencies, and
-keep default builds fast.
-
-> "To unblock algorithmic work, what if we do the following: 1. Put this behind an 'experimental'
-> feature flag and in an 'experimental' module… 2. Gate the new dependencies…" — #1099, @hildebrandmw
-
-### no-silent-config-defaults `MAJOR`
-
-**No silent defaults in benchmark/run configuration.**
-> "I recommend not using `default` for these… The benchmark runs are meant to record all the
-> information we can about a run." — #1106, @hildebrandmw
-
 ### license-header `BLOCK`
 
 **License header on every new file.**
+We want License on new code, we can skip data files, test inputs or Markdown files. 
 ```rust
 /*
  * Copyright (c) Microsoft Corporation.
@@ -604,29 +557,11 @@ keep default builds fast.
  */
 ```
 
-### verify-removals-against-usage `MAJOR`
-
-**Verify removals against internal/test usage.**
-> "These are still being referenced in some internal tests… please double check they are indeed safe
-> to remove" — #1185, @hildebrandmw
-
-### no-build-time-regression `MAJOR`
-
-**Don't regress build times.**
-Called out directly in [.github/copilot-instructions.md](../../copilot-instructions.md).
-Feature-gate heavy code paths and watch generic instantiation.
-
-### cross-platform-validation `BLOCK`
-
-**Cross-platform validation for arch-specific code.**
-Per AGENTS.md and `diskann-wide/README.md`: AVX-512 under Intel SDE, AArch64 under QEMU, and a
-baseline `x86-64` run to confirm no unsupported instructions are emitted.
-
 ---
 
 ## 9. Interaction norms
 
-### read-existing-review-threads `BLOCK`
+### read-existing-review-threads `MAJOR`
 
 **Read the existing review threads before proposing structural changes.**
 On any PR with prior review activity, fetch the open threads first. Structural and naming decisions
@@ -643,12 +578,7 @@ Filter out `*[bot]`, `Copilot`, and `codecov-commenter` for the human signal —
 body itself (rule `patch-coverage`) and skim bot findings for genuine correctness bugs before
 discarding them.
 
-#1269 is the cautionary case. The module is named `views` while the PR description says `matrix`,
-which looks like an obvious naming defect — but @hildebrandmw had explicitly asked for it: *"is it
-possible to keep the new matrix in `views` for one PR and then rename the module in a follow-up. Will
-help with auditing across all the files."* Recommending the rename would have contradicted the lead
-reviewer's deliberate call. The correct finding there was the **stale PR description**, not the module
-name.
+#1269 is the cautionary case. A reviewer requested deferring a module rename to simplify the diff, leaving the PR description stale. Here, an AI reviewer should flag the description not the code.
 
 Corollary: when a discrepancy between description and code has an innocent explanation, the reviewable
 defect is usually the stale description (rule `pr-description-explains-why`), not the code.
@@ -659,7 +589,7 @@ defect is usually the stale description (rule `pr-description-explains-why`), no
 
 - `nit:` means explicitly non-blocking. Reviewers approve PRs with open nits.
 - Reviewers propose concrete fixes — full trait sketches, links to existing helpers, exact commands.
-  Do the same.
+  Do the same but only give just enough detail to outline the idea. No need to flesh out all the details.
 - Disagreement is reasoned and normal. Maintainers reverse their own positions when given context
   ("I take back the suggestion to remove the ground-truth"). Authors are expected to push back with
   data.
@@ -667,5 +597,4 @@ defect is usually the stale description (rule `pr-description-explains-why`), no
 - Reviewers state their stake and priority openly ("I have a vested interest in seeing something like
   this merged ASAP. That said, there is a lot of work needed…"). Transparency about trade-offs beats
   false neutrality.
-- Praise for good design choices is normal and expected.
 - Large PRs get proportionally harder architectural pushback. Expect it, and split when you can.
