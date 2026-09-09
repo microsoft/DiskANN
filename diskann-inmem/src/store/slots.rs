@@ -46,6 +46,11 @@
 //! * `frozen`: Since "frozen" is a terminal state, it is safe to give out references to
 //!   frozen slots.
 //!
+//!   Note that "frozen" points differ from normal points in that they are protected from
+//!   being retired by the [`super::Store`]. This enables potential optimizations like
+//!   pre-loading and then freezing all data to be inserted, allowing safe, concurrency-free
+//!   read-only index builds. But for now, it mainly helps with algorithm correctness.
+//!
 //! ## Writable States
 //!
 //! * [`Exclusive`]: The exclusive stats is a little spooky. Slots can assume that an
