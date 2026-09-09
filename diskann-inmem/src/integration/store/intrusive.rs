@@ -28,7 +28,7 @@ pub struct Config {
 boilerplate!(
     store::intrusive::Intrusive => Store,
     for<'a> store::intrusive::Reader<'a> => Reader,
-    for<'a> store::intrusive::Slot<'a> => Writer,
+    for<'a> store::intrusive::Exclusive<'a> => Writer,
 );
 
 impl Store {

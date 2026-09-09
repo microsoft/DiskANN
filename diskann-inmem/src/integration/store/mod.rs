@@ -15,7 +15,7 @@ macro_rules! boilerplate {
     (
         $slots:ty => $store:ident,
         for<$read_lt:lifetime> $read:ty => $reader:ident,
-        for<$slot_lt:lifetime> $slot:ty => $writer:ident,
+        for<$exclusive_lt:lifetime> $exclusive:ty => $writer:ident,
     ) => {
         /// A test store wraper.
         #[derive(Debug)]
@@ -76,12 +76,12 @@ macro_rules! boilerplate {
 
         /// A writer for the test store.
         #[derive(Debug)]
-        pub struct $writer<$slot_lt> {
-            slot: $crate::store::Slot<$slot_lt, $slot>,
+        pub struct $writer<$exclusive_lt> {
+            slot: $crate::store::Exclusive<$exclusive_lt, $exclusive>,
         }
 
-        impl<$slot_lt> $writer<$slot_lt> {
-            fn new(slot: $crate::store::Slot<$slot_lt, $slot>) -> Self {
+        impl<$exclusive_lt> $writer<$exclusive_lt> {
+            fn new(slot: $crate::store::Exclusive<$exclusive_lt, $exclusive>) -> Self {
                 Self { slot }
             }
 

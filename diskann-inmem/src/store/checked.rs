@@ -382,14 +382,14 @@ impl Reader<'_> {
 }
 
 impl slots::Slots for Checked {
-    type Slot<'a> = Slot<'a>;
+    type Exclusive<'a> = Exclusive<'a>;
 
     fn id_limit(&self) -> IdLimit {
         <Checked>::id_limit(self)
     }
 
-    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Slot<'_> {
-        Slot::new(self.entries[i.into_usize()].expect_write())
+    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Exclusive<'_> {
+        Exclusive::new(self.entries[i.into_usize()].expect_write())
     }
 
     unsafe fn retire(&self, i: u32, _: Lifecycle) {
@@ -401,14 +401,14 @@ impl slots::Slots for Checked {
     }
 }
 
-/// A writable [`slots::Slot`] for [`Checked`].
+/// A writable [`slots::Exclusive`] for [`Checked`].
 #[derive(Debug)]
-pub(crate) struct Slot<'a> {
+pub(crate) struct Exclusive<'a> {
     entry: WriteEntry<'a>,
     value: Option<u64>,
 }
 
-impl<'a> Slot<'a> {
+impl<'a> Exclusive<'a> {
     fn new(entry: WriteEntry<'a>) -> Self {
         Self { entry, value: None }
     }
@@ -419,7 +419,7 @@ impl<'a> Slot<'a> {
     }
 }
 
-impl slots::Slot for Slot<'_> {
+impl slots::Exclusive for Exclusive<'_> {
     fn publish(self, _: Lifecycle) {
         let value = self.value.expect("`value` was not set");
         self.entry.publish(value);

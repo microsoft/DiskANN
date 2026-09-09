@@ -22,9 +22,9 @@
 //!         |       `abort`                         `retire`
 //!     `acquire`      |                               |
 //!         |          |                               |
-//!         |      +----------+                   +-----------+
-//!         +----->| Slot<'_> |---- `publish` --->| Published |
-//!                +----------+                   +-----------+
+//!         |    +---------------+                   +-----------+
+//!         +--->| Exclusive<'_> |---- `publish` --->| Published |
+//!              +---------------+                   +-----------+
 //!                    |
 //!                 `freeze`
 //!                    |
@@ -48,13 +48,13 @@
 //!
 //! ## Writable States
 //!
-//! * [`Slot`]: Slots are a little spooky. Slots can assume that a [`Slot`] for an index
-//!   `i` is exclusive for its duration. This means that [`Slot`] implementations can lend
-//!   out mutable references to its contents (for example,
-//!   [`super::intrusive::Slot::as_mut_slice`]).
+//! * [`Exclusive`]: The exclusive stats is a little spooky. Slots can assume that an
+//!   [`Exclusive`] for an index `i` is exclusive for its duration. This means that
+//!   [`Exclusive`] implementations can lend out mutable references to its contents (for
+//!   example, [`super::intrusive::Exclusive::as_mut_slice`]).
 //!
-//!   Code in [`super`] is very careful to maintain this invariant and all users of [`Slot`]
-//!   must carefully maintain this as well.
+//!   Code in [`super`] is very careful to maintain this invariant and all users of
+//!   [`Exclusive`] must carefully maintain this as well.
 //!
 //! * `reclaim`: On a call to [`Slots::reclaim`], implementations may assume exclusive access
 //!   to the indicated slot for the duration of the function call.
@@ -62,7 +62,7 @@
 //! ## Contracts
 //!
 //! Users of [`Slots`] must ensure that the lifecycle shown above is strictly observed.
-//! Furthermore, for [`Slot`]s, exactly one of the terminal methods **must** be called.
+//! Furthermore, for [`Exclusive`]s, exactly one of the terminal methods **must** be called.
 //!
 //! State transitions are driven by the authoritative [`super::Store`]. Before invoking a
 //! transition, the store ensures the slot is not externally available in its previous
@@ -91,8 +91,8 @@ pub(crate) trait SlotsConfig: Debug {
 ///
 /// See the [module level documentation](self) for details.
 pub(crate) trait Slots: Debug + 'static {
-    /// The writable [`Slot`].
-    type Slot<'a>: Slot;
+    /// The writable [`Exclusive`] slot.
+    type Exclusive<'a>: Exclusive;
 
     /// Return the exclusive upper bound for indices provided to this API.
     ///
@@ -111,11 +111,11 @@ pub(crate) trait Slots: Debug + 'static {
     /// 1. The slot is in the implicit "available" state according to the [module docs](self).
     ///
     /// 2. Access to slot `i` is exclusive before invoking this method and that exclusivity
-    ///    is maintained until the returned [`Slot`] is consumed by a terminal method.
+    ///    is maintained until the returned [`Exclusive`] is consumed by a terminal method.
     ///
-    /// 3. Exactly one of the [`Slot`] terminal methods is called. The [`Slot`] **may not**
-    ///    be dropped or forgotten without one of these methods being called.
-    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Slot<'_>;
+    /// 3. Exactly one of the [`Exclusive`] terminal methods is called. The [`Exclusive`]
+    ///    **may not** be dropped or forgotten without one of these methods being called.
+    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Exclusive<'_>;
 
     /// Transition slot `i` from the "published" state to the "retiring" state.
     ///
@@ -145,9 +145,9 @@ pub(crate) trait Slots: Debug + 'static {
 
 /// A writable slot for [`Slots`].
 ///
-/// [`Slot`]s may assume that they have exclusive ownership of their slots for their duration
-/// in accordance with [`Slots::acquire`].
-pub(crate) trait Slot: Debug {
+/// [`Exclusive`]s may assume that they have exclusive ownership of their slots for their
+/// duration in accordance with [`Slots::acquire`].
+pub(crate) trait Exclusive: Debug {
     /// Mark this slot as readable, transition it to the "published" state.
     fn publish(self, _: Lifecycle);
 

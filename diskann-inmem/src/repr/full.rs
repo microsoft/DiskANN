@@ -391,11 +391,11 @@ where
 /// A [`repr::Guard`] for [`Full`].
 #[derive(Debug)]
 pub struct Guard<'a> {
-    slot: store::Slot<'a, intrusive::Slot<'a>>,
+    slot: store::Exclusive<'a, intrusive::Exclusive<'a>>,
 }
 
 impl<'a> Guard<'a> {
-    fn new(slot: store::Slot<'a, intrusive::Slot<'a>>) -> Self {
+    fn new(slot: store::Exclusive<'a, intrusive::Exclusive<'a>>) -> Self {
         Self { slot }
     }
 }

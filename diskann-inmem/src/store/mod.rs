@@ -21,14 +21,14 @@ mod internal_docs {
     //!
     //! ## Writing
     //!
-    //! [`Store::acquire`] is used to find and claim an unused internal [`Slot`]. A [`Slot`]
-    //! provides write access to its corresponding [`Slot::data`]. Either [`Slot::publish`]
-    //! or [`Slot::freeze`] can be used to make data readable.
+    //! [`Store::acquire`] is used to find and claim an unused internal [`Exclusive`]. A
+    //! [`Exclusive`] provides write access to its corresponding [`Exclusive::data`].
+    //! Either [`Exclusive::publish`] or [`Exclusive::freeze`] can be used to make data readable.
     //!
-    //! If a [`Slot`] is dropped, its corresponding slot is returned to the [`Store`] without
-    //! publishing its contents.
+    //! If a [`Exclusive`] is dropped, its corresponding slot is returned to the [`Store`]
+    //! without publishing its contents.
     //!
-    //! The index of the slot chosen may be obtained via [`Slot::slot`].
+    //! The index of the slot chosen may be obtained via [`Exclusive::slot`].
     //!
     //! ## Deleting
     //!
@@ -393,11 +393,11 @@ where
         Ok(f(self.slots(), guard))
     }
 
-    /// Attempt to acquire a new [`Slot`] for writing.
+    /// Attempt to acquire a new [`Exclusive`] for writing.
     ///
     /// This method first consults the freelist and falls back to scanning the tags list
     /// if no ID is available from the fast path.
-    pub(crate) fn acquire(&self) -> Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> {
+    pub(crate) fn acquire(&self) -> Option<Exclusive<'_, <T as slots::Slots>::Exclusive<'_>>> {
         for _ in 0..SCAN_ADVANCE_RETRY_LIMIT {
             match self.freelist.pop() {
                 freelist::Id::Found(id) => {
@@ -476,12 +476,12 @@ where
     ///
     /// Periodically, the freelist is checked to see if another thread has found an available
     /// slot for us.
-    fn scan_acquire(&self) -> Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> {
+    fn scan_acquire(&self) -> Option<Exclusive<'_, <T as slots::Slots>::Exclusive<'_>>> {
         // This is potentially quite slow, so scan approximately `1 / SCAN_ADVANCE_RETRY_LIMIT`
         // of the writable range. The outer retry loop provides broader coverage.
         let mut remaining = self.unfrozen.value().div_ceil(SCAN_ADVANCE_RETRY_LIMIT);
         let mut chunks_since_freelist_check = 0;
-        let mut acquired: Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> = None;
+        let mut acquired: Option<Exclusive<'_, <T as slots::Slots>::Exclusive<'_>>> = None;
 
         while remaining != 0 {
             let chunk = self.freelist.scan();
@@ -527,11 +527,11 @@ where
         None
     }
 
-    /// Attempt to directly acquire a [`Slot`] to id `i`.
+    /// Attempt to directly acquire a [`Exclusive`] to id `i`.
     ///
     /// Returns `None` if `i` is not within [`Self::id_limit`] or if the slot is not currently
     /// acquirable.
-    pub(crate) fn slot(&self, i: u32) -> Option<Slot<'_, <T as slots::Slots>::Slot<'_>>> {
+    pub(crate) fn slot(&self, i: u32) -> Option<Exclusive<'_, <T as slots::Slots>::Exclusive<'_>>> {
         let tag = &self.tags.get(i.into_usize())?;
 
         // SAFETY: We've guaranteed that `tag` belongs to `slot`.
@@ -548,7 +548,7 @@ where
         &'a self,
         tag: &'a AtomicTag,
         slot: u32,
-    ) -> Option<Slot<'a, <T as slots::Slots>::Slot<'a>>> {
+    ) -> Option<Exclusive<'a, <T as slots::Slots>::Exclusive<'a>>> {
         if tag.load(Ordering::Relaxed) != Tag::AVAILABLE {
             return None;
         }
@@ -566,11 +566,11 @@ where
                 // "available", making slot reclamation or abort work visible before
                 // `Slots::acquire`.
                 //
-                // The `Slot` data structure ensures that exactly one of the terminal methods
-                // for `slot::Slot` is called.
+                // The `Exclusive` data structure ensures that exactly one of the terminal methods
+                // for `slot::Exclusive` is called.
                 let data = unsafe { slots::Slots::acquire(self.slots(), slot, Lifecycle::new()) };
 
-                Some(Slot {
+                Some(Exclusive {
                     tag,
                     data: ManuallyDrop::new(data),
                     slot,
@@ -685,25 +685,26 @@ diskann::convert_error!(RetireError);
 
 /// A writable buffer into the data managed by a [`Store`], obtained from [`Store::acquire`].
 ///
-/// This is the only safe way to interact with a [`slots::Slot`] since this ensures that one
-/// of the terminal methods is called. Dropping a [`Slot`] without calling [`Slot::publish`]
-/// or [`Slot::freeze`] automatically invokes [`slots::Slot::abort`].
+/// This is the only safe way to interact with a [`slots::Exclusive`] since this ensures that
+/// one of the terminal methods is called. Dropping a [`Exclusive`] without calling
+/// [`Exclusive::publish`] or [`Exclusive::freeze`] automatically invokes
+/// [`slots::Exclusive::abort`].
 #[derive(Debug)]
-pub(crate) struct Slot<'a, S>
+pub(crate) struct Exclusive<'a, E>
 where
-    S: slots::Slot,
+    E: slots::Exclusive,
 {
     tag: &'a AtomicTag,
-    data: ManuallyDrop<S>,
+    data: ManuallyDrop<E>,
     slot: u32,
 }
 
-impl<'a, S> Slot<'a, S>
+impl<'a, E> Exclusive<'a, E>
 where
-    S: slots::Slot,
+    E: slots::Exclusive,
 {
     /// View the raw inner slot.
-    pub(crate) fn data(&mut self) -> &mut S {
+    pub(crate) fn data(&mut self) -> &mut E {
         &mut self.data
     }
 
@@ -717,7 +718,7 @@ where
         let mut me = ManuallyDrop::new(self);
 
         // Freeze the inner slot.
-        slots::Slot::freeze(
+        slots::Exclusive::freeze(
             // SAFETY: The `ManuallyDrop` `data` is not used after this call.
             unsafe { ManuallyDrop::take(&mut me.data) },
             Lifecycle::new(),
@@ -737,7 +738,7 @@ where
         let mut me = ManuallyDrop::new(self);
 
         // Publish the inner slot.
-        slots::Slot::publish(
+        slots::Exclusive::publish(
             // SAFETY: The `ManuallyDrop` `data` is not used after this call.
             unsafe { ManuallyDrop::take(&mut me.data) },
             Lifecycle::new(),
@@ -749,12 +750,12 @@ where
     }
 }
 
-impl<S> Drop for Slot<'_, S>
+impl<E> Drop for Exclusive<'_, E>
 where
-    S: slots::Slot,
+    E: slots::Exclusive,
 {
     fn drop(&mut self) {
-        slots::Slot::abort(
+        slots::Exclusive::abort(
             // SAFETY: The `ManuallyDrop` `data` is not used after this call.
             unsafe { ManuallyDrop::take(&mut self.data) },
             Lifecycle::new(),

@@ -23,10 +23,10 @@
 //! prevents the slot from transitioning from "retiring" back to "available" and being
 //! reused while the guard remains active.
 //!
-//! The transitions [`slots::Slot::publish`] and [`slots::Slot::freeze`] use release stores.
-//! Since these are terminal slot operations, their release stores occur after all payload
-//! writes. The acquire load in [`Reader::read`] makes those writes visible before creating
-//! a shared slice.
+//! The transitions [`slots::Exclusive::publish`] and [`slots::Exclusive::freeze`] use
+//! release stores. Since these are terminal slot operations, their release stores occur
+//! after all payload writes. The acquire load in [`Reader::read`] makes those writes visible
+//! before creating a shared slice.
 //!
 //! ## Safety
 //!
@@ -195,14 +195,14 @@ enum IntrusiveErrorInner {
 }
 
 impl slots::Slots for Intrusive {
-    type Slot<'a> = Slot<'a>;
+    type Exclusive<'a> = Exclusive<'a>;
 
     fn id_limit(&self) -> IdLimit {
         <Intrusive>::id_limit(self)
     }
 
     #[expect(clippy::panic, reason = "out-of-bounds is a hard program bug")]
-    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Slot<'_> {
+    unsafe fn acquire(&self, i: u32, _: Lifecycle) -> Self::Exclusive<'_> {
         let Some((tag, data)) = self.data(i.into_usize()) else {
             panic!("index {i} is out-of-bounds");
         };
@@ -218,7 +218,7 @@ impl slots::Slots for Intrusive {
         // While we can leave this tag as `Tag::AVAILABLE` since it's just a mirror, setting
         // it to `Tag::OWNED` lets us more precisely detect misuse from the caller.
         tag.store(Tag::OWNED, Ordering::Relaxed);
-        Slot { tag, data }
+        Exclusive { tag, data }
     }
 
     #[expect(clippy::panic, reason = "out-of-bounds is a hard program bug")]
@@ -381,21 +381,21 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// A [`slots::Slot`] for [`Intrusive`].
+/// A [`slots::Exclusive`] for [`Intrusive`].
 #[derive(Debug)]
-pub(crate) struct Slot<'a> {
+pub(crate) struct Exclusive<'a> {
     // NOTE: `tag` and `data` must belong to the same slot.
     tag: &'a AtomicTag,
     data: RawSlice<'a>,
 }
 
-impl<'a> Slot<'a> {
+impl<'a> Exclusive<'a> {
     /// Return the data within this slot as a mutable slice.
     ///
     /// The length of this slice is guaranteed to be the number of bytes passed to
     /// [`Intrusive::new`] or [`Config::new`].
     pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
-        // SAFETY: Users of the `slots::Slot` are obligated to ensure exclusivity.
+        // SAFETY: Users of the `slots::Exclusive` are obligated to ensure exclusivity.
         //
         // Since `Reader` obeys the slots life-cycle requirements, a concurrent reader
         // of this data should not be possible.
@@ -403,7 +403,7 @@ impl<'a> Slot<'a> {
     }
 }
 
-impl slots::Slot for Slot<'_> {
+impl slots::Exclusive for Exclusive<'_> {
     fn publish(self, _: Lifecycle) {
         self.tag.store(Tag::PUBLISHED, Ordering::Release);
     }

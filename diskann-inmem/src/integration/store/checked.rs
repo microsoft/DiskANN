@@ -28,7 +28,7 @@ pub struct Config {
 boilerplate!(
     checked::Checked => Store,
     for<'a> checked::Reader<'a> => Reader,
-    for<'a> checked::Slot<'a> => Writer,
+    for<'a> checked::Exclusive<'a> => Writer,
 );
 
 impl Store {
