@@ -1,21 +1,21 @@
 {
   "file": "diskann/src/graph/test/cases/range_search.rs",
-  "test": "graph/test/cases/range_search/two_round_search",
+  "test": "graph/test/cases/range_search/range_slack_high_expands_frontier",
   "payload": {
-    "comparisons": 129,
-    "description": "Two round search test to validate that a low starting L with a large radius triggers a second round of range search.",
+    "comparisons": 110,
+    "description": "High range_slack expands frontier exploration.",
     "grid_dims": 3,
     "grid_size": 5,
-    "hops": 115,
+    "hops": 90,
     "inner_radius": null,
     "query": [
       5.0,
       5.0,
       5.0
     ],
-    "radius": 50.0,
+    "radius": 30.0,
     "range_search_second_round": true,
-    "result_count": 109,
+    "result_count": 60,
     "results": [
       [
         124,
@@ -230,24 +230,12 @@
         30.0
       ],
       [
-        18,
-        33.0
-      ],
-      [
-        22,
-        35.0
-      ],
-      [
         38,
         29.0
       ],
       [
         42,
         29.0
-      ],
-      [
-        46,
-        33.0
       ],
       [
         58,
@@ -262,196 +250,12 @@
         29.0
       ],
       [
-        70,
-        35.0
-      ],
-      [
-        78,
-        33.0
-      ],
-      [
         82,
         29.0
       ],
       [
         86,
         29.0
-      ],
-      [
-        90,
-        33.0
-      ],
-      [
-        102,
-        35.0
-      ],
-      [
-        106,
-        33.0
-      ],
-      [
-        110,
-        35.0
-      ],
-      [
-        14,
-        35.0
-      ],
-      [
-        34,
-        33.0
-      ],
-      [
-        54,
-        35.0
-      ],
-      [
-        13,
-        38.0
-      ],
-      [
-        17,
-        38.0
-      ],
-      [
-        21,
-        42.0
-      ],
-      [
-        33,
-        36.0
-      ],
-      [
-        37,
-        34.0
-      ],
-      [
-        41,
-        36.0
-      ],
-      [
-        45,
-        42.0
-      ],
-      [
-        53,
-        38.0
-      ],
-      [
-        57,
-        34.0
-      ],
-      [
-        61,
-        34.0
-      ],
-      [
-        65,
-        38.0
-      ],
-      [
-        77,
-        38.0
-      ],
-      [
-        81,
-        36.0
-      ],
-      [
-        85,
-        38.0
-      ],
-      [
-        101,
-        42.0
-      ],
-      [
-        105,
-        42.0
-      ],
-      [
-        9,
-        42.0
-      ],
-      [
-        29,
-        42.0
-      ],
-      [
-        8,
-        45.0
-      ],
-      [
-        12,
-        43.0
-      ],
-      [
-        16,
-        45.0
-      ],
-      [
-        28,
-        45.0
-      ],
-      [
-        32,
-        41.0
-      ],
-      [
-        36,
-        41.0
-      ],
-      [
-        40,
-        45.0
-      ],
-      [
-        52,
-        43.0
-      ],
-      [
-        56,
-        41.0
-      ],
-      [
-        60,
-        43.0
-      ],
-      [
-        76,
-        45.0
-      ],
-      [
-        80,
-        45.0
-      ],
-      [
-        7,
-        50.0
-      ],
-      [
-        11,
-        50.0
-      ],
-      [
-        27,
-        50.0
-      ],
-      [
-        31,
-        48.0
-      ],
-      [
-        35,
-        50.0
-      ],
-      [
-        51,
-        50.0
-      ],
-      [
-        55,
-        50.0
       ]
     ],
     "starting_l": 4

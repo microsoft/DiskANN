@@ -1,9 +1,9 @@
 {
   "file": "diskann/src/graph/test/cases/range_search.rs",
-  "test": "graph/test/cases/range_search/two_round_search",
+  "test": "graph/test/cases/range_search/initial_slack_high_avoids_second_round",
   "payload": {
     "comparisons": 129,
-    "description": "Two round search test to validate that a low starting L with a large radius triggers a second round of range search.",
+    "description": "High initial_slack avoids second round search.",
     "grid_dims": 3,
     "grid_size": 5,
     "hops": 115,

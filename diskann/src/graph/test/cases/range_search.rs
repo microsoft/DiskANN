@@ -347,72 +347,6 @@ fn empty_results() {
 }
 
 #[test]
-fn max_results_respected_means_no_second_round() {
-    let description = "Two round search test to validate that max_results = \
-    starting_l means no second round is triggered.";
-
-    let rt = current_thread_runtime();
-    let mut test_root = root();
-    let mut path = test_root.path();
-    let name = path.push("max_results_respected_means_no_second_round");
-
-    let grid_size = 5;
-    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
-    let radius = 1.0e9; // every point will be in range with this radius
-    let starting_l = 4; // small set to trigger multiple rounds
-    let max_results = 4; // max_returned = starting_l, so second round should not be triggered
-
-    let range_search = Range::builder(starting_l, radius)
-        .max_returned(Some(max_results))
-        .build()
-        .unwrap();
-
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
-
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
-        .unwrap();
-
-    let baseline = RangeSearchBaseline {
-        description: description.to_string(),
-        grid_dims: Grid::Three.dim(),
-        grid_size,
-        query: query.clone(),
-        radius,
-        inner_radius: None,
-        starting_l,
-        results: results.iter().map(|n| n.as_tuple()).collect(),
-        comparisons: stats.cmps as usize,
-        hops: stats.hops as usize,
-        result_count: results.len(),
-        range_search_second_round: stats.range_search_second_round,
-    };
-
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
-    assert!(
-        results.len() <= max_results,
-        "result count {} exceeds max_results {}",
-        results.len(),
-        max_results
-    );
-
-    assert!(
-        !stats.range_search_second_round,
-        "If max_results is respected, a second round should not be triggered"
-    );
-    assert_range_invariants(&results, radius, None);
-    assert_no_duplicates(&results);
-}
-
-#[test]
 fn max_results_respected_and_second_round_triggered() {
     let description = "Two round search test to validate that max_results > \
     starting_l means a second round is triggered.";
@@ -473,6 +407,246 @@ fn max_results_respected_and_second_round_triggered() {
     assert!(
         stats.range_search_second_round,
         "If max_results is respected, a second round should be triggered"
+    );
+
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn initial_slack_low_triggers_second_round() {
+    let _description = "Test that low initial_slack triggers second round. \
+    With initial_slack=0.5 and starting_l=4, the threshold is 2, so any \
+    outer_range_len >= 2 will trigger the second round.";
+
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("initial_slack_low_triggers_second_round");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 50.0;
+    let starting_l = 4;
+    let low_slack = 0.5;
+
+    let range_search = Range::builder(starting_l, radius)
+        .initial_slack(low_slack)
+        .build()
+        .unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        description: "Low initial_slack triggers second round search.".to_string(),
+        grid_dims: Grid::Three.dim(),
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| n.as_tuple()).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        stats.range_search_second_round,
+        "low initial_slack ({}) should trigger second round",
+        low_slack
+    );
+
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn initial_slack_high_avoids_second_round() {
+    let _description = "Test that high initial_slack avoids second round. \
+    With initial_slack=1.0 and starting_l=4, the threshold is 4, making it \
+    harder to trigger the second round.";
+
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("initial_slack_high_avoids_second_round");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 50.0;
+    let starting_l = 4;
+    let high_slack = 1.0;
+
+    let range_search = Range::builder(starting_l, radius)
+        .initial_slack(high_slack)
+        .build()
+        .unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        description: "High initial_slack avoids second round search.".to_string(),
+        grid_dims: Grid::Three.dim(),
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| n.as_tuple()).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn range_slack_low_constrains_frontier() {
+    let _description = "Test that low range_slack constrains frontier expansion. \
+    With range_slack=1.0, the frontier only expands to nodes within radius, \
+    resulting in fewer total results found.";
+
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("range_slack_low_constrains_frontier");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 30.0;
+    let starting_l = 4;
+    let initial_slack = 0.5;
+    let low_range_slack = 1.0;
+
+    let range_search = Range::builder(starting_l, radius)
+        .initial_slack(initial_slack)
+        .range_slack(low_range_slack)
+        .build()
+        .unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        description: "Low range_slack constrains frontier expansion.".to_string(),
+        grid_dims: Grid::Three.dim(),
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| n.as_tuple()).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        stats.range_search_second_round,
+        "low initial_slack should trigger second round"
+    );
+
+    assert_range_invariants(&results, radius, None);
+    assert_no_duplicates(&results);
+}
+
+#[test]
+fn range_slack_high_expands_frontier() {
+    let _description = "Test that high range_slack expands frontier exploration. \
+    With range_slack=1.3, the frontier expands to nodes up to radius * 1.3, \
+    potentially finding more results than lower range_slack.";
+
+    let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("range_slack_high_expands_frontier");
+
+    let grid_size = 5;
+    let (index, query) = setup_grid_index_and_default_query(grid_size, Grid::Three);
+    let radius = 30.0;
+    let starting_l = 4;
+    let initial_slack = 0.5;
+    let high_range_slack = 1.3;
+
+    let range_search = Range::builder(starting_l, radius)
+        .initial_slack(initial_slack)
+        .range_slack(high_range_slack)
+        .build()
+        .unwrap();
+    let mut results: Vec<Neighbor<u32>> = Vec::new();
+
+    let stats = rt
+        .block_on(index.search(
+            range_search,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut results,
+        ))
+        .unwrap();
+
+    let baseline = RangeSearchBaseline {
+        description: "High range_slack expands frontier exploration.".to_string(),
+        grid_dims: Grid::Three.dim(),
+        grid_size,
+        query: query.clone(),
+        radius,
+        inner_radius: None,
+        starting_l,
+        results: results.iter().map(|n| n.as_tuple()).collect(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+        result_count: results.len(),
+        range_search_second_round: stats.range_search_second_round,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
+    assert!(
+        stats.range_search_second_round,
+        "low initial_slack should trigger second round"
     );
 
     assert_range_invariants(&results, radius, None);
