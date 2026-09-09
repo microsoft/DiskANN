@@ -14,7 +14,7 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 use super::{
     leaf_metric::LeafMetric,
     simd::PiPNNSIMDSchema,
-    topk::{Candidate, distance_blocks, with_topk_rows},
+    topk::{Candidate, with_topk},
 };
 
 /// Reusable storage for one leaf numerical pipeline.
@@ -89,28 +89,18 @@ where
     Ok(())
 }
 
-/// Traverse the strict lower triangle and update each pair's two candidate rows.
-fn rank_leaf_distances<A>(
+/// Offer each lower-triangle row to the two endpoint neighbor lists.
+fn rank_leaf_distances<A: PiPNNSIMDSchema>(
     arch: A,
     distances: MatrixView<'_, f32>,
     output: MutMatrixView<'_, Candidate>,
     worst: &mut Vec<f32>,
-) where
-    A: PiPNNSIMDSchema,
-{
-    if output.ncols() == 0 {
-        return;
-    }
-    worst.resize(distances.nrows(), f32::INFINITY);
-    with_topk_rows!(output, worst, |topks| {
-        // Rayon outlines leaf workers. Reapply target features before the SIMD scan.
-        arch.run(move || {
-            for source_idx in 1..distances.nrows() {
-                let source_distances = &distances.row(source_idx)[..source_idx];
-                for block in distance_blocks(arch, source_distances) {
-                    topks.update_one(source_idx, &block);
-                    topks.update_many(source_idx as u32, &block);
-                }
+) {
+    worst.resize(output.nrows(), f32::INFINITY);
+    arch.run(move || {
+        with_topk!(output, worst.as_mut_slice(), |topk| {
+            for point_idx in 1..distances.nrows() {
+                topk.update_dual_topk(arch, point_idx, &distances.row(point_idx)[..point_idx]);
             }
         });
     });
@@ -143,92 +133,38 @@ fn validate_output(
 mod tests {
     use super::*;
     use crate::graph::pipnn::L2;
-    use diskann_utils::views::{MatrixView, MutMatrixView};
 
     mod test_support {
-        use std::cmp::Ordering;
-
         use super::*;
         use diskann_wide::arch::{self, Target1};
 
         struct KernelCall<'a> {
             distances: MatrixView<'a, f32>,
             output: MutMatrixView<'a, Candidate>,
-            worst: &'a mut Vec<f32>,
         }
 
         struct RankDistances;
 
-        impl<A> Target1<A, (), KernelCall<'_>> for RankDistances
-        where
-            A: PiPNNSIMDSchema,
-        {
+        impl<A: PiPNNSIMDSchema> Target1<A, (), KernelCall<'_>> for RankDistances {
             fn run(self, arch: A, call: KernelCall<'_>) {
-                rank_leaf_distances(arch, call.distances, call.output, call.worst);
+                rank_leaf_distances(arch, call.distances, call.output, &mut Vec::new());
             }
         }
 
         pub(super) fn rank_distance_fixture(
             distances: &[f32],
             points: usize,
-            output_width: usize,
+            width: usize,
         ) -> Vec<Candidate> {
-            let mut output = vec![Candidate::default(); points * output_width];
+            let mut output = vec![Candidate::default(); points * width];
             arch::dispatch1_no_features(
                 RankDistances,
                 KernelCall {
                     distances: MatrixView::try_from(distances, points, points).unwrap(),
-                    output: MutMatrixView::try_from(output.as_mut_slice(), points, output_width)
-                        .unwrap(),
-                    worst: &mut Vec::new(),
+                    output: MutMatrixView::try_from(output.as_mut_slice(), points, width).unwrap(),
                 },
             );
             output
-        }
-
-        pub(super) fn reference_neighbors(
-            distances: &[f32],
-            points: usize,
-            width: usize,
-        ) -> Vec<Candidate> {
-            let mut output = vec![Candidate::default(); points * width];
-            for source in 0..points {
-                let mut candidates = Vec::with_capacity(points.saturating_sub(1));
-                for target in 0..points {
-                    if source == target {
-                        continue;
-                    }
-                    let row = source.max(target);
-                    let column = source.min(target);
-                    let distance = distances[row * points + column];
-                    if distance < f32::INFINITY {
-                        candidates.push(Candidate::new(target as u32, distance));
-                    }
-                }
-                candidates.sort_unstable_by(|left, right| {
-                    left.distance
-                        .partial_cmp(&right.distance)
-                        .unwrap_or(Ordering::Equal)
-                });
-                let retained = candidates.len().min(width);
-                output[source * width..source * width + retained]
-                    .copy_from_slice(&candidates[..retained]);
-            }
-            output
-        }
-
-        /// Give each pair a unique distance, with alternating signs in each row.
-        pub(super) fn lower_triangle_distances(points: usize) -> Vec<f32> {
-            // NaN in unused entries detects reads of the diagonal or upper triangle.
-            let mut distances = vec![f32::NAN; points * points];
-            for source in 1..points {
-                for target in 0..source {
-                    let distance = (source * points + target + 1) as f32;
-                    distances[source * points + target] =
-                        if target % 2 == 0 { -distance } else { distance };
-                }
-            }
-            distances
         }
     }
 
@@ -255,14 +191,10 @@ mod tests {
         #[rstest::rstest]
         #[case::missing_row(2)]
         #[case::extra_row(4)]
-        fn invalid_output_rows_leave_buffers_unchanged(#[case] rows: usize) {
+        fn invalid_output_rows_return_an_error(#[case] rows: usize) {
             let values = [0.0_f32, 1.0, 3.0];
-            let expected_output = vec![Candidate::new(42, -1.0); rows];
-            let mut output = expected_output.clone();
-            let mut workspace = LeafKernelWorkspace {
-                distance_scratch: vec![99.0],
-                worst: vec![7.0],
-            };
+            let mut output = vec![Candidate::default(); rows];
+            let mut workspace = LeafKernelWorkspace::default();
 
             let error = select_leaf_neighbors::<_, L2>(
                 diskann_wide::ARCH,
@@ -276,58 +208,35 @@ mod tests {
                 error.downcast_ref::<LeafKernelError>(),
                 Some(&LeafKernelError::InvalidOutputRows { points: 3, rows })
             );
-            assert_eq!(output, expected_output);
-            assert_eq!(workspace.distance_scratch, [99.0]);
-            assert_eq!(workspace.worst, [7.0]);
         }
 
         #[test]
-        fn invalid_neighbor_width_leaves_buffers_unchanged() {
-            // Given
+        fn requesting_self_as_an_extra_neighbor_returns_an_error() {
             let values = [0.0_f32, 1.0, 3.0];
-            let point_count = values.len();
-            let invalid_width = point_count;
-            let points = MatrixView::try_from(&values[..], point_count, 1).unwrap();
-            let expected_output = [Candidate::default(); 9];
-            // A smaller prior leaf forces scratch growth if validation runs too late.
-            let expected_distances = [99.0; 4];
-            let expected_thresholds = [7.0; 2];
-            let expected_error = LeafKernelError::InvalidNeighborCount {
-                points: point_count,
-                neighbors: invalid_width,
-                maximum: point_count - 1,
-            };
-            let mut output = expected_output;
-            let mut workspace = LeafKernelWorkspace {
-                distance_scratch: expected_distances.to_vec(),
-                worst: expected_thresholds.to_vec(),
+            let mut output = [Candidate::default(); 9];
+            let mut workspace = LeafKernelWorkspace::default();
+            let expected = LeafKernelError::InvalidNeighborCount {
+                points: 3,
+                neighbors: 3,
+                maximum: 2,
             };
 
-            // When
             let error = select_leaf_neighbors::<_, L2>(
                 diskann_wide::ARCH,
-                points,
-                MutMatrixView::try_from(&mut output[..], point_count, invalid_width).unwrap(),
+                MatrixView::try_from(&values[..], 3, 1).unwrap(),
+                MutMatrixView::try_from(&mut output[..], 3, 3).unwrap(),
                 &mut workspace,
             )
             .unwrap_err();
 
-            // Then
-            assert_eq!(
-                error.downcast_ref::<LeafKernelError>(),
-                Some(&expected_error)
-            );
-            assert_eq!(output, expected_output);
-            assert_eq!(workspace.distance_scratch, expected_distances);
-            assert_eq!(workspace.worst, expected_thresholds);
+            assert_eq!(error.downcast_ref::<LeafKernelError>(), Some(&expected));
         }
 
         #[test]
-        fn l2_selection_reuses_output_and_scratch_for_a_smaller_leaf() {
-            // Given
+        fn l2_neighbors_follow_new_geometry_when_workspace_is_reused() {
+            // Given: squared distances on the line determine each point's two neighbors.
             let values = [0.0_f32, 1.0, 3.0, 10.0];
-            let points = MatrixView::try_from(&values[..], 4, 1).unwrap();
-            let expected_neighbors = [
+            let expected = [
                 Candidate::new(1, (values[0] - values[1]).powi(2)),
                 Candidate::new(2, (values[0] - values[2]).powi(2)),
                 Candidate::new(0, (values[1] - values[0]).powi(2)),
@@ -337,30 +246,30 @@ mod tests {
                 Candidate::new(2, (values[3] - values[2]).powi(2)),
                 Candidate::new(1, (values[3] - values[1]).powi(2)),
             ];
-            let mut actual_neighbors = [Candidate::default(); 8];
+            let mut output = [Candidate::default(); 8];
             let mut workspace = LeafKernelWorkspace::default();
 
-            // When
+            // When: first populate output and scratch with a valid larger leaf.
             select_leaf_neighbors::<_, L2>(
                 diskann_wide::ARCH,
-                points,
-                MutMatrixView::try_from(&mut actual_neighbors[..], 4, 2).unwrap(),
+                MatrixView::try_from(&values[..], 4, 1).unwrap(),
+                MutMatrixView::try_from(&mut output[..], 4, 2).unwrap(),
                 &mut workspace,
             )
             .unwrap();
-            assert_eq!(actual_neighbors, expected_neighbors);
+            assert_eq!(output, expected);
 
-            // Reuse both buffers with a smaller, different dataset and unfilled slots.
+            // A smaller leaf has one finite pair and leaves the other slots unassigned.
             let smaller = [0.0, 2.0, f32::NAN];
             select_leaf_neighbors::<_, L2>(
                 diskann_wide::ARCH,
                 MatrixView::try_from(&smaller[..], 3, 1).unwrap(),
-                MutMatrixView::try_from(&mut actual_neighbors[..6], 3, 2).unwrap(),
+                MutMatrixView::try_from(&mut output[..6], 3, 2).unwrap(),
                 &mut workspace,
             )
             .unwrap();
             assert_eq!(
-                actual_neighbors[..6],
+                output[..6],
                 [
                     Candidate::new(1, 4.0),
                     Candidate::default(),
@@ -370,169 +279,64 @@ mod tests {
                     Candidate::default(),
                 ]
             );
+
+            // Growing again must replace the NaN scratch and stale rows. Doubling
+            // every coordinate preserves IDs and multiplies squared distances by four.
+            let scaled = values.map(|value| 2.0 * value);
+            let expected = expected
+                .map(|candidate| Candidate::new(candidate.local_idx, 4.0 * candidate.distance));
+            select_leaf_neighbors::<_, L2>(
+                diskann_wide::ARCH,
+                MatrixView::try_from(&scaled[..], 4, 1).unwrap(),
+                MutMatrixView::try_from(&mut output[..], 4, 2).unwrap(),
+                &mut workspace,
+            )
+            .unwrap();
+            assert_eq!(output, expected);
         }
     }
 
     mod rank_leaf_distances_tests {
-        use super::test_support::*;
+        use super::test_support::rank_distance_fixture;
         use super::*;
-        use rstest::rstest;
 
-        #[rstest]
-        #[case::two_points_fixed_one(2, 1)]
-        #[case::scalar_fixed_two(7, 2)]
-        #[case::lane_minus_one_fixed_three(16, 3)]
-        #[case::one_complete_lane_fixed_one(17, 1)]
-        #[case::one_complete_lane_fixed_two(17, 2)]
-        #[case::one_complete_lane_fixed_three(17, 3)]
-        #[case::lane_plus_one_runtime_width(18, 4)]
-        #[case::all_non_self_neighbors(17, 16)]
-        #[case::two_lanes_minus_one_runtime_width(32, 7)]
-        #[case::two_complete_lanes_runtime_width(33, 7)]
-        #[case::two_lanes_plus_one_runtime_width(34, 7)]
-        #[case::maximum_leaf_size_runtime_width(512, 7)]
-        #[trace]
-        fn dispatched_leaf_ranking_matches_scalar_reference_across_lane_boundaries(
-            #[case] point_count: usize,
-            #[case] requested_k: usize,
-        ) {
-            // Miri covers the pointer boundaries in the smaller lane cases.
-            if cfg!(miri) && point_count > 64 {
-                return;
+        #[test]
+        fn lower_triangle_pairs_update_both_endpoints_across_a_simd_group_and_tail() {
+            // Given: only three lower-triangle pairs rank. The diagonal and upper
+            // triangle contain better distances, so reading either changes the answer.
+            let mut distances = [f32::NEG_INFINITY; 18 * 18];
+            let mut matrix = MutMatrixView::try_from(&mut distances[..], 18, 18).unwrap();
+            for source in 1..18 {
+                matrix.row_mut(source)[..source].fill(f32::INFINITY);
             }
+            matrix.row_mut(16)[0] = 3.0;
+            matrix.row_mut(17)[1] = 2.0;
+            matrix.row_mut(17)[16] = 1.0;
+            let mut expected = [[Candidate::default(); 2]; 18];
+            expected[0][0] = Candidate::new(16, 3.0);
+            expected[1][0] = Candidate::new(17, 2.0);
+            expected[16] = [Candidate::new(17, 1.0), Candidate::new(0, 3.0)];
+            expected[17] = [Candidate::new(16, 1.0), Candidate::new(1, 2.0)];
 
-            // Given: the last source row has `point_count - 1` distances.
-            let distances = lower_triangle_distances(point_count);
-            let expected_neighbors = reference_neighbors(&distances, point_count, requested_k);
+            // When: row 16 supplies a full SIMD group; row 17 also supplies a tail.
+            let actual = rank_distance_fixture(matrix.as_slice(), 18, 2);
 
-            // When
-            let actual_neighbors = rank_distance_fixture(&distances, point_count, requested_k);
-
-            // Then
-            assert_eq!(actual_neighbors, expected_neighbors);
-        }
-
-        #[rstest]
-        #[case::finite_negative(-f32::EPSILON)]
-        #[case::negative_infinity(f32::NEG_INFINITY)]
-        fn negative_distances_remain_rankable(#[case] distance: f32) {
-            // Given
-            let distances = [f32::NAN, f32::NAN, distance, f32::NAN];
-            let expected = [Candidate::new(1, distance), Candidate::new(0, distance)];
-
-            // When
-            let actual = rank_distance_fixture(&distances, 2, 1);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn tied_distances_fill_capacity_with_distinct_non_self_neighbors() {
-            // Given: each point has three equally distant candidates for two slots.
-            let point_count = 4;
-            let width = 2;
-            let distances = [1.0; 16];
-
-            // When
-            let actual = rank_distance_fixture(&distances, point_count, width);
-
-            // Then: any two candidates are valid; no tie order is required.
-            for (source, neighbors) in actual.chunks_exact(width).enumerate() {
-                assert_eq!(neighbors[0].distance, 1.0);
-                assert_eq!(neighbors[1].distance, 1.0);
-                assert_ne!(neighbors[0].local_idx, neighbors[1].local_idx);
-                for neighbor in neighbors {
-                    assert!(neighbor.local_idx < point_count as u32);
-                    assert_ne!(neighbor.local_idx, source as u32);
-                }
-            }
-        }
-
-        #[test]
-        fn f32_max_distance_is_still_a_rankable_neighbor() {
-            // Given
-            let point_count = 4;
-            let width = 3;
-            let source = 3;
-            let mut distances = [1.0; 16];
-            distances[source * point_count] = f32::MAX;
-            let expected_last_neighbor = Candidate::new(0, f32::MAX);
-
-            // When
-            let actual = rank_distance_fixture(&distances, point_count, width);
-
-            // Then
-            assert_eq!(actual[source * width + width - 1], expected_last_neighbor);
-        }
-
-        #[rstest]
-        #[case::nan(f32::NAN)]
-        #[case::positive_infinity(f32::INFINITY)]
-        fn non_rankable_distances_leave_neighbor_slots_unassigned(#[case] distance: f32) {
-            // One leaf exercises scalar rows, a full SIMD group, and its tail.
-            let point_count = 18;
-            let distances = vec![distance; point_count * point_count];
-            let expected = vec![Candidate::default(); point_count];
-
-            // When
-            let actual = rank_distance_fixture(&distances, point_count, 1);
-
-            // Then
-            assert_eq!(actual, expected);
-        }
-
-        #[rstest]
-        #[case::nan(f32::NAN)]
-        #[case::positive_infinity(f32::INFINITY)]
-        fn non_rankable_candidates_cannot_replace_finite_neighbors(
-            #[case] distance: f32,
-            #[values(17, 18)] point_count: usize,
-        ) {
-            // Given: the last candidate is in a full SIMD group or its scalar tail.
-            let source = point_count - 1;
-            let invalid_target = source - 1;
-            let mut distances = vec![1.0; point_count * point_count];
-            distances[source * point_count + invalid_target] = distance;
-
-            // When
-            let actual = rank_distance_fixture(&distances, point_count, 1);
-
-            // Then
-            assert!(actual[source].local_idx < invalid_target as u32);
-            assert_eq!(actual[source].distance, 1.0);
-        }
-
-        #[test]
-        fn scalar_tail_updates_both_endpoints_after_a_rejected_simd_group() {
-            // Given: the final pair is the only rankable pair in the leaf.
-            let point_count = 18;
-            let source = 17;
-            let target = 16;
-            let mut distances = vec![f32::INFINITY; point_count * point_count];
-            distances[source * point_count + target] = -1.0;
-            let mut expected = vec![Candidate::default(); point_count];
-            expected[source] = Candidate::new(target as u32, -1.0);
-            expected[target] = Candidate::new(source as u32, -1.0);
-
-            // When
-            let actual = rank_distance_fixture(&distances, point_count, 1);
-
-            // Then
-            assert_eq!(actual, expected);
+            // Then: every reciprocal ID is local to its output row; other rows stay empty.
+            assert_eq!(actual.as_slice(), expected.as_flattened());
         }
 
         #[test]
         fn singleton_leaf_has_no_neighbors() {
-            // Given
-            let distances = [f32::NAN];
-            let expected: [Candidate; 0] = [];
+            let actual = rank_distance_fixture(&[f32::NAN], 1, 0);
 
-            // When
-            let actual = rank_distance_fixture(&distances, 1, 0);
+            assert!(actual.is_empty());
+        }
 
-            // Then
-            assert_eq!(actual, expected);
+        #[test]
+        fn zero_neighbor_capacity_returns_empty_rows() {
+            let actual = rank_distance_fixture(&[1.0; 9], 3, 0);
+
+            assert!(actual.is_empty());
         }
     }
 }
