@@ -13,7 +13,10 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::M
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use crate::{
-    model::{FixedChunkPQTable, pq::distance::multi},
+    model::{
+        FixedChunkPQTable,
+        pq::distance::{Shared, multi},
+    },
     utils::BridgeErr,
 };
 
@@ -71,8 +74,10 @@ impl TestMultiPQProviderAsync {
 
     pub fn multi_table(&self) -> Result<MultiTable<'_>, multi::EqualVersionsError> {
         match &self.table_old {
-            None => Ok(MultiTable::one(&self.table_new, 1)),
-            Some(table_old) => MultiTable::two(&self.table_new, table_old, 2, 1),
+            None => Ok(MultiTable::one(Shared::Ref(&self.table_new), 1)),
+            Some(table_old) => {
+                MultiTable::two(Shared::Ref(&self.table_new), Shared::Ref(table_old), 2, 1)
+            }
         }
     }
 

@@ -5,15 +5,15 @@
 
 //! Backend for flat-index (brute-force kNN) benchmarks.
 //!
-//! This exercises [`diskann::flat::FlatIndex::knn_search`] over an in-memory
+//! This exercises [`diskann::flat::knn_search`] over an in-memory
 //! provider, measuring recall and latency.
 
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    flat::{DistancesUnordered, FlatIndex, SearchStrategy},
+    flat::{knn_search, DistancesUnordered},
     graph::{glue::CopyIds, SearchOutputBuffer},
-    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
+    provider::HasId,
     utils::VectorRepr,
     ANNResult,
 };
@@ -53,27 +53,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 /////////////////
 
 /// A minimal in-memory provider for flat search benchmarks.
-///
-/// Wraps a loaded [`Matrix<T>`] and implements [`DataProvider`] with identity
-/// ID mapping.
 struct InMemProvider<T> {
     data: Arc<Matrix<T>>,
-}
-
-impl<T: VectorRepr> DataProvider for InMemProvider<T> {
-    type Context = DefaultContext;
-    type InternalId = u32;
-    type ExternalId = u32;
-    type Error = diskann::ANNError;
-    type Guard = NoopGuard<u32>;
-
-    fn to_internal_id(&self, _ctx: &DefaultContext, gid: &u32) -> Result<u32, Self::Error> {
-        Ok(*gid)
-    }
-
-    fn to_external_id(&self, _ctx: &DefaultContext, id: u32) -> Result<u32, Self::Error> {
-        Ok(id)
-    }
 }
 
 struct Flat<T> {
@@ -132,10 +113,9 @@ where
         );
         writeln!(output, "  Loaded {} vectors of dimension {}", nrows, ncols)?;
 
-        // Build the provider and wrap in FlatIndex
+        // Build the provider.
         let data = Arc::new(data);
         let provider = InMemProvider { data: data.clone() };
-        let index = FlatIndex::new(provider);
 
         // Load queries and groundtruth
         let queries: Matrix<T> =
@@ -172,9 +152,9 @@ where
         let mut results = Vec::new();
 
         let searcher = Arc::new(Searcher {
-            index,
+            provider,
             queries,
-            strategy: Strategy::new(metric),
+            metric,
         });
 
         for &threads in &input.search.num_threads {
@@ -202,50 +182,35 @@ where
     }
 }
 
-///////////////////////
-// Flat SearchStrategy //
-///////////////////////
-
-/// A [`SearchStrategy`] implementation for [`InMemProvider`] that drives
-/// a full sequential scan over all vectors.
-struct Strategy<T: VectorRepr> {
-    metric: Metric,
-    _phantom: std::marker::PhantomData<T>,
+/// The visitor that iterates over all vectors in the provider.
+struct Visitor<'a, T: VectorRepr> {
+    data: &'a Matrix<T>,
+    computer: T::QueryDistance,
 }
 
-impl<T: VectorRepr> Strategy<T> {
-    fn new(metric: Metric) -> Self {
+impl<'a, T: VectorRepr> Visitor<'a, T> {
+    fn new(provider: &'a InMemProvider<T>, query: &[T], metric: Metric) -> Self {
         Self {
-            metric,
-            _phantom: std::marker::PhantomData,
+            data: &provider.data,
+            computer: T::query_distance(query, metric),
         }
     }
-}
-
-/// The visitor that iterates over all vectors in the provider.
-struct Visitor<'a, T> {
-    data: &'a Matrix<T>,
 }
 
 impl<T: VectorRepr> HasId for Visitor<'_, T> {
     type Id = u32;
 }
 
-impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for Visitor<'_, T> {
-    type ElementRef<'a> = &'a [T];
+impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
     type Error = diskann::error::Infallible;
 
-    fn distances_unordered<F>(
-        &mut self,
-        computer: &T::QueryDistance,
-        mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    fn distances_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + FnMut(Self::Id, f32),
     {
         async move {
             for (i, vector) in self.data.row_iter().enumerate() {
-                let dist = computer.evaluate_similarity(vector);
+                let dist = self.computer.evaluate_similarity(vector);
                 f(i as u32, dist);
             }
             Ok(())
@@ -253,44 +218,15 @@ impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for Visitor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for Strategy<T> {
-    type ElementRef<'a> = &'a [T];
-    type QueryComputer = T::QueryDistance;
-    type QueryComputerError = diskann::error::Infallible;
-    type Visitor<'a>
-        = Visitor<'a, T>
-    where
-        Self: 'a,
-        InMemProvider<T>: 'a;
-    type Error = diskann::error::Infallible;
-
-    fn create_visitor<'a>(
-        &'a self,
-        provider: &'a InMemProvider<T>,
-        _context: &'a DefaultContext,
-    ) -> Result<Self::Visitor<'a>, Self::Error> {
-        Ok(Visitor {
-            data: &provider.data,
-        })
-    }
-
-    fn build_query_computer(
-        &self,
-        query: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(query, self.metric))
-    }
-}
-
 //////////////////////////////////////////
 // benchmark_core::search::Search impl  //
 //////////////////////////////////////////
 
-/// Wraps a [`FlatIndex`] and queries to implement [`search::Search`].
+/// Wraps a flat-search provider and queries to implement [`search::Search`].
 struct Searcher<T: VectorRepr> {
-    index: FlatIndex<InMemProvider<T>>,
+    provider: InMemProvider<T>,
     queries: Matrix<T>,
-    strategy: Strategy<T>,
+    metric: Metric,
 }
 
 /// Search parameters for flat-index benchmarks.
@@ -331,20 +267,10 @@ where
     where
         O: SearchOutputBuffer<u32> + Send,
     {
-        let context = DefaultContext;
         let query = self.queries.row(index);
+        let mut visitor = Visitor::new(&self.provider, query, self.metric);
 
-        let stats = self
-            .index
-            .knn_search(
-                parameters.k,
-                &self.strategy,
-                CopyIds,
-                &context,
-                query,
-                buffer,
-            )
-            .await?;
+        let stats = knn_search(&mut visitor, parameters.k, CopyIds, query, buffer).await?;
 
         Ok(Metrics {
             comparisons: stats.cmps,
