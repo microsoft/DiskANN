@@ -1228,118 +1228,124 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
-    pub async fn search(
-        &self,
-        query: &[Data::VectorDataType],
+    pub fn search<'a>(
+        &'a self,
+        query: &'a [Data::VectorDataType],
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        mode: SearchMode<'_>,
-    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
-        let mut query_stats = QueryStatistics::default();
-        let mut indices = vec![0u32; return_list_size as usize];
-        let mut distances = vec![0f32; return_list_size as usize];
-        let mut associated_data =
-            vec![Data::AssociatedDataType::default(); return_list_size as usize];
+        mode: SearchMode<'a>,
+    ) -> impl SendFuture<ANNResult<SearchResult<Data::AssociatedDataType>>> + 'a {
+        async move {
+            let mut query_stats = QueryStatistics::default();
+            let mut indices = vec![0u32; return_list_size as usize];
+            let mut distances = vec![0f32; return_list_size as usize];
+            let mut associated_data =
+                vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
-        if search_list_size < return_list_size {
-            return Err(diskann_error!(
-                ErrorKind::IndexError,
-                "search list size must be at least as large as the number of results requested",
-            ));
+            if search_list_size < return_list_size {
+                return Err(diskann_error!(
+                    ErrorKind::IndexError,
+                    "search list size must be at least as large as the number of results requested",
+                ));
+            }
+
+            let stats = self
+                .search_internal(
+                    query,
+                    return_list_size as usize,
+                    search_list_size,
+                    beam_width,
+                    &mut query_stats,
+                    &mut indices,
+                    &mut distances,
+                    &mut associated_data,
+                    None,
+                    &mode,
+                )
+                .await?;
+
+            let mut search_result = SearchResult {
+                results: Vec::with_capacity(return_list_size as usize),
+                stats,
+            };
+
+            for ((vertex_id, distance), associated_data) in
+                indices.into_iter().zip(distances).zip(associated_data)
+            {
+                search_result.results.push(SearchResultItem {
+                    vertex_id,
+                    distance,
+                    data: associated_data,
+                });
+            }
+
+            Ok(search_result)
         }
-
-        let stats = self
-            .search_internal(
-                query,
-                return_list_size as usize,
-                search_list_size,
-                beam_width,
-                &mut query_stats,
-                &mut indices,
-                &mut distances,
-                &mut associated_data,
-                None,
-                &mode,
-            )
-            .await?;
-
-        let mut search_result = SearchResult {
-            results: Vec::with_capacity(return_list_size as usize),
-            stats,
-        };
-
-        for ((vertex_id, distance), associated_data) in
-            indices.into_iter().zip(distances).zip(associated_data)
-        {
-            search_result.results.push(SearchResultItem {
-                vertex_id,
-                distance,
-                data: associated_data,
-            });
-        }
-
-        Ok(search_result)
     }
 
     /// Perform a search on the disk index and return each result with its native indexed vector.
     ///
     /// Unlike [`Self::search`], this returns only valid results, so the result list length equals
     /// `stats.result_count`.
-    pub async fn search_with_indexed_vectors(
-        &self,
-        query: &[Data::VectorDataType],
+    pub fn search_with_indexed_vectors<'a>(
+        &'a self,
+        query: &'a [Data::VectorDataType],
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        mode: SearchMode<'_>,
-    ) -> ANNResult<SearchResultWithVectors<Data::AssociatedDataType, Data::VectorDataType>> {
-        let result_count = return_list_size as usize;
-        let mut query_stats = QueryStatistics::default();
-        let mut indices = vec![0u32; result_count];
-        let mut distances = vec![0f32; result_count];
-        let mut associated_data = vec![Data::AssociatedDataType::default(); result_count];
-        let mut indexed_vectors = std::iter::repeat_with(|| None)
-            .take(result_count)
-            .collect::<Vec<_>>();
+        mode: SearchMode<'a>,
+    ) -> impl SendFuture<
+        ANNResult<SearchResultWithVectors<Data::AssociatedDataType, Data::VectorDataType>>,
+    > + 'a {
+        async move {
+            let result_count = return_list_size as usize;
+            let mut query_stats = QueryStatistics::default();
+            let mut indices = vec![0u32; result_count];
+            let mut distances = vec![0f32; result_count];
+            let mut associated_data = vec![Data::AssociatedDataType::default(); result_count];
+            let mut indexed_vectors = std::iter::repeat_with(|| None)
+                .take(result_count)
+                .collect::<Vec<_>>();
 
-        let stats = self
-            .search_internal(
-                query,
-                result_count,
-                search_list_size,
-                beam_width,
-                &mut query_stats,
-                &mut indices,
-                &mut distances,
-                &mut associated_data,
-                Some(&mut indexed_vectors),
-                &mode,
-            )
-            .await?;
+            let stats = self
+                .search_internal(
+                    query,
+                    result_count,
+                    search_list_size,
+                    beam_width,
+                    &mut query_stats,
+                    &mut indices,
+                    &mut distances,
+                    &mut associated_data,
+                    Some(&mut indexed_vectors),
+                    &mode,
+                )
+                .await?;
 
-        let results = indices
-            .into_iter()
-            .zip(distances)
-            .zip(associated_data)
-            .zip(indexed_vectors)
-            .take(stats.result_count as usize)
-            .map(|(((vertex_id, distance), data), indexed_vector)| {
-                Ok(SearchResultItemWithIndexedVector {
-                    vertex_id,
-                    data,
-                    distance,
-                    indexed_vector: indexed_vector.ok_or_else(|| {
-                        diskann_error!(
-                            ErrorKind::IndexError,
-                            "missing indexed vector for vertex {vertex_id}"
-                        )
-                    })?,
+            let results = indices
+                .into_iter()
+                .zip(distances)
+                .zip(associated_data)
+                .zip(indexed_vectors)
+                .take(stats.result_count as usize)
+                .map(|(((vertex_id, distance), data), indexed_vector)| {
+                    Ok(SearchResultItemWithIndexedVector {
+                        vertex_id,
+                        data,
+                        distance,
+                        indexed_vector: indexed_vector.ok_or_else(|| {
+                            diskann_error!(
+                                ErrorKind::IndexError,
+                                "missing indexed vector for vertex {vertex_id}"
+                            )
+                        })?,
+                    })
                 })
-            })
-            .collect::<ANNResult<Vec<_>>>()?;
+                .collect::<ANNResult<Vec<_>>>()?;
 
-        Ok(SearchResultWithVectors { results, stats })
+            Ok(SearchResultWithVectors { results, stats })
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
